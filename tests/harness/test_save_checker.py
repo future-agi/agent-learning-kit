@@ -490,29 +490,93 @@ def test_a_failed_scan_is_sent_again_and_an_answer_after_a_cut_is_dropped(tmp_pa
     assert _kinds(folder, 0) == ["trial", "session", "session"]
 
 
-def test_two_deaths_move_the_checks_into_this_process_for_good(
+def test_deaths_in_a_row_never_move_the_checks_into_this_process(
     tmp_path: Path, warnings: pytest.LogCaptureFixture, thread_checks: list[dict[str, Any]]
 ) -> None:
     checker, folder = _checker(tmp_path, {"save": [[["die", 7]]]}, stand_in="tests.fake_stand_in")
 
     async def main() -> list[Any]:
-        return [await _save(checker) for _ in range(3)]
+        results: list[Any] = []
+        for _ in range(4):
+            try:
+                results.append(await _save(checker))
+            except SaveChecksFailed as failed:
+                results.append(failed)
+        return results
 
-    first, second, third = asyncio.run(main())
+    first, second, third, fourth = asyncio.run(main())
 
     assert isinstance(first, NotInTime) and isinstance(second, NotInTime)
-    assert isinstance(third, Saved)
-    # The restarted child's stand_in answer didn't reset the count.
-    assert _kinds(folder, 0) == ["trial", "stand_in", "session", "save"]
-    assert _kinds(folder, 1) == ["stand_in", "save"]
-    assert checker.ran_in_child == 2
-    assert "save checker: running the checks in this process: the child ended 2 times in a row" in (
-        warnings.text
-    )
-    # Thread mode takes the cached instrumentation, and a cached scan's reach isn't passed.
-    assert thread_checks[-1]["instrumentation"] == "traceai"
-    assert thread_checks[-1]["reached"] is None
+    # The third death in a row ends the stage, and it stays ended for this checker.
+    for failed in (third, fourth):
+        assert isinstance(failed, SaveChecksFailed)
+        assert "checks ended the checker's child 3 times in a row" in str(failed)
+    assert checker._deaths == 3
+    assert checker._thread_reason is None
+    # Never run here, and no fourth child was started for the fourth save.
+    assert thread_checks == []
+    assert checker.ran_in_child == 3
+    assert len(_pids(folder)) == 3
+    assert "running the checks in this process" not in warnings.text
     assert _eventually(lambda: all(_gone(pid) for pid in _pids(folder)))
+
+
+def test_a_watchdog_killed_save_is_not_run_in_this_process_and_the_parent_does_not_grow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    warnings: pytest.LogCaptureFixture,
+    thread_checks: list[dict[str, Any]],
+) -> None:
+    # Dileep's repro: a save whose checks allocate far past the cap and sleep. The child goes
+    # again and again; the parent stays as small as it was.
+    checker, folder = _checker(tmp_path, {"save": [[["grow", 400 * MIB], ["sleep", 60]]]})
+
+    async def main() -> tuple[list[Any], int, int]:
+        await _scan(checker)
+        resident = save_checker._rss(_pids(folder)[0])
+        assert resident is not None
+        monkeypatch.setattr(save_checker, "WATCH_CAP", resident + 150 * MIB)
+        before = save_checker._rss(os.getpid()) or 0
+        results: list[Any] = []
+        for _ in range(3):
+            try:
+                results.append(await _save(checker))
+            except SaveChecksFailed as failed:
+                results.append(failed)
+            await _until(lambda: checker._child is None or checker._child.ready or checker._thread_reason is not None)
+        return results, before, save_checker._rss(os.getpid()) or 0
+
+    results, before, after = asyncio.run(main())
+
+    assert isinstance(results[0], NotInTime) and isinstance(results[1], NotInTime)
+    assert isinstance(results[2], SaveChecksFailed)
+    assert checker._thread_reason is None
+    assert thread_checks == []
+    assert after - before < 300 * MIB
+    assert "save checker: the child ended (watchdog)" in warnings.text
+
+
+def test_a_child_that_cannot_start_still_moves_the_checks_into_this_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    warnings: pytest.LogCaptureFixture,
+    thread_checks: list[dict[str, Any]],
+) -> None:
+    def broken() -> Any:
+        raise OSError("no forkserver")
+
+    checker, folder = _checker(tmp_path)
+    monkeypatch.setattr(checker, "_new_child", broken)
+
+    async def main() -> tuple[Any, Any]:
+        return await _scan(checker), await _save(checker)
+
+    scanned, saved = asyncio.run(main())
+
+    assert scanned == ScanAnswer(["in-thread"], frozenset())
+    assert isinstance(saved, Saved)
+    assert checker.ran_in_child == 0
+    assert "running the checks in this process: the child could not start (OSError)" in warnings.text
 
 
 def test_deadline_kills_in_a_row_stay_in_the_child(
@@ -1049,7 +1113,8 @@ def test_a_session_answer_after_an_idle_death_does_not_reset_the_death_count(
     tmp_path: Path, warnings: pytest.LogCaptureFixture, thread_checks: list[dict[str, Any]]
 ) -> None:
     # A part fails, the idle child then dies, and the next child answers the session again
-    # before it dies too: only a save's answer resets the count, so that is two in a row.
+    # before it dies in a save too: only a save's answer resets the count, so the next save's
+    # death is the third in a row.
     checker, folder = _checker(
         tmp_path,
         {"session": [[SCAN, FAILED_INSTRUMENTATION, ["sleep", 0.5], ["die", 3]]]},
@@ -1061,14 +1126,17 @@ def test_a_session_answer_after_an_idle_death_does_not_reset_the_death_count(
         await _up(checker)
         await _until(lambda: checker._failures["instrumentation"] == 1 and checker._deaths == 1)
         cut = await _save(checker)
-        return cut, await _save(checker)
+        with pytest.raises(SaveChecksFailed) as worn:
+            await _save(checker)
+        return cut, worn.value
 
-    cut, after = asyncio.run(main())
+    cut, worn = asyncio.run(main())
 
     assert isinstance(cut, NotInTime)
-    assert isinstance(after, Saved)
-    assert checker.ran_in_child == 1
-    assert "running the checks in this process: the child ended 2 times in a row" in warnings.text
+    assert worn.deaths == 3
+    assert checker.ran_in_child == 2
+    assert checker._thread_reason is None
+    assert thread_checks == []
 
 
 def test_a_call_waiting_when_the_checker_closes_runs_in_this_process(

@@ -2379,21 +2379,27 @@ def test_a_child_that_dies_in_the_instrumentation_part_does_not_save_it_as_none(
     assert _saved(destination)["instrumentation"] == "traceai"
 
 
-def test_after_two_deaths_the_checks_run_here_with_the_sessions_instrumentation(tmp_path, repo):
+def test_after_three_deaths_the_saves_fail_and_the_checks_never_run_here(tmp_path, repo):
+    from fi.alk.harness.save_checker import SaveChecksFailed
+
     _session(repo, instrumentation={"value": "traceai"})
     destination, submit, checker = _child_server(tmp_path, repo)
 
     async def calls():
         ended = [await submit(_plain("tool_evidence:exit")) for _ in range(2)]
-        return ended, await submit(_plain("after"))
+        with pytest.raises(SaveChecksFailed) as third:
+            await submit(_plain("tool_evidence:exit"))
+        with pytest.raises(SaveChecksFailed):
+            await submit(_plain("after"))
+        return ended, third.value
 
-    ended, after = asyncio.run(calls())
+    ended, third = asyncio.run(calls())
 
     assert all("not checked in time" in _text(one) for one in ended), ended
-    assert not after.get("is_error"), after
-    # This folder's own code says none: the answer is the one the child's session job gave.
-    assert _saved(destination)["instrumentation"] == "traceai"
-    assert checker.ran_in_child == 2
+    assert "3 times in a row" in str(third)
+    assert not (destination / "contract.json").exists()
+    assert checker._thread_reason is None
+    assert checker.ran_in_child == 3
 
 
 def test_a_job_with_no_roots_starts_no_child(tmp_path):

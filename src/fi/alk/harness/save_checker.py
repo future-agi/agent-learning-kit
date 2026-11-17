@@ -53,8 +53,9 @@ JOIN_SECONDS = 5.0
 # A child that sends no `up` by then is taken as a failed start: the fork server's preload took
 # 0.3-1.6 s when measured, so this only catches one that never comes up.
 START_SECONDS = 15.0
-# Deaths in a row before the checks move into this process for the rest of the checker's life.
-DEATHS = 2
+# Deaths in a row, in requests, before the checker's saves fail for the rest of its life. A death
+# comes from the input (a watchdog kill, a crash), so the checks never move into this process.
+DEATHS = 3
 WATCH_INTERVAL = 0.05
 # Measured child peaks were 57-209 MB; this catches slow growth, not a burst.
 WATCH_CAP = 400 * 1024 * 1024
@@ -89,6 +90,19 @@ class SaveChecksFailed(Exception):
             "Nothing was saved."
         )
         self.error, self.message = error, message
+
+
+class ChildKeepsEnding(SaveChecksFailed):
+    """The save's checks ended the child ``deaths`` times in a row; the checker stops asking."""
+
+    def __init__(self, deaths: int) -> None:
+        Exception.__init__(
+            self,
+            f"The save's checks ended the checker's child {deaths} times in a row. "
+            "Nothing was saved, and this session's saves will not be checked here.",
+        )
+        self.error, self.message = "ChildKeepsEnding", f"the child ended {deaths} times in a row"
+        self.deaths = deaths
 
 
 class StandInFailed(Exception):
@@ -289,6 +303,8 @@ class SaveChecker:
         self._stand_in_error: tuple[str, str] | None = None
         self._trial_passed = False
         self._deaths = 0
+        # Set at DEATHS deaths in a row: every later save raises, and no child is started.
+        self._worn_out = False
         self._start_thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._lock: asyncio.Lock | None = None
@@ -528,6 +544,10 @@ class SaveChecker:
     def _gave_way(self) -> bool:
         return self._closed or self._thread_reason is not None
 
+    def _raise_worn_out(self) -> None:
+        if self._worn_out:
+            raise ChildKeepsEnding(self._deaths)
+
     def _raise_failed(self, part: str, seen: dict[str, int]) -> None:
         if not self._has(part) and self._failures[part] > seen[part]:
             raise SessionChecksFailed(part, *self._failure[part])
@@ -545,6 +565,7 @@ class SaveChecker:
         if self._gave_way():
             return _THREAD
         self._raise_stand_in()
+        self._raise_worn_out()
         if self._has("scan") and self._has("instrumentation"):
             return True
         for part in _PARTS:
@@ -555,6 +576,7 @@ class SaveChecker:
         if self._gave_way():
             return _THREAD
         self._raise_stand_in()
+        self._raise_worn_out()
         child = self._child
         if (
             child is not None
@@ -700,6 +722,9 @@ class SaveChecker:
                 if child.request == rid:
                     child.request = None
         kind, message = outcome
+        if kind == "gone":
+            with self._cache_lock:
+                self._raise_worn_out()
         if kind == "done":
             assert message is not None
             with self._cache_lock:
@@ -1077,11 +1102,12 @@ class SaveChecker:
             child.replies.clear()
         child.stop.set()
         child.inbox.put(_GONE)
-        for reply in replies:
-            reply(_GONE)
-        # Before it was ready, the start thread decides what its end means.
+        # Before it was ready, the start thread decides what its end means. The death is counted
+        # before a waiting save wakes, so the save that was the third one sees it.
         if ready:
             self._ended(child)
+        for reply in replies:
+            reply(_GONE)
 
     def _ended(self, child: _Child) -> None:
         """A ready child ended. Unless the parent killed it, that is a death."""
@@ -1094,6 +1120,8 @@ class SaveChecker:
                 return
             self._deaths += 1
             deaths = self._deaths
+            if deaths >= DEATHS:
+                self._worn_out = True
             missing: list[str] = []
             session = self._session
             if session is not None and session.child is child:
@@ -1107,7 +1135,7 @@ class SaveChecker:
             )
         self._notify()
         if deaths >= DEATHS:
-            self._fallback(f"the child ended {deaths} times in a row")
+            logger.error("save checker: the child ended %d times in a row; the saves now fail", deaths)
             self._spawn(self._reap, child)
         else:
             self._spawn(self._replace, child)
@@ -1138,7 +1166,7 @@ class SaveChecker:
         # The old reader ends before the new one starts, so one reader reads at a time.
         self._reap(old)
         with self._cache_lock:
-            stop = self._gave_way() or self._stand_in_error is not None
+            stop = self._gave_way() or self._stand_in_error is not None or self._worn_out
         if not stop:
             self._launch()
 
