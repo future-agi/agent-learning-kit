@@ -15,6 +15,10 @@ ROOT = Path(environments.__file__).parent
 # Package -> phase-1 workbook entry whose five acceptance cases it must carry.
 VERTICALS = {
     "banking": "v01",
+    "clinic_scheduling": "v02",
+    "internal_knowledge": "v11",
+    "service_scheduling": "v12",
+    "sales_intake": "v17",
     "hr": "v13",
     "retail": "v15",
     "saas_subscriptions": "v16",

@@ -1,0 +1,99 @@
+{
+  "name": "book_primary_care_slot_held_alternative_booked",
+  "scenario_key": "book-primary-care-slot-held-alternative-booked",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P414 asks for Tuesday 3 November 14:30 with Dr. Patel; slot is held under H01; accepts 15:30 alternative",
+  "tests": "passes when the agent checks slots for Dr. Patel on 3 November, identifies the held slot at 14:30, and books the alternative 15:30 slot",
+  "instruction": "You want to book an appointment with Dr. Rohan Patel on Tuesday 3 November at 14:30. Provide your details when asked. If told that 14:30 is currently on hold by another patient, accept the offered alternative slot at 15:30 on the same day and confirm the booking.\n\nYour details:\n- Full name: Sean Connolly\n- Date of birth: 1966-04-30\n- Insurance: Vitality, Member ID: VT-300124\n- Preferred provider: Dr. Rohan Patel\n- Requested slot: Tuesday 3 November 2026, 14:30\n- Accepted alternative: Tuesday 3 November 2026, 15:30",
+  "keywords": [
+    "primary_care",
+    "booking",
+    "slot_held",
+    "alternative_offered"
+  ],
+  "persona": {
+    "name": "Sean Connolly",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Technician",
+    "location": "Australia",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, can I book Dr. Rohan Patel on Tuesday 3 November at 14:30?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "hold_id": "H01",
+    "created_records": [
+      "patients.P414",
+      "insurance.P414"
+    ],
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1966-04-30",
+        "full_name": "Sean Connolly"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "date_from": "2026-11-03",
+        "provider_id": "D02",
+        "date_to": "2026-11-03",
+        "patient_id": "P414"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "slot_id": "SL-D02-20261103-1530",
+        "confirmed": true,
+        "request_key": "req-p414-d02-1103",
+        "reason": "Routine checkup",
+        "self_pay": false,
+        "patient_id": "P414"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P414",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "patient",
+    "interface": "clean",
+    "task": "book_appointment",
+    "interaction": "multi_turn",
+    "disposition": "slot_held"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

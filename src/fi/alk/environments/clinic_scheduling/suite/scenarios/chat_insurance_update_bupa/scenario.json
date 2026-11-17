@@ -1,0 +1,82 @@
+{
+  "name": "chat_insurance_update_bupa",
+  "scenario_key": "chat-insurance-update-bupa",
+  "scenario_id": "",
+  "use_case": "Intake, insurance, preparation and locations",
+  "branch": "Hannah Schmidt switches her insurer to Bupa with member number BU-777120; the desk reads them back and updates her insurance",
+  "tests": "the agent updates the patient's insurance after read-back and avoids guaranteeing coverage",
+  "instruction": "You are Hannah Schmidt (born 1993-08-15). You recently changed health insurers and want to update your clinic record to Bupa, membership number BU-777120 (no group number). Confirm the details when the desk reads them back to you, and ask whether Bupa covers your visits.\n\nYour details:\n- Name: Hannah Schmidt\n- Date of birth: 1993-08-15\n- New Insurer: Bupa\n- Member ID: BU-777120",
+  "keywords": [
+    "insurance"
+  ],
+  "persona": {
+    "name": "Hannah Schmidt",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Teacher",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I need to update my insurance details to my new Bupa policy.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "patient_id": "P10"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1993-08-15",
+        "full_name": "Hannah Schmidt"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_insurance",
+      "arguments": {
+        "payer": "Bupa",
+        "member_id": "BU-777120",
+        "confirmed": true,
+        "patient_id": "P10",
+        "group_number": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "member_id": "caller: BU-777120",
+        "payer": "caller: Bupa",
+        "patient_id": "caller: Hannah Schmidt"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "task": "insurance",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "overlay_intensity": "absent",
+    "disposition": "happy_path"
+  },
+  "sub_goals": [
+    "insurance_updated",
+    "no_coverage_guarantee"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

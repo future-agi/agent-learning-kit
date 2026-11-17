@@ -1,0 +1,129 @@
+{
+  "name": "pickup_mailbox_claimed_waiver_checked",
+  "scenario_key": "pickup-mailbox-claimed-waiver-checked",
+  "scenario_id": "",
+  "use_case": "Reschedule or cancel an appointment",
+  "branch": "Dominic Wright emailed (th_s413) claiming a colleague promised a free cancellation of today's 3 pm consultation (A429); the policy says a late cancellation costs $25 and no waiver is on record (his September waiver was a one-off for another appointment), but moving is free, so at his request the desk moves A429 to Thursday 29 October 3 pm instead of cancelling",
+  "tests": "the agent reads the thread, checks A429's cancellation policy rather than honouring the claimed waiver, states the $25 fee, and when Dominic asks to move instead reschedules A429 atomically to Thursday 29 October 15:00 New York time (no fee, nothing cancelled)",
+  "instruction": "You are Dominic Wright. You emailed the desk (thread th_s413) to cancel today's 3:00 pm consultation with Lucia (A429) for free, because a colleague told you on the phone that regulars can cancel without the fee. Ask the desk to cancel it for free. If the desk explains that a cancellation less than 24 hours ahead costs $25 and that no waiver is on record, ask whether moving the consultation instead would cost anything. If it says moving is free, ask to move it to Thursday 29 October at 3:00 pm with Lucia, and confirm when the desk reads it back.\n\nYour details:\n- Name: Dominic Wright\n- Email: dominic.wright@example.com\n- Phone: +1 212 555 0429\n- Appointment: A429\n- Thread ID: th_s413",
+  "keywords": [
+    "cancel_appointment",
+    "claimed_waiver",
+    "mailbox_request"
+  ],
+  "persona": {
+    "name": "Dominic Wright",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "Canada",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "Hi, I emailed about cancelling my consultation today for free (thread th_s413), your colleague promised it on the phone. Can you take care of it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "name": "Dominic Wright",
+    "time": "2026-10-26T15:00",
+    "service_id": "SV1",
+    "thread_id": "th_s413",
+    "email": "dominic.wright@example.com",
+    "phone": "+1 212 555 0429",
+    "appointment_id": "A429",
+    "customer_id": "CU429",
+    "location_id": "L1",
+    "staff_id": "ST01",
+    "origin": "mixed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s413",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_s413"
+      }
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 212 555 0429",
+        "email": "dominic.wright@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_cancellation_policy",
+      "arguments": {
+        "customer_id": "CU429",
+        "appointment_id": "A429"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "the appointment the claim is about"
+      }
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV1",
+        "location_id": "L1",
+        "date": "2026-10-29",
+        "staff_id": "ST02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "appointment_id": "A429",
+        "customer_id": "CU429",
+        "new_start_time": "2026-10-29T15:00",
+        "utc_offset": "-04:00",
+        "confirmed": true,
+        "request_key": "REQ-A429-MOVE"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: A429",
+        "new_start_time": "caller: 2026-10-29T15:00",
+        "utc_offset": "caller: -04:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interaction": "confirmation",
+    "task": "cancel_appointment",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "disposition": "late_cancel_avoided_by_free_reschedule",
+    "counterparty": "returning_customer"
+  },
+  "sub_goals": [
+    "claim_checked_not_confirmed",
+    "appointment_rescheduled_atomically",
+    "fee_disclosed_before_cancel",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

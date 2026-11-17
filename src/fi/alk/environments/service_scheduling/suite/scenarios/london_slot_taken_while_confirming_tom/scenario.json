@@ -1,0 +1,92 @@
+{
+  "name": "london_slot_taken_while_confirming_tom",
+  "scenario_key": "london-slot-taken-while-confirming-tom",
+  "scenario_id": "",
+  "use_case": "Concurrency, clock changes and failures",
+  "branch": "Competing booking BC403 on Tom Whitaker (ST05) at 2026-11-04 10:00 UTC at Shoreditch; customer confirms, booking fails due to slot taken; agent offers alternatives, nothing booked.",
+  "tests": "the agent handles a slot contention race condition by reporting the conflict honestly without claiming success",
+  "instruction": "You want to book a Haircut at the Shoreditch Studio in London with Tom Whitaker on Wednesday 4 November at 10:00 am. When the agent attempts to confirm the booking, if the agent tells you the slot was just taken by another customer and offers other available times, decline booking anything else for now.\n\nYour details:\n- Name: Maya Thorne\n- Email: maya.thorne@example.com\n- Phone: +44 20 7946 0403\n- Customer ID: CU403\n- Location: Shoreditch Studio (London)\n- Stylist: Tom Whitaker\n- Date and Time: Wednesday 4 November at 10:00 am\n- Service: Haircut",
+  "keywords": [
+    "concurrency",
+    "slot_taken",
+    "shoreditch",
+    "london",
+    "contention"
+  ],
+  "persona": {
+    "name": "Maya Thorne",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I'd like to book a Haircut with Tom Whitaker at Shoreditch on Wednesday 4 November at 10:00 am please.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "CU403",
+    "location_id": "L2",
+    "email": "maya.thorne@example.com",
+    "phone": "+44 20 7946 0403",
+    "contention_id": "BC403"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "maya.thorne@example.com",
+        "phone": "+44 20 7946 0403"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "confirmed": true,
+        "request_key": "REQ-BC403-MAYA",
+        "staff_id": "ST05",
+        "utc_offset": "+00:00",
+        "start_time": "2026-11-04T10:00",
+        "customer_id": "CU403",
+        "location_id": "L2",
+        "hold_id": "",
+        "service_id": "SV3"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller: CU403"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "overlay_intensity": "absent",
+    "task": "concurrency",
+    "disposition": "slot_taken"
+  },
+  "sub_goals": [
+    "slot_taken_handled",
+    "no_success_claimed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

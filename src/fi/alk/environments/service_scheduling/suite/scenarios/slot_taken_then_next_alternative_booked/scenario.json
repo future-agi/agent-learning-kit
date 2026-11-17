@@ -1,0 +1,113 @@
+{
+  "name": "slot_taken_then_next_alternative_booked",
+  "scenario_key": "slot-taken-then-next-alternative-booked",
+  "scenario_id": "",
+  "use_case": "Concurrency, clock changes and failures",
+  "branch": "Competing booking BC404 on Lucia Fernandez (ST02) for SV3 at 2026-11-03 14:00 local; initial booking returns slot_taken; customer takes next slot at 14:30 and it is booked.",
+  "tests": "the agent handles slot contention on the first choice and successfully books the offered second choice",
+  "instruction": "You want to book a Haircut with Lucia Fernandez at Midtown Studio on Tuesday 3 November at 2:00 pm (14:00). If the agent explains that the 2:00 pm slot was just taken by another customer and offers 2:30 pm (14:30), accept the 2:30 pm slot and confirm the booking.\n\nYour details:\n- Name: Kiran Patel\n- Email: kiran.patel@example.com\n- Phone: +1 416 555 0404\n- Customer ID: CU404\n- Location: L1\n- Stylist: ST02\n- Service: SV3\n- First Choice: 2026-11-03T14:00\n- Second Choice: 2026-11-03T14:30\n- UTC Offset: -05:00",
+  "keywords": [
+    "concurrency",
+    "slot_taken",
+    "retry",
+    "midtown",
+    "haircut"
+  ],
+  "persona": {
+    "name": "Kiran Patel",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I'd like to book a Haircut with Lucia Fernandez at Midtown Studio on Tuesday 3 November at 2:00 pm please.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "location_id": "L1",
+    "email": "kiran.patel@example.com",
+    "contention_id": "BC404",
+    "customer_id": "CU404",
+    "origin": "generated",
+    "phone": "+1 416 555 0404"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 416 555 0404",
+        "email": "kiran.patel@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "staff_id": "ST02",
+        "hold_id": "",
+        "utc_offset": "-05:00",
+        "confirmed": true,
+        "service_id": "SV3",
+        "request_key": "REQ-BC404-1",
+        "customer_id": "CU404",
+        "start_time": "2026-11-03T14:00",
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "request_key": "REQ-BC404-2",
+        "customer_id": "CU404",
+        "location_id": "L1",
+        "staff_id": "ST02",
+        "hold_id": "",
+        "utc_offset": "-05:00",
+        "service_id": "SV3",
+        "confirmed": true,
+        "start_time": "2026-11-03T14:30"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "location_id": "caller: L1",
+        "staff_id": "caller: ST02",
+        "service_id": "caller: SV3",
+        "customer_id": "caller: CU404",
+        "start_time": "caller: 2026-11-03T14:30",
+        "utc_offset": "caller: -05:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "concurrency",
+    "overlay_vector": "none",
+    "disposition": "slot_taken_recovery",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "counterparty": "individual_customer",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "slot_taken_handled",
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

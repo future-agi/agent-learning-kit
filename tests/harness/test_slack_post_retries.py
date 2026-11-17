@@ -18,7 +18,7 @@ from fi.alk.harness.folder import read_folder
 from fi.alk.harness.prove import _run, play_reference_step
 from fi.alk.harness.releases import WORLD
 
-VERTICALS = ("hr", "internal_it", "saas_subscriptions")
+VERTICALS = ("hr", "internal_it", "saas_subscriptions", "sales_intake", "internal_knowledge")
 
 
 def _posted(here: Path, world_root: Path):

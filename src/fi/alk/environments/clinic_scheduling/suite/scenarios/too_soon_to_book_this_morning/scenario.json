@@ -1,0 +1,91 @@
+{
+  "name": "too_soon_to_book_this_morning",
+  "scenario_key": "too-soon-to-book-this-morning",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "Too soon to book this morning",
+  "tests": "Tests explaining notice window constraints when requesting a same-morning slot and booking the earliest valid slot.",
+  "instruction": "You are Sarah Bennett, mother and guardian of Noah Bennett (born 4 May 2018, insured with Vitality). You want to book a paediatric consultation with Dr. Hannah Lee at Riverbank North this morning, Monday 26 October, for 10:00 or 10:30. When the assistant explains that 10:00 and 10:30 cannot be booked because appointments require at least 2 hours' notice from the current time (09:00), and offers 11:00 or 11:30 instead, choose 11:00 and confirm the booking when details are read back.",
+  "keywords": [
+    "declined_action",
+    "notice_window"
+  ],
+  "persona": {
+    "name": "Sarah Bennett",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Teacher",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I would like to book an appointment for my son Noah Bennett with Dr. Hannah Lee at Riverbank North this morning at 10:00 or 10:30.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "dob": "2018-05-04",
+    "origin": "seed",
+    "patient_id": "P06",
+    "guardian_name": "Sarah Bennett",
+    "full_name": "Noah Bennett"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "2018-05-04",
+        "full_name": "Noah Bennett"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "patient_id": "P06",
+        "date_to": "2026-10-26",
+        "provider_id": "D06",
+        "date_from": "2026-10-26"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "request_key": "req_book_p06",
+        "confirmed": true,
+        "reason": "Paediatric consultation",
+        "patient_id": "P06",
+        "slot_id": "SL-D06-20261026-1100",
+        "self_pay": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id",
+        "slot_id": "record: the slot the caller confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "book_appointment"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

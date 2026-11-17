@@ -1,0 +1,139 @@
+{
+  "name": "slack_reply_client_dinner_conflict_lucas",
+  "scenario_key": "slack-reply-client-dinner-conflict-lucas",
+  "scenario_id": "",
+  "use_case": "Pick up a Slack question and post the approved reply in its thread",
+  "branch": "Lucas Martin asked about conflicting client dinner limits in #help-policies (KM08, a six-message thread with a per-diem mix-up and the Sales Hospitality owner asking for the owners to settle it); Laura Chen asks the desk to flag the conflict on client_ent_v1 to its owner and then post approved reply APP-KN-405, which says the conflict has been flagged",
+  "tests": "the agent reads the KM08 thread, Client Entertainment Guidelines 1.0 section 1 and Sales Hospitality Standard 1.0 section 1, finds no precedence rule, raises one conflict issue on client_ent_v1 (routed to its owner Tomas Rivera), and only then posts the approved reply, which says the conflict was flagged, in Lucas's thread with APP-KN-405",
+  "instruction": "You are Laura Chen, Finance Controller. Lucas Martin asked in #help-policies (KM08) whether the client dinner limit is $100 or $150 per person, since two documents disagree. Ask the Knowledge Desk to flag the conflict on the Client Entertainment Guidelines to its owner, and then to post the approved reply in Lucas's thread; you provide approval APP-KN-405.\n\nYour details:\n- Name: Laura Chen\n- Employee ID: E11\n- Approval: APP-KN-405",
+  "keywords": [
+    "slack",
+    "approval"
+  ],
+  "persona": {
+    "name": "Laura Chen",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Finance Controller",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "Please flag the client dinner limit conflict on the Client Entertainment Guidelines to its owner, then post the approved reply in Lucas's #help-policies thread using approval APP-KN-405.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "approval_id": "APP-KN-405"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HELPPOL",
+        "message_ts": "1793786400.000008"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: KM08"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E11",
+        "passage_id": "P-CLIENTENTV1-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Client Entertainment Guidelines 1.0, section 1"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "passage_id": "P-SALESHOSPV1-01",
+        "employee_id": "E11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: Sales Hospitality Standard 1.0, section 1"
+      }
+    },
+    {
+      "tool": "get_precedence_rules",
+      "arguments": {
+        "family": "client_entertainment",
+        "other_family": "sales_hospitality",
+        "employee_id": "E11"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_document_owner",
+      "arguments": {
+        "employee_id": "E11",
+        "drive_file_id": "client_ent_v1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "flag_document_issue",
+      "arguments": {
+        "employee_id": "E11",
+        "drive_file_id": "client_ent_v1",
+        "issue_type": "conflict",
+        "details": "Section 1 caps client entertainment at $100 per person; Sales Hospitality Standard 1.0 section 1 allows $150 per person for the same events; no precedence rule is configured.",
+        "request_key": "DI-E11-CLIENT-ENT-CONFLICT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "drive_file_id": "record: Client Entertainment Guidelines 1.0 (client_ent_v1)",
+        "issue_type": "record: a conflict"
+      }
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "approval_id": "APP-KN-405",
+        "message": "Client Entertainment Guidelines 1.0 section 1 caps client entertainment at $100 per person, while Sales Hospitality Standard 1.0 section 1 allows $150 per person, and no precedence rule is configured between them. The Knowledge Desk has flagged this conflict to the owner of the Client Entertainment Guidelines for clarification.",
+        "thread_ts": "1793786400.000008",
+        "channel_id": "CH_HELPPOL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "record: KM08 thread",
+        "channel_id": "record: #help-policies"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "manager",
+    "overlay": "none",
+    "disposition": "conflict_present",
+    "interface": "slack",
+    "task": "slack_reply",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread",
+    "document_issue_flagged"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

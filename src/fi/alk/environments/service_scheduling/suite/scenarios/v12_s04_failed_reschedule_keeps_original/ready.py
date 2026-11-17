@@ -1,0 +1,6 @@
+def ready(world):
+    state = world.state()
+    row = next((r for r in state.get("booking_contention", []) if r.get("contention_id") == 'BC402'), None)
+    if not row or row.get("status") != 'armed':
+        return "booking_contention BC402 is missing or its status is not armed"
+    return None

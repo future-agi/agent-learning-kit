@@ -7,6 +7,15 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Wave A increments 7 to 10 (TH-8750): four new vertical packages, each with 100 scenarios over
+  linked business and MCP records: `clinic_scheduling` (V02; Calendar as the availability source,
+  Gmail), `service_scheduling` (V12; Calendar across two time zones and a clock change, Gmail),
+  `sales_intake` (V17; Gmail, Calendar and Slack in one world) and `internal_knowledge` (V11; the
+  Drive corpus is the business system, Slack decisions). Each carries its five workbook cases,
+  hand-written seeds and builder-generated scenarios proved on its own world, a validation test
+  with a wrong-run matrix, and a README rendered from the suite and the test; each seals on SQLite
+  and twice on PostgreSQL with identical digests and was run live (Claude Code over MCP, Gemini
+  conversations, an E2B build).
 - Wave A increments 3 to 6 (TH-8750): `retail` (Gmail and Drive), `hr` (Slack and Drive),
   `internal_it` (Slack and Drive) and `saas_subscriptions` (Gmail and Slack) each reach 100
   scenarios over linked business and MCP records, with new business tools, world checks for the

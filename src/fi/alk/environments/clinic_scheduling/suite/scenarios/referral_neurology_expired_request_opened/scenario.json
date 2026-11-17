@@ -1,0 +1,100 @@
+{
+  "name": "referral_neurology_expired_request_opened",
+  "scenario_key": "referral-neurology-expired-request-opened",
+  "scenario_id": "",
+  "use_case": "Referral and eligibility constraints",
+  "branch": "P10 wants neurology; RF03 expired; desk opens a new referral request for neurology.",
+  "tests": "the desk identifies that the neurology referral is expired, blocks immediate booking, and creates a referral request to the patient practice",
+  "instruction": "You need to see Dr. Grace Liu for neurology consultation regarding ongoing neurological symptoms. You had a referral from Canonbury Health Centre earlier this year, but you are not sure if it is still valid. You want to book an appointment with Dr. Liu. If the desk informs you that your neurology referral has expired and cannot be used to book, ask the desk to open a new referral request to your practice (Canonbury Health Centre).\n\nYour details:\n- Full name: Hannah Schmidt\n- Date of birth: 15 August 1993 (1993-08-15)\n- GP practice: Canonbury Health Centre\n- Specialty wanted: Neurology\n- Requested provider: Dr. Grace Liu",
+  "keywords": [
+    "referral",
+    "neurology",
+    "expired"
+  ],
+  "persona": {
+    "name": "Hannah Schmidt",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Teacher",
+    "location": "Canada",
+    "personality": "Anxious",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello, I need to see Dr. Grace Liu for neurology. I had a referral from Canonbury Health Centre.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P10",
+    "status": "expired",
+    "origin": "seed",
+    "referral_id": "RF03",
+    "specialty": "neurology"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1993-08-15",
+        "full_name": "Hannah Schmidt"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "dob": "caller: 1993-08-15",
+        "full_name": "caller: Hannah Schmidt"
+      }
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "patient_id": "P10",
+        "specialty": "neurology"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "caller: P10",
+        "specialty": "record: the patient and the specialty whose referral decides the booking"
+      }
+    },
+    {
+      "tool": "create_referral_request",
+      "arguments": {
+        "referring_practice": "Canonbury Health Centre",
+        "request_key": "REQ-P10-NEUR-REF",
+        "specialty": "neurology",
+        "patient_id": "P10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "specialty": "caller: neurology",
+        "patient_id": "caller: P10"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "book_appointment",
+    "counterparty": "verified",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "interaction": "single_request",
+    "disposition": "referral_expired",
+    "overlay_vector": "none",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "referral_request_created",
+    "referral_required_enforced"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

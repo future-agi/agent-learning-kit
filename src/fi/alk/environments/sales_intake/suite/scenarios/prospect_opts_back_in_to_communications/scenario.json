@@ -1,0 +1,81 @@
+{
+  "name": "prospect_opts_back_in_to_communications",
+  "scenario_key": "prospect-opts-back-in-to-communications",
+  "scenario_id": "",
+  "use_case": "Record consent and stop outreach",
+  "branch": "Grace Okafor of Ridgeway Utilities (contact C15, currently opted_out) explicitly requests to opt back in to BrightDesk communications; the desk confirms and updates her consent status to opted_in",
+  "tests": "the agent confirms Grace Okafor's identity and updates C15's consent status to opted_in upon her explicit request",
+  "instruction": "You are Grace Okafor at Ridgeway Utilities. You previously opted out, but now want to receive communications from BrightDesk again. Request to opt back in (opted_in) and confirm when the agent reads it back to you.\n\nYour details:\n- Name: Grace Okafor\n- Email: grace.okafor@ridgeway.example\n- Company: Ridgeway Utilities",
+  "keywords": [
+    "consent"
+  ],
+  "persona": {
+    "name": "Grace Okafor",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I am Grace Okafor from Ridgeway Utilities. I previously opted out of messages from BrightDesk, but our situation has changed and I would like to opt back in.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "contact_id": "C15"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "grace.okafor@ridgeway.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_contact_consent",
+      "arguments": {
+        "contact_id": "C15",
+        "source": "prospect_request",
+        "status": "opted_in",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "confirmed": "caller: confirmed",
+        "contact_id": "record: Grace Okafor C15",
+        "status": "caller: opted_in"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "task": "consent",
+    "counterparty": "prospect",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "disposition": "opt_out"
+  },
+  "sub_goals": [
+    "consent_recorded_and_respected",
+    "facts_confirmed_before_write",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

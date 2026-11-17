@@ -1,0 +1,88 @@
+{
+  "name": "demo_availability_offered_for_qualified_lead",
+  "scenario_key": "demo-availability-offered-for-qualified-lead",
+  "scenario_id": "",
+  "use_case": "Book a demo on the owner's calendar after the prospect picks",
+  "branch": "A prospect with an existing qualified lead (L03 owned by Priya Raman A02) inquires about demo times, and the agent offers the owner's open demo slots in the prospect's time zone without prematurely booking",
+  "tests": "the agent identifies the lead and owner rep A02, queries open demo slots on A02's calendar, offers them to the prospect in their local time zone, and does not book until a slot is chosen",
+  "instruction": "You are Elodie Tremblay, Support Operations Lead at Maple Ridge Telecom in Canada. Your company has an open qualified lead with BrightDesk. You want to see what demo times are open with your assigned rep so your team can pick a slot to see BrightDesk in action.\n\nYour details:\n- Name: Elodie Tremblay\n- Email: elodie.tremblay@mapleridge.example\n- Company: Maple Ridge Telecom\n- Country: Canada\n- Title: Support Operations Lead",
+  "keywords": [
+    "demo",
+    "availability"
+  ],
+  "persona": {
+    "name": "Elodie Tremblay",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Elodie Tremblay from Maple Ridge Telecom (elodie.tremblay@mapleridge.example). We're ready to schedule a product demo. Could you share what open demo slots are available this week?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "email": "elodie.tremblay@mapleridge.example",
+    "contact_id": "C03",
+    "owner_rep_id": "A02",
+    "lead_id": "L03",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "elodie.tremblay@mapleridge.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_demo_slots",
+      "arguments": {
+        "rep_id": "A02",
+        "lead_id": "L03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "rep_id": "record: leads.L03.owner_rep_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "book_demo",
+    "disposition": "availability_check",
+    "counterparty": "known_contact",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "interaction": "single_request",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "availability_offered",
+    "demo_time_in_prospect_timezone"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

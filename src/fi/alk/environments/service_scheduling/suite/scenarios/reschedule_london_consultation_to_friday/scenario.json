@@ -1,0 +1,101 @@
+{
+  "name": "reschedule_london_consultation_to_friday",
+  "scenario_key": "reschedule-london-consultation-to-friday",
+  "scenario_id": "",
+  "use_case": "Reschedule or cancel an appointment",
+  "branch": "customer moves an existing London consultation appointment A421 to Friday 30 October at 13:00 London time",
+  "tests": "the agent reschedules appointment A421 with Priya to Friday 30 October 13:00 London time and updates the calendar event",
+  "instruction": "You have an existing Initial Consultation (A421) booked with Priya Desai at the Shoreditch studio on Thursday 29 October 2026 at 1:00 pm. You want to reschedule it to Friday 30 October 2026 at 1:00 pm (13:00) with Priya at Shoreditch.\n\nYour details:\n- Name: Freya Davies\n- Email: freya.davies@example.com\n- Phone: +44 20 7946 0421\n- Existing appointment ID: A421\n- Service: Initial Consultation\n- Staff: Priya Desai\n- Location: Shoreditch Studio (22 Rivington St, London)\n- New requested time: Friday 30 October 2026 at 1:00 pm (2026-10-30T13:00)\n- Time zone: Europe/London (+00:00)",
+  "keywords": [
+    "reschedule_appointment",
+    "consultation",
+    "london"
+  ],
+  "persona": {
+    "name": "Freya Davies",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I have an Initial Consultation booked at Shoreditch this Thursday at 1 pm (A421). Could you please move it to Friday 30 October at 1 pm?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "location_id": "L2",
+    "customer_id": "CU421",
+    "name": "Freya Davies",
+    "service_id": "SV1",
+    "email": "freya.davies@example.com",
+    "phone": "+44 20 7946 0421",
+    "appointment_id": "A421",
+    "origin": "mixed",
+    "new_time": "2026-10-30T13:00",
+    "staff_id": "ST04"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "freya.davies@example.com",
+        "phone": "+44 20 7946 0421"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "customer_id": "CU421",
+        "appointment_id": "A421"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "customer_id": "CU421",
+        "utc_offset": "+00:00",
+        "new_start_time": "2026-10-30T13:00",
+        "appointment_id": "A421",
+        "request_key": "REQ-RESCHED-A421",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "new_start_time": "caller: 2026-10-30T13:00",
+        "appointment_id": "record: A421",
+        "utc_offset": "caller: +00:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reschedule_appointment",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interaction": "single_request",
+    "interface": "clean_prose",
+    "counterparty": "returning_customer",
+    "disposition": "move_day",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

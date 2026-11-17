@@ -1,0 +1,128 @@
+{
+  "name": "rep_handoff_created_for_qualified_uk_lead",
+  "scenario_key": "rep-handoff-created-for-qualified-uk-lead",
+  "scenario_id": "",
+  "use_case": "Post an approved handoff summary in Slack",
+  "branch": "Beatrice Vance from Orion Logistics UK (L_BEATRICE) has full rubric facts (50 seats, customer_service, 0-3 months, UK); the desk qualifies the lead, routes to UK territory owner A03 (Oliver Hughes), and creates a rep_handoff",
+  "tests": "the agent searches for contact Beatrice Vance, qualifies lead L_BEATRICE, assigns UK owner A03, and creates a rep_handoff",
+  "instruction": "You are Beatrice Vance, Head of Customer Care at Orion Logistics UK in the United Kingdom. You previously submitted your requirements (50 customer service seats, going live in 0-3 months, budget confirmed) and you are checking in on live chat to see if your enquiry is qualified and routed to your dedicated account executive.\n\nYour details:\n- Name: Beatrice Vance\n- Email: beatrice.vance@orion-logistics.example\n- Company: Orion Logistics UK\n- Country: United Kingdom\n- Title: Head of Customer Care\n- Requirements: 50 seats, customer service, 0-3 months, budget confirmed",
+  "keywords": [
+    "handoff",
+    "qualification",
+    "territory"
+  ],
+  "persona": {
+    "name": "Beatrice Vance",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I'm Beatrice Vance from Orion Logistics UK (beatrice.vance@orion-logistics.example). We're looking for 50 customer service seats for our UK team to launch within 0-3 months, with confirmed budget. Could you confirm our qualification and route us to our assigned rep?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contact_id": "C_BEATRICE",
+    "lead_id": "L_BEATRICE",
+    "email": "beatrice.vance@orion-logistics.example",
+    "rep_id": "A03",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "beatrice.vance@orion-logistics.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L_BEATRICE"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "facts": {
+          "timeline": "0-3 months",
+          "use_case": "customer_service",
+          "seats": 50
+        },
+        "lead_id": "L_BEATRICE"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: leads.L_BEATRICE.lead_id",
+        "facts": "record: leads.L_BEATRICE facts"
+      }
+    },
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "United Kingdom"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "assign_owner",
+      "arguments": {
+        "lead_id": "L_BEATRICE",
+        "rep_id": "A03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "rep_id": "record: territory_rules.United Kingdom.rep_id",
+        "lead_id": "record: leads.L_BEATRICE.lead_id"
+      }
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "request_key": "REQ-LBEA-H",
+        "summary": "Orion Logistics UK: 50 seats, customer service, 0-3 months, assigned to Oliver Hughes",
+        "lead_id": "L_BEATRICE",
+        "kind": "rep_handoff"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: leads.L_BEATRICE.lead_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interaction": "single_request",
+    "disposition": "qualify_and_route",
+    "overlay_vector": "none",
+    "task": "slack_handoff",
+    "overlay": "none",
+    "counterparty": "known_contact",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "lead_qualified_by_rubric",
+    "owner_assigned_by_territory",
+    "handoff_created_for_lead"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,133 @@
+{
+  "name": "email_two_corrections_reschedule_and_draft",
+  "scenario_key": "email-two-corrections-reschedule-and-draft",
+  "scenario_id": "",
+  "use_case": "Email requests and corrections",
+  "branch": "Aisha Mensah emailed to move cardiology appointment A03 from 13:00 to 15:00, changed it to 14:00 and then to 15:30 on Wednesday 28 October; her chat opening defers to the email, so the desk finds the latest time, moves A03 to 15:30 and drafts a reply confirming it",
+  "tests": "the agent reads th_c13_two_corrections_p08 (five messages, two corrections), reschedules A03 to SL-D04-20261028-1530, and creates a reply draft on the thread confirming 15:30",
+  "instruction": "You emailed the clinic about moving your cardiology appointment A03 on Wednesday 28 October, then changed the time in follow-up emails. You are now contacting the clinic desk on chat: ask them to move A03 to the time your latest email gives, and to draft a reply on your email thread confirming the change so you have it in writing. Do not say the new time yourself; if asked, say it is in your latest email. Your latest email asked for 15:30: when the desk reads back Wednesday 28 October at 15:30 with Dr. Ethan Brooks at Riverbank North, confirm. If it reads back 15:00 or 14:00, say your latest email replaced that.\n\nYour details:\n- Full name: Aisha Mensah\n- Date of birth: 1979-03-22\n- Email: aisha.mensah@example.com\n- Appointment reference: A03\n- Email thread subject: Changing the time of A03",
+  "keywords": [
+    "reschedule",
+    "correction"
+  ],
+  "persona": {
+    "name": "Aisha Mensah",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Accountant",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I sent an email and then a couple of follow-ups about moving my cardiology appointment A03. Could you move it as my latest email says and draft a reply to my email confirming it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "full_name": "Aisha Mensah",
+    "provider_id": "D04",
+    "origin": "seed",
+    "date": "2026-10-28",
+    "dob": "1979-03-22",
+    "patient_id": "P08",
+    "appointment_id": "A03",
+    "email": "aisha.mensah@example.com",
+    "thread_id": "th_c13_two_corrections_p08"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Aisha Mensah",
+        "dob": "1979-03-22"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c13_two_corrections_p08",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.id"
+      }
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "specialty": "cardiology",
+        "provider_id": "D04",
+        "date_from": "2026-10-28",
+        "patient_id": "P08",
+        "location_id": null,
+        "date_to": "2026-10-28"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "confirmed": true,
+        "request_key": "REQ-P08-RESCHED",
+        "new_slot_id": "SL-D04-20261028-1530",
+        "appointment_id": "A03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: appointments.appointment_id",
+        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\"",
+        "new_slot_id": "record: the slot the caller confirmed"
+      }
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "body": "Dear Aisha Mensah, your cardiology appointment A03 on Wednesday 28 October has been moved to 15:30, as your latest email asked. Riverbank Appointments Desk",
+        "subject": "Re: Changing the time of A03",
+        "bcc": null,
+        "to": [
+          "aisha.mensah@example.com"
+        ],
+        "cc": null,
+        "htmlBody": null,
+        "replyToMessageId": "cmsg_023",
+        "attachments": null
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "to": "record: gmail_messages.sender",
+        "replyToMessageId": "record: gmail_messages.id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reschedule",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "disposition": "correction",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interface": "email_thread",
+    "counterparty": "proxy"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically",
+    "draft_created_for_review"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

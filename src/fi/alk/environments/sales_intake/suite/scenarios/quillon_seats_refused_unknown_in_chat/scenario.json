@@ -1,0 +1,78 @@
+{
+  "name": "quillon_seats_refused_unknown_in_chat",
+  "scenario_key": "quillon-seats-refused-unknown-in-chat",
+  "scenario_id": "",
+  "use_case": "Ask for missing facts instead of inventing them",
+  "branch": "Ava Morales (lead L11) chats to qualify but does not know their seat count yet; the desk evaluates L11 with the facts on file, leaving it in needs_information",
+  "tests": "the agent asks Ava Morales for the seat count and leaves lead L11 in needs_information when she does not know it",
+  "instruction": "You are Ava Morales from Quillon Travel (lead L11). You want to qualify for next steps. When the desk asks how many agents or seats you need, say you don't know the seat count yet and are still evaluating team size.\n\nYour details:\n- Name: Ava Morales\n- Email: ava.morales@quillon.example\n- Company: Quillon Travel\n- Lead ID: L11",
+  "keywords": [
+    "qualification"
+  ],
+  "persona": {
+    "name": "Ava Morales",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Reserved",
+    "communication_style": "Questioning",
+    "initial_message": "Hello, Ava Morales from Quillon Travel here. Can we qualify our lead for next steps?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "lead_id": "L11",
+    "origin": "seed",
+    "contact_id": "C31"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: Quillon lead L11"
+      }
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "facts": {},
+        "lead_id": "L11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: Quillon lead L11"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "qualify_lead",
+    "interface": "clean_prose",
+    "counterparty": "prospect",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "missing_information"
+  },
+  "sub_goals": [
+    "missing_info_requested"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

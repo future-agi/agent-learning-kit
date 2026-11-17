@@ -1,0 +1,100 @@
+{
+  "name": "oncall_slack_reminder_agrees_with_policy",
+  "scenario_key": "oncall-slack-reminder-agrees-with-policy",
+  "scenario_id": "",
+  "use_case": "Report conflicting current sources without choosing one",
+  "branch": "Maya Patel checks on-call compensation after seeing Marcus Lee's reminder KM13 in #engineering; the agent reads KM13 and oncall_v2, confirming $400/week and $50/page",
+  "tests": "the agent reads Marcus's reminder thread KM13 in #engineering ($400 a week and $50 per after-hours page, with follow-ups on weekends and swaps) and On-call Policy 2.0 sections 1 and 2, and confirms both figures in the reminder match the policy in effect",
+  "instruction": "You saw Marcus Lee post an on-call reminder in #engineering about the weekly stipend and the after-hours page rate. Ask the Knowledge Desk to verify both figures against the policy.\n\nYour details:\n- Name: Maya Patel\n- Employee ID: E13\n- Channel: #engineering",
+  "keywords": [
+    "slack_decision"
+  ],
+  "persona": {
+    "name": "Maya Patel",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "QA Engineer",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Technical",
+    "initial_message": "Can you verify our on-call pay rates based on Marcus's reminder in #engineering and the On-Call Policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "message_ts": "1793872800.000013",
+    "employee_id": "E13",
+    "origin": "seed",
+    "passage_id": "P-ONCALLV2-01"
+  },
+  "solution": [
+    {
+      "tool": "get_user_profile",
+      "arguments": {
+        "employee_id": "E13"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1793872800.000013",
+        "channel_id": "CH_ENG"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_channels #engineering",
+        "message_ts": "record: KM13 in #engineering"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E13",
+        "passage_id": "P-ONCALLV2-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: kb_passages oncall_v2"
+      }
+    },
+    {
+      "tool": "fetch_passage",
+      "arguments": {
+        "employee_id": "E13",
+        "passage_id": "P-ONCALLV2-02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "passage_id": "record: On-call Policy 2.0, section 2"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "conflict",
+    "disposition": "conflicting_request",
+    "interface": "slack",
+    "counterparty": "internal_lead",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interaction": "correction",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "slack_evidence_weighed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
