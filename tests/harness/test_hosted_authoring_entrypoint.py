@@ -438,3 +438,53 @@ def test_authoring_masks_every_value_in_spans_but_the_platform_settings(
     assert copy.attributes["input.value"] == (
         "a *** b *** c *** d *** e *** f *** g *** h *** i pin ***. j *** k 14821 l ***"
     )
+
+
+def test_authoring_masks_a_customer_secret_stored_under_a_platform_setting_name(
+    tmp_path, monkeypatch
+) -> None:
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from fi.alk.harness import observability
+
+    # Only SIMULATOR_* is closed to customers, so FI_* names in secrets.json can hold theirs.
+    customer = {
+        "FI_HARNESS_PROJECT": "cust-vault-secret-FAKE-778899",
+        "FI_BASE_URL": "cust-base-secret-FAKE-112233",
+        "SIMULATOR_LLM_MODEL": "gemini-2.5-flash-lite",
+    }
+    gateway = {
+        "FI_HARNESS_PROJECT": "hosted-harness-prod",
+        "FI_BASE_URL": "https://collector.example.test",
+        "ALK_HARNESS_MODEL": "vertex_ai/claude-sonnet-4-5",
+    }
+
+    handed = entrypoint._span_secret_values(customer, gateway)
+
+    memory = InMemorySpanExporter()
+    provider = TracerProvider(
+        resource=Resource({"project_name": "hosted-harness-prod"})
+    )
+    provider.add_span_processor(SimpleSpanProcessor(memory))
+    with provider.get_tracer("test").start_as_current_span(
+        "llm",
+        attributes={
+            "gen_ai.request.model": "vertex_ai/claude-sonnet-4-5",
+            "llm.model_name": "gemini-2.5-flash-lite",
+            "input.value": "a cust-vault-secret-FAKE-778899 b cust-base-secret-FAKE-112233",
+        },
+    ):
+        pass
+    sink = InMemorySpanExporter()
+    observability._CleaningExporter(sink, handed).export(memory.get_finished_spans())
+
+    (copy,) = sink.get_finished_spans()
+    assert copy.attributes["input.value"] == "a *** b ***"
+    assert copy.attributes["gen_ai.request.model"] == "vertex_ai/claude-sonnet-4-5"
+    assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
+    assert copy.resource.attributes["project_name"] == "hosted-harness-prod"

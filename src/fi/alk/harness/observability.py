@@ -316,7 +316,11 @@ def _secret_patterns(secret_values: tuple[str, ...]) -> tuple[Any, ...]:
     forms = set(long)
     for value in long:
         for ascii_only in (True, False):
-            forms.add(json.dumps(value, ensure_ascii=ascii_only)[1:-1])
+            once = json.dumps(value, ensure_ascii=ascii_only)[1:-1]
+            forms.add(once)
+            # JSON text inside JSON text, left unparsed (too deep, or cut short), is escaped twice.
+            for ascii_twice in (True, False):
+                forms.add(json.dumps(once, ensure_ascii=ascii_twice)[1:-1])
     short = {
         value
         for value in secret_values
@@ -328,7 +332,33 @@ def _secret_patterns(secret_values: tuple[str, ...]) -> tuple[Any, ...]:
     if short:
         alternatives = "|".join(re.escape(value) for value in sorted(short, key=len, reverse=True))
         patterns.append(re.compile(rf"(?<![0-9])(?:{alternatives})(?![0-9])"))
+    # A PIN is spoken on calls, so a 4-digit value also goes when its digits are spaced out or
+    # said as words. A longer run of digits around the spaced form is not the PIN.
+    for value in sorted(short):
+        if len(value) == _SHORTEST_PIN:
+            patterns.extend(_spoken_pin_patterns(value))
     return tuple(patterns)
+
+
+_DIGIT_WORDS = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+)
+
+
+def _spoken_pin_patterns(pin: str) -> list[Any]:
+    separated = r"[ .\-]".join(pin)
+    spaced = re.compile(rf"(?<![0-9])(?<![0-9][ .\-]){separated}(?![0-9])(?![ .\-][0-9])")
+    words = r"[ \-]+".join(_DIGIT_WORDS[int(digit)] for digit in pin)
+    return [spaced, re.compile(rf"\b{words}\b", re.IGNORECASE)]
 
 
 def _mask(text: str, secrets: tuple[Any, ...]) -> str:
@@ -423,6 +453,10 @@ def _take_json(node: Any, flat: list[str], key: str, secrets: tuple[Any, ...]) -
         return ("dict", pairs)
     if isinstance(node, list):
         return ("list", [_take_json(item, flat, key, secrets) for item in node])
+    if isinstance(node, int) and not isinstance(node, bool):
+        # A declared all-digit value written as a number (a PIN passed as an integer argument).
+        text = str(node)
+        return ("as is", "***" if _mask(text, secrets) != text else node)
     if isinstance(node, str):
         if _named_secret(key):
             return ("as is", "[redacted]")
@@ -435,10 +469,15 @@ def _take_json(node: Any, flat: list[str], key: str, secrets: tuple[Any, ...]) -
     return ("as is", node)
 
 
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
 def _give(where: Any, cleaned: list[Any]) -> Any:
     kind, body = where
     if kind == "text":
-        return cleaned[body]
+        # A lone surrogate can't be encoded for the wire, and the encoder drops the whole
+        # attribute for it.
+        return _LONE_SURROGATE.sub("\ufffd", cleaned[body])
     if kind == "sequence":
         return tuple(_give(item, cleaned) for item in body)
     if kind == "json":

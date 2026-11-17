@@ -71,12 +71,12 @@ def _platform_simulator_values(values: dict[str, str]) -> dict[str, str]:
     }
 
 
-# In secrets.json only names a customer can't declare may be kept: SIMULATOR_* and FI_* are the
-# platform's. A customer may declare GOOGLE_CLOUD_PROJECT, so under that name it is masked there.
+# In secrets.json only names a customer can't declare may be kept, and the backend refuses only
+# SIMULATOR_*. A customer may store a secret under FI_HARNESS_PROJECT, FI_BASE_URL or
+# GOOGLE_CLOUD_PROJECT, so under those names it is masked there; the gateway file still carries
+# the platform's own values for them, and they come through from it.
 _PLATFORM_ONLY_SETTINGS = frozenset(
-    name
-    for name in observability.NON_SECRET_SETTINGS
-    if name.startswith(("SIMULATOR_", "FI_"))
+    name for name in observability.NON_SECRET_SETTINGS if name.startswith("SIMULATOR_")
 )
 
 

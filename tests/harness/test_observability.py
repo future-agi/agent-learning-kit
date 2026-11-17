@@ -1167,19 +1167,27 @@ def test_a_declared_secret_running_into_a_cut_address_goes_whole():
     assert out.endswith(" key=***[redacted]")
 
 
-@pytest.mark.parametrize("secret", ["pässword-1234567", 'pa"ss\\word-12345'])
-def test_a_secret_json_escapes_is_replaced_in_text_that_is_not_parsed(secret):
+@pytest.mark.parametrize(
+    "secret", ["pässword-1234567", 'pa"ss\\word-12345', 'pä"ss-wörd-123']
+)
+@pytest.mark.parametrize("ensure_ascii", [True, False])
+def test_a_secret_json_escapes_is_replaced_in_text_that_is_not_parsed(
+    secret, ensure_ascii
+):
     node = {"pw": "x", "note": "login " + secret}
     for _ in range(65):
         node = [node]
-    deep = json.dumps(node)
-    short = json.dumps({"note": "login " + secret + " " + "z" * 1200})[:1000]
+    deep = json.dumps(node, ensure_ascii=ensure_ascii)
+    short = json.dumps(
+        {"note": "login " + secret + " " + "z" * 1200}, ensure_ascii=ensure_ascii
+    )[:1000]
 
     for value in (deep, short):
         out = _export_one(_readable(**{"input.value": value}), (secret,)).attributes[
             "input.value"
         ]
         assert json.dumps(secret)[1:-1] not in out and secret not in out
+        assert json.dumps(secret, ensure_ascii=False)[1:-1] not in out
 
 
 def test_a_secret_in_json_text_inside_json_text_is_replaced():
@@ -1206,3 +1214,125 @@ def test_three_json_keys_that_clean_alike_keep_all_three_values():
     )
 
     assert sorted(out.values()) == ["1", "2", "3"]
+
+
+def test_a_secret_escaped_twice_in_text_that_is_not_parsed_is_replaced():
+    secret = 'line one\n-----KEY "fake" 1234567'
+    once = json.dumps(secret)[1:-1]
+    twice = json.dumps(once)[1:-1]
+    assert twice != once
+    value = "tool said " + twice + " and stopped"
+
+    out = _export_one(_readable(**{"output.value": value}), (secret,)).attributes[
+        "output.value"
+    ]
+
+    assert out == "tool said *** and stopped"
+
+
+def test_a_declared_all_digit_value_written_as_a_json_number_is_replaced():
+    value = json.dumps(
+        {"guest_pin": 4821, "max_tokens": 4096, "stream": True, "nested": [4821, 7]}
+    )
+
+    out = _export_one(_readable(**{"input.value": value}), ("4821",)).attributes[
+        "input.value"
+    ]
+
+    assert json.loads(out) == {
+        "guest_pin": "***",
+        "max_tokens": 4096,
+        "stream": True,
+        "nested": ["***", 7],
+    }
+
+
+def test_a_number_nobody_declared_is_kept_as_a_number():
+    value = json.dumps({"max_tokens": 4096, "stream": True, "pin": 4821})
+
+    out = _export_one(_readable(**{"input.value": value}), ()).attributes["input.value"]
+
+    assert json.loads(out) == {"max_tokens": 4096, "stream": True, "pin": 4821}
+
+
+@pytest.mark.parametrize(
+    "spoken",
+    [
+        "4 8 2 1",
+        "4-8-2-1",
+        "4.8.2.1",
+        "four eight two one",
+        "Four-Eight-Two-One",
+        "FOUR EIGHT TWO ONE",
+    ],
+)
+def test_a_four_digit_value_spoken_or_spaced_out_is_replaced(spoken):
+    out = _export_one(
+        _readable(**{"output.value": f"the pin is {spoken}, thanks"}), ("4821",)
+    ).attributes["output.value"]
+
+    assert out == "the pin is ***, thanks"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "code 14821 ok",
+        "run 4 8 2 1 5 ok",
+        "run 5 4 8 2 1 ok",
+        "fourteen eight two one",
+    ],
+)
+def test_a_longer_run_than_the_four_digit_value_is_kept(text):
+    out = _export_one(_readable(**{"output.value": text}), ("4821",)).attributes[
+        "output.value"
+    ]
+
+    assert out == text
+
+
+def test_the_non_secret_settings_are_exactly_these_27_names():
+    assert observability.NON_SECRET_SETTINGS == frozenset(
+        {
+            "AGENTCC_BASE_URL",
+            "ALK_BACKGROUND_NOISE",
+            "ALK_BACKGROUND_NOISE_CATALOG",
+            "ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER",
+            "ALK_HARNESS",
+            "ALK_HARNESS_MODEL",
+            "ALK_HARNESS_THINKING",
+            "ALK_JUDGE_MODE",
+            "ALK_VERTEX_LOCATION",
+            "ALK_VOICEMAIL_SCENARIOS",
+            "FI_BASE_URL",
+            "FI_HARNESS_PROJECT",
+            "GOOGLE_CLOUD_LOCATION",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+            "HARNESS_BACKGROUND_NOISE_VOLUME",
+            "HARNESS_CALLER_BARGE_IN_RATE",
+            "HARNESS_OBSERVABILITY",
+            "LIVEKIT_URL",
+            "SIMULATOR_LLM_FALLBACK_MODELS",
+            "SIMULATOR_LLM_MODEL",
+            "SIMULATOR_LLM_PROVIDER",
+            "SIMULATOR_LLM_THINKING",
+            "SIMULATOR_STT_MODEL",
+            "SIMULATOR_STT_PROVIDER",
+            "SIMULATOR_TTS_MODEL",
+            "SIMULATOR_TTS_PROVIDER",
+        }
+    )
+    assert len(observability.NON_SECRET_SETTINGS) == 27
+
+
+def test_a_lone_surrogate_in_plain_text_does_not_cost_the_attribute_its_export():
+    encoders = pytest.importorskip(
+        "opentelemetry.exporter.otlp.proto.common.trace_encoder"
+    )
+
+    copy = _export_one(_readable(**{"input.value": "a \ud83d b", "other": "kept"}), ())
+
+    assert copy.attributes["input.value"] == "a \ufffd b"
+    encoded = encoders.encode_spans([copy]).SerializeToString()
+    assert b"a \xef\xbf\xbd b" in encoded
