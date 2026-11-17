@@ -4772,6 +4772,17 @@ def test_a_call_its_call_actor_never_reached_is_graded_with_the_actor_noted(
     assert failed.reason == f"did not reach the agent: {why}"
 
 
+def test_a_fault_after_an_actor_never_reached_the_agent_keeps_the_note_beside_the_fault(monkeypatch) -> None:
+    def broken(world, calls):
+        raise RuntimeError("check crashed")
+
+    receipt = _run_with_friend(monkeypatch, _friend(name="R" * 600), [FakeSubGoal("booked", broken)])
+
+    assert (receipt.status, receipt.failure.code) == ("errored", "check_broken")
+    # The note is kept whole here; it is redacted, then capped, where it leaves the sandbox.
+    assert receipt.reason == f"did not reach the agent: {'R' * 600} (not_delivered)"
+
+
 def test_a_call_actor_a_probability_draw_left_out_leaves_the_call_graded(
     monkeypatch,
 ) -> None:

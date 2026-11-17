@@ -1579,10 +1579,6 @@ class RunResult:
     fenced: BaseException | None = None
 
 
-# The platform keeps a receipt's note to 500 characters.
-_NOTE_LIMIT = 500
-
-
 def _call_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
     """Each of the scenario's actors who speak on the call that never reached the agent, and why: not_triggered or
     not_delivered. One a `probability` draw left out is absent by design and not counted."""
@@ -2008,6 +2004,7 @@ class HostedScheduler:
             evaluations=(),
             call=pending.outcome.call,
             failure=pending.outcome.failure,
+            reason=pending.outcome.reason,
         )
         await self._emit(self._outbound.receipt(receipt), what="receipt")
         return receipt
@@ -2152,6 +2149,7 @@ class HostedScheduler:
                         evaluations=(),
                         call=outcome.call,
                         failure=outcome.failure,
+                        reason=outcome.reason,
                     )
                     await self._emit(self._outbound.receipt(receipt), what="receipt")
                     return receipt
@@ -2376,7 +2374,7 @@ class HostedScheduler:
         context.call = self._call_summary(call_outcome)
         # An actor that never reached the agent is noted on the trial; its sub-goals are graded as usual.
         missing = _call_actors_missing(scenario, call_outcome)
-        note = f"did not reach the agent: {missing}"[:_NOTE_LIMIT] if missing else None
+        note = f"did not reach the agent: {missing}" if missing else None
         calls = graded_calls(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
@@ -2401,6 +2399,7 @@ class HostedScheduler:
                 sub_goals=_unjudged(scenario.sub_goals),
                 call=self._call_summary(call_outcome),
                 mark_unhealthy=False,
+                reason=note,
             )
 
         if not scenario.sub_goals:
@@ -2416,7 +2415,8 @@ class HostedScheduler:
                 ),
                 sub_goals=(),
                 call=self._call_summary(call_outcome),
-            )
+                           reason=note,
+ )
 
         sub_goal_results: list[SubGoalResult] = []
         judged_pending: list[tuple[int, Any]] = []
@@ -2460,6 +2460,7 @@ class HostedScheduler:
                         + _unjudged(scenario.sub_goals[len(sub_goal_results) + 1 :]),
                         call=self._call_summary(call_outcome),
                         mark_unhealthy=True,
+                        reason=note,
                     )
                 broken_failure = outcome.failure
                 sub_goal_results.append(
@@ -2604,7 +2605,8 @@ class HostedScheduler:
                 broken_failure,
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
-            )
+                           reason=note,
+ )
         if off_script:
             return self._fault(
                 scenario,
@@ -2614,6 +2616,7 @@ class HostedScheduler:
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
                 retry=False,
+                reason=note,
             )
 
         sub_goal_results = [
@@ -2635,6 +2638,7 @@ class HostedScheduler:
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
                 retry=False,
+                reason=note,
             )
         # A settled `False` fails the scenario; an unsettled sub-goal (unmeasured included) makes it not decided.
         if any(result.held is False for result in sub_goal_results):
@@ -2657,6 +2661,7 @@ class HostedScheduler:
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
                 retry=False,
+                reason=note,
             )
         else:
             status = "passed"
@@ -2704,6 +2709,7 @@ class HostedScheduler:
         sub_goals: tuple[SubGoalResult, ...],
         call: CallSummary | None = None,
         retry: bool | None = None,
+        reason: str | None = None,
     ) -> "ResultReceipt | _Retry":
         should_retry = _is_retryable(failure.code) if retry is None else retry
         if should_retry:
@@ -2712,6 +2718,7 @@ class HostedScheduler:
                 sub_goals=sub_goals,
                 call=call,
                 mark_unhealthy=failure.code == "world_unavailable",
+                reason=reason,
             )
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
@@ -2723,6 +2730,7 @@ class HostedScheduler:
             evaluations=(),
             call=call,
             failure=failure,
+            reason=reason,
         )
 
 
@@ -2732,6 +2740,8 @@ class _Retry:
     sub_goals: tuple[SubGoalResult, ...]
     call: CallSummary | None
     mark_unhealthy: bool
+    # A note on the trial beside its fault (an actor that never reached the agent).
+    reason: str | None = None
 
 
 __all__ = [

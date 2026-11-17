@@ -981,25 +981,46 @@ def evidence_notices(
         if isinstance(held, Mapping)
         else {str(tool): {"action": str(tool)} for tool in held}
     )
-    for tool, how in sorted(logged_as_by.items()):
-        action, method = str(how.get("action") or tool), str(how.get("method") or "").upper()
+    # Tools the proxy reaches over one route with one method are one thing the log can tell apart: their calls are
+    # counted together against its rows for that route.
+    groups: dict[tuple[str, str, bool], list[str]] = {}
+    for tool, how in logged_as_by.items():
+        # A tool held behind the proxy carries the method it is called with; the in-process door's rows name the tool.
+        proxied = "method" in how
+        action = str(how.get("action") or tool)
+        groups.setdefault((action, str(how.get("method") or "").upper(), proxied), []).append(tool)
+    rows = list(log or ())
+    used: set[int] = set()
+    # A route of its own before one with a `{part}` that could also match its rows, so each row goes to its own.
+    for (action, method, proxied), tools in sorted(groups.items(), key=lambda item: ("{" in item[0][0], item[0])):
 
-        def is_this(row: Mapping[str, Any], tool: str = tool, action: str = action, method: str = method) -> bool:
-            # The door names the call by the tool or records the tool beside it, or logs the world action it reached
-            # (a route's `{part}` standing for the part the call named), made with the tool's own method.
-            if str(row.get("name") or "") == tool or str(row.get("agent_tool") or "") == tool:
+        def is_this(row: Mapping[str, Any], tools: list[str] = tools, action: str = action, method: str = method,
+                    proxied: bool = proxied) -> bool:
+            # The in-process door names the call by the tool or records the tool beside it. The proxy logs the world
+            # action it reached (a route's `{part}` standing for the part the call named) with the method it was
+            # made with; its row's name is only the route's last part, never the tool.
+            if not proxied and (str(row.get("name") or "") in tools or str(row.get("agent_tool") or "") in tools):
                 return True
             made_with = str(row.get("method") or "").upper()
             return action_matches(logged_as(row), action) and not (method and made_with and made_with != method)
 
-        made = sum(1 for call in calls if call.name == tool)
-        logged = sum(
-            1 for row in log or () if (row.get("actor_id") or AGENT) == AGENT and is_attempt(row) and is_this(row)
-        )
-        marked = sum(calls_in(row) for row in missing if is_this(row))
-        unseen = made - logged - marked
-        if unseen > 0:
-            count += unseen
+        made = sum(1 for call in calls if call.name in tools)
+        seen = 0
+        # Each row is one call's record: it settles one call, of one tool, once.
+        for index, row in enumerate(rows):
+            if seen >= made:
+                break
+            if index in used or not is_this(row):
+                continue
+            if _unrecorded(row):
+                seen += calls_in(row)
+            elif (row.get("actor_id") or AGENT) == AGENT and is_attempt(row):
+                seen += 1
+            else:
+                continue
+            used.add(index)
+        if made > seen:
+            count += made - seen
             why = sorted(set(why) | {"the world's door kept no row for them"})
     if not count:
         return []

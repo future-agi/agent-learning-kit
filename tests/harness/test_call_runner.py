@@ -3807,6 +3807,54 @@ def test_a_dropped_delete_is_never_hidden_by_the_get_of_the_same_route():
     assert cr.evidence_notices(log, calls, held)[0]["count"] == 1
 
 
+def _proxied(**routes):
+    contract = {"tool_entrypoints": [
+        {"tool": tool, "mode": "construct", "module": "agent", "callable": f"Agent.{tool}", "endpoint": endpoint,
+         "method": method}
+        for tool, (method, endpoint) in routes.items()
+    ]}
+    return cr.in_process_tools(contract, {"tool_proxy": object()})
+
+
+def test_a_proxy_row_named_like_the_tool_never_stands_for_a_call_made_with_another_method():
+    """The proxy names its row by the route's last part: a POST row named `get_order` is not the GET's record."""
+    held = _proxied(get_order=("GET", "/orders/get_order"), place_order=("POST", "/orders/get_order"))
+    calls = [Call(name="get_order", arguments={}, ok=True), Call(name="place_order", arguments={}, ok=True)]
+    log = [{"name": "get_order", "action": "orders.get_order", "method": "POST", "actor_id": "agent"}]
+
+    assert cr.evidence_notices(log, calls, held)[0]["count"] == 1
+    # Nor when the GET is the only call held: the POST row is still not its record.
+    assert cr.evidence_notices(log, calls[:1], _proxied(get_order=("GET", "/orders/get_order")))[0]["count"] == 1
+
+
+def test_a_proxy_row_for_another_route_with_the_same_last_part_is_not_the_tool_s_record():
+    """`/ticket/update` is logged with the name `update`; a tool named `update` bound to `/crm/update` never made it."""
+    held = _proxied(update=("POST", "/crm/update"))
+    calls = [Call(name="update", arguments={}, ok=True)]
+    log = [{"name": "update", "action": "ticket.update", "method": "POST", "actor_id": "agent"}]
+
+    assert cr.evidence_notices(log, calls, held)[0]["count"] == 1
+
+
+def test_one_proxy_row_settles_one_call_when_two_tools_share_its_route():
+    held = _proxied(update_address=("POST", "/orders/update"), update_delivery=("POST", "/orders/update"))
+    calls = [Call(name="update_address", arguments={}, ok=True), Call(name="update_delivery", arguments={}, ok=True)]
+    row = {"name": "update", "action": "orders.update", "method": "POST", "actor_id": "agent"}
+
+    assert cr.evidence_notices([row], calls, held)[0]["count"] == 1
+    assert cr.evidence_notices([row, dict(row)], calls, held) == []
+
+
+def test_a_row_goes_to_its_own_route_before_one_with_a_part_that_also_matches_it():
+    held = _proxied(cancel_order=("POST", "/orders/{order_id}"), refresh_orders=("POST", "/orders/refresh"))
+    calls = [Call(name="cancel_order", arguments={}, ok=True), Call(name="refresh_orders", arguments={}, ok=True)]
+    log = [{"name": "refresh", "action": "orders.refresh", "method": "POST", "actor_id": "agent"},
+           {"name": "1043", "action": "orders.1043", "method": "POST", "actor_id": "agent"}]
+
+    assert cr.evidence_notices(log, calls, held) == []
+    assert cr.evidence_notices(log[:1], calls, held)[0]["count"] == 1
+
+
 def test_were_the_in_process_door_beside_the_proxy_it_would_decide_and_hold_every_bound_tool():
     """The bundle never installs both (the in-process door is left out when there is a tool proxy); were both there,
     the in-process door wraps every bound tool, so a step with no route is still held by its name."""
