@@ -2596,8 +2596,6 @@ def resolve_environment_plan(
                 if routed_through_gateway(job.agent.config.get("target_model")):
                     # Read at start-up by the shared sitecustomize hook.
                     environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
-                    # The SDK's own trace export would send the gateway key to OpenAI.
-                    environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
             if is_livekit and service_name == control_name:
                 environment.setdefault(
                     "LIVEKIT_AGENT_NAME",
@@ -2867,9 +2865,9 @@ def resolve_environment_plan(
             environment["PORT"] = f"{{{{PORT_{control_name}}}}}"
         if routed_through_gateway(job.agent.config.get("target_model")):
             # Read at start-up by the shared sitecustomize hook.
+            # The hook also keeps the SDK's own trace export from reaching OpenAI. The SDK's
+            # tracing switch isn't set: it would also stop the kit's span observation.
             environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
-            # The SDK's own trace export would send the gateway key to OpenAI.
-            environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
         callback_entrypoint = (
             discovered_callback or _callback_entrypoint(run_folder)
             if is_callback

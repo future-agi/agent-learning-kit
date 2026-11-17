@@ -253,6 +253,9 @@ _STANDIN_TRACING = {
         "    def set_api_key(self, api_key):\n"
         "        with open(os.environ['STANDIN_CALLS'] + '.key', 'a') as handle:\n"
         "            handle.write(api_key + '\\n')\n"
+        "    def export(self, items):\n"
+        "        with open(os.environ['STANDIN_CALLS'] + '.export', 'a') as handle:\n"
+        "            handle.write(str(len(items)) + '\\n')\n"
         "_exporter = None\n"
         "def default_exporter():\n"
         "    global _exporter\n"
@@ -446,6 +449,41 @@ def test_the_gateway_key_never_becomes_the_trace_export_key(tmp_path: Path, code
     keys = (tmp_path / "calls.txt.key").read_text().splitlines()
     assert keys[-1] == "alk-tracing-disabled"
     assert "sk-FAKE-GATEWAY" not in keys
+
+
+_EXPORT_A_SPAN = (
+    "import agents\n"
+    "from agents.tracing.processors import default_exporter\n"
+    "default_exporter().export(['span'])\n"
+)
+
+
+def test_the_sdks_default_exporter_sends_nothing_under_the_mark(tmp_path: Path) -> None:
+    # Whatever key it holds, the SDK's own exporter to OpenAI doesn't send on a gateway run; the
+    # kit's span observation is a separate processor and isn't affected.
+    result, lines = _chat_style_run(
+        tmp_path,
+        _EXPORT_A_SPAN,
+        agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
+        exporter=True,
+        extra_env=_GATEWAY_KEY,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert not (tmp_path / "calls.txt.export").exists()
+
+
+def test_the_sdks_default_exporter_is_left_alone_without_the_mark(tmp_path: Path) -> None:
+    result, lines = _chat_style_run(
+        tmp_path,
+        _EXPORT_A_SPAN,
+        agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
+        exporter=True,
+        extra_env=_GATEWAY_KEY,
+        mark=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "calls.txt.export").read_text().splitlines() == ["1"]
 
 
 def test_an_agents_own_trace_export_key_still_wins(tmp_path: Path) -> None:

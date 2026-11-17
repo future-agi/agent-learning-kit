@@ -266,12 +266,14 @@ _TRACING_EXPORT_PLACEHOLDER = "alk-tracing-disabled"
 
 
 def _guard_tracing_export_key(module: Any) -> None:
-    """Turn the gateway key into the placeholder whenever the agent hands it to the exporter.
+    """Keep the SDK's own trace export to OpenAI from sending anything on a gateway run.
 
-    The SDK's set_default_openai_key and set_default_openai_client pass their key to the trace
-    exporter unless told not to, and an empty key falls back to OPENAI_API_KEY. Any other key
-    the agent sets is its own choice and still wins. Getting the exporter builds it (with its
-    HTTP client) during the agent's ``import agents``, where the SDK would build it on first use.
+    Its default exporter's export does nothing, so spans and the key in its header never leave.
+    The kit's span observation is a separate processor and still runs. As well, the gateway key
+    becomes the placeholder whenever the agent hands it to the exporter: the SDK's
+    set_default_openai_key and set_default_openai_client pass their key on unless told not to,
+    and an empty key falls back to OPENAI_API_KEY. Getting the exporter builds it (with its HTTP
+    client) during the agent's ``import agents``, where the SDK would build it on first use.
     """
     gateway_keys = {
         value
@@ -281,6 +283,11 @@ def _guard_tracing_export_key(module: Any) -> None:
     if not gateway_keys:
         return
     exporter = sys.modules[f"{module.__name__}.tracing.processors"].default_exporter()
+
+    def export_nothing(items: Any) -> None:
+        return None
+
+    exporter.export = export_nothing
     set_api_key = exporter.set_api_key
 
     def guarded_set_api_key(api_key: str) -> None:

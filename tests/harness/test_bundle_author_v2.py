@@ -6859,11 +6859,13 @@ def test_routed_target_model_marks_the_agent_process_for_chat_completions(
         tmp_path, lane, "vertex_ai/gemini-3.7-flash"
     )
     assert environment[_GATEWAY_MARK] == "1"
-    assert environment[_TRACING_OFF] == "1"
+    # The hook keeps the SDK's own export from reaching OpenAI; the tracing switch would also
+    # stop the kit's span observation, so a hooked process doesn't get it.
+    assert _TRACING_OFF not in environment
 
 
 @pytest.mark.parametrize("lane", ["callback", "declared"])
-def test_routed_sdk_agent_in_a_repo_with_an_agents_folder_has_tracing_off(
+def test_routed_sdk_agent_in_a_repo_with_an_agents_folder_is_marked_without_tracing_off(
     tmp_path: Path, lane: str
 ) -> None:
     text, runtime, kind = _LANES[lane]
@@ -6886,30 +6888,11 @@ def test_routed_sdk_agent_in_a_repo_with_an_agents_folder_has_tracing_off(
         p for p in plan.processes if p.name == plan.control_service
     ).environment
     assert environment[_GATEWAY_MARK] == "1"
-    assert environment[_TRACING_OFF] == "1"
-
-
-def test_routed_declared_tracing_value_is_overridden(tmp_path: Path) -> None:
-    source = _repo(tmp_path, {"pyproject.toml": _PROJECT, "agent.py": "x = 1\n"})
-    plan = resolve_environment_plan(
-        source,
-        _gateway_job("vertex_ai/gemini-3.7-flash"),
-        contract_modality="chat",
-        contract_interface_kind="command",
-        contract_runtime={
-            "command": ["python", "agent.py"],
-            "interface": {"kind": "command"},
-            "environment": {_TRACING_OFF: "0"},
-        },
-    )
-    environment = next(
-        p for p in plan.processes if p.name == plan.control_service
-    ).environment
-    assert environment[_TRACING_OFF] == "1"
+    assert _TRACING_OFF not in environment
 
 
 @pytest.mark.parametrize("customer_value", [None, "0"], ids=["unset", "customer_zero"])
-def test_routed_compose_runtime_control_service_has_tracing_off(
+def test_routed_compose_runtime_control_service_is_marked_without_tracing_off(
     tmp_path: Path, customer_value: str | None
 ) -> None:
     from fi.alk.harness.contract import Runtime
@@ -6940,7 +6923,30 @@ def test_routed_compose_runtime_control_service_has_tracing_off(
         p for p in plan.processes if p.name == plan.control_service
     ).environment
     assert environment[_GATEWAY_MARK] == "1"
-    assert environment[_TRACING_OFF] == "1"
+    # The source-built control service runs the hook, so it isn't given the switch.
+    assert environment.get(_TRACING_OFF) == customer_value
+
+
+def test_routed_command_agent_keeps_framework_observation_and_no_tracing_off(
+    tmp_path: Path,
+) -> None:
+    # A command-run Agents SDK agent's tool calls come from the framework spans the kit observes;
+    # the SDK's tracing switch would leave that observer nothing to read.
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="agent"\nversion="1"\n')
+    plan = resolve_environment_plan(
+        tmp_path,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_runtime={
+            "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        },
+        contract_interface_kind="command",
+        contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    assert control.environment[_GATEWAY_MARK] == "1"
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert _TRACING_OFF not in control.environment
 
 
 @pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
