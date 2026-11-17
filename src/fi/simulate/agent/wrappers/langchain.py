@@ -89,4 +89,4 @@ class LangChainAgentWrapper(AgentWrapper):
             last = response["messages"][-1]
             return text_of(last if isinstance(last, str) else _message_content(last))
             
-        return str(response)
+        return text_of(response)

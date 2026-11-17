@@ -244,3 +244,8 @@ def test_generic_agent_wrapper_keeps_only_the_text(reply, expected):
     out = _generic_reply(reply)
     assert out == expected
     assert "signature" not in out and "thinking" not in out
+
+
+def test_langchain_wrapper_returns_only_the_text_of_a_bare_block_list():
+    assert _langchain_reply(_blocks()) == ANSWER
+    assert _langchain_reply([THINKING]) == ""
