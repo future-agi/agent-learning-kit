@@ -18,10 +18,13 @@ from pathlib import Path
 import pytest
 
 from test_bundle_author_v2 import (
+    _agent_of,
     _bundle,
     _github_job,
     _callback,
     _repo,
+    _sealed,
+    BundleAuthorError,
     _compile_source_tool_handlers,
     resolve_environment_plan,
     _job,
@@ -233,3 +236,187 @@ def test_the_tracer_records_a_function_tool_by_its_def_name(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert [(r["name"], r["arguments"]) for r in records] == [("look_up_order", {"order_id": "A-1"})]
+
+
+# --- Task 3: the LangGraph command that can't run takes the graph route ---------------------
+
+def graph_route(manifest, output) -> bool:
+    agent = _agent_of(manifest)
+    taken = "ALK_LANGGRAPH_ENTRYPOINT" in agent.environment
+    runtime = _sealed(output)["runtime"]
+    if taken:
+        assert agent.environment["ALK_LANGGRAPH_ENTRYPOINT"] == "agent.py:graph"
+        assert runtime["command"] == []
+        assert runtime["execution"] == "auto"
+        assert runtime["interface"]["kind"] == "callable"
+        assert runtime["interface"]["include_tools"] is False
+    return taken
+
+
+def todays_route(manifest, output, body) -> None:
+    """The command is run as written, the interface and execution as the reading wrote them."""
+    agent = _agent_of(manifest)
+    assert "ALK_LANGGRAPH_ENTRYPOINT" not in agent.environment
+    assert agent.run_command[-len(body["runtime"]["command"]) :] == body["runtime"]["command"]
+    sealed = _sealed(output)["runtime"]
+    for key in ("command", "execution", "interface", "workdir", "source_subfolder"):
+        assert sealed[key] == body["runtime"][key], key
+
+
+def test_the_12_nov_deep_agents_reading_takes_the_graph_route(tmp_path):
+    manifest, output = bundled(tmp_path, deep_source(tmp_path), DEEP, contract=deep_reading())
+    assert graph_route(manifest, output)
+    assert _agent_of(manifest).fixed_port is None
+    assert "ThreadingHTTPServer" in _agent_of(manifest).run_command[-1]
+
+
+@pytest.mark.parametrize("verb", ["dev", "up"])
+def test_langgraph_dev_and_up_both_take_it(tmp_path, verb):
+    body = deep_reading()
+    body["runtime"]["command"] = ["langgraph", verb, "--port", "2024"]
+    manifest, output = bundled(tmp_path, deep_source(tmp_path), DEEP, contract=body)
+    assert graph_route(manifest, output)
+
+
+def _callback_found(tmp_path):
+    return deep_source(
+        tmp_path, extra={f"{DEEP}/agent.py": DEFS + "graph = object()\n" + _callback()}
+    )
+
+
+def _not_chat(tmp_path):
+    return deep_source(tmp_path)
+
+
+def _cli_installed(tmp_path):
+    return deep_source(tmp_path, requirements=DEEP_REQUIREMENTS + "langgraph-cli[inmem]>=0.1\n")
+
+
+def _cli_in_pyproject(tmp_path):
+    return deep_source(
+        tmp_path,
+        extra={f"{DEEP}/pyproject.toml": "[project]\nname='x'\nversion='1'\ndependencies=['langgraph_cli']\n"},
+    )
+
+
+def _too_large(tmp_path):
+    return deep_source(tmp_path, graph={**GRAPH, "env": "x" * 70_000})
+
+
+def _has_http(tmp_path):
+    return deep_source(tmp_path, graph={**GRAPH, "http": {"app": "./app.py:app"}})
+
+
+def _has_auth(tmp_path):
+    return deep_source(tmp_path, graph={**GRAPH, "auth": {"path": "./auth.py:auth"}})
+
+
+def _two_graphs(tmp_path):
+    return deep_source(tmp_path, graph={"graphs": {"a": "./agent.py:graph", "b": "./agent.py:graph"}})
+
+
+def _invalid_graph(tmp_path):
+    return deep_source(tmp_path, graph={"graphs": {"a": "no-colon"}})
+
+
+def _unreadable_json(tmp_path):
+    return deep_source(tmp_path, graph="{not json")
+
+
+def _no_langgraph_json(tmp_path):
+    source = deep_source(tmp_path)
+    (source / DEEP / "langgraph.json").unlink()
+    return source
+
+
+@pytest.mark.parametrize(
+    ("make", "change"),
+    [
+        pytest.param(_callback_found, {}, id="callback-discovered"),
+        pytest.param(_not_chat, {"modality": "voice"}, id="not-chat"),
+        pytest.param(deep_source, {"command": ["uv", "run", "--with", "langgraph-cli[inmem]", "langgraph", "dev"]}, id="uv-run-wrapper"),
+        pytest.param(deep_source, {"command": ["python", "-m", "langgraph", "dev"]}, id="python-m"),
+        pytest.param(deep_source, {"command": ["langgraph", "build"]}, id="other-verb"),
+        pytest.param(deep_source, {"command": ["langgraph"]}, id="no-verb"),
+        pytest.param(deep_source, {"command": ["./langgraph", "dev"]}, id="path-to-binary"),
+        pytest.param(_cli_installed, {}, id="cli-in-requirements"),
+        pytest.param(_cli_in_pyproject, {}, id="cli-in-pyproject"),
+        pytest.param(_too_large, {}, id="langgraph-json-over-64kb"),
+        pytest.param(_has_http, {}, id="http-key"),
+        pytest.param(_has_auth, {}, id="auth-key"),
+        pytest.param(_two_graphs, {}, id="two-graphs"),
+        pytest.param(_invalid_graph, {}, id="invalid-graph"),
+        pytest.param(_unreadable_json, {}, id="unreadable-json"),
+        pytest.param(_no_langgraph_json, {}, id="no-langgraph-json"),
+    ],
+)
+def test_each_condition_failing_alone_keeps_todays_route(tmp_path, make, change):
+    body = deep_reading()
+    if "command" in change:
+        body["runtime"]["command"] = change["command"]
+    if "modality" in change:
+        body["modality"] = change["modality"]
+    try:
+        manifest, output = bundled(tmp_path, make(tmp_path), DEEP, contract=body)
+    except BundleAuthorError:
+        # Today's route, refusal included: the same input before this change fails the same way.
+        assert body["modality"] == "voice"
+        return
+    todays_route(manifest, output, body)
+
+
+def test_the_h2_probe_two_graphs_with_the_cli_installed_still_bundles(tmp_path):
+    """Round 1, H2: a two-graph app with langgraph-cli installed bundles today, and must still."""
+    source = deep_source(
+        tmp_path,
+        requirements=DEEP_REQUIREMENTS + "langgraph-cli\n",
+        graph={"graphs": {"a": "./agent.py:graph", "b": "./agent.py:graph"}},
+    )
+    body = deep_reading()
+    manifest, output = bundled(tmp_path, source, DEEP, contract=body)
+    todays_route(manifest, output, body)
+
+
+def test_the_uv_run_langgraph_dev_shape_is_unchanged(tmp_path):
+    command = ["uv", "run", "--project", "graphs/python", "--with", "langgraph-cli[inmem]", "langgraph", "dev"]
+    runtime = {"language": "python", "execution": "native", "command": command}
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime, tool_entrypoints=[],
+        contract_interface_kind="http", contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    assert "ALK_LANGGRAPH_ENTRYPOINT" not in control.environment
+
+
+def test_a_langgraph_json_is_not_read_past_64kb(tmp_path, monkeypatch):
+    read = []
+    real = bundle_author_v2._langgraph_entrypoint
+    monkeypatch.setattr(
+        bundle_author_v2, "_langgraph_entrypoint", lambda root: read.append(root) or real(root)
+    )
+    body = deep_reading()
+    bundled(tmp_path, _too_large(tmp_path), DEEP, contract=body)
+    assert read == []
+
+
+def test_a_graph_route_reading_the_requirements_uses_the_install_plans_files(tmp_path):
+    """Where the build installs from: a requirements file the runtime names counts too."""
+    body = deep_reading()
+    body["runtime"]["requirements_files"] = ["extra.txt"]
+    source = deep_source(tmp_path, extra={f"{DEEP}/extra.txt": "langgraph-cli\n"})
+    manifest, output = bundled(tmp_path, source, DEEP, contract=body)
+    todays_route(manifest, output, body)
+
+
+def test_the_other_12_nov_readings_take_no_graph_route(tmp_path):
+    body = reading("google_adk")
+    source = _repo(
+        tmp_path,
+        {"examples/harness/google_adk_support/support_agent/agent.py": DEFS + "root_agent = object()\n",
+         "examples/harness/google_adk_support/support_agent/__init__.py": "",
+         "examples/harness/google_adk_support/requirements.txt": "google-adk\nmcp\n"},
+    )
+    manifest, output = bundled(tmp_path, source, "examples/harness/google_adk_support", contract=body)
+    assert "ALK_LANGGRAPH_ENTRYPOINT" not in _agent_of(manifest).environment
+    assert _sealed(output)["runtime"]["interface"]["path"] == "/run_sse"

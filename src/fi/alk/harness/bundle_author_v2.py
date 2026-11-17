@@ -1914,6 +1914,51 @@ def _runtime_component(root: Path, configured_workdir: str) -> Path:
     return component
 
 
+_LANGGRAPH_JSON_LARGEST = 64 * 1024
+_LANGGRAPH_CLI = re.compile(r"^langgraph[-_.]cli(?:\s|\[|[<>=!~@;]|$)", re.IGNORECASE)
+
+
+def _langgraph_command_cannot_run(
+    source_root: Path, run_folder: Path, runtime: dict[str, Any]
+) -> bool:
+    """Whether a chat agent's ``langgraph dev``/``up`` command can't start because nothing the
+    build installs declares ``langgraph-cli``, and its source is one graph the kit can serve.
+
+    Every one of these must hold, and any doubt keeps today's route (the command run as written):
+    no ``agent_callback``; the command is exactly ``langgraph dev`` or ``langgraph up``; no
+    requirement or project dependency names ``langgraph-cli``; ``langgraph.json`` is at most
+    64 KB, has no ``http`` or ``auth`` key (custom routes or auth make the app more than its
+    graph), and declares one graph.
+    """
+    command = runtime.get("command")
+    if (
+        not isinstance(command, list)
+        or len(command) < 2
+        or command[0] != "langgraph"
+        or command[1] not in {"dev", "up"}
+    ):
+        return False
+    try:
+        if _discover_callback_entrypoint(run_folder) is not None:
+            return False
+        requirements = _declared_requirements(source_root, Runtime.model_validate(runtime))
+        if any(
+            _LANGGRAPH_CLI.match(requirement.strip())
+            for requirement in requirements
+            if isinstance(requirement, str)
+        ):
+            return False
+        path = run_folder / "langgraph.json"
+        if not path.is_file() or path.stat().st_size > _LANGGRAPH_JSON_LARGEST:
+            return False
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict) or {"http", "auth"} & set(document):
+            return False
+        return _langgraph_entrypoint(run_folder) is not None
+    except Exception:  # noqa: BLE001 - any doubt keeps the command as the reading wrote it
+        return False
+
+
 def _is_adk_web_command(command: list[str]) -> bool:
     """Return whether argv starts Google ADK's source-owned HTTP development server."""
 
@@ -3210,6 +3255,24 @@ def resolve_environment_plan(
     )
 
 
+def _declared_requirements(source: Path, runtime: Runtime) -> list[Any]:
+    """What the build installs, as the project's dependencies, the chosen extras, the requirement
+    files the runtime names, and ``requirements.txt`` when there is no ``pyproject.toml``."""
+    component = _runtime_component(source, runtime.workdir)
+    project = _pyproject_document(component / "pyproject.toml").get("project", {})
+    requirements = list(project.get("dependencies", []))
+    for extra in runtime.extras:
+        requirements.extend(project.get("optional-dependencies", {}).get(extra, []))
+    requirement_files = list(runtime.requirements_files)
+    if not (component / "pyproject.toml").is_file():
+        requirement_files.append("requirements.txt")
+    for name in requirement_files:
+        path = (component / name).resolve()
+        if path.is_relative_to(source) and path.is_file():
+            requirements.extend(path.read_text(encoding="utf-8").splitlines())
+    return requirements
+
+
 def _source_tool_trace_environment(
     source: Path, runtime: Runtime, entries: list[dict[str, Any]]
 ) -> dict[str, str]:
@@ -3230,18 +3293,7 @@ def _source_tool_trace_environment(
     }
     if declared:
         environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(declared, sort_keys=True)
-    component = _runtime_component(source, runtime.workdir)
-    project = _pyproject_document(component / "pyproject.toml").get("project", {})
-    requirements = list(project.get("dependencies", []))
-    for extra in runtime.extras:
-        requirements.extend(project.get("optional-dependencies", {}).get(extra, []))
-    requirement_files = list(runtime.requirements_files)
-    if not (component / "pyproject.toml").is_file():
-        requirement_files.append("requirements.txt")
-    for name in requirement_files:
-        path = (component / name).resolve()
-        if path.is_relative_to(source) and path.is_file():
-            requirements.extend(path.read_text(encoding="utf-8").splitlines())
+    requirements = _declared_requirements(source, runtime)
     if any(
         re.match(r"^crewai(?:\s|\[|[<>=!~@;]|$)", requirement.strip(), re.IGNORECASE)
         for requirement in requirements
@@ -3618,6 +3670,26 @@ def author_bundle_v2(
             )
             contract_body = {**contract_body, "runtime": runtime}
         interface = runtime.get("interface") if isinstance(runtime, dict) else None
+        if contract_modality == "chat" and _langgraph_command_cannot_run(
+            source_root, run_folder, runtime
+        ):
+            # The reading wrote `langgraph dev`, and nothing installs the CLI: serve the graph
+            # as `langgraph.json` declares it, as with no command. A native run needs a command
+            # (`runtime_native_command_missing`), so it becomes `auto`.
+            runtime = {
+                **runtime,
+                "command": [],
+                **({"execution": "auto"} if runtime.get("execution") == "native" else {}),
+                "interface": {
+                    "kind": "callable",
+                    "protocol": "fi.alk",
+                    "path": "",
+                    "health_path": "",
+                    "include_tools": False,
+                },
+            }
+            contract_body = {**contract_body, "runtime": runtime}
+            interface = runtime["interface"]
         if isinstance(interface, dict):
             contract_interface_kind = str(interface.get("kind") or "").strip().lower()
             adk_interface = _adk_web_interface(source_root, runtime)
