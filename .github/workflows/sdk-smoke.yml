@@ -9,6 +9,33 @@ on:
   pull_request:
 
 jobs:
+  openai-agents-sdk:
+    # The kit's hook against the real OpenAI Agents SDK, pinned to the version its internals were
+    # read at. A third-party package for this job only: the main install and clean-install jobs
+    # are unchanged.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The version the hook's exporter handling was read against, and the version the kit's
+        # reference example pins (examples/harness/openai_agents_support/requirements.txt).
+        openai-agents: ["0.18.3", "0.24.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit with the pinned OpenAI Agents SDK
+        run: python -m pip install . pytest 'openai-agents==${{ matrix.openai-agents }}'
+      - name: Run the hook's real-SDK tests, failing if they skip
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py \
+            -k real_openai_agents_sdk | tee pytest.out
+          ! grep -q "skipped" pytest.out
+
   clean-install:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -44,6 +71,13 @@ jobs:
           'livekit-plugins-google==1.8.3'
           'livekit-plugins-openai==1.8.3'
           'livekit-plugins-silero==1.8.3'
+      - name: Pin the Claude Agent SDK to the lock's version
+        # The image installs the SDK at uv.lock's version, so the tests run the Claude Code CLI
+        # that ships (test_secret_paths.py drives it; TH-9042). Only the SDK is pinned here.
+        run: >-
+          python -m pip install "claude-agent-sdk==$(python -c "import tomllib;
+          print(next(p['version'] for p in tomllib.load(open('uv.lock', 'rb'))['package']
+          if p['name'] == 'claude-agent-sdk'))")"
       - name: Run engine + dispatch + acceptance tests
         # Scoped to the suites this PR adds/relies on. The broader tests/ tree has
         # pre-existing failures unrelated to the voice engine (CLI golden-path,
@@ -92,16 +126,22 @@ jobs:
           tests/harness/test_authoring_runtime_validation.py
           tests/harness/test_failure_file.py
           tests/harness/test_contract_tools_subfolder.py
+          tests/harness/test_contract_model.py
+          tests/harness/test_secret_paths.py
           tests/harness/test_import_roots.py
           tests/harness/test_source_data_invariants_folder.py
           tests/harness/test_hosted_authoring_entrypoint.py
           tests/harness/test_certify_only.py
           tests/harness/test_bundle_author_v2.py
+          tests/harness/test_python_tool_trace_bootstrap.py
+          tests/harness/test_workflow_intent.py
           tests/harness/test_simulation_mark_bootstrap.py
           tests/harness/test_process_preflight.py
+          tests/harness/test_process_diagnostics.py
           tests/harness/test_spend.py
           tests/harness/test_claude_cost.py
           tests/providers
+          tests/harness/test_observability.py
           tests/harness/test_scenario_source_provision_agent.py
           tests/harness/test_framework_detection.py
           tests/harness/test_openai_agents_reference.py
@@ -150,3 +190,16 @@ jobs:
           'opentelemetry-api==1.39.1' 'opentelemetry-sdk==1.39.1'
           'opentelemetry-exporter-otlp-proto-http==1.39.1' 'opentelemetry-proto==1.39.1'
           && python -m pytest -q tests/harness/test_simulation_measure.py
+      - name: Run the tracing cleaner on the locked fi-instrumentation-otel
+        # The hosted image installs what uv.lock pins (fi-instrumentation-otel 1.0.0, with the
+        # traceAI instrumentors of the hosted-tracing extra), not the newest release the steps
+        # above resolve. The cleaner masks secrets in what is exported, so its tests run on that
+        # install as well.
+        run: >-
+          python -m pip install uv
+          && uv export --frozen --extra hosted-tracing --no-hashes --no-emit-project
+          --output-file locked-requirements.txt
+          && python -m venv .locked-venv
+          && .locked-venv/bin/python -m pip install -r locked-requirements.txt
+          && .locked-venv/bin/python -m pip install --no-deps .
+          && .locked-venv/bin/python -m pytest -q tests/harness/test_observability.py
