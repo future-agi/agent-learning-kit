@@ -3296,6 +3296,37 @@ def test_one_failed_attempt_walks_the_source_once(tmp_path, monkeypatch):
     assert len(walks) == 1
 
 
+def test_each_run_walks_the_source_afresh(tmp_path, monkeypatch):
+    # The masks are kept for one run only: a later run reads the source as it is then.
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    walks = _counted_mask_walks(monkeypatch)
+    seen = []
+
+    def run():
+        calls = []
+
+        async def validate(*args):
+            calls.append("validate")
+            if len(calls) == 1:
+                raise RuntimeValidationError("environment", "failed with canary-later-0093")
+            return 10
+
+        async def repair(phase, guidance):
+            seen.append(guidance)
+            return 0
+
+        asyncio.run(validate_and_repair(None, source, authoring, validate=validate, repair=repair))
+
+    run()
+    (source / ".env").write_text("LATER_PASSWORD=canary-later-0093\n")
+    run()
+    assert len(walks) == 2
+    assert "canary-later-0093" not in seen[-1]
+
+
 def test_a_failed_mask_walk_is_logged_once_and_the_evidence_is_withheld(
     tmp_path, monkeypatch, caplog
 ):

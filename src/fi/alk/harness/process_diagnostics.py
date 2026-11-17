@@ -31,7 +31,9 @@ _PLACEHOLDER = "<redacted>"
 # Committed placeholders, not secrets: no masks are built from them.
 _TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 # A settings name that holds one of these parts has its value masked whatever the value looks like.
-_SECRET_NAME_PARTS = ("KEY", "TOKEN", "SECRET", "PASS", "PWD", "AUTH", "CREDENTIAL", "DSN", "HOOK")
+_SECRET_NAME_PARTS = (
+    "KEY", "TOKEN", "SECRET", "PASS", "PWD", "AUTH", "CREDENTIAL", "DSN", "WEBHOOK",
+)
 _ENV_FILE_NAME = re.compile(r"(^|\.)env($|\.)", re.IGNORECASE)
 _LONG_RUN = re.compile(r"[A-Za-z0-9+/=_-]{32,}")
 _HEX_RUN = re.compile(r"[0-9a-fA-F]{32,}")
@@ -66,7 +68,7 @@ def _looks_like_secret(value: str) -> bool:
         return (
             "@" in parts.netloc
             or bool(parts.query)
-            or any(_looks_like_secret(segment) for segment in parts.path.split("/"))
+            or any(_token_segment(segment) for segment in parts.path.split("/"))
         )
     if len(value) >= 16 and any(c.isalpha() for c in value) and any(c.isdigit() for c in value):
         return True
@@ -80,6 +82,20 @@ def _looks_like_secret(value: str) -> bool:
         )
         >= 2
     )
+
+
+def _token_segment(segment: str) -> bool:
+    """Whether one segment of a URL's path is a token, as a webhook's is. Stricter than a whole
+    value's rule, so a model or project name in a path (gpt-4o-mini-2024-07-18,
+    Llama-3.1-8B-Instruct, my-project-123456) is left for the repair to read."""
+    if _HEX_RUN.fullmatch(segment) or _LONG_RUN.fullmatch(segment):
+        return True
+    if len(segment) < 24 or "." in segment:
+        return False
+    has_digit = any(c.isdigit() for c in segment)
+    has_letter = any(c.isalpha() for c in segment)
+    mixed_case = any(c.islower() for c in segment) and any(c.isupper() for c in segment)
+    return has_letter and (has_digit or (mixed_case and "-" not in segment))
 
 
 def _line_values(line: str, *, only_secrets: bool = False) -> set[str]:

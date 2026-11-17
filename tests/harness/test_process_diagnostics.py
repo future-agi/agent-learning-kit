@@ -568,10 +568,35 @@ def test_a_webhook_url_with_its_token_in_the_path_is_masked(tmp_path, line, url)
     assert "fakeWebhookSecretValue24" not in text and "fake-Discord_Webhook" not in text
 
 
-def test_a_url_with_a_plain_path_is_left_alone(tmp_path):
-    source = _source(tmp_path, {".env": "BACKEND_URL=https://api.example.com/v1/chat/completions\n"})
-    text = _evidence(tmp_path, source, "calling https://api.example.com/v1/chat/completions\n")
-    assert "https://api.example.com/v1/chat/completions" in text
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://api.example.com/v1/chat/completions",
+        "https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct",
+        "https://api.openai.com/v1/models/gpt-4o-mini-2024-07-18",
+        "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-001",
+        "https://aiplatform.googleapis.com/v1/projects/my-project-123456/locations/us-central1",
+    ],
+    ids=["plain", "hf-model", "openai-model", "gemini-model", "vertex-project"],
+)
+def test_a_url_with_a_model_or_plain_path_is_left_alone(tmp_path, url):
+    # A model-not-found 404 names the model's URL; the repair has to read it.
+    source = _source(tmp_path, {".env": f"MODEL_URL={url}\n"})
+    text = _evidence(tmp_path, source, f"calling {url}\n")
+    assert url in text
+
+
+def test_a_letters_only_webhook_token_under_a_plain_name_is_masked(tmp_path):
+    url = "https://hooks.slack.com/services/T0FAKE1234/B0FAKE5678/FakeWebhookSecretValueAbCd"
+    source = _source(tmp_path, {".env": f"NOTIFY_TARGET={url}\n"})
+    text = _evidence(tmp_path, source, f"POST {url} 404\n")
+    assert "FakeWebhookSecretValueAbCd" not in text
+
+
+def test_a_hooks_path_setting_is_not_taken_for_a_secret(tmp_path):
+    source = _source(tmp_path, {".env": "GIT_HOOKS_PATH=.githooks/shared-local\n"})
+    text = _evidence(tmp_path, source, "hooks from .githooks/shared-local\n")
+    assert ".githooks/shared-local" in text
 
 
 def test_a_line_of_an_env_file_that_is_not_a_setting_is_masked_like_a_line(tmp_path):
