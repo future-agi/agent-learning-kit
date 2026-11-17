@@ -913,13 +913,22 @@ _CREDENTIAL_QUERY_NAMES = frozenset({"key", "sig", "signature", "pwd", "pass", "
 _QUERY_PARAM = re.compile(r"[?#&;]([^=&#?;\s]*)=([^&#;\s]*)")
 _KEY_VALUE = re.compile(r"[A-Za-z0-9+/=_%\-]{16,}")
 # scheme://user:password@ : a username alone (ssh://git@host) is fine, and so is a port.
+# The scheme must start a run, so one long run of scheme characters is scanned once.
 _USERINFO_PASSWORD = re.compile(
-    r"[A-Za-z][A-Za-z0-9+.\-]*://[^/?#\s@:]*:(?P<password>[^/?#\s]+)@"
+    r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]*://[^/?#\s@:]*:(?P<password>[^/?#\s]+)@"
 )
+# user:password@host with no scheme, at the start of a value or after //. A password stops at
+# a slash here, so a start scans only to the next slash. mailto: is an address, not userinfo.
+_SCHEMELESS_USERINFO = re.compile(
+    r"(?:\A|(?<=//))(?!mailto:)[^\s/:@]+:(?P<password>[^\s/@]+)@[A-Za-z0-9.\-]+(?::\d+)?(?:/|\Z)"
+)
+# A value that is only a reference: ${API_KEY}, $API_KEY, <API_KEY>, {{api_key}}, {API_KEY}.
+_REF = re.compile(r"\$\{?[A-Z_][A-Z0-9_]*\}?|<[^>]*>|\{\{?[^{}]*\}\}?")
+_UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 # A credential-named assignment with a quoted literal: password = "x", {"api_key": 'x'},
 # creds["password"] = "x". "==" is a comparison and is not read.
 _LITERAL_ASSIGNMENT = re.compile(
-    r"""([A-Za-z_][A-Za-z0-9_\-]*)["']?\]?\s*(?::|=(?!=))\s*[rbfRBF]{0,2}(["'])([^"'\n]+)\2"""
+    r"""(?<![A-Za-z0-9_\-])([A-Za-z_][A-Za-z0-9_\-]*)["']?\]?\s*(?::|=(?!=))\s*[rbfRBF]{0,2}(["'])([^"'\n]+)\2"""
 )
 
 
@@ -928,7 +937,10 @@ def _is_reference(value: object) -> bool:
 
 
 def _names_a_credential(name: str) -> bool:
+    # `name` in its own case: the pagination list is exact. A count (max_tokens) is no secret.
     low = name.lower()
+    if name in _PAGINATION or low.endswith("tokens"):
+        return False
     return any(marker in low for marker in REDACTION_MARKERS)
 
 
@@ -948,28 +960,41 @@ def credential_in(value: object) -> bool:
     It never refuses a query for being there (`?id=77`, `?api-version=...`), a fragment, a host
     in capitals, a `{HOST}:{PORT}` or `${API_HOST}` template or a username with no password:
     the cleaner changes those, and they are honest text. Numbers, booleans and None are not
-    read, and a dict's key names are not either; a shapeless value under a credential name is
-    `credential_named_arg_values_refusal`'s case, or kept in scenario fields.
+    read. A dict's keys are read as text, but a key's name is not judged: a shapeless value under
+    a credential name is `credential_named_arg_values_refusal`'s case, or kept in scenario
+    fields.
     """
     if isinstance(value, dict):
-        return any(credential_in(item) for item in value.values())
+        return any(
+            credential_in(str(key)) or credential_in(item)
+            for key, item in value.items()
+        )
     if isinstance(value, (list, tuple)):
         return any(credential_in(item) for item in value)
     if not isinstance(value, str):
         return False
+    # A URL password the cleaner removes whole: one broken by /, ?, # or a space.
+    if rule1(value):
+        return True
     # A reference in the password position ($PASS, ${DB_PASSWORD}, <...>, {{...}}) is no secret.
     if any(
         not match.group("password").startswith(_REFERENCE_STARTS)
         for match in _USERINFO_PASSWORD.finditer(value)
     ):
         return True
+    if any(
+        not match.group("password").startswith(_REFERENCE_STARTS)
+        for match in _SCHEMELESS_USERINFO.finditer(value)
+    ):
+        return True
     for match in _QUERY_PARAM.finditer(value):
-        name = match.group(1).lower()
-        if (
-            _names_a_credential(name)
-            or name in _CREDENTIAL_QUERY_NAMES
-            or _KEY_VALUE.fullmatch(match.group(2))
-        ):
+        raw, text = match.group(1), match.group(2)
+        # An empty value or a reference holds nothing; the refusal message itself says to use one.
+        if not text or _REF.fullmatch(text):
+            continue
+        if _names_a_credential(raw) or raw.lower() in _CREDENTIAL_QUERY_NAMES:
+            return True
+        if _KEY_VALUE.fullmatch(text) and not (_UUID.fullmatch(text) or text.isdigit()):
             return True
     return bool(find(value))
 

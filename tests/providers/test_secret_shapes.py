@@ -1114,6 +1114,11 @@ def test_the_page_outcomes_hold() -> None:
 # -- S3 and S4: the corpus ----------------------------------------------------------------------
 
 
+# A named value inside escaped JSON, as kubectl's last-applied annotation or a stringified HTTP
+# body holds it: \" isn't read as a quote.
+R5_LIMITS = {"escaped json named value": r'{\"name\":\"svc\",\"password\":\"Zq8wYv3Lp9\"}'}
+
+
 def _corpus() -> dict[str, str]:
     cases = {}
     for label, group in (
@@ -1122,6 +1127,7 @@ def _corpus() -> dict[str, str]:
         ("r2", R2_CASES),
         ("r3", R3_CASES),
         ("r4 honest", R4_HONEST),
+        ("r5", R5_LIMITS),
     ):
         cases.update({f"{label}: {name}": text for name, text in group.items()})
     cases.update({f"r4 secret: {name}": text for name, (text, _) in R4_SECRETS.items()})
@@ -1197,6 +1203,7 @@ SECRETS_KEPT = {
     "r2: cut ghp": "a key cut short in a text that isn't the 600-character cut (r4 L1)",
     "r2: cut sk-proj end": "shorter than the key's least length, and not the cut (r4 L1)",
     "r4 honest: pagination nextToken": "a pagination name's value is honest (r4 L2)",
+    "r5: escaped json named value": "a named value inside escaped JSON, where \\\" isn't a quote",
 }
 # Text with no secret that the rules change, each as the design page says they would.
 HONEST_CHANGED = {

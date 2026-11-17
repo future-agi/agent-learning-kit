@@ -986,6 +986,35 @@ def test_a_mirrored_transcript_keeps_counts_and_loses_credentials():
     assert loaded[UUIDS["a4"]]["requestRef"] == "req_B"
 
 
+def _nested(depth: int) -> dict:
+    value: dict = {"leaf": "x"}
+    for _ in range(depth):
+        value = {"d": value}
+    return value
+
+
+@pytest.mark.parametrize("depth", [600, 5000])
+def test_a_deeply_nested_line_keeps_its_place_and_does_not_drop_the_batch(depth):
+    raw = build_transcript("/work", (2, 1, 318))
+    by_uuid = {one.get("uuid"): one for one in raw}
+    by_uuid[UUIDS["a4"]]["message"]["content"][0]["input"] = _nested(depth)
+    by_uuid[UUIDS["u3"]]["toolUseResult"] = _nested(depth)
+
+    for split in (0, 6, len(raw)):
+        loaded = _mirror(raw, split=split)
+
+        # The batch is not dropped, and every pointer still resolves to a stored line.
+        assert pointer_problems(loaded) == [], f"split at {split}"
+        kept = {one.get("uuid"): one for one in loaded}
+        assert UUIDS["a4"] in kept and UUIDS["u3"] in kept
+        # Nested as deep as the cleaner can read it comes through cleaned; deeper is replaced.
+        expected = _nested(depth) if depth < 1000 else "[redacted]"
+        assert kept[UUIDS["a4"]]["message"]["content"][0]["input"] == expected
+        assert kept[UUIDS["u3"]]["toolUseResult"] == expected
+        assert kept[UUIDS["a4"]]["message"]["content"][0]["id"] == "toolu_01T2"
+    assert by_uuid[UUIDS["a4"]]["message"]["content"][0]["input"] == _nested(depth)
+
+
 def test_a_batch_with_nothing_left_to_mirror_is_not_posted():
     only_replay = [
         {"type": "api-request", "id": "r", "sessionId": SESSION_ID},
@@ -1307,6 +1336,41 @@ def test_a_session_database_that_cannot_be_cleaned_is_left_out_loudly(tmp_path, 
 
     assert sorted(_members(archive)) == ["contract.json"]
     assert any("session database" in one.getMessage() for one in caplog.records)
+
+
+def test_a_session_database_with_a_table_the_cleaner_does_not_know_is_left_out_loudly(
+    tmp_path, caplog
+):
+    import sqlite3
+
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+
+    database = tmp_path / ".futureagi-adk.db"
+    _adk_database(database)
+    with sqlite3.connect(database) as one:
+        one.execute("CREATE TABLE extra_cache (v TEXT)")
+        one.execute("INSERT INTO extra_cache VALUES ('token ghp_' || 'aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5')")
+    (tmp_path / "contract.json").write_text("{}")
+
+    with caplog.at_level("WARNING"):
+        archive = _workspace_archive(tmp_path)
+
+    assert sorted(_members(archive)) == ["contract.json"]
+    assert any("session database" in one.getMessage() for one in caplog.records)
+
+
+def test_a_session_database_with_exactly_the_known_tables_is_still_carried(tmp_path):
+    import sqlite3
+
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+
+    database = tmp_path / ".futureagi-adk.db"
+    _adk_database(database)
+    with sqlite3.connect(database) as one:
+        tables = {row[0] for row in one.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert tables == {"adk_internal_metadata", "app_states", "events", "sessions", "user_states"}
+
+    assert ".futureagi-adk.db" in _members(_workspace_archive(tmp_path))
 
 
 def test_the_checkpoint_leaves_out_the_temporary_sibling_of_a_file_it_cleans(tmp_path):

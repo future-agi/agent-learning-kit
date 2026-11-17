@@ -4,6 +4,8 @@ the kept cases are honest text that the cleaner would otherwise change."""
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from fi.alk.providers import agent, secret_shapes
@@ -25,6 +27,14 @@ _REFUSED = {
     "userinfo password": "https://u:pw@h/x",
     "userinfo literal password beside a reference host": "postgres://app:hunter2@${DB_HOST}/x",
     "userinfo password, other scheme": "postgres://admin:admin@localhost:5432/app",
+    "userinfo password holding a slash": "http://svc:Zq9/fakePw@inventory:9000/v1/items",
+    "userinfo password holding a slash, in a connection string": "postgres://app:k8/Qz3vLm@db/app",
+    "userinfo password holding a hash": "postgres://svc:Zq9#fakePw@db/app",
+    "userinfo password holding a question mark": "postgres://svc:Zq9?fakePw@db/app",
+    "userinfo password holding a space": "postgres://svc:Zq9 fakePw@db/app",
+    "userinfo with no scheme, after //": "//svc:pw@db/app",
+    "userinfo with no scheme, at the start": "svc:Zq9fakePw@db.internal/app",
+    "userinfo with no scheme, a port after the host": "svc:Zq9fakePw@db.internal:5432",
     "key shape alone": "AKIAIOSFODNN7EXAMPLE",
     "key shape in prose": "use ghp_" + "X" * 36 + " here",
     "named value in text": "token=abc123def456 is the sample cursor",
@@ -41,7 +51,33 @@ def test_credential_in_refuses(name: str) -> None:
     assert secret_shapes.credential_in(_REFUSED[name]) is True
 
 
+# A URL password broken by one of these characters, raw or percent-encoded, is still a password.
+@pytest.mark.parametrize(
+    "char", ["/", "#", "?", " ", "%2F", "%23", "%3F", "%20"], ids=lambda c: repr(c)
+)
+@pytest.mark.parametrize("scheme", ["http", "postgres"])
+def test_credential_in_refuses_a_password_holding_a_url_break(
+    scheme: str, char: str
+) -> None:
+    assert secret_shapes.credential_in(f"{scheme}://svc:Zq9{char}fakePw@db:9000/v1/x")
+
+
 _KEPT = {
+    "address in a query": "/o?email=a@b.com",
+    "mailto": "mailto:a@b.com",
+    "a user at a host": "user@host",
+    "an email address": "email@example.com",
+    "scheme-less userinfo from a reference": "//svc:${DB_PASSWORD}@db/app",
+    "pagination name in a query": "/v1/items?nextPageToken=abc",
+    "pagination name, snake case": "/v1/items?next_page_token=abc",
+    "a count of tokens": "/v1/complete?max_tokens=256",
+    "placeholder from the environment": "https://api.example.com/v1/search?key=${API_KEY}",
+    "placeholder in braces": "https://api.example.com/v1/search?key={API_KEY}",
+    "placeholder in angle brackets": "https://api.example.com/v1/search?key=<API_KEY>",
+    "placeholder in a template": "https://api.example.com/v1/search?key={{api_key}}",
+    "placeholder from a variable": "https://api.example.com/v1/search?api_key=$API_KEY",
+    "a uuid in a query": "/o?id=550e8400-e29b-41d4-a716-446655440000",
+    "a 16-digit number in a query": "/e?since=1700000000000000",
     "query id": "/o?id=77",
     "query id on a url": "https://shop.example.com/o?id=77",
     "api-version": "https://acme.openai.azure.com/x?api-version=2024-01-01",
@@ -79,6 +115,61 @@ def test_credential_in_never_refuses_on_its_own(name: str) -> None:
 def test_credential_in_reads_strings_inside_lists_and_dicts() -> None:
     assert secret_shapes.credential_in(["ok", {"a": ["https://u:pw@h/x"]}]) is True
     assert secret_shapes.credential_in({"a": ["/x?id=77"], "b": "plain"}) is False
+
+
+def test_a_query_value_that_only_starts_like_a_reference_is_refused() -> None:
+    assert secret_shapes.credential_in("/x?password=$ecretP4ss99")
+
+
+def test_credential_in_reads_dict_keys() -> None:
+    assert secret_shapes.credential_in({"ghp_" + "X" * 36: {"owner": "alice"}}) is True
+    assert secret_shapes.credential_in({"https://u:pw@h/x": 1}) is True
+
+
+def test_a_pagination_or_token_count_argument_may_list_values() -> None:
+    for name in ("nextPageToken", "next_page_token", "max_tokens", "total_tokens"):
+        assert (
+            secret_shapes.credential_named_arg_values_refusal(name, ["abc"]) is False
+        )
+    assert secret_shapes.credential_named_arg_values_refusal("page_token", ["a"]) is True
+
+
+# Time grows with the size, so a pattern that restarts at each position of one long run
+# shows at 16 KiB already. Each size must stay under 2 s, and 1 MiB under 64 times the
+# 64 KiB time plus 0.5 s: linear growth with room for a slow runner, where a quadratic
+# pattern would need 256 times as long.
+_RUNS = {
+    "letters": "a",
+    "scheme characters": "a.-",
+    "digits and underscores": "a1_",
+    "a run behind a scheme": "x://a",
+}
+
+
+def _seconds(function, text: str) -> float:
+    start = time.perf_counter()
+    function(text)
+    return time.perf_counter() - start
+
+
+@pytest.mark.parametrize("run", sorted(_RUNS))
+@pytest.mark.parametrize(
+    "function",
+    [
+        secret_shapes.credential_in,
+        secret_shapes.credential_in_check_code,
+        secret_shapes.rule1,
+    ],
+    ids=lambda function: function.__name__,
+)
+def test_a_long_run_is_read_in_linear_time(function, run: str) -> None:
+    unit = _RUNS[run]
+    times = {}
+    for kib in (16, 64, 256, 1024):
+        text = (unit * (kib * 1024 // len(unit) + 1))[: kib * 1024]
+        times[kib] = _seconds(function, text)
+        assert times[kib] < 2.0, times
+    assert times[1024] < 64 * times[64] + 0.5, times
 
 
 def test_credential_in_ignores_numbers_booleans_and_none() -> None:
@@ -119,6 +210,8 @@ def test_check_code_refuses(name: str) -> None:
 
 
 _CODE_KEPT = {
+    "a count of tokens": 'max_tokens = "4096"',
+    "a pagination name": 'expected = {"next_page_token": "abc"}',
     "assignment from a reference": 'password = "$PASSWORD"',
     "assignment from a placeholder": 'password = "<password>"',
     "assignment from a template": 'password = "{{PASSWORD}}"',

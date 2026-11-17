@@ -166,6 +166,7 @@ def sync_run(
                 payload, sort_keys=True, separators=(",", ":"), default=str
             )
         },
+        addressed=frozenset({LEDGER_ROW_ATTR}),
         project_name=SYNC_PROJECT_NAME,
         headers={
             "X-Api-Key": config.api_key,

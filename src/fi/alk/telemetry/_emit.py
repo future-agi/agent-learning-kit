@@ -119,18 +119,17 @@ def _build_provider(project_name: str, headers: Mapping[str, str]) -> tuple[Any,
     return provider, recorder
 
 
-# The ledger row's JSON attribute (`_sync.LEDGER_ROW_ATTR`). It is cleaned when the row is
-# built and its `run_id` is the hash of those exact bytes, so cleaning it again here would
-# send a row that no longer matches its address.
-_ADDRESSED_ATTR = "fi.kit.ledger_row"
-
-
-def _scalar(value: Any, key: str = "") -> Any:
+def _scalar(value: Any, key: str = "", addressed: frozenset[str] = frozenset()) -> Any:
     """OTel span attributes accept str/bool/int/float (and homogeneous lists).
     Coerce anything else to a compact string so a metric mapping never breaks
-    the emit. Text that leaves for the account is cleaned of secrets."""
+    the emit. Text that leaves for the account is cleaned of secrets.
 
-    if key == _ADDRESSED_ATTR and isinstance(value, str):
+    `addressed` names the attributes the emitter's caller built already cleaned and addressed
+    (the ledger row, whose `run_id` is the hash of those exact bytes): cleaning one again would
+    send a row that no longer matches its address. The caller names them; an attribute that
+    merely carries the same name in a customer's metrics is cleaned like any other."""
+
+    if key in addressed and isinstance(value, str):
         return value
     if isinstance(value, (bool, int, float)):
         return value
@@ -138,9 +137,11 @@ def _scalar(value: Any, key: str = "") -> Any:
         return redact_strings(value)
     import json
 
+    # Cleaned whole, then cut: a key shape that straddles the cut would otherwise leave its
+    # prefix, too short for the cleaner to recognise.
     return redact_strings(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)[:1024]
-    )
+        json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    )[:1024]
 
 
 def keyed_emit(
@@ -153,6 +154,7 @@ def keyed_emit(
     run_id: str = "",
     phase: str = "",
     world: str | None = None,
+    addressed: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Emit one run as a trace (root span + child spans) to the user's account and
     report the OBSERVED export result.
@@ -176,11 +178,11 @@ def keyed_emit(
             if world:
                 root.set_attribute(FI_KIT_WORLD_ATTR, str(world))
             for key, value in root_attrs.items():
-                root.set_attribute(str(key), _scalar(value, str(key)))
+                root.set_attribute(str(key), _scalar(value, str(key), addressed))
             for child_name, child_attrs in children:
                 with tracer.start_as_current_span(str(child_name)) as child:
                     for key, value in (child_attrs or {}).items():
-                        child.set_attribute(str(key), _scalar(value, str(key)))
+                        child.set_attribute(str(key), _scalar(value, str(key), addressed))
         provider.force_flush()
         provider.shutdown()
     except BaseException as exc:  # noqa: BLE001 — degrade-to-local (R§3.5)

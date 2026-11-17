@@ -684,3 +684,23 @@ def test_sdk_account_sync_example_dry_run(tmp_path, monkeypatch):
     assert payload["identity"]["local_run_id"] == (
         payload["identity"]["encoded_run_id"]
     )
+
+
+def test_keys_that_differ_only_in_a_url_query_stay_distinct(ledger_env):
+    from fi.alk.telemetry import _row
+
+    cleaned = _row._redact_value(
+        {"https://h.example.com/a?page=1": 1, "https://h.example.com/a?page=2": 2}, ()
+    )
+    assert cleaned == {
+        "https://h.example.com/a?page=1": 1,
+        "https://h.example.com/a?page=2": 2,
+    }
+
+
+def test_a_declared_env_value_is_still_removed_from_a_key(ledger_env, monkeypatch):
+    from fi.alk.telemetry import _row
+
+    monkeypatch.setenv("SENTINEL_TOKEN", "sk-sentinel-key-test")
+    cleaned = _row._redact_value({"k-sk-sentinel-key-test": 1}, ["SENTINEL_TOKEN"])
+    assert cleaned == {"k-[redacted:SENTINEL_TOKEN]": 1}

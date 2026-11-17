@@ -186,3 +186,55 @@ def test_a_credential_in_check_code_is_refused_and_a_placeholder_is_not():
     assert not any("holds a credential" in one for one in validate_sub_goal(good))
     keyed = SubGoal(name="g", what="w", check=CHECK + f"# {KEY}\n")
     assert any("holds a credential" in one for one in validate_sub_goal(keyed))
+
+
+# What the saved file would say differently from the document submitted: the caller is given the
+# saved copy, and the folder is named from the name, so each must survive cleaning unchanged.
+def _cleaning_problems(scenario: Scenario) -> list[str]:
+    return [
+        one
+        for one in validate_scenario(scenario, _catalogue(), {})
+        if "is changed when the scenario is cleaned" in one
+    ]
+
+
+def test_an_instruction_the_cleaner_would_change_is_refused_at_submission():
+    scenario = _scenario(
+        instruction="Reset your password. New password: Blue-Sky-42",
+        solution=[
+            Step(
+                tool="reset",
+                arguments={"new_password": "Blue-Sky-42"},
+                fixed={"new_password": "caller: says it"},
+            )
+        ],
+    )
+    problems = _cleaning_problems(scenario)
+    assert len(problems) == 1
+    assert problems[0].startswith("instruction ")
+    assert "fixture" in problems[0]
+    assert "Blue-Sky-42" not in problems[0]
+
+
+@pytest.mark.parametrize(
+    "fields,start",
+    [
+        ({"persona": Persona(name="Ana", initial_message="my password: Blue-Sky-42")},
+         "persona.initial_message "),
+        ({"name": "login token: abc123"}, "name "),
+        ({"scenario_key": "login token: abc123"}, "scenario_key "),
+        ({"sub_goals": [f"goal {KEY}"]}, "sub_goals "),
+    ],
+)
+def test_the_other_fields_the_run_replays_or_names_by_are_refused_too(fields, start):
+    problems = _cleaning_problems(_scenario(instruction="Ask to reset it.", **fields))
+    assert len(problems) == 1
+    assert problems[0].startswith(start)
+
+
+def test_an_honest_scenario_is_not_refused_for_cleaning():
+    scenario = _scenario(
+        instruction="Reset your password. The new password is in the fixture.",
+        persona=Persona(name="Ana", initial_message="Hi, I need a password reset."),
+    )
+    assert _cleaning_problems(scenario) == []

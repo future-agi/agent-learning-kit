@@ -25,6 +25,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from ..providers.agent import redact_strings
 from ..providers.secret_shapes import credential_in
 from .catalogue import Catalogue
 from .simulator import variables_in
@@ -516,6 +517,39 @@ def _credentials_in_kept_fields(scenario: Scenario) -> list[str]:
     ]
 
 
+def _fields_the_cleaner_would_change(scenario: Scenario) -> list[str]:
+    """Fields the saved file would hold differently from the document submitted.
+
+    The run replays `instruction` and `persona.initial_message` to the simulated caller from the
+    saved copy, and names the folder and the checks from `name`, `scenario_key` and the sub-goal
+    ids, so each must come back from cleaning exactly as it went in. Refused instead of masked, so
+    the proof never changes after submission. The value is never echoed back."""
+    persona = scenario.persona
+    replayed = {
+        "instruction": scenario.instruction,
+        "persona.initial_message": getattr(persona, "initial_message", "") or "",
+    }
+    named = {
+        "name": scenario.name,
+        "scenario_key": scenario.scenario_key,
+        "sub_goals": list(scenario.sub_goals),
+    }
+    problems = [
+        f"{field} is changed when the scenario is cleaned for saving, and the caller is given the "
+        "saved copy, so a value it must say would arrive masked. Put a value the caller replays in "
+        "`fixture` (and in `persona.scripted_caller` if the caller must say it)"
+        for field, text in replayed.items()
+        if text and redact_strings(text) != text
+    ]
+    problems.extend(
+        f"{field} is changed when the scenario is cleaned for saving, so the saved file and its "
+        "folder would no longer match what was submitted. Keep a name free of credentials"
+        for field, value in named.items()
+        if value and redact_strings(value) != value
+    )
+    return problems
+
+
 def validate_scenario(
     scenario: Scenario,
     catalogue: Catalogue,
@@ -531,6 +565,7 @@ def validate_scenario(
     it. That is what the gates are for.
     """
     problems: list[str] = _credentials_in_kept_fields(scenario)
+    problems.extend(_fields_the_cleaner_would_change(scenario))
     if not scenario.name.strip():
         problems.append("no name")
     if not scenario.instruction.strip():

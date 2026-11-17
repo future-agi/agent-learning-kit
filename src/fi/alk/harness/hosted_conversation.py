@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import hashlib
 import io
 import json
@@ -444,7 +443,7 @@ class PlatformSessionStore:
     def _clean(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         kept: list[dict[str, Any]] = []
         for original in entries:
-            entry = copy.deepcopy(original)
+            entry = _copy_line(original)
             if not entry.get("uuid") and entry.get("type") in _REQUEST_REPLAY:
                 continue
             if _strip_thinking(entry):
@@ -452,7 +451,7 @@ class PlatformSessionStore:
                     self._dropped[entry["uuid"]] = entry.get("parentUuid")
                 continue
             kept.append(entry)
-        return [_clean_entry(self._resolve_pointers(entry)) for entry in kept]
+        return [_clean_entry_or_payload(self._resolve_pointers(entry)) for entry in kept]
 
     def _resolve(self, value: Any) -> Any:
         """The nearest line at or above `value` that was not dropped (None past the first line)."""
@@ -519,6 +518,47 @@ def _strip_thinking(entry: dict[str, Any]) -> bool:
         return False
     message["content"] = blocks
     return not blocks
+
+
+def _copy_line(original: dict[str, Any]) -> dict[str, Any]:
+    """A copy of a line that nothing downstream shares. A JSON round trip rather than
+    copy.deepcopy, which needs twice the stack and fails on a line the cleaner could still read;
+    a line too deep even for that keeps its top-level scalars, which carry the uuid pointers."""
+    try:
+        return json.loads(json.dumps(original))
+    except RecursionError:
+        return {
+            name: value if value is None or isinstance(value, (str, int, float, bool)) else _GONE
+            for name, value in original.items()
+        }
+
+
+_GONE = "[redacted]"
+
+
+def _clean_entry_or_payload(entry: dict[str, Any]) -> dict[str, Any]:
+    """`_clean_entry`, except that a line nested too deep to clean keeps its place with the
+    payloads replaced, rather than failing the whole batch: a line left out would leave the lines
+    after it pointing at a uuid that was never stored."""
+    try:
+        return _clean_entry(entry)
+    except RecursionError:
+        pass
+    message = entry.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    for block in content if isinstance(content, list) else []:
+        if isinstance(block, dict) and "input" in block:
+            block["input"] = _GONE
+    if "toolUseResult" in entry:
+        entry["toolUseResult"] = _GONE
+    try:
+        return _clean_entry(entry)
+    except RecursionError:
+        # Deep somewhere else: keep the line's scalars, which carry its uuid and pointers.
+        return {
+            name: value if value is None or isinstance(value, (str, int, float, bool)) else _GONE
+            for name, value in entry.items()
+        }
 
 
 def _clean_entry(entry: dict[str, Any]) -> dict[str, Any]:
@@ -604,6 +644,11 @@ def _clean_adk_event(value: Any, field: str = "") -> Any:
     return value
 
 
+_ADK_TABLES = frozenset(
+    {"adk_internal_metadata", "app_states", "events", "sessions", "user_states"}
+)
+
+
 def _cleaned_adk_database(path: Path) -> bytes | None:
     """The session database as it may leave the sandbox, or None when it can't be made clean.
 
@@ -619,6 +664,16 @@ def _cleaned_adk_database(path: Path) -> bytes | None:
         finally:
             source.close()
         try:
+            # VACUUM INTO copies every table, so one the cleaner does not read would carry its
+            # text out raw. ADK 2.7.1's schema is exactly these; anything else is left out.
+            tables = {
+                name
+                for (name,) in memory.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                )
+            }
+            if tables - _ADK_TABLES:
+                raise ValueError("a table the cleaner does not know")
             for rowid, data in memory.execute("SELECT rowid, event_data FROM events").fetchall():
                 if data is not None:
                     memory.execute(

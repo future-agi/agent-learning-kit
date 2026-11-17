@@ -65,8 +65,12 @@ def _redact_value(value: Any, required_env: Sequence[str]) -> Any:
     if isinstance(value, float):
         return round(value, _FLOAT_PRECISION)
     if isinstance(value, Mapping):
+        # A key gets the declared env values only: the text rule drops a URL's query, so two
+        # keys that differ only there would merge and one value would be lost.
         return {
-            _redact_value(key, required_env): _redact_value(item, required_env)
+            (redact_env_values(key, required_env) if isinstance(key, str) else key): (
+                _redact_value(item, required_env)
+            )
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
