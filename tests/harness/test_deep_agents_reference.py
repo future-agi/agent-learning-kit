@@ -24,6 +24,7 @@ from reference_agents import (
     assert_bindings_match,
     assert_detected,
     assert_pins,
+    assert_refuses_key_without_base_url,
     build_control_service,
     fresh_import,
     run_tracer,
@@ -320,8 +321,17 @@ def test_an_empty_or_blank_key_also_gets_the_placeholder(example_module, key) ->
     assert model.base_url is None
 
 
+def test_a_key_with_no_base_url_is_refused_at_import(example_module, monkeypatch) -> None:
+    def no_client() -> None:
+        import langchain_openai
+
+        assert langchain_openai.INSTANCES == []
+
+    assert_refuses_key_without_base_url(example_module, None, monkeypatch, after_refusal=no_client)
+
+
 @pytest.mark.parametrize("base_url", [None, "", "   "], ids=["unset", "empty", "blank"])
-def test_a_key_with_no_base_url_is_refused_at_import(example_module, base_url) -> None:
+def test_the_refusal_leaves_the_key_out_of_the_examples_frame(example_module, base_url) -> None:
     environment = {"OPENAI_API_KEY": "secret-canary-key"}
     if base_url is not None:
         environment["OPENAI_BASE_URL"] = base_url
@@ -329,7 +339,6 @@ def test_a_key_with_no_base_url_is_refused_at_import(example_module, base_url) -
     with pytest.raises(RuntimeError, match="OPENAI_BASE_URL") as refused:
         example_module(**environment)
 
-    assert "secret-canary-key" not in str(refused.value)
     # Nor in the example's own frame, which a traceback that prints variables would show.
     frames = []
     trace = refused.tb
@@ -339,10 +348,6 @@ def test_a_key_with_no_base_url_is_refused_at_import(example_module, base_url) -
     example_frames = [frame for frame in frames if frame.f_code.co_filename.endswith("agent.py")]
     assert example_frames
     assert not any("secret-canary-key" in repr(frame.f_locals) for frame in example_frames)
-    import langchain_openai
-
-    # Refused before any client exists, so nothing could have been sent.
-    assert langchain_openai.INSTANCES == []
 
 
 def test_openai_api_base_alone_does_not_satisfy_the_check(example_module) -> None:
