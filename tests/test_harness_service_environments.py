@@ -692,6 +692,69 @@ def test_a_bind_elsewhere_is_not_a_docker_socket_mount(volume):
     _validate_compose_security({"services": {"agent": {"volumes": [volume]}}})
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "cap_add",
+        "security_opt",
+        "sysctls",
+        "runtime",
+        "isolation",
+        "cgroup_parent",
+        "device_cgroup_rules",
+        "oom_kill_disable",
+        "gpus",
+        "external_links",
+        "some_future_field",
+    ],
+)
+def test_a_service_field_not_on_the_allowlist_is_rejected(field):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(_svc(**{field: ["CANARY-7f3a"]}))
+    assert f"agent: field {field} is not allowed" in str(error.value)
+    assert "CANARY" not in str(error.value)
+    assert "db: field" not in str(error.value)
+
+
+def test_a_privileged_service_is_reported_once():
+    with pytest.raises(ProvisionError) as error:
+        _validate_compose_security(_svc(privileged=True, devices=["/dev/kvm"]))
+    assert "agent: privileged" in str(error.value)
+    assert "agent: host devices" in str(error.value)
+    assert "field privileged" not in str(error.value)
+    assert "field devices" not in str(error.value)
+
+
+def test_service_fields_on_the_allowlist_are_accepted():
+    _validate_compose_security(
+        _svc(
+            image="x",
+            build={"context": "."},
+            command=["run"],
+            entrypoint=["run"],
+            environment={"A": "b"},
+            env_file=["a.env"],
+            working_dir="/app",
+            user="1000",
+            depends_on={"db": {"condition": "service_started"}},
+            healthcheck={"test": ["CMD", "true"]},
+            volumes=[{"type": "volume", "source": "data", "target": "/d"}],
+            ports=[{"target": 80}],
+            expose=["80"],
+            restart="no",
+            profiles=["harness-runtime"],
+            networks={"default": None},
+            labels={"a": "b"},
+            deploy={"resources": {"limits": {"cpus": "1"}}},
+            cap_drop=["ALL"],
+            tmpfs=["/tmp"],
+            mem_limit="1g",
+            develop={"watch": [{"path": "./src", "action": "sync", "target": "/app"}]},
+            **{"x-anything": {"a": 1}},
+        )
+    )
+
+
 def _svc(**fields):
     return {"services": {"agent": fields, "db": {}}}
 

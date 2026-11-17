@@ -550,6 +550,26 @@ def _mounts_docker_socket(volume: Any) -> bool:
     return resolved in _DOCKER_SOCKET_AND_PARENTS
 
 
+# Deny by default: a service field this list does not name is refused, so a field added to
+# Compose later cannot reach the host unnoticed. Keys the function value-checks below
+# (network_mode, pid, ipc, uts, userns_mode, cgroup, volumes_from, build, volumes) are listed;
+# privileged and devices are refused outright and are not.
+_ALLOWED_SERVICE_FIELDS = frozenset(
+    {
+        "image", "platform", "build", "command", "entrypoint", "environment", "env_file",
+        "working_dir", "user", "group_add", "depends_on", "healthcheck", "volumes", "ports",
+        "expose", "restart", "init", "stop_grace_period", "stop_signal", "read_only", "tmpfs",
+        "shm_size", "ulimits", "mem_limit", "mem_reservation", "memswap_limit",
+        "mem_swappiness", "cpus", "cpu_shares", "cpu_quota", "cpu_period", "cpuset",
+        "pids_limit", "networks", "hostname", "domainname", "mac_address", "dns", "dns_opt",
+        "dns_search", "labels", "annotations", "logging", "extra_hosts", "container_name",
+        "deploy", "cap_drop", "profiles", "links", "scale", "pull_policy", "tty",
+        "stdin_open", "post_start", "pre_stop", "attach", "develop", "network_mode", "pid", "ipc",
+        "uts", "userns_mode", "cgroup", "volumes_from",
+    }
+)  # fmt: skip
+
+
 def _validate_compose_security(config: dict[str, Any]) -> None:
     """Reject host-escape primitives before any submitted container is created.
 
@@ -612,6 +632,12 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
                 violations.append(f"{name}: build.entitlements")
         if service.get("devices"):
             violations.append(f"{name}: host devices")
+        for key in sorted(str(key) for key in service):
+            if key in _ALLOWED_SERVICE_FIELDS or key.startswith("x-"):
+                continue
+            if key in ("privileged", "devices") and service.get(key):
+                continue  # already reported above
+            violations.append(f"{name}: field {key} is not allowed")
         for volume in service.get("volumes") or []:
             if _mounts_docker_socket(volume):
                 violations.append(f"{name}: Docker socket mount")
