@@ -146,18 +146,21 @@ _LENGTH_LIMITS = (
 )
 
 
-def _attribute_length_limit() -> int | None:
-    """The length the SDK cuts an attribute to, read as it reads it: the span-specific variable,
-    then the general one, each ignored when unset, empty, not a whole number or not positive.
-    The SDK cuts there with no "...", and the customer's own limit stays as it is."""
+def _attribute_length_limits() -> tuple[int, ...]:
+    """The lengths the SDK cuts an attribute to, read as it reads them: each variable ignored
+    when unset, empty, not a whole number or not positive. The span-specific limit cuts a span's
+    own attributes, the general one its events and links (record_exception, add_event), so both
+    are cut lengths. The SDK cuts there with no "...", and the customer's own limit stays as it
+    is."""
+    limits: list[int] = []
     for name in _LENGTH_LIMITS:
         try:
             limit = int(os.environ.get(name, ""))
         except ValueError:
             continue
-        if limit > 0:
-            return limit
-    return None
+        if limit > 0 and limit not in limits:
+            limits.append(limit)
+    return tuple(limits)
 
 
 class _Secrets(tuple):
@@ -176,13 +179,13 @@ _SCHEME_CHARACTERS = frozenset(
 )
 
 
-def _cut(value: str) -> str:
+def _cut(value: str, cuts: tuple[int, ...] = _CUTS) -> str:
     """A value of a cut length that ends inside an address loses it, from its scheme on.
 
     Run on the text as traceai recorded it, before anything else shortens it. A 5,000-character
     value ends in traceai's "...", which goes with the address.
     """
-    if len(value) not in _CUTS:
+    if len(value) not in cuts:
         return value
     return _cut_address(value)
 
@@ -209,9 +212,8 @@ class _CleaningExporter(SpanExporter):
         self._inner = inner
         # The job's own secret values, replaced whole as the other outbound channels replace them
         # (outbound.redact_outbound_text): a key a tool printed has no shape to recognise.
-        limit = _attribute_length_limit()
         self._secrets = _Secrets(
-            _secret_patterns(secret_values), _CUTS + ((limit,) if limit else ())
+            _secret_patterns(secret_values), _CUTS + _attribute_length_limits()
         )
         # One cleaned copy per resource, made the first time it is seen.
         self._resources: dict[int, tuple[Any, Any]] = {}
@@ -349,13 +351,13 @@ def _secret_patterns(secret_values: tuple[str, ...]) -> tuple[Any, ...]:
     isn't parsed as JSON carries it escaped), longest first; then one pattern for short all-digit
     values such as a 4-digit PIN, matched only between non-digits so it can't hit inside a longer
     number. Other short values would hit ordinary words, so they are left."""
-    long = {value for value in secret_values if len(value) >= _SHORTEST_SECRET}
+    declared = {value for value in secret_values if value}
     patterns: list[Any] = []
     seen: set[str] = set()
     # Longest value first, and for each value its whole forms before its cut rules: a declared
     # value inside a longer one must not break the longer one's cut, and the cut rule of a value
     # that holds "..." must not run before its whole form has been replaced.
-    for value in sorted(long, key=lambda v: (-len(v), v)):
+    for value in sorted(declared, key=lambda v: (-len(v), v)):
         # repr is how traceai prints an error's text and a list result, and writes a value with
         # both quotes in it with \' that no JSON form has.
         forms = {value, repr(value)[1:-1]}
@@ -372,9 +374,14 @@ def _secret_patterns(secret_values: tuple[str, ...]) -> tuple[Any, ...]:
         forms -= seen
         seen |= forms
         ordered = sorted(forms, key=lambda form: (-len(form), form))
-        patterns.extend(ordered)
-        # traceai cuts the JSON text of a value, so a cut can fall inside any of its forms.
-        patterns.extend(_CutSecret(form) for form in ordered)
+        if len(value) >= _SHORTEST_SECRET:
+            patterns.extend(ordered)
+            # traceai cuts the JSON text of a value, so a cut can fall inside any of its forms.
+            patterns.extend(_CutSecret(form) for form in ordered)
+        # Where the text is known to be cut, any head of a value is a cut one, however short:
+        # a value of 8 characters cut to 7 is still its head, and a shorter one is no word to
+        # leave. Elsewhere the floor stays, or ordinary words would go.
+        patterns.extend(_CutTail(form) for form in ordered)
     short = {
         value
         for value in secret_values
@@ -415,18 +422,50 @@ _DIGIT_WORDS = (
 )
 
 
+# What people put between spoken digits: spaces (one or more), or a comma, dot or dash with
+# spaces around it. Digits may also run together in groups ("48 21").
+_PIN_SEPARATOR = r"(?:[ ]*[,.\-][ ]*|[ ]+)"
+_PIN_BEFORE = re.compile(rf"[0-9]{_PIN_SEPARATOR}?\Z")
+
+
+class _SpokenPin:
+    """A PIN's digits as they are written out, with the separators of _PIN_SEPARATOR between
+    them or none, not part of a longer run of digits.
+
+    The pattern starts with the PIN's first digit, so re skips ahead to it instead of trying
+    every position. The digit before the match can't be a lookbehind of fixed width, since the
+    separator before it isn't, so it is read from the text before each match, which costs
+    only where a match is found."""
+
+    def __init__(self, pin: str) -> None:
+        digits = rf"{_PIN_SEPARATOR}?".join(pin)
+        self._pattern = re.compile(rf"{digits}(?!{_PIN_SEPARATOR}?[0-9])")
+
+    def sub(self, replacement: str, text: str) -> str:
+        out: list[str] = []
+        done = 0
+        at = 0
+        while True:
+            found = self._pattern.search(text, at)
+            if found is None:
+                break
+            if _PIN_BEFORE.search(text, max(0, found.start() - 64), found.start()):
+                # Part of a longer run of digits: try again one character on.
+                at = found.start() + 1
+                continue
+            out.append(text[done : found.start()])
+            out.append(replacement)
+            done = at = found.end()
+        if not out:
+            return text
+        out.append(text[done:])
+        return "".join(out)
+
+
 def _spoken_pin_patterns(pin: str) -> list[Any]:
-    separated = r"[ .\-]".join(pin)
-    # The first digit comes before the lookbehinds: a pattern that starts with a lookbehind is
-    # tried at every position of every string, one that starts with a literal lets re skip ahead
-    # to it. The lookbehinds then look back from that digit, so the same text matches.
-    first = pin[0]
-    spaced = re.compile(
-        rf"{first}(?<![0-9]{first})(?<![0-9][ .\-]{first})"
-        rf"{separated[1:]}(?![0-9])(?![ .\-][0-9])"
-    )
-    words = r"[ \-]+".join(_DIGIT_WORDS[int(digit)] for digit in pin)
-    return [spaced, re.compile(rf"\b{words}\b", re.IGNORECASE)]
+    words_separator = r"(?:[ \-]+|[ \-]*,[ \-]*)"
+    words = words_separator.join(_DIGIT_WORDS[int(digit)] for digit in pin)
+    return [_SpokenPin(pin), re.compile(rf"\b{words}\b", re.IGNORECASE)]
 
 
 class _Guarded:
@@ -522,10 +561,38 @@ class _CutSecret:
         return "".join(out)
 
 
-def _mask(text: str, secrets: tuple[Any, ...], ends: bool = False) -> str:
+class _CutTail:
+    """A form of a declared value, as its head of any length (1 or more) ends text known to be a
+    cut: text that ends where traceai or an environment limit cuts (ends), or that ends in the
+    "..." traceai adds after a cut (dotted). _CutSecret takes a head of 8 or more anywhere a cut
+    could be; this takes the shorter ones, only at the one place the cut is certain, because a
+    short head elsewhere is just a word."""
+
+    def __init__(self, value: str) -> None:
+        self._value = value
+
+    def sub(self, replacement: str, text: str, ends: bool, dotted: bool) -> str:
+        value = self._value
+        first = value[0]
+        # The "..." goes first: the head before it, then the end of the text itself.
+        for before_dots in ((True,) if dotted else ()) + ((False,) if ends else ()):
+            end = len(text) - 3 if before_dots else len(text)
+            start = text.find(first, max(0, end - len(value)), end)
+            while start != -1:
+                if value.startswith(text[start:end]):
+                    text = text[:start] + replacement + text[end:]
+                    break
+                start = text.find(first, start + 1, end)
+        return text
+
+
+def _mask(
+    text: str, secrets: tuple[Any, ...], ends: bool = False, dotted: bool = False
+) -> str:
     """Replace the declared values in text. ends says the text may be a value traceai cut to a
-    length it cuts to, so that a secret's first characters ending it are a cut one; in JSON, or
-    in a value of any other length, only "..." marks a cut."""
+    length it cuts to, so that a secret's first characters ending it are a cut one; dotted, that
+    it ends in the "..." of a cut. In JSON, or in a value of any other length, only "..." marks
+    a cut."""
     dots = "..." in text
     for secret in secrets:
         if isinstance(secret, str):
@@ -533,6 +600,9 @@ def _mask(text: str, secrets: tuple[Any, ...], ends: bool = False) -> str:
         elif isinstance(secret, _CutSecret):
             if dots or ends:
                 text = secret.sub("***", text, dots, ends)
+        elif isinstance(secret, _CutTail):
+            if ends or dotted:
+                text = secret.sub("***", text, ends, dotted)
         else:
             text = secret.sub("***", text)
     return text
@@ -566,7 +636,8 @@ def _take_text(value: str, flat: list[str], key: str, secrets: tuple[Any, ...]) 
         return ("as is", "[redacted]")
     # _cut and _as_json read the value as recorded: replacing a secret first changes its length
     # (so a value traceai cut is no longer of a cut length) and, inside JSON, its escaping.
-    cut = _cut(value)
+    cuts = getattr(secrets, "cuts", _CUTS)
+    cut = _cut(value, cuts)
     if cut == value:
         # traceai records tool input, messages and metadata as JSON. Cleaned as prose, a URL with
         # a query takes the rest of its whitespace-free run, the JSON's closing quote and comma
@@ -577,7 +648,19 @@ def _take_text(value: str, flat: list[str], key: str, secrets: tuple[Any, ...]) 
             return ("json", _take_json(tree, flat, key, secrets))
     # The cut is decided on the value as recorded, but made on the masked text: cutting first can
     # take a secret's tail with the address and leave its head, which no longer matches.
-    masked = _mask(value, secrets, len(value) in getattr(secrets, "cuts", _CUTS))
+    ends = len(value) in cuts
+    # A limit of 4998 or 4999 cuts inside traceai's "...", leaving the secret's head followed by
+    # one or two dots, which the cut rule doesn't take for a cut. Written back to three dots for
+    # the masking, and taken off again after.
+    dots = len(value) - len(value.rstrip("."))
+    pad = "." * (3 - dots) if ends and 0 < dots < 3 else ""
+    # Where traceai cuts and adds "...", the text is cut at the length or three short of it.
+    dotted = (value + pad).endswith("...") and (
+        len(value) in cuts or len(value) - 3 in cuts
+    )
+    masked = _mask(value + pad, secrets, ends, dotted)
+    if pad and masked.endswith(pad):
+        masked = masked[: -len(pad)]
     flat.append(_cut_address(masked) if cut != value else masked)
     return ("text", len(flat) - 1)
 

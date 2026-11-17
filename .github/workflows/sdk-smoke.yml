@@ -132,3 +132,16 @@ jobs:
           'opentelemetry-api==1.39.1' 'opentelemetry-sdk==1.39.1'
           'opentelemetry-exporter-otlp-proto-http==1.39.1' 'opentelemetry-proto==1.39.1'
           && python -m pytest -q tests/harness/test_simulation_measure.py
+      - name: Run the tracing cleaner on the locked fi-instrumentation-otel
+        # The hosted image installs what uv.lock pins (fi-instrumentation-otel 1.0.0, with the
+        # traceAI instrumentors of the hosted-tracing extra), not the newest release the steps
+        # above resolve. The cleaner masks secrets in what is exported, so its tests run on that
+        # install as well.
+        run: >-
+          python -m pip install uv
+          && uv export --frozen --extra hosted-tracing --no-hashes --no-emit-project
+          --output-file locked-requirements.txt
+          && python -m venv .locked-venv
+          && .locked-venv/bin/python -m pip install -r locked-requirements.txt
+          && .locked-venv/bin/python -m pip install --no-deps .
+          && .locked-venv/bin/python -m pytest -q tests/harness/test_observability.py

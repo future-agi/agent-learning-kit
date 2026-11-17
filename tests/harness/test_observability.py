@@ -1620,6 +1620,7 @@ def test_declared_pins_cost_a_fraction_of_a_lookbehind_first_pattern_on_prose():
         pattern
         for pattern in observability._secret_patterns(pins)
         if not (isinstance(pattern, re.Pattern) and pattern.flags & re.IGNORECASE)
+        and not isinstance(pattern, (observability._CutTail, observability._CutSecret))
     ]
     assert len(ours) == 3
 
@@ -1689,10 +1690,10 @@ def test_the_span_specific_limit_wins_and_a_bad_value_is_ignored(monkeypatch):
         OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT="3000",
         OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT="4000",
     )
-    assert (
-        observability._CleaningExporter(InMemorySpanExporter())._secrets.cuts[-1]
-        == 3000
-    )
+    # A span's own attributes are cut at the span-specific limit, its events and links at the
+    # general one, so both are cut lengths.
+    cuts = observability._CleaningExporter(InMemorySpanExporter())._secrets.cuts
+    assert {3000, 4000} <= set(cuts)
     for bad in ("", "abc", "0", "-5", "12.5"):
         _with_limits(
             monkeypatch,
@@ -1700,7 +1701,8 @@ def test_the_span_specific_limit_wins_and_a_bad_value_is_ignored(monkeypatch):
             OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT="4000",
         )
         exporter = observability._CleaningExporter(InMemorySpanExporter())
-        assert exporter._secrets.cuts[-1] == 4000, bad
+        assert 4000 in exporter._secrets.cuts, bad
+        assert 3000 not in exporter._secrets.cuts, bad
     _with_limits(monkeypatch, OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT="abc")
     exporter = observability._CleaningExporter(InMemorySpanExporter())
     assert tuple(exporter._secrets.cuts) == observability._CUTS
@@ -1745,3 +1747,154 @@ def test_a_value_with_nothing_to_escape_has_exactly_one_form():
     ]
 
     assert forms == ["plainvalue12345"]
+
+
+def test_a_secret_cut_in_an_exception_message_by_the_general_limit_is_replaced(
+    monkeypatch,
+):
+    _with_limits(
+        monkeypatch,
+        OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT="3000",
+        OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT="4000",
+    )
+    cut = _cut_by_limit(4000)
+    memory = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(memory))
+    with provider.get_tracer("test").start_as_current_span("tool") as span:
+        span.add_event("exception", {"exception.message": cut})
+    sink = InMemorySpanExporter()
+
+    observability._CleaningExporter(sink, (CUT_SECRET,)).export(
+        memory.get_finished_spans()
+    )
+
+    (event,) = sink.get_finished_spans()[0].events
+    message = event.attributes["exception.message"]
+    assert CUT_SECRET[:8] not in message and message.endswith("OPENAI_API_KEY=***")
+
+
+@pytest.mark.parametrize("declared", [(), ("8462",)])
+def test_an_address_ending_a_value_cut_by_the_environments_limit_goes_whole(
+    monkeypatch, declared
+):
+    _with_limits(monkeypatch, OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT="4000")
+    tail = "postgresql://admin:8462"
+    text = "x" * (4000 - len(tail)) + tail
+
+    out = _export_one(_readable(**{"output.value": text}), declared).attributes[
+        "output.value"
+    ]
+
+    assert "8462" not in out and out.endswith("[redacted]")
+
+
+@pytest.mark.parametrize("limit", [4998, 4999])
+def test_a_limit_that_cuts_inside_traceais_dots_still_masks_the_head(
+    monkeypatch, limit
+):
+    _with_limits(monkeypatch, OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT=str(limit))
+    full = "x" * (5000 - 20 - 3 - 15) + "OPENAI_API_KEY=" + CUT_SECRET[:20] + "..."
+    assert len(full) == 5000
+    cut = full[:limit]
+    assert cut.endswith(CUT_SECRET[:20] + "." * (limit - 4997))
+
+    out = _export_one(_readable(**{"output.value": cut}), (CUT_SECRET,)).attributes[
+        "output.value"
+    ]
+
+    assert CUT_SECRET[:8] not in out
+    assert out.endswith("OPENAI_API_KEY=***" + "." * (limit - 4997))
+
+
+# -- A short head at a place traceai cut, and PINs as people say them ---------------------------
+
+
+def _cut_head(head, length=5000, ending="..."):
+    """Text of `length` characters that traceai cut: the head of a secret, then the ending."""
+    return (
+        "x" * (length - len(ending) - len(head) - len("KEY=")) + "KEY=" + head + ending
+    )
+
+
+@pytest.mark.parametrize(
+    "value, head",
+    [
+        ("hunter12", "hunter1"),
+        ("Zq7Hk", "Zq7"),
+        ("Zq7Hk", "Zq7Hk"),
+        ("hunter12", "h"),
+    ],
+)
+def test_a_short_head_of_a_declared_value_at_a_traceai_cut_is_replaced(value, head):
+    for length, ending in ((5000, "..."), (503, "..."), (500, "")):
+        out = _export_one(
+            _readable(**{"output.value": _cut_head(head, length, ending)}), (value,)
+        ).attributes["output.value"]
+
+        assert out.endswith("KEY=***" + ending), (length, out[-30:])
+
+
+def test_a_short_head_at_the_environments_limit_is_replaced(monkeypatch):
+    _with_limits(monkeypatch, OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT="4000")
+
+    out = _export_one(
+        _readable(**{"output.value": _cut_head("Zq7", 4000, "")}), ("Zq7Hk",)
+    ).attributes["output.value"]
+
+    assert out.endswith("KEY=***")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "PASSWORD=hunter1... then more",
+        "the key Zq7...",
+        "x" * 4980 + "Zq7 and more...",
+        "x" * 4990 + "Zq7Hk is it",
+        "x" * 4500 + "KEY=Zq7...",
+    ],
+)
+def test_a_short_head_that_is_not_at_a_cut_is_kept(text):
+    out = _export_one(_readable(**{"output.value": text}), ("hunter12", "Zq7Hk"))
+
+    assert out.attributes["output.value"] == text
+
+
+@pytest.mark.parametrize(
+    "spoken",
+    [
+        "4, 8, 2, 1",
+        "4,8,2,1",
+        "four, eight, two, one",
+        "Four , Eight , Two , One",
+        "4 - 8 - 2 - 1",
+        "4  8  2  1",
+        "48 21",
+        "4 82 1",
+    ],
+)
+def test_a_four_digit_value_as_people_write_it_out_is_replaced(spoken):
+    out = _export_one(
+        _readable(**{"output.value": f"the pin is {spoken}, thanks"}), ("4821",)
+    ).attributes["output.value"]
+
+    assert out == "the pin is ***, thanks"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "run 4, 8, 2, 1, 5 ok",
+        "run 5, 4, 8, 2, 1 ok",
+        "run 48 215 ok",
+        "run 548 21 ok",
+        "run 5 - 4 - 8 - 2 - 1 ok",
+    ],
+)
+def test_a_longer_run_than_the_pin_in_the_wider_forms_is_kept(text):
+    out = _export_one(_readable(**{"output.value": text}), ("4821",)).attributes[
+        "output.value"
+    ]
+
+    assert out == text
