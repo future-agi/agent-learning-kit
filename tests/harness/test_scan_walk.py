@@ -8,6 +8,8 @@ import itertools
 import json
 import os
 import random
+import subprocess
+import sys
 import tokenize
 import tracemalloc
 from collections.abc import Iterator
@@ -1781,22 +1783,9 @@ def _allocated(size: int) -> int:
     return max(32, (size + 8 + 15) // 16 * 16)
 
 
-# Deep enough that every allocation the walk makes still has a scan_walk frame in its record:
-# on the shapes here the deepest is 10 frames below one (the templates shape), and 6 more allow
-# for frames a test runner adds. Not deeper: every frame kept is recorded for every allocation,
-# which is most of what these tests cost.
-_TRACE_FRAMES = 16
-
-
 def _rounded_live() -> int:
-    """What is alive that the walk itself allocated, each block rounded as allocated.
-
-    Only allocations made beneath a scan_walk frame count, so memory another thread allocates
-    meanwhile (a server or loop an earlier test left running) is not charged to the walk."""
-    snapshot = tracemalloc.take_snapshot().filter_traces(
-        [tracemalloc.Filter(True, scan_walk.__file__, all_frames=True)]
-    )
-    return sum(_allocated(trace.size) for trace in snapshot.traces)
+    """What is alive that was allocated while tracing, each block rounded as allocated."""
+    return sum(_allocated(trace.size) for trace in tracemalloc.take_snapshot().traces)
 
 
 def _largest_parse_peak(root: Path) -> int:
@@ -1826,10 +1815,35 @@ def _hazard_peak(root: Path) -> int:
         tracemalloc.stop()
 
 
+# Run in a fresh interpreter by `_measure`: this module, then one measure of the folder given.
+_MEASURE_IN_A_FRESH_PROCESS = """
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import test_scan_walk
+print(json.dumps(test_scan_walk._measure_here(Path(sys.argv[2]))))
+"""
+
+
 def _measure(root: Path) -> dict[str, int]:
+    """`_measure_here` in a fresh interpreter, where no other thread runs. In this one, a server
+    or loop an earlier test left running can allocate while the walk is measured, and what it
+    holds would be charged to the walk."""
+    done = subprocess.run(
+        [sys.executable, "-c", _MEASURE_IN_A_FRESH_PROCESS, str(Path(__file__).parent), str(root)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr[-4000:]
+    return json.loads(done.stdout.splitlines()[-1])
+
+
+def _measure_here(root: Path) -> dict[str, int]:
     """Walk and join ``root`` under tracemalloc: what was charged, what is really kept."""
     gc.collect()
-    tracemalloc.start(_TRACE_FRAMES)
+    tracemalloc.start()
     try:
         walk = scan_walk._Walk(root, deadline=FOREVER, clock=lambda: 0.0)
         walk.run()
