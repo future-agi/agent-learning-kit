@@ -1391,3 +1391,23 @@ def test_a_workspace_member_the_agent_depends_on_is_followed_through_its_src(tmp
     )
 
     assert _required(discover_credentials(root, agent_subfolder=sub))["SHARED_DB_PASSWORD"] is True
+
+
+def test_a_sibling_agents_unreadable_elevenlabs_key_leaves_this_agent_alone(tmp_path):
+    # Agent b's constructor isn't agent a's code: it makes no choice a has to meet.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "a/agent.py": "print('a')\n",
+            "b/agent.py": (
+                "from livekit.plugins import elevenlabs\n"
+                "x = elevenlabs.TTS(api_key=settings.eleven_key)\n"
+            ),
+        },
+    )
+    manifest = discover_credentials(root, agent_subfolder="a")
+    assert manifest.ready
+    assert manifest.credential_choices == []
+    for item in manifest.requirements:
+        if item.environment_name in {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"}:
+            assert item.required is False

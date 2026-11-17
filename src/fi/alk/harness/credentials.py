@@ -673,6 +673,9 @@ def discover_credentials(
             record(match.group(1), required=True)
         if path.suffix.lower() == ".py":
             for name, origin in _python_sdk_requirements(content):
+                if origin.endswith(_EITHER_NAME) and not agents_own:
+                    # Another agent's constructor: it makes no choice this agent has to meet.
+                    origin = origin[: -len(_EITHER_NAME)]
                 # A name any one of which will do is made required through its choice.
                 record(name, required=not origin.endswith(_EITHER_NAME))
                 detected = findings[name]["detected_from"]
@@ -1949,7 +1952,10 @@ def _either_name_choices(
 ) -> list[CredentialChoice]:
     """One choice per plugin whose unreadable ``api_key=`` leaves its own code reading any one
     of several names. A name the agent's code needs by itself stays its own requirement, so
-    no choice is made then."""
+    no choice is made then.
+
+    Changes the requirements in place: while no option is configured, every member is marked
+    required and MISSING, so the form asks for one."""
     by_provider: dict[str, list[CredentialRequirement]] = {}
     prefix = "sdk:livekit.plugins."
     for item in requirements:
