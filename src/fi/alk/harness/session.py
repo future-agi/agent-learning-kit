@@ -328,13 +328,14 @@ class Stage:
         # delegates proved.
         idle_bound = self._spec.idle_timeout_seconds or STAGE_IDLE_TIMEOUT_SECONDS
         loop = asyncio.get_running_loop()
-        task = asyncio.current_task()
         while True:
             # The next reply is awaited in this task, so the model's own context stays one context. A watcher stops it
-            # once the bound passes with nobody asked; while a person is asked, it waits on.
+            # once the bound passes with nobody asked; while a person is asked, it waits on. The task is read before
+            # each wait: a generator may be stepped by another task than the one that began it.
+            task = asyncio.current_task()
             expired = False
 
-            def expire() -> None:
+            def expire(task: asyncio.Task[Any] | None = task) -> None:
                 nonlocal watcher, expired
                 if _ASKING:
                     watcher = loop.call_later(idle_bound, expire)
@@ -351,8 +352,12 @@ class Stage:
             except asyncio.CancelledError as exc:
                 if not expired:
                     raise
+                # A reply that lands just as the watcher fires is lost to a timeout: an exact-edge race, accepted.
                 if task is not None and hasattr(task, "uncancel"):
                     task.uncancel()
+                    # Cancelled from outside as well: that cancel stands, never read as an idle stage.
+                    if task.cancelling() > 0:
+                        raise
                 raise StageIdleTimeout(
                     f"{self.name or 'model'} produced no event for {idle_bound:g}s"
                 ) from exc
