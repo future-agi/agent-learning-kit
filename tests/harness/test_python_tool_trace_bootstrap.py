@@ -556,18 +556,21 @@ def test_a_generator_closed_early_is_recorded_and_is_not_an_error(
         tmp_path, GENERATORS, [name], "import agent\n" + driver.format(n=name) + "\n"
     )
     seen = [(r["name"], r["arguments"], r["is_error"]) for r in records]
-    if _TRACED_VERSION == (3, 13) and name == "bare":
-        # Python 3.13 closes a generator paused at a `yield` outside any `try` without running
-        # its frame, and fires no profile or monitoring event for it, so no hook can see the
-        # call end: it goes unrecorded. (3.14 runs the frame again, and 3.12 throws into it.)
-        assert seen == []
-    elif mechanism == "profile" and _TRACED_VERSION >= (3, 13):
+    if mechanism == "profile" and _TRACED_VERSION >= (3, 13):
         # The profile path cannot tell a close from a raise on 3.13 and later (its call event no
         # longer carries the thrown exception, and 3.14 ends the closed frame on a RESUME), so
         # the one record it writes is marked failed. It never writes a second one.
-        assert seen == [(name, {"n": 3}, True)]
+        expected = [(name, {"n": 3}, True)]
     else:
-        assert seen == [(name, {"n": 3}, False)]
+        expected = [(name, {"n": 3}, False)]
+    if _TRACED_VERSION == (3, 13) and name == "bare":
+        # Early 3.13 releases (3.13.3 here) close a generator paused at a `yield` outside any
+        # `try` without running its frame and fire no profile or monitoring event, so no hook
+        # sees the call end and it goes unrecorded; later 3.13 releases (3.13.18 in CI) run the
+        # frame, and it is recorded as on 3.12 and 3.14. Never a wrong record.
+        assert seen in ([], expected)
+    else:
+        assert seen == expected
 
 
 ASYNC_TOOLS = (
