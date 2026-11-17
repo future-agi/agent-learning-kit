@@ -3368,6 +3368,25 @@ def test_writes_to_two_records_are_not_a_duplicate_when_only_their_amount_is_fix
     assert duplicate_commits(log, solution) == []
 
 
+def test_writes_to_two_records_named_by_text_ids_are_not_a_duplicate():
+    """A record named by a text id (order-A, order-B) is another record, however the solution fixes the amount;
+    the same id with reworded free text is still one write."""
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    solution = [{"tool": "issue_refund", "arguments": {"amount": 500}, "fixed": {"amount": "the person"}}]
+    two_records = [
+        _logged("issue_refund", {"order_id": "order-A", "amount": 500}, error="response_lost"),
+        _logged("issue_refund", {"order_id": "order-B", "amount": 500}),
+    ]
+    reworded = [
+        _logged("issue_refund", {"order_id": "order-A", "amount": 500, "note": "first try"}, error="response_lost"),
+        _logged("issue_refund", {"order_id": "order-A", "amount": 500, "note": "retrying"}),
+    ]
+
+    assert duplicate_commits(two_records, solution) == []
+    assert len(duplicate_commits(reworded, solution)) == 1
+
+
 def test_an_unreadable_action_log_leaves_duplicates_unknown_never_cleared(monkeypatch):
     from types import SimpleNamespace
 

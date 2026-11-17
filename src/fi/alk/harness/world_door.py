@@ -26,6 +26,8 @@ TIMEOUT_MODES = ("timeout_before_commit", "timeout_after_commit")
 # The fault that holds every write of an action until an actor has recorded an approval, and its refusal's code.
 APPROVAL_REQUIRED = "approval_required"
 APPROVAL_MISSING = "approval_missing"
+# Held because whether the approval exists could not be read: the door's decision to hold, never a door failure.
+APPROVAL_UNKNOWN = "approval_unknown"
 LOG_WRITE_SECONDS = 2.0
 # A record change an actor may be permitted beside the world's tools: `<collection>.change` or `<collection>.put`.
 logger = logging.getLogger(__name__)
@@ -372,8 +374,11 @@ class WorldDoor:
                     # Committed, even when a fault then lost the answer: a retry with this key is answered from it.
                     self._keyed[slot] = ("committed", call.action, call.arguments, outcome.result)
                     self._settle(key, call.actor, "committed", logged)
-                elif outcome.outcome == "faulted" and outcome.fault is None:
-                    # The world failed mid-action: whether it applied it is unknown, so the key is never run again.
+                elif outcome.outcome == "faulted" and (
+                    outcome.fault is None or outcome.fault.get("mode") == "timeout_after_commit"
+                ):
+                    # The world failed mid-action, or the call ran and its answer was lost: whether it applied it is
+                    # unknown, so the key is never run again.
                     self._keyed[slot] = ("unknown", call.action, call.arguments, None)
                     self._settle(key, call.actor, "unknown", logged)
                 else:
@@ -423,7 +428,12 @@ class WorldDoor:
                 try:
                     approved = all(self._approved(one) for one in held)
                 except Exception:  # noqa: BLE001 - unknown whether an approval exists: the world's fault, never the agent's
-                    outcome = Outcome("faulted", 503, reason="whether this action was approved could not be read")
+                    outcome = Outcome(
+                        "faulted",
+                        503,
+                        reason="whether this action was approved could not be read",
+                        refusal_code=APPROVAL_UNKNOWN,
+                    )
                     self._write(call, outcome, key=key)
                     return outcome
                 if not approved:
@@ -524,7 +534,8 @@ class WorldDoor:
             ran = self._execute(call)
             logged = replace(
                 ran,
-                reason="response_lost",
+                # A call that committed lost its answer; one whose run failed keeps what failed.
+                reason="response_lost" if ran.outcome == "committed" else ran.reason,
                 fault=fault,
                 status=504,
                 body=None,

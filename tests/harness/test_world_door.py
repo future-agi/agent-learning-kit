@@ -145,6 +145,34 @@ def test_the_agent_s_keyed_retry_after_a_lost_answer_is_answered_not_committed_t
     assert retry.outcome == "duplicate" and len(executor.ran) == 1
 
 
+def test_a_keyed_retry_after_a_write_that_ran_but_whose_answer_was_lost_to_a_reset_never_runs_it_again():
+    """The refund commits, then the connection resets before its answer comes back, under a timeout_after_commit
+    fault: whether it took effect is unknown, so a retry with the same key is never run again."""
+
+    class _CommitsThenResets:
+        def __init__(self):
+            self.ran: list[ToolCall] = []
+
+        def run(self, call):
+            self.ran.append(call)
+            if len(self.ran) == 1:
+                raise ConnectionResetError("reset after commit")
+            return Executed(200, {"refund": len(self.ran)})
+
+    executor = _CommitsThenResets()
+    door = _door(
+        executor,
+        faults=[{"action": "orders.refund", "mode": "timeout_after_commit", "on_call": 1, "delay_seconds": 0}],
+    )
+
+    first = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+    retry = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+
+    assert first.outcome == "faulted"
+    assert retry.outcome == "faulted" and "unknown" in retry.reason
+    assert len(executor.ran) == 1
+
+
 def test_the_agent_s_keyed_retry_after_a_timeout_before_commit_runs_since_nothing_took_effect():
     executor = _Executor()
     door = _door(
@@ -902,3 +930,28 @@ def test_events_hold_only_actions_attempted_in_the_world_never_stopped_egress_or
     door = _door(log=log)
     assert [(row["name"], row["outcome"]) for row in door.events(actor="agent")] == [("update", "committed")]
     assert door.events(outcome="refused") == []
+
+
+def test_a_fault_on_one_action_is_never_used_up_by_another_with_the_same_last_name_part():
+    """An on_call 1 fault on crm.update fires on crm.update's first call, though ticket.update (also `update`) ran
+    first; and with only ticket.update called, the notice says crm.update was never called, never that it was."""
+    from fi.alk.harness.call_runner import fault_notices
+    from fi.alk.harness.world.runtime import Call
+
+    faults = [{"action": "crm.update", "mode": "unavailable", "on_call": 1}]
+    door = _door(_Executor(), faults=faults)
+
+    ticket = door.enter(ToolCall(action="ticket.update", name="update", arguments={"id": 1}))
+    crm = door.enter(ToolCall(action="crm.update", name="update", arguments={"id": 1}))
+
+    assert (ticket.outcome, crm.outcome) == ("committed", "faulted")
+    assert [(row["action"], row["outcome"]) for row in door.events()] == [
+        ("ticket.update", "committed"),
+        ("crm.update", "faulted"),
+    ]
+    assert fault_notices(faults, door.events(), [Call(name="update", arguments={}), Call(name="update", arguments={})]) == []
+
+    only_ticket = _door(_Executor(), faults=faults)
+    only_ticket.enter(ToolCall(action="ticket.update", name="update", arguments={"id": 1}))
+    [notice] = fault_notices(faults, only_ticket.events(), [Call(name="update", arguments={})])
+    assert notice["code"] == "fault_not_triggered" and "made 0 calls" in notice["message"]

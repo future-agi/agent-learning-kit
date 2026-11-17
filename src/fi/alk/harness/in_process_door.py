@@ -168,10 +168,11 @@ class InProcessDoor:
         if waiting.ran:
             return {"run": True, "id": call_id}
         self._forget(call_id)
-        if waiting.outcome is None or waiting.outcome.fault is None:
-            # Not held by the scenario: the door itself failed, and the tool runs as it would without one, marked.
+        if not _decided(waiting.outcome):
+            # The door itself failed, deciding nothing: the tool runs as it would without one, marked.
             self._unrecorded(call, "the world's door failed")
             return {"run": True, "id": "", "door": "failed"}
+        # Held on purpose: a scenario's fault, a refusal (an approval not given) or an approval that could not be read.
         return {"run": False, **_held(waiting.outcome)}
 
     def _unrecorded(self, call: ToolCall, why: str) -> None:
@@ -212,6 +213,13 @@ def _int_or_zero(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _decided(outcome: Outcome | None) -> bool:
+    """Whether the door held the call on purpose, as opposed to failing to decide anything."""
+    return outcome is not None and (
+        outcome.fault is not None or outcome.outcome == "refused" or outcome.refusal_code is not None
+    )
 
 
 def _held(outcome: Outcome) -> dict[str, Any]:

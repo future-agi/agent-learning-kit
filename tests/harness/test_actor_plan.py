@@ -1985,6 +1985,42 @@ def test_a_chat_actor_told_no_that_answers_with_words_instead_still_says_them():
     assert [line for _, line in out] == ["I could not post it, but it was approved."] and len(rows) == 1
 
 
+def test_a_chat_actor_s_action_is_another_action_when_only_its_last_name_part_is_the_same():
+    """crm.update then ticket.update with the same arguments are two actions: the second is sent, never skipped while
+    its line still says it was done."""
+    from fi.alk.harness.run import conversation as conv
+
+    rows: list = []
+
+    async def act(actor_id, action, arguments, **kwargs):
+        rows.append({"actor_id": actor_id, "name": action.rsplit(".", 1)[-1], "action": action,
+                     "arguments": arguments, "outcome": "committed"})
+        return {"status": 200, "outcome": "committed"}
+
+    cast = conv.ChatActors(
+        [{"id": "lead", "name": "Lee", "trigger": {"kind": "always"},
+          "permitted_actions": ["crm.update", "ticket.update"]}],
+        seed="t", model=None, act=act, history=lambda key: list(rows),
+    )
+    replies = iter([
+        '{"line": "Updated the CRM.", "action": "crm.update", "arguments": {"id": 1}, "why": "x"}',
+        '{"line": "Updated the ticket too.", "action": "ticket.update", "arguments": {"id": 1}, "why": "y"}',
+    ])
+
+    async def write(actor, brief):
+        return next(replies)
+
+    cast._write = write
+
+    async def turns():
+        for turn in (1, 2):
+            await cast.due_lines(agent_turns=turn, last_text="Done?", tools_called=[], conversation=[])
+
+    asyncio.run(turns())
+    assert [row["action"] for row in rows] == ["crm.update", "ticket.update"]
+    assert not [one for one in cast.events if one.get("kind") == "repeated"]
+
+
 def test_a_chat_actor_never_sends_an_action_it_already_committed_again():
     rows: list = []
     sent, briefs = [], []

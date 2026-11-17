@@ -291,7 +291,8 @@ class ChatActors:
             try:
                 return [
                     {
-                        "action": row.get("name"),
+                        # The full action (crm.update), never only its last part, which another service's may share.
+                        "action": row.get("action") or row.get("name"),
                         "arguments": row.get("arguments"),
                         "outcome": row.get("outcome"),
                         # What the world said when it refused, as a person would hear it, so the actor can correct it.
@@ -314,10 +315,9 @@ class ChatActors:
         import json
 
         wanted = json.dumps(arguments or {}, sort_keys=True, default=str)
-        last = action.rsplit(".", 1)[-1]
         return any(
             row.get("outcome") == "committed"
-            and str(row.get("action") or "").rsplit(".", 1)[-1] == last
+            and _same_action(str(row.get("action") or ""), action)
             and json.dumps(row.get("arguments") or {}, sort_keys=True, default=str) == wanted
             for row in self._own_rows(key)
         )
@@ -841,3 +841,11 @@ def _close_actors(transcript: Transcript, actors: ChatActors | None) -> None:
     transcript.simulator_input_tokens += tokens_in
     transcript.simulator_output_tokens += tokens_out
     transcript.spent_usd += cost
+
+
+def _same_action(logged: str, action: str) -> bool:
+    """Whether a logged action is ``action``: by its full name, or by its last part only for a row that never
+    recorded the full one."""
+    if "." in logged:
+        return logged == action
+    return logged == action.rsplit(".", 1)[-1]

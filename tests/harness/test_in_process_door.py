@@ -130,6 +130,31 @@ def test_a_lost_answer_is_recorded_and_its_trial_graded_though_the_agent_s_trace
     assert evidence_notices(log.rows(), retried, {"issue_refund"})[0]["count"] == 1
 
 
+def test_a_call_that_needs_an_approval_never_given_does_not_run():
+    """A production-wrapped refund that needs a supervisor's approval: refused by the door on purpose, so the tool
+    never runs and the world never changes, whatever its own code would do."""
+    door, log = _door([{"action": "issue_refund", "mode": "approval_required", "approval": "approvals.change"}])
+
+    decision = door.begin("issue_refund", {"order": 7})
+
+    assert decision["run"] is False and decision["outcome"] == "refused" and decision["status"] == 403
+    [row] = log.rows()
+    assert (row["name"], row["outcome"], row["refusal_code"]) == ("issue_refund", "refused", "approval_missing")
+
+
+def test_a_call_whose_approval_cannot_be_read_does_not_run(monkeypatch):
+    door, log = _door([{"action": "issue_refund", "mode": "approval_required", "approval": "approvals.change"}])
+
+    def unreadable(fault):
+        raise RuntimeError("approvals table down")
+
+    monkeypatch.setattr(door.door, "_approved", unreadable)
+    decision = door.begin("issue_refund", {"order": 7})
+
+    assert decision["run"] is False and decision["outcome"] == "faulted"
+    assert [row["refusal_code"] for row in log.rows()] == ["approval_unknown"]
+
+
 def test_a_door_that_fails_lets_the_tool_run_and_marks_the_trial_s_evidence_incomplete(monkeypatch):
     import fi.alk.harness.call_runner as cr
     from fi.alk.harness.call_runner import evidence_notices, missing_evidence, read_tool_trace

@@ -1290,11 +1290,18 @@ def _fixed_fields(solution: Sequence[Any], action: str) -> set[str]:
     return fields
 
 
+def _record_key(field: str) -> bool:
+    """Whether an argument names a record (`id`, `order_id`, `idempotency_key`): its value says which record is
+    written, so it is compared whatever its type, never read as the agent's own words."""
+    name = field.lower()
+    return name == "id" or name.endswith(("_id", "_key"))
+
+
 def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[str]) -> bool:
     """Whether two committed writes of one action are the same write: equal arguments, or equal on every fixed
-    argument either carries and on every other argument that is not text. Text the solution does not fix is the
-    agent's own words, so a retry that rewords it is still the same write; a different record, named by a value that
-    is not text, is not."""
+    argument either carries, on every argument that names a record, and on every other argument that is not text.
+    Text the solution does not fix is the agent's own words, so a retry that rewords it is still the same write; a
+    different record (order-A, order-B, or 7, 8) is not."""
     one, two = _arguments(first.get("arguments")), _arguments(later.get("arguments"))
     if one == two:
         return True
@@ -1307,7 +1314,9 @@ def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[s
     return all(one.get(field) == two.get(field) for field in carried) and all(
         one.get(field) == two.get(field)
         for field in others
-        if not isinstance(one.get(field), str) or not isinstance(two.get(field), str)
+        if _record_key(field)
+        or not isinstance(one.get(field), str)
+        or not isinstance(two.get(field), str)
     )
 
 
@@ -1569,8 +1578,13 @@ def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
 
 
 def _same_action(action: str, name: str) -> bool:
-    """A fault names the world action (`service_a.update`); a call may carry the tool's own name (`update`)."""
-    return bool(action) and bool(name) and (action == name or action.rsplit(".", 1)[-1] == name.rsplit(".", 1)[-1])
+    """A fault names the world action (`service_a.update`); a call may carry the tool's own name (`update`). Two full
+    names match only when equal, so `crm.update` is never `ticket.update`."""
+    if not action or not name:
+        return False
+    if "." in action and "." in name:
+        return action == name
+    return action.rsplit(".", 1)[-1] == name.rsplit(".", 1)[-1]
 
 
 def fault_notices(

@@ -391,7 +391,7 @@ def test_a_live_actor_comes_in_on_its_activation_trigger_once_when_no_one_reache
     assert len(asked) == 1
 
 
-def _approver(fallback, *, answers=None, instead_play="mocked"):
+def _approver(fallback, *, answers=None, instead_play="mocked", in_cast=True, decides=None):
     """A manager the agent reaches on Slack, waited on for 30 s; `answers` is its scheduled approval, if any."""
     clock, sent = _Clock(), []
     actors = {
@@ -405,7 +405,7 @@ def _approver(fallback, *, answers=None, instead_play="mocked"):
         "deputy": Actor(id="deputy", name="Dev", permitted_actions=["deals.approve"], play=instead_play),
     }
     cast = [{"id": "manager", "actions": answers or []}]
-    if fallback == "deputy":
+    if fallback == "deputy" and in_cast:
         cast.append({"id": "deputy", "actions": [{"action": "deals.approve", "trigger": {"kind": "after_seconds", "seconds": 999}}]})
     dispatcher = ActorDispatcher(
         actors,
@@ -418,7 +418,7 @@ def _approver(fallback, *, answers=None, instead_play="mocked"):
         timeout=60.0,
         clock=clock,
         send=lambda url, headers, arguments: sent.append((url, headers)) or 200,
-        decide=lambda situation: '{"action": "deals.approve", "why": "covering for Mia"}',
+        decide=lambda situation: decides if decides is not None else '{"action": "deals.approve", "why": "covering for Mia"}',
     )
     return dispatcher, clock, sent
 
@@ -487,6 +487,23 @@ def test_answered_by_is_recorded_only_once_the_stand_in_s_turn_or_action_has_hap
     # The stand-in's own action comes right after the timeout that names it.
     assert plays[timeout + 1] == ("deputy", play)
     assert dispatcher.fired[timeout]["outcome"] == "answered_by" and len(sent) == 1
+
+
+def test_a_live_stand_in_outside_the_scenario_s_cast_answers_instead():
+    """The fallback names a live actor the scenario does not include: it joins with everything a live actor keeps,
+    so its turn is taken and sent, never a crash that records an answer nobody sent."""
+    dispatcher, clock, sent = _approver("deputy", instead_play="live", in_cast=False)
+    asyncio.run(_wait_out(dispatcher, clock, 30))
+    assert ("manager", "timeout", "answered_by") in _timeline(dispatcher)
+    assert [headers["X-ALK-Actor"] for _url, headers in sent] == ["deputy"]
+
+
+def test_a_live_stand_in_that_decides_nothing_leaves_the_wait_unresolved():
+    dispatcher, clock, sent = _approver("deputy", instead_play="live", in_cast=False, decides="{}")
+    asyncio.run(_wait_out(dispatcher, clock, 30))
+    timeout = next(one for one in dispatcher.fired if one["play"] == "timeout")
+    assert (timeout["outcome"], timeout["why"]) == ("unresolved", "stand_in_sent_nothing")
+    assert sent == []
 
 
 def test_a_stand_in_with_nothing_left_to_do_leaves_the_wait_unresolved():

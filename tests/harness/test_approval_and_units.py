@@ -373,3 +373,25 @@ def test_units_and_time_zones_reach_the_trial_records_as_written():
     assert change["after"]["amount"] == 1099
     assert change["after"]["paid_at"].endswith("+05:30")
     assert table[1]["amount"] == 1099
+
+
+def test_an_approver_acting_on_two_actions_with_the_same_last_part_gets_each_verdict_from_its_own_action():
+    from fi.alk.harness.call_runner import _same_action, approvals
+
+    log = [
+        {"actor_id": AGENT, "name": "request_refund", "action_id": "a1", "at": 1.0, "outcome": "committed"},
+        {"actor_id": AGENT, "name": "request_escalation", "action_id": "a2", "at": 2.0, "outcome": "committed"},
+        {"actor_id": "supervisor", "name": "change", "action": "crm.change", "action_id": "s1", "at": 3.0,
+         "parent_event_id": "a1", "outcome": "committed", "arguments": {"note": "seen"}},
+        {"actor_id": "supervisor", "name": "change", "action": "ticket.change", "action_id": "s2", "at": 4.0,
+         "parent_event_id": "a2", "outcome": "committed", "arguments": {"note": "seen"}},
+    ]
+    decisions = [
+        {"actor": "supervisor", "play": "mocked", "action": "ticket.change", "outcome": "committed",
+         "verdict": "approved"},
+        {"actor": "supervisor", "play": "mocked", "action": "crm.change", "outcome": "committed", "verdict": "refused"},
+    ]
+    verdicts = {line["decision"]["action"]: line["verdict"] for line in approvals(log, decisions)}
+    assert verdicts == {"crm.change": "refused", "ticket.change": "approved"}
+    assert not _same_action("crm.update", "ticket.update")
+    assert _same_action("crm.update", "update") and _same_action("update", "crm.update")

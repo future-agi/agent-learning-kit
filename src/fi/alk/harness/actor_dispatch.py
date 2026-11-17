@@ -209,13 +209,15 @@ class ActorDispatcher:
             and actors[entry.id].play in ("live", "both")
             and not actors[entry.id].channel
         ]
-        self.live_turns: dict[str, int] = {one.id: 0 for one in self.live}
+        self.live_turns: dict[str, int] = {}
         # What each live actor has already sent: the same action again is a loop, not a new turn.
-        self.live_sent: dict[str, list[tuple[str, str]]] = {one.id: [] for one in self.live}
+        self.live_sent: dict[str, list[tuple[str, str]]] = {}
+        self.answered: dict[str, set[str]] = {}
+        for one in self.live:
+            self._ready_live(one)
         # Live turns the trial's end cut short, with what called for them: taken again when the trial settles.
         self.cut: list[tuple[Actor, str]] = []
         self.looped: set[str] = set()
-        self.answered: dict[str, set[str]] = {one.id: set() for one in self.live}
         self.woken: set[str] = set()
         self.problems: list[dict[str, Any]] = []
         # A speaking actor's trigger, wait and fallback belong to its channel's cast.
@@ -454,9 +456,16 @@ class ActorDispatcher:
             speaks=False,
         )
 
+    def _ready_live(self, actor: Actor) -> None:
+        """Everything a live actor's turns keep, set together: one that joins later (a stand-in) has it all too."""
+        self.live_turns.setdefault(actor.id, 0)
+        self.live_sent.setdefault(actor.id, [])
+        self.answered.setdefault(actor.id, set())
+
     async def _live_turn(
         self, actor: Actor, cause: str, log: list[dict[str, Any]]
-    ) -> None:
+    ) -> bool:
+        """One live turn; True when it sent an action."""
         self.live_turns[actor.id] += 1
         turn = self.live_turns[actor.id]
         try:
@@ -483,7 +492,7 @@ class ActorDispatcher:
                     "parent": cause or None,
                 }
             )
-            return
+            return False
         if not decision.action:
             self.fired.append(
                 {
@@ -495,7 +504,7 @@ class ActorDispatcher:
                     "parent": cause or None,
                 }
             )
-            return
+            return False
         said = (decision.action, json.dumps(decision.arguments, sort_keys=True, default=str))
         if said in self.live_sent[actor.id]:
             # The same action again is a loop between actors: it is not sent, and this actor takes no more turns.
@@ -504,7 +513,7 @@ class ActorDispatcher:
                 {"actor": actor.id, "play": "live", "turn": turn, "decided": None,
                  "why": "repeated its own earlier action", "parent": cause or None}
             )
-            return
+            return False
         self.live_sent[actor.id].append(said)
         # Sent whatever it chose: the world, not the decision, decides whether it may.
         sent = await self._send(
@@ -529,6 +538,7 @@ class ActorDispatcher:
                 "verdict": decision.verdict,
             }
         )
+        return True
 
     # -- waits and fallbacks -------------------------------------------------------------------------------------
 
@@ -640,12 +650,13 @@ class ActorDispatcher:
         if instead.play in ("live", "both"):
             if instead not in self.live:
                 self.live.append(instead)
-                self.live_turns[instead.id] = 0
-                self.answered[instead.id] = set()
+                self._ready_live(instead)
             # Answering for another is a live turn like any other, held to the same limits.
             if not self._turn_left(instead):
                 return "limit_blocked", "turn_limit"
-            await self._live_turn(instead, cause, log)
+            # Answered only when the stand-in sent something; a turn that decided nothing leaves the wait open.
+            if not await self._live_turn(instead, cause, log):
+                return "unresolved", "stand_in_sent_nothing"
             return "answered_by", ""
         scheduled = [one for one in self.pending if one[0].id == instead.id]
         if not scheduled:
