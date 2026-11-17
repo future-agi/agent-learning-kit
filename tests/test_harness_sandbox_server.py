@@ -2245,7 +2245,15 @@ def test_a_job_value_does_not_override_the_kits_port_variable(tmp_path, monkeypa
     calls = []
 
     def fake_run(command, **kwargs):
-        calls.append(dict(kwargs["env"]))
+        # What Compose sees: the job env file (read now, it is deleted after the call) under the
+        # process environment.
+        seen = dict(kwargs["env"])
+        job_file = [c for i, c in enumerate(command) if i and command[i - 1] == "--env-file"][-1]
+        with open(job_file, encoding="utf-8") as handle:
+            for line in filter(None, handle.read().split("\n")):
+                key, _, quoted = line.partition("=")
+                seen.setdefault(key, quoted[1:-1])
+        calls.append((dict(kwargs["env"]), seen))
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(provision.subprocess, "run", fake_run)
@@ -2259,7 +2267,9 @@ def test_a_job_value_does_not_override_the_kits_port_variable(tmp_path, monkeypa
         port_variables={"MY_PORT": "0"},
     )
     provision._run(environment, "ps")
-    assert calls[0]["MY_PORT"] == "0"
+    process_env, seen = calls[0]
+    assert seen["MY_PORT"] == "0"
+    assert "MY_PORT" not in process_env
 
 
 @pytest.mark.parametrize(
@@ -2806,7 +2816,20 @@ def _compose_session(tmp_path, monkeypatch, services_environment, label):
     docker_calls = []
 
     def fake_run(command, **kwargs):
-        docker_calls.append((list(command), dict(kwargs["env"])))
+        # What Compose sees: the job env file (read now, it is deleted after the call) under the
+        # process environment. Job values reach Compose only through that file.
+        seen = dict(kwargs["env"])
+        if "--env-file" in command:
+            job_file = [c for i, c in enumerate(command) if i and command[i - 1] == "--env-file"][-1]
+            with open(job_file, encoding="utf-8") as handle:
+                lines = handle.read().split("\n")
+            for line in filter(None, lines):
+                key, _, quoted = line.partition("=")
+                seen.setdefault(
+                    key,
+                    re.sub(r"\\(.)", lambda m: "\n" if m.group(1) == "n" else m.group(1), quoted[1:-1]),
+                )
+        docker_calls.append((list(command), seen))
         rendered = {
             "services": {
                 "agent-runtime": {"image": "example", "environment": services_environment}
