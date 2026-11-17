@@ -7,9 +7,38 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Builder chat: every turn's ending reports what that turn spent: tokens, USD, unpriced
+  turns and only the models it called. The ending is kept before the turn's final
+  checkpoint, so a restart after a failed delivery replays the same ending, usage included.
+  A chat sandbox of its own stores each ending once in its coordinator state: a checkpoint
+  adds only the endings new or changed since the last one (the turn journal is still
+  stored whole).
+- A world whose JSON columns hold values the seed import refuses, such as a jsonb string
+  written as bare text, is refused where it is written: `save_world` and the builder's
+  `change_world` name the table and column and the JSON text expected, instead of the
+  environment failing its seed import at validation. The columns are those the agent's
+  own `CREATE TABLE` statements declare `json` or `jsonb`.
+- A claim for a scenario's coverage overlay (a refusal, an escalation, an out-of-scope request)
+  that its catalogue row settles by what was said (`verifier: llm`, no check, reference or
+  observed record) no longer requires tool evidence, so a correct agent that makes no tool call
+  is graded instead of ending `evidence_missing`. The claim is matched by the catalogue's
+  `overlay` field or by holding the overlay's whole name. Every other sub-goal, coded ones
+  included, still requires evidence.
+- A call whose declared tool capture could not be read ends `evidence_missing` even when its
+  scenario needs no tool call, instead of being graded as a call that made none. Unread means an
+  unreadable trace file, a trace file with no readable record, or a `tool_trace` world database
+  that is missing or fails. A hand-off is never graded as a tool call. A traced declared tool's
+  oversized record is now cut by value, so its trace line stays valid JSON. Only an oversize
+  value is cut, and it says it was cut; the other values keep their types.
 - Multi-agent compatibility references preserve native Google ADK, LangGraph,
   and CrewAI orchestration, while Python command agents capture bounded tool
   evidence with explicit worker and task attribution.
+- Multi-agent apps: the contract records the workers an app declares, and every Python agent's
+  tool calls are read from its framework spans with the worker that made each, every hand-off and
+  when that worker returned; a worker's run is never graded as a tool call. Each sealed worker event
+  names its span, the parent hand-off it ran in, its kind (`delegated`, `transferred` or
+  `tool_call`), whether that place was observed or is unknown, and whether its input or output was
+  cut; a blank or repeated worker id is a contract problem.
 - Builder chat: `edit_scenario` changes a kept scenario by its key with only the fields that change
   (`clear` resets a field), keeping its key, number, place and history; a rename alone is not
   proved again. A new scenario never takes a key the environment has used, a dropped scenario's

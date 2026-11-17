@@ -1160,6 +1160,7 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
                 cpu_observer=lambda: None, mem_observer=lambda: None
             )
             assert actual_provider._run_admission(1, kwargs["work_directory"]) == 1
+            assert process_runtime._read_job_id(kwargs["work_directory"]) == "job-123"
             calls.append("provision")
             return [SimpleNamespace(endpoints={}, world_index=0)]
 
@@ -1219,6 +1220,7 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
         ],
     )
     job = SimpleNamespace(
+        job_id="job-123",
         agent=SimpleNamespace(secret_refs={}),
         scenario_count=2,
         seed=0,

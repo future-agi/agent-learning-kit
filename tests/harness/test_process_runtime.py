@@ -54,10 +54,12 @@ from fi.alk.harness.bundle_v2 import (
     SecretPurpose,
     SourceProcess,
 )
+from fi.alk.harness import privilege
 from fi.alk.harness import process_runtime as pr
 from fi.alk.harness.job import (
     AgentConnection,
     ExecutionMode,
+    FailureCause,
     FailureDomain,
     HarnessJob,
     HarnessJobMetadata,
@@ -568,6 +570,35 @@ def test_job_id_placeholder_scopes_external_dispatch_identity() -> None:
         configuration_addresses={},
     )
     assert rendered == "agent-job-123-w2"
+
+
+def test_job_id_comes_from_the_platform_job_file(tmp_path: Path) -> None:
+    (tmp_path / "job.json").write_text('{"job_id": " job-123 "}', encoding="utf-8")
+    assert pr._read_job_id(tmp_path) == "job-123"
+
+
+@pytest.mark.parametrize(
+    "job_file", [None, '{"runtime": {"cpu_units": 1}}', "not json"]
+)
+def test_a_missing_job_id_never_falls_back_to_a_shared_dispatch_name(
+    tmp_path: Path, job_file: str | None
+) -> None:
+    if job_file is not None:
+        (tmp_path / "job.json").write_text(job_file, encoding="utf-8")
+    first, second = pr._read_job_id(tmp_path), pr._read_job_id(tmp_path)
+    assert first.startswith("local-") and second.startswith("local-")
+    assert first != second
+
+
+def test_each_attempt_of_a_job_gets_its_own_dispatch_identity() -> None:
+    """A retry or rerun is a new attempt of the same job; the superseded attempt's sandbox can
+    still be registered with LiveKit, so the two must never share a dispatch name."""
+    first = pr._dispatch_identity("job-123", "attempt-a")
+    second = pr._dispatch_identity("job-123", "attempt-b")
+    assert first != second
+    assert "job-123" in first and "job-123" in second
+    # Without an attempt (local runs), the job identity is used as before.
+    assert pr._dispatch_identity("job-123", None) == "job-123"
 
 
 def test_an_unresolvable_token_is_an_internal_error_not_a_preflight_code() -> None:
@@ -1362,6 +1393,7 @@ def test_legitimate_process_names_are_unaffected_by_the_containment_check(
 
 def test_build_process_tree_chowns_the_copied_tree_to_the_resolved_user(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """F1, p5-round1-review — BLOCKER. The build tree (root AND every copied file, not just the
     directory) is chowned to the process's declared `user` after copy. `os.chown` to a foreign uid
@@ -1377,11 +1409,49 @@ def test_build_process_tree_chowns_the_copied_tree_to_the_resolved_user(
         source_root=tmp_path / "source",
         build_root=tmp_path / "build",
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     build_dir = tmp_path / "build" / "svc"
     assert (str(build_dir), 1234, 5678) in chowned
     assert (str(build_dir / "main.py"), 1234, 5678) in chowned
+
+
+def test_build_process_tree_never_reaches_through_a_folder_swapped_mid_walk(
+    tmp_path: Path,
+    chown_path,
+) -> None:
+    """A process of the declared user may already write in the tree while it is given away: it
+    swaps a folder for a symlink to the harness's files between two of the folder's entries. A
+    walk that re-owns each entry by its full path then re-owns the harness's files."""
+    package = tmp_path / "source" / "svc" / "pkg"
+    package.mkdir(parents=True)
+    held_back = tmp_path / "bundle" / "scenarios"
+    held_back.mkdir(parents=True)
+    for name in ("a.py", "b.py"):
+        (package / name).write_text("")
+        (held_back / name).write_text("held-back case\n")
+    built_package = tmp_path / "build" / "svc" / "pkg"
+    reached: list[Path] = []
+
+    def chown(path, uid, gid, dir_fd=None):
+        target = Path(os.path.realpath(chown_path(path, dir_fd)))
+        reached.append(target)
+        if target.parent == built_package.resolve() and not built_package.is_symlink():
+            built_package.rename(built_package.with_name("pkg.old"))
+            built_package.symlink_to(held_back, target_is_directory=True)
+
+    pr.build_process_tree(
+        _source_process(working_directory="svc", build_commands=[]),
+        source_root=tmp_path / "source",
+        build_root=tmp_path / "build",
+        user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
+        chown=chown,
+    )
+
+    assert built_package.is_symlink()  # the swap happened mid-walk
+    assert [path for path in reached if path.parent == held_back.resolve()] == []
 
 
 def test_build_commands_run_under_the_resolved_user(tmp_path: Path) -> None:
@@ -1402,7 +1472,7 @@ def test_build_commands_run_under_the_resolved_user(tmp_path: Path) -> None:
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
         # `chown` faked too — real `os.chown` to a fake uid needs root, which this lane does not
         # have; the chown call itself is asserted separately (`test_build_process_tree_chowns_...`).
-        chown=lambda path, uid, gid: None,
+        chown=lambda *_, **__: None,
     )
     assert captured["user"] == 1234
     assert captured["group"] == 5678
@@ -1442,6 +1512,7 @@ def test_build_process_tree_raises_when_user_is_required_but_not_resolvable(
 
 def test_spawn_source_process_applies_the_resolved_user_to_the_runner(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """Tests: assert the resolved user IS applied — the fake runner records `user=`."""
     build_dir = tmp_path / "build" / "svc"
@@ -1468,7 +1539,9 @@ def test_spawn_source_process_applies_the_resolved_user_to_the_runner(
         secret_purposes={},
         runner=fake_runner,
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     assert captured["user"] == 1234
     assert captured["group"] == 5678
@@ -1537,6 +1610,7 @@ def test_spawn_source_process_raises_when_user_is_required_but_not_resolvable(
 
 def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     manifest = _manifest()
     postgres = manifest.processes[0]
@@ -1557,7 +1631,9 @@ def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(
         runner=lambda *a, **k: FakeHandle(),
         sync_run=fake_sync_run,
         user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     assert (str(data_dir), 2222, 3333) in chowned
     # The pwfile is chowned to the same user too — `initdb` runs as that user (below) and must be
@@ -1570,6 +1646,7 @@ def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(
 
 def test_spawn_managed_process_chowns_a_pre_populated_data_dir_recursively(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """B6, p6-review-r1: `data_dir` is empty on the very FIRST spawn (`initdb` itself creates
     everything under it as the already-correct user), but `freeze_baseline`'s `datadir_copy`
@@ -1598,7 +1675,9 @@ def test_spawn_managed_process_chowns_a_pre_populated_data_dir_recursively(
         runner=lambda *a, **k: FakeHandle(),
         sync_run=_fake_sync_run,
         user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     chowned_paths = {path for path, _, _ in chowned}
     assert str(data_dir) in chowned_paths
@@ -1685,7 +1764,7 @@ def test_default_process_runner_does_not_chown_the_log_when_no_user_is_given(
         cwd=tmp_path,
         env={"PATH": "/usr/bin:/bin"},
         log_path=tmp_path / "logs" / "proc.log",
-        chown=lambda *args: chowned.append(args),
+        chown=lambda *args, **kwargs: chowned.append(args),
     )
     _reap(handle)
     assert chowned == []
@@ -1934,6 +2013,42 @@ def test_spawn_source_process_creates_the_per_world_scratch_directory(
         runner=fake_runner,
     )
     assert world_dir.is_dir()
+
+
+@pytest.mark.parametrize(("mode", "expected"), [("per_user", 0o711), ("fixed_user", 0o700)])
+def test_the_harness_s_workers_can_pass_through_a_world_dir_only_under_isolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, expected: int
+) -> None:
+    """The harness's workers hold no capabilities, yet open what the process writes into its own
+    world directory (its tool-call trace) by name. Under per-user isolation that directory is the
+    process's, so it lets them pass through; with one fixed user it stays as it was."""
+    monkeypatch.setattr(privilege, "_mode", privilege.IsolationMode(mode))
+    build_dir = tmp_path / "build" / "svc"
+    build_dir.mkdir(parents=True)
+    world_dir = tmp_path / "worlds" / "w0" / "svc"
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        return FakeHandle()
+
+    previous = os.umask(0o077)
+    try:
+        pr.spawn_source_process(
+            _source_process(),
+            build_dir=build_dir,
+            world_dir=world_dir,
+            world_index=0,
+            port_plan=_solo_port_plan("svc"),
+            configuration_addresses={},
+            secret_values={},
+            secret_purposes={},
+            runner=fake_runner,
+            user_resolver=_fake_user_resolver({"svc-tools": (4444, 5555)}),
+            chown=lambda *_, **__: None,
+        )
+    finally:
+        os.umask(previous)
+
+    assert world_dir.stat().st_mode & 0o777 == expected
 
 
 def test_spawn_source_process_cwd_is_the_build_tree_not_the_world_scratch_dir(
@@ -2197,8 +2312,37 @@ def test_wait_for_dependency_requires_every_readiness_probe_backing_the_process(
     assert ready["/health"] and ready["/admin/health"]
 
 
-def test_depends_on_readiness_probe_timeout_is_a_typed_error() -> None:
-    manifest = _manifest()
+def _control(name: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """A `_body` mutation making `name` the control service, with the users each role carries."""
+
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["runtime"] = {**body["runtime"], "control_service": name}
+        body["processes"] = [
+            {**process, "user": "svc-agent" if process["name"] == name else "svc-tools"}
+            if process["kind"] == "source"
+            else process
+            for process in body["processes"]
+        ]
+        return body
+
+    return mutate
+
+
+# Only the control service is the agent. The crashing process here is `tools-api`: as the control
+# service its failure is the agent's named cause; as a helper beside the agent it names none.
+_EXITED = [
+    pytest.param("tools-api", FailureCause.AGENT_EXITED_BEFORE_READY, id="the agent"),
+    pytest.param("agent", None, id="a helper service"),
+]
+_STALLED = [
+    pytest.param("tools-api", FailureCause.AGENT_NOT_READY_IN_TIME, id="the agent"),
+    pytest.param("agent", None, id="a helper service"),
+]
+
+
+@pytest.mark.parametrize(("control", "cause"), _STALLED)
+def test_depends_on_readiness_probe_timeout_is_a_typed_error(control, cause) -> None:
+    manifest = _manifest(_control(control))
     plan = pr.plan_ports(manifest, instances=1)
     spawned = pr.SpawnedWorldProcess("tools-api", FakeHandle(), 15001, 0)
     ticks = {"t": 0.0}
@@ -2215,10 +2359,14 @@ def test_depends_on_readiness_probe_timeout_is_a_typed_error() -> None:
         )
     assert excinfo.value.stage == "depends_on"
     assert excinfo.value.code == "depends_on_timeout"
+    assert excinfo.value.cause is cause
 
 
-def test_depends_on_readiness_fails_immediately_when_source_process_exits() -> None:
-    manifest = _manifest()
+@pytest.mark.parametrize(("control", "cause"), _EXITED)
+def test_depends_on_readiness_fails_immediately_when_source_process_exits(
+    control, cause
+) -> None:
+    manifest = _manifest(_control(control))
     plan = pr.plan_ports(manifest, instances=1)
     handle = FakeHandle("RuntimeError: prompt service rejected credentials\n")
     handle.terminated = True
@@ -2238,8 +2386,84 @@ def test_depends_on_readiness_fails_immediately_when_source_process_exits() -> N
 
     assert excinfo.value.code == "spawn_failed"
     assert excinfo.value.domain is pr.FailureDomain.AGENT
+    assert excinfo.value.cause is cause
     assert "prompt service rejected credentials" in str(excinfo.value)
     assert sleeps == []
+
+
+@pytest.mark.parametrize(("control", "cause"), _EXITED)
+def test_an_agent_that_crashes_at_import_reads_exited_before_ready(
+    tmp_path: Path, control, cause
+) -> None:
+    """A real process that raises while importing: the cause is closed, the text stays local."""
+    manifest = _manifest(
+        lambda body: _control(control)(
+            {
+                **body,
+                "readiness": [],
+                "processes": [
+                    body["processes"][0],
+                    {
+                        **body["processes"][1],
+                        "started_check": {"port": True, "timeout_seconds": 10},
+                    },
+                    body["processes"][2],
+                ],
+            }
+        )
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    handle = pr.default_process_runner(
+        [sys.executable, "-c", "raise RuntimeError('crashed at import')"],
+        cwd=tmp_path,
+        env={},
+        log_path=tmp_path / "tools-api.log",
+    )
+    spawned = pr.SpawnedWorldProcess(
+        "tools-api", handle, plan.port_for("tools-api", 0), 0
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.wait_for_dependency(
+            manifest, "tools-api", world_index=0, port_plan=plan, spawned=spawned
+        )
+
+    assert excinfo.value.code == "spawn_failed"
+    assert excinfo.value.cause is cause
+    assert "crashed at import" in str(excinfo.value)
+
+
+def test_a_managed_engine_that_exits_before_ready_has_no_agent_cause() -> None:
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "readiness": [
+                {
+                    "capability": "database",
+                    "timeout_seconds": 5,
+                    "interval_seconds": 0.1,
+                }
+            ],
+        }
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    handle = FakeHandle()
+    handle.terminated = True
+    spawned = pr.SpawnedWorldProcess("postgres", handle, 15000, 0)
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.wait_for_dependency(
+            manifest,
+            "postgres",
+            world_index=0,
+            port_plan=plan,
+            spawned=spawned,
+            prober=lambda **kwargs: False,
+            sleep=lambda s: None,
+        )
+
+    assert excinfo.value.domain is pr.FailureDomain.INFRASTRUCTURE
+    assert excinfo.value.cause is None
 
 
 def test_started_check_log_marker_variant_waits_for_the_marker() -> None:
@@ -2395,21 +2619,24 @@ def test_started_check_port_variant_dials_the_world_specific_formula_port(
     assert dialed == [("localhost", expected_port)]
 
 
-def test_started_check_port_variant_timeout_when_nothing_listens() -> None:
+@pytest.mark.parametrize(("control", "cause"), _STALLED)
+def test_started_check_port_variant_timeout_when_nothing_listens(control, cause) -> None:
     manifest = _manifest(
-        lambda body: {
-            **body,
-            "readiness": [],
-            "processes": [
-                body["processes"][0],
-                {
-                    **body["processes"][1],
-                    "fixed_port": 1,
-                    "started_check": {"port": True, "timeout_seconds": 1},
-                },
-                body["processes"][2],
-            ],
-        }
+        lambda body: _control(control)(
+            {
+                **body,
+                "readiness": [],
+                "processes": [
+                    body["processes"][0],
+                    {
+                        **body["processes"][1],
+                        "fixed_port": 1,
+                        "started_check": {"port": True, "timeout_seconds": 1},
+                    },
+                    body["processes"][2],
+                ],
+            }
+        )
     )
     plan = pr.plan_ports(manifest, instances=1)
     spawned = pr.SpawnedWorldProcess("tools-api", FakeHandle(), 1, 0)
@@ -2425,6 +2652,7 @@ def test_started_check_port_variant_timeout_when_nothing_listens() -> None:
             sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
         )
     assert excinfo.value.code == "depends_on_timeout"
+    assert excinfo.value.cause is cause
 
 
 def test_spawn_world_spawns_in_dependency_order_and_waits_between(
@@ -2464,6 +2692,56 @@ def test_spawn_world_spawns_in_dependency_order_and_waits_between(
     assert spawn_order.index("node") < spawn_order.index(
         "python3"
     )  # agent's run_command[0]
+
+
+@pytest.mark.parametrize(("control", "cause"), _EXITED)
+def test_spawn_world_keeps_the_cause_of_a_source_process_that_crashes_at_import(
+    tmp_path: Path, control, cause
+) -> None:
+    manifest = _manifest(
+        lambda body: _control(control)(
+            {
+                **body,
+                "readiness": [],
+                "processes": [
+                    body["processes"][0],
+                    {
+                        **body["processes"][1],
+                        "started_check": {"port": True, "timeout_seconds": 10},
+                    },
+                    body["processes"][2],
+                ],
+            }
+        )
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    credentials = pr.generate_engine_credentials(manifest, token=lambda: "PW")
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        if argv[0] != "node":
+            return FakeHandle()
+        return pr.default_process_runner(
+            [sys.executable, "-c", "raise RuntimeError('crashed at import')"],
+            cwd=tmp_path,
+            env={},
+            log_path=log_path,
+        )
+
+    context = pr.SpawnContext(
+        work_directory=tmp_path,
+        port_plan=plan,
+        credentials=credentials,
+        secret_values={},
+        secret_purposes={},
+        runner=runner,
+        sync_run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0),
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.spawn_world(manifest, world_index=0, context=context)
+
+    assert excinfo.value.process == "tools-api"
+    assert excinfo.value.cause is cause
 
 
 def test_spawn_world_waits_for_terminal_source_started_check(tmp_path: Path) -> None:
@@ -4192,7 +4470,7 @@ def test_freeze_baseline_seed_commands_run_under_the_stores_declared_user(
     ctx = dc_replace(
         ctx,
         user_resolver=_fake_user_resolver({"svc-data": (4444, 5555)}),
-        chown=lambda path, uid, gid: (
+        chown=lambda *_, **__: (
             None
         ),  # a fake uid needs no real os.chown to prove the point.
     )
@@ -4683,7 +4961,7 @@ def test_world_clone_empty_strategy_reseed_runs_under_the_stores_declared_user(
     ctx = dc_replace(
         ctx,
         user_resolver=_fake_user_resolver({"svc-data": (6666, 7777)}),
-        chown=lambda path, uid, gid: (
+        chown=lambda *_, **__: (
             None
         ),  # a fake uid needs no real os.chown to prove the point.
     )
@@ -5388,6 +5666,231 @@ def test_environment_backed_provider_is_created_exposed_and_destroyed(
 
     asyncio.run(provider.close(work_directory=tmp_path))
     assert lifecycle_calls == ["provision", "destroy"]
+
+
+def _vapi_receipt(context: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "schema_version": "1",
+            "provider": "vapi",
+            "attempt_id": context["attempt_id"],
+            "world_id": context["world_id"],
+            "target": {"kind": "assistant", "id": "asst-test"},
+            "resources": [{"kind": "assistant", "id": "asst-test", "owned": True}],
+            "cleanup": {
+                "receipt_version": "1",
+                "idempotency_key": context["idempotency_key"],
+            },
+        }
+    )
+
+
+def _lifecycle_provider(
+    tmp_path: Path, lifecycle_run: Callable[..., subprocess.CompletedProcess], output: str
+) -> tuple[Any, Any, Path, Path]:
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "metadata": {
+                "provider_lifecycle": {
+                    "type": "vapi",
+                    "scope": "world",
+                    "process": "agent",
+                    "public_capability": "tools",
+                    "provision": {"command": ["python", "provider.py", "provision"]},
+                    "destroy": {"command": ["python", "provider.py", "destroy"]},
+                    "required_secrets": ["VAPI_API_KEY"],
+                    "output": output,
+                }
+            },
+        }
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    (source / "provider.py").write_text("# lifecycle", encoding="utf-8")
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps({"VAPI_API_KEY": "test-secret"}), encoding="utf-8")
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path,
+        secret_purpose_map={"VAPI_API_KEY": "target_provider"},
+        sync_run=lifecycle_run,
+        public_url_resolver=lambda port, _ttl: f"https://signed.example/{port}",
+    )
+    return provider, manifest, source, bundle_dir
+
+
+def _provision_one(provider: Any, manifest: Any, source: Path, bundle_dir: Path, work: Path):
+    return asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=work,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
+
+
+def test_a_nested_receipt_is_read_below_its_lifecycle_folder(tmp_path: Path) -> None:
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[-1] == "provision":
+            context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+            Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"]).write_text(_vapi_receipt(context))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, lifecycle_run, "receipts/deep/provider-target.json"
+    )
+
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+
+    assert runtimes[0].metadata["provider_target_id"] == "asst-test"
+    asyncio.run(provider.close(work_directory=tmp_path))
+
+
+def test_a_receipt_reached_through_a_linked_folder_is_refused(tmp_path: Path) -> None:
+    # The lifecycle command owns the folders below its lifecycle folder: it swaps one for a link
+    # to a valid receipt of its choosing elsewhere.
+    elsewhere = tmp_path / "elsewhere"
+
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[-1] == "provision":
+            context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+            output = Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"])
+            (elsewhere / "deep").mkdir(parents=True)
+            (elsewhere / "deep" / output.name).write_text(_vapi_receipt(context))
+            receipts = output.parent.parent
+            receipts.rename(tmp_path / "receipts-moved")
+            receipts.symlink_to(elsewhere, target_is_directory=True)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, lifecycle_run, "receipts/deep/provider-target.json"
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError, match="provider_provision_receipt_invalid"):
+        _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+
+
+def test_a_re_provision_never_writes_its_context_through_a_link(tmp_path: Path) -> None:
+    # After the first provision the lifecycle folder is the lifecycle user's. A process of that
+    # user can leave a link where the next provision writes its context.
+    held_back = tmp_path / "held-back.yaml"
+    held_back.write_text("held-back case\n", encoding="utf-8")
+
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[-1] == "provision":
+            context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+            Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"]).write_text(_vapi_receipt(context))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, lifecycle_run, "provider-target.json"
+    )
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    context_path = tmp_path / "provider" / "w0" / "context.json"
+    provider._destroy_provider_target(0)
+    context_path.unlink()
+    context_path.symlink_to(held_back)
+
+    provider._ensure_provider_target(0, runtimes[0])
+
+    assert held_back.read_text(encoding="utf-8") == "held-back case\n"
+    assert not context_path.is_symlink()
+    assert stat.S_IMODE(context_path.stat().st_mode) == 0o600
+    assert json.loads(context_path.read_text())["world_id"] == "0"
+    asyncio.run(provider.close(work_directory=tmp_path))
+
+
+def _nested_receipt_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    if argv[-1] == "provision":
+        context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+        Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"]).write_text(_vapi_receipt(context))
+    return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+
+def _link_the_receipt_folder(tmp_path: Path) -> None:
+    """What a process of the lifecycle user can do to the folders it owns."""
+    receipts = tmp_path / "provider" / "w0" / "receipts"
+    receipts.rename(tmp_path / "receipts-moved")
+    (tmp_path / "elsewhere").mkdir()
+    receipts.symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+
+
+def test_teardown_stops_a_world_whatever_its_lifecycle_user_left_in_its_folder(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "receipts/deep/provider-target.json"
+    )
+    _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    handles = [
+        spawned.handle
+        for name, spawned in provider._world_handles[0].items()
+        if name not in provider._job_shared_handles  # a job's shared engine outlives a world
+    ]
+    _link_the_receipt_folder(tmp_path)
+
+    provider._teardown_world(0)
+
+    assert handles and all(handle.terminated for handle in handles)
+    assert "provider_lifecycle_output_unsafe" in caplog.text
+    assert list((tmp_path / "elsewhere").iterdir()) == []
+
+
+def test_teardown_stops_a_world_with_a_folder_where_its_destroy_log_goes(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "provider-target.json"
+    )
+    _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    handles = [
+        spawned.handle
+        for name, spawned in provider._world_handles[0].items()
+        if name not in provider._job_shared_handles
+    ]
+    (tmp_path / "provider" / "w0" / "destroy.log").mkdir()
+
+    provider._teardown_world(0)
+
+    assert handles and all(handle.terminated for handle in handles)
+    assert "provider cleanup failed for world 0" in caplog.text
+
+
+def test_a_re_provision_through_a_linked_output_folder_fails_as_the_environment(
+    tmp_path: Path,
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "receipts/deep/provider-target.json"
+    )
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    provider._destroy_provider_target(0)
+    _link_the_receipt_folder(tmp_path)
+
+    with pytest.raises(pr.ProcessRuntimeError, match="provider_lifecycle_output_unsafe") as info:
+        provider._ensure_provider_target(0, runtimes[0])
+
+    assert info.value.domain is FailureDomain.ENVIRONMENT
+    assert list((tmp_path / "elsewhere").iterdir()) == []
+
+
+def test_a_re_provision_with_a_folder_where_its_context_goes_fails_as_the_environment(
+    tmp_path: Path,
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "provider-target.json"
+    )
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    provider._destroy_provider_target(0)
+    context_path = tmp_path / "provider" / "w0" / "context.json"
+    context_path.unlink()
+    context_path.mkdir()
+
+    with pytest.raises(pr.ProcessRuntimeError) as info:
+        provider._ensure_provider_target(0, runtimes[0])
+
+    assert info.value.domain is FailureDomain.ENVIRONMENT
 
 
 def test_provider_provision_failure_surfaces_redacted_provider_output(
@@ -6750,7 +7253,7 @@ def test_spawn_managed_process_data_dir_setup_failure_is_typed_spawn_failed(
     postgres = manifest.processes[0]
     creds = pr.EngineCredentials(username="harness", password="pw")
 
-    def failing_chown(path: Path, uid: int, gid: int) -> None:
+    def failing_chown(path: Path, uid: int, gid: int, *, dir_fd: int | None = None) -> None:
         raise PermissionError("simulated: svc-control cannot chown this path")
 
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
@@ -6838,6 +7341,32 @@ def _rabbitmq_process() -> Any:
             "depends_on": [],
         }
     )
+
+
+def test_a_managed_engine_runs_with_its_declared_user_s_home(tmp_path: Path, monkeypatch) -> None:
+    """Under per-user isolation the harness's HOME is not the engine's to write. RabbitMQ's Erlang
+    keeps its cookie there, and a broker given the harness's HOME crashes at boot."""
+    monkeypatch.setenv("HOME", "/home/svc-control")
+    captured_env: dict[str, str] = {}
+
+    def recording_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured_env.update(env)
+        return FakeHandle()
+
+    pr.spawn_managed_process(
+        _rabbitmq_process(),
+        port=15003,
+        data_dir=tmp_path / "queue",
+        credentials=pr.EngineCredentials(username="harness", password="pw"),
+        runner=recording_runner,
+        sync_run=_fake_sync_run,
+        user_resolver=lambda name: types.SimpleNamespace(
+            pw_uid=2003, pw_gid=2003, pw_dir=f"/home/{name}"
+        ),
+        chown=lambda *_, **__: None,
+    )
+
+    assert captured_env["HOME"] == "/home/svc-data"
 
 
 def test_spawn_managed_process_rabbitmq_conf_carries_credentials(
@@ -7261,6 +7790,7 @@ def test_terminate_and_wait_logs_when_the_process_survives_even_kill(
 
 def test_spawn_managed_process_chmods_before_chowning_the_data_dir(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """N14, p6-review-r2: `chmod` after `chown` cannot succeed once ownership has moved — `svc-
     control` still owns `data_dir` at chmod time and it is free; after chown, a non-root `svc-
@@ -7272,8 +7802,8 @@ def test_spawn_managed_process_chmods_before_chowning_the_data_dir(
     data_dir = tmp_path / "pg"
     mode_at_chown_time: list[int] = []
 
-    def recording_chown(path: Path, uid: int, gid: int) -> None:
-        if path == data_dir:
+    def recording_chown(path: Path, uid: int, gid: int, *, dir_fd: int | None = None) -> None:
+        if chown_path(path, dir_fd) == data_dir:
             mode_at_chown_time.append(data_dir.stat().st_mode & 0o777)
 
     pr.spawn_managed_process(
@@ -7667,6 +8197,42 @@ def test_provision_surfaces_dispatch_identity_on_runtime_metadata(
         {"livekit_agent_name": "agent-w0"},
         {"livekit_agent_name": "agent-w1"},
     ]
+
+
+def test_provision_gives_each_attempt_its_own_dispatch_name(tmp_path: Path) -> None:
+    """A retry of the same job must register a different LiveKit agent name than the attempt it
+    supersedes, whose sandbox may still be running."""
+
+    def add_dispatch_env(body: dict[str, Any]) -> dict[str, Any]:
+        for process in body["processes"]:
+            if process["name"] == "agent":
+                process["environment"]["LIVEKIT_AGENT_NAME"] = (
+                    "agent-{{JOB_ID}}-w{{WORLD_INDEX}}"
+                )
+        return body
+
+    names = []
+    for attempt in ("attempt-aaaa", "attempt-bbbb"):
+        work = tmp_path / attempt
+        work.mkdir()
+        (work / "job.json").write_text('{"job_id": "job-123"}', encoding="utf-8")
+        source, bundle_dir = _provision_dirs(work)
+        provider = _sql_spy_provider(
+            secrets_path=work / "secrets.json", provider_attempt_id=attempt
+        )
+        runtimes = asyncio.run(
+            provider.provision(
+                _manifest(add_dispatch_env),
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=work,
+                instances=1,
+                require_declared_user=False,
+            )
+        )
+        names.append(runtimes[0].metadata["livekit_agent_name"])
+    assert names[0] != names[1]
+    assert all(name.startswith("agent-job-123-") for name in names)
 
 
 # ============================================================================================
@@ -9308,11 +9874,16 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
         ]
         assert sorted(path.name for path in world.iterdir()) == [
             "simulation_mark_bootstrap.py",
+            "simulation_measure.py",
+            "simulation_worker_events.py",
             "sitecustomize.py",
         ]
         assert (
             world / "simulation_mark_bootstrap.py"
         ).read_bytes() == _MARK_HOOK.read_bytes()
+        assert (world / "simulation_measure.py").read_bytes() == (
+            _MARK_HOOK.with_name("simulation_measure.py").read_bytes()
+        )
         for written in world.iterdir():
             assert stat.S_IMODE(written.stat().st_mode) == 0o444
 
@@ -9367,6 +9938,15 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
     world = captured["world_dir"]
     assert (world / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
     assert not (world / "simulation_mark_bootstrap.py").exists()
+
+    # Framework observation reads spans through the mark module, exported or not.
+    observed = both.model_copy(
+        update={"environment": {**both.environment, "ALK_OBSERVE_FRAMEWORKS": "1"}}
+    )
+    captured = _spawn(tmp_path / "observed", observed)
+    assert (
+        captured["world_dir"] / "simulation_mark_bootstrap.py"
+    ).read_bytes() == _MARK_HOOK.read_bytes()
 
     # A reset spawns again in the same directory, whose files the process's own user now owns
     # read-only: they are reused, never rewritten.
@@ -9740,6 +10320,8 @@ def test_small_mark_hook_says_so_when_the_mark_module_is_broken(
     world = captured["world_dir"]
     assert sorted(path.name for path in world.iterdir()) == [
         "simulation_mark_bootstrap.py",
+        "simulation_measure.py",
+        "simulation_worker_events.py",
         "sitecustomize.py",
     ]
     _replace_mark_module(world, _BROKEN_MARK_MODULES[source])
@@ -10136,6 +10718,7 @@ def _clone_provider(strategies, *, shared=True):
         credentials={"postgres0": store(username="harness", password="pw")},
         port_plan=store(port_for=lambda name, world_index: 14000),
         sql_runner=lambda **kwargs: statements.append(kwargs["statement"]) or [],
+        require_declared_user=False,
     )
     provider._build_output = store(
         stores=[store(process_name="postgres0", baseline_reference="baseline_t")]
