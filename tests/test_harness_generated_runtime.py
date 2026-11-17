@@ -1948,3 +1948,59 @@ def test_env_file_skips_and_logs_an_invalid_name_by_name_only(caplog) -> None:
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "BAD-NAME" in logged and "1LEAD" in logged
     assert "v1" not in logged and "v2" not in logged
+
+
+def test_hosted_uploaded_google_credential_reaches_compose_as_the_container_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    credential = tmp_path / "customer.json"
+    credential.write_text('{"type":"service_account"}\n', encoding="utf-8")
+    for name in list(os.environ):
+        if name not in {"PYTEST_CURRENT_TEST", "PATH", "HOME"}:
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ALK_RUNTIME_CONFIGURATION_NAMES", "GOOGLE_APPLICATION_CREDENTIALS")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_GOOGLE_APPLICATION_CREDENTIALS", str(credential))
+    monkeypatch.setenv("ALK_RUNTIME_SECRET_FILE_NAMES", "GOOGLE_APPLICATION_CREDENTIALS")
+    monkeypatch.setenv("ALK_HOSTED_EXECUTION", "1")
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
+    source = tmp_path / "source"
+    source.mkdir()
+    provisioning.ProvisionedEnvironment(
+        source=str(source),
+        compose_file=str(source / "compose.yaml"),
+        project="gac-upload",
+        runtime_services=["agent-runtime"],
+        runtime_configuration_names=["GOOGLE_APPLICATION_CREDENTIALS"],
+        running=True,
+    ).save(tmp_path)
+    calls = []
+
+    def run(command, **kwargs):
+        files = [command[i + 1] for i, a in enumerate(command) if a == "--env-file"]
+        text = Path(files[-1]).read_text(encoding="utf-8") if files else ""
+        calls.append(types.SimpleNamespace(argv=list(command), env=dict(kwargs["env"]), text=text))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(provisioning.subprocess, "run", run)
+    monkeypatch.setattr(
+        provisioning,
+        "_config",
+        lambda _e: {"services": {"agent-runtime": {"environment": {}}}},
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_docker",
+        lambda *a, **_k: "running" if a and a[0] == "inspect" else "",
+    )
+
+    provisioning.start_runtime(tmp_path)
+
+    run_call = next(call for call in calls if "run" in call.argv)
+    target = "/run/harness-secrets/google_application_credentials"
+    assert f'GOOGLE_APPLICATION_CREDENTIALS="{target}"\n' in run_call.text
+    assert str(credential) not in run_call.text
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in run_call.env
+    assert any(
+        run_call.argv[i : i + 2] == ["--env", "GOOGLE_APPLICATION_CREDENTIALS"]
+        for i in range(len(run_call.argv) - 1)
+    )
