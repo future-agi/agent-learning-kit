@@ -141,6 +141,9 @@ def _check_job(job: HarnessJob) -> HarnessFailure | None:
 
 # The most the source look's list of folders still to visit may hold, by its count (TH-9525).
 _LOOK_HELD = 67_108_864
+# Inside one folder, the clock is read again after this many entries, so a huge folder can't keep
+# the look past its deadline.
+_LOOK_CLOCK_EVERY = 4_096
 
 
 def _path_cost(path: str) -> int:
@@ -158,7 +161,9 @@ def _look(
     `_LOOK_HELD` first) or ``"clock"`` (the deadline passed first), with the folders read and what
     the list held. Each folder is read once, entry by entry: its subfolders are taken on until the
     bound, and the read goes on past the bound for a regular file, which wins wherever it is in the
-    folder. A folder or entry that can't be read is passed over, as os.walk does."""
+    folder. A folder or entry that can't be read is passed over, as os.walk does. The clock is read
+    before each folder after the source's own, and every `_LOOK_CLOCK_EVERY` entries inside any
+    folder; an empty source never reaches either, so it is "none" whatever the time."""
     try:
         if not source.is_dir():
             return "none", 0, 0
@@ -179,7 +184,9 @@ def _look(
         over = False
         try:
             with os.scandir(folder) as entries:
-                for entry in entries:
+                for index, entry in enumerate(entries, 1):
+                    if not index % _LOOK_CLOCK_EVERY and clock() > deadline:
+                        return "clock", folders, held
                     try:
                         if entry.is_dir(follow_symlinks=False):
                             if not over:
