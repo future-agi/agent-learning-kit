@@ -73,4 +73,11 @@ def test_skill_tells_a_langgraph_app_without_the_cli_to_leave_the_command_empty(
     assert "declare the interface as `callable` with protocol `fi.alk`" in text
     assert "write no interface" not in text
     assert "the kit serves the graph" in text
-    assert "Don't map the LangGraph server's `/runs/wait` with a JSON template" in text
+    # Scoped to that shape: an app that keeps its command can still map the server's ingress.
+    assert "In that no-CLI shape, don't map the LangGraph server's `/runs/wait` with a JSON template" in text
+    assert (
+        "An app that installs `langgraph-cli`, or whose `langgraph.json` has an `http` or `auth` "
+        "key or declares more than one graph, keeps its command and its HTTP interface, and may "
+        "map `/runs/wait`"
+    ) in text
+    assert not re.search(r"(?<!In that no-CLI shape, )[Dd]on't map the LangGraph server's `/runs/wait`", text)

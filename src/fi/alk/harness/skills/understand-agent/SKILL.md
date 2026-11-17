@@ -264,9 +264,10 @@ Find, in roughly this order:
    `langgraph-cli`, `langgraph dev` and `langgraph up` can't run there: leave `runtime.command`
    empty, set `execution` to `auto`, and declare the interface as `callable` with protocol
    `fi.alk`; the kit serves the graph itself through it.
-   Don't map the LangGraph server's `/runs/wait` with a JSON template. (An app whose
-   `langgraph.json` has an `http` or `auth` key, or declares more than one graph, is run as
-   written.)
+   In that no-CLI shape, don't map the LangGraph server's `/runs/wait` with a JSON template.
+   An app that installs `langgraph-cli`, or whose `langgraph.json` has an `http` or `auth` key
+   or declares more than one graph, keeps its command and its HTTP interface, and may map
+   `/runs/wait`.
 
    If an HTTP ingress uses neither the ALK nor OpenAI envelope, do not stop and do not label it as
    one of those protocols. Read the route models, OpenAPI setup, client examples and tests, then use
