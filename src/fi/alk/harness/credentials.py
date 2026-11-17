@@ -178,6 +178,9 @@ _BUILT_SUFFIXES = frozenset({".js", ".mjs", ".cjs", ".jsx"})
 # `src/index.ts`). Only these are dropped to find a source, as many as are stacked, and only after
 # the exact name: `app.module.js` is never `app.ts`.
 _BUILD_FLAVOURS = frozenset({".esm", ".es", ".cjs", ".umd", ".min", ".modern", ".bundle"})
+# The folders a dual build writes each flavour to (`tsc --outDir dist/cjs`): only these are dropped
+# to find a source, so dist/server/index.js is never src/index.ts.
+_BUILD_FLAVOUR_FOLDERS = frozenset({"cjs", "esm", "mjs", "es", "umd", "browser", "node"})
 _SCRIPT_IMPORT = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
 )
@@ -1772,8 +1775,10 @@ def imported_by_agent(
     def built_from_source(package: Path, target: Path) -> Path | None:
         """An entry in a build folder that isn't committed (`dist/worker.js`), found where it is
         built from: its own path under `src/` (or the package, for `dist/src/...`), with each
-        source suffix the build compiles to that name. A dual build's output folder
-        (`dist/cjs/worker.js`) is also tried without it (`src/worker.*`), and a bundler's flavour
+        source suffix the build compiles to that name, or its path from the package itself
+        (`tsc` with rootDir `.`: dist/server/index.js from server/index.ts). A dual build's
+        flavour folder (`dist/cjs/worker.js`) is also tried without it (`src/worker.*`), and a
+        bundler's flavour
         (`index.esm.js`) is dropped only after the exact name has no source. A folder entry
         (`dist`, `dist/sub`) is entered through its index there. Never another module:
         `src/index.*` stands in only for an entry that is itself an index. Looked up through the
@@ -1789,13 +1794,13 @@ def imported_by_agent(
         if not rest:
             return found_at(script_index(source))
         # A dual build (`tsc --outDir dist/cjs`) writes src/index.ts to dist/cjs/index.js.
-        layouts = (rest, rest[1:]) if len(rest) > 1 else (rest,)
+        layouts = (rest, rest[1:]) if len(rest) > 1 and rest[0] in _BUILD_FLAVOUR_FOLDERS else (rest,)
         bases: list[Path] = []
         for parts in layouts:
             bases.append(source.joinpath(*parts))
-            # `tsc` with the package as its root writes src/worker.ts to dist/src/worker.js.
-            if parts[0] == "src":
-                bases.append(package.joinpath(*parts))
+            # `tsc` with the package as its root (rootDir `.`) writes src/worker.ts to
+            # dist/src/worker.js, and server/index.ts to dist/server/index.js.
+            bases.append(package.joinpath(*parts))
         candidates: list[Path] = []
         flavoured: list[Path] = []
         for built in bases:
