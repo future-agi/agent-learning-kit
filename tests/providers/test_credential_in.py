@@ -78,6 +78,8 @@ _KEPT = {
     "placeholder from a variable": "https://api.example.com/v1/search?api_key=$API_KEY",
     "a uuid in a query": "/o?id=550e8400-e29b-41d4-a716-446655440000",
     "a 16-digit number in a query": "/e?since=1700000000000000",
+    "a model name in a query": "/v1/chat?model=gpt-4o-mini-2024-07-18",
+    "a model id in a query": "/v1/chat?model_id=claude-opus-5-5-20261101",
     "query id": "/o?id=77",
     "query id on a url": "https://shop.example.com/o?id=77",
     "api-version": "https://acme.openai.azure.com/x?api-version=2024-01-01",
@@ -375,3 +377,9 @@ def test_a_page_token_that_is_not_in_the_list_stays_masked(text: str) -> None:
     out = _cleaned(text)
     assert out != text
     assert "EAAGm0PX4ZCpsBAabc123" not in out
+
+
+def test_a_model_name_lifts_only_the_length_rule_not_a_key_shape() -> None:
+    # A model name is long and key-like by length alone; a real key under that name is still one.
+    assert secret_shapes.credential_in("/v1/chat?model=AKIAIOSFODNN7EXAMPLE")
+    assert secret_shapes.credential_in("/v1/chat?model=ghp_" + "X" * 36)

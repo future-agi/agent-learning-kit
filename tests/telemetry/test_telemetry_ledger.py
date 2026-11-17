@@ -704,3 +704,10 @@ def test_a_declared_env_value_is_still_removed_from_a_key(ledger_env, monkeypatc
     monkeypatch.setenv("SENTINEL_TOKEN", "sk-sentinel-key-test")
     cleaned = _row._redact_value({"k-sk-sentinel-key-test": 1}, ["SENTINEL_TOKEN"])
     assert cleaned == {"k-[redacted:SENTINEL_TOKEN]": 1}
+
+
+def test_a_key_holding_a_key_shape_is_still_cleaned(ledger_env):
+    from fi.alk.telemetry import _row
+
+    cleaned = _row._redact_value({"run ghp_" + "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5": 1}, ())
+    assert not any("ghp_aB3" in key for key in cleaned)

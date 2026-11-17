@@ -909,6 +909,9 @@ REDACTION_MARKERS = (
 )
 # Query names that are credentials without holding a marker.
 _CREDENTIAL_QUERY_NAMES = frozenset({"key", "sig", "signature", "pwd", "pass", "auth"})
+# Query names whose value is a model id: long and key-like by length alone. A key shape under
+# them is still caught by find().
+_MODEL_QUERY_NAMES = frozenset({"model", "model_id", "modelid", "model_name", "modelname"})
 # A query or fragment parameter of any URL or path: after ? # & or ;.
 _QUERY_PARAM = re.compile(r"[?#&;]([^=&#?;\s]*)=([^&#;\s]*)")
 _KEY_VALUE = re.compile(r"[A-Za-z0-9+/=_%\-]{16,}")
@@ -994,6 +997,8 @@ def credential_in(value: object) -> bool:
             continue
         if _names_a_credential(raw) or raw.lower() in _CREDENTIAL_QUERY_NAMES:
             return True
+        if raw.lower() in _MODEL_QUERY_NAMES:
+            continue
         if _KEY_VALUE.fullmatch(text) and not (_UUID.fullmatch(text) or text.isdigit()):
             return True
     return bool(find(value))
