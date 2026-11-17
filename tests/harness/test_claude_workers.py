@@ -193,3 +193,30 @@ def test_an_interactive_builder_can_reply_after_saving() -> None:
         if hasattr(part, "text")
     )
     assert isinstance(events[-1], StageDone)
+
+
+def test_the_cli_offers_only_the_built_ins_granted_and_the_delegation_tools() -> None:
+    spec = SessionSpec(
+        system_prompt="parent",
+        builtins=("Read", "AskUserQuestion"),
+        workers={
+            "operator": WorkerSpec(description="runs", instructions="run", builtins=("Bash",)),
+        },
+    )
+
+    options = ClaudeBackend()._options(spec)
+
+    # Left unset the CLI offers every built-in it has; a worker's own built-ins are granted.
+    assert set(options.tools) == {"Read", "AskUserQuestion", "Bash", "Agent", "Task"}
+    assert "Bash" not in (options.disallowed_tools or [])
+    # The stage's ask is the permission callback's to answer, as before.
+    assert "AskUserQuestion" in options.allowed_tools
+
+
+def test_a_built_in_the_backend_cannot_supply_is_refused() -> None:
+    import pytest
+
+    spec = SessionSpec(system_prompt="parent", builtins=("Read", "WebSearch"))
+
+    with pytest.raises(ValueError, match="WebSearch"):
+        ClaudeBackend()._options(spec)

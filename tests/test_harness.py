@@ -35,6 +35,11 @@ from fi.alk.harness import (
 )
 
 
+def _tool_error(result) -> bool:
+    """An MCP tool result's error flag: `isError` before mcp 2, `is_error` after."""
+    return bool(getattr(result, "is_error", getattr(result, "isError", False)))
+
+
 def _contract(**overrides) -> AgentContract:
     payload = {
         "agent": "drive_thru",
@@ -4623,7 +4628,6 @@ def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path
 
     assert options.tools == ["Read", "AskUserQuestion"]
     assert options.strict_mcp_config is True
-    assert "AskUserQuestion" not in options.allowed_tools
     assert options.setting_sources == []
     assert options.include_partial_messages is True
     assert options.resume == "provider-session-id"
@@ -4854,10 +4858,20 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
                 stack.extend(typing.get_args(annotation))
         return names
 
-    fields = set()
-    seen_models: set = set()
-    for model in (AgentContract, ToolSpec, Scenario, Persona, Step, SubGoal):
-        fields |= nested_fields(model, seen_models)
+    def fields_of(*models: type[BaseModel]) -> set[str]:
+        seen: set = set()
+        names: set[str] = set()
+        for model in models:
+            names |= nested_fields(model, seen)
+        return names
+
+    # Each skill may name the fields of the models it writes, and no others.
+    stage_fields = {
+        "understand-agent": fields_of(AgentContract, ToolSpec),
+        "build-environment": fields_of(AgentContract, ToolSpec, SubGoal, Scenario, Step),
+        "write-scenarios": fields_of(Scenario, Persona, Step, SubGoal, ToolSpec),
+        "run-scenarios": fields_of(Scenario, Persona, Step, SubGoal, ToolSpec),
+    }
     # The sub-agent a stage briefs is named by its own constant.
     from fi.alk.harness.simulator_voice import _CALLER_PHONE_KEYS
     from fi.alk.harness.understand import READER
@@ -4884,8 +4898,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.scenario import _AXIS_LABELS, _LEVEL_LABELS
 
     ignore = (
-        fields
-        | offered
+        offered
         | set(MODALITIES)
         | set(CALL_DIRECTIONS)
         | set(CALLER_AWARENESS)
@@ -4917,7 +4930,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         mentioned = set(re.findall(r"`([a-z_][a-z0-9_]*)\(?`", text))
         unknown = {
             name
-            for name in mentioned - tools - ignore
+            for name in mentioned - tools - ignore - stage_fields[stage]
             if name not in {"route_to_stage", "AskUserQuestion", READER}
         }
         assert not unknown, (
@@ -6443,8 +6456,8 @@ def test_connect_only_provider_world_cannot_create_shadow_state(tmp_path):
     seed_result = asyncio.run(
         call("seed", {"table": "appointments", "rows": [{"id": "fake"}]})
     )
-    assert schema_result.isError
-    assert seed_result.isError
+    assert _tool_error(schema_result)
+    assert _tool_error(seed_result)
     assert world.state() == {}
     assert world.handlers == {}
     assert world.runtime_tools == {"book_appointment"}
@@ -8858,7 +8871,7 @@ def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(
         answer = await handler.handler(
             None, CallToolRequestParams(name="save_scenarios", arguments={})
         )
-        return answer.isError, answer.content[0].text
+        return _tool_error(answer), answer.content[0].text
 
     first, second = (asyncio.run(save()) for _ in range(2))
     assert first[0] and "one pass, not a rewrite" in first[1]
@@ -8971,7 +8984,7 @@ def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
         answer = await handler.handler(
             None, CallToolRequestParams(name="drop_scenario", arguments=arguments)
         )
-        return answer.isError, answer.content[0].text
+        return _tool_error(answer), answer.content[0].text
 
     refused = asyncio.run(drop({"name": "*"}))
     by_name = asyncio.run(drop({"name": saved[0].name}))
