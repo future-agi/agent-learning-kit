@@ -263,6 +263,14 @@ def _install_worker_isolation() -> None:
 # A fixed value that is not a secret: with it set, a customer's own set_tracing_disabled(False)
 # cannot send the gateway key to OpenAI's trace endpoint.
 _TRACING_EXPORT_PLACEHOLDER = "alk-tracing-disabled"
+_SDK_TRACING_SWITCH = "OPENAI_AGENTS_DISABLE_TRACING"
+
+
+def _sdk_tracing_off() -> None:
+    """Where the hook can't keep the SDK's export local, the SDK's own switch does. The SDK reads
+    it on first use, after its import, so setting it now still holds. It also stops the kit's
+    span observation, so it is the fallback, never the first choice."""
+    os.environ[_SDK_TRACING_SWITCH] = "1"
 
 
 def _guard_tracing_export_key(module: Any) -> None:
@@ -284,12 +292,14 @@ def _guard_tracing_export_key(module: Any) -> None:
         return
     exporter = sys.modules[f"{module.__name__}.tracing.processors"].default_exporter()
 
-    def export_nothing(items: Any, deadline: Any = None) -> None:
+    def export_nothing(self: Any, items: Any, deadline: Any = None) -> None:
         return None
 
-    # The batch processor calls the deadline form directly when it flushes at exit.
-    exporter.export = export_nothing
-    exporter._export_with_deadline = export_nothing
+    # On the class, so an exporter the agent builds itself sends nothing either. The batch
+    # processor calls the deadline form directly when it flushes at exit.
+    exporter_class = type(exporter)
+    exporter_class.export = export_nothing
+    exporter_class._export_with_deadline = export_nothing
     set_api_key = exporter.set_api_key
 
     def guarded_set_api_key(api_key: str) -> None:
@@ -305,10 +315,17 @@ def _set_openai_agents_chat_style(module: Any, reason: str = "") -> None:
         # Each setting on its own: the trace key placeholder holds even if the chat style fails.
         try:
             module.set_tracing_export_api_key(_TRACING_EXPORT_PLACEHOLDER)
-            _guard_tracing_export_key(module)
         except Exception as exc:  # noqa: BLE001 - a setting we could not make must not stop the agent
             sys.stderr.write(
                 "alk: could not set the OpenAI Agents SDK trace export key: "
+                f"{type(exc).__name__}\n"
+            )
+        try:
+            _guard_tracing_export_key(module)
+        except Exception as exc:  # noqa: BLE001 - a setting we could not make must not stop the agent
+            _sdk_tracing_off()
+            sys.stderr.write(
+                "alk: could not keep the OpenAI Agents SDK trace export local: "
                 f"{type(exc).__name__}\n"
             )
         try:
@@ -366,6 +383,9 @@ class _OpenAIAgentsFinder:
             try:
                 spec = find_spec(fullname, path, target)
             except Exception:  # noqa: BLE001 - the import system reaches the same finder next
+                # The SDK then loads without the hook: its own switch keeps its export off.
+                self.armed = False
+                _sdk_tracing_off()
                 return None
             if spec is not None:
                 break
@@ -376,6 +396,7 @@ class _OpenAIAgentsFinder:
             # Not ours to load (a namespace package or an old-style loader): the SDK imports as
             # without the kit, and the log says it stays on its default style.
             self.armed = False
+            _sdk_tracing_off()
             _set_openai_agents_chat_style(None, "its loader cannot be wrapped")
             return spec
         spec.loader = _ChatStyleLoader(self, loader)

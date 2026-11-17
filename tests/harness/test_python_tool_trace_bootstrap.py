@@ -499,6 +499,38 @@ def test_the_sdks_default_exporter_is_left_alone_without_the_mark(tmp_path: Path
     assert (tmp_path / "calls.txt.export").read_text().splitlines() == ["1"]
 
 
+def test_an_exporter_the_agent_builds_itself_sends_nothing_under_the_mark(
+    tmp_path: Path,
+) -> None:
+    result, lines = _chat_style_run(
+        tmp_path,
+        "import agents\n"
+        "from agents.tracing.processors import default_exporter\n"
+        "type(default_exporter())().export(['span'])\n",
+        agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
+        exporter=True,
+        extra_env=_GATEWAY_KEY,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "calls.txt.export").exists()
+
+
+def test_where_the_export_cant_be_kept_local_the_sdks_own_switch_is_set(
+    tmp_path: Path,
+) -> None:
+    # The stand-in has no tracing module to reach: the SDK's switch, read on first use, does it.
+    result, lines = _chat_style_run(
+        tmp_path,
+        "import os, agents\nprint(os.environ.get('OPENAI_AGENTS_DISABLE_TRACING'))\n",
+        extra_env=_GATEWAY_KEY,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "1"
+    assert result.stderr.splitlines() == [
+        "alk: could not keep the OpenAI Agents SDK trace export local: KeyError"
+    ]
+
+
 def test_an_agents_own_trace_export_key_still_wins(tmp_path: Path) -> None:
     result, lines = _chat_style_run(
         tmp_path,
@@ -739,3 +771,30 @@ def test_openai_agents_setting_without_reason_writes_the_exception_name(
         "alk: could not set the OpenAI Agents SDK to chat completions: "
         "its loader cannot be wrapped",
     ]
+
+
+class _OldStyleLoaderFinder:
+    def find_spec(self, fullname, path=None, target=None):
+        import importlib.machinery
+
+        return importlib.machinery.ModuleSpec(fullname, object())
+
+
+class _RaisingFinder:
+    def find_spec(self, fullname, path=None, target=None):
+        raise RuntimeError("finder broke")
+
+
+@pytest.mark.parametrize(
+    "other", [_OldStyleLoaderFinder, _RaisingFinder], ids=["old_style_loader", "finder_raises"]
+)
+def test_where_the_hook_cant_wrap_the_sdk_the_sdks_own_switch_is_set(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], other
+) -> None:
+    hook = _load_hook(monkeypatch)
+    monkeypatch.setenv("OPENAI_AGENTS_DISABLE_TRACING", "unset-by-the-test")
+    monkeypatch.delenv("OPENAI_AGENTS_DISABLE_TRACING")
+    finder = hook._OpenAIAgentsFinder()
+    monkeypatch.setattr(sys, "meta_path", [finder, other()])
+    finder.find_spec("agents")
+    assert os.environ.get("OPENAI_AGENTS_DISABLE_TRACING") == "1"

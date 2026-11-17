@@ -6949,6 +6949,28 @@ def test_routed_command_agent_keeps_framework_observation_and_no_tracing_off(
     assert _TRACING_OFF not in control.environment
 
 
+@pytest.mark.parametrize(
+    "command",
+    [["python", "-I", "agent.py"], ["python3", "-E", "agent.py"], ["python", "-uS", "agent.py"]],
+    ids=["isolated", "ignore_environment", "no_site"],
+)
+def test_a_routed_python_that_skips_the_hook_gets_the_sdks_tracing_switch(
+    tmp_path: Path, command: list[str]
+) -> None:
+    # -I, -E and -S never load the hook, so only the SDK's own switch keeps its export off.
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="agent"\nversion="1"\n')
+    plan = resolve_environment_plan(
+        tmp_path,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_runtime={"language": "python", "execution": "native", "command": command},
+        contract_interface_kind="command",
+        contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    assert control.environment[_TRACING_OFF] == "1"
+
+
 @pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
 @pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])
 def test_unrouted_target_model_leaves_the_agent_process_unmarked(
