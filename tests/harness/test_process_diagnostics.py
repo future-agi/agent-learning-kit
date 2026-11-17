@@ -543,6 +543,37 @@ def test_a_url_with_userinfo_or_a_query_is_masked(tmp_path, value):
     assert value not in text and "canary" not in text
 
 
+_SLACK = "https://hooks.slack.com/services/T0FAKE1234/B0FAKE5678/fakeWebhookSecretValue24"
+_DISCORD = (
+    "https://discord.com/api/webhooks/1234567890123/"
+    "fake-Discord_Webhook_Token_Value_abcdefghijkl"
+)
+
+
+@pytest.mark.parametrize(
+    "line,url",
+    [
+        (f"SLACK_WEBHOOK_URL={_SLACK}", _SLACK),
+        (f"DISCORD_WEBHOOK={_DISCORD}", _DISCORD),
+        # Under a name with no secret part: the token in the URL's path still marks it.
+        (f"NOTIFY_TARGET={_SLACK}", _SLACK),
+    ],
+    ids=["slack", "discord", "plain-name"],
+)
+def test_a_webhook_url_with_its_token_in_the_path_is_masked(tmp_path, line, url):
+    source = _source(tmp_path, {".env": line + "\nOPENAI_API_KEY=sk-live-fakefakefake123\n"})
+    log = f'HTTP Request: POST {url} "HTTP/1.1 404 Not Found"\n'
+    text = _evidence(tmp_path, source, log)
+    assert url not in text
+    assert "fakeWebhookSecretValue24" not in text and "fake-Discord_Webhook" not in text
+
+
+def test_a_url_with_a_plain_path_is_left_alone(tmp_path):
+    source = _source(tmp_path, {".env": "BACKEND_URL=https://api.example.com/v1/chat/completions\n"})
+    text = _evidence(tmp_path, source, "calling https://api.example.com/v1/chat/completions\n")
+    assert "https://api.example.com/v1/chat/completions" in text
+
+
 def test_a_line_of_an_env_file_that_is_not_a_setting_is_masked_like_a_line(tmp_path):
     source = _source(
         tmp_path,

@@ -31,7 +31,7 @@ _PLACEHOLDER = "<redacted>"
 # Committed placeholders, not secrets: no masks are built from them.
 _TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 # A settings name that holds one of these parts has its value masked whatever the value looks like.
-_SECRET_NAME_PARTS = ("KEY", "TOKEN", "SECRET", "PASS", "PWD", "AUTH", "CREDENTIAL", "DSN")
+_SECRET_NAME_PARTS = ("KEY", "TOKEN", "SECRET", "PASS", "PWD", "AUTH", "CREDENTIAL", "DSN", "HOOK")
 _ENV_FILE_NAME = re.compile(r"(^|\.)env($|\.)", re.IGNORECASE)
 _LONG_RUN = re.compile(r"[A-Za-z0-9+/=_-]{32,}")
 _HEX_RUN = re.compile(r"[0-9a-fA-F]{32,}")
@@ -53,16 +53,21 @@ def _secret_name(name: str) -> bool:
 
 def _looks_like_secret(value: str) -> bool:
     """Whether a value, whatever its setting is called, has the shape of a secret: a URL with
-    userinfo (user:pw@host) or a query string, or a token-like string. Plain words, model names and
-    URLs with neither userinfo nor query (https://api.openai.com/v1) do not."""
+    userinfo (user:pw@host), a query string or a token-like path segment (a webhook), or a
+    token-like string. Plain words, model names and URLs with none of these
+    (https://api.openai.com/v1) do not."""
     if not value or any(char.isspace() for char in value):
         return False
     if "://" in value:
         try:
             parts = urlsplit(value)
-            return "@" in parts.netloc or bool(parts.query)
         except ValueError:
             return True
+        return (
+            "@" in parts.netloc
+            or bool(parts.query)
+            or any(_looks_like_secret(segment) for segment in parts.path.split("/"))
+        )
     if len(value) >= 16 and any(c.isalpha() for c in value) and any(c.isdigit() for c in value):
         return True
     if _HEX_RUN.fullmatch(value):
