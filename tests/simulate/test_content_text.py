@@ -62,6 +62,12 @@ def test_every_copy_keeps_the_text_of_every_reply_shape(copy_name, content, expe
 def test_the_three_copies_are_the_same_code():
     regions = {name: _region(path) for name, path in COPIES.items()}
     assert len(set(regions.values())) == 1, "text_of copies drifted"
+    for name, path in COPIES.items():
+        body = ast.parse(path.read_text(encoding="utf-8")).body
+        names = [t.id for node in body if isinstance(node, ast.Assign) for t in node.targets if isinstance(t, ast.Name)]
+        names += [node.name for node in body if isinstance(node, ast.FunctionDef)]
+        for helper in ("_TEXT_KINDS", "_MISSING", "_field", "_block_text", "_text_of"):
+            assert names.count(helper) == 1, f"{name} defines {helper} {names.count(helper)} times"
 
 
 def test_the_hosted_adapters_import_only_agent_input_from_fi():
