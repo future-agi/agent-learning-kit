@@ -1322,6 +1322,9 @@ def test_a_bare_getenv_imported_from_os_keeps_the_plugins_own_requirement(tmp_pa
 def test_elevenlabs_options_dict_is_not_ready_without_the_plugins_name(tmp_path):
     _plugin_agent(tmp_path, "elevenlabs", "TTS(**opts)")
     assert {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"} <= _missing(tmp_path)
+    # No api_key= is passed, so the plugin reads only its own name: the other doesn't stand in.
+    assert "ELEVEN_API_KEY" in _missing(tmp_path, "ELEVENLABS_API_KEY")
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].credential_choices == []
 
 
 @pytest.mark.parametrize(
@@ -1332,7 +1335,7 @@ def test_elevenlabs_options_dict_is_not_ready_without_the_plugins_name(tmp_path)
     ],
 )
 def test_an_unreadable_elevenlabs_api_key_takes_either_name(tmp_path, call, pre):
-    # The plugin's own code reads either name, so one of them is enough.
+    # The code behind an unreadable api_key= may read either name: one is enough.
     _plugin_agent(tmp_path, "elevenlabs", call, pre=pre)
     assert _missing(tmp_path, "ELEVEN_API_KEY") == set()
     assert _missing(tmp_path, "ELEVENLABS_API_KEY") == set()
@@ -1408,6 +1411,36 @@ def test_a_sibling_agents_unreadable_elevenlabs_key_leaves_this_agent_alone(tmp_
     manifest = discover_credentials(root, agent_subfolder="a")
     assert manifest.ready
     assert manifest.credential_choices == []
-    for item in manifest.requirements:
-        if item.environment_name in {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"}:
-            assert item.required is False
+    rows = {
+        item.environment_name: item.status
+        for item in manifest.requirements
+        if item.environment_name in {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"}
+    }
+    assert rows == {
+        "ELEVEN_API_KEY": RequirementStatus.OPTIONAL,
+        "ELEVENLABS_API_KEY": RequirementStatus.OPTIONAL,
+    }
+
+
+def test_imported_code_behind_the_agent_makes_the_either_name_choice(tmp_path):
+    # The agent's folder imports the code that builds the plugin: that code is the agent's own.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "lib/__init__.py": "",
+            "lib/voice.py": (
+                "from livekit.plugins import elevenlabs\n"
+                "x = elevenlabs.TTS(api_key=settings.eleven_key)\n"
+            ),
+            "agents/a/agent.py": "from lib import voice\n",
+        },
+    )
+    manifest = discover_credentials(
+        root,
+        agent_subfolder="agents/a",
+        provided_environment=["ELEVEN_API_KEY", "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"],
+    )
+    assert manifest.ready
+    assert [choice.options for choice in manifest.credential_choices] == [
+        [["ELEVEN_API_KEY"], ["ELEVENLABS_API_KEY"]]
+    ]

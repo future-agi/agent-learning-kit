@@ -309,7 +309,7 @@ _LIVEKIT_PROVIDER_CREDENTIALS = {
 }
 
 
-# When a constructor's ``api_key=`` can't be read, ElevenLabs' own code may read either name.
+# When a constructor's ``api_key=`` can't be read, the code behind it may read either name.
 _LIVEKIT_UNREADABLE_KEY_EXTRA = {"elevenlabs": ("ELEVENLABS_API_KEY",)}
 # The origin suffix of a plugin key that any one of its names satisfies.
 _EITHER_NAME = ":either"
@@ -461,10 +461,14 @@ def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
             "RealtimeModel",
         }:
             names = _plugin_key_names(node, provider)
-            # The plugin's own code reads any one of these: it is a choice, not each one.
+            # The code behind an unreadable api_key= may read either name: one is enough. With
+            # no api_key= at all (**opts), the plugin reads only its own name.
             either = _LIVEKIT_UNREADABLE_KEY_EXTRA.get(provider, ())
             fallback = _LIVEKIT_PROVIDER_CREDENTIALS[provider] + either
-            suffix = _EITHER_NAME if either and tuple(names) == fallback else ""
+            passes_key = any(keyword.arg == "api_key" for keyword in node.keywords)
+            suffix = (
+                _EITHER_NAME if either and passes_key and tuple(names) == fallback else ""
+            )
             for name in names:
                 found.add((name, f"sdk:livekit.plugins.{provider}{suffix}"))
         if provider == "google" and constructor in {"LLM", "STT", "TTS"}:
@@ -1950,8 +1954,8 @@ def _credential_choices(
 def _either_name_choices(
     requirements: list[CredentialRequirement],
 ) -> list[CredentialChoice]:
-    """One choice per plugin whose unreadable ``api_key=`` leaves its own code reading any one
-    of several names. A name the agent's code needs by itself stays its own requirement, so
+    """One choice per plugin whose unreadable ``api_key=`` leaves the agent's code reading any
+    one of several names. A name the agent's code needs by itself stays its own requirement, so
     no choice is made then.
 
     Changes the requirements in place: while no option is configured, every member is marked
