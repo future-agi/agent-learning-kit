@@ -346,6 +346,33 @@ def assert_refuses_key_without_base_url(
     assert not problems, "\n".join(problems)
 
 
+# Order state -------------------------------------------------------------------------------
+
+
+def assert_each_conversation_has_its_own_orders(
+    module: ModuleType, call_tool: Callable[..., str] | None = None
+) -> None:
+    """A return started in one conversation is not there in another, and stays in its own.
+
+    `call_tool(name, **arguments)` calls one tool the way its library does; by default the
+    module's plain function of that name."""
+    call = call_tool or (lambda name, **arguments: getattr(module, name)(**arguments))
+
+    def in_conversation(thread: str, name: str, **arguments: str) -> str:
+        token = module._CONVERSATION.set(thread)
+        try:
+            return call(name, **arguments)
+        finally:
+            module._CONVERSATION.reset(token)
+
+    started = in_conversation("one", "start_return", order_id="A1001", reason="too small")
+    assert "Return started" in started
+    assert in_conversation("two", "look_up_order", order_id="A1001").endswith("return: none.")
+    assert in_conversation("one", "look_up_order", order_id="A1001").endswith(
+        "return: too small."
+    )
+
+
 # The tracer ---------------------------------------------------------------------------------
 
 
