@@ -21,6 +21,7 @@ from reference_agents import (
     REPO,
     TOOLS,
     TRACE_HOOK,
+    assert_bindings_match,
     assert_detected,
     assert_pins,
     build_control_service,
@@ -194,7 +195,7 @@ def test_example_is_detected_as_crewai(tmp_path: Path, where: str) -> None:
 
 
 def test_build_runs_the_callback_bridge_with_the_generic_tool_tracer(
-    tmp_path: Path,
+    tmp_path: Path, example_module
 ) -> None:
     agent = build_control_service(
         tmp_path, write_callable_contract, "agent", subfolder=SUBFOLDER, example=EXAMPLE
@@ -206,10 +207,7 @@ def test_build_runs_the_callback_bridge_with_the_generic_tool_tracer(
     assert "requirements.txt" in json.dumps(agent.build_commands)
     assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     bindings = json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])
-    assert sorted(bindings, key=lambda item: item["name"]) == sorted(
-        ({"name": name, "module": "agent", "callable": name} for name in TOOLS),
-        key=lambda item: item["name"],
-    )
+    assert_bindings_match(bindings, example_module(), "agent")
     # The kit's CrewAI observer is for command-run agents. A callback agent is traced by the
     # generic tracer alone.
     assert "ALK_CREWAI_TOOL_TRACE" not in agent.environment
