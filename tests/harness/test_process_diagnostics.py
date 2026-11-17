@@ -563,3 +563,26 @@ def test_a_long_line_of_spaces_builds_the_masks_quickly(tmp_path):
     took = time.perf_counter() - started
     assert "canary-key-QWERTY-12345" in masks
     assert took < 1.0, took
+
+
+def test_retained_log_drops_a_derived_world_role_password(tmp_path):
+    from fi.alk.harness import process_runtime as pr
+
+    credentials = {
+        "db": pr.EngineCredentials("harness", "superpw", world_secret="s" * 64)
+    }
+    derived = pr.world_role(credentials["db"], 0).password
+    work = tmp_path / "work"
+    log = work / "worlds" / "w0" / "agent" / "process.log"
+    log.parent.mkdir(parents=True)
+    log.write_text(f"connect failed postgres://alk_w0:{derived}@127.0.0.1:5432/w0\n")
+    provider = ProcessRuntimeProvider(
+        generic_artifact_root=tmp_path / "artifacts", secrets_path=tmp_path / "secrets"
+    )
+    provider._secrets_loaded = True
+    provider._diagnostic_work_directory = work
+    provider._diagnostic_engine_secrets = pr._engine_diagnostic_secrets(credentials, 2)
+    provider._retain_process_log(log)
+    text = next((tmp_path / "artifacts").rglob("*.log")).read_text()
+    assert derived not in text
+    assert "connect failed" in text and "@127.0.0.1:5432/w0" in text
