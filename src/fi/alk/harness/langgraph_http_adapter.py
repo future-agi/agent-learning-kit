@@ -28,14 +28,19 @@ def _field(value: Any, name: str) -> Any:
     return getattr(value, name, None)
 
 
-def _block_text(block: Any, depth: int = 0) -> str:
-    """Answer text of one content block; "" for any block that is not answer text."""
+def _is_text_block(block: Any) -> bool:
     kind = _field(block, "type")
-    if kind in _TEXT_KINDS or (
+    return kind in _TEXT_KINDS or (
         kind is None
         and isinstance(_field(block, "text"), str)
         and _field(block, "thought") is not True
-    ):
+    )
+
+
+def _block_text(block: Any, depth: int = 0) -> str:
+    """Answer text of one content block; "" for any block that is not answer text."""
+    kind = _field(block, "type")
+    if _is_text_block(block):
         text = _field(block, "text")
         if isinstance(text, dict):
             text = text.get("value")
@@ -80,7 +85,7 @@ def _text_of(content: Any, depth: int = 0) -> str:
             is_block = not isinstance(item, str) and not _is_message(item)
             piece = item if isinstance(item, str) else _block_text(item, depth)
             if not piece:
-                if not isinstance(item, str) and _field(item, "type") not in _TEXT_KINDS:
+                if not isinstance(item, str) and not _is_text_block(item):
                     after_block = False
                 continue
             if text and not (is_block and after_block):

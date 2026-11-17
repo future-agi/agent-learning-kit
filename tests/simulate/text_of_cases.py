@@ -186,3 +186,11 @@ CASES += [
         "Let me check. It shipped today.",
     ),
 ]
+
+CASES += [
+    (
+        "untyped-empty-part-keeps-the-adjacent-join",
+        [{"text": "a"}, {"text": ""}, {"text": "b"}],
+        "ab",
+    ),
+]
