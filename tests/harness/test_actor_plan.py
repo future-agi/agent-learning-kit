@@ -2015,3 +2015,100 @@ def test_the_dispatcher_shows_a_live_actor_its_own_rows_as_its_own():
     plain = decision_brief({"name": "Mia"}, situation="", said=[], conversation=[], language="",
                            seen=['{"by": "agent", "action": "get"}'], actions={}, speaks=False)
     assert "your own earlier actions" not in plain
+
+
+def _built(tmp_path, actor, scenario, *, trial_id="t", log=None, sent=None):
+    from fi.alk.harness.actor_dispatch import build_dispatcher
+    from fi.alk.harness.actors import save_actors
+
+    save_actors(tmp_path, ActorList(actors=[actor]))
+    return build_dispatcher(
+        scenario,
+        tmp_path,
+        act=door_acts(_sent_to(sent if sent is not None else [])),
+        read_log=lambda: list(log or []),
+        records=None,
+        trial_id=trial_id,
+    )
+
+
+def test_a_system_actor_takes_its_action_through_the_door_as_itself(tmp_path):
+    """A third-party system (kind `system`, no channel) acts in the world the way any actor does: its own action, sent
+    under its own id."""
+    sent: list = []
+    billing = Actor(
+        id="billing_system",
+        name="Billing",
+        kind="system",
+        role="the billing system",
+        permitted_actions=["invoices.void"],
+    )
+    scenario = {
+        "actors": [
+            {
+                "id": "billing_system",
+                "actions": [{"action": "invoices.void", "arguments": {"id": 9}, "trigger": {"kind": "always"}}],
+            }
+        ]
+    }
+
+    asyncio.run(_built(tmp_path, billing, scenario, sent=sent).tick())
+
+    assert billing.kind == "system" and billing.channel is None
+    assert [(url, headers["X-ALK-Actor"], arguments) for url, headers, arguments in sent] == [
+        ("http://p/invoices/void", "billing_system", {"id": 9})
+    ]
+
+
+def test_an_actor_starts_each_trial_clean(tmp_path):
+    """What an actor did in one trial never carries into the next: its scheduled action fires again in the next trial,
+    as that trial's own call, and its live turns count from zero."""
+    sent: list = []
+    manager = Actor(id="manager", name="Mia", role="manager", permitted_actions=["approvals.change"])
+    scenario = {
+        "actors": [
+            {
+                "id": "manager",
+                "actions": [{"action": "approvals.change", "arguments": {"id": 1}, "trigger": {"kind": "always"}}],
+            }
+        ]
+    }
+
+    first = _built(tmp_path, manager, scenario, trial_id="trial-1", sent=sent)
+    asyncio.run(first.tick())
+    asyncio.run(first.tick())
+    second = _built(tmp_path, manager, scenario, trial_id="trial-2", sent=sent)
+    asyncio.run(second.tick())
+
+    keys = [headers["Idempotency-Key"] for _url, headers, _arguments in sent]
+    # Once per trial, never twice in one, and each trial's call is its own.
+    assert len(keys) == 2 and keys[0].startswith("trial-1:") and keys[1].startswith("trial-2:")
+    assert second.fired and all(count == 0 for count in second.live_turns.values())
+
+
+def test_an_actor_decides_from_its_goal_and_acts_on_what_it_decided(tmp_path):
+    """An actor's goal is what it decides from on its live turn, and what it decides reaches the world."""
+    sent: list = []
+    seen: list = []
+    goal = "Get the 20% discount on deal 7 approved before Friday"
+    lead = Actor(
+        id="lead",
+        name="Lee",
+        role="sales lead",
+        play="live",
+        goal=goal,
+        permitted_actions=["crm.approve"],
+        activation={"trigger": {"kind": "on_tool", "tool": "crm.request"}},
+    )
+    log = [{"actor_id": "agent", "name": "request", "action": "crm.request", "action_id": "a1", "arguments": {}}]
+    dispatcher = _built(tmp_path, lead, {"actors": [{"id": "lead"}]}, log=log, sent=sent)
+    dispatcher.decide = lambda situation, actor: (
+        seen.append(situation) or '{"action": "crm.approve", "arguments": {"deal_id": 7, "discount_percent": 20}}'
+    )
+
+    asyncio.run(dispatcher.tick())
+
+    assert seen and goal in seen[0]
+    assert [(url, arguments) for url, _headers, arguments in sent] == [
+        ("http://p/crm/approve", {"deal_id": 7, "discount_percent": 20})
+    ]
