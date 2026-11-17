@@ -280,7 +280,7 @@ _PROVIDERS: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (("LIVEKIT_", "ACCEPTANCE_LIVEKIT_"), "livekit", "connect to the voice room"),
     (("DEEPGRAM_",), "deepgram", "speech-to-text"),
     (("CARTESIA_",), "cartesia", "text-to-speech"),
-    (("ELEVENLABS_",), "elevenlabs", "text-to-speech"),
+    (("ELEVENLABS_", "ELEVEN_"), "elevenlabs", "text-to-speech"),
     (("OPENAI_",), "openai", "language or realtime model"),
     (("ANTHROPIC_",), "anthropic", "language model"),
     (("GOOGLE_", "VERTEX_", "CLOUD_ML_"), "google_cloud", "model or cloud runtime"),
@@ -314,9 +314,70 @@ _CONNECTOR_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 _LIVEKIT_PROVIDER_CREDENTIALS = {
     "deepgram": ("DEEPGRAM_API_KEY",),
     "cartesia": ("CARTESIA_API_KEY",),
-    "elevenlabs": ("ELEVENLABS_API_KEY",),
+    "elevenlabs": ("ELEVEN_API_KEY",),
     "openai": ("OPENAI_API_KEY",),
 }
+
+
+# When a constructor's ``api_key=`` can't be read, the code behind it may read either name.
+_LIVEKIT_UNREADABLE_KEY_EXTRA = {"elevenlabs": ("ELEVENLABS_API_KEY",)}
+# The origin suffix of a plugin key that any one of its names satisfies.
+_EITHER_NAME = ":either"
+_CODE_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{2,}")
+
+
+def _plugin_key_names(node: ast.Call, provider: str) -> tuple[str, ...]:
+    """Names a LiveKit plugin constructor needs, judged by the ``api_key=`` it passes.
+
+    Only errs towards asking: anything that can't be read keeps the plugin's own row.
+    """
+    own = _LIVEKIT_PROVIDER_CREDENTIALS[provider]
+    fallback = own + _LIVEKIT_UNREADABLE_KEY_EXTRA.get(provider, ())
+    keys = [keyword for keyword in node.keywords if keyword.arg == "api_key"]
+    if not keys:
+        return fallback if any(k.arg is None for k in node.keywords) else own
+    value = keys[0].value
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return () if value.value.strip() else fallback
+    if (
+        isinstance(value, ast.Subscript)
+        and _dotted_name(value.value) == "os.environ"
+        and isinstance(value.slice, ast.Constant)
+        and isinstance(value.slice.value, str)
+        and _CODE_ENV_NAME.fullmatch(value.slice.value)
+    ):
+        return ()
+    if (
+        isinstance(value, ast.Call)
+        and _dotted_name(value.func) in {"os.getenv", "os.environ.get"}
+        and value.args
+        and not any(isinstance(arg, ast.Starred) for arg in value.args)
+        and not any(k.arg is None for k in value.keywords)
+        and len(value.args) <= 2
+        and isinstance(value.args[0], ast.Constant)
+        and isinstance(value.args[0].value, str)
+        and _CODE_ENV_NAME.fullmatch(value.args[0].value)
+    ):
+        name = value.args[0].value
+        if name in _NON_USER_CONFIGURATION or name.startswith("ALK_"):
+            # A name the customer can never supply. Some plugins then fall back to their own
+            # variable (``api_key or os.environ.get(...)``: Cartesia, Deepgram TTS, OpenAI
+            # realtime); others refuse an explicit None. Ask for the plugin's own name.
+            return fallback
+        default = value.args[1] if len(value.args) > 1 else None
+        for keyword in value.keywords:
+            if keyword.arg == "default" and default is None:
+                default = keyword.value
+        if default is None or (
+            isinstance(default, ast.Constant) and default.value is None
+        ):
+            return (name,)
+        if isinstance(default, ast.Constant) and isinstance(default.value, str):
+            text = default.value.strip()
+            if not text or _PLACEHOLDER_VALUE.fullmatch(text):
+                return (name,)
+            return ()
+    return fallback
 
 
 def _dotted_name(node: ast.AST) -> str:
@@ -409,8 +470,17 @@ def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
             "TTS",
             "RealtimeModel",
         }:
-            for name in _LIVEKIT_PROVIDER_CREDENTIALS[provider]:
-                found.add((name, f"sdk:livekit.plugins.{provider}"))
+            names = _plugin_key_names(node, provider)
+            # The code behind an unreadable api_key= may read either name: one is enough. With
+            # no api_key= at all (**opts), the plugin reads only its own name.
+            either = _LIVEKIT_UNREADABLE_KEY_EXTRA.get(provider, ())
+            fallback = _LIVEKIT_PROVIDER_CREDENTIALS[provider] + either
+            passes_key = any(keyword.arg == "api_key" for keyword in node.keywords)
+            suffix = (
+                _EITHER_NAME if either and passes_key and tuple(names) == fallback else ""
+            )
+            for name in names:
+                found.add((name, f"sdk:livekit.plugins.{provider}{suffix}"))
         if provider == "google" and constructor in {"LLM", "STT", "TTS"}:
             vertex = next(
                 (
@@ -617,7 +687,11 @@ def discover_credentials(
             record(match.group(1), required=True)
         if path.suffix.lower() == ".py":
             for name, origin in _python_sdk_requirements(content):
-                record(name, required=True)
+                if origin.endswith(_EITHER_NAME) and not agents_own:
+                    # Another agent's constructor: it makes no choice this agent has to meet.
+                    origin = origin[: -len(_EITHER_NAME)]
+                # A name any one of which will do is made required through its choice.
+                record(name, required=not origin.endswith(_EITHER_NAME))
                 detected = findings[name]["detected_from"]
                 assert isinstance(detected, set)
                 detected.add(origin)
@@ -641,7 +715,11 @@ def discover_credentials(
     for name, finding in sorted(findings.items()):
         kind = _kind(name)
         required = bool(finding["required"])
-        if kind is RequirementKind.CONFIGURATION and finding["declared_default"]:
+        if (
+            kind is RequirementKind.CONFIGURATION
+            and finding["declared_default"]
+            and not any(str(o).startswith("sdk:") for o in finding["detected_from"])
+        ):
             required = False
         if kind is RequirementKind.HARNESS_INFRASTRUCTURE:
             status = RequirementStatus.HARNESS_PROVIDED
@@ -668,7 +746,7 @@ def discover_credentials(
             )
         )
 
-    choices = _credential_choices(requirements)
+    choices = _credential_choices(requirements) + _either_name_choices(requirements)
     manifest_core = {
         "files": digest.hexdigest(),
         "connectors": sorted(connector_hits),
@@ -1930,6 +2008,47 @@ def _credential_choices(
             satisfied=satisfied,
         )
     ]
+
+
+def _either_name_choices(
+    requirements: list[CredentialRequirement],
+) -> list[CredentialChoice]:
+    """One choice per plugin whose unreadable ``api_key=`` leaves the agent's code reading any
+    one of several names. A name the agent's code needs by itself stays its own requirement, so
+    no choice is made then.
+
+    Changes the requirements in place: while no option is configured, every member is marked
+    required and MISSING, so the form asks for one."""
+    by_provider: dict[str, list[CredentialRequirement]] = {}
+    prefix = "sdk:livekit.plugins."
+    for item in requirements:
+        for origin in item.detected_from:
+            if origin.startswith(prefix) and origin.endswith(_EITHER_NAME):
+                provider = origin[len(prefix) : -len(_EITHER_NAME)]
+                by_provider.setdefault(provider, []).append(item)
+    configured = {RequirementStatus.CONFIGURED, RequirementStatus.HARNESS_PROVIDED}
+    choices = []
+    for provider, members in sorted(by_provider.items()):
+        if len(members) < 2 or any(member.required for member in members):
+            continue
+        order = _LIVEKIT_PROVIDER_CREDENTIALS[provider] + _LIVEKIT_UNREADABLE_KEY_EXTRA.get(
+            provider, ()
+        )
+        members.sort(key=lambda member: order.index(member.environment_name))
+        satisfied = any(member.status in configured for member in members)
+        if not satisfied:
+            for member in members:
+                member.required = True
+                member.status = RequirementStatus.MISSING
+        choices.append(
+            CredentialChoice(
+                id=f"{provider}_api_key",
+                purpose=f"authenticate the {provider} plugin",
+                options=[[member.environment_name] for member in members],
+                satisfied=satisfied,
+            )
+        )
+    return choices
 
 
 def _identifier(value: str) -> str:
