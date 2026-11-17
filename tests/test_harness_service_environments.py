@@ -527,6 +527,34 @@ def test_static_ports_receive_a_job_scoped_compose_override(tmp_path, monkeypatc
     assert 'host_ip: "127.0.0.1"' in generated
 
 
+def test_a_fixed_port_on_all_interfaces_is_replaced_beside_a_variable_one(tmp_path):
+    # b publishes 0.0.0.0:2375 on the same container port that a's ${A_PORT:-8080} takes: every
+    # port goes through the override, on the kit's bind host, with Docker choosing the host port.
+    compose = tmp_path / "compose.yml"
+    compose.write_text(
+        "services:\n  a:\n    ports: ['${A_PORT:-8080}:80']\n"
+        "  b:\n    ports: ['0.0.0.0:2375:80']\n"
+    )
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path), compose_file=str(compose), project="isolated"
+    )
+    _write_port_override(
+        tmp_path / "session",
+        environment,
+        {
+            "services": {
+                "a": {"ports": [{"target": 80, "published": "0"}]},
+                "b": {"ports": [{"target": 80, "published": "2375", "host_ip": "0.0.0.0"}]},
+            }
+        },
+    )
+    generated = Path(environment.compose_override_file).read_text()
+    assert '"a"' in generated and '"b"' in generated
+    assert "2375" not in generated
+    assert generated.count('published: "0"') == 2
+    assert '"0.0.0.0"' not in generated
+
+
 def test_fixed_container_name_is_reset_for_project_isolation(tmp_path):
     compose = tmp_path / "compose.yml"
     compose.write_text(
