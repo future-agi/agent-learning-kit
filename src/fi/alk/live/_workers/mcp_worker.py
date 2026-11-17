@@ -45,6 +45,11 @@ def _read_boot() -> dict[str, Any]:
     return boot
 
 
+
+def _is_error(result: object) -> bool:
+    """Whether an MCP tool result reports an error: `isError` before mcp 2, `is_error` after."""
+    return bool(getattr(result, "is_error", getattr(result, "isError", False)))
+
 def _result_text(result: Any) -> str:
     texts: list[str] = []
     for block in getattr(result, "content", None) or []:
@@ -125,7 +130,7 @@ async def _run(boot: dict[str, Any]) -> None:
                 _emit("tool", "tool_call", {"name": name, "arguments": arguments})
                 result = await session.call_tool(name, arguments)
                 text = _result_text(result)
-                ok = not bool(getattr(result, "isError", False))
+                ok = not _is_error(result)
                 # Claim-level rubric, tolerant of alternative trajectories
                 # (R§1 #11): the claim is about the answer, not the path.
                 expect = call.get("expect")
