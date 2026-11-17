@@ -643,13 +643,13 @@ def _tools_in(
                     found |= _markers(raw)
                 imported |= named
         except Exception as error:
-            # A skipped file may be the agent's main one, and the reading then finds nothing. The
-            # type only at WARNING, once a scan: a trace can quote a line of the customer's code,
-            # and a path can name their business.
+            # A skipped file may be the agent's main one, and the reading then finds nothing. No
+            # trace at any level, since a trace can quote a line of the customer's code; the type
+            # only at WARNING, once a scan, since a path can name their business.
             skipped += 1
             if skipped == 1:
                 logger.warning("agent type scan skipped a file: %s", type(error).__name__)
-            logger.debug("agent type scan skipped %s", path, exc_info=True)
+            logger.debug("agent type scan skipped %s: %s", path, type(error).__name__)
             continue
     if skipped > 1:
         logger.warning("agent type scan skipped %d files", skipped)

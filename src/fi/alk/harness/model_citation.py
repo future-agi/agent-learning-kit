@@ -119,6 +119,13 @@ _TRIPLE_SUFFIXES = frozenset(
         ".gradle", ".java", ".cs", ".jl", ".dart", ".ex", ".exs",
     }
 )
+# Code languages where <!-- is never a comment over lines, only text (a regex, a string, a
+# template): there, as in configuration, it is a comment only to its line's end. In every other
+# file (HTML, XML and its many suffixes: .config, .csproj, .xaml; PHP, JSP, Vue, Svelte, and any
+# suffix not known here) it runs on to its -->.
+_NO_MARKUP_COMMENT_SUFFIXES = (
+    _NO_HASH_COMMENT_SUFFIXES | _NO_BLOCK_COMMENT_SUFFIXES | _DASH_COMMENT_SUFFIXES
+)
 # Where a quote leaves text out: ... or …, also inside brackets, since only letters are compared.
 _ELISION = re.compile(r"\.{3,}|…")
 # How many letters of code may sit between two words of a quote in the lines: a string prefix
@@ -175,6 +182,10 @@ def _opens_a_string(line: str, at: int) -> bool:
     return line[start:at].lower() in _STRING_PREFIXES
 
 
+# What closes a block comment left open at a line's end.
+_COMMENT_CLOSERS = frozenset({"*/", "-->"})
+
+
 def _line_scan(
     line: str,
     block: str | None,
@@ -184,21 +195,29 @@ def _line_scan(
     triple: bool = False,
     hash_comments: str = _HASH_ANYWHERE,
     block_comments: bool = True,
+    markup: bool = False,
 ) -> tuple[int, list[tuple[int, int]], str | None]:
     """One pass over a line: where its comment starts (or its length), the stretches of it that
     are text (inside a triple-quoted string, or a block comment closed on the line), and the
-    triple quote still open at its end. ``block`` is the one open where the line starts. A line
-    is a comment when it is the `* ` middle of a block comment or,
-    in INI, starts with ;. Strings are passed over whole, so a marker or a triple quote inside one
-    doesn't count; an apostrophe opens a string only when another closes it on the line."""
+    block still open at its end (a triple quote, or the */ or --> a comment ends at; --> only in
+    ``markup``, where <!-- runs on over lines). ``block`` is the one open where the line starts.
+    A line is a comment when it is the `* ` middle of a block comment or, in INI, starts with ;.
+    Strings are passed over whole, so a marker or a triple quote inside one doesn't count; an
+    apostrophe opens a string only when another closes it on the line."""
     inside: list[tuple[int, int]] = []
     at = 0
     if block is not None:
         close = line.find(block)
-        if close < 0:
+        if block in _COMMENT_CLOSERS:
+            if close < 0:
+                return 0, inside, block
+            # From the line's start, so the stretch can never be a quoted value.
+            inside.append((0, close + len(block)))
+        elif close < 0:
             return len(line), [(0, len(line))], block
-        inside.append((0, close))
-        at = close + 3
+        else:
+            inside.append((0, close))
+        at = close + len(block)
     else:
         stripped = line.lstrip()
         if (block_comments and stripped.startswith(("* ", "*\t"))) or (
@@ -227,36 +246,70 @@ def _line_scan(
                     at = closed.end()
         elif token in ("/*", "<!--"):
             # A block comment closed on the line is passed over: `/* x */ model = "gpt-4o"`.
-            close = line.find("*/" if token == "/*" else "-->", at)
+            closer = "*/" if token == "/*" else "-->"
+            close = line.find(closer, at)
             if close < 0:
-                return start, inside, None
+                if token == "<!--" and not markup:
+                    # Outside markup, <!-- is a comment only to the line's end.
+                    return start, inside, None
+                # The comment runs on to the line that closes it.
+                return start, inside, closer
             # From the marker itself, so the stretch can never be a quoted value.
             inside.append((start, close))
-            at = close + (2 if token == "/*" else 3)
+            at = close + len(closer)
         elif token[0] not in "\"`":
             return start, inside, None
     return len(line), inside, None
 
 
 def block_open_before(
-    lines: list[str], *, hash_comments: str = _HASH_ANYWHERE, block_comments: bool = True
+    lines: list[str],
+    before: int,
+    *,
+    triple: bool = False,
+    dashes: bool = False,
+    ini: bool = False,
+    hash_comments: str = _HASH_ANYWHERE,
+    block_comments: bool = True,
+    markup: bool = False,
 ) -> str | None:
-    """The triple quote open where the line after ``lines`` starts, the lines read with the same
-    scan as the cited one. A line with no triple quote, outside a block, is passed over without
-    a scan; inside one, only the closing quote is looked for."""
+    """The block open where ``lines[before]`` starts (a triple quote, or the */ or --> of a
+    block comment), the lines before it read with the same scan as the cited one. A comment is
+    carried to later lines only when its closer is on a later line of the file: an opener that
+    never closes is text (a regex, a template), not a comment over the rest of the file. A line
+    that could open none, outside a block, is passed over without a scan; inside one, only its
+    closer is looked for."""
+    openers = ['"""', "'''"] if triple else []
+    if block_comments:
+        openers.append("/*")
+    if markup:
+        openers.append("<!--")
+    # The last line each comment closer is on, looked for once, from the file's end.
+    last_closer: dict[str, int] = {}
     block: str | None = None
-    for line in lines:
-        if block is None and '"""' not in line and "'''" not in line:
+    for at in range(before):
+        line = lines[at]
+        if block is None and not any(opener in line for opener in openers):
             continue
         if block is not None and block not in line:
             continue
         _, _, block = _line_scan(
             line,
             block,
-            triple=True,
+            dashes=dashes,
+            ini=ini,
+            triple=triple,
             hash_comments=hash_comments,
             block_comments=block_comments,
+            markup=markup,
         )
+        if block in _COMMENT_CLOSERS:
+            if block not in last_closer:
+                last_closer[block] = next(
+                    (i for i in range(len(lines) - 1, -1, -1) if block in lines[i]), -1
+                )
+            if last_closer[block] <= at:
+                block = None
     return block
 
 
@@ -406,7 +459,8 @@ def named_on(
     block: str | None = None,
 ) -> bool:
     """Whether ``name`` is the value written on ``line``: whole, outside a comment and outside
-    a triple-quoted string (``block`` is the triple quote open where the line starts), and
+    a triple-quoted string or a block comment (``block`` is the triple quote, or the */ or -->,
+    open where the line starts), and
     between matching quotes (not a key, not a lookup), or in a configuration file written bare
     after ``:`` or ``=`` or as a shell default, ``${MODEL:-gpt-4o}``. ``name`` is made only of
     MODEL_NAME_CHARS, so an occurrence starting inside one that failed has a name character just
@@ -608,14 +662,23 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
         triple=triple,
         hash_comments=hash_comments,
         block_comments=block_comments,
-        block=(
-            block_open_before(
-                lines[: model.line - 1],
-                hash_comments=hash_comments,
-                block_comments=block_comments,
-            )
-            if triple
-            else None
+        # A block open from an earlier line: a triple quote, /* where block comments are, <!--
+        # outside code and configuration.
+        block=block_open_before(
+            lines,
+            model.line - 1,
+            triple=triple,
+            dashes=dashes,
+            ini=ini,
+            hash_comments=hash_comments,
+            block_comments=block_comments,
+            # Configuration by its suffix or its whole name: env.xml is markup. A name that
+            # is configuration by itself stays so whatever its suffix (Dockerfile.xml, .env.xml).
+            markup=not (
+                suffix in CONFIG_SUFFIXES
+                or _names_configuration(name_lower)
+                or suffix in _NO_MARKUP_COMMENT_SUFFIXES
+            ),
         ),
     ):
         return [
