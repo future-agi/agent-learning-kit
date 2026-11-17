@@ -32,6 +32,19 @@ _REFUSED = {
     "userinfo password holding a hash": "postgres://svc:Zq9#fakePw@db/app",
     "userinfo password holding a question mark": "postgres://svc:Zq9?fakePw@db/app",
     "userinfo password holding a space": "postgres://svc:Zq9 fakePw@db/app",
+    "userinfo password starting with a dollar": "postgres://svc:$ecretP4ss@db/app",
+    "userinfo password starting with a dollar, http": "http://svc:$Zq9fakePw@db/app",
+    "userinfo password starting with a dollar, no scheme": "//svc:$ecretP4ss@db/app",
+    "userinfo password starting with an angle bracket": "postgres://svc:<Zq9fakePw@db/app",
+    "userinfo password starting with two braces": "postgres://svc:{{Zq9fakePw@db/app",
+    "userinfo password broken by a line break before the at": "postgres://svc:Zq9fakePw\n@db/app",
+    "userinfo password broken by a tab before the at": "postgres://svc:Zq9fakePw\t@db/app",
+    "userinfo password broken by a line break after the colon": "postgres://svc:\nZq9fakePw@db/app",
+    "userinfo password broken by two line breaks": "postgres://svc:Zq9\n\nfakePw@db/app",
+    "userinfo password broken by five tabs": "postgres://svc:Zq9\t\t\t\t\tfakePw@db/app",
+    "scheme run starting with a digit": "9postgres://svc:Zq9fakePw@db?sslmode=require",
+    "scheme run starting with a dash": "-postgres://svc:Zq9fakePw@db?sslmode=require",
+    "scheme run starting with a dot": ".postgres://svc:Zq9fakePw@db:5432?x=1",
     "userinfo with no scheme, after //": "//svc:pw@db/app",
     "userinfo with no scheme, at the start": "svc:Zq9fakePw@db.internal/app",
     "userinfo with no scheme, a port after the host": "svc:Zq9fakePw@db.internal:5432",
@@ -63,6 +76,13 @@ def test_credential_in_refuses_a_password_holding_a_url_break(
 
 
 _KEPT = {
+    "a prose query": "https://shop.example.com/search?q=red+running+shoes+size",
+    "an encoded path in a query": "/login?next=%2Faccount%2Fsettings%2Fbilling",
+    "userinfo password, a full shell reference": "postgres://svc:${DB_PASSWORD}@db/app",
+    "userinfo password, a full variable": "postgres://svc:$DB_PASSWORD@db/app",
+    "userinfo password, a full placeholder": "postgres://svc:<db_password>@db/app",
+    "userinfo password, a placeholder with a space": "postgres://app:<db password>@db/app",
+    "userinfo password, a full template": "postgres://svc:{{db_password}}@db/app",
     "address in a query": "/o?email=a@b.com",
     "mailto": "mailto:a@b.com",
     "a user at a host": "user@host",
@@ -119,6 +139,17 @@ def test_credential_in_reads_strings_inside_lists_and_dicts() -> None:
     assert secret_shapes.credential_in({"a": ["/x?id=77"], "b": "plain"}) is False
 
 
+def test_a_long_query_value_is_still_refused_unless_it_reads_as_words_or_a_path() -> None:
+    for text in (
+        "/x?q=AbCd+EfGh/IjKl+MnOp/QrSt==",  # base64
+        "/x?q=abcdefghijklmnopqrstuv",  # one long lowercase word
+        "/x?q=abcd+efgh/ijkl+mnop",  # words and slashes mixed
+        "/x?q=red+running+shoes+ghp_" + "X" * 36,  # a key shape inside words
+        "/x?next=%2Fabcdefghijklmnopqrstuv",  # a single long segment
+    ):
+        assert secret_shapes.credential_in(text) is True, text
+
+
 def test_a_query_value_that_only_starts_like_a_reference_is_refused() -> None:
     assert secret_shapes.credential_in("/x?password=$ecretP4ss99")
 
@@ -145,6 +176,11 @@ _RUNS = {
     "scheme characters": "a.-",
     "digits and underscores": "a1_",
     "a run behind a scheme": "x://a",
+    "digits": "1",
+    "a digit and a letter": "1a",
+    "dots and dashes": ".-",
+    "a digit-led scheme": "9a://",
+    "a digit-led scheme and a colon": "1a:",
 }
 
 
@@ -194,6 +230,8 @@ def test_credential_in_is_not_the_cleaner_changing_the_text() -> None:
 
 # The check-code entry point reads one more thing: a credential-named assignment.
 _CODE_REFUSED = {
+    "a credential named for itself, holding a scheme word": 'password = "Bearer"',
+    "a token type with a real value": 'token_type = "hunter2x"',
     "assignment": 'password = "x"',
     "assignment, single quotes": "password = 'x'",
     "assignment, no spaces": 'password="x"',
@@ -212,6 +250,9 @@ def test_check_code_refuses(name: str) -> None:
 
 
 _CODE_KEPT = {
+    "a token type": 'token_type = "Bearer"',
+    "a token type, dict literal, any case": '{"token_type": "basic"}',
+    "an auth scheme": 'auth_scheme = "Token"',
     "a count of tokens": 'max_tokens = "4096"',
     "a pagination name": 'expected = {"next_page_token": "abc"}',
     "assignment from a reference": 'password = "$PASSWORD"',
@@ -314,6 +355,14 @@ _NEWLY_MASKED = {
     ),
     "Pwd after a lower-case letter": ("dbPwd: abc123x", "dbPwd: [redacted]"),
     "Pwd, equals": ("dbPwd=abc123x", "dbPwd=[redacted]"),
+    "padding of 17 spaces": (
+        "password" + " " * 17 + "= hunter2x",
+        "password" + " " * 17 + "= [redacted]",
+    ),
+    "padding of 4000 spaces": (
+        "password" + " " * 4000 + "= hunter2x",
+        "password" + " " * 4000 + "= [redacted]",
+    ),
     "padding of 16 spaces": (
         "password" + " " * 16 + "= hunter2x",
         "password" + " " * 16 + "= [redacted]",
@@ -335,7 +384,6 @@ _STAY_UNMASKED = {
     "pwd alone is the working directory": "pwd=/home/user1",
     "pass alone": "pass=abc123x",
     "Pass not after a lower-case letter": "Pass=abc123x",
-    "padding of 17 spaces, a named limit": "password" + " " * 17 + "= hunter2x",
 }
 
 
@@ -383,3 +431,29 @@ def test_a_model_name_lifts_only_the_length_rule_not_a_key_shape() -> None:
     # A model name is long and key-like by length alone; a real key under that name is still one.
     assert secret_shapes.credential_in("/v1/chat?model=AKIAIOSFODNN7EXAMPLE")
     assert secret_shapes.credential_in("/v1/chat?model=ghp_" + "X" * 36)
+
+
+# Padding between a name and its value has no bound, so its reading must stay linear: 1 MiB
+# of it takes about 16 times as long as 64 KiB, and the bound allows twice that and 0.5 s.
+@pytest.mark.parametrize(
+    "shape",
+    ["name, padding, value", "name and padding only", "names between padding", "padding after ="],
+)
+def test_unbounded_padding_is_cleaned_in_linear_time(shape: str) -> None:
+    def build(size: int) -> str:
+        if shape == "name, padding, value":
+            return "password" + " " * size + "= hunter2x"
+        if shape == "name and padding only":
+            return "password" + " " * size
+        if shape == "names between padding":
+            return ("password" + " " * 24) * (size // 32)
+        return "password=" + " " * size + "hunter2x"
+
+    times = {}
+    for kib in (64, 1024):
+        text = build(kib * 1024)
+        start = time.perf_counter()
+        agent._redact(text)
+        times[kib] = time.perf_counter() - start
+        assert times[kib] < 2.0, times
+    assert times[1024] < 32 * times[64] + 0.5, times

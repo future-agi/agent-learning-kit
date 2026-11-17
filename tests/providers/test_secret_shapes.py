@@ -643,7 +643,7 @@ _MASKED = {
         "see https://h/x?a=1&\n    key=sk-1 more",
         "see https://h/x\n    key= more",
     ),
-    # A named value: up to 16 spaces or tabs of alignment, or up to 4 whitespace with a break.
+    # A named value: any run of spaces or tabs of alignment, or up to 4 whitespace with a break.
     "named json": ('{"password": "Zq8wYv3Lp9"}', '{"password": "[redacted]"}'),
     "named env": ("DB_PASSWORD=Zq8wYv3Lp9", "DB_PASSWORD=[redacted]"),
     "named django": (
@@ -653,6 +653,14 @@ _MASKED = {
     "named 16 spaces": (
         "password" + " " * 16 + "= " + _PW,
         "password" + " " * 16 + "= [redacted]",
+    ),
+    "named 17 spaces": (
+        "password" + " " * 17 + "= " + _PW,
+        "password" + " " * 17 + "= [redacted]",
+    ),
+    "named 300 spaces and tabs": (
+        "password" + " \t" * 150 + "= " + _PW,
+        "password" + " \t" * 150 + "= [redacted]",
     ),
     "named break after :": ("password:\n   " + _PW, "password:\n   [redacted]"),
     "named space break after :": ("password: \n  " + _PW, "password: \n  [redacted]"),
@@ -762,7 +770,6 @@ _KEPT = [
     "password: $uperSecret1",
     "<password>Zq8wYv3Lp9</password>",
     "the password is Zq8wYv3Lp9",
-    "password" + " " * 17 + "= " + _PW,
     # A quoted value for each reference form (r1 M5).
     'token: "{{ secrets.TOKEN_1 }}"',
     'token: "$TOKEN_1"',

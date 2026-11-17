@@ -23,7 +23,7 @@ def _scenario(**fields) -> Scenario:
         "keywords": [f"token {KEY}", "reset"],
         "persona": Persona(
             name="Ana",
-            personality=f"calm, mentions {KEY}",
+            personality="calm and brief",
             metadata={"verification_token": "RT4821X"},
             scripted_caller={"reset_token": "RT4821X", "new_password": "Blue-Sky-42"},
         ),
@@ -77,6 +77,7 @@ def test_the_shared_helper_cleans_prose_and_keeps_the_closed_list():
     from fi.alk.harness.folder import clean_scenario_document
 
     document = _scenario().model_dump()
+    document["persona"]["personality"] = f"calm, mentions {KEY}"
     cleaned = clean_scenario_document(document)
     _assert_cleaned_but_exact(cleaned)
     assert "[redacted]" in cleaned["instruction"]
@@ -238,3 +239,84 @@ def test_an_honest_scenario_is_not_refused_for_cleaning():
         persona=Persona(name="Ana", initial_message="Hi, I need a password reset."),
     )
     assert _cleaning_problems(scenario) == []
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("name", "my password: Blue-Sky-42"),
+        ("occupation", "token: abc123"),
+        ("location", "token: abc123"),
+        ("personality", "calm, my password: Blue-Sky-42"),
+        ("communication_style", "token: abc123"),
+        ("age_group", "token: abc123"),
+        ("gender", "token: abc123"),
+    ],
+)
+def test_the_persona_prose_the_caller_is_given_is_refused_when_cleaning_would_change_it(
+    field, value
+):
+    persona = Persona(name="Ana", **{field: value}) if field != "name" else Persona(name=value)
+    problems = _cleaning_problems(_scenario(instruction="Ask to reset it.", persona=persona))
+    assert len(problems) == 1
+    assert problems[0].startswith(f"persona.{field} ")
+    assert "Blue-Sky-42" not in problems[0]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Look up the order at https://shop.example.com/orders?id=77 and read its status.",
+        "Open https://shop.example.com/list?page=2 and count the rows.",
+    ],
+)
+def test_an_instruction_with_an_honest_url_query_is_not_refused(text):
+    assert _cleaning_problems(_scenario(instruction=text)) == []
+
+
+def test_an_instruction_with_a_credential_in_a_query_is_still_refused():
+    problems = _cleaning_problems(
+        _scenario(instruction="Open https://shop.example.com/list?api_key=abc123def and read it.")
+    )
+    assert len(problems) == 1 and problems[0].startswith("instruction ")
+
+
+# setup.py, ready.py and each check are copied into the scenario's folder as written.
+def _copied_file_problems(scenario: Scenario, catalogue: Catalogue) -> list[str]:
+    return [
+        one
+        for one in validate_scenario(scenario, catalogue, {})
+        if "is copied into the scenario as written" in one
+    ]
+
+
+def _catalogue_with_check(check: str) -> Catalogue:
+    return Catalogue(
+        sub_goals=[SubGoal(name="reset-done", what="the reset happened", check=check)]
+    )
+
+
+@pytest.mark.parametrize(
+    "file,fields,check",
+    [
+        ("setup.py", {"setup_code": 'def setup(world):\n    token = "ghp_' + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8" + '"\n'}, CHECK),
+        ("ready.py", {"ready_code": 'def ready(world):\n    password = "hunter2x"\n'}, CHECK),
+        ("checks/reset-done.py", {}, CHECK + 'api_key = "abc123def"\n'),
+    ],
+)
+def test_a_credential_in_a_copied_file_is_refused_and_the_file_is_named(file, fields, check):
+    problems = _copied_file_problems(
+        _scenario(instruction="Ask to reset it.", **fields), _catalogue_with_check(check)
+    )
+    assert len(problems) == 1
+    assert problems[0].startswith(file + " ")
+    assert "hunter2x" not in problems[0] and "abc123def" not in problems[0]
+
+
+def test_honest_copied_files_are_not_refused():
+    scenario = _scenario(
+        instruction="Ask to reset it.",
+        setup_code='def setup(world):\n    password = "$PASSWORD"\n    world.put("users", {"id": 1})\n',
+        ready_code="def ready(world):\n    return True\n",
+    )
+    assert _copied_file_problems(scenario, _catalogue_with_check(CHECK + "# done\n")) == []

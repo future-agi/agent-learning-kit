@@ -495,7 +495,13 @@ class PlatformSessionStore:
     ) -> list[dict[str, Any]] | None:
         body = await self._client.load_session(dict(key))
         entries = body.get("entries")
-        return list(entries) if isinstance(entries, list) else None
+        if not isinstance(entries, list):
+            return None
+        # What was stored before the mirror cleaned its lines is still raw. A resume reads the
+        # store through here, so the same per-line cleaning (and the same pointer closing, over
+        # the whole history in order) runs on the way out; a line already cleaned comes back as
+        # it is.
+        return self._clean(entries)
 
     async def list_subkeys(self, key: dict[str, Any]) -> list[str]:
         body = await self._client.load_session(dict(key))
@@ -617,6 +623,7 @@ _RAW_STAGING = frozenset(
     name + ".tmp" for name in (PENDING_QUESTION, ADK_DATABASE)
 ) | frozenset(str(Path(name).with_suffix(".tmp")) for name in (PENDING_QUESTION, ADK_DATABASE))
 _SIGNATURES = frozenset({"thought_signature", "thoughtSignature"})
+_STATE_FIELDS = frozenset({"state_delta", "stateDelta"})
 _CALL_FIELDS = {
     "function_call": "args",
     "functionCall": "args",
@@ -633,7 +640,10 @@ def _clean_adk_event(value: Any, field: str = "") -> Any:
     if isinstance(value, dict):
         masked = _CALL_FIELDS.get(field)
         return {
-            name: _redact(item, name) if name == masked else _clean_adk_event(item, name)
+            # State is keyed by names a tool chose, so a state change gets the key mask too.
+            name: _redact(item, name)
+            if name == masked or name in _STATE_FIELDS
+            else _clean_adk_event(item, name)
             for name, item in value.items()
             if name not in _SIGNATURES
         }
@@ -687,7 +697,7 @@ def _cleaned_adk_database(path: Path) -> bytes | None:
                     if data is not None:
                         memory.execute(
                             f"UPDATE {table} SET state = ? WHERE rowid = ?",
-                            (json.dumps(redact_strings(json.loads(data))), rowid),
+                            (json.dumps(_redact(json.loads(data))), rowid),
                         )
             memory.commit()
             with tempfile.TemporaryDirectory() as folder:

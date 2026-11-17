@@ -1120,11 +1120,20 @@ def test_a_real_cli_resumes_the_cleaned_transcript_and_sends_it_whole(tmp_path):
         raw_client = StoringClient()
         raw_client.stored = list(raw)
 
+        class _RawReader(PlatformSessionStore):
+            """Reads the stored lines as they are: load cleans, and the control must not."""
+
+            async def load(self, key):
+                return list((await self._client.load_session(dict(key)))["entries"])
+
         runs = {}
-        for name, client in (("raw", raw_client), ("cleaned", cleaned_client)):
+        for name, store in (
+            ("raw", _RawReader(raw_client)),  # type: ignore[arg-type]
+            ("cleaned", PlatformSessionStore(cleaned_client)),  # type: ignore[arg-type]
+        ):
             scratch = tmp_path / name
             scratch.mkdir()
-            done = _resume_through_the_cli(cli, stub, PlatformSessionStore(client), cwd.resolve(), scratch)  # type: ignore[arg-type]
+            done = _resume_through_the_cli(cli, stub, store, cwd.resolve(), scratch)
             runs[name] = (done, stub.probe_request("RESUME_PROBE"), list(stub.requests))
             stub.requests.clear()
     finally:
@@ -1436,3 +1445,83 @@ def test_the_checkpoint_cleans_the_state_the_session_database_keeps(tmp_path):
 
     session = asyncio.run(reload())
     assert session.state["turns"] == 3 and "StateDeltaPw91" not in json.dumps(session.state)
+
+
+def test_the_checkpoint_key_masks_the_state_the_session_database_keeps(tmp_path):
+    import gzip
+    import sqlite3
+
+    from google.adk.events import Event
+    from google.adk.events.event_actions import EventActions
+    from google.adk.sessions import DatabaseSessionService
+    from google.genai import types
+
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+
+    database = tmp_path / ".futureagi-adk.db"
+
+    async def write():
+        service = DatabaseSessionService(db_url=f"sqlite+aiosqlite:///{database.as_posix()}")
+        session = await service.create_session(app_name="app", user_id="u", session_id="conv-builder")
+        delta = EventActions(
+            state_delta={"api_key": "shapelessDeltaOne", "city": "Paris", "turns": 3}
+        )
+        await service.append_event(
+            session,
+            Event(author="model", invocation_id="i1", actions=delta, content=types.Content(role="model", parts=[types.Part(text="ok")])),
+        )
+        if hasattr(service, "close"):
+            await service.close()
+
+    asyncio.run(write())
+    with sqlite3.connect(database) as one:
+        one.execute("INSERT OR REPLACE INTO app_states (app_name, state, update_time) VALUES ('app', ?, 0)", (json.dumps({"api_key": "shapelessAppTwo", "city": "Paris"}),))
+        one.execute("INSERT OR REPLACE INTO user_states (app_name, user_id, state, update_time) VALUES ('app', 'u', ?, 0)", (json.dumps({"api_key": "shapelessUserThree", "city": "Paris"}),))
+        one.execute("UPDATE sessions SET state = ? ", (json.dumps({"api_key": "shapelessSessionFour", "city": "Paris", "turns": 3}),))
+    plants = [b"shapelessDeltaOne", b"shapelessAppTwo", b"shapelessUserThree", b"shapelessSessionFour"]
+    assert all(plant in database.read_bytes() for plant in plants)
+
+    archive = _workspace_archive(tmp_path)
+
+    for plant in plants:
+        assert plant not in gzip.decompress(archive), plant
+    packed = tmp_path / "packed.db"
+    packed.write_bytes(_members(archive)[".futureagi-adk.db"])
+    with sqlite3.connect(packed) as one:
+        states = [
+            json.loads(row[0])
+            for table in ("sessions", "app_states", "user_states")
+            for row in one.execute(f"select state from {table}")
+        ]
+        event = json.loads(one.execute("select event_data from events").fetchone()[0])
+    assert states and all(state["api_key"] == "[redacted]" for state in states)
+    assert all(state["city"] == "Paris" for state in states)
+    assert [state["turns"] for state in states if "turns" in state] == [3]
+    delta = event["actions"].get("state_delta") or event["actions"].get("stateDelta")
+    assert delta == {"api_key": "[redacted]", "city": "Paris", "turns": 3}
+
+
+def test_a_line_stored_raw_before_the_mirror_cleaned_comes_back_cleaned_on_load():
+    raw = build_transcript("/work", (2, 1, 318))
+    client = StoringClient()
+    client.stored.extend(json.loads(json.dumps(raw)))
+    assert any(plant in json.dumps(client.stored) for plant in PLANTS)
+    assert thinking_blocks(client.stored) > 0
+    store = PlatformSessionStore(client)  # type: ignore[arg-type]
+
+    loaded = asyncio.run(store.load({"project_key": "p", "session_id": SESSION_ID})) or []
+
+    assert not [plant for plant in PLANTS if plant in json.dumps(loaded)]
+    assert thinking_blocks(loaded) == 0
+    assert pointer_problems(loaded) == []
+    assert [one["uuid"] for one in loaded if "uuid" in one] == [
+        UUIDS[name] for name in ["u1", "a2", "u2", "a4", "u3", "b", "s1", "a6"]
+    ]
+    # The stored lines are left as they were, and a line already cleaned comes back as it is.
+    assert any(plant in json.dumps(client.stored) for plant in PLANTS)
+    second = StoringClient()
+    second.stored.extend(loaded)
+    again = asyncio.run(
+        PlatformSessionStore(second).load({"project_key": "p", "session_id": SESSION_ID})  # type: ignore[arg-type]
+    )
+    assert again == loaded

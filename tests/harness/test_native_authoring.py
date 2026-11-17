@@ -148,6 +148,40 @@ def test_native_rename_keeps_its_key_without_proving_again(tmp_path, monkeypatch
     world.close()
 
 
+def test_a_rename_to_a_name_the_cleaner_would_change_is_refused_and_leaves_no_folder(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import scenario_tools
+
+    key = "ghp_" + "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5"
+    _, _, world = native_world(tmp_path)
+    save(world, tmp_path)
+    original = Scenario(
+        name="lookup", scenario_key="lookup", instruction="Find the stored value"
+    )
+    kept = [original]
+    monkeypatch.setattr(
+        scenario_tools,
+        "prove",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError),
+    )
+
+    result = accept_scenario(
+        original.model_copy(update={"name": f"login {key}"}).model_dump(),
+        world_root=tmp_path,
+        catalogue=Catalogue(),
+        kept=kept,
+        renaming=True,
+    )
+
+    assert result.get("is_error"), result
+    assert "name" in result["content"][0]["text"]
+    assert key not in result["content"][0]["text"]
+    assert [one.name for one in kept] == ["lookup"]
+    assert not [path for path in tmp_path.rglob("*") if key in path.name]
+    world.close()
+
+
 @pytest.fixture
 def native_api():
     records = {}

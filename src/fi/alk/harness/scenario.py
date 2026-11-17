@@ -26,7 +26,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..providers.agent import redact_strings
-from ..providers.secret_shapes import credential_in
+from ..providers.secret_shapes import credential_in, credential_in_check_code
 from .catalogue import Catalogue
 from .simulator import variables_in
 
@@ -517,18 +517,41 @@ def _credentials_in_kept_fields(scenario: Scenario) -> list[str]:
     ]
 
 
+def _credentials_in_copied_files(scenario: Scenario, catalogue: Catalogue) -> list[str]:
+    """The code files a scenario's folder is written with, each copied as written: setup.py,
+    ready.py and the check of each sub-goal it names. Named by file, never echoed."""
+    files = {"setup.py": scenario.setup_code, "ready.py": scenario.ready_code}
+    for name in scenario.sub_goals:
+        sub_goal = catalogue.named(name)
+        if sub_goal is not None and sub_goal.deterministic():
+            files[f"checks/{name}.py"] = sub_goal.check
+    return [
+        f"{file} holds a credential. It is copied into the scenario as written, so give the agent "
+        "the secret through its settings and use a placeholder here"
+        for file, code in files.items()
+        if code and credential_in_check_code(code)
+    ]
+
+
 def _fields_the_cleaner_would_change(scenario: Scenario) -> list[str]:
     """Fields the saved file would hold differently from the document submitted.
 
-    The run replays `instruction` and `persona.initial_message` to the simulated caller from the
+    The run replays `instruction` and the persona's prose to the simulated caller from the
     saved copy, and names the folder and the checks from `name`, `scenario_key` and the sub-goal
     ids, so each must come back from cleaning exactly as it went in. Refused instead of masked, so
     the proof never changes after submission. The value is never echoed back."""
     persona = scenario.persona
-    replayed = {
-        "instruction": scenario.instruction,
-        "persona.initial_message": getattr(persona, "initial_message", "") or "",
-    }
+    replayed: dict[str, Any] = {"instruction": scenario.instruction}
+    if persona is not None:
+        # Everything the simulated caller is told about itself is read from the saved copy.
+        # `metadata` and `scripted_caller` are kept exactly and checked for credentials instead.
+        replayed.update(
+            {
+                f"persona.{name}": value
+                for name, value in persona.model_dump().items()
+                if name not in {"metadata", "scripted_caller", "multilingual"}
+            }
+        )
     named = {
         "name": scenario.name,
         "scenario_key": scenario.scenario_key,
@@ -539,7 +562,9 @@ def _fields_the_cleaner_would_change(scenario: Scenario) -> list[str]:
         "saved copy, so a value it must say would arrive masked. Put a value the caller replays in "
         "`fixture` (and in `persona.scripted_caller` if the caller must say it)"
         for field, text in replayed.items()
-        if text and redact_strings(text) != text
+        # Only text the cleaner would change by removing a credential: an honest URL query is
+        # no loss to the caller, and refusing it would refuse ordinary instructions.
+        if text and redact_strings(text) != text and credential_in(text)
     ]
     problems.extend(
         f"{field} is changed when the scenario is cleaned for saving, so the saved file and its "
@@ -565,6 +590,7 @@ def validate_scenario(
     it. That is what the gates are for.
     """
     problems: list[str] = _credentials_in_kept_fields(scenario)
+    problems.extend(_credentials_in_copied_files(scenario, catalogue))
     problems.extend(_fields_the_cleaner_would_change(scenario))
     if not scenario.name.strip():
         problems.append("no name")

@@ -11,6 +11,7 @@ package, so only the drift test reads it, to tie the prefix patterns here to it.
 """
 
 import re
+from urllib.parse import unquote_plus
 from bisect import bisect_left
 
 REDACTED = "[redacted]"
@@ -211,10 +212,12 @@ _PAGINATION = frozenset(
 _LONGEST_NAME = max(map(len, _FORMS))
 # Longest first, so secret_key is tried before secret at the same start.
 _NAME_ALTERNATION = "|".join(map(re.escape, sorted(_FORMS, key=len, reverse=True)))
-# Around the "=" or ":": up to 16 spaces or tabs of alignment, or up to 4 whitespace characters
+# Around the "=" or ":": any run of spaces or tabs of alignment, or up to 4 whitespace characters
 # with a line break. The break branch is tried first, and only when text follows within 4
-# characters: tried second, the alignment branch would match empty before the break (r1 M2).
-_AROUND = r"(?:(?=\s{0,4}\S)\s{0,4}|[ \t]{0,16})"
+# characters: tried second, the alignment branch would match empty before the break. The run is
+# possessive, so a long one is read once and never given back and retried: nothing that follows
+# it can start with a space or tab.
+_AROUND = r"(?:(?=\s{0,4}\S)\s{0,4}|[ \t]*+)"
 # A quote may close a quoted name; Markdown emphasis or a backtick may sit around the ":".
 _TAIL = (
     r"[\"'`]?(?:[*_`]{0,4}"
@@ -917,16 +920,29 @@ _QUERY_PARAM = re.compile(r"[?#&;]([^=&#?;\s]*)=([^&#;\s]*)")
 _KEY_VALUE = re.compile(r"[A-Za-z0-9+/=_%\-]{16,}")
 # scheme://user:password@ : a username alone (ssh://git@host) is fine, and so is a port.
 # The scheme must start a run, so one long run of scheme characters is scanned once.
+# A scheme run may begin with a digit, dot, dash or plus: the cleaner takes the scheme from the
+# run's first letter, so the leading characters are skipped, not required to be letters.
 _USERINFO_PASSWORD = re.compile(
-    r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]*://[^/?#\s@:]*:(?P<password>[^/?#\s]+)@"
+    r"(?<![A-Za-z0-9+.\-])[0-9+.\-]*[A-Za-z][A-Za-z0-9+.\-]*://[^/?#\s@:]*:(?P<password>[^/?#\s]+)@"
 )
 # user:password@host with no scheme, at the start of a value or after //. A password stops at
 # a slash here, so a start scans only to the next slash. mailto: is an address, not userinfo.
 _SCHEMELESS_USERINFO = re.compile(
     r"(?:\A|(?<=//))(?!mailto:)[^\s/:@]+:(?P<password>[^\s/@]+)@[A-Za-z0-9.\-]+(?::\d+)?(?:/|\Z)"
 )
+# One URL broken by a tab or a line break is joined before it is cleaned, as the cleaner does
+# (its own copies of these are in agent.py, which imports this module and so can't be imported
+# here).
+_LEADING_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://")
+_URL_BREAKS = str.maketrans("", "", "\t\r\n")
+_WHITESPACE = re.compile(r"\s")
 # A value that is only a reference: ${API_KEY}, $API_KEY, <API_KEY>, {{api_key}}, {API_KEY}.
 _REF = re.compile(r"\$\{?[A-Z_][A-Z0-9_]*\}?|<[^>]*>|\{\{?[^{}]*\}\}?")
+# A query value that reads as words (q=red+running+shoes) or as a path (next=%2Faccount%2Fbilling)
+# once decoded. At least two words or segments of lowercase letters, so one long lowercase run,
+# which a key can be, is not read as prose.
+_WORDS = re.compile(r"[a-z]{2,}(?: [a-z]{2,})+")
+_PATH = re.compile(r"/?[a-z]{2,}(?:/[a-z]{2,})+")
 _UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 # A credential-named assignment with a quoted literal: password = "x", {"api_key": 'x'},
 # creds["password"] = "x". "==" is a comparison and is not read.
@@ -945,6 +961,28 @@ def _names_a_credential(name: str) -> bool:
     if name in _PAGINATION or low.endswith("tokens"):
         return False
     return any(marker in low for marker in REDACTION_MARKERS)
+
+
+def _reads_as_prose(text: str) -> bool:
+    decoded = unquote_plus(text)
+    return bool(_WORDS.fullmatch(decoded) or _PATH.fullmatch(decoded))
+
+
+def query_param_holds_credential(name: str, text: str) -> bool:
+    """Whether one query or fragment parameter is a credential: its name holds a marker or is one
+    of key, sig, signature, pwd, pass or auth, or its value is 16 or more key characters that are
+    not a UUID, a number, a model id or words."""
+    # An empty value or a reference holds nothing; the refusal message itself says to use one.
+    if not text or _REF.fullmatch(text):
+        return False
+    if _names_a_credential(name) or name.lower() in _CREDENTIAL_QUERY_NAMES:
+        return True
+    if name.lower() in _MODEL_QUERY_NAMES:
+        return False
+    return bool(
+        _KEY_VALUE.fullmatch(text)
+        and not (_UUID.fullmatch(text) or text.isdigit() or _reads_as_prose(text))
+    )
 
 
 def credential_in(value: object) -> bool:
@@ -976,32 +1014,47 @@ def credential_in(value: object) -> bool:
         return any(credential_in(item) for item in value)
     if not isinstance(value, str):
         return False
-    # A URL password the cleaner removes whole: one broken by /, ?, # or a space.
-    if rule1(value):
-        return True
-    # A reference in the password position ($PASS, ${DB_PASSWORD}, <...>, {{...}}) is no secret.
+    # A value that is one URL broken by a tab or a line break is read as the cleaner joins it.
+    if _LEADING_SCHEME.match(value):
+        joined = value.translate(_URL_BREAKS)
+        if joined != value and not _WHITESPACE.search(joined) and credential_in(joined):
+            return True
+    # A URL password the cleaner removes whole: one broken by /, ?, # or a space. A password
+    # that is only a reference (<db password>) is no secret.
     if any(
-        not match.group("password").startswith(_REFERENCE_STARTS)
+        not _REF.fullmatch(value[start : end - 1].split(":", 1)[-1])
+        for start, end in rule1(value)
+    ):
+        return True
+    # A reference is no secret in the password position ($PASS, ${DB_PASSWORD}, <...>, {{...}}),
+    # but only the whole password being one is: $ecretP4ss starts like one and is a password.
+    if any(
+        not _REF.fullmatch(match.group("password"))
         for match in _USERINFO_PASSWORD.finditer(value)
     ):
         return True
     if any(
-        not match.group("password").startswith(_REFERENCE_STARTS)
+        not _REF.fullmatch(match.group("password"))
         for match in _SCHEMELESS_USERINFO.finditer(value)
     ):
         return True
-    for match in _QUERY_PARAM.finditer(value):
-        raw, text = match.group(1), match.group(2)
-        # An empty value or a reference holds nothing; the refusal message itself says to use one.
-        if not text or _REF.fullmatch(text):
-            continue
-        if _names_a_credential(raw) or raw.lower() in _CREDENTIAL_QUERY_NAMES:
-            return True
-        if raw.lower() in _MODEL_QUERY_NAMES:
-            continue
-        if _KEY_VALUE.fullmatch(text) and not (_UUID.fullmatch(text) or text.isdigit()):
-            return True
+    if any(
+        query_param_holds_credential(match.group(1), match.group(2))
+        for match in _QUERY_PARAM.finditer(value)
+    ):
+        return True
     return bool(find(value))
+
+
+# What a credential's kind is called, and the words an auth header names its kind with:
+# token_type = "Bearer" says how to send a token, not what it is. A bare credential name
+# (password = "Bearer") is not exempt: the word is then its value.
+_KIND_SUFFIXES = ("type", "scheme", "kind", "prefix", "style")
+_AUTH_SCHEMES = frozenset({"bearer", "basic", "token", "digest"})
+
+
+def _names_a_kind_of(name: str, literal: str) -> bool:
+    return name.lower().endswith(_KIND_SUFFIXES) and literal.strip().lower() in _AUTH_SCHEMES
 
 
 def credential_in_check_code(code: str) -> bool:
@@ -1012,7 +1065,9 @@ def credential_in_check_code(code: str) -> bool:
     if credential_in(code):
         return True
     return any(
-        _names_a_credential(match.group(1)) and not _is_reference(match.group(3))
+        _names_a_credential(match.group(1))
+        and not _is_reference(match.group(3))
+        and not _names_a_kind_of(match.group(1), match.group(3))
         for match in _LITERAL_ASSIGNMENT.finditer(code)
     )
 
@@ -1037,7 +1092,7 @@ _SEAM_GUARD = re.compile("|".join(_GUARD_NAMES))
 _TAIL_PATTERN = re.compile(_TAIL)
 # Every beginning of a tail: while what follows a name is one, its match is still open.
 _TAIL_OPEN = re.compile(
-    r"[\"'`]?[*_`]{0,4}(?:[ \t]{0,16}|\s{0,4})(?:[=:][*_`]{0,4}(?:[ \t]{0,16}|\s{0,4}))?"
+    r"[\"'`]?[*_`]{0,4}(?:[ \t]*+|\s{0,4})(?:[=:][*_`]{0,4}(?:[ \t]*+|\s{0,4}))?"
 )
 _GUARD_TAIL = re.compile(r"[\s:=]+['\"]?")
 _GUARD_TAIL_OPEN = re.compile(r"[\s:=]*")
