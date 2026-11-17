@@ -400,7 +400,7 @@ def _checked_against_source(
             if refusal := _builds_a_sibling(source_root, runtime, subfolder):
                 problems.append(refusal)
             if rooted := _modules_as_the_process_imports_them(
-                contract.tool_entrypoints, source_root, runtime.workdir
+                contract.tool_entrypoints, source_root, runtime.workdir, subfolder
             ):
                 contract = contract.model_copy(update={"tool_entrypoints": rooted})
         except SubfolderNotFound:
@@ -431,7 +431,7 @@ def _checked_against_source(
 
 
 def _modules_as_the_process_imports_them(
-    entries: list[ToolEntry], source_root: Path, workdir: str
+    entries: list[ToolEntry], source_root: Path, workdir: str, subfolder: str = ""
 ) -> list[ToolEntry] | None:
     """The entries with each module written as the agent's own process imports it, or None when
     none changes. Only with a subfolder, where the process starts in the bound ``workdir``: a
@@ -447,6 +447,12 @@ def _modules_as_the_process_imports_them(
     - no folder from the repository root down to the workdir has an ``__init__.py``: one that
       does is part of a regular package, whose code knows its modules by the qualified name
       (``GeneratedWorld.reach`` puts the package root on the path for exactly that).
+
+    An ``import`` or ``construct`` entry is also compiled to a handler, which imports through
+    ``GeneratedWorld.reach(source_root, subfolder)``: the root and the subfolder are on its path,
+    never the workdir. So those entries are rewritten only when the workdir is the subfolder
+    itself; an ``unreachable`` entry has no handler and only the tracer reads it, so it keeps the
+    workdir as its root.
     """
     from .source_tool_evidence import _file_in
 
@@ -467,6 +473,8 @@ def _modules_as_the_process_imports_them(
         if _file_in(root.joinpath(*folders[:depth], "__init__.py"), root):
             return None
     prefix = ".".join(folders) + "."
+    subfolder_parts = [part for part in PurePosixPath(subfolder or "").parts if part != "."]
+    handler_root = subfolder_parts == folders
 
     def names_a_file(dotted: str) -> bool:
         module = start.joinpath(*dotted.split("."))
@@ -477,6 +485,7 @@ def _modules_as_the_process_imports_them(
         module = entry.module
         if (
             entry.mode in _ROOTED_MODES
+            and (handler_root or entry.mode == "unreachable")
             and module.startswith(prefix)
             and all(part.isidentifier() for part in module.split("."))
             and not names_a_file(module)
@@ -1095,9 +1104,11 @@ def contract_tools(
                             "module": {
                                 "type": "string",
                                 "description": "The dotted name the agent's own process imports, "
-                                "from the folder it runs in (the runtime's workdir): `agent` for "
-                                "the file agent.py there, not the name counted from the "
-                                "repository root. Not a filesystem path.",
+                                "from the folder it runs in: `agent` for the file agent.py "
+                                "there, not the name counted from the repository root. For "
+                                "`import` and `construct` the name is counted from the "
+                                "subfolder, and is rewritten only when the runtime's workdir "
+                                "is that subfolder. Not a filesystem path.",
                             },
                             "callable": {
                                 "type": "string",

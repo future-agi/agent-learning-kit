@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -234,3 +236,42 @@ def test_the_check_costs_the_save_lookups_not_a_walk(tmp_path, monkeypatch):
     _save(tmp_path, repo, _entries(f"{SUBFOLDER.replace('/', '.')}.agent"), SUBFOLDER)
     assert not walked
     assert hasattr(tools, "path_lookup_budget")
+
+
+def _handler_imports(repo: Path, subfolder: str, module: str) -> str:
+    """What a handler gets: the module imported with the repository root and the subfolder on
+    the path, as ``GeneratedWorld.reach`` sets it (never the workdir)."""
+    code = (
+        "import importlib, sys\n"
+        f"sys.path[:0] = [{str(repo / subfolder)!r}, {str(repo)!r}]\n"
+        f"print(importlib.import_module({module!r}).where)\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", code], capture_output=True, text=True
+    )
+    return done.stdout.strip() if done.returncode == 0 else done.stderr.strip().splitlines()[-1]
+
+
+@pytest.mark.parametrize("outer", [False, True])
+@pytest.mark.parametrize("mode", ["import", "construct"])
+def test_h2_a_workdir_deeper_than_the_subfolder_keeps_an_import_entry(tmp_path, mode, outer):
+    """The handler imports from the root and the subfolder, never the workdir, so the name
+    written from the root is the one that works (round 2, H2)."""
+    folder, deep = "examples/x", "examples/x/app"
+    files = {f"{deep}/tools.py": "where = 'inner'\n"}
+    if outer:
+        files[f"{folder}/tools.py"] = "where = 'OUTER'\n"
+    repo = _repo(tmp_path, files)
+    module = "examples.x.app.tools"
+    saved = _save(tmp_path, repo, _entries(module, mode), folder, workdir=deep)
+    assert saved == [(mode, module)]
+    assert _handler_imports(repo, folder, saved[0][1]) == "inner"
+
+
+def test_h2_a_workdir_that_is_the_subfolder_still_rewrites_an_import_entry(tmp_path):
+    repo = _repo(tmp_path, {f"{SUBFOLDER}/agent.py": DEF})
+    saved = _save(
+        tmp_path, repo, _entries(f"{SUBFOLDER.replace('/', '.')}.agent", "import"), SUBFOLDER,
+        workdir=SUBFOLDER,
+    )
+    assert saved == [("import", "agent")]
