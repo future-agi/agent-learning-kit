@@ -16,7 +16,10 @@ CASES = [
     ("dict-blocks-thinking-first", _blocks(), ANSWER),
     (
         "sdk-objects",
-        [NS(type="thinking", thinking="x", signature="sig"), NS(type="text", text=ANSWER)],
+        [
+            NS(type="thinking", thinking="x", signature="sig"),
+            NS(type="text", text=ANSWER),
+        ],
         ANSWER,
     ),
     (
@@ -37,19 +40,38 @@ CASES = [
     ),
     (
         "consecutive-text-no-separator",
-        [{"type": "text", "text": "The status "}, {"type": "text", "text": "is complete."}],
+        [
+            {"type": "text", "text": "The status "},
+            {"type": "text", "text": "is complete."},
+        ],
         ANSWER,
     ),
-    ("untyped-text-block", [{"text": "Your order shipped today."}], "Your order shipped today."),
+    (
+        "untyped-text-block",
+        [{"text": "Your order shipped today."}],
+        "Your order shipped today.",
+    ),
     ("untyped-text-object", [NS(text="obj")], "obj"),
     ("untyped-block-without-text", [{"foo": "bar"}, {"text": 3}], ""),
-    ("message-with-untyped-text-blocks", {"role": "assistant", "content": [{"text": "Hi."}]}, "Hi."),
+    (
+        "message-with-untyped-text-blocks",
+        {"role": "assistant", "content": [{"text": "Hi."}]},
+        "Hi.",
+    ),
     ("string", "plain", "plain"),
     ("none", None, ""),
     ("empty-list", [], ""),
     ("string-list", ["a", "b"], "a b"),
-    ("strings-and-blocks-in-order", ["a", {"type": "text", "text": "b"}, THINKING, "c"], "a b c"),
-    ("sentences-in-a-list", ["Sure.", "Your order shipped today."], "Sure. Your order shipped today."),
+    (
+        "strings-and-blocks-in-order",
+        ["a", {"type": "text", "text": "b"}, THINKING, "c"],
+        "a b c",
+    ),
+    (
+        "sentences-in-a-list",
+        ["Sure.", "Your order shipped today."],
+        "Sure. Your order shipped today.",
+    ),
     ("empty-strings-add-no-space", ["a", "", "b"], "a b"),
     (
         "messages-joined-by-a-space",
@@ -64,7 +86,13 @@ CASES = [
     (
         "blocks-of-one-message-joined-by-nothing-messages-by-a-space",
         [
-            {"role": "assistant", "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "a"},
+                    {"type": "text", "text": "b"},
+                ],
+            },
             {"role": "assistant", "content": [{"type": "text", "text": "c"}]},
         ],
         "ab c",
@@ -74,7 +102,11 @@ CASES = [
     ("text-value-dict", [{"type": "text", "text": {"value": "v"}}], "v"),
     ("text-value-not-str", [{"type": "text", "text": {"value": {"a": 1}}}], ""),
     ("text-not-str-never-a-repr", [{"type": "text", "text": {"other": "x"}}], ""),
-    ("refusal-block", [{"type": "refusal", "refusal": "I can't help."}], "I can't help."),
+    (
+        "refusal-block",
+        [{"type": "refusal", "refusal": "I can't help."}],
+        "I can't help.",
+    ),
     ("refusal-object", [NS(type="refusal", refusal="no")], "no"),
     ("refusal-not-str", [{"type": "refusal", "refusal": 5}], ""),
     ("lone-text-dict", {"type": "text", "text": "one"}, "one"),
@@ -102,7 +134,12 @@ CASES = [
     ),
     (
         "state-last-message",
-        {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": _blocks()}]},
+        {
+            "messages": [
+                {"role": "user", "content": "q"},
+                {"role": "assistant", "content": _blocks()},
+            ]
+        },
         ANSWER,
     ),
     ("state-empty-messages", {"messages": []}, "{'messages': []}"),
@@ -111,16 +148,32 @@ CASES = [
 ]
 
 CASES += [
-    ("gemini-thought-part-dropped", [{"text": "THOUGHT", "thought": True}, {"text": "Shipped."}], "Shipped."),
-    ("gemini-thought-object-dropped", [NS(text="THOUGHT", thought=True), NS(text="Shipped.")], "Shipped."),
-    ("untyped-text-thought-false-kept", [{"text": "a", "thought": False}, NS(text="b", thought=False)], "ab"),
+    (
+        "gemini-thought-part-dropped",
+        [{"text": "THOUGHT", "thought": True}, {"text": "Shipped."}],
+        "Shipped.",
+    ),
+    (
+        "gemini-thought-object-dropped",
+        [NS(text="THOUGHT", thought=True), NS(text="Shipped.")],
+        "Shipped.",
+    ),
+    (
+        "untyped-text-thought-false-kept",
+        [{"text": "a", "thought": False}, NS(text="b", thought=False)],
+        "ab",
+    ),
     ("untyped-text-no-thought-kept", [{"text": "a"}, NS(text="b", thought=None)], "ab"),
 ]
 
 CASES += [
     (
         "text-around-thinking-joined-by-a-space",
-        [{"type": "text", "text": "Let me check."}, THINKING, {"type": "text", "text": "It shipped today."}],
+        [
+            {"type": "text", "text": "Let me check."},
+            THINKING,
+            {"type": "text", "text": "It shipped today."},
+        ],
         "Let me check. It shipped today.",
     ),
     (

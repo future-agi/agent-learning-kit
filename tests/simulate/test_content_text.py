@@ -53,9 +53,15 @@ def _copy(name):
 @pytest.mark.parametrize(
     "copy_name",
     ["content", "callback_http_adapter", "langgraph_http_adapter"],
-    ids=["content.text_of", "callback_http_adapter._text_of", "langgraph_http_adapter._text_of"],
+    ids=[
+        "content.text_of",
+        "callback_http_adapter._text_of",
+        "langgraph_http_adapter._text_of",
+    ],
 )
-@pytest.mark.parametrize("content, expected", [(c, e) for _, c, e in CASES], ids=[i for i, _, _ in CASES])
+@pytest.mark.parametrize(
+    "content, expected", [(c, e) for _, c, e in CASES], ids=[i for i, _, _ in CASES]
+)
 def test_every_copy_keeps_the_text_of_every_reply_shape(copy_name, content, expected):
     assert _copy(copy_name)(content) == expected
 
@@ -65,20 +71,34 @@ def test_the_three_copies_are_the_same_code():
     assert len(set(regions.values())) == 1, "text_of copies drifted"
     for name, path in COPIES.items():
         body = ast.parse(path.read_text(encoding="utf-8")).body
-        names = [t.id for node in body if isinstance(node, ast.Assign) for t in node.targets if isinstance(t, ast.Name)]
+        names = [
+            t.id
+            for node in body
+            if isinstance(node, ast.Assign)
+            for t in node.targets
+            if isinstance(t, ast.Name)
+        ]
         names += [node.name for node in body if isinstance(node, ast.FunctionDef)]
         for helper in ("_TEXT_KINDS", "_MISSING", "_field", "_block_text", "_text_of"):
-            assert names.count(helper) == 1, f"{name} defines {helper} {names.count(helper)} times"
+            assert names.count(helper) == 1, (
+                f"{name} defines {helper} {names.count(helper)} times"
+            )
 
 
 def test_the_hosted_adapters_import_only_agent_input_from_fi():
     """They run in the agent's own venv, whose fi.simulate may predate agent.content."""
-    allowed = {"callback_http_adapter": {("fi.simulate", "AgentInput")}, "langgraph_http_adapter": set()}
+    allowed = {
+        "callback_http_adapter": {("fi.simulate", "AgentInput")},
+        "langgraph_http_adapter": set(),
+    }
     for name, expected in allowed.items():
         tree = ast.parse(COPIES[name].read_text(encoding="utf-8"))
         found = set()
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "fi":
+            if (
+                isinstance(node, ast.ImportFrom)
+                and (node.module or "").split(".")[0] == "fi"
+            ):
                 found |= {(node.module, alias.name) for alias in node.names}
             if isinstance(node, ast.Import):
                 assert not [a for a in node.names if a.name.split(".")[0] == "fi"]
@@ -104,12 +124,22 @@ def test_langchain_wrapper_returns_only_the_text():
 
 
 def test_langchain_wrapper_around_a_langgraph_graph_returns_the_last_message_text():
-    state = {"messages": [SimpleNamespace(content="question"), SimpleNamespace(content=_blocks())]}
+    state = {
+        "messages": [
+            SimpleNamespace(content="question"),
+            SimpleNamespace(content=_blocks()),
+        ]
+    }
     assert _langchain_reply(state) == ANSWER
 
 
 def test_langchain_wrapper_reads_a_dict_message_in_graph_state():
-    state = {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": _blocks()}]}
+    state = {
+        "messages": [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": _blocks()},
+        ]
+    }
     assert _langchain_reply(state) == ANSWER
 
 
@@ -173,7 +203,13 @@ def test_chat_environment_cleans_a_message_object_a_custom_wrapper_returns():
 
 
 def test_cleaning_an_agent_responses_content_keeps_every_other_field():
-    tool_calls = [{"id": "c1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]
+    tool_calls = [
+        {
+            "id": "c1",
+            "type": "function",
+            "function": {"name": "lookup", "arguments": "{}"},
+        }
+    ]
     tool_responses = [{"role": "tool", "tool_call_id": "c1", "content": "found"}]
     reply = AgentResponse.model_construct(
         content=_blocks(),
@@ -191,7 +227,12 @@ def test_cleaning_an_agent_responses_content_keeps_every_other_field():
     assert assistant[0]["tool_calls"] == tool_calls
     assert {"role": "tool", "tool_call_id": "c1", "content": "found"} in result.messages
     names = [event.name for event in result.events]
-    assert {"agent_tool_calls", "kept_event", "agent_memory_update", "agent_state_update"} <= set(names)
+    assert {
+        "agent_tool_calls",
+        "kept_event",
+        "agent_memory_update",
+        "agent_state_update",
+    } <= set(names)
     updates = {e.name: e.payload for e in result.events}
     assert updates["agent_memory_update"] == {"mem": "kept"}
     assert updates["agent_state_update"] == {"stage": "kept"}
@@ -222,11 +263,17 @@ def _generic_reply(reply):
     [
         ({"output": _blocks()}, ANSWER),
         (SimpleNamespace(content=[THINKING]), ""),
-        (SimpleNamespace(content=[{"type": "refusal", "refusal": "I can't."}]), "I can't."),
+        (
+            SimpleNamespace(content=[{"type": "refusal", "refusal": "I can't."}]),
+            "I can't.",
+        ),
         (SimpleNamespace(content=[{"type": "text", "text": {"value": "dv"}}]), "dv"),
         (
             SimpleNamespace(
-                content=[{"type": "text", "text": "The status "}, {"type": "text", "text": "is complete."}]
+                content=[
+                    {"type": "text", "text": "The status "},
+                    {"type": "text", "text": "is complete."},
+                ]
             ),
             ANSWER,
         ),
@@ -234,12 +281,18 @@ def _generic_reply(reply):
         ({"messages": [{"role": "assistant", "content": _blocks()}]}, ANSWER),
         ({"messages": [{"role": "assistant", "content": [THINKING]}]}, ""),
         ({"choices": [{"message": {"content": _blocks()}}]}, ANSWER),
-        ({"role": "assistant", "content": [{"text": "Your order shipped today."}]}, "Your order shipped today."),
+        (
+            {"role": "assistant", "content": [{"text": "Your order shipped today."}]},
+            "Your order shipped today.",
+        ),
         (
             {"result": [{"order_id": "A1", "status": "shipped"}]},
             '[{"order_id": "A1", "status": "shipped"}]',
         ),
-        ({"content": ["Sure.", "Your order shipped today."]}, "Sure. Your order shipped today."),
+        (
+            {"content": ["Sure.", "Your order shipped today."]},
+            "Sure. Your order shipped today.",
+        ),
         (
             {
                 "output": [
@@ -252,7 +305,12 @@ def _generic_reply(reply):
             "Let me check. It shipped today.",
         ),
         (
-            {"output": [{"role": "assistant", "content": "Let me check."}, {"role": "assistant", "content": "Done."}]},
+            {
+                "output": [
+                    {"role": "assistant", "content": "Let me check."},
+                    {"role": "assistant", "content": "Done."},
+                ]
+            },
             "Let me check. Done.",
         ),
     ],
@@ -273,8 +331,6 @@ def _generic_reply(reply):
         "list-of-dict-messages",
     ],
 )
-
-
 def test_generic_agent_wrapper_keeps_only_the_text(reply, expected):
     out = _generic_reply(reply)
     assert out == expected
@@ -307,11 +363,21 @@ def test_the_frameworks_probe_reports_only_the_text_of_a_block_reply():
 @pytest.mark.parametrize(
     "reply, expected",
     [
-        ({"result": [{"type": "order", "id": "A1"}]}, '[{"type": "order", "id": "A1"}]'),
-        ({"data": [{"name": "Ann", "role": "admin"}]}, '[{"name": "Ann", "role": "admin"}]'),
+        (
+            {"result": [{"type": "order", "id": "A1"}]},
+            '[{"type": "order", "id": "A1"}]',
+        ),
+        (
+            {"data": [{"name": "Ann", "role": "admin"}]},
+            '[{"name": "Ann", "role": "admin"}]',
+        ),
         ({"output": [THINKING]}, ""),
     ],
-    ids=["records-with-type-stay-json", "records-with-role-stay-json", "thinking-only-stays-empty"],
+    ids=[
+        "records-with-type-stay-json",
+        "records-with-role-stay-json",
+        "thinking-only-stays-empty",
+    ],
 )
 def test_records_with_a_type_or_role_key_stay_json(reply, expected):
     assert _generic_reply(reply) == expected
