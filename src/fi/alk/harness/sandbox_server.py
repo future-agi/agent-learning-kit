@@ -1616,6 +1616,12 @@ def _validate_secret_alias_shapes(references: dict[str, SecretRef]) -> None:
             raise ValueError(f"secret_reference_name_invalid: {alias}")
 
 
+_RESERVED_HINT = (
+    " (the name steers a process the runner starts, or is the runner's own; send the value "
+    "under another name and read that name in the agent)"
+)
+
+
 def _validate_controller_names(
     config: dict[str, Any], references: dict[str, SecretRef]
 ) -> None:
@@ -1626,7 +1632,7 @@ def _validate_controller_names(
             or str(name).startswith("ALK_")
             or agent_value_name_reserved(str(name))
         ):
-            raise ValueError(f"connector_config_name_reserved: {name}")
+            raise ValueError(f"connector_config_name_reserved: {name}{_RESERVED_HINT}")
     _validate_secret_alias_shapes(references)
     for alias, reference in references.items():
         # An upload alias becomes a runtime value, never a controller variable, but its name
@@ -1698,7 +1704,7 @@ def _validate_environment_values(
             or name.startswith("ALK_")
             or agent_value_name_reserved(name)
         ):
-            raise ValueError(f"environment_name_reserved: {name}")
+            raise ValueError(f"environment_name_reserved: {name}{_RESERVED_HINT}")
         value = secret.get_secret_value()
         if "\x00" in value:
             raise ValueError(f"environment_value_contains_nul: {name}")

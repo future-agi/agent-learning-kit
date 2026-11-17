@@ -2219,7 +2219,11 @@ _NO_AGENT_NEEDS = [
     "DOCKER_CONFIG", "COMPOSE_FILE", "BASH_ENV", "ENV", "LD_PRELOAD",
     "DYLD_INSERT_LIBRARIES", "GIT_SSH_COMMAND", "SSH_ASKPASS", "NODE_OPTIONS",
 ]
-_AGENT_SETTINGS = ["HTTPS_PROXY", "http_proxy", "NO_PROXY", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"]
+_AGENT_SETTINGS = [
+    "HTTPS_PROXY", "http_proxy", "NO_PROXY", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE",
+    # A customer's own credentials under a tool's prefix: git, ssh and docker don't read these.
+    "GIT_TOKEN", "GIT_ACCESS_TOKEN", "SSH_PRIVATE_KEY", "DOCKER_PASSWORD", "DOCKER_USERNAME",
+]
 
 
 @pytest.mark.parametrize("name", _NO_AGENT_NEEDS)
@@ -2232,9 +2236,14 @@ def test_a_name_no_agent_needs_is_refused_on_both_channels(name, request_type):
         request_type(source_path="/tmp/agent", environment_values={name: "canary"})
 
 
+def test_a_refused_name_says_why_and_what_to_do(request_type=LocalSandboxRequest):
+    with pytest.raises(ValidationError, match="steers a process the runner starts.*another name"):
+        request_type(source_path="/tmp/agent", environment_values={"DOCKER_CONFIG": "x"})
+
+
 @pytest.mark.parametrize("name", _AGENT_SETTINGS)
 @pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
-def test_proxy_and_ca_names_stay_agent_settings(name, request_type):
+def test_proxy_ca_and_credential_names_stay_agent_settings(name, request_type):
     request_type(source_path="/tmp/agent", connector_config={name: "canary"})
     request_type(source_path="/tmp/agent", environment_values={name: "canary"})
 
