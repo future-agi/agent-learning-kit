@@ -147,6 +147,39 @@ def test_validation_repairs_then_revalidates_and_records_scope(tmp_path):
     assert proof["reference_tools_proven"] is False
 
 
+def test_the_whole_repair_guidance_is_masked_against_the_sources_listed_files(tmp_path):
+    # A diagnostic's own text can echo process output, not just the process logs.
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".env").write_text("DB_PASSWORD=canary-source-password-7781\nPORT=8080\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) == 1:
+            error = RuntimeValidationError(
+                "environment", "login failed for canary-source-password-7781 on 8080"
+            )
+            error.process_evidence = "agent.log\nusing canary-source-password-7781\n"
+            raise error
+        return 10
+
+    seen = []
+
+    async def repair(phase, guidance):
+        seen.append(guidance)
+        return 0
+
+    asyncio.run(
+        validate_and_repair(None, source, authoring, validate=validate, repair=repair)
+    )
+    assert seen and "canary-source-password-7781" not in seen[0]
+    assert "<redacted>" in seen[0]
+    assert "8080" in seen[0]
+
+
 def test_validation_stops_after_two_repairs_without_false_certificate(tmp_path):
     repairs = []
 
@@ -2748,6 +2781,59 @@ def test_startup_failure_preserves_redacted_process_logs_for_repair(
             assert "stale failure" not in evidence
 
 
+def test_startup_failure_masks_the_sources_listed_files_in_both_process_logs(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import bundle_author_v2, process_preflight, process_runtime
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".env").write_text("DB_PASSWORD=canary-source-password-7781\nPORT=8080\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text('{"KEY":"private-startup-token"}')
+    logs = authoring / "generic-harness" / "process-logs"
+    logs.mkdir(parents=True)
+    started = []
+
+    class Provider:
+        def __init__(self, **kwargs):
+            pass
+
+        async def provision(self, *args, **kwargs):
+            started.append(True)
+            raise process_runtime.ProcessRuntimeError(
+                "depends_on", "depends_on_timeout", "readiness probe timed out"
+            )
+
+        async def close(self, **kwargs):
+            (logs / ("worlds-w0-agent-" + "a" * 32 + ".log")).write_text(
+                "connecting with canary-source-password-7781 on port 8080\n"
+            )
+
+    def compile_bundle(**kwargs):
+        return SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+                control_service="agent",
+            )
+        )
+
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(bundle_author_v2, "author_bundle_v2", compile_bundle)
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *a, **k: None)
+    job = SimpleNamespace(agent=SimpleNamespace(secret_refs={}))
+    with pytest.raises(RuntimeValidationError) as caught:
+        asyncio.run(
+            validate_once(job, source, authoring, secrets_path=secrets, local_runtime=True)
+        )
+    for evidence in (caught.value.process_evidence, caught.value.target_process_evidence):
+        assert "connecting with <redacted> on port 8080" in evidence
+        assert "canary-source-password-7781" not in evidence
+
+
 @pytest.mark.parametrize("readiness_only", [False, True])
 def test_ingress_repair_capability_is_private_and_revalidates_candidate(
     tmp_path, monkeypatch, readiness_only
@@ -2965,6 +3051,390 @@ class Handler(BaseHTTPRequestHandler):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_startup_failure_withholds_both_process_logs_when_the_masks_cannot_be_built(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import bundle_author_v2, process_diagnostics, process_preflight, process_runtime
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".env").write_text("DB_PASSWORD=canary-source-password-7782\nPORT=8080\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text('{"KEY":"private-startup-token"}')
+    logs = authoring / "generic-harness" / "process-logs"
+    logs.mkdir(parents=True)
+
+    class Provider:
+        def __init__(self, **kwargs):
+            pass
+
+        async def provision(self, *args, **kwargs):
+            raise process_runtime.ProcessRuntimeError(
+                "depends_on", "depends_on_timeout", "readiness probe timed out"
+            )
+
+        async def close(self, **kwargs):
+            (logs / ("worlds-w0-agent-" + "a" * 32 + ".log")).write_text(
+                "connecting with canary-source-password-7782 on port 8080\n"
+            )
+
+    def compile_bundle(**kwargs):
+        return SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+                control_service="agent",
+            )
+        )
+
+    def unreadable(root):
+        raise OSError("cannot scan")
+
+    monkeypatch.setattr(process_diagnostics, "source_secret_masks", unreadable)
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(bundle_author_v2, "author_bundle_v2", compile_bundle)
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *a, **k: None)
+    job = SimpleNamespace(agent=SimpleNamespace(secret_refs={}))
+    with pytest.raises(RuntimeValidationError) as caught:
+        asyncio.run(
+            validate_once(job, source, authoring, secrets_path=secrets, local_runtime=True)
+        )
+    assert caught.value.process_evidence == ""
+    assert caught.value.target_process_evidence == ""
+
+
+def test_the_repair_gets_no_evidence_when_the_masks_cannot_be_built(tmp_path, monkeypatch):
+    from fi.alk.harness import process_diagnostics
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".env").write_text("DB_PASSWORD=canary-source-password-7783\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    calls = []
+
+    def unreadable(root):
+        raise OSError("cannot scan")
+
+    monkeypatch.setattr(process_diagnostics, "source_secret_masks", unreadable)
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) == 1:
+            error = RuntimeValidationError(
+                "environment", "login failed for canary-source-password-7783"
+            )
+            error.process_evidence = "agent.log\nusing canary-source-password-7783\n"
+            raise error
+        return 10
+
+    seen = []
+
+    async def repair(phase, guidance):
+        seen.append(guidance)
+        return 0
+
+    asyncio.run(
+        validate_and_repair(None, source, authoring, validate=validate, repair=repair)
+    )
+    assert seen and "canary-source-password-7783" not in seen[0]
+    assert "agent.log" not in seen[0] and "login failed" not in seen[0]
+    assert "evidence was withheld" in seen[0]
+
+
+def test_typed_diagnostics_are_masked_before_the_plan_patch_briefing_is_built(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import runtime_repair
+
+    value = "canary-typed-diagnostic-8841"
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / ".env").write_text(f"DB_PASSWORD={value}\nPORT=8080\n")
+    (source / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    contract = AgentContract(agent="unknown-framework", runtime=Runtime())
+    (authoring / "contract.json").write_text(
+        contract.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_runtime_plan_invalid",
+        message=f"agent exited: auth failed for {value} on 8080",
+        evidence_refs=(f"log: password {value}",),
+    )
+    briefings = []
+
+    class CapturingStage:
+        def __init__(self, spec, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def say(self, briefing, *, on_event=None):
+            briefings.append(briefing)
+
+    monkeypatch.setattr(runtime_repair, "Stage", CapturingStage)
+    attempts = []
+
+    async def validate(*_args):
+        attempts.append(1)
+        if len(attempts) > 1:
+            return 1
+        raise RuntimeValidationError("runtime", "launcher", diagnostics=(diagnostic,))
+
+    job = HarnessJob(
+        job_id="repair",
+        run_id="repair",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        metadata={"generic_harness_v1": True},
+        guidance=[],
+        require_tool_workflow=True,
+    )
+    with pytest.raises(RuntimeValidationError):
+        asyncio.run(validate_and_repair(job, source, authoring, validate=validate, repair=None))
+    assert briefings, "the plan-patch route was not reached"
+    assert value not in briefings[0]
+    assert "auth failed for <redacted> on 8080" in briefings[0]
+
+
+def test_typed_diagnostics_carry_the_codes_only_when_the_masks_cannot_be_built():
+    from fi.alk.harness.authoring_runtime_validation import _mask_diagnostics
+
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_runtime_plan_invalid",
+        message="auth failed for canary-codes-only-8842",
+        evidence_refs=("ref canary-codes-only-8842",),
+    )
+    (withheld,) = _mask_diagnostics((diagnostic,), None)
+    assert withheld.code == "generated_runtime_plan_invalid"
+    assert "canary-codes-only-8842" not in withheld.model_dump_json()
+    assert withheld.evidence_refs == ()
+    (masked,) = _mask_diagnostics((diagnostic,), frozenset({"canary-codes-only-8842"}))
+    assert "canary-codes-only-8842" not in masked.model_dump_json()
+
+
+def test_a_value_straddling_the_diagnostic_cut_is_masked_before_it_is_cut(tmp_path):
+    value = "canary-straddle-guidance-8843"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".env").write_text(f"DB_PASSWORD={value}\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    calls = []
+
+    async def validate(*args):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeValidationError("environment", "x" * 3990 + value + " tail")
+        return 10
+
+    seen = []
+
+    async def repair(phase, guidance):
+        seen.append(guidance)
+        return 0
+
+    asyncio.run(
+        validate_and_repair(None, source, authoring, validate=validate, repair=repair)
+    )
+    assert seen and value[:10] not in seen[0]
+    assert "<redacted>" in seen[0]
+
+
+def _counted_mask_walks(monkeypatch, *, fails=False):
+    from fi.alk.harness import process_diagnostics
+
+    real = process_diagnostics.source_secret_masks
+    walks = []
+
+    def counted(root):
+        walks.append(root)
+        if fails:
+            raise OSError("a listed file is too large to mask")
+        return real(root)
+
+    monkeypatch.setattr(process_diagnostics, "source_secret_masks", counted)
+    return walks
+
+
+def test_one_failed_attempt_walks_the_source_once(tmp_path, monkeypatch):
+    # The repair never changes the source, so its listed files are walked once per run.
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / ".env").write_text("DB_PASSWORD=canary-walk-once-0091\n")
+    walks = _counted_mask_walks(monkeypatch)
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) == 1:
+            raise RuntimeValidationError("environment", "failed with canary-walk-once-0091")
+        return 10
+
+    async def repair(phase, guidance):
+        assert "canary-walk-once-0091" not in guidance
+        return 0
+
+    asyncio.run(validate_and_repair(None, source, authoring, validate=validate, repair=repair))
+    assert len(walks) == 1
+
+
+def test_each_run_walks_the_source_afresh(tmp_path, monkeypatch):
+    # The masks are kept for one run only: a later run reads the source as it is then.
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    walks = _counted_mask_walks(monkeypatch)
+    seen = []
+
+    def run():
+        calls = []
+
+        async def validate(*args):
+            calls.append("validate")
+            if len(calls) == 1:
+                raise RuntimeValidationError("environment", "failed with canary-later-0093")
+            return 10
+
+        async def repair(phase, guidance):
+            seen.append(guidance)
+            return 0
+
+        asyncio.run(validate_and_repair(None, source, authoring, validate=validate, repair=repair))
+
+    run()
+    (source / ".env").write_text("LATER_PASSWORD=canary-later-0093\n")
+    run()
+    assert len(walks) == 2
+    assert "canary-later-0093" not in seen[-1]
+
+
+def test_a_failed_mask_walk_is_logged_once_and_the_evidence_is_withheld(
+    tmp_path, monkeypatch, caplog
+):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    walks = _counted_mask_walks(monkeypatch, fails=True)
+    calls = []
+    seen = []
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) <= 2:
+            raise RuntimeValidationError("environment", "failed")
+        return 10
+
+    async def repair(phase, guidance):
+        seen.append(guidance)
+        return 0
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(
+            validate_and_repair(None, source, authoring, validate=validate, repair=repair)
+        )
+    assert len(walks) == 1
+    assert all(guidance.startswith("The diagnostic evidence was withheld.") for guidance in seen)
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "OSError" in warnings[0].getMessage()
+
+
+def test_the_scenario_retry_guidance_is_masked(tmp_path, monkeypatch):
+    # The rejection text added on a retry comes from a check of the repaired scenarios, not from
+    # masked evidence: only the repair's own mask keeps a listed value out of it.
+    from fi.alk.harness import scenario_repair, scenario_tools
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / ".env").write_text("API_KEY=canary-retry-secret-0042\n")
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda _authoring: [])
+    monkeypatch.setattr(scenario_tools, "write_scenarios", lambda *_args: None)
+
+    def rejects(*_args, **_kwargs):
+        raise ValueError("scenario 1 sets canary-retry-secret-0042")
+
+    monkeypatch.setattr(scenario_repair, "certify_scenario_repair", rejects)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="test",
+        code="ready_condition_invalid",
+        message="ready condition invalid",
+    )
+
+    async def validate(*args):
+        raise RuntimeValidationError("scenarios", "invalid", diagnostics=(diagnostic,))
+
+    seen = []
+
+    async def repair(phase, guidance):
+        seen.append(guidance)
+        return 0
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=1)
+    with pytest.raises(ValueError):
+        asyncio.run(validate_and_repair(job, source, authoring, validate=validate, repair=repair))
+    assert len(seen) >= 2
+    assert "rejected and undone" in seen[1]
+    assert all("canary-retry-secret-0042" not in guidance for guidance in seen)
+    assert "<redacted>" in seen[1]
+
+
+def test_the_storage_repair_masks_the_contract_it_adds(tmp_path, monkeypatch):
+    # The storage repair adds the saved contract after the repair's own mask; a contract can
+    # quote the source, so the contract is masked too.
+    from fi.alk.harness import cli
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / ".env").write_text("API_KEY=canary-contract-secret-77\n")
+    contract = AgentContract(agent="canary-contract-secret-77", runtime=Runtime(language="python"))
+    (authoring / "contract.json").write_text(contract.model_dump_json(indent=2) + "\n")
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_storage_declaration_missing",
+        message="no storage declared",
+    )
+    seen = []
+
+    async def understand(args):
+        seen.extend(args.guidance)
+        return 1
+
+    monkeypatch.setattr(cli, "_understand", understand)
+
+    async def validate(*_args):
+        raise RuntimeValidationError("environment", "no storage", diagnostics=(diagnostic,))
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=1)
+    with pytest.raises(RuntimeValidationError):
+        asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+    assert seen
+    assert all("canary-contract-secret-77" not in text for text in seen)
 
 
 @pytest.mark.parametrize("readiness_only", [False, True])
