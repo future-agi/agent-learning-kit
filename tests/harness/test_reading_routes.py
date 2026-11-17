@@ -93,8 +93,8 @@ def control_environment(manifest) -> dict:
 # --- Task 2: an unreachable entry that says where it is, is traced --------------------------
 
 
-def bound(entries) -> list:
-    return bundle_author_v2._source_tool_trace_bindings({"tool_entrypoints": entries})
+def bound(entries, **options) -> list:
+    return bundle_author_v2._source_tool_trace_bindings({"tool_entrypoints": entries}, **options)
 
 
 def one(mode="unreachable", module="agent", callable="look_up_order"):
@@ -627,3 +627,14 @@ def test_m5_a_uv_group_keeps_todays_route(tmp_path, pyproject):
     )
     manifest, output = bundled(tmp_path, source, DEEP, contract=body)
     todays_route(manifest, output, body)
+
+
+def test_l1_a_process_with_the_livekit_tool_trace_hook_binds_no_unreachable_entry():
+    """The hook already records the call; a second binding would grade it twice."""
+    from types import SimpleNamespace as Process
+
+    hooked = Process(
+        environment={"LIVEKIT_AGENT_NAME": "x-{{JOB_ID}}", "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/t"}
+    )
+    assert bundle_author_v2._observed_by_frameworks([hooked])
+    assert bound([one()], watch_unreachable=not bundle_author_v2._observed_by_frameworks([hooked])) == []
