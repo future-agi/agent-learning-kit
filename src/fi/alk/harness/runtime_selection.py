@@ -19,6 +19,8 @@ from .source_folder import contains_or_is_above, is_within
 
 
 COMPOSE_SERVICE_OUTSIDE_FOLDER = "runtime_compose_service_outside_subfolder"
+# The names automatic selection looks for in the agent folder.
+COMPOSE_FILE_NAMES = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
 
 
 class RuntimeSelectionError(ValueError):
@@ -110,12 +112,7 @@ def _select_runtime(
         lookup = root / runtime.source_subfolder if runtime.source_subfolder else root
         matches = [
             lookup / name
-            for name in (
-                "compose.yaml",
-                "compose.yml",
-                "docker-compose.yaml",
-                "docker-compose.yml",
-            )
+            for name in COMPOSE_FILE_NAMES
             if (lookup / name).is_file()
         ]
         if len(matches) > 1:

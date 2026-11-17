@@ -511,6 +511,30 @@ def test_h3_a_compose_selection_bundles_as_it_does_on_the_old_kit(tmp_path, monk
     assert sealed["command"] == body["runtime"]["command"]
 
 
+@pytest.mark.parametrize("execution", ["native", "auto"])
+def test_h3_an_auto_selected_compose_file_bundles_as_on_the_old_kit(
+    tmp_path, monkeypatch, execution
+):
+    """Round 3, H1: the reading names no compose file, but `auto` (which `native` becomes on the
+    graph route) selects the folder's docker-compose.yml, and Compose refuses `callable`."""
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/nonexistent/broker.sock")
+    compose = (
+        "services:\n  agent:\n    build: .\n"
+        "    command: [langgraph, dev, --host, 0.0.0.0, --port, '2024']\n    ports: ['2024:2024']\n"
+    )
+    docker = "FROM python:3.12\nWORKDIR /app\nCOPY . .\nRUN pip install -r requirements.txt 'langgraph-cli[inmem]'\n"
+    source = deep_source(
+        tmp_path, extra={f"{DEEP}/docker-compose.yml": compose, f"{DEEP}/Dockerfile": docker}
+    )
+    body = deep_reading()
+    body["runtime"]["execution"] = execution
+    manifest, output = bundled(tmp_path, source, DEEP, contract=body)
+    sealed = _sealed(output)["runtime"]
+    assert sealed["interface"]["kind"] == "http"
+    assert sealed["interface"]["path"] == "/runs/wait"
+    assert sealed["command"] == body["runtime"]["command"]
+
+
 def _scoped(source: Path, **selection):
     """What `_langgraph_command_cannot_run` is handed: the reading's runtime bound to its folder."""
     root = source.resolve()

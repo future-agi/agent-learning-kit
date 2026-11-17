@@ -73,7 +73,12 @@ from .generated_runtime import (
 )
 from .credentials import assess_configuration, discover_credentials
 from .secrets import process_secret_environment_names
-from .runtime_selection import ComposeSelection, bounded_yaml_load, select_runtime
+from .runtime_selection import (
+    COMPOSE_FILE_NAMES,
+    ComposeSelection,
+    bounded_yaml_load,
+    select_runtime,
+)
 from .agent_type_check import EXIT_REFUSED
 from .source_folder import (
     SubfolderNotFound,
@@ -1935,6 +1940,14 @@ def _langgraph_command_cannot_run(
     image, which this can't see, and a ``callable`` interface is refused on a Compose selection.
     """
     if runtime.get("execution") == "compose" or runtime.get("compose_file") or runtime.get("service"):
+        return False
+    lookup = (
+        source_root / runtime["source_subfolder"]
+        if runtime.get("source_subfolder")
+        else source_root
+    )
+    if any((lookup / name).is_file() for name in COMPOSE_FILE_NAMES):
+        # `auto`, which a native reading becomes on the graph route, would select this file.
         return False
     command = runtime.get("command")
     if (
