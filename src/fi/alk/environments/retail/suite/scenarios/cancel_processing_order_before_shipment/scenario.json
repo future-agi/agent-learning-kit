@@ -1,0 +1,94 @@
+{
+  "name": "cancel_processing_order_before_shipment",
+  "scenario_key": "cancel-processing-order-before-shipment",
+  "scenario_id": "",
+  "use_case": "Change or cancel an order before it ships",
+  "branch": "the order is in processing status so cancellation succeeds upon customer confirmation",
+  "tests": "cancels a processing order after verifying ownership and obtaining confirmation",
+  "instruction": "You are currently traveling in Vancouver, Canada. You placed an order yesterday for Athletic Performance Shorts (Order O31) to your address on file, but you no longer need them and want to cancel the order before it ships. You want to make sure the order is completely cancelled and that your payment card will not be charged.\n\nYour details:\n- Name: Mia Wong\n- Email: mia.wong@example.com\n- Postal Code: 97201\n- Order ID: O31",
+  "keywords": [
+    "cancel_order"
+  ],
+  "persona": {
+    "name": "Mia Wong",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I'd like to cancel my order O31 that is still processing.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "name": "Mia Wong",
+    "customer_id": "C13",
+    "order_id": "O31",
+    "origin": "seed",
+    "status": "processing",
+    "postal_code": "97201",
+    "email": "mia.wong@example.com"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O31",
+        "email": "mia.wong@example.com",
+        "customer_id": "C13",
+        "postal_code": "97201"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O31"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_order",
+      "arguments": {
+        "customer_id": "C13",
+        "confirmed": true,
+        "order_id": "O31",
+        "reason": "Customer requested cancellation before shipment",
+        "request_key": "REQ-C13-O31-CANCEL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "pending_fulfillment",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "task": "change_or_cancel_order",
+    "interface": "clean_prose",
+    "counterparty": "verified_owner"
+  },
+  "sub_goals": [
+    "order_cancelled_as_requested"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

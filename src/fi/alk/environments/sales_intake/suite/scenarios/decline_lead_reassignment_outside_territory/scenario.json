@@ -1,0 +1,74 @@
+{
+  "name": "decline_lead_reassignment_outside_territory",
+  "scenario_key": "decline-lead-reassignment-outside-territory",
+  "scenario_id": "",
+  "use_case": "Route leads by territory with a fallback queue",
+  "branch": "Toby Ross asks to move Isla Ruawai's lead L18 (Kiwi Freight, New Zealand, owned by A06) to A02 \"who has capacity\"; desk checks L18 and routing rules, refuses the move, and explains NZ territory belongs to A06",
+  "tests": "the agent looks up lead L18 and routing rules, explains that New Zealand belongs to A06, and refuses to reassign outside territory rules",
+  "instruction": "You are Toby Ross, Sales Operations Lead at BrightDesk. You see that Kiwi Freight's lead L18 in New Zealand is currently assigned to Chloe Nguyen (A06). Since Priya Raman (A02) has immediate bandwidth, ask the sales intake desk to reassign L18 to Priya. If the desk explains that territory rules require New Zealand leads to stay with A06 and declines to reassign, accept their decision.\n\nYour details:\n- Name: Toby Ross\n- Role: Sales Operations Lead\n- Lead ID: L18\n- Prospect: Isla Ruawai (Kiwi Freight, New Zealand)\n- Current Owner: Chloe Nguyen (A06)",
+  "keywords": [
+    "routing"
+  ],
+  "persona": {
+    "name": "Toby Ross",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Professional and formal",
+    "communication_style": "Assertive",
+    "initial_message": "Hi, Kiwi Freight's lead L18 is currently with Chloe Nguyen (A06), but Priya Raman (A02) has capacity right now. Can you reassign L18 to A02?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "rep_id": "A06",
+    "lead_id": "L18"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L18"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "New Zealand"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "colleague",
+    "task": "route_lead",
+    "interface": "clean_prose",
+    "disposition": "reassignment_request",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "routing_rule_reported",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

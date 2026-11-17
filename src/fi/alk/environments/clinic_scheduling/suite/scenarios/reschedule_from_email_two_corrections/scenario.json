@@ -1,0 +1,97 @@
+{
+  "name": "reschedule_from_email_two_corrections",
+  "scenario_key": "reschedule-from-email-two-corrections",
+  "scenario_id": "",
+  "use_case": "Reschedule and cancel",
+  "branch": "Aisha Mensah emailed (th_c13_two_corrections_p08) moving A03 to 15:00, then 14:00, then 15:30 on 28 October; her opening names no time, and the desk honours the latest correction",
+  "tests": "the agent reads thread th_c13_two_corrections_p08, applies the latest of its two corrections, and moves A03 to SL-D04-20261028-1530",
+  "instruction": "You are Aisha Mensah (born 1979-03-22). You emailed the clinic about moving your cardiology appointment A03 on 28 October and then sent follow-ups changing the time. Ask the desk to update it as your latest email says. Do not state the time yourself; if asked, say it is in your latest email. Your latest email asked for 15:30: when the desk reads back Wednesday 28 October at 15:30 with Dr. Ethan Brooks at Riverbank North, confirm. If it reads back another time, say your latest email replaced that.\n\nYour details:\n- Name: Aisha Mensah\n- Date of birth: 1979-03-22\n- Appointment ID: A03\n- Email thread subject: Changing the time of A03",
+  "keywords": [
+    "reschedule",
+    "email"
+  ],
+  "persona": {
+    "name": "Aisha Mensah",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Teacher",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, I sent an email and some follow-ups about moving my cardiology appointment A03 on 28 October. Can you update it as my latest email says?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P08",
+    "appointment_id": "A03",
+    "thread_id": "th_c13_two_corrections_p08",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Aisha Mensah",
+        "dob": "1979-03-22"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "dob": "caller: 1979-03-22",
+        "full_name": "caller: Aisha Mensah"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "messageFormat": "FULL_CONTENT",
+        "threadId": "th_c13_two_corrections_p08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c13_two_corrections_p08"
+      }
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "new_slot_id": "SL-D04-20261028-1530",
+        "request_key": "req_p08_resched",
+        "confirmed": true,
+        "appointment_id": "A03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\"",
+        "appointment_id": "caller: A03",
+        "new_slot_id": "record: the slot the caller confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reschedule",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "correction",
+    "interface": "email_thread",
+    "counterparty": "first_time",
+    "overlay": "none",
+    "interaction": "single_turn"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

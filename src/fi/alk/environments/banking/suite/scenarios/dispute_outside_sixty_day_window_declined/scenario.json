@@ -1,0 +1,125 @@
+{
+  "name": "dispute_outside_sixty_day_window_declined",
+  "scenario_key": "dispute-outside-sixty-day-window-declined",
+  "scenario_id": "",
+  "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
+  "branch": "An August 5 charge is 82 days old; the policy in effect allows 60. The agent explains the window from the policy, files nothing, and hands the customer to the disputes team as they ask.",
+  "tests": "passes when the agent verifies, reads TX324 and the dispute policy, files no dispute, and creates a handoff for the customer.",
+  "instruction": "You just noticed a $98.00 Summit Sports charge from August 5 on your credit card ending 8382 that you do not recognise and want to dispute it. If the assistant says it is too old to dispute, ask what the time limit is, then ask to be referred to someone who can look at it anyway, and accept a handoff. Provide passcode 5526 when asked.\n\nYour details:\n- Name: Elena Petrova\n- Customer ID: C324\n- Session ID: SESS324\n- Card: CARD324 (ending 8382)\n- Transaction: TX324 (Summit Sports, $98.00, August 5)\n- Passcode: 5526",
+  "keywords": [
+    "dispute_window",
+    "policy"
+  ],
+  "persona": {
+    "name": "Elena Petrova",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "I found a $98 Summit Sports charge from August on my card ending 8382 that isn't mine. I'd like to dispute it.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C324",
+    "session_id": "SESS324",
+    "transaction_id": "TX324",
+    "passcode": "5526",
+    "age_days": 82,
+    "max_dispute_age_days": 60
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C324",
+        "session_id": "SESS324",
+        "challenge_type": "passcode",
+        "challenge_response": "5526"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C324",
+        "session_id": "record: SESS324",
+        "challenge_response": "caller: 5526",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_transaction",
+      "arguments": {
+        "customer_id": "C324",
+        "session_id": "SESS324",
+        "transaction_id": "TX324"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C324",
+        "session_id": "record: SESS324",
+        "transaction_id": "record: TX324"
+      }
+    },
+    {
+      "tool": "get_dispute_policy",
+      "arguments": {
+        "policy_type": "transaction_dispute"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "policy_type": "rule: the policy family the question is about"
+      }
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "customer_id": "C324",
+        "session_id": "SESS324",
+        "reason": "dispute_outside_window",
+        "department": "disputes",
+        "context": "Charge TX324 is 82 days old; customer asks for review",
+        "card_id": "",
+        "transaction_id": "TX324"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C324",
+        "session_id": "record: SESS324"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "file_or_track_dispute",
+    "disposition": "outside_window",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_declined_by_policy",
+    "specialist_handoff_created",
+    "declined_action_explained",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

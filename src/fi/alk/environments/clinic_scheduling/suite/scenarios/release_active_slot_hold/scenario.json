@@ -1,0 +1,78 @@
+{
+  "name": "release_active_slot_hold",
+  "scenario_key": "release-active-slot-hold",
+  "scenario_id": "",
+  "use_case": "Waitlist, concurrency and failure recovery",
+  "branch": "Matteo Colombo has active hold H401 on slot SL-D03-20261029-1430; he decides he does not want it and asks to release the hold",
+  "tests": "the agent verifies Matteo Colombo and releases active hold H401",
+  "instruction": "You are Matteo Colombo (born 1996-06-06). You have an active hold (H401) on a dermatology slot on 29 October, but you won't be able to make it. Ask the desk to release the hold.\n\nYour details:\n- Name: Matteo Colombo\n- Date of birth: 1996-06-06\n- Hold ID: H401",
+  "keywords": [
+    "hold",
+    "concurrency"
+  ],
+  "persona": {
+    "name": "Matteo Colombo",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Freelancer",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hello, I had a hold on a slot for 29 October (H401), but I don't need it anymore. Could you release it please?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P412",
+    "origin": "generated",
+    "slot_id": "SL-D03-20261029-1430",
+    "hold_id": "H401"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1996-06-06",
+        "full_name": "Matteo Colombo"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "release_hold",
+      "arguments": {
+        "hold_id": "H401"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "hold_id": "caller: H401"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interface": "clean_prose",
+    "interaction": "single_turn",
+    "overlay_vector": "none",
+    "disposition": "concurrency",
+    "task": "book",
+    "overlay_intensity": "absent",
+    "counterparty": "first_time"
+  },
+  "sub_goals": [
+    "hold_released"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

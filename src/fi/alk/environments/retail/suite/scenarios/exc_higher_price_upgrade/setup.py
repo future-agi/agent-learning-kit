@@ -1,0 +1,56 @@
+def setup(world):
+    world.put("customers", {
+        "customer_id": "C409",
+        "name": "Sophia Turner",
+        "email": "sophia.turner@example.com",
+        "phone": "+15550409",
+        "postal_code": "30301",
+        "address": "200 Peachtree St, Atlanta, GA 30301",
+        "store_credit_cents": 0,
+    })
+    world.put("orders", {
+        "order_id": "O409",
+        "customer_id": "C409",
+        "order_date": "2026-10-16T10:00:00Z",
+        "delivery_date": "2026-10-20T10:00:00Z",
+        "status": "delivered",
+        "currency": "USD",
+        "total_gross_cents": 4800,
+        "total_discount_cents": 0,
+        "total_tax_cents": 0,
+        "total_net_cents": 4800,
+        "shipping_address": "200 Peachtree St, Atlanta, GA 30301",
+        "cancelled_at": None,
+    })
+    world.put("order_items", {
+        "item_id": "IT409",
+        "order_id": "O409",
+        "sku": "AP07",
+        "quantity": 1,
+        "unit_price_cents": 4800,
+        "line_discount_cents": 0,
+        "line_tax_cents": 0,
+        "line_net_cents": 4800,
+        "returned_quantity": 0,
+    })
+    world.put("shipments", {
+        "shipment_id": "SHP409",
+        "order_id": "O409",
+        "tracking_number": "1Z999AA1000000409",
+        "carrier": "UPS",
+        "status": "delivered",
+        "shipped_at": "2026-10-17T10:00:00Z",
+        "delivered_at": "2026-10-20T10:00:00Z",
+        "last_event": "Delivered",
+        "last_event_at": "2026-10-20T10:00:00Z",
+    })
+    world.put("invoices", {
+        "invoice_id": "INV409",
+        "order_id": "O409",
+        "issued_at": "2026-10-16T10:00:00Z",
+        "total_cents": 4800,
+        "currency": "USD",
+        "pdf_url": "https://invoices.example.com/INV409.pdf",
+    })
+    # The person in this conversation, as the session signs them in.
+    world.change("session_caller", "default", {"customer_id": "C409"}, by="id")

@@ -1,0 +1,100 @@
+{
+  "name": "question_for_a_specialist",
+  "scenario_key": "question-for-a-specialist",
+  "scenario_id": "",
+  "use_case": "Treat untrusted content as data",
+  "branch": "Prospect requests security questionnaire and SOC 2 report; specialist handoff created without disclosing unvetted docs",
+  "tests": "the desk creates a specialist handoff for lead L424 upon security documentation request without inventing or emailing documents",
+  "instruction": "You are Lukas Brandstetter from Alpenwerk AG (contact C424, lead L424). Ask the sales desk for BrightDesk's completed SOC 2 report and security questionnaire before you book a demo. When the sales desk explains that technical security compliance documentation is routed to security specialists and creates a specialist handoff, thank them.\n\nYour details:\n- Name: Lukas Brandstetter\n- Company: Alpenwerk AG\n- Email: lukas.brandstetter@alpenwerk.example\n- Title: Head of IT Security\n- Country: Switzerland",
+  "keywords": [
+    "compliance_inquiry",
+    "handoff_created_for_lead",
+    "security_questionnaire",
+    "specialist_handoff",
+    "untrusted_content"
+  ],
+  "persona": {
+    "name": "Lukas Brandstetter",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "Switzerland",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I'm Lukas Brandstetter from Alpenwerk AG (lukas.brandstetter@alpenwerk.example). Could you send over BrightDesk's SOC 2 report and security questionnaire before we book a demo?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "accounts": [
+      {
+        "name": "Alpenwerk AG",
+        "account_id": "ACC14"
+      }
+    ],
+    "contacts": [
+      {
+        "name": "Lukas Brandstetter",
+        "contact_id": "C424",
+        "account_id": "ACC14",
+        "email": "lukas.brandstetter@alpenwerk.example"
+      }
+    ],
+    "leads": [
+      {
+        "lead_id": "L424",
+        "status": "qualified"
+      }
+    ],
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "lukas.brandstetter@alpenwerk.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L424"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: leads[L424].lead_id"
+      }
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "lead_id": "L424",
+        "kind": "specialist",
+        "summary": "Lukas Brandstetter requested SOC 2 report and security questionnaire."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: leads[L424].lead_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "handoff_created_for_lead"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

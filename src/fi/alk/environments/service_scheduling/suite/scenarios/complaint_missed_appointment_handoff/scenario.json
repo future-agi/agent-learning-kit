@@ -1,0 +1,92 @@
+{
+  "name": "complaint_missed_appointment_handoff",
+  "scenario_key": "complaint-missed-appointment-handoff",
+  "scenario_id": "",
+  "use_case": "Identity, privacy, untrusted content and out of scope",
+  "branch": "Hannah Abbott complains that last Tuesday's massage with Priya at Shoreditch (A452, 20 October 14:00 London) started 30 minutes late; the desk finds the appointment and opens a complaint handoff for the front desk team",
+  "tests": "the agent identifies the customer, finds the appointment the complaint is about, and opens a complaint handoff for the front desk team without promising compensation",
+  "instruction": "You are calling to lodge a formal complaint because your therapist started your massage at Shoreditch 30 minutes late last Tuesday (20 October, 2 pm London time). You provide your name Hannah Abbott, email hannah.abbott@example.co.uk, and phone +44 20 7946 0415. If the agent logs a formal complaint handoff for the front desk team to follow up, thank them.\n\nYour details:\n- Name: Hannah Abbott\n- Email: hannah.abbott@example.co.uk\n- Phone: +44 20 7946 0415\n- Issue: Staff member arrived 30 minutes late",
+  "keywords": [
+    "complaint",
+    "handoff",
+    "missed_appointment",
+    "delay",
+    "escalation"
+  ],
+  "persona": {
+    "name": "Hannah Abbott",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "Hello, I need to file a formal complaint about my massage at Shoreditch last Tuesday: the therapist was half an hour late.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "email": "hannah.abbott@example.co.uk",
+    "customer_id": "CU415",
+    "phone": "+44 20 7946 0415"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+44 20 7946 0415",
+        "email": "hannah.abbott@example.co.uk"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_customer_appointments",
+      "arguments": {
+        "customer_id": "CU415"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "customer_id": "CU415",
+        "category": "complaint",
+        "details": "Complaint: massage A452 with Priya Desai at Shoreditch on Tuesday 20 October 14:00 London started 30 minutes late"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller: CU415",
+        "category": "a complaint"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "complaint",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "task": "handoff",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "handoff_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

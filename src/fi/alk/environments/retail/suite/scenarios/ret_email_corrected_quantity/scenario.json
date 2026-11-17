@@ -1,0 +1,122 @@
+{
+  "name": "ret_email_corrected_quantity",
+  "scenario_key": "ret-email-corrected-quantity",
+  "scenario_id": "",
+  "use_case": "Eligible item return and label generation",
+  "branch": "Customer Tara Maclay C20 does not restate the quantity; her thread th_r15_quantity_corrected first asks to return all 3 units of AP14 from O36 and later settles on 2, which the agent must discover",
+  "tests": "the agent reads the whole thread th_r15_quantity_corrected, finds that the latest messages reduce the return from three units of AP14 to two, reads that back, and creates a return for 2 units of AP14 on order O36",
+  "instruction": "Earlier you emailed customer support (thread th_r15_quantity_corrected) about returning Classic Polo Shirts (SKU AP14) from order O36. You first asked to return all three, asked about another colour, and in your latest messages settled on returning two and keeping one.\n\nIn chat, do not say how many shirts you are returning: ask the agent to go by your latest email. If the agent reads back 2 units of AP14 from O36, confirm it. If the agent proposes three, or asks you how many, say: please check my last email.\n\nYour details:\n- Name: Tara Maclay\n- Email: tara.maclay@example.com\n- Postal Code: 94704\n- Thread: th_r15_quantity_corrected\n- Order ID: O36",
+  "keywords": [
+    "email_support",
+    "quantity_correction"
+  ],
+  "persona": {
+    "name": "Tara Maclay",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I'm following up on email thread th_r15_quantity_corrected about the polo shirts from order O36. Please set up the return as my latest email says.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O36",
+    "customer_id": "C20",
+    "origin": "seed",
+    "thread_id": "th_r15_quantity_corrected",
+    "sku": "AP14"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r15_quantity_corrected"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: email thread th_r15_quantity_corrected"
+      }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O36",
+        "postal_code": "94704"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O36"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "order_id": "O36",
+        "items": [
+          {
+            "sku": "AP14",
+            "reason": "excess_quantity",
+            "quantity": 2
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_return",
+      "arguments": {
+        "items": [
+          {
+            "reason": "excess_quantity",
+            "sku": "AP14",
+            "quantity": 2
+          }
+        ],
+        "order_id": "O36",
+        "customer_id": "C20"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C20",
+        "order_id": "caller: order O36",
+        "items": "the items and quantities the customer settled on"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay": "none",
+    "counterparty": "verified_owner",
+    "overlay_vector": "none",
+    "interaction": "correction_mid_turn",
+    "disposition": "quantity_correction",
+    "task": "return_eligible_item",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "subgoal_return_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

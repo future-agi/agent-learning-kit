@@ -1,0 +1,77 @@
+{
+  "name": "policy_scanned_form_unreadable_disclosed",
+  "scenario_key": "policy-scanned-form-unreadable-disclosed",
+  "scenario_id": "",
+  "use_case": "Answer policy and fee questions from the policy library with citations",
+  "branch": "The customer asks what the dispute affidavit form requires. The only copy is a scanned binary; the read reports textFormattingNotSupported and the answer says the form cannot be read here, offering the policy text instead.",
+  "tests": "passes when the agent reads form_dispute_affidavit, gets textFormattingNotSupported, and reports the limitation.",
+  "instruction": "You have been told to fill in a dispute affidavit form and want to know what information it asks for. Ask the assistant to read you the form. If it says the form is a scan it cannot read, ask what the dispute policy requires instead and accept the answer.\n\nYour details:\n- Question: What does the dispute affidavit form ask for?",
+  "keywords": [
+    "drive",
+    "unsupported_format"
+  ],
+  "persona": {
+    "name": "Oliver Grant",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Reserved",
+    "communication_style": "Formal and polite",
+    "initial_message": "Can you tell me what the dispute affidavit form asks for?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "seed",
+    "binary_file": "form_dispute_affidavit"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Affidavit'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "form_dispute_affidavit"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: form_dispute_affidavit, the scanned form, which cannot be read as text"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_policy_question",
+    "disposition": "binary",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "unsupported_format_disclosed"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

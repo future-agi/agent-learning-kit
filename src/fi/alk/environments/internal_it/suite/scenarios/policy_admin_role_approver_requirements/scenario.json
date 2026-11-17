@@ -1,0 +1,83 @@
+{
+  "name": "policy_admin_role_approver_requirements",
+  "scenario_key": "policy-admin-role-approver-requirements",
+  "scenario_id": "",
+  "use_case": "Answer access policy questions with citations",
+  "branch": "Caller asks who must approve an admin role request for Reporting Application (APP-RPT); agent runs check_access_policy for E425 on APP-RPT admin.",
+  "tests": "Does the agent verify employee E425, evaluate policy for APP-RPT admin, and explain that both manager and application owner approvals are required?",
+  "instruction": "You are Eva Green (employee ID E425), an analytics director. You are planning upcoming dashboard administrative coverage and want to know which approvers are required for the admin tier role on Reporting Application (APP-RPT). Ask the IT access desk who must approve an admin request for employee E425 on APP-RPT.",
+  "keywords": [
+    "policy_citation",
+    "approval_routing"
+  ],
+  "persona": {
+    "name": "Eva Green",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I am Eva Green (E425). Could you check the approval requirements for the admin role on Reporting Application (APP-RPT) and tell me who needs to sign off on it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "employee_id": "E425",
+    "target_app": "APP-RPT",
+    "target_role": "admin"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E425"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Eva Green (E425)"
+      }
+    },
+    {
+      "tool": "check_access_policy",
+      "arguments": {
+        "app_id": "APP-RPT",
+        "role_name": "admin",
+        "employee_id": "E425"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "role_name": "caller: admin",
+        "app_id": "caller: APP-RPT"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "policy_inquiry",
+    "overlay_intensity": "absent",
+    "interface": "chat",
+    "overlay": "none",
+    "interaction": "collaborative",
+    "task": "answer_access_policy_questions_with_citations",
+    "overlay_vector": "none",
+    "counterparty": "executive"
+  },
+  "sub_goals": [
+    "least_privilege_role_explained",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

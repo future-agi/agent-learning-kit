@@ -1,0 +1,88 @@
+{
+  "name": "slack_seat_change_preview_hyperscale",
+  "scenario_key": "slack-seat-change-preview-hyperscale",
+  "scenario_id": "",
+  "use_case": "Preview and schedule a plan or seat change",
+  "branch": "account manager in Slack asks for cost delta preview of adding 20 seats to Enterprise plan for tenant T08",
+  "tests": "the agent reads the Slack escalation thread and previews the Enterprise seat addition without scheduling state changes",
+  "instruction": "You are Marco Diaz, HyperScale's account manager at Cloudnest (user ID U_AM2). You posted a message in the #billing-escalations Slack channel asking the billing desk to preview the cost impact of adding 20 seats to HyperScale's (T08) Enterprise plan (taking them from 120 to 140 seats). You are waiting for the billing desk to review the thread and calculate the preview delta.\n\nYour details:\n- Channel: #billing-escalations\n- Message Timestamp: 1792000000.000402\n- Tenant ID: T08\n- Target Plan: Enterprise\n- Target Seats: 140\n- Effective Timing: end of period (2026-11-01)",
+  "keywords": [
+    "slack_integration"
+  ],
+  "persona": {
+    "name": "Marco Diaz",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "HyperScale (T08) wants to add 20 seats to their Enterprise plan, taking them to 140 seats. What is the preview delta?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "tenant_id": "T08",
+    "target_seats": 140,
+    "channel_id": "CH_BILLESC",
+    "message_id": "SM402",
+    "plan": "enterprise",
+    "origin": "mixed",
+    "message_ts": "1792000000.000402"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792000000.000402",
+        "channel_id": "CH_BILLESC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: 1792000000.000402"
+      }
+    },
+    {
+      "tool": "preview_plan_change",
+      "arguments": {
+        "actor_id": "U_AM2",
+        "target_seats": 140,
+        "target_plan_id": "enterprise",
+        "tenant_id": "T08",
+        "effective_timing": "end_of_period"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "target_plan_id": "caller: enterprise",
+        "tenant_id": "caller: T08",
+        "target_seats": "caller: 140"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "counterparty": "member",
+    "task": "preview_plan_change",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_chat",
+    "disposition": "standard",
+    "interaction": "single_turn"
+  },
+  "sub_goals": [
+    "plan_change_previewed_and_held"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

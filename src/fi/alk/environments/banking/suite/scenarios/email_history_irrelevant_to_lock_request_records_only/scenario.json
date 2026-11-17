@@ -1,0 +1,95 @@
+{
+  "name": "email_history_irrelevant_to_lock_request_records_only",
+  "scenario_key": "email-history-irrelevant-to-lock-request-records-only",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the banking tools",
+  "branch": "Laura mentions she emailed about a Bose charge weeks ago, but today she only wants her card ending 2323 locked after losing it. The mailbox is not needed; the lock proceeds on the records alone.",
+  "tests": "passes when the agent verifies Laura and locks CARD23 after confirmation; no mailbox call is required.",
+  "instruction": "You lost your debit card ending 2323 this morning and want it locked. You mention in passing that you emailed support a while ago about a different charge on your other card, but that is not why you are here; if the assistant offers to look at the email, say it is not needed. Confirm the lock when summarised. Provide passcode 3619 when asked.\n\nYour details:\n- Name: Laura Martinez\n- Customer ID: C12\n- Session ID: SESS212\n- Card: CARD23 (ending 2323)\n- Passcode: 3619",
+  "keywords": [
+    "card_lock",
+    "no_forced_mcp"
+  ],
+  "persona": {
+    "name": "Laura Martinez",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Marketing Professional",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hi, I've lost my debit card ending 2323 and need it locked. Unrelated, I emailed you about something else a while back.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "mixed",
+    "customer_id": "C12",
+    "session_id": "SESS212",
+    "card_id": "CARD23"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C12",
+        "session_id": "SESS212",
+        "challenge_type": "passcode",
+        "challenge_response": "3619"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C12",
+        "session_id": "record: SESS212",
+        "challenge_response": "caller: 3619",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "lock_card",
+      "arguments": {
+        "customer_id": "C12",
+        "session_id": "SESS212",
+        "card_id": "CARD23",
+        "reason": "lost_card",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C12",
+        "session_id": "record: SESS212",
+        "card_id": "record: CARD23",
+        "confirmed": "rule: 'The agent must ask for and receive explicit customer confirmation before locking a payment card.'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pickup_email_case",
+    "disposition": "no_mailbox_needed",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_locked_upon_confirmation"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

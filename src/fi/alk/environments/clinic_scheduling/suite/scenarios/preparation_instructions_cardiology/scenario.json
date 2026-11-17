@@ -1,0 +1,76 @@
+{
+  "name": "preparation_instructions_cardiology",
+  "scenario_key": "preparation-instructions-cardiology",
+  "scenario_id": "",
+  "use_case": "Intake, insurance, preparation and locations",
+  "branch": "Aisha Mensah asks how to prepare and what to bring for her cardiology follow-up appointment A03",
+  "tests": "the agent retrieves and reports the preparation instructions for cardiology",
+  "instruction": "You are Aisha Mensah (born 1979-03-22). You have an upcoming cardiology appointment (A03) and want to know what you should bring and how you need to prepare for it.\n\nYour details:\n- Name: Aisha Mensah\n- Date of birth: 1979-03-22\n- Appointment: A03 (Cardiology)",
+  "keywords": [
+    "preparation"
+  ],
+  "persona": {
+    "name": "Aisha Mensah",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Teacher",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, what do I need to bring for my cardiology appointment?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "patient_id": "P08",
+    "appointment_id": "A03"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1979-03-22",
+        "full_name": "Aisha Mensah"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_preparation_instructions",
+      "arguments": {
+        "specialty": "cardiology"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "specialty": "record: appointments A03 specialty cardiology"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "disposition": "happy_path",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "task": "preparation",
+    "counterparty": "individual_customer"
+  },
+  "sub_goals": [
+    "clinic_information_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

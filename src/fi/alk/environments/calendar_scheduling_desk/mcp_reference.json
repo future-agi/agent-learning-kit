@@ -1,0 +1,668 @@
+{
+  "server": "Google Calendar MCP server (Developer Preview)",
+  "endpoint": "https://calendarmcp.googleapis.com/mcp/v1",
+  "transport": "streamable_http",
+  "recorded": "2026-11-04",
+  "sources": [
+    "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server",
+    "https://developers.google.com/workspace/guides/configure-mcp-servers",
+    "https://developers.google.com/workspace/calendar/api/v3/reference/mcp/tools_list/list_calendars",
+    "https://developers.google.com/workspace/calendar/api/v3/reference/mcp/tools_list/list_events",
+    "https://developers.google.com/workspace/calendar/api/v3/reference/mcp/tools_list/get_event",
+    "https://developers.google.com/workspace/calendar/api/v3/reference/mcp/tools_list/search_events",
+    "https://developers.google.com/workspace/calendar/api/v3/reference/mcp/tools_list/suggest_time",
+    "https://developers.google.com/workspace/calendar/api/v3/reference/mcp/tools_list/create_event",
+    "https://developers.google.com/workspace/calendar/api/v3/reference/mcp/tools_list/update_event",
+    "https://developers.google.com/workspace/calendar/api/v3/reference/mcp/tools_list/delete_event"
+  ],
+  "notes": [
+    "The server publishes no MCP protocol version; the tool pages carry a Developer Preview warning.",
+    "Times are ISO 8601 strings (startTime, endTime) with an optional IANA timeZone; the Event's start and end are DateOrDateTime objects {dateTime, timeZone}.",
+    "calendarId defaults to the primary calendar; this world's calendar IDs are CAL-PRIMARY, CAL-TEAM and CAL-RO rather than email addresses.",
+    "Writes are approval-gated and version-checked by policy (workbook C06, C07): approval_id and expected_version are local arguments, and delete_event's recurring_action distinguishes one occurrence from the series (workbook M03 invariant 3)."
+  ],
+  "objects": {
+    "Event": [
+      "id",
+      "status",
+      "htmlLink",
+      "created",
+      "updated",
+      "summary",
+      "description",
+      "location",
+      "creator",
+      "organizer",
+      "start",
+      "end",
+      "recurrence",
+      "recurringEventId",
+      "originalStartTime",
+      "visibility",
+      "attendees",
+      "conferenceUrl",
+      "colorId",
+      "overrideReminders",
+      "attachments",
+      "guestPermissions",
+      "eventType",
+      "availability"
+    ],
+    "DateOrDateTime": [
+      "date",
+      "dateTime",
+      "timeZone"
+    ],
+    "Attendee": [
+      "id",
+      "email",
+      "displayName",
+      "organizer",
+      "self",
+      "resource",
+      "optionalAttendee",
+      "responseStatus",
+      "comment",
+      "additionalGuests"
+    ],
+    "CalendarListItem": [
+      "id",
+      "summary",
+      "description",
+      "timeZone"
+    ],
+    "TimeSlot": [
+      "start",
+      "end"
+    ]
+  },
+  "tools": {
+    "list_calendars": {
+      "input": {
+        "properties": {
+          "pageSize": {
+            "type": "integer",
+            "default": 100,
+            "maximum": 250
+          },
+          "pageToken": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "output": {
+        "properties": {
+          "calendars": "CalendarListItem[]",
+          "nextPageToken": "string"
+        },
+        "required": [
+          "calendars"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false
+      }
+    },
+    "list_events": {
+      "input": {
+        "properties": {
+          "calendarId": {
+            "type": "string"
+          },
+          "pageSize": {
+            "type": "integer",
+            "default": 100,
+            "maximum": 250
+          },
+          "pageToken": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "endTime": {
+            "type": "string"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "orderBy": {
+            "type": "string",
+            "enum": [
+              "default",
+              "startTime",
+              "startTimeDesc",
+              "lastModified"
+            ]
+          },
+          "fullText": {
+            "type": "string"
+          },
+          "eventType": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": []
+      },
+      "output": {
+        "properties": {
+          "summary": "string",
+          "description": "string",
+          "updated": "string",
+          "timeZone": "string",
+          "accessRole": "string",
+          "defaultReminders": "Reminder[]",
+          "events": "Event[]",
+          "nextPageToken": "string"
+        },
+        "required": [
+          "events"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false
+      }
+    },
+    "get_event": {
+      "input": {
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "calendarId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId"
+        ]
+      },
+      "output": {
+        "properties": {
+          "id": "see objects.Event",
+          "status": "see objects.Event",
+          "htmlLink": "see objects.Event",
+          "created": "see objects.Event",
+          "updated": "see objects.Event",
+          "summary": "see objects.Event",
+          "description": "see objects.Event",
+          "location": "see objects.Event",
+          "creator": "see objects.Event",
+          "organizer": "see objects.Event",
+          "start": "see objects.Event",
+          "end": "see objects.Event",
+          "recurrence": "see objects.Event",
+          "recurringEventId": "see objects.Event",
+          "originalStartTime": "see objects.Event",
+          "visibility": "see objects.Event",
+          "attendees": "see objects.Event",
+          "conferenceUrl": "see objects.Event",
+          "colorId": "see objects.Event",
+          "overrideReminders": "see objects.Event",
+          "attachments": "see objects.Event",
+          "guestPermissions": "see objects.Event",
+          "eventType": "see objects.Event",
+          "availability": "see objects.Event"
+        },
+        "required": [
+          "id",
+          "status",
+          "summary",
+          "start",
+          "end"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false
+      }
+    },
+    "search_events": {
+      "input": {
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "pageToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "output": {
+        "properties": {
+          "events": "Event[]",
+          "nextPageToken": "string"
+        },
+        "required": [
+          "events"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false
+      }
+    },
+    "suggest_time": {
+      "input": {
+        "properties": {
+          "attendeeEmails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "endTime": {
+            "type": "string"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "durationMinutes": {
+            "type": "integer",
+            "default": 30
+          },
+          "preferences": {
+            "type": "object",
+            "properties": {
+              "startHour": {
+                "type": "string"
+              },
+              "endHour": {
+                "type": "string"
+              },
+              "excludeWeekends": {
+                "type": "boolean"
+              },
+              "pageSize": {
+                "type": "integer",
+                "default": 5
+              }
+            }
+          }
+        },
+        "required": [
+          "attendeeEmails",
+          "startTime",
+          "endTime"
+        ]
+      },
+      "output": {
+        "properties": {
+          "timeSlots": "TimeSlot[]"
+        },
+        "required": [
+          "timeSlots"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "destructiveHint": false
+      }
+    },
+    "create_event": {
+      "input": {
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "endTime": {
+            "type": "string"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "recurrenceData": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "calendarId": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "allDay": {
+            "type": "boolean"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "notificationLevel": {
+            "type": "string",
+            "enum": [
+              "NOTIFICATION_LEVEL_UNSPECIFIED",
+              "NONE",
+              "EXTERNAL_ONLY",
+              "ALL"
+            ]
+          },
+          "addGoogleMeetUrl": {
+            "type": "boolean"
+          },
+          "visibility": {
+            "type": "string"
+          },
+          "colorId": {
+            "type": "string"
+          },
+          "googleMeetUrl": {
+            "type": "string"
+          },
+          "guestPermissions": {
+            "type": "object"
+          },
+          "availability": {
+            "type": "string"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "overrideReminders": {
+            "type": "array"
+          },
+          "attachments": {
+            "type": "array"
+          },
+          "attendeeEmails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "deprecated": true
+          }
+        },
+        "required": [
+          "summary",
+          "startTime",
+          "endTime"
+        ]
+      },
+      "output": {
+        "properties": {
+          "id": "see objects.Event",
+          "status": "see objects.Event",
+          "htmlLink": "see objects.Event",
+          "created": "see objects.Event",
+          "updated": "see objects.Event",
+          "summary": "see objects.Event",
+          "description": "see objects.Event",
+          "location": "see objects.Event",
+          "creator": "see objects.Event",
+          "organizer": "see objects.Event",
+          "start": "see objects.Event",
+          "end": "see objects.Event",
+          "recurrence": "see objects.Event",
+          "recurringEventId": "see objects.Event",
+          "originalStartTime": "see objects.Event",
+          "visibility": "see objects.Event",
+          "attendees": "see objects.Event",
+          "conferenceUrl": "see objects.Event",
+          "colorId": "see objects.Event",
+          "overrideReminders": "see objects.Event",
+          "attachments": "see objects.Event",
+          "guestPermissions": "see objects.Event",
+          "eventType": "see objects.Event",
+          "availability": "see objects.Event"
+        },
+        "required": [
+          "id",
+          "status",
+          "summary",
+          "start",
+          "end"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "idempotentHint": false,
+        "destructiveHint": false
+      }
+    },
+    "update_event": {
+      "input": {
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "calendarId": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "endTime": {
+            "type": "string"
+          },
+          "allDay": {
+            "type": "boolean"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "addedAttendees": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "removedAttendeeEmails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notificationLevel": {
+            "type": "string"
+          },
+          "addGoogleMeetUrl": {
+            "type": "boolean"
+          },
+          "visibility": {
+            "type": "string"
+          },
+          "colorId": {
+            "type": "string"
+          },
+          "googleMeetUrl": {
+            "type": "string"
+          },
+          "guestPermissions": {
+            "type": "object"
+          },
+          "availability": {
+            "type": "string"
+          },
+          "overrideReminders": {
+            "type": "array"
+          },
+          "addedAttachments": {
+            "type": "array"
+          },
+          "removedAttachmentFileUrls": {
+            "type": "array"
+          },
+          "addedAttendeeEmails": {
+            "type": "array",
+            "deprecated": true
+          }
+        },
+        "required": [
+          "eventId"
+        ]
+      },
+      "output": {
+        "properties": {
+          "id": "see objects.Event",
+          "status": "see objects.Event",
+          "htmlLink": "see objects.Event",
+          "created": "see objects.Event",
+          "updated": "see objects.Event",
+          "summary": "see objects.Event",
+          "description": "see objects.Event",
+          "location": "see objects.Event",
+          "creator": "see objects.Event",
+          "organizer": "see objects.Event",
+          "start": "see objects.Event",
+          "end": "see objects.Event",
+          "recurrence": "see objects.Event",
+          "recurringEventId": "see objects.Event",
+          "originalStartTime": "see objects.Event",
+          "visibility": "see objects.Event",
+          "attendees": "see objects.Event",
+          "conferenceUrl": "see objects.Event",
+          "colorId": "see objects.Event",
+          "overrideReminders": "see objects.Event",
+          "attachments": "see objects.Event",
+          "guestPermissions": "see objects.Event",
+          "eventType": "see objects.Event",
+          "availability": "see objects.Event"
+        },
+        "required": [
+          "id",
+          "status",
+          "summary",
+          "start",
+          "end"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "destructiveHint": false
+      }
+    },
+    "delete_event": {
+      "input": {
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "calendarId": {
+            "type": "string"
+          },
+          "notificationLevel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId"
+        ]
+      },
+      "output": {
+        "properties": {
+          "id": "see objects.Event",
+          "status": "see objects.Event",
+          "htmlLink": "see objects.Event",
+          "created": "see objects.Event",
+          "updated": "see objects.Event",
+          "summary": "see objects.Event",
+          "description": "see objects.Event",
+          "location": "see objects.Event",
+          "creator": "see objects.Event",
+          "organizer": "see objects.Event",
+          "start": "see objects.Event",
+          "end": "see objects.Event",
+          "recurrence": "see objects.Event",
+          "recurringEventId": "see objects.Event",
+          "originalStartTime": "see objects.Event",
+          "visibility": "see objects.Event",
+          "attendees": "see objects.Event",
+          "conferenceUrl": "see objects.Event",
+          "colorId": "see objects.Event",
+          "overrideReminders": "see objects.Event",
+          "attachments": "see objects.Event",
+          "guestPermissions": "see objects.Event",
+          "eventType": "see objects.Event",
+          "availability": "see objects.Event"
+        },
+        "required": [
+          "id",
+          "status"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "destructiveHint": true
+      }
+    }
+  },
+  "not_attached": {
+    "respond_to_event": "the M03 cases schedule for the acting user; RSVPs are outside M03"
+  },
+  "local": {
+    "parameters": {
+      "create_event": {
+        "approval_id": "approval event bound to the mutation (C06); required while cfg_require_approval is on"
+      },
+      "update_event": {
+        "approval_id": "as create_event",
+        "expected_version": "optimistic concurrency (C07 expected_entity_version); refused when stale"
+      },
+      "delete_event": {
+        "approval_id": "as create_event",
+        "recurring_action": "this_event (default) or all_events, workbook M03 invariant 3"
+      }
+    },
+    "result_fields": {
+      "list_calendars": {
+        "accessRole": "none, freeBusyReader, reader, writer or owner; the official list has it only on list_events"
+      },
+      "get_event": {
+        "version": "the event's version for expected_version"
+      },
+      "list_events": {
+        "calendar_events[].version": "as get_event"
+      },
+      "create_event": {
+        "version": "as get_event"
+      },
+      "update_event": {
+        "version": "as get_event"
+      },
+      "delete_event": {
+        "version": "as get_event"
+      }
+    }
+  }
+}

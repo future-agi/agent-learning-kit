@@ -1,0 +1,115 @@
+{
+  "name": "change_email_address_with_otp_step_up",
+  "scenario_key": "change-email-address-with-otp-step-up",
+  "scenario_id": "",
+  "use_case": "Change contact details with step-up verification",
+  "branch": "The customer wants a new email address on file. Passcode, OTP step-up, then the email is changed; confirmations go to both addresses.",
+  "tests": "passes when the agent verifies, completes the OTP step-up, and sets the email to clara.new@example.com.",
+  "instruction": "You want to change the email address on your account to clara.new@example.com. Provide passcode 8845 when asked and one-time passcode 173905 when the assistant says it has been sent. Confirm the new address when read back.\n\nYour details:\n- Name: Clara Dubois\n- Customer ID: C361\n- Session ID: SESS361\n- New email: clara.new@example.com\n- Passcode: 8845\n- One-time passcode: 173905",
+  "keywords": [
+    "contact_change",
+    "step_up"
+  ],
+  "persona": {
+    "name": "Clara Dubois",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Teacher",
+    "location": "United States",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Questioning",
+    "initial_message": "Hello, please change the email on my account to clara.new@example.com.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C361",
+    "session_id": "SESS361",
+    "field": "email",
+    "new_value": "clara.new@example.com",
+    "passcode": "8845",
+    "otp": "173905"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C361",
+        "session_id": "SESS361",
+        "challenge_type": "passcode",
+        "challenge_response": "8845"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C361",
+        "session_id": "record: SESS361",
+        "challenge_response": "caller: 8845",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C361",
+        "session_id": "SESS361",
+        "challenge_type": "otp",
+        "challenge_response": "173905"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C361",
+        "session_id": "record: SESS361",
+        "challenge_response": "caller: one-time passcode 173905",
+        "challenge_type": "rule: 'Contact-detail changes require a one-time passcode step-up on the verified session'"
+      }
+    },
+    {
+      "tool": "update_contact_details",
+      "arguments": {
+        "customer_id": "C361",
+        "session_id": "SESS361",
+        "field": "email",
+        "new_value": "clara.new@example.com",
+        "request_key": "REQ-C361-EMAIL-1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C361",
+        "session_id": "record: SESS361",
+        "field": "caller: email",
+        "new_value": "caller: clara.new@example.com"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "change_contact_details",
+    "disposition": "email",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "contact_details_updated_after_step_up",
+    "step_up_explained_and_enforced"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

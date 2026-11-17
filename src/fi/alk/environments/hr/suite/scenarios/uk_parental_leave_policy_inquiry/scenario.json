@@ -1,0 +1,81 @@
+{
+  "name": "uk_parental_leave_policy_inquiry",
+  "scenario_key": "uk-parental-leave-policy-inquiry",
+  "scenario_id": "",
+  "use_case": "Answer leave policy questions for the employee's region with citations",
+  "branch": "A UK employee asks about parental leave entitlement, which is governed by the global parental leave policy of 16 weeks.",
+  "tests": "Verifies that the assistant searches UK parental leave policy and explains the 16-week global entitlement.",
+  "instruction": "You are planning to take parental leave and want to know what the policy entitlement is for employees based in the UK.\n\nYour details:\n- Employee ID: E08\n- Name: Hannah Abbott\n- Region: UK\n- Question: How much parental leave am I entitled to as a UK employee?",
+  "keywords": [
+    "leave_policy",
+    "parental_leave"
+  ],
+  "persona": {
+    "name": "Hannah Abbott",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, could you provide information on the company parental leave policy and duration for UK staff?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "parental_leave_weeks": 16,
+    "employee_id": "E08",
+    "origin": "seed",
+    "region": "UK"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E08"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_hr_policy",
+      "arguments": {
+        "topic": "parental_leave",
+        "region": "UK",
+        "effective_date": "2026-10-26"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "topic": "record: parental_leave",
+        "region": "record: UK"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay": "none",
+    "task": "check_policy",
+    "overlay_vector": "none",
+    "counterparty": "employee_uk",
+    "overlay_intensity": "absent",
+    "interaction": "single_request",
+    "disposition": "standard"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

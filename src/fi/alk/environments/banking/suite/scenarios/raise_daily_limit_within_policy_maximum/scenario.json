@@ -1,0 +1,99 @@
+{
+  "name": "raise_daily_limit_within_policy_maximum",
+  "scenario_key": "raise-daily-limit-within-policy-maximum",
+  "scenario_id": "",
+  "use_case": "Service a lost, stolen or damaged card: lock, controls, replacement",
+  "branch": "The customer is buying furniture and wants the daily limit on the card ending 9174 raised from $2,500 to $4,000, which is within the $5,000 maximum.",
+  "tests": "passes when the agent verifies and sets daily_limit to 400000 (minor units) on CARD309.",
+  "instruction": "You are buying furniture this weekend and need your daily spending limit on debit card ending 9174 raised to $4,000 (it is $2,500 now). Ask for exactly $4,000 and confirm when summarised. Provide passcode 5502 when asked.\n\nYour details:\n- Name: Beatriz Costa\n- Customer ID: C309\n- Session ID: SESS309\n- Card: CARD309 (ending 9174)\n- New daily limit: $4,000.00\n- Passcode: 5502",
+  "keywords": [
+    "card_controls",
+    "daily_limit"
+  ],
+  "persona": {
+    "name": "Beatriz Costa",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, can you raise the daily limit on my card ending 9174 to $4,000 for this weekend?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C309",
+    "session_id": "SESS309",
+    "card_id": "CARD309",
+    "passcode": "5502",
+    "daily_limit": 400000
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C309",
+        "session_id": "SESS309",
+        "challenge_type": "passcode",
+        "challenge_response": "5502"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C309",
+        "session_id": "record: SESS309",
+        "challenge_response": "caller: 5502",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "update_card_controls",
+      "arguments": {
+        "customer_id": "C309",
+        "session_id": "SESS309",
+        "card_id": "CARD309",
+        "confirmed": true,
+        "daily_limit": 400000
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C309",
+        "session_id": "record: SESS309",
+        "card_id": "record: CARD309",
+        "confirmed": "rule: 'The agent confirms the exact changes before changing card controls'",
+        "daily_limit": "caller: 400000"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "service_card",
+    "disposition": "daily_limit",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_controls_updated_as_requested",
+    "servicing_change_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

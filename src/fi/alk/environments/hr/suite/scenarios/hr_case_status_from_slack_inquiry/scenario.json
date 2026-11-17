@@ -1,0 +1,81 @@
+{
+  "name": "hr_case_status_from_slack_inquiry",
+  "scenario_key": "hr-case-status-from-slack-inquiry",
+  "scenario_id": "",
+  "use_case": "Handle leave request boundaries such as insufficient balance, overlaps, or exceptions via HR case",
+  "branch": "An employee asks in Slack for an update on their open carry-forward dispute case CASE-2901, so the assistant checks the case status in the HR system.",
+  "tests": "Reads the employee's Slack thread and looks up the case status for CASE-2901.",
+  "instruction": "You posted a question in the #hr-help Slack channel asking about the status of your carry-forward dispute case CASE-2901. You want the assistant to check on the latest update and notes regarding your case.\n\nYour details:\n- Employee ID: E07\n- Name: George Clark\n- Slack Channel: CH_HRHELP\n- Message ID: SM10\n- Message Timestamp: 1792922400.000010\n- Case ID: CASE-2901",
+  "keywords": [
+    "hr_case",
+    "slack",
+    "leave_balance"
+  ],
+  "persona": {
+    "name": "George Clark",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi HR, can you check on the status of my case CASE-2901 posted in #hr-help?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "case_id": "CASE-2901",
+    "employee_id": "E07",
+    "channel_id": "CH_HRHELP",
+    "message_ts": "1792922400.000010"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792922400.000010",
+        "channel_id": "CH_HRHELP"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_hr_case_status",
+      "arguments": {
+        "case_id": "CASE-2901",
+        "employee_id": "E07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "case_id": "caller: CASE-2901"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "counterparty": "employee_uk",
+    "overlay_vector": "none",
+    "disposition": "disputed_balance",
+    "task": "handle_boundary_exception",
+    "interaction": "single_request",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "hr_case_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

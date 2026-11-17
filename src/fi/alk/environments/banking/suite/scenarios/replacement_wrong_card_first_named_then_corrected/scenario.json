@@ -1,0 +1,111 @@
+{
+  "name": "replacement_wrong_card_first_named_then_corrected",
+  "scenario_key": "replacement-wrong-card-first-named-then-corrected",
+  "scenario_id": "",
+  "use_case": "Service a lost, stolen or damaged card: lock, controls, replacement",
+  "branch": "The customer first asks to replace the card ending 8802, then corrects to the debit card ending 8801, which never arrived in the post. Only CARD304 is replaced.",
+  "tests": "passes when the agent verifies and requests a standard replacement for CARD304 (ending 8801) only, not for CARD305 that the customer first mentioned.",
+  "instruction": "Your new debit card never arrived in the post. Start by asking for a replacement of the card ending 8802; when the assistant reads back the card, realise your mistake and correct it: the card that never arrived is the debit card ending 8801, and 8802 is your credit card which is fine. Confirm a standard replacement for 8801 only. Provide passcode 6650 when asked.\n\nYour details:\n- Name: Marcus Reed\n- Customer ID: C304\n- Session ID: SESS304\n- Cards: CARD304 (debit, ending 8801), CARD305 (credit, ending 8802)\n- Passcode: 6650",
+  "keywords": [
+    "replacement",
+    "correction"
+  ],
+  "persona": {
+    "name": "Marcus Reed",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Teacher",
+    "location": "United States",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Questioning",
+    "initial_message": "Hi, my new card ending 8802 never arrived, can you send another one?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C304",
+    "session_id": "SESS304",
+    "card_id": "CARD304",
+    "distractor_card": "CARD305",
+    "passcode": "6650"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C304",
+        "session_id": "SESS304",
+        "challenge_type": "passcode",
+        "challenge_response": "6650"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C304",
+        "session_id": "record: SESS304",
+        "challenge_response": "caller: 6650",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "list_owned_cards",
+      "arguments": {
+        "customer_id": "C304",
+        "session_id": "SESS304"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "request_replacement_card",
+      "arguments": {
+        "customer_id": "C304",
+        "session_id": "SESS304",
+        "card_id": "CARD304",
+        "reason": "not_received",
+        "delivery_speed": "standard",
+        "confirmed": true,
+        "request_key": "REQ-C304-CARD304-RPL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C304",
+        "session_id": "record: SESS304",
+        "card_id": "record: CARD304",
+        "reason": "rule: lost, stolen, damaged, expired or not_received",
+        "delivery_speed": "caller: standard",
+        "confirmed": "rule: 'The agent confirms the exact card and option before requesting a replacement'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "service_card",
+    "disposition": "not_received",
+    "interaction": "correction",
+    "counterparty": "individual_cardholder",
+    "interface": "self_correction",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "replacement_requested_as_confirmed",
+    "servicing_change_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,92 @@
+{
+  "name": "cancel_subscription_annual_term_end",
+  "scenario_key": "cancel-subscription-annual-term-end",
+  "scenario_id": "",
+  "use_case": "Cancel at term end or explain renewal",
+  "branch": "Derek Coleman U404_ADMIN of DataFlow Systems T404 cancels annual subscription ending 2027-03-20; takes effect at annual term end",
+  "tests": "Schedules cancellation for annual subscription taking effect on annual term end date rather than month end",
+  "instruction": "You are Derek Coleman, Billing Admin for DataFlow Systems (Tenant ID: T404, Actor ID: U404_ADMIN). You want to cancel your annual subscription at the end of its annual term. Ask the Cloudnest billing desk to schedule the cancellation at the end of the term and confirm when asked.\n\nYour details:\n- Tenant ID: T404 (DataFlow Systems)\n- Admin Actor ID: U404_ADMIN\n- Term: annual",
+  "keywords": [
+    "cancellation_at_term_end"
+  ],
+  "persona": {
+    "name": "Derek Coleman",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I'm Derek Coleman, billing admin for DataFlow Systems (T404, U404_ADMIN). We want to cancel our annual subscription at the end of our current term.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "records": {
+      "tenant_id": "T404",
+      "subscription_id": "sub_404",
+      "admin_id": "U404_ADMIN"
+    }
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U404_ADMIN",
+        "tenant_id": "T404"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_renewal_terms",
+      "arguments": {
+        "actor_id": "U404_ADMIN",
+        "tenant_id": "T404"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_cancellation",
+      "arguments": {
+        "actor_id": "U404_ADMIN",
+        "effective_timing": "end_of_term",
+        "confirmation_code": "confirmed",
+        "request_key": "req_cancel_04",
+        "tenant_id": "T404"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T404"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interaction": "single_turn",
+    "disposition": "annual_term",
+    "overlay_vector": "none",
+    "counterparty": "billing_admin",
+    "interface": "clean_chat",
+    "task": "cancel_subscription"
+  },
+  "sub_goals": [
+    "cancellation_scheduled_at_term_end"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

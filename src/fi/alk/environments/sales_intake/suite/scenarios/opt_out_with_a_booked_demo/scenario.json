@@ -1,0 +1,106 @@
+{
+  "name": "opt_out_with_a_booked_demo",
+  "scenario_key": "opt-out-with-a-booked-demo",
+  "scenario_id": "",
+  "use_case": "Record consent and stop outreach",
+  "branch": "Prospect requests opt-out which also requires cancellation of their booked demo",
+  "tests": "the desk records opt-out for C421, stops outreach, and cancels booked demo D421 releasing slot DS421",
+  "instruction": "You are Nigel Caldwell from Tasman Health (email nigel.caldwell@tasmanhealth.example, contact C421, lead L421). You currently have a booked demo D421 with Chloe Nguyen for Nov 13. Tell the sales desk to remove you from all BrightDesk communications and cancel your booked demo. Confirm both actions when read back.\n\nYour details:\n- Name: Nigel Caldwell\n- Company: Tasman Health\n- Email: nigel.caldwell@tasmanhealth.example\n- Lead ID: L421\n- Existing Demo: D421",
+  "keywords": [
+    "opt_out",
+    "cancel_demo",
+    "consent",
+    "tasman_health"
+  ],
+  "persona": {
+    "name": "Nigel Caldwell",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, Nigel Caldwell from Tasman Health (nigel.caldwell@tasmanhealth.example). Please remove me from all BrightDesk communications and cancel our booked demo.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "leads": [
+      {
+        "status": "demo_booked",
+        "lead_id": "L421",
+        "country": "Australia",
+        "owner_rep_id": "A06"
+      }
+    ],
+    "demos": [
+      {
+        "lead_id": "L421",
+        "demo_id": "D421",
+        "slot_id": "DS421"
+      }
+    ],
+    "contacts": [
+      {
+        "name": "Nigel Caldwell",
+        "contact_id": "C421",
+        "email": "nigel.caldwell@tasmanhealth.example"
+      }
+    ],
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "nigel.caldwell@tasmanhealth.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_contact_consent",
+      "arguments": {
+        "status": "opted_out",
+        "source": "chat",
+        "contact_id": "C421",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "contact_id": "record: contacts[C421].contact_id",
+        "status": "record: consent_status.opted_out"
+      }
+    },
+    {
+      "tool": "cancel_demo",
+      "arguments": {
+        "confirmed": true,
+        "demo_id": "D421"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "demo_id": "record: demos[D421].demo_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "consent_recorded_and_respected",
+    "demo_cancelled_as_requested",
+    "facts_confirmed_before_write"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

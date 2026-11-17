@@ -1,0 +1,78 @@
+{
+  "name": "order_invoice_discount_breakdown_retrieval",
+  "scenario_key": "order-invoice-discount-breakdown-retrieval",
+  "scenario_id": "",
+  "use_case": "Track an order, report a damaged delivery",
+  "branch": "Customer requests order invoice and discount breakdown for expense claim submission",
+  "tests": "the agent verifies order ownership and retrieves the order invoice with itemized line discounts",
+  "instruction": "You need the official invoice for order O18 showing the itemized prices and discount breakdown so you can submit an expense claim to your employer.\n\nYour details:\nName: Rachel Green\nEmail: rachel.green@example.com\nPostal code: 10014\nOrder ID: O18",
+  "keywords": [
+    "track_order"
+  ],
+  "persona": {
+    "name": "Rachel Green",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I need a copy of my invoice for order O18 showing the itemized prices and discount breakdown for an expense report.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "customer_id": "C18",
+    "order_id": "O18"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "10014",
+        "order_id": "O18"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order_invoice",
+      "arguments": {
+        "order_id": "O18",
+        "customer_id": "C18"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O18"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "verified_owner",
+    "interface": "clean_prose",
+    "task": "track_order_report_damage",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "disposition": "discounted_pricing",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "subgoal_quote_net_breakdown",
+    "subgoal_verify_ownership_first"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

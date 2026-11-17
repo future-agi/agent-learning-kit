@@ -1,0 +1,122 @@
+{
+  "name": "ret_email_corrected_item",
+  "scenario_key": "ret-email-corrected-item",
+  "scenario_id": "",
+  "use_case": "Eligible item return and label generation",
+  "branch": "Customer Alice Morgan C01 does not restate the item; her email thread th_r01_wrong_item_corrected first asks to return AP02 from O21 and later settles on 1 pair of SH01 from O01, which the agent must discover",
+  "tests": "the agent reads the whole thread th_r01_wrong_item_corrected, finds that the latest messages replace the T-shirt AP02 (O21) with one pair of SH01 from O01, reads that back, and creates a return for 1 unit of SH01 on order O01 only",
+  "instruction": "Earlier you emailed customer support (thread th_r01_wrong_item_corrected) about a return. Over several messages you first asked to return the T-shirt (AP02) from order O21, then asked whether shoes could go back too, and in your latest messages you settled on returning one pair of the Road Running Shoes (SKU SH01) from order O01, keeping the T-shirt.\n\nIn chat, do not say which item you settled on: ask the agent to go by your latest email in that thread. If the agent reads back one pair of SH01 from order O01, confirm it. If the agent proposes the T-shirt from O21, or asks you to choose, say: please check my last email.\n\nYour details:\n- Name: Alice Morgan\n- Email: alice.morgan@example.com\n- Postal Code: 90210\n- Thread: th_r01_wrong_item_corrected",
+  "keywords": [
+    "email_support",
+    "item_correction"
+  ],
+  "persona": {
+    "name": "Alice Morgan",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm following up on my email thread th_r01_wrong_item_corrected about a return. Please set up the return the way my latest email there says.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_r01_wrong_item_corrected",
+    "order_id": "O01",
+    "origin": "seed",
+    "sku": "SH01",
+    "customer_id": "C01"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r01_wrong_item_corrected"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: email thread th_r01_wrong_item_corrected"
+      }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "90210",
+        "order_id": "O01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "items": [
+          {
+            "reason": "wrong_item",
+            "quantity": 1,
+            "sku": "SH01"
+          }
+        ],
+        "order_id": "O01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_return",
+      "arguments": {
+        "items": [
+          {
+            "quantity": 1,
+            "reason": "wrong_item",
+            "sku": "SH01"
+          }
+        ],
+        "order_id": "O01",
+        "customer_id": "C01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C01",
+        "order_id": "caller: order O01",
+        "items": "the items and quantities the customer settled on"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "correction_mid_turn",
+    "disposition": "cooperative",
+    "counterparty": "verified_owner",
+    "overlay": "none",
+    "task": "return_eligible_item",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "subgoal_return_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

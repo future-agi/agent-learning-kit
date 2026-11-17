@@ -1,0 +1,112 @@
+{
+  "name": "slack_reply_waiver_status_approved_post",
+  "scenario_key": "slack-reply-waiver-status-approved-post",
+  "scenario_id": "",
+  "use_case": "Answer an account manager in #billing-escalations",
+  "branch": "Billing lead provides approval APP-BL-401 to reply in BM01 thread that FinTrack dispute is in review under BC-301",
+  "tests": "Posts approved reply in BM01 Slack thread confirming waiver is with finance under review",
+  "instruction": "You are Elena Rostova, Billing Lead at Cloudnest. You want the billing desk to reply in the BM01 thread (ts: '1791799200.000001') in #billing-escalations regarding FinTrack (T06). You have approved the message text under approval ID 'APP-BL-401'. Ask the assistant to check the records and post the reply with approval APP-BL-401.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL13\n- Tenant ID: T06 (FinTrack)\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791799200.000001\n- Approval ID: APP-BL-401\n- Approved Message: \"FinTrack dispute is in review with finance under case BC-301. No credit has been issued yet.\"",
+  "keywords": [
+    "slack_escalation"
+  ],
+  "persona": {
+    "name": "Elena Rostova",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, please check FinTrack (T06) dispute in thread BM01 in #billing-escalations, and post our reply using approval APP-BL-401.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "records": {
+      "tenant_id": "T06",
+      "message_ts": "1791799200.000001",
+      "case_id": "BC-301",
+      "invoice_id": "inv_06_curr",
+      "credit_note_id": "CN-202",
+      "approval_id": "APP-BL-401",
+      "channel_id": "CH_BILLESC",
+      "caller_id": "U_BL13"
+    },
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1791799200.000001",
+        "channel_id": "CH_BILLESC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1791799200.000001"
+      }
+    },
+    {
+      "tool": "get_credit_notes",
+      "arguments": {
+        "tenant_id": "T06",
+        "actor_id": "U_BL13",
+        "invoice_id": "inv_06_curr"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_billing_case_status",
+      "arguments": {
+        "tenant_id": "T06",
+        "actor_id": "U_BL13",
+        "case_id": "BC-301"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "thread_ts": "1791799200.000001",
+        "channel_id": "CH_BILLESC",
+        "request_key": "req_sm_401",
+        "approval_id": "APP-BL-401",
+        "message": "FinTrack dispute is in review with finance under case BC-301. No credit has been issued yet."
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "caller: CH_BILLESC",
+        "thread_ts": "caller: 1791799200.000001"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interface": "clean_chat",
+    "interaction": "multi_turn",
+    "task": "answer_slack_escalation",
+    "disposition": "standard",
+    "overlay_intensity": "absent",
+    "counterparty": "billing_lead",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread",
+    "slack_claim_not_authority"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

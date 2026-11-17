@@ -1,0 +1,92 @@
+{
+  "name": "v15_s05_service_failure_label_escalation",
+  "scenario_key": "v15-s05-service-failure-label-escalation",
+  "scenario_id": "",
+  "use_case": "Support case escalation and service error recovery",
+  "branch": "Return R01 is authorized but synthetic shipping label generation failed; agent checks status and escalates via support case",
+  "tests": "the agent checks existing return R01 status, notes unavailable shipping label, and opens an escalated support case",
+  "instruction": "Your return R01 for order O05 was approved previously, but you never received a shipping label. You want to check the status of your return and have a support case opened if the label service is unavailable.\n\nYour details:\n- Name: Elena Rodriguez\n- Email: elena.rodriguez@example.com\n- Postal Code: 33101\n- Order ID: O05\n- Return ID: R01",
+  "keywords": [
+    "support_escalation"
+  ],
+  "persona": {
+    "name": "Elena Rodriguez",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "United Kingdom",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, my return R01 for order O05 was approved earlier, but I never received a return shipping label. Could you help me get the label or open a support ticket?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "return_id": "R01",
+    "order_id": "O05",
+    "origin": "mixed",
+    "customer_id": "C05",
+    "sku": "AP05"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O05",
+        "postal_code": "33101",
+        "email": "elena.rodriguez@example.com",
+        "customer_id": "C05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_return_status",
+      "arguments": {
+        "return_id": "R01",
+        "order_id": "O05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_support_case",
+      "arguments": {
+        "order_id": "O05",
+        "customer_id": "C05",
+        "details": "Return R01 shipping label unavailable; manual support case opened.",
+        "subject": "Return label generation error for R01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C05"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "counterparty": "verified_owner",
+    "disposition": "label_failure",
+    "interface": "clean_prose",
+    "task": "escalate_service_failure",
+    "overlay_intensity": "absent",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "subgoal_support_case_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

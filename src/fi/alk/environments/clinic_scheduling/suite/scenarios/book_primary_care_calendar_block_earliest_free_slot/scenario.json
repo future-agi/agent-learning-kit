@@ -1,0 +1,111 @@
+{
+  "name": "book_primary_care_calendar_block_earliest_free_slot",
+  "scenario_key": "book-primary-care-calendar-block-earliest-free-slot",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P4011 asks for Dr. Patel on Thursday 5 November at 09:00; calendar block BLK-01 prevents it; books 10:00 instead",
+  "tests": "passes when the agent checks Dr. Patel's calendar on CAL-D02, identifies the 09:00 block, and books the earliest free 10:00 slot",
+  "instruction": "You want to book a primary care appointment with Dr. Rohan Patel on Thursday 5 November at 09:00 at Riverbank West. Provide your details when asked. If told that 09:00 is blocked for training, accept the earliest available slot that morning (10:00) and confirm the booking.\n\nYour details:\n- Full name: Daniel Vance\n- Date of birth: 1980-06-18\n- Insurance: Bupa, Member ID: BU-100411\n- Preferred provider: Dr. Rohan Patel\n- Preferred location: Riverbank West\n- Requested time: Thursday 5 November 2026, 09:00\n- Alternative accepted: Thursday 5 November 2026, 10:00",
+  "keywords": [
+    "primary_care",
+    "booking",
+    "calendar_block",
+    "training_block"
+  ],
+  "persona": {
+    "name": "Daniel Vance",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "Good morning, I would like to book Dr. Rohan Patel on Thursday 5 November at 09:00 at Riverbank West.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "calendar_id": "CAL-D02",
+    "created_records": [
+      "patients.P4011",
+      "insurance.P4011"
+    ],
+    "event_id": "BLK-01"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1980-06-18",
+        "full_name": "Daniel Vance"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_events",
+      "arguments": {
+        "startTime": "2026-11-05T08:00:00Z",
+        "endTime": "2026-11-05T13:00:00Z",
+        "calendarId": "CAL-D02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "provider_id": "D02",
+        "date_to": "2026-11-05",
+        "patient_id": "P4011",
+        "location_id": "LOC-WES",
+        "date_from": "2026-11-05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "confirmed": true,
+        "patient_id": "P4011",
+        "self_pay": false,
+        "slot_id": "SL-D02-20261105-1000",
+        "reason": "General consultation",
+        "request_key": "req-p4011-d02-1105"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P4011",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "book_appointment",
+    "disposition": "calendar_block",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "interface": "clean",
+    "overlay_intensity": "absent",
+    "counterparty": "patient",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

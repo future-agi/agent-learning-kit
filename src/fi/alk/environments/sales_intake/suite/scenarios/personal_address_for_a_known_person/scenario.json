@@ -1,0 +1,98 @@
+{
+  "name": "personal_address_for_a_known_person",
+  "scenario_key": "personal-address-for-a-known-person",
+  "scenario_id": "",
+  "use_case": "Recognise known contacts and accounts",
+  "branch": "Known contact reaches out from an unrecognized personal email address; work email provided upon request updates existing lead",
+  "tests": "the desk searches contacts for personal email, requests official work email, and updates lead L423 without creating duplicate contacts",
+  "instruction": "You are Brooke Winslow from Kestrel Logistics (contact C423, lead L423). Initially reach out from your personal email (brooke.winslow@personalmail.example) stating that Kestrel Logistics now needs 70 seats instead of 65. When the sales desk asks for your official work email address to match your account, provide brooke.winslow@kestrellogistics.example. Confirm the updated seat count of 70 seats.\n\nYour details:\n- Name: Brooke Winslow\n- Company: Kestrel Logistics\n- Personal Email: brooke.winslow@personalmail.example\n- Work Email: brooke.winslow@kestrellogistics.example\n- Updated Seats: 70 seats",
+  "keywords": [
+    "personal_email",
+    "lead_updated_not_duplicated",
+    "work_email",
+    "kestrel_logistics"
+  ],
+  "persona": {
+    "name": "Brooke Winslow",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Brooke Winslow from Kestrel Logistics (brooke.winslow@personalmail.example). We now need 70 seats instead of 65.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "leads": [
+      {
+        "seats": 65,
+        "lead_id": "L423"
+      }
+    ],
+    "contacts": [
+      {
+        "account_id": "ACC423",
+        "email": "brooke.winslow@kestrellogistics.example",
+        "contact_id": "C423",
+        "name": "Brooke Winslow"
+      }
+    ],
+    "origin": "generated",
+    "accounts": [
+      {
+        "account_id": "ACC423",
+        "name": "Kestrel Logistics"
+      }
+    ]
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "brooke.winslow@personalmail.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "brooke.winslow@kestrellogistics.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "upsert_lead",
+      "arguments": {
+        "email": "brooke.winslow@kestrellogistics.example",
+        "seats": 70
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "email": "caller: brooke.winslow@kestrellogistics.example",
+        "seats": "caller: 70 seats"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "lead_updated_not_duplicated",
+    "facts_confirmed_before_write"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

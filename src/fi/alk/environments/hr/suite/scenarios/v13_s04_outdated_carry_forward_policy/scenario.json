@@ -1,0 +1,83 @@
+{
+  "name": "v13_s04_outdated_carry_forward_policy",
+  "scenario_key": "v13-s04-outdated-carry-forward-policy",
+  "scenario_id": "",
+  "use_case": "Check leave policy and carry-forward rules for an employee's region and effective date",
+  "branch": "The employee believes they can carry forward 10 days based on an old handbook, requiring the assistant to check effective policy and cite the current 5-day limit under version 2.0.",
+  "tests": "Answers that current US policy allows up to 5 days carry-forward, correcting the outdated 10-day belief.",
+  "instruction": "You are planning your year-end leave and want to know how much annual leave you can carry forward into 2027. You recall reading in an older employee handbook that up to 10 days could be carried over, and you ask the HR assistant whether you can carry forward 10 days of annual leave. If the policy has changed, you want the assistant to tell you the current effective rule and limit for the US.\n\nYour details:\n- Employee ID: E04\n- Name: Diana Prince\n- Region: US\n- Policy Topic: annual_leave\n- Question: Can I carry forward 10 days of unused annual leave into next year?",
+  "keywords": [
+    "carry_forward",
+    "leave_policy",
+    "leave_balance"
+  ],
+  "persona": {
+    "name": "Diana Prince",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Questioning",
+    "initial_message": "Can I carry forward ten days of unused annual leave into next year under our policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "outdated_belief": 10,
+    "employee_id": "E04",
+    "origin": "seed",
+    "region": "US",
+    "effective_carry_forward": 5
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_hr_policy",
+      "arguments": {
+        "effective_date": "2026-10-26",
+        "topic": "annual_leave",
+        "region": "US"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "region": "record: US",
+        "topic": "caller: annual_leave"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "employee_us",
+    "interaction": "single_request",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "disposition": "outdated_policy_belief",
+    "task": "check_policy"
+  },
+  "sub_goals": [
+    "policy_searched_for_region_and_topic",
+    "accurate_policy_terms_and_version_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

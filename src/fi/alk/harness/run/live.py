@@ -24,12 +24,12 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..simulator_voice import fixture_caller_phone
 from ..catalogue import load_catalogue
-from ..checks import Outcome, run_check
+from ..checks import Outcome, reference_of, run_check
 from ..folder import apply_setup, check_ready
 from ..scenario import Scenario
 from ..simulator import fill, load_simulator_prompt
+from ..simulator_voice import fixture_caller_phone
 from ..world.runtime import GeneratedWorld
 from ..world.snapshot import restore
 from .voice import WorldWebhook, repoint_assistant
@@ -160,7 +160,15 @@ def grade(scenario: Scenario, world: GeneratedWorld, world_root: Path) -> LiveRu
         if sub_goal is None:
             run.problems.append(f"{name} is not in the catalogue")
         elif sub_goal.deterministic():
-            run.settled.append(run_check(sub_goal.check, world, world.calls, name=name))
+            run.settled.append(
+                run_check(
+                    sub_goal.check,
+                    world,
+                    world.calls,
+                    name=name,
+                    reference=reference_of(scenario.solution),
+                )
+            )
         else:
             run.judged.append(name)
     run.calls = [

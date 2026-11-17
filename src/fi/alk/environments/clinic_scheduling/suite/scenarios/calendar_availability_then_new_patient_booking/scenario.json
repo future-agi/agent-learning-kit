@@ -1,0 +1,100 @@
+{
+  "name": "calendar_availability_then_new_patient_booking",
+  "scenario_key": "calendar-availability-then-new-patient-booking",
+  "scenario_id": "",
+  "use_case": "Provider availability questions from Calendar",
+  "branch": "Rachel Davies books a 10:00 primary care appointment on Wednesday 4 November with Dr. Nguyen for new patient Callum Davies",
+  "tests": "the agent verifies Callum Davies, checks available slots for Dr. Alicia Nguyen on 4 November, reports them from the calendar, and books the 10:00 slot after confirmation",
+  "instruction": "You are calling as the proxy for your husband, Callum Davies, who is registering as a new patient with Riverbank Clinics. Ask for what morning appointments Dr. Alicia Nguyen has next Wednesday 4 November. When offered the morning slots, choose the 10:00 AM slot at Riverbank Central, confirm the booking details, and complete the booking.\n\nYour details:\n- Caller: Rachel Davies (spouse/proxy)\n- Patient Name: Callum Davies\n- Date of birth: 1992-10-02\n- Provider: Dr. Alicia Nguyen (Primary Care)\n- Preferred date: Wednesday 4 November 2026, 10:00 AM\n- Insurance: Bupa (Member ID: BU-998877, Group: RB-01)",
+  "keywords": [
+    "availability",
+    "reschedule"
+  ],
+  "persona": {
+    "name": "Rachel Davies",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Business Owner",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm calling for my husband Callum Davies. He needs to see Dr. Alicia Nguyen next Wednesday morning, 4 November. What times does she have open?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "insurance_payer": "Bupa",
+    "patient_id": "P22"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1992-10-02",
+        "full_name": "Callum Davies"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "dob": "caller: 1992-10-02",
+        "full_name": "caller: Callum Davies"
+      }
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "patient_id": "P22",
+        "date_from": "2026-11-04",
+        "provider_id": "D01",
+        "date_to": "2026-11-04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "request_key": "REQ-P22-D01-1104",
+        "reason": "Primary care consultation",
+        "self_pay": false,
+        "patient_id": "P22",
+        "confirmed": true,
+        "slot_id": "SL-D01-20261104-1000"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id for Callum Davies (P22)",
+        "confirmed": "rule: 'Read back provider, date, time and location (or the insurer details) and get the patient\\'s yes before booking'",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "missing_information",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "task": "book",
+    "counterparty": "proxy",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "patient_verified_before_disclosure",
+    "appointment_booked_as_confirmed",
+    "confirmation_obtained_before_change"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

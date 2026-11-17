@@ -1,0 +1,100 @@
+{
+  "name": "duplicate_contact_and_lead_prevented_on_resubmission",
+  "scenario_key": "duplicate-contact-and-lead-prevented-on-resubmission",
+  "scenario_id": "",
+  "use_case": "Recognise known contacts and accounts",
+  "branch": "Devon Price from Solaris Cloud (C_DEVON) already has an open lead L_DEVON; when resubmitting in chat with updated seats (35) and timeline (0-3 months), the agent updates L_DEVON without creating a duplicate contact or lead",
+  "tests": "the agent searches for contact Devon Price by email, finds existing contact C_DEVON and open lead L_DEVON, and updates the existing lead without duplicating records",
+  "instruction": "You are Devon Price, IT Support Manager at Solaris Cloud in Canada. You previously submitted a web inquiry for 20 seats. You are now reaching out via live chat to update your requirements to 35 seats for helpdesk support, with confirmed budget and a timeline of 0-3 months.\n\nYour details:\n- Name: Devon Price\n- Email: devon.price@solaris-cloud.example\n- Company: Solaris Cloud\n- Country: Canada\n- Title: IT Support Manager\n- Updated Requirements: 35 seats, helpdesk use case, 0-3 months, budget confirmed",
+  "keywords": [
+    "duplicate",
+    "contact",
+    "lead"
+  ],
+  "persona": {
+    "name": "Devon Price",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Technician",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Devon Price from Solaris Cloud (devon.price@solaris-cloud.example). I submitted an inquiry earlier and want to update our details: we need 35 helpdesk seats, our timeline is 0-3 months, and our budget is confirmed.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "contact_id": "C_DEVON",
+    "lead_id": "L_DEVON",
+    "email": "devon.price@solaris-cloud.example"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "devon.price@solaris-cloud.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_contact",
+      "arguments": {
+        "contact_id": "C_DEVON"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "upsert_lead",
+      "arguments": {
+        "title": "IT Support Manager",
+        "source": "chat",
+        "seats": 35,
+        "company": "Solaris Cloud",
+        "use_case": "helpdesk",
+        "request_key": "REQ-DP-01",
+        "timeline": "0-3 months",
+        "budget": "confirmed",
+        "name": "Devon Price",
+        "country": "Canada",
+        "email": "devon.price@solaris-cloud.example"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "email": "caller: devon.price@solaris-cloud.example",
+        "seats": "caller: 35 seats",
+        "use_case": "caller: helpdesk",
+        "timeline": "caller: 0-3 months",
+        "budget": "caller: confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_vector": "none",
+    "task": "recognise_contact",
+    "overlay_intensity": "absent",
+    "disposition": "resubmission",
+    "interaction": "single_request",
+    "counterparty": "known_contact",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "lead_updated_not_duplicated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

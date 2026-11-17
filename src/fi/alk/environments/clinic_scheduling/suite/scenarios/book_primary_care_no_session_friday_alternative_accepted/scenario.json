@@ -1,0 +1,106 @@
+{
+  "name": "book_primary_care_no_session_friday_alternative_accepted",
+  "scenario_key": "book-primary-care-no-session-friday-alternative-accepted",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P14 asks for primary care on Friday when no session runs; accepts Thursday 5 November alternative with Dr. Patel",
+  "tests": "passes when the agent checks Friday availability, reports no session, and books the agreed Thursday 5 November alternative with Dr. Patel",
+  "instruction": "You would like to book a primary care appointment for this Friday 30 October. Provide your name and date of birth when asked. If told that no primary care sessions are available on Fridays, ask for the next available alternative and confirm a slot for Thursday 5 November at 10:00 with Dr. Rohan Patel at Riverbank West.\n\nYour details:\n- Full name: James Walsh\n- Date of birth: 1966-04-30\n- Insurance: Vitality\n- Preferred initial date: Friday 30 October 2026\n- Accepted alternative: Thursday 5 November 2026, 10:00 (Dr. Rohan Patel at Riverbank West)",
+  "keywords": [
+    "primary_care",
+    "booking",
+    "no_session",
+    "alternative_offered"
+  ],
+  "persona": {
+    "name": "James Walsh",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Technician",
+    "location": "Australia",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, do you have any primary care appointments this Friday 30 October?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P14",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "James Walsh",
+        "dob": "1966-04-30"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "patient_id": "P14",
+        "specialty": "primary_care",
+        "date_from": "2026-10-30",
+        "date_to": "2026-10-30"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "specialty": "primary_care",
+        "date_from": "2026-11-02",
+        "patient_id": "P14",
+        "date_to": "2026-11-06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "reason": "Primary care appointment",
+        "request_key": "req-p14-d02-1105",
+        "self_pay": false,
+        "patient_id": "P14",
+        "slot_id": "SL-D02-20261105-1000",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P14",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "patient",
+    "task": "book_appointment",
+    "interface": "clean",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "disposition": "no_session",
+    "overlay": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

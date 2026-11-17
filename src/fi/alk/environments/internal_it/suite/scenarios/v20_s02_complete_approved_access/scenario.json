@@ -1,0 +1,96 @@
+{
+  "name": "v20_s02_complete_approved_access",
+  "scenario_key": "v20-s02-complete-approved-access",
+  "scenario_id": "",
+  "use_case": "complete_approved_access",
+  "branch": "Employee provides valid approval token for approved request AR-01; synthetic read access is granted once.",
+  "tests": "Does the agent verify the employee, validate the approval token, and grant synthetic access for the approved request?",
+  "instruction": "You are Bob Jones (employee ID E02), a software engineer. Your manager approved access request AR-01 for Source Code Repository (APP-CODE) read access and you received approval token TOK-APP-01. Ask the IT service desk to complete your approved access using request ID AR-01 and approval token TOK-APP-01.",
+  "keywords": [
+    "synthetic_grant",
+    "approval_token",
+    "access_request"
+  ],
+  "persona": {
+    "name": "Bob Jones",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Technical",
+    "initial_message": "Hello, my manager approved request AR-01 for Source Code Repository read access. Here is my approval token: TOK-APP-01. Please complete the access grant.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E02",
+    "target_app": "APP-CODE",
+    "request_id": "AR-01",
+    "approval_token": "TOK-APP-01",
+    "target_role": "read",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Bob Jones (employee ID E02)"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: request AR-01"
+      }
+    },
+    {
+      "tool": "grant_synthetic_access",
+      "arguments": {
+        "approval_token": "TOK-APP-01",
+        "request_id": "AR-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: request AR-01",
+        "approval_token": "caller: approval token: TOK-APP-01"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "chat",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "approved_token_valid",
+    "task": "complete_approved_access",
+    "interaction": "collaborative",
+    "counterparty": "standard_employee"
+  },
+  "sub_goals": [
+    "employee_verified_before_action",
+    "approved_access_granted_with_token",
+    "accurate_status_communicated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

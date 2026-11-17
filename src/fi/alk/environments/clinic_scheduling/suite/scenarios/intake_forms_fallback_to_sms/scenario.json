@@ -1,0 +1,91 @@
+{
+  "name": "intake_forms_fallback_to_sms",
+  "scenario_key": "intake-forms-fallback-to-sms",
+  "scenario_id": "",
+  "use_case": "Intake, insurance, preparation and locations",
+  "branch": "Ben Carter has no email on file and requests intake forms by email; after email dispatch fails, the desk sends them by SMS",
+  "tests": "the agent sends intake forms by SMS after email is refused because no email is on file",
+  "instruction": "You are Ben Carter (born 1992-10-02), a new patient. Ask the desk to email you the intake forms for your appointment (A12). When told you have no email address on file, ask for them to be sent by text message / SMS to your mobile phone instead.\n\nYour details:\n- Name: Ben Carter\n- Date of birth: 1992-10-02\n- Appointment: A12",
+  "keywords": [
+    "intake",
+    "sms"
+  ],
+  "persona": {
+    "name": "Ben Carter",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, can you email me the intake forms for my appointment?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P20",
+    "origin": "seed",
+    "appointment_id": "A12"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1992-10-02",
+        "full_name": "Ben Carter"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "send_intake_forms",
+      "arguments": {
+        "patient_id": "P20",
+        "channel": "email",
+        "appointment_id": "A12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "send_intake_forms",
+      "arguments": {
+        "patient_id": "P20",
+        "channel": "sms",
+        "appointment_id": "A12"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel": "caller: SMS alternative",
+        "patient_id": "caller: Ben Carter",
+        "appointment_id": "record: appointments A12"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "intake",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "disposition": "missing_information",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "intake_forms_sent"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

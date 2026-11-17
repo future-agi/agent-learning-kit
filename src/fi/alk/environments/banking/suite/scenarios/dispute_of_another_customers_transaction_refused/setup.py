@@ -1,0 +1,6 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C332", "first_name": "Oscar", "last_name": "Delgado", "email": "oscar.delgado@example.com", "phone": "+1555123332", "passcode": "8830", "kba_answer": "Pepper", "otp_code": "364920", "address": "332 Example Street, Springfield, IL 62701", "customer_since": "2021-04-12"})
+    world.put("accounts", {"account_id": "ACC332", "customer_id": "C332", "account_number": "1000000332", "account_type": "checking", "balance": 350000, "currency": "USD", "status": "active"})
+    world.put("cards", {"card_id": "CARD332", "account_id": "ACC332", "customer_id": "C332", "card_number_masked": "••••••••••••1415", "last_four": "1415", "card_type": "debit", "status": "active", "expiration_date": "2028-11-30", "locked_at": None})
+    world.put("sessions", {"session_id": "SESS332", "customer_id": "C332", "channel": "chat", "is_verified": 0, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z", "step_up_at": None})
+    world.put("transactions", {"transaction_id": "TX332", "account_id": "ACC332", "card_id": "CARD332", "merchant_name": "Metro Grocer", "amount": 5400, "currency": "USD", "status": "posted", "transaction_time": "2026-10-23T18:00:00Z", "description": "Groceries", "statement_descriptor": "METRO GROCER"})

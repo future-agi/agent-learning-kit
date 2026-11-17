@@ -621,6 +621,9 @@ class OperationRecord:
     result: Any = None
     status: str = "ok"
     error: str = ""
+    # A refusal the world simulates on purpose keeps its writes: the caller commits it although
+    # the call failed.
+    keep_writes: bool = False
 
 
 @dataclass
@@ -730,6 +733,7 @@ def _operate(
         record.result = run_operation(record.tool, dict(record.arguments))
     except ToolError as exc:
         record.status, record.error = "refused", str(exc)
+        record.keep_writes = bool(getattr(exc, "keep_writes", False))
         return False
     except Exception as exc:  # noqa: BLE001 - a handler breaking is reported, not raised
         record.status, record.error = "fault", f"{type(exc).__name__}: {exc}"

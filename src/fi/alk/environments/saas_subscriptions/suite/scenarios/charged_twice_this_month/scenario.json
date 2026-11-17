@@ -1,0 +1,89 @@
+{
+  "name": "charged_twice_this_month",
+  "scenario_key": "charged-twice-this-month",
+  "scenario_id": "",
+  "use_case": "Explain an invoice or a bill increase",
+  "branch": "Admin asks why KiteWorks was billed twice in October; desk lists invoices and explains separate mid-cycle seat add-on",
+  "tests": "Lists invoices and explains monthly recurring vs mid-cycle seat add-on charges accurately",
+  "instruction": "You are Karen Kite, billing administrator for KiteWorks (Tenant ID: T11, User ID: U11_ADMIN). You noticed KiteWorks was billed twice in October (an invoice at the start of October and another invoice inv_11_addon). You want to ask why you were charged twice this month and have the agent explain what the charges are for.\n\nYour details:\n- Tenant ID: T11\n- User ID: U11_ADMIN\n- Inquiry: Explain why there are two invoices in October (inv_11_curr and inv_11_addon)",
+  "keywords": [
+    "invoice_explanation",
+    "line_items",
+    "role_authorization"
+  ],
+  "persona": {
+    "name": "Karen Kite",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Karen Kite from KiteWorks (T11, U11_ADMIN). It looks like we were billed twice in October. Can you explain why we have two charges this month?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "tenant_id": "T11",
+    "actor_id": "U11_ADMIN",
+    "origin": "seed",
+    "current_invoice": "inv_11_curr",
+    "addon_invoice": "inv_11_addon"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U11_ADMIN",
+        "tenant_id": "T11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T11",
+        "actor_id": "caller: U11_ADMIN"
+      }
+    },
+    {
+      "tool": "list_invoices",
+      "arguments": {
+        "actor_id": "U11_ADMIN",
+        "tenant_id": "T11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T11"
+      }
+    },
+    {
+      "tool": "get_invoice_lines",
+      "arguments": {
+        "invoice_id": "inv_11_addon",
+        "tenant_id": "T11",
+        "actor_id": "U11_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T11",
+        "invoice_id": "caller: inv_11_addon"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "invoice_history_reported",
+    "invoice_breakdown_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

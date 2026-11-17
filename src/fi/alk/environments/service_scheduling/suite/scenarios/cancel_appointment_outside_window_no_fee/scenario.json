@@ -1,0 +1,97 @@
+{
+  "name": "cancel_appointment_outside_window_no_fee",
+  "scenario_key": "cancel-appointment-outside-window-no-fee",
+  "scenario_id": "",
+  "use_case": "Reschedule or cancel an appointment",
+  "branch": "a customer cancels a booked appointment outside the 24-hour late window with no cancellation fee",
+  "tests": "the agent checks the policy, finds no late fee applies, and cancels appointment A420 with its calendar event",
+  "instruction": "You want to cancel your haircut with Marcus Hale at Midtown scheduled for Tuesday 3 November 2026 at 4:00 pm (appointment A420).\nSince the appointment is over a week away, there is no cancellation fee. Confirm the cancellation when asked.\n\nYour details:\n- Name: Devon Vance\n- Email: devon.vance@example.com\n- Phone: +1 212 555 0420\n- Appointment: A420\n- Date and time: Tuesday 3 November 2026 at 4:00 pm (16:00)",
+  "keywords": [
+    "cancel_appointment",
+    "haircut",
+    "no_fee"
+  ],
+  "persona": {
+    "name": "Devon Vance",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I need to cancel my haircut with Marcus on Tuesday November 3rd (A420).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "location_id": "L1",
+    "phone": "+1 212 555 0420",
+    "appointment_id": "A420",
+    "staff_id": "ST03",
+    "time": "2026-11-03T16:00",
+    "service_id": "SV3",
+    "name": "Devon Vance",
+    "origin": "mixed",
+    "email": "devon.vance@example.com",
+    "customer_id": "CU420"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 212 555 0420",
+        "email": "devon.vance@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_cancellation_policy",
+      "arguments": {
+        "appointment_id": "A420",
+        "customer_id": "CU420"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_appointment",
+      "arguments": {
+        "confirmed": true,
+        "customer_id": "CU420",
+        "acknowledged_fee": false,
+        "appointment_id": "A420"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: A420"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "disposition": "clean_cancel",
+    "task": "cancel_appointment",
+    "interaction": "single_request",
+    "counterparty": "returning_customer",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "appointment_cancelled_with_fee_disclosed"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

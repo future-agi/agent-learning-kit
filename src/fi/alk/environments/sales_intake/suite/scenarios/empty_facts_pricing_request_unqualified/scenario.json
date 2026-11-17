@@ -1,0 +1,87 @@
+{
+  "name": "empty_facts_pricing_request_unqualified",
+  "scenario_key": "empty-facts-pricing-request-unqualified",
+  "scenario_id": "",
+  "use_case": "Ask for missing facts instead of inventing them",
+  "branch": "Daniel Brooks (L21, Northwind, nothing known on lead) chats asking for a price; the desk asks for the facts and he gives none; the desk evaluates L21 with empty facts, keeping it needs_information",
+  "tests": "the agent asks Daniel Brooks for qualification facts and leaves lead L21 unqualified when no facts are provided",
+  "instruction": "You are Daniel Brooks with Northwind Support Co (lead L21). You want a pricing sheet. If the desk asks about seats, use case, timeline, or company details, refuse to give any numbers and just say you only want pricing for now.\n\nYour details:\n- Name: Daniel Brooks\n- Email: daniel.brooks@northwind-support.example\n- Company: Northwind Support Co\n- Lead ID: L21",
+  "keywords": [
+    "qualification"
+  ],
+  "persona": {
+    "name": "Daniel Brooks",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Daniel Brooks with Northwind Support Co. Just give me your pricing sheet.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contact_id": "C21",
+    "origin": "seed",
+    "lead_id": "L21"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "daniel.brooks@northwind-support.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L21"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: Northwind lead L21"
+      }
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "facts": {},
+        "lead_id": "L21"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: Northwind lead L21"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "qualify_lead",
+    "counterparty": "prospect",
+    "disposition": "missing_information",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "missing_info_requested",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

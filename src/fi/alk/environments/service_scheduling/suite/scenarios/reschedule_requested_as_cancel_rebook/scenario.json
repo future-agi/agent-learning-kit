@@ -1,0 +1,101 @@
+{
+  "name": "reschedule_requested_as_cancel_rebook",
+  "scenario_key": "reschedule-requested-as-cancel-rebook",
+  "scenario_id": "",
+  "use_case": "Reschedule or cancel an appointment",
+  "branch": "customer asks to cancel an existing appointment and rebook for next day; the agent reschedules atomically using reschedule_appointment",
+  "tests": "the agent reschedules appointment A425 atomically without cancelling the original appointment first",
+  "instruction": "You have a Haircut appointment (A425) with Lucia at Midtown on Wednesday 4 November 2026 at 10:00 am.\nYou want to change your appointment to Thursday 5 November 2026 at 10:00 am. You ask the desk to cancel Wednesday and book Thursday instead. When they explain they can reschedule it directly, agree and confirm the move.\n\nYour details:\n- Name: Miles Davis\n- Email: miles.davis@example.com\n- Phone: +1 212 555 0425\n- Existing appointment ID: A425\n- Service: Haircut\n- Staff: Lucia Fernandez\n- Location: Midtown Studio (410 Lexington Ave)\n- New requested time: Thursday 5 November 2026 at 10:00 am (2026-11-05T10:00)\n- Time zone: America/New_York (-05:00)",
+  "keywords": [
+    "reschedule_appointment",
+    "atomic_reschedule",
+    "haircut"
+  ],
+  "persona": {
+    "name": "Miles Davis",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I have a haircut on Wednesday Nov 4 at 10 am (A425). Can you cancel that and book me for Thursday Nov 5 at 10 am instead?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "phone": "+1 212 555 0425",
+    "origin": "mixed",
+    "new_time": "2026-11-05T10:00",
+    "location_id": "L1",
+    "customer_id": "CU425",
+    "appointment_id": "A425",
+    "name": "Miles Davis",
+    "email": "miles.davis@example.com",
+    "staff_id": "ST02",
+    "service_id": "SV3"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 212 555 0425",
+        "email": "miles.davis@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "appointment_id": "A425",
+        "customer_id": "CU425"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "customer_id": "CU425",
+        "request_key": "REQ-RESCHED-A425",
+        "appointment_id": "A425",
+        "confirmed": true,
+        "utc_offset": "-05:00",
+        "new_start_time": "2026-11-05T10:00"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "new_start_time": "caller: 2026-11-05T10:00",
+        "utc_offset": "caller: -05:00",
+        "appointment_id": "record: A425"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "cancel_and_rebook_request",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "task": "reschedule_appointment",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "returning_customer",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

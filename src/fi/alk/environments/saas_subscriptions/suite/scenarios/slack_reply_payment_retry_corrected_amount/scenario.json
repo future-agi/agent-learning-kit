@@ -1,0 +1,99 @@
+{
+  "name": "slack_reply_payment_retry_corrected_amount",
+  "scenario_key": "slack-reply-payment-retry-corrected-amount",
+  "scenario_id": "",
+  "use_case": "Answer an account manager in #billing-escalations",
+  "branch": "BM05/BM06 thread corrects amount to $33.00 for KiteWorks T11 inv_11_addon; assistant checks payment status and posts with APP-BL-404",
+  "tests": "Checks payment retry status and posts approved Slack response in BM05 thread",
+  "instruction": "You are Sarah Jenkins, Billing Lead at Cloudnest. In BM05/BM06 (ts: '1791968400.000005') in #billing-escalations, an account manager corrected the amount for KiteWorks (T11) inv_11_addon. You have approved a reply under 'APP-BL-404'. Ask the assistant to check the thread and payment status, and post the reply with approval APP-BL-404.\n\nYour details:\n- Role: Billing Lead\n- Your User ID: U_BL9\n- Tenant ID: T11 (KiteWorks)\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791968400.000005\n- Invoice ID: inv_11_addon\n- Approval ID: APP-BL-404\n- Approved Message: \"Confirmed: inv_11_addon total is $33.00 with tax, retrying on 2026-10-17.\"",
+  "keywords": [
+    "slack_escalation"
+  ],
+  "persona": {
+    "name": "Sarah Jenkins",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, please check the BM05 thread in #billing-escalations for KiteWorks (T11) inv_11_addon, and post the approved response with approval APP-BL-404.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "records": {
+      "message_ts": "1791968400.000005",
+      "invoice_id": "inv_11_addon",
+      "approval_id": "APP-BL-404",
+      "channel_id": "CH_BILLESC",
+      "tenant_id": "T11",
+      "caller_id": "U_BL9"
+    }
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1791968400.000005",
+        "channel_id": "CH_BILLESC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1791968400.000005"
+      }
+    },
+    {
+      "tool": "get_payment_status",
+      "arguments": {
+        "actor_id": "U_BL9",
+        "invoice_id": "inv_11_addon",
+        "tenant_id": "T11"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_send_message",
+      "arguments": {
+        "request_key": "req_sm_404",
+        "thread_ts": "1791968400.000005",
+        "approval_id": "APP-BL-404",
+        "message": "Confirmed: inv_11_addon total is $33.00 with tax, retrying on 2026-10-17.",
+        "channel_id": "CH_BILLESC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "thread_ts": "caller: 1791968400.000005",
+        "channel_id": "caller: CH_BILLESC"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "single_turn",
+    "overlay_vector": "none",
+    "interface": "clean_chat",
+    "overlay": "none",
+    "counterparty": "billing_lead",
+    "overlay_intensity": "absent",
+    "task": "answer_slack_escalation",
+    "disposition": "retry_payment"
+  },
+  "sub_goals": [
+    "slack_reply_in_thread"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

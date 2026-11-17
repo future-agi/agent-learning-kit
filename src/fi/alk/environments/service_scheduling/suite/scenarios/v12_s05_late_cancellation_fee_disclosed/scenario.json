@@ -1,0 +1,90 @@
+{
+  "name": "v12_s05_late_cancellation_fee_disclosed",
+  "scenario_key": "v12-s05-late-cancellation-fee-disclosed",
+  "scenario_id": "",
+  "use_case": "Reschedule or cancel an appointment",
+  "branch": "David Okoye cancels today's 3 pm consultation (A004), which starts in 10 hours, inside the 24-hour window, so the $25.00 late fee must be disclosed and accepted first",
+  "tests": "the agent checks the policy, states the $25.00 fee, and cancels only after David accepts it",
+  "instruction": "You want to cancel your consultation today at 3 pm at Midtown (A004). If a fee is mentioned, ask how much, then accept it and go ahead.\n\nYour details:\n- Name: David Okoye\n- Email: david.okoye@example.com\n- Phone: +1 212 555 0104\n- Appointment: A004",
+  "keywords": [
+    "workbook:V12-S05"
+  ],
+  "persona": {
+    "name": "David Okoye",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "I need to cancel my consultation this afternoon.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "david.okoye@example.com",
+        "phone": "+1 212 555 0104"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_cancellation_policy",
+      "arguments": {
+        "appointment_id": "A004",
+        "customer_id": "CU04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_appointment",
+      "arguments": {
+        "appointment_id": "A004",
+        "customer_id": "CU04",
+        "confirmed": true,
+        "acknowledged_fee": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A004",
+        "customer_id": "caller",
+        "confirmed": "the customer agreed",
+        "acknowledged_fee": "the customer accepted the fee"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "cancel",
+    "disposition": "late_window",
+    "interaction": "confirmation",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_cancelled_with_fee_disclosed",
+    "fee_disclosed_before_cancel"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

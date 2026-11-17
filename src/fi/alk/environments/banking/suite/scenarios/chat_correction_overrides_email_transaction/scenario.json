@@ -1,0 +1,112 @@
+{
+  "name": "chat_correction_overrides_email_transaction",
+  "scenario_key": "chat-correction-overrides-email-transaction",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the banking tools",
+  "branch": "Alice's thread settled on Target TX17, but in chat she says she has since checked again and the charge she does not recognise is the Delta Air Lines one, TX19. The latest word governs: the dispute is for TX19, and the thread is read first.",
+  "tests": "passes when the agent reads th_c01_complaint, verifies Alice and files exactly one dispute for TX19 (her correction in chat), none for TX17 or TX01.",
+  "instruction": "You emailed support last week about a charge on your card ending 4821 and your emails ended on the Target charge. Since then you found the Target receipt: Target was you. The charge you actually do not recognise is Delta Air Lines $125.00 from October 18 (TX19). In this chat tell the assistant you have a correction to your emails and want TX19 disputed instead; do not lock the card. Provide passcode 8194 when asked.\n\nYour details:\n- Name: Alice Smith\n- Customer ID: C01\n- Session ID: SESS201\n- Email: alice.smith@example.com\n- Card: CARD01 (ending 4821)\n- Dispute this: TX19 (Delta Air Lines, $125.00)\n- Not this: TX17 (Target, recognised now)\n- Passcode: 8194",
+  "keywords": [
+    "email_pickup",
+    "correction",
+    "dispute_filing"
+  ],
+  "persona": {
+    "name": "Alice Smith",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, about my emails on the card ending 4821: I have a correction. The charge I don't recognise is actually the Delta one.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "mixed",
+    "customer_id": "C01",
+    "session_id": "SESS201",
+    "thread_id": "th_c01_complaint",
+    "transaction_id": "TX19",
+    "superseded": [
+      "TX01",
+      "TX17"
+    ]
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C01",
+        "session_id": "SESS201",
+        "challenge_type": "passcode",
+        "challenge_response": "8194"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C01",
+        "session_id": "record: SESS201",
+        "challenge_response": "caller: 8194",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c01_complaint"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c01_complaint, Alice's thread"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_id": "C01",
+        "session_id": "SESS201",
+        "transaction_id": "TX19",
+        "dispute_reason": "unrecognized_charge",
+        "request_key": "REQ-C01-TX19",
+        "customer_notes": "Customer corrected in chat: Delta Air Lines charge, Target recognised"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C01",
+        "session_id": "record: SESS201",
+        "transaction_id": "record: TX19",
+        "dispute_reason": "rule: one of the allowed dispute reasons in the Transaction Dispute Policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pickup_email_case",
+    "disposition": "chat_correction",
+    "interaction": "correction",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_filed_and_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

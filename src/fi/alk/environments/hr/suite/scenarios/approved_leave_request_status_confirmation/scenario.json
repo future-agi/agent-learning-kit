@@ -1,0 +1,83 @@
+{
+  "name": "approved_leave_request_status_confirmation",
+  "scenario_key": "approved-leave-request-status-confirmation",
+  "scenario_id": "",
+  "use_case": "Report a leave request's approval status truthfully",
+  "branch": "Employee asks in chat if their approved wedding leave is officially confirmed",
+  "tests": "the agent looks up the employee profile and request status to confirm the approved status of the leave request",
+  "instruction": "You submitted a leave request REQ-1105 for your wedding from November 23 to 27, and you want to confirm via chat whether it has been approved by your manager and officially booked in the system so you can finalize your travel plans.\n\nYour details:\n- Name: Hannah Abbott\n- Employee ID: E08\n- Leave Request ID: REQ-1105\n- Leave Type: Annual Leave\n- Requested Dates: 2026-11-23 to 2026-11-27\n- Manager: M02",
+  "keywords": [
+    "leave_status",
+    "approved_request",
+    "status_confirmation",
+    "annual_leave"
+  ],
+  "persona": {
+    "name": "Hannah Abbott",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! Could you check on my leave request REQ-1105 for November 23-27 to confirm if it's officially approved in the system?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "request_id": "REQ-1105",
+    "origin": "seed",
+    "employee_id": "E08"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E08",
+        "actor_id": "E08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E08"
+      }
+    },
+    {
+      "tool": "get_request_status",
+      "arguments": {
+        "request_id": "REQ-1105",
+        "actor_id": "E08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: REQ-1105"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "interaction": "fresh_single_turn",
+    "disposition": "approved_request",
+    "counterparty": "employee",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "task": "report_leave_status"
+  },
+  "sub_goals": [
+    "employee_profile_retrieved",
+    "request_status_checked"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

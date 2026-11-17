@@ -1,0 +1,83 @@
+{
+  "name": "cancel_appointment_confirmed",
+  "scenario_key": "cancel-appointment-confirmed",
+  "scenario_id": "",
+  "use_case": "Reschedule and cancel",
+  "branch": "Nia Okafor cancels her setup dermatology appointment A401 on Thursday 5 November 13:30 after confirming",
+  "tests": "the agent verifies Nia Okafor, confirms which appointment, and cancels A401",
+  "instruction": "You are Nia Okafor (born 1968-09-30). You have a dermatology appointment A401 on Thursday 5 November at 13:30 with Dr. Sofia Morales at Riverbank Central that you wish to cancel. Confirm when asked.\n\nYour details:\n- Name: Nia Okafor\n- Date of birth: 1968-09-30\n- Appointment ID: A401\n- Date and time: Thursday 5 November 2026 at 13:30\n- Specialty: Dermatology\n- Provider: Dr. Sofia Morales\n- Location: Riverbank Central",
+  "keywords": [
+    "cancel"
+  ],
+  "persona": {
+    "name": "Nia Okafor",
+    "gender": "female",
+    "age_group": "50-60",
+    "occupation": "Doctor",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Good morning, I would like to cancel my dermatology appointment A401 on Thursday 5 November.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "patient_id": "P405",
+    "appointment_id": "A401"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1968-09-30",
+        "full_name": "Nia Okafor"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "full_name": "caller: Nia Okafor",
+        "dob": "caller: 1968-09-30"
+      }
+    },
+    {
+      "tool": "cancel_appointment",
+      "arguments": {
+        "confirmed": true,
+        "reason": "No longer needed",
+        "appointment_id": "A401"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A401",
+        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\""
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "cancel",
+    "counterparty": "first_time",
+    "interaction": "single_turn",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "disposition": "happy_path",
+    "interface": "clean_prose",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "appointment_cancelled_as_requested",
+    "confirmation_obtained_before_change"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

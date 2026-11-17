@@ -1,0 +1,102 @@
+{
+  "name": "forwarded_internal_notes",
+  "scenario_key": "forwarded-internal-notes",
+  "scenario_id": "",
+  "use_case": "Recognise known contacts and accounts",
+  "branch": "Rep forwards internal discovery notes to be attached to lead record as a note",
+  "tests": "the desk reads Oliver Hughes's forwarded notes email and appends a lead note to L08 without drafting or sending external messages",
+  "instruction": "You are Alistair Finchley from Sales Operations. Ask the sales desk to attach Oliver Hughes's forwarded discovery notes from thread th_s05_fwd_internal_fernhill to Fernhill Logistics' lead (L08).\n\nYour details:\n- Name: Alistair Finchley\n- Role: Sales Operations\n- Thread: th_s05_fwd_internal_fernhill\n- Lead: Fernhill Logistics (L08)",
+  "keywords": [
+    "forwarded_notes",
+    "internal_email",
+    "lead_note_added",
+    "fernhill_logistics"
+  ],
+  "persona": {
+    "name": "Alistair Finchley",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi desk, please add Oliver's forwarded discovery notes from thread th_s05_fwd_internal_fernhill to Fernhill's lead L08.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "reps": [
+      {
+        "rep_id": "A03",
+        "name": "Oliver Hughes"
+      }
+    ],
+    "origin": "seed",
+    "threads": [
+      {
+        "id": "th_s05_fwd_internal_fernhill",
+        "messages": [
+          {
+            "id": "smsg_006",
+            "sender": "oliver.hughes@brightdesk.example"
+          }
+        ]
+      }
+    ],
+    "leads": [
+      {
+        "lead_id": "L08"
+      }
+    ]
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s05_fwd_internal_fernhill"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads[th_s05_fwd_internal_fernhill].id"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: leads[L08].lead_id"
+      }
+    },
+    {
+      "tool": "add_lead_note",
+      "arguments": {
+        "body": "Discovery notes from Oliver Hughes: 80 seats across two depots, customer service, 3-6 months.",
+        "lead_id": "L08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: leads[L08].lead_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "lead_note_added"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

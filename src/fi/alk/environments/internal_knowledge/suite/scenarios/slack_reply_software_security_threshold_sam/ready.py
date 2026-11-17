@@ -1,0 +1,6 @@
+def ready(world):
+    state = world.state()
+    row = next((r for r in state.get("slack_approvals", []) if r.get("approval_id") == 'APP-KN-412'), None)
+    if not row or row.get("status") != 'approved':
+        return "slack_approvals APP-KN-412 is missing or its status is not approved"
+    return None

@@ -1,0 +1,97 @@
+{
+  "name": "slack_inquiry_leave_approver_chain",
+  "scenario_key": "slack-inquiry-leave-approver-chain",
+  "scenario_id": "",
+  "use_case": "Report a leave request's approval status truthfully",
+  "branch": "Employee asks in Slack who approves their requested leave and what the approval routing is",
+  "tests": "the agent reads the Slack thread, retrieves request status and approval chain, and explains who approves the leave request",
+  "instruction": "You submitted a leave request REQ-1109 for December 7 to 8 and posted a question in the #hr-help Slack channel asking who approves your request. You want to understand who is assigned to approve your leave and what the standard approval chain looks like.\n\nYour details:\n- Name: Alice Johnson\n- Employee ID: E01\n- Leave Request ID: REQ-1109\n- Dates: 2026-12-07 to 2026-12-08\n- Slack Channel: CH_HRHELP\n- Slack Thread: 1792773000.000012",
+  "keywords": [
+    "approval_chain",
+    "approver_inquiry",
+    "leave_status",
+    "slack_thread"
+  ],
+  "persona": {
+    "name": "Alice Johnson",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Questioning",
+    "initial_message": "Hi, I posted in Slack about REQ-1109 asking who approves my leave for December 7-8. Could you check the approver and approval chain for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E01",
+    "origin": "seed",
+    "channel_id": "CH_HRHELP",
+    "message_ts": "1792773000.000012",
+    "request_id": "REQ-1109"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_HRHELP",
+        "message_ts": "1792773000.000012"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: CH_HRHELP",
+        "message_ts": "record: 1792773000.000012"
+      }
+    },
+    {
+      "tool": "get_request_status",
+      "arguments": {
+        "actor_id": "E01",
+        "request_id": "REQ-1109"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: REQ-1109"
+      }
+    },
+    {
+      "tool": "get_approval_chain",
+      "arguments": {
+        "working_days": 2,
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E01"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "report_leave_status",
+    "interaction": "fresh_single_turn",
+    "overlay_vector": "none",
+    "counterparty": "employee",
+    "disposition": "approval_routing_inquiry",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "status_reported_from_hr_system",
+    "approval_chain_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

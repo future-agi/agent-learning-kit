@@ -1,0 +1,114 @@
+{
+  "name": "v13_s01_three_working_days_requested",
+  "scenario_key": "v13-s01-three-working-days-requested",
+  "scenario_id": "",
+  "use_case": "Check leave balance and submit a leave request with manager approval routing",
+  "branch": "The requested four-calendar-day span contains a public holiday (Veterans Day), resulting in exactly three working days submitted for manager approval.",
+  "tests": "Submits a valid 3-working-day leave request routed to manager M01 with pending status.",
+  "instruction": "You want to request time off from Monday, November 9, 2026 to Thursday, November 12, 2026 for annual leave. You know that Wednesday, November 11 is Veterans Day (a company holiday), so you expect this to use 3 working days of your annual leave. You want the assistant to verify your balance and submit the leave request to your manager.\n\nYour details:\n- Employee ID: E01\n- Name: Alice Johnson\n- Region: US\n- Leave Type: annual\n- Start Date: 2026-11-09\n- End Date: 2026-11-12\n- Reason: Personal family trip",
+  "keywords": [
+    "leave_submission",
+    "leave_balance",
+    "working_days",
+    "manager_approval"
+  ],
+  "persona": {
+    "name": "Alice Johnson",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I would like to check my balance and submit an annual leave request from November 9 to November 12, 2026.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "working_days": 3,
+    "region": "US",
+    "manager_id": "M01",
+    "employee_id": "E01",
+    "origin": "seed",
+    "requested_span": "2026-11-09 to 2026-11-12"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E01"
+      }
+    },
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "leave_type": "annual",
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E01",
+        "leave_type": "caller: annual"
+      }
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "start_date": "2026-11-09",
+        "region": "US",
+        "end_date": "2026-11-12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "submit_leave_request",
+      "arguments": {
+        "reason": "Personal family trip",
+        "end_date": "2026-11-12",
+        "employee_id": "E01",
+        "start_date": "2026-11-09",
+        "leave_type": "annual"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "end_date": "caller: 2026-11-12",
+        "start_date": "caller: 2026-11-09",
+        "leave_type": "caller: annual",
+        "employee_id": "caller: E01"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "employee_us",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "task": "submit_leave_request",
+    "overlay_intensity": "absent",
+    "interaction": "single_request",
+    "disposition": "standard",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "leave_request_submitted_correctly",
+    "truthful_status_and_approval_workflow_explained",
+    "details_confirmed_before_submission"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

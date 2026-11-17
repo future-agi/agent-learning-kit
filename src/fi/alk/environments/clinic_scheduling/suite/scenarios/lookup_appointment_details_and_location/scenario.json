@@ -1,0 +1,76 @@
+{
+  "name": "lookup_appointment_details_and_location",
+  "scenario_key": "lookup-appointment-details-and-location",
+  "scenario_id": "",
+  "use_case": "Intake, insurance, preparation and locations",
+  "branch": "Nathan Brooks asks where and when his upcoming physiotherapy appointment A403 is scheduled",
+  "tests": "the agent retrieves appointment A403 and reports its date, time, provider and location",
+  "instruction": "You are Nathan Brooks (born 1988-03-14). You want to check the date, time, and clinic location of your upcoming appointment (A403).\n\nYour details:\n- Name: Nathan Brooks\n- Date of birth: 1988-03-14\n- Appointment ID: A403",
+  "keywords": [
+    "appointment"
+  ],
+  "persona": {
+    "name": "Nathan Brooks",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, could you remind me when and where my upcoming appointment A403 is?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "appointment_id": "A403",
+    "origin": "generated",
+    "patient_id": "P403"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Nathan Brooks",
+        "dob": "1988-03-14"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "appointment_id": "A403"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: appointments A403"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "disposition": "happy_path",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "task": "appointment"
+  },
+  "sub_goals": [
+    "appointment_details_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,84 @@
+{
+  "name": "v20_s05_duplicate_access_idempotency",
+  "scenario_key": "v20-s05-duplicate-access-idempotency",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Employee already possesses active viewer entitlement; agent inspects current access and avoids creating duplicate requests or grants.",
+  "tests": "Does the agent check existing access and inform the employee they already have active access without creating duplicate requests or grants?",
+  "instruction": "You are Evan Wright (employee ID E05), an analytics manager. You already hold active viewer access on Reporting Application (APP-RPT) but forgot and are asking the IT service desk to grant you read-only viewer access to APP-RPT again. If told you already have active access, thank them and acknowledge.",
+  "keywords": [
+    "duplicate_access",
+    "idempotency",
+    "least_privilege"
+  ],
+  "persona": {
+    "name": "Evan Wright",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "India",
+    "personality": "Analytical",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I would like to request read-only viewer access to the Reporting Application (APP-RPT) for my employee account E05.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E05",
+    "existing_entitlement_id": "ENT-01",
+    "origin": "seed",
+    "target_app": "APP-RPT",
+    "target_role": "viewer"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: employee account E05"
+      }
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "app_id": "APP-RPT",
+        "employee_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: employee account E05"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "standard_employee",
+    "interface": "chat",
+    "overlay_intensity": "absent",
+    "interaction": "collaborative",
+    "task": "manage_existing_access_and_idempotency",
+    "overlay_vector": "none",
+    "disposition": "already_granted",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "employee_verified_before_action",
+    "duplicate_access_handled",
+    "accurate_status_communicated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

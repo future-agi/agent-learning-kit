@@ -23,14 +23,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..backends import SessionSpec, tool, tool_server
-
-from ..catalogue import criteria_text
+from ..catalogue import Catalogue, SuiteEval, criteria_text
+from ..checks import Outcome, reference_of, run_check
 from ..config import chosen_model
 from ..contract import AgentContract
 from ..scenario import Scenario
 from ..session import Stage
-from ..checks import Outcome, run_check
-from ..catalogue import Catalogue, SuiteEval
 from ..world.runtime import GeneratedWorld
 from .conversation import Transcript
 
@@ -217,9 +215,7 @@ def _verdict_tool(collected: list[dict[str, Any]]) -> Any:
             ]
         }
 
-    return tool_server(
-        name=JUDGE_SERVER, version="0.1.0", tools=[submit_verdict]
-    )
+    return tool_server(name=JUDGE_SERVER, version="0.1.0", tools=[submit_verdict])
 
 
 def _on_platform(
@@ -497,7 +493,17 @@ def grade_sub_goals(
         sub_goal = catalogue.named(name)
         if sub_goal is None or not sub_goal.deterministic():
             continue
-        outcomes.append(run_check(sub_goal.check, world, calls, name=name))
+        outcomes.append(
+            run_check(
+                sub_goal.check,
+                world,
+                calls,
+                name=name,
+                # The values the scenario marks fixed: what a reference-aware check compares the
+                # run's targets against (plan §3.2, review of #99).
+                reference=reference_of(scenario.solution),
+            )
+        )
     return outcomes
 
 

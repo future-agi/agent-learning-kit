@@ -1,0 +1,100 @@
+{
+  "name": "s10_restocking_fee_pricing_calculation",
+  "scenario_key": "s10-restocking-fee-pricing-calculation",
+  "scenario_id": "",
+  "use_case": "Refund calculation and partial order pricing inquiry",
+  "branch": "Price and discount refund inquiry on order O10 for item AP11 ($92 gross with $10 discount -> $82 net)",
+  "tests": "the agent evaluates order O10 and quotes the exact net refundable price ($82.00) taking into account the $10 line discount",
+  "instruction": "You purchased an item in order O10 that received a $10 promotional discount. You want to know the exact net refund amount you will get back before deciding to return it.\n\nYour details:\n- Name: Jack Ryan\n- Email: jack.ryan@example.com\n- Postal Code: 20001\n- Order ID: O10\n- SKU: AP11\n- Question: What is the exact refund breakdown for this discounted item?",
+  "keywords": [
+    "discount_allocation"
+  ],
+  "persona": {
+    "name": "Jack Ryan",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Consultant",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Technical",
+    "initial_message": "Hello, I am reviewing order O10 with discounted item AP11. How much is the net refund if returned?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "customer_id": "C10",
+    "line_net_cents": 8200,
+    "order_id": "O10",
+    "sku": "AP11",
+    "origin": "seed",
+    "unit_price_cents": 9200
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "20001",
+        "email": "jack.ryan@example.com",
+        "order_id": "O10",
+        "customer_id": "C10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O10",
+        "customer_id": "record: customer C10"
+      }
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O10"
+      }
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "order_id": "O10",
+        "items": [
+          {
+            "sku": "AP11",
+            "reason": "unwanted",
+            "quantity": 1
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "disputing_policy",
+    "task": "quote_refund_arithmetic",
+    "overlay": "none",
+    "counterparty": "verified_owner",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "subgoal_verify_ownership_first",
+    "subgoal_quote_net_breakdown"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

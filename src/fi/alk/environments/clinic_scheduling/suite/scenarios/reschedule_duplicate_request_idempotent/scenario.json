@@ -1,0 +1,95 @@
+{
+  "name": "reschedule_duplicate_request_idempotent",
+  "scenario_key": "reschedule-duplicate-request-idempotent",
+  "scenario_id": "",
+  "use_case": "Reschedule and cancel",
+  "branch": "Declan Murphy's connection drops after confirming A407 move to Thursday 5 November 10:00; retry with identical request_key produces atomic single move",
+  "tests": "the agent retries reschedule_appointment with the same request_key and confirms appointment A407 was moved once",
+  "instruction": "You are Declan Murphy (born 1966-04-30). You want to move appointment A407 to Thursday 5 November at 10:00 with Dr. Rohan Patel at Riverbank West. Your connection drops briefly right after confirming, so you repeat the request.\n\nYour details:\n- Name: Declan Murphy\n- Date of birth: 1966-04-30\n- Appointment ID: A407\n- Provider: Dr. Rohan Patel\n- Desired date and time: Thursday 5 November 2026 at 10:00\n- Location: Riverbank West",
+  "keywords": [
+    "reschedule",
+    "retry"
+  ],
+  "persona": {
+    "name": "Declan Murphy",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Accountant",
+    "location": "Canada",
+    "personality": "Reserved",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I need to reschedule appointment A407 to Thursday 5 November at 10:00 with Dr. Patel at West.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P414",
+    "appointment_id": "A407",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1966-04-30",
+        "full_name": "Declan Murphy"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "full_name": "caller: Declan Murphy",
+        "dob": "caller: 1966-04-30"
+      }
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "confirmed": true,
+        "request_key": "idemp_p414_resched",
+        "appointment_id": "A407",
+        "new_slot_id": "SL-D02-20261105-1000"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A407",
+        "new_slot_id": "record: the slot the caller confirmed"
+      }
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "request_key": "idemp_p414_resched",
+        "new_slot_id": "SL-D02-20261105-1000",
+        "confirmed": true,
+        "appointment_id": "A407"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "task": "reschedule",
+    "disposition": "retry",
+    "interaction": "multi_turn",
+    "counterparty": "first_time",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -321,6 +321,55 @@ class GeneratedWorld(EnvironmentAdapter):
     # -- execution -------------------------------------------------------------------
 
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
+        """Execute one call as one transaction, one call at a time.
+
+        A call that fails changes nothing: its writes are rolled back by the store, which needs
+        no writes of its own to do it, so it holds even while the store refuses writes. Only a
+        refusal the world simulates on purpose (``keep_writes``: a rival booking, a commit whose
+        reply was lost) keeps what it wrote. Calls take turns, so rolling one back can never
+        undo another call's success.
+        """
+        import threading
+
+        with self.__dict__.setdefault("_turns", threading.RLock()):
+            held = self.state_object is None and callable(getattr(self.store, "hold", None))
+            mark = None
+            if held:
+                self.store.hold()
+            elif callable(getattr(self.store, "freeze", None)):
+                mark = self.checkpoint()
+            # A store that can neither hold a transaction nor freeze (a bare stand-in) runs the
+            # call as it always did: there is nothing to roll back to.
+            self._kept = False
+            try:
+                call = self._call(name, arguments)
+            except BaseException:
+                if held:
+                    self.store.release(keep=False)
+                raise
+            keep = call.ok or self._kept
+            if held:
+                try:
+                    self.store.release(keep=keep)
+                except Exception as failed:
+                    # The commit itself failed (a constraint checked at commit, a lost store):
+                    # nothing the call wrote stands, so it is recorded as failed, not as the
+                    # success the handler returned.
+                    if self.calls and self.calls[-1] is call:
+                        self.calls.pop()
+                    call = self._record(
+                        Call(
+                            name=call.name,
+                            arguments=call.arguments,
+                            ok=False,
+                            error=f"{type(failed).__name__}: {failed}",
+                        )
+                    )
+            elif not keep and mark is not None:
+                self.revert(mark)
+            return call
+
+    def _call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
         """Execute one call and record it. Never raises: a failure is an outcome, not an event.
 
         An unknown tool is a refusal rather than a silent success. An agent reaching for a tool
@@ -364,6 +413,7 @@ class GeneratedWorld(EnvironmentAdapter):
                     raise RuntimeError("handler defines no handle(args, db)")
                 value = handle(args, Db(self.store, self.state_object))
         except Exception as raised:
+            self._kept = bool(getattr(raised, "keep_writes", False))
             if _is_refusal(raised, self.refusal_signature):
                 return self._record(
                     Call(

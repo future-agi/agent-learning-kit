@@ -1,0 +1,105 @@
+{
+  "name": "buyers_remorse_not_a_dispute_reason_explained",
+  "scenario_key": "buyers-remorse-not-a-dispute-reason-explained",
+  "scenario_id": "",
+  "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
+  "branch": "The customer regrets a $210 boutique purchase and wants it disputed. Buyer's remorse is not a dispute reason; the agent explains the reasons from the policy and points to the merchant. Nothing is filed.",
+  "tests": "passes when the agent verifies, reads TX333 and the dispute policy, and files no dispute.",
+  "instruction": "You bought a $210.00 jacket at Velvet Boutique on October 19 with your credit card ending 3030 and now regret it; the shop will not take it back. Ask the assistant to dispute the charge. If it explains that changing your mind is not a dispute reason, ask what reasons are allowed and accept the answer; do not invent a different story. Provide passcode 2275 when asked.\n\nYour details:\n- Name: Tess Gallagher\n- Customer ID: C333\n- Session ID: SESS333\n- Card: CARD333 (ending 3030)\n- Transaction: TX333 (Velvet Boutique, $210.00)\n- Passcode: 2275",
+  "keywords": [
+    "dispute_reasons",
+    "policy"
+  ],
+  "persona": {
+    "name": "Tess Gallagher",
+    "gender": "female",
+    "age_group": "18-25",
+    "occupation": "Student",
+    "location": "United States",
+    "personality": "Anxious",
+    "communication_style": "Passive",
+    "initial_message": "I want to dispute a $210 Velvet Boutique charge on my card ending 3030, I regret the purchase.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C333",
+    "session_id": "SESS333",
+    "transaction_id": "TX333",
+    "passcode": "2275"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C333",
+        "session_id": "SESS333",
+        "challenge_type": "passcode",
+        "challenge_response": "2275"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C333",
+        "session_id": "record: SESS333",
+        "challenge_response": "caller: 2275",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_transaction",
+      "arguments": {
+        "customer_id": "C333",
+        "session_id": "SESS333",
+        "transaction_id": "TX333"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C333",
+        "session_id": "record: SESS333",
+        "transaction_id": "record: TX333"
+      }
+    },
+    {
+      "tool": "get_dispute_policy",
+      "arguments": {
+        "policy_type": "transaction_dispute"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "policy_type": "rule: the policy family the question is about"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "file_or_track_dispute",
+    "disposition": "disallowed_reason",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_declined_by_policy",
+    "declined_action_explained",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

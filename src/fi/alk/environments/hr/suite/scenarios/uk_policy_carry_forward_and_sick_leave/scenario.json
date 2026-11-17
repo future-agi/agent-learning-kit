@@ -1,0 +1,81 @@
+{
+  "name": "uk_policy_carry_forward_and_sick_leave",
+  "scenario_key": "uk-policy-carry-forward-and-sick-leave",
+  "scenario_id": "",
+  "use_case": "Check leave policy and carry-forward rules for an employee's region and effective date",
+  "branch": "A UK employee asks about statutory annual leave carry-forward limits and manager approval requirements under current UK policy.",
+  "tests": "Explains the UK annual leave carry-forward limit (8 days) under current v2.0 policy.",
+  "instruction": "You want to know the annual leave carry-forward rules for the UK region under the 2026 policy. You want to confirm how many days of unused statutory annual leave you can carry forward into next year (8 days) and whether manager approval is required.\n\nYour details:\n- Employee ID: E06\n- Name: Fiona Gallagher\n- Region: UK\n- Question: How many days of annual leave can UK employees carry forward into the next year?",
+  "keywords": [
+    "leave_policy",
+    "carry_forward",
+    "manager_approval"
+  ],
+  "persona": {
+    "name": "Fiona Gallagher",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Could you explain the UK carry-forward rules for annual leave under our current policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "region": "UK",
+    "employee_id": "E06",
+    "carry_forward_days": 8
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_hr_policy",
+      "arguments": {
+        "region": "UK",
+        "topic": "annual_leave",
+        "effective_date": "2026-10-26"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "region": "record: UK"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "counterparty": "employee_uk",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "disposition": "standard",
+    "task": "check_policy"
+  },
+  "sub_goals": [
+    "policy_searched_for_region_and_topic",
+    "accurate_policy_terms_and_version_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

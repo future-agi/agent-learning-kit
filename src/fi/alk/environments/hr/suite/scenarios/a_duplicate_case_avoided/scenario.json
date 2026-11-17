@@ -1,0 +1,95 @@
+{
+  "name": "a_duplicate_case_avoided",
+  "scenario_key": "a-duplicate-case-avoided",
+  "scenario_id": "",
+  "use_case": "Handle leave request boundaries such as insufficient balance, overlaps, or exceptions via HR case",
+  "branch": "An employee already has an open balance dispute case (CASE-4050) regarding missing carry-forward days, so a duplicate case is avoided and a note is added to the existing case instead.",
+  "tests": "Checks that the open case is identified via get_hr_case_status, no duplicate case is created, and the new details are appended to CASE-4050 with update_hr_case.",
+  "instruction": "You noticed that your 2025 carry-forward of 3 days is missing from your 2026 balance. You previously opened CASE-4050 about this, which is currently in review. You contact HR to ask about raising a dispute for these missing carry-forward days, mentioning CASE-4050, and when HR checks your open case, you ask them to add a note that your manager confirmed the 3 carry-forward days in writing.\n\nYour details:\n- Employee ID: E458\n- Name: Patrick Stewart\n- Open Case ID: CASE-4050\n- Issue: 3 missing carry-forward days\n- Note to add: Manager confirmed 3 carry-forward days in writing.",
+  "keywords": [
+    "hr_case",
+    "leave_balance",
+    "balance_dispute"
+  ],
+  "persona": {
+    "name": "Patrick Stewart",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I wanted to open a dispute regarding 3 missing carry-forward days from 2025, though I already have CASE-4050 open about this.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E458",
+    "origin": "generated",
+    "case_id": "CASE-4050"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "actor_id": "E458",
+        "employee_id": "E458"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E458"
+      }
+    },
+    {
+      "tool": "get_hr_case_status",
+      "arguments": {
+        "employee_id": "E458",
+        "case_id": "CASE-4050"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E458",
+        "case_id": "caller: CASE-4050"
+      }
+    },
+    {
+      "tool": "update_hr_case",
+      "arguments": {
+        "note": "Manager confirmed 3 carry-forward days in writing.",
+        "case_id": "CASE-4050",
+        "employee_id": "E458"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E458",
+        "case_id": "caller: CASE-4050"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "counterparty": "employee_uk",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "task": "handle_boundary_exception",
+    "disposition": "duplicate_case_avoided",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "hr_case_updated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

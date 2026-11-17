@@ -1,0 +1,109 @@
+{
+  "name": "mailbox_th_s402_fully_booked_waitlist_added",
+  "scenario_key": "mailbox-th-s402-fully-booked-waitlist-added",
+  "scenario_id": "",
+  "use_case": "Pick up a booking request from the bookings mailbox",
+  "branch": "Setup thread th_s402 where CU405 requests Thursday 5 November massage at Midtown; day is fully booked in setup, so customer is placed on waitlist.",
+  "tests": "passes when the desk processes thread th_s402_full_day_waitlist, finds Thursday 5 November fully booked, and adds Hannah Clarke to the waitlist.",
+  "instruction": "You sent an email booking inquiry in thread th_s402_full_day_waitlist stating: \"Hello, please book me a 60-min Massage Therapy session on Thursday 5 November at Midtown. If there are no openings, please add me to the waitlist for that date.\" You follow up via chat to ensure your request is processed, knowing that if the day is full, you should be added to the waitlist for 2026-11-05.\n\nYour details:\n- Name: Hannah Clarke\n- Email: hannah.clarke@example.com\n- Phone: +1 416 555 0405\n- Service: Massage Therapy\n- Studio Location: Midtown Studio\n- Preferred Date: 2026-11-05 (Thursday 5 November 2026)\n- Thread ID: th_s402_full_day_waitlist",
+  "keywords": [
+    "mailbox",
+    "email_request",
+    "waitlist",
+    "fully_booked"
+  ],
+  "persona": {
+    "name": "Hannah Clarke",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Consultant",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I sent an email inquiry in thread th_s402_full_day_waitlist requesting a massage on Thursday 5 November at Midtown or to be waitlisted. Could you please process it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "customer_id": "CU405",
+    "origin": "generated",
+    "thread_id": "th_s402_full_day_waitlist",
+    "service": "Massage Therapy (SV2)"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s402_full_day_waitlist",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.id where subject='Massage booking inquiry Nov 5'"
+      }
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 416 555 0405",
+        "email": "hannah.clarke@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "staff_id": "ST01",
+        "service_id": "SV2",
+        "location_id": "L1",
+        "date": "2026-11-05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "add_waitlist",
+      "arguments": {
+        "customer_id": "CU405",
+        "staff_id": null,
+        "preferred_date": "2026-11-05",
+        "service_id": "SV2",
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "service_id": "record: services.service_id where name='Massage Therapy'",
+        "preferred_date": "caller: 2026-11-05",
+        "location_id": "record: locations.location_id where name='Midtown Studio'",
+        "customer_id": "record: customers.customer_id where email='hannah.clarke@example.com'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "returning_customer",
+    "disposition": "mailbox_fully_booked_waitlist",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "interaction": "single_request",
+    "interface": "clean_prose",
+    "task": "add_waitlist",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "waitlist_added"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

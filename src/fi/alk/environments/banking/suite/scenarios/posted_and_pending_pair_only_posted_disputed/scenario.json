@@ -1,0 +1,109 @@
+{
+  "name": "posted_and_pending_pair_only_posted_disputed",
+  "scenario_key": "posted-and-pending-pair-only-posted-disputed",
+  "scenario_id": "",
+  "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
+  "branch": "Two $150 Riverside Spa charges: one posted on October 22 that the customer never authorised, one still pending from today. Only the posted charge is disputed; the pending one is explained.",
+  "tests": "passes when the agent verifies, explains the pending rule, and files exactly one dispute for TX330 and none for TX331.",
+  "instruction": "You see two $150.00 Riverside Spa charges on your debit card ending 6672: one from October 22 and one pending from today. You have never been there. Ask to dispute both. If the assistant explains the pending one cannot be disputed until it posts, accept that and have the posted one disputed as unrecognised. Provide passcode 7351 when asked.\n\nYour details:\n- Name: Mia Johansson\n- Customer ID: C330\n- Session ID: SESS330\n- Card: CARD330 (ending 6672)\n- Posted charge: TX330\n- Pending charge: TX331\n- Passcode: 7351",
+  "keywords": [
+    "dispute_filing",
+    "pending_charge"
+  ],
+  "persona": {
+    "name": "Mia Johansson",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Formal and polite",
+    "initial_message": "There are two Riverside Spa charges on my card ending 6672 and I've never been there. Please dispute both.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C330",
+    "session_id": "SESS330",
+    "transaction_id": "TX330",
+    "pending_transaction": "TX331",
+    "passcode": "7351"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C330",
+        "session_id": "SESS330",
+        "challenge_type": "passcode",
+        "challenge_response": "7351"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C330",
+        "session_id": "record: SESS330",
+        "challenge_response": "caller: 7351",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_dispute_policy",
+      "arguments": {
+        "policy_type": "transaction_dispute"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "policy_type": "rule: the policy family the question is about"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_id": "C330",
+        "session_id": "SESS330",
+        "transaction_id": "TX330",
+        "dispute_reason": "unrecognized_charge",
+        "request_key": "REQ-C330-TX330",
+        "customer_notes": "Customer has never visited Riverside Spa"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C330",
+        "session_id": "record: SESS330",
+        "transaction_id": "record: TX330",
+        "dispute_reason": "rule: one of the allowed dispute reasons in the Transaction Dispute Policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "file_or_track_dispute",
+    "disposition": "pending_and_posted",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "pending_charge_policy_explained",
+    "dispute_filed_and_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

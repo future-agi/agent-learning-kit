@@ -1,0 +1,100 @@
+{
+  "name": "hold_first_then_book_in_the_same",
+  "scenario_key": "hold-first-then-book-in-the-same",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "Hold first, then book in the same chat",
+  "tests": "Tests placing a temporary slot hold and then completing the booking for that held slot within the same chat session.",
+  "instruction": "You are Tomasz Nowak (born 21 November 1983, insured with Vitality VT-300421). You want a physiotherapy appointment with Omar Haddad on Wednesday 4 November in the morning at Riverbank West. When offered the 09:30 slot, ask the assistant to place a hold on it while you quickly check your work calendar. Once the hold is placed, say that you are good to go and ask to confirm and book the 09:30 slot.",
+  "keywords": [
+    "hold_slot"
+  ],
+  "persona": {
+    "name": "Tomasz Nowak",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Technician",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I would like to check physiotherapy availability with Omar Haddad on Wednesday 4 November morning at Riverbank West.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P421",
+    "payer": "Vitality",
+    "dob": "1983-11-21",
+    "origin": "generated",
+    "member_id": "VT-300421",
+    "full_name": "Tomasz Nowak"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1983-11-21",
+        "full_name": "Tomasz Nowak"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "patient_id": "P421",
+        "provider_id": "D07",
+        "date_from": "2026-11-04",
+        "date_to": "2026-11-04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "hold_slot",
+      "arguments": {
+        "patient_id": "P421",
+        "slot_id": "SL-D07-20261104-0930",
+        "request_key": "req_hold_p421"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "self_pay": false,
+        "confirmed": true,
+        "patient_id": "P421",
+        "slot_id": "SL-D07-20261104-0930",
+        "request_key": "req_book_p421",
+        "reason": "Physiotherapy consultation"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id",
+        "slot_id": "record: the slot the caller confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "book_appointment"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,107 @@
+{
+  "name": "email_pickup_withdraw_dispute_customer_recognised_charge",
+  "scenario_key": "email-pickup-withdraw-dispute-customer-recognised-charge",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the banking tools",
+  "branch": "Julia's latest email says the Tiffany charge was a gift bought with her card and she may not need dispute D02. In chat she confirms: withdraw D02. The thread is read first.",
+  "tests": "passes when the agent reads th_c10_dispute_followup, verifies Julia and withdraws D02 after confirmation.",
+  "instruction": "You emailed support about dispute D02 (a $162.00 Tiffany & Co. charge on your card ending 9890) and in your last email said you had found the receipt: your husband bought a gift with your card. In this chat, ask the assistant to act on your last email. When it asks whether you want the dispute withdrawn, say yes and confirm. Provide passcode 7163 when asked.\n\nYour details:\n- Name: Julia Anderson\n- Customer ID: C10\n- Session ID: SESS210b\n- Email: julia.a@example.com\n- Dispute: D02\n- Passcode: 7163",
+  "keywords": [
+    "email_pickup",
+    "withdraw_dispute"
+  ],
+  "persona": {
+    "name": "Julia Anderson",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hi, I emailed about my dispute D02 and what I found out. Can you act on my last email?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "mixed",
+    "customer_id": "C10",
+    "session_id": "SESS210b",
+    "thread_id": "th_c10_dispute_followup",
+    "dispute_id": "D02"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C10",
+        "session_id": "SESS210b",
+        "challenge_type": "passcode",
+        "challenge_response": "7163"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C10",
+        "session_id": "record: SESS210b",
+        "challenge_response": "caller: 7163",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c10_dispute_followup"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c10_dispute_followup, Julia's follow-up saying she recognises the charge"
+      }
+    },
+    {
+      "tool": "withdraw_dispute",
+      "arguments": {
+        "customer_id": "C10",
+        "session_id": "SESS210b",
+        "dispute_id": "D02",
+        "reason": "Customer found the receipt; the charge was a gift bought with her card",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C10",
+        "session_id": "record: SESS210b",
+        "dispute_id": "record: D02",
+        "confirmed": "rule: 'The agent confirms the withdrawal and its consequence first'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pickup_email_case",
+    "disposition": "withdrawal",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_withdrawn_as_requested",
+    "servicing_change_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
