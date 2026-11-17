@@ -45,7 +45,7 @@ from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_b
 from .compose_broker import BrokerError, ComposeBrokerClient
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .world.observation import ObservationWorldFactory
-from .call_runner import CallRunnerContext, CallRunnerImpl
+from .call_runner import CallRunnerContext, CallRunnerImpl, _bundle_contract, contract_worker_names
 from .hosted_scheduler import (
     CallOutcome,
     CallRunner,
@@ -777,6 +777,16 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
     return "\n\n".join(parts)
 
 
+def _worker_processes(bundle_dir: Path) -> dict[str, str]:
+    """Each declared worker the app serves as its own process, {worker id: process name}, from the sealed contract."""
+    workers = _bundle_contract(bundle_dir).get("workers")
+    return {
+        str(one["id"]): str(one["process"]).strip()
+        for one in workers or []
+        if isinstance(one, dict) and one.get("id") and str(one.get("process") or "").strip()
+    }
+
+
 def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:
     path = bundle_dir / "contract.json"
     if not path.is_file():
@@ -1479,6 +1489,9 @@ class OutboundAdapter:
                 "scenario_attempt": scenario_attempt,
             },
         )
+        # Sent as the call starts, not with its receipt: the platform shows the call under way, and a stop's seal
+        # wait knows it is in flight.
+        await self.aflush_events()
 
     async def scenario_retried(
         self, *, scenario_key: str, from_world: int, to_world: int, cause: str = ""
@@ -1933,6 +1946,7 @@ def sub_goal_wire(goal: Any) -> dict[str, Any]:
         "judged": goal.judged,
         **({"verdict": goal.verdict} if goal.verdict else {}),
         **({"evidence": list(goal.evidence)} if getattr(goal, "evidence", ()) else {}),
+        **({"subject": goal.subject} if getattr(goal, "subject", "task") != "task" else {}),
     }
 
 
@@ -2855,6 +2869,7 @@ async def run_job(
             attempt_number=capabilities.attempt_number,
             source_directory=source,
             usage_reporter=usage_reporter,
+            stop_requested=cancel_requested,
         )
         call_runner = deps.build_call_runner(adapter, call_runner_context)
         scheduler = HostedScheduler(
@@ -2871,6 +2886,8 @@ async def run_job(
             joint_judge=functools.partial(
                 _judge_sub_goals_jointly, agent_instructions=_agent_instructions(job, bundle_dir)
             ),
+            worker_processes=_worker_processes(bundle_dir),
+            worker_names=contract_worker_names(bundle_dir),
         )
         result: RunResult = await scheduler.run(scenarios)
 

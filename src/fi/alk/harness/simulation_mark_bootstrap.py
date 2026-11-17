@@ -36,6 +36,9 @@ run the next ``sitecustomize`` on the path, which is theirs, so a repository's o
 not lost behind this one; a failure of that hook is reported as Python reports it, never as ours.
 A failure of this patch leaves the process as it would be without the hook and writes one fixed
 line to stderr.
+
+Framework instrumentation differs per framework, so what this hook knows about one (its instrumentor, a helper to
+guard) sits in data tables only: the stated exception to the rule that harness code names no framework.
 """
 
 from __future__ import annotations
@@ -472,8 +475,38 @@ def _instrument(module, target) -> None:
         return
     instrumentor.instrument()
     _yield_to_process(type(instrumentor))
+    serialiser = _SERIALISERS.get(name)
+    if serialiser is not None:
+        _guard_serialiser(*serialiser)
     if module.__name__ == "agents":
         _keep_agents_processors()
+
+
+# Instrumentor helpers whose failure to serialise an object into a span would fail the app's call.
+_SERIALISERS = {"traceai_smolagents": ("traceai_smolagents._wrappers", "_to_dict")}
+
+
+def _guard_serialiser(module_name, attribute) -> None:
+    """Keep an instrumentor's serialiser from failing the app: an object it cannot serialise is recorded by name."""
+    try:
+        module = importlib.import_module(module_name)
+        original = getattr(module, attribute)
+    except Exception:
+        return
+    if getattr(original, _PATCHED, False):
+        return
+
+    def guarded(result, __original=original):
+        try:
+            return __original(result)
+        except Exception:
+            name = getattr(result, "name", None)
+            return name if isinstance(name, str) and name else type(result).__name__
+
+    functools.update_wrapper(guarded, original)
+    setattr(guarded, _PATCHED, True)
+    # Recursive calls go through the module name, so each item is guarded on its own.
+    setattr(module, attribute, guarded)
 
 
 def _yield_to_process(cls) -> None:

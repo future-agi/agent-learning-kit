@@ -5269,3 +5269,11 @@ def test_hosted_compose_uses_broker_and_observation_world(monkeypatch):
     assert selected == ["broker", "observation"]
     assert harness.provisioner.provision_calls == 1
     assert harness.provisioner.closed
+
+
+def test_a_scenario_start_reaches_the_platform_as_the_call_starts() -> None:
+    """Not held for the receipt: a call the person stops mid-way is known to be in flight while its seal is waited on."""
+    transport = FakeTransport()
+    adapter = _build_adapter(transport)
+    asyncio.run(adapter.scenario_started(scenario_key="s1", world_index=0, scenario_attempt=1))
+    assert [record["type"] for record in transport.event_records] == ["scenario_started"]

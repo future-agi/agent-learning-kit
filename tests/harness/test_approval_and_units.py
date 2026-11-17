@@ -378,7 +378,8 @@ def test_units_and_time_zones_reach_the_trial_records_as_written():
 
 
 def test_an_approver_acting_on_two_actions_with_the_same_last_part_gets_each_verdict_from_its_own_action():
-    from fi.alk.harness.call_runner import _same_action, approvals
+    from fi.alk.harness.call_runner import approvals
+    from fi.alk.harness.world_door import named_alike as _same_action
 
     log = [
         {"actor_id": AGENT, "name": "request_refund", "action_id": "a1", "at": 1.0, "outcome": "committed"},

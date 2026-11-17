@@ -149,6 +149,8 @@ def document_for(scenario: Scenario) -> dict:
     if not body.get("actors"):
         # A scenario without actors is written exactly as before they existed.
         body.pop("actors", None)
+    if body.get("worker_budget_seconds") is None:
+        body.pop("worker_budget_seconds", None)
     return body
 
 

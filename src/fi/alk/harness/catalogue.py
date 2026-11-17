@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from typing import Any
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 CATALOGUE = "sub_goals.json"
 
@@ -53,6 +53,21 @@ class SubGoal(BaseModel):
     comparison: str = ""
     scope: str = ""
     applicability: str = ""
+    # Whose result this checks: the task as a whole, or `worker:<id>`, one of the agent's declared workers. A worker's
+    # check is given only that worker's calls, and with none it is inconclusive: absence is never a pass.
+    subject: str = "task"
+
+    @field_validator("subject")
+    @classmethod
+    def _known_subject(cls, value: str) -> str:
+        value = (value or "task").strip()
+        if value != "task" and not (value.startswith("worker:") and value[len("worker:") :].strip()):
+            raise ValueError("subject is task or worker:<id>")
+        return value
+
+    @property
+    def worker(self) -> str:
+        return self.subject[len("worker:") :] if self.subject.startswith("worker:") else ""
 
     @property
     def both(self) -> bool:
@@ -344,7 +359,12 @@ CHECK_RULES = (
     "the form they said it, so compare it in one common form (a date parsed, an amount as a number), "
     "or compare what the tool decided with it instead. Compare an identifier with `same_id(a, b)`, never as "
     "text: it ignores separators and case and nothing else, and the proof refuses a check that fails the same id "
-    "typed without its separators. Check the outcome, not the route: where the "
+    "typed without its separators. `retried_timeouts(world)`, `repeated_commits(world)` and "
+    "`committed_writes(world)` list the agent's writes from the action log: one the world timed out "
+    "on and the agent tried again, a second commit to the same record, and every committed write; pass the "
+    "check's `reference` as their second argument so a retry that rewords free text is still the same record; "
+    "whether a reply claims a change that `committed_writes` does not hold is judged, never matched "
+    "as text. Check the outcome, not the route: where the "
     "outcome leaves a record, "
     "check the record, and otherwise accept every call that achieves it. Use `judged` for what was "
     "said and what nothing observable settles; it holds the criteria. `output` is pass_fail.\n"
@@ -611,8 +631,13 @@ def save_catalogue(catalogue: Catalogue, destination: Path) -> Path:
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / CATALOGUE
+    body = catalogue.model_dump()
+    for goal in body.get("sub_goals") or []:
+        if goal.get("subject") == "task":
+            # A task check is written exactly as before the field existed.
+            goal.pop("subject", None)
     path.write_text(
-        json.dumps(catalogue.model_dump(), indent=2, ensure_ascii=False),
+        json.dumps(body, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
     return path

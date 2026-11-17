@@ -100,6 +100,24 @@ def _fingerprint(raw: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def _framework_coordination(tool: Any, entry: Any, contract: AgentContract, source: Path) -> bool:
+    """Whether a tool is the agent framework's own worker coordination: imported from a package the submitted source
+    does not contain, in a contract with workers, reading and changing no world table."""
+    if entry.mode not in {"import", "construct"} or not contract.workers or tool.tables_read or tool.tables_changed:
+        return False
+    package = entry.module.strip().split(".")[0]
+    return bool(package) and not _source_has_module(source, package)
+
+
+def _source_has_module(source: Path, package: str) -> bool:
+    """Whether the submitted source holds the top-level module or package `package` outside hidden directories."""
+    for path in (*source.rglob(f"{package}.py"), *source.rglob(package)):
+        parts = path.relative_to(source).parts
+        if not any(part.startswith(".") or part in {"site-packages", "node_modules"} for part in parts):
+            return True
+    return False
+
+
 def certify_tool_inventory(
     contract: AgentContract,
     bundle_dir: Path,
@@ -206,6 +224,21 @@ def certify_tool_inventory(
                         "native implementation is declared; execution is observed only in agent responses"
                         if declared else "native implementation declaration is incomplete"
                     ),
+                )
+            )
+        elif source is not None and _framework_coordination(tool, entry, contract, source):
+            # The multi-agent framework's own tool (an async sub-agent launch or check): it starts and follows the
+            # workers, so it has no world code to compile and touches no table; its calls are observed in the run.
+            results.append(
+                ToolCertification(
+                    tool=tool.name,
+                    entrypoint_mode=entry.mode,
+                    probe_mode=ToolProbeMode.RUNTIME_ONLY,
+                    availability=ToolAvailability.RUNTIME_ONLY,
+                    schema_validated=True,
+                    implementation_validated=False,
+                    reason=f"provided by the agent framework ({entry.module.split('.')[0]}) to coordinate its "
+                    "workers; not a world action",
                 )
             )
         elif entry.mode in {"import", "construct"}:

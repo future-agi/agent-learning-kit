@@ -209,3 +209,74 @@ def test_native_incomplete_and_ambiguous_declarations_are_rejected(tmp_path):
         native_observation=True,
     )
     assert report.tools[0].availability is ToolAvailability.REJECTED
+
+
+# As a LangGraph async deep agents build authored them: the framework's own background-job tools, imported from the
+# installed package, listed as the agent's tools beside two workers.
+_ASYNC_JOB_TOOLS = (
+    "launch_async_subagent",
+    "check_async_subagent",
+    "update_async_subagent",
+    "cancel_async_subagent",
+    "list_async_subagent_jobs",
+)
+
+
+def _async_deep_agents(*extra_tools: dict, extra_entries: tuple[dict, ...] = ()) -> AgentContract:
+    return AgentContract.model_validate(
+        {
+            "agent": "supervisor",
+            "real_use_cases": ["research and code in the background"],
+            "tools": [
+                *({"name": name, "args": ["description"], "tables_read": [], "tables_changed": []}
+                  for name in _ASYNC_JOB_TOOLS),
+                *extra_tools,
+            ],
+            "tool_entrypoints": [
+                *({"tool": name, "mode": "import", "module": "deepagents", "callable": name}
+                  for name in _ASYNC_JOB_TOOLS),
+                *extra_entries,
+            ],
+            "workers": [{"id": "researcher", "name": "researcher"}, {"id": "coder", "name": "coder"}],
+        }
+    )
+
+
+def _async_source(tmp_path: Path) -> Path:
+    source = tmp_path / "source"
+    (source / "graphs" / "python" / "src").mkdir(parents=True)
+    (source / "graphs" / "python" / "src" / "agent.py").write_text(
+        "from deepagents import AsyncSubAgent\n", encoding="utf-8"
+    )
+    return source
+
+
+def test_the_framework_s_own_worker_job_tools_need_no_world_code(tmp_path: Path) -> None:
+    report = certify_tool_inventory(
+        _async_deep_agents(), tmp_path, external_provider=False, source=_async_source(tmp_path)
+    )
+
+    assert {item.tool: item.availability for item in report.tools} == {
+        name: ToolAvailability.RUNTIME_ONLY for name in _ASYNC_JOB_TOOLS
+    }
+
+
+def test_a_world_tool_whose_code_is_missing_is_still_rejected_beside_them(tmp_path: Path) -> None:
+    source = _async_source(tmp_path)
+    # The app's own tool, in its own module, with no compiled handler; and one from a library that writes a table.
+    contract = _async_deep_agents(
+        {"name": "save_report", "args": ["text"]},
+        {"name": "store_row", "args": ["row"], "tables_changed": ["reports"]},
+        extra_entries=(
+            {"tool": "save_report", "mode": "import", "module": "src.agent", "callable": "save_report"},
+            {"tool": "store_row", "mode": "import", "module": "somelib.sql", "callable": "store_row"},
+        ),
+    )
+    (source / "graphs" / "python" / "src" / "__init__.py").write_text("", encoding="utf-8")
+
+    report = certify_tool_inventory(contract, tmp_path, external_provider=False, source=source)
+
+    by_tool = {item.tool: item.availability for item in report.tools}
+    assert by_tool["save_report"] is ToolAvailability.REJECTED
+    assert by_tool["store_row"] is ToolAvailability.REJECTED
+    assert all(by_tool[name] is ToolAvailability.RUNTIME_ONLY for name in _ASYNC_JOB_TOOLS)

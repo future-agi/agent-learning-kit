@@ -9,9 +9,10 @@ import logging
 import os
 import re
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from fi._diagnostics import sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
@@ -23,12 +24,14 @@ from .call_runner import (
     CallRunnerContext,
     ToolCaptureFailed,
     _clear_file_tool_calls,
-    _with_span_calls,
     _with_scenario_edits,
+    collect_seam_calls,
+    contract_worker_names,
+    declared_worker_ids,
 )
 from .contract import AgentContract
 from .privilege import IsolationMode, isolation_mode
-from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
+from .hosted_scheduler import WORKER_LIMITS_NOT_ENFORCED, CallAborted, CallCancelled, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import ChatActors, TargetConversationEnded, Transcript, converse
@@ -42,6 +45,7 @@ from .usage import (
 from .handler_child import ChildWorld, HandlerChannel, HandlerChild, start_handler_child
 from .world.runtime import Call, GeneratedWorld, graded_calls, trace_row
 from .world.stores.postgres import AttachedPostgresStore
+from .world_door import world_action
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +112,89 @@ async def _record_text_usage(
 
 
 DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 300.0
+# After a person's Stop the call seals what it kept: the actors' last turns get this much, so the transcript reaches the
+# scheduler inside its seal bound (15 s from the stop), as a stopped voice call's teardown is cut short.
+_STOPPED_WIND_DOWN_SECONDS = 8.0
+_STOP_POLL_SECONDS = 0.25
+
+
+async def _sealed_through_stop(
+    stop_requested: Callable[[], bool], drive: Callable[[asyncio.Event], Awaitable[CallOutcome]]
+) -> CallOutcome:
+    """Run a chat call so a person's stop cuts its conversation, never what follows: `drive` sets its event when the
+    conversation is over; a stop before that reaches the call, a stop after is absorbed and said as the person's stop
+    once the call has sealed. A cancel that is not a stop reaches the call anywhere."""
+    sealing = asyncio.Event()
+    call = asyncio.ensure_future(drive(sealing))
+    stopped_while_sealing = False
+    while not call.done():
+        try:
+            await asyncio.wait({call})
+        except asyncio.CancelledError:
+            if stop_requested():
+                task = asyncio.current_task()
+                if task is not None and hasattr(task, "uncancel"):
+                    task.uncancel()
+                if sealing.is_set():
+                    stopped_while_sealing = True
+                    continue
+            call.cancel()
+    outcome = call.result()
+    if stopped_while_sealing:
+        # Sealed like any call, then said as the person's stop.
+        raise CallCancelled(partial=replace(outcome, stop_reason="user_canceled"))
+    return outcome
+
+
+def _stopped_call(cancel: asyncio.CancelledError) -> tuple[CallCancelled, Transcript]:
+    """The failure and transcript a call seals when a person's stop cut its conversation (the caller checked the stop)."""
+    failure = CallCancelled()
+    partial = getattr(cancel, "partial_transcript", None)
+    setattr(failure, "partial_transcript", partial)
+    task = asyncio.current_task()
+    if task is not None and hasattr(task, "uncancel"):
+        # Python 3.11+: the uploads that follow run as an uncancelled task. On 3.10 the caught cancel leaves nothing
+        # pending.
+        task.uncancel()
+    return failure, partial or Transcript()
+
+
+async def _within_stop_bound(stop_requested: Callable[[], bool], step: Awaitable[None]) -> None:
+    """Wait for `step`, but no longer than `_STOPPED_WIND_DOWN_SECONDS` after a person's stop."""
+    task = asyncio.ensure_future(step)
+    loop = asyncio.get_running_loop()
+    stopped_at: float | None = None
+    try:
+        while not task.done():
+            await asyncio.wait({task}, timeout=_STOP_POLL_SECONDS)
+            if stopped_at is None and stop_requested():
+                stopped_at = loop.time()
+            cut = stopped_at is not None and loop.time() - stopped_at >= _STOPPED_WIND_DOWN_SECONDS
+            if cut and not task.done():
+                logger.warning("chat_wind_down_cut_on_stop seconds=%s", _STOPPED_WIND_DOWN_SECONDS)
+                break
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+    if not task.cancelled():
+        task.result()
+
+
+def _unproxied_worker_notices(document: Mapping[str, Any], bundle_dir: Any = None) -> list[dict[str, Any]]:
+    """A chat agent whose tool calls the harness runs itself has no tool proxy, so nothing holds a worker's deadline or
+    permitted actions: a scenario that relies on either says so, and is held rather than graded."""
+    from .call_runner import relies_on_worker_limits
+
+    budget = document.get("worker_budget_seconds")
+    if (not budget or isinstance(budget, bool)) and not relies_on_worker_limits(document, bundle_dir):
+        return []
+    return [{
+        "code": WORKER_LIMITS_NOT_ENFORCED,
+        "message": "This agent's tools are not reached through the world's tool proxy, so no worker's deadline or "
+        "permitted actions were enforced in this trial, and its checks were not graded.",
+    }]
 
 
 def _chat_target_timeout_seconds() -> float:
@@ -189,7 +276,7 @@ def service_actions(contract: Any) -> set[str]:
     """The agent's tools its own tools service runs, as world actions: a service entry's route, `/` read as `.`.
     A route with a path parameter is left to the world's handler."""
     return {
-        route.replace("/", ".")
+        world_action(route)
         for entry in _entries(contract)
         if entry.get("mode") == "service"
         and (route := str(entry.get("endpoint") or "").strip("/"))
@@ -334,12 +421,19 @@ def _readable_trial_log(door: Any, since: float = 0.0, *, proxied: bool = False)
 
 
 def _world_actors_record(
-    door: Any, listing: Any, dispatcher: Any, cast: Any, meter: Any, limits: dict[str, Any], since: float = 0.0
+    door: Any,
+    listing: Any,
+    dispatcher: Any,
+    cast: Any,
+    meter: Any,
+    limits: dict[str, Any],
+    since: float = 0.0,
+    contract: Any = None,
 ) -> dict[str, Any] | None:
     """What actors did in the world this trial and what each participant changed, sealed beside the transcript as a
     call seals it, on every trial with a door, actors or not (`actions` and `decisions` then empty); None only when
     there is no door."""
-    from .call_runner import actor_rows, approvals, trial_state_changes
+    from .call_runner import actor_rows, approvals, trial_shared_record_fields, trial_state_changes
 
     if door is None:
         return None
@@ -367,14 +461,18 @@ def _world_actors_record(
             if one.get("kind") == "timeout"
         ]
     acted = actor_rows(log, listed, decisions)
-    return {
+    changes = trial_state_changes(log, listed, decisions)
+    record = {
         "actions": acted,
         "decisions": decisions,
-        "state_changes": trial_state_changes(log, listed, decisions),
+        "state_changes": changes,
         "approvals": approvals(log, decisions),
         "limits": dict(limits),
         "usage": meter.rows(),
     }
+    # Which participants named the same record and what the world made of each call.
+    record.update(trial_shared_record_fields(log, contract))
+    return record
 
 
 def _chat_actor_summary(cast: Any, world_record: dict[str, Any] | None, listing: Any) -> tuple[dict[str, Any], ...]:
@@ -621,7 +719,7 @@ class _HostedChatTarget:
         for entry in self._contract.tool_entrypoints or []:
             entry = entry if isinstance(entry, dict) else entry.model_dump()
             if entry.get("tool") == tool and str(entry.get("endpoint") or "").strip("/"):
-                return str(entry["endpoint"]).strip("/").replace("/", ".")
+                return world_action(str(entry["endpoint"]))
         return tool
 
     def _world_call(self, call_id: str, name: str, arguments: Any) -> str:
@@ -874,6 +972,11 @@ class HostedChatCallRunner:
         del (
             world
         )  # Handler execution uses the same leased world's endpoint from runtime.
+        return await _sealed_through_stop(
+            self._context.stop_requested, lambda sealing: self._run(scenario, runtime, sealing)
+        )
+
+    async def _run(self, scenario: Scenario, runtime: EnvironmentRuntime, sealing: asyncio.Event) -> CallOutcome:
         if self._contract is None:
             raise CallAborted(
                 "chat_contract_unavailable: bundle/contract.json is absent"
@@ -931,8 +1034,10 @@ class HostedChatCallRunner:
         listing = load_actors(self._context.bundle_dir)
         world_db = runtime.endpoints.get("world_db")
         service = runtime.endpoints.get("tools_api")
-        # Read the world's table whenever the trial is proxied, cast or not, so the fault notices see those calls.
+        # The tool proxy and the in-process door log the agent's and its limited workers' calls in the world's table:
+        # read it whenever the trial is proxied or has limited workers, cast or not.
         proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
+        limited_workers = (Path(self._context.bundle_dir) / "generated" / "tool-proxy" / "permissions.json").is_file()
         # The scenario's faults are a rule of its graded trials; a readiness probe checks the tools' binding without them.
         from .call_runner import _bundle_contract
         from .world_door import routed_faults
@@ -945,7 +1050,7 @@ class HostedChatCallRunner:
         door = chat_door(
             target_world,
             world_db.address
-            if (listing.actors or proxied) and world_db is not None and world_db.protocol == "postgres"
+            if (listing.actors or proxied or limited_workers) and world_db is not None and world_db.protocol == "postgres"
             else None,
             {
                 one.id: {"permitted_actions": list(one.permitted_actions), "on_behalf_of": one.on_behalf_of}
@@ -1005,6 +1110,9 @@ class HostedChatCallRunner:
                 "scenario": scenario.scenario_key,
             },
         )
+        if hasattr(wrapper, "abandon_on_cancel"):
+            # A stopped run's world is never reused: its call seals what it kept without waiting out the agent's reply.
+            wrapper.abandon_on_cancel = self._context.stop_requested
         funding = simulator_funding()
         await _check_text_usage(self._context.usage_reporter, funding)
         started = datetime.now(timezone.utc)
@@ -1012,13 +1120,33 @@ class HostedChatCallRunner:
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
         acting: asyncio.Task[None] | None = None
+        deadline_notices: list[dict[str, Any]] = []
         # An agent that runs its own tools reaches them through the tool proxy, which reads this trial's faults from
         # the world's database, as on a voice call.
         if proxied:
-            from .call_runner import _set_trial_faults
+            from .call_runner import _set_trial_faults, trial_worker_deadlines
 
+            deadline, deadlines, deadline_notices = trial_worker_deadlines(document, self._context.bundle_dir)
+        else:
+            deadline_notices = _unproxied_worker_notices(document, self._context.bundle_dir)
+        held = tuple(one for one in deadline_notices if one.get("code") == WORKER_LIMITS_NOT_ENFORCED)
+        if held and not self._context.readiness_probe:
+            # Known before the conversation: a trial relying on limits nobody can hold is held without starting it.
+            ended = datetime.now(timezone.utc)
+            return CallOutcome(
+                calls=(),
+                turns=0,
+                started_at=format_rfc3339_millis(started),
+                ended_at=format_rfc3339_millis(ended),
+                duration_ms=_duration_ms(started, ended),
+                notices=held,
+            )
+        if proxied:
+            if self._context.readiness_probe:
+                # The workers' deadline is a rule of the scenario's graded trials; the probe checks the tools' binding.
+                deadline, deadlines = None, {}
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
-            _set_trial_faults(runtime, faults)
+            await asyncio.to_thread(_set_trial_faults, runtime, faults, deadline, deadlines)
         try:
             # The trial's starting records, after its reset: whether it started from the seed.
             await asyncio.to_thread(self._records.begin, id(runtime), records_dsn)
@@ -1045,6 +1173,11 @@ class HostedChatCallRunner:
         except CallAborted as exc:
             failure = exc
             transcript = getattr(exc, "partial_transcript", None) or Transcript()
+        except asyncio.CancelledError as exc:
+            if not self._context.stop_requested():
+                raise
+            # The person stopped the run: seal what the call kept through the abort path below, then raise.
+            failure, transcript = _stopped_call(exc)
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
             status = (
                 exc.trace.get("status_code")
@@ -1080,18 +1213,19 @@ class HostedChatCallRunner:
                     scenario_key=scenario.scenario_key,
                 )
         finally:
+            sealing.set()
             if proxied:
                 from .call_runner import _write_trial_state
 
                 with contextlib.suppress(Exception):
-                    _write_trial_state(runtime, [])
+                    await asyncio.to_thread(_write_trial_state, runtime, [])
             if acting is not None:
                 acting.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await acting
                 # An actor the agent's last calls woke still takes its turn, within the settle's bound.
                 with contextlib.suppress(Exception):
-                    await dispatcher.settle()
+                    await _within_stop_bound(self._context.stop_requested, dispatcher.settle())
             await _record_text_usage(
                 self._context.usage_reporter,
                 scenario_key=scenario.scenario_key,
@@ -1101,12 +1235,15 @@ class HostedChatCallRunner:
                 failure=failure,
             )
 
-        # The submitted agent may execute tools entirely inside its Python process instead
-        # of returning tool requests over HTTP. These observed calls belong to the same attempt;
-        # do not replay the tool through the generated world or fabricate evidence from text.
+        # Calls the agent made in its own process or against the world's services belong to this attempt: never
+        # replayed through the generated world, never inferred from text.
         try:
-            transcript.calls[:] = _with_span_calls(
-                transcript.calls, runtime, strict=True
+            transcript.calls[:] = collect_seam_calls(
+                runtime,
+                self._context.evidence_seam,
+                transcript.calls,
+                worker_names=contract_worker_names(self._context.bundle_dir),
+                strict=True,
             )
             capture_failed = False
         except ToolCaptureFailed as exc:
@@ -1115,14 +1252,19 @@ class HostedChatCallRunner:
         # Calls returned over HTTP are recorded here as they run, so they are a full capture.
         capture_failed = capture_failed and not graded_calls(transcript.calls)
 
-        world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
+        world_record = _world_actors_record(
+            door, listing, dispatcher, cast, meter, limits, since=trial_started, contract=self._contract
+        )
         from .call_runner import (
             NOT_RECORDED,
             SEALED_WITHOUT_DOOR,
+            deadlines_not_enforced,
             duplicate_commits,
             missing_evidence,
             one_call_per_lost_answer,
+            read_worker_stops,
             sealed_without_door,
+            unenforced_deadline_notices,
             unmeasured_reasons,
         )
 
@@ -1141,6 +1283,17 @@ class HostedChatCallRunner:
         else:
             # The agent runs its own tools where no door stands: World changes says so, never "no change".
             world_record = dict(NOT_RECORDED)
+        unenforced: list[dict[str, str]] = []
+        if proxied:
+            # Off the loop: the seal may wait on a worker's stop under way, and other calls share this loop.
+            stopped = await asyncio.to_thread(read_worker_stops, runtime)
+            if stopped:
+                # Workers whose own process the harness ended past their deadline.
+                world_record["stopped_workers"] = stopped
+            # A listed worker the door inside the agent could not stop at its deadline, each with why.
+            unenforced = await asyncio.to_thread(deadlines_not_enforced, runtime, document, self._context.bundle_dir)
+            if unenforced:
+                world_record["unenforced_deadlines"] = unenforced
 
         # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
         trial_log = _readable_trial_log(door, trial_started, proxied=proxied) if door is not None else []
@@ -1150,8 +1303,12 @@ class HostedChatCallRunner:
             world_record = {**(world_record or {}), "duplicates": duplicates}
         if door_sees_tools and sealed_without_door(runtime.endpoints, transcript.calls, trial_log):
             # Sealed with no world door, the agent ran the tools it was offered itself: its calls are in its own trace
-            # and none reached the world here, so what it changed is unknown, never "no change".
-            world_record = dict(SEALED_WITHOUT_DOOR)
+            # and none reached the world here, so what it changed is unknown, never "no change". The workers the
+            # harness stopped, and those it could not, are still said.
+            world_record = {
+                **SEALED_WITHOUT_DOOR,
+                **{key: world_record[key] for key in ("stopped_workers", "unenforced_deadlines") if key in world_record},
+            }
         if world_record is not None:
             transcript.world_actors = world_record
         # Every actor that took part, the ones acting only through the world too, so the call is found by each.
@@ -1165,21 +1322,26 @@ class HostedChatCallRunner:
         from .call_runner import (
             DUPLICATES_UNREADABLE,
             _bundle_contract,
+            channel_bypass_notices,
             evidence_notices,
             fault_notices,
+            faults_not_held,
+            hand_off_notices,
             in_process_tools,
             repeated_untimed_notices,
         )
 
+        said = list(deadline_notices)
         if faults:
             # A fault that did not take effect is said, never only logged: the trial ran without it.
-            transcript.notices = (
+            said += (
                 fault_notices(
                     faults, None, transcript.calls, unreachable="the trial's faults were unreadable in the world's "
                     "database", code="fault_unreadable",
                 )
                 if proxied and not _faults_readable(runtime)
-                else fault_notices(
+                else faults_not_held(faults, transcript.calls, self._context.bundle_dir)
+                or fault_notices(
                     faults, _trial_log(door, trial_started), transcript.calls,
                     contract=_bundle_contract(self._context.bundle_dir),
                 )
@@ -1187,15 +1349,16 @@ class HostedChatCallRunner:
         if door is not None:
             # A call of the agent's that ran without the door recording it leaves the trial's evidence incomplete.
             # An action log that could not be read is missing evidence, never an empty log.
-            transcript.notices = (
-                list(transcript.notices or [])
-                + evidence_notices(
-                    trial_log, transcript.calls,
-                    in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints),
-                )
-                + ([dict(DUPLICATES_UNREADABLE)] if trial_log is None else [])
-            )
-        transcript.notices = list(transcript.notices or []) + repeated_untimed_notices(transcript.calls)
+            said += evidence_notices(
+                trial_log, transcript.calls, in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints)
+            ) + ([dict(DUPLICATES_UNREADABLE)] if trial_log is None else [])
+        # A separate worker that reached the world on the shared address: said, and held from its own checks.
+        said += channel_bypass_notices(transcript.calls, self._context.bundle_dir)
+        # Such a worker's own checks are not graded; the rest of the trial is.
+        said += unenforced_deadline_notices(unenforced)
+        said += repeated_untimed_notices(transcript.calls) + hand_off_notices(runtime)
+        if said:
+            transcript.notices = said
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),
@@ -1204,8 +1367,9 @@ class HostedChatCallRunner:
         )
         calls = tuple(transcript.calls)
         if calls:
+            workers = declared_worker_ids(self._context.bundle_dir)
             tool_trace = "\n".join(
-                json.dumps(trace_row(call), sort_keys=True, default=str)
+                json.dumps(trace_row(call, workers), sort_keys=True, default=str)
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(
@@ -1217,6 +1381,7 @@ class HostedChatCallRunner:
             calls=calls,
             tool_capture_failed=capture_failed,
             turns=len(transcript.exchanges),
+            notices=tuple(said),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),
@@ -1232,6 +1397,8 @@ class HostedChatCallRunner:
                 **(dispatcher.briefs if dispatcher is not None else {}),
             },
         )
+        if failure is not None and failure.code == "user_canceled":
+            outcome = replace(outcome, stop_reason="user_canceled")
         if failure is not None:
             failure.partial = outcome
             raise failure
