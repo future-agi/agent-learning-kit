@@ -2215,6 +2215,94 @@ def test_reserved_config_keys_are_refused_at_submit_and_preflight(name, request_
         request_type(source_path="/tmp/agent", connector_config={name: "canary"})
 
 
+_NO_AGENT_NEEDS = [
+    "DOCKER_CONFIG", "COMPOSE_FILE", "BASH_ENV", "ENV", "LD_PRELOAD",
+    "DYLD_INSERT_LIBRARIES", "GIT_SSH_COMMAND", "SSH_ASKPASS", "NODE_OPTIONS",
+]
+_AGENT_SETTINGS = [
+    "HTTPS_PROXY", "http_proxy", "NO_PROXY", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE",
+    # A customer's own credentials under a tool's prefix: git, ssh and docker don't read these.
+    "GIT_TOKEN", "GIT_ACCESS_TOKEN", "SSH_PRIVATE_KEY", "DOCKER_PASSWORD", "DOCKER_USERNAME",
+]
+
+
+@pytest.mark.parametrize("name", _NO_AGENT_NEEDS)
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+def test_a_name_no_agent_needs_is_refused_on_both_channels(name, request_type):
+    # Runtime values reach the Compose subprocess under their own names, where these steer it.
+    with pytest.raises(ValidationError, match=f"connector_config_name_reserved: {name}"):
+        request_type(source_path="/tmp/agent", connector_config={name: "canary"})
+    with pytest.raises(ValidationError, match=f"environment_name_reserved: {name}"):
+        request_type(source_path="/tmp/agent", environment_values={name: "canary"})
+
+
+def test_a_job_value_does_not_override_the_kits_port_variable(tmp_path, monkeypatch):
+    # The kit allocates the published port; a job value of the same name (MY_PORT=1.2.3.4:9, or
+    # 0.0.0.0:2375) must not replace it in Compose's environment.
+    from fi.alk.harness import provision
+
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_MY_PORT", "1.2.3.4:9")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(dict(kwargs["env"]))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(provision.subprocess, "run", fake_run)
+    compose = tmp_path / "compose.yml"
+    compose.write_text("services: {}\n")
+    environment = provision.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(compose),
+        project="fagi-harness-port",
+        runtime_configuration_names=["MY_PORT"],
+        port_variables={"MY_PORT": "0"},
+    )
+    provision._run(environment, "ps")
+    assert calls[0]["MY_PORT"] == "0"
+
+
+@pytest.mark.parametrize(
+    "field", ["environment_values", "connector_config"]
+)
+def test_a_refused_value_is_not_echoed_in_the_422(tmp_path, field):
+    client = TestClient(create_app(tmp_path / "state"))
+    response = client.post(
+        "/v1/jobs",
+        json={"source_path": "/tmp/agent", field: {"DOCKER_CONFIG": "canary-echo-0042"}},
+    )
+    assert response.status_code == 422
+    assert "canary-echo-0042" not in response.text
+
+
+def test_a_rerun_refuses_a_name_no_agent_needs():
+    with pytest.raises(ValidationError, match="environment_name_reserved: DOCKER_CONFIG"):
+        SandboxRerunRequest(environment_values={"DOCKER_CONFIG": "x"})
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["alk_sandbox_token", "Alk_Anything", "pythonpath", "fi_api_key", "harness_platform_url"],
+)
+def test_a_runner_name_is_refused_in_any_case(name):
+    with pytest.raises(ValidationError, match="name_reserved"):
+        LocalSandboxRequest(source_path="/tmp/agent", connector_config={name: "x"})
+    with pytest.raises(ValidationError, match="name_reserved"):
+        LocalSandboxRequest(source_path="/tmp/agent", environment_values={name: "x"})
+
+
+def test_a_refused_name_says_why_and_what_to_do(request_type=LocalSandboxRequest):
+    with pytest.raises(ValidationError, match="steers a process the runner starts.*another name"):
+        request_type(source_path="/tmp/agent", environment_values={"DOCKER_CONFIG": "x"})
+
+
+@pytest.mark.parametrize("name", _AGENT_SETTINGS)
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+def test_proxy_ca_and_credential_names_stay_agent_settings(name, request_type):
+    request_type(source_path="/tmp/agent", connector_config={name: "canary"})
+    request_type(source_path="/tmp/agent", environment_values={name: "canary"})
+
+
 def test_reserved_config_key_is_a_422_over_http(tmp_path):
     client = TestClient(create_app(tmp_path / "state"))
 
@@ -3123,7 +3211,7 @@ def test_an_ordinary_upload_alias_still_uploads_and_validates(tmp_path):
 
 @pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest, SandboxRerunRequest])
 @pytest.mark.parametrize(
-    "name", ["HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "NODE_OPTIONS", "LANG"]
+    "name", ["HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "LANG", "LC_ALL"]
 )
 def test_a_client_name_is_accepted_as_an_environment_value(request_type, name):
     extra = {} if request_type is SandboxRerunRequest else {"source_path": "/tmp/agent"}
@@ -3151,3 +3239,30 @@ def test_a_target_provider_ref_under_a_neutral_alias_reaches_only_the_runtime_na
         "ALK_RUNTIME_VALUE_MY_AGENT_KEY"
     ]
     assert worker[_ALIASES_ENV] == "MY_AGENT_KEY"
+
+
+@pytest.mark.parametrize("name", ["fi_api_key", "harness_platform_url", "Alk_X"])
+def test_a_runner_name_is_refused_in_any_case_as_a_target_alias(name):
+    with pytest.raises(ValidationError, match=f"secret_alias_reserved: {name}"):
+        LocalSandboxRequest(
+            source_path="/tmp/agent", secret_refs={name: _ref("environment", "MY_SOURCE")}
+        )
+
+
+@pytest.mark.parametrize("name", ["fi_api_key", "harness_platform_url"])
+def test_a_runner_name_is_refused_in_any_case_for_an_upload(tmp_path, name):
+    from fastapi import HTTPException
+
+    sandbox = LocalSandbox(tmp_path / "state")
+    with pytest.raises(HTTPException, match="environment_name is reserved"):
+        asyncio.run(_upload_credential(sandbox, name))
+
+
+def test_the_agent_runtime_is_started_without_publishing_its_service_ports(
+    tmp_path, monkeypatch
+):
+    # A job value can stand in for a port variable at the agent runtime's start; that's safe only
+    # while the run publishes no service ports.
+    command, _environment = _agent_runtime_command({}, tmp_path, monkeypatch, label="ports")
+    assert "--no-deps" in command
+    assert "-P" not in command and "--service-ports" not in command

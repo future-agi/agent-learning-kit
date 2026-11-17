@@ -34,7 +34,9 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from fi.simulate.runtime.spec import SecretRef
 
@@ -68,6 +70,7 @@ from .secrets import (
     RUNTIME_CONFIGURATION_NAMES_ENV,
     SecretResolutionError,
     TARGET_PROVIDER_ALIASES_ENV,
+    agent_value_name_reserved,
     client_name_reserved,
     controller_name_reserved,
     resolve_worker_secrets,
@@ -82,6 +85,9 @@ _SANDBOX_FILE_PREFIX = "ALK_SECRET_FILE_"
 
 
 class LocalSandboxRequest(BaseModel):
+    # A 422 must not echo a submitted value (a secret) back.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     source_path: str | None = None
     source_id: str | None = None
     provider_only: bool = False
@@ -134,6 +140,9 @@ class LocalSandboxRequest(BaseModel):
 
 
 class SandboxPreflightRequest(BaseModel):
+    # A 422 must not echo a submitted value (a secret) back.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     source_path: str | None = None
     source_id: str | None = None
     github_repository: str | None = None
@@ -166,6 +175,9 @@ class SandboxRerunRequest(BaseModel):
     deliberately supplied again (or resolved from fresh references); they are never recovered
     from the completed job's persisted payload.
     """
+    # A 422 must not echo a submitted value (a secret) back.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
 
     secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
     environment_values: dict[str, SecretStr] = Field(default_factory=dict)
@@ -292,8 +304,7 @@ class LocalSandbox:
         if not _ENVIRONMENT_NAME.fullmatch(name):
             raise HTTPException(status_code=400, detail="environment_name is invalid")
         if (
-            name in _RUNNER_RESERVED_ENVIRONMENT
-            or name.startswith("ALK_")
+            _runner_owned(name)
             or client_name_reserved(name)
         ):
             raise HTTPException(status_code=400, detail="environment_name is reserved")
@@ -1615,13 +1626,25 @@ def _validate_secret_alias_shapes(references: dict[str, SecretRef]) -> None:
             raise ValueError(f"secret_reference_name_invalid: {alias}")
 
 
+def _runner_owned(name: str) -> bool:
+    """A name the runner owns, in any case: its reserved environment and the ALK_ prefix."""
+    key = str(name).strip().upper()
+    return key in _RUNNER_RESERVED_ENVIRONMENT or key.startswith("ALK_")
+
+
+_RESERVED_HINT = (
+    " (the name steers a process the runner starts, or is the runner's own; send the value "
+    "under another name and read that name in the agent)"
+)
+
+
 def _validate_controller_names(
     config: dict[str, Any], references: dict[str, SecretRef]
 ) -> None:
     """Refuse the names of a job that would reach the controller's own environment."""
     for name in config:
-        if str(name) in _RUNNER_RESERVED_ENVIRONMENT or str(name).startswith("ALK_"):
-            raise ValueError(f"connector_config_name_reserved: {name}")
+        if _runner_owned(str(name)) or agent_value_name_reserved(str(name)):
+            raise ValueError(f"connector_config_name_reserved: {name}{_RESERVED_HINT}")
     _validate_secret_alias_shapes(references)
     for alias, reference in references.items():
         # An upload alias becomes a runtime value, never a controller variable, but its name
@@ -1629,15 +1652,14 @@ def _validate_controller_names(
         if reference.manager == "mounted" and reference.key.startswith(
             _SANDBOX_FILE_PREFIX
         ):
-            if client_name_reserved(alias):
+            if _runner_owned(alias) or client_name_reserved(alias):
                 raise ValueError(f"secret_alias_reserved: {alias}")
             continue
         if _target_alias(reference):
             # The customer agent's own credential (ANTHROPIC_API_KEY, GOOGLE_API_KEY): it reaches
             # only the agent's runtime namespace, so it takes the rule environment values take.
             if (
-                alias in _RUNNER_RESERVED_ENVIRONMENT
-                or alias.startswith("ALK_")
+                _runner_owned(alias)
                 or client_name_reserved(alias)
             ):
                 raise ValueError(f"secret_alias_reserved: {alias}")
@@ -1688,8 +1710,8 @@ def _validate_environment_values(
     for name, secret in values.items():
         if not _ENVIRONMENT_NAME.fullmatch(name):
             raise ValueError(f"environment_name_invalid: {name}")
-        if name in _RUNNER_RESERVED_ENVIRONMENT or name.startswith("ALK_"):
-            raise ValueError(f"environment_name_reserved: {name}")
+        if _runner_owned(name) or agent_value_name_reserved(name):
+            raise ValueError(f"environment_name_reserved: {name}{_RESERVED_HINT}")
         value = secret.get_secret_value()
         if "\x00" in value:
             raise ValueError(f"environment_value_contains_nul: {name}")
@@ -2265,6 +2287,20 @@ def create_app(root: Path | None = None) -> FastAPI:
         root or Path(os.getenv("ALK_SANDBOX_ROOT", "./artifacts/sandbox")),
         max_concurrency=int(os.getenv("ALK_SANDBOX_MAX_CONCURRENCY", "2")),
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_request, exc: RequestValidationError):
+        # FastAPI's default 422 carries each error's input: a submitted value, maybe a secret.
+        # The location and message say what to fix; the value stays out.
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {key: error[key] for key in ("type", "loc", "msg") if key in error}
+                    for error in exc.errors()
+                ]
+            },
+        )
 
     @app.get("/health")
     async def health() -> dict[str, str]:

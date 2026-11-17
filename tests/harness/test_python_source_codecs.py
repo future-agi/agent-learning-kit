@@ -1,6 +1,7 @@
 """A Python file whose codec can spell a name in other bytes is read as Python reads it.
 
-Each row that says Python runs a name checks it with ``compile``, which is what an import runs.
+Each row that says Python runs a name checks it with ``compile``, which is what an import runs,
+or, in a codec only `python file.py` runs a file in, by running the file with a stub on the path.
 """
 
 from __future__ import annotations
@@ -10,9 +11,14 @@ import codecs
 import collections
 import encodings
 import encodings.aliases
+import io
+import logging
+import os
 import pkgutil
 import string
+import subprocess
 import sys
+import tokenize
 import types
 from pathlib import Path
 
@@ -30,13 +36,31 @@ from fi.alk.harness.python_source import (
     _RAW_SAFE_CODECS,
     EscapeBudget,
     _coding,
-    _decoded_first,
+    _decoded_readings,
     read_module,
 )
 
 # Python reads a decoded CR as a line end, and a line it starts as blank, only from 3.12.
 _FROM_312 = pytest.mark.skipif(
     sys.version_info < (3, 12), reason="Python reads a decoded CR this way from 3.12"
+)
+
+
+def _keeps_a_decoded_cr() -> bool:
+    """Whether Python keeps a decoded CR inside a line: 3.13.13 and 3.14.7 end the line there."""
+    try:
+        compile(
+            b'# coding: unicode-escape\nx = "\\r"\n', "<cr>", "exec", dont_inherit=True
+        )
+    except SyntaxError:
+        return False
+    return True
+
+
+# The rows whose premise is a decoded CR Python keeps inside a line: where it ends the line
+# there instead, it refuses the file, and the row has nothing left to show.
+_KEEPS_A_DECODED_CR = pytest.mark.skipif(
+    not _keeps_a_decoded_cr(), reason="this Python ends a line at a decoded CR"
 )
 _ISO2022 = (
     "iso2022_jp",
@@ -174,6 +198,392 @@ def test_a_browser_import_spelled_in_a_codec_that_can_spell_one_is_found(
     assert name in _names_python_runs(raw)
     _write(tmp_path, raw)
     assert browser_tools_found(tmp_path) == [name.replace("_", "-")]
+
+
+# The EBCDIC codecs, each by a name 3.14 can decode its coding line in (it refuses `cp424`,
+# whose `p` cp424 lacks). compile() and import decode the coding line too, and in these it
+# decodes to other characters, so only `python file.py` runs a file in one.
+_EBCDIC = {
+    "cp037": "cp037",
+    "cp1026": "cp1026",
+    "cp1140": "cp1140",
+    "cp273": "cp273",
+    "cp424": "ibm424",
+    "cp500": "cp500",
+    "cp875": "cp875",
+}
+
+
+def _script_imports(folder: Path, raw: bytes) -> bool:
+    """Whether `python main.py`, for a main.py in ``folder`` holding ``raw``, imports
+    playwright: a stub on the path says so."""
+    stub = folder.parent / f"{folder.name}-stub"
+    _write(stub, b"print('stub imported')\n", "playwright.py")
+    _write(folder, raw, "main.py")
+    run = subprocess.run(
+        [sys.executable, "-s", "main.py"],
+        cwd=folder,
+        env={**os.environ, "PYTHONPATH": str(stub), "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True,
+        timeout=60,
+    )
+    return run.returncode == 0 and b"stub imported" in run.stdout
+
+
+@pytest.mark.parametrize(
+    "raw, lines",
+    [
+        # Python throws away the line after the coding line; a blank line stands for it.
+        *(
+            pytest.param(
+                _in(name, "x = 0\nimport playwright\n".encode(codec)), [3], id=codec
+            )
+            for codec, name in sorted(_EBCDIC.items())
+        ),
+        # A NUL makes the byte before the coding line's end an LF; nothing else is thrown away.
+        pytest.param(
+            _in("utf_16_le", b"\0" + "x = 0\nimport playwright\n".encode("utf_16_le")),
+            [2, 3],
+            id="utf-16-le",
+        ),
+        # Here that byte starts a character with the NUL, which the LF after it ends.
+        pytest.param(
+            _in("utf_16_be", b"\0" + "\nimport playwright\n".encode("utf_16_be")),
+            [3],
+            id="utf-16-be",
+        ),
+    ],
+)
+def test_a_browser_import_in_a_codec_only_a_script_runs_is_found(tmp_path, raw, lines):
+    folder = tmp_path / "agent"
+    assert _script_imports(folder, raw)
+    assert browser_tools_found(folder) == ["playwright"]
+    budget = EscapeBudget()
+    text = read_module(folder / "main.py", escapes=budget)
+    assert budget.left == python_source.LARGEST_ESCAPED_TOTAL - len(raw)
+    # Each line keeps its number in the file.
+    assert [node.lineno for node in ast.parse(text).body] == lines
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        "# coding: utf_16_le\n",
+        "# coding: utf_16_le\r\n",
+        "# -*- coding: utf_16_le -*-\n",
+        "#!x\n# coding: utf_16_le\n",
+        # A blank first line of one space: padded too, it keeps the pair's length even.
+        " \n# coding: utf_16_le\n",
+        # An odd number of bytes, which 3.14 can't decode in UTF-16: it refuses the file.
+        "# coding:  utf_16_le\n",
+    ],
+)
+def test_a_utf_16_coding_line_of_any_length_is_read(tmp_path, head):
+    raw = head.encode() + b"\0" + "x = 0\nimport playwright\n".encode("utf_16_le")
+    folder = tmp_path / "agent"
+    if not _script_imports(folder, raw):
+        pytest.skip("this Python refuses the coding line in UTF-16")
+    assert browser_tools_found(folder) == ["playwright"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"# coding: utf_16_le\n",
+        b"# coding: utf_16_le\r\n",
+        b"# -*- coding: utf_16_le -*- \n",
+        b"#!xy\n# coding: utf_16_le\n",
+        b"\n# coding: utf_16_le\n",
+        b" \n# coding: utf_16_le\n",
+        b"\t  \n# coding: utf_16_le\n",
+    ],
+)
+def test_detect_encoding_is_handed_lines_as_long_as_the_real_ones_mod_4(
+    monkeypatch, raw
+):
+    # From 3.14 it decodes them in their codec, as Python decodes the real ones: a UTF-16 or
+    # UTF-32 line of the wrong length would be refused.
+    handed: list[bytes] = []
+    real = python_source.tokenize.detect_encoding
+
+    def spied(readline):
+        def line():
+            got = readline()
+            handed.append(got)
+            return got
+
+        return real(line)
+
+    monkeypatch.setattr(python_source.tokenize, "detect_encoding", spied)
+    if _coding(raw + b"\0x\0") is None:
+        # From 3.14 Python refuses some of these files itself, so no coding is right there.
+        pytest.skip("this Python refuses this coding line")
+    # Python ends each with an LF, a CRLF made one.
+    real = [len(line) + 1 for line in raw.replace(b"\r\n", b"\n").split(b"\n")[:-1]]
+    assert [len(line) % 4 for line in handed] == [length % 4 for length in real][
+        : len(handed)
+    ]
+
+
+def test_a_long_first_line_is_read_both_ways_and_charged_for_both():
+    # Asking whether a coding line this long reads as itself would decode it uncharged.
+    raw = (
+        b"# coding: utf-7 "
+        + b"x" * python_source._LONGEST_HEAD_CHECKED
+        + b"\nimport os\n"
+    )
+    budget = EscapeBudget()
+    assert _decoded_readings(raw, _coding(raw), budget) == (
+        True,
+        raw.decode("utf-7"),
+        None,
+    )
+    assert budget.left == python_source.LARGEST_ESCAPED_TOTAL - 2 * len(raw)
+
+
+@pytest.mark.parametrize(
+    "head, body, imports",
+    [
+        # Python opens the file again one byte before the coding line's end and throws away
+        # the line it reads there: the LF, in cp037 no line end, and the line after it.
+        pytest.param("# coding: cp037\n", "import playwright\n", False, id="lf"),
+        pytest.param("# coding: cp037\r\n", "import playwright\n", False, id="crlf"),
+        pytest.param(
+            "#!/usr/bin/env python\n# coding: cp037\n",
+            "x = 0\nimport playwright\n",
+            True,
+            id="second-line",
+        ),
+        # The CR is a line end in cp037 too, so nothing after it is thrown away.
+        pytest.param("# coding: cp037\r", "import playwright\n", True, id="cr"),
+        pytest.param(
+            "# coding: cp037\r", "\nimport playwright\n", True, id="cr-then-lf"
+        ),
+        # Decoded, a CR ends a line, as Python reads a file it decodes as it goes.
+        pytest.param(
+            "# coding: cp037\n",
+            "x = 0\nimport os\rimport playwright\n",
+            True,
+            id="body-cr",
+        ),
+        # The coding line on the second line: its own end is the byte decoded first. A `%`,
+        # cp037's LF, on it would end the thrown line there were the first line's end taken.
+        pytest.param(
+            "#!x\n# coding: cp037 %\n",
+            "x = 0\nimport playwright\n",
+            True,
+            id="second-line-%",
+        ),
+        pytest.param(
+            "#!x\r# coding: cp037 %\n",
+            "x = 0\nimport playwright\n",
+            True,
+            id="second-line-%-after-cr",
+        ),
+        # A CRLF is one line end: the byte decoded first is its LF, not its CR.
+        pytest.param(
+            "# coding: cp037\r\n",
+            "x = 0\nimport playwright\n",
+            True,
+            id="crlf-x-first",
+        ),
+    ],
+)
+def test_a_script_only_codec_reads_as_python_runs_the_script(
+    tmp_path, head, body, imports
+):
+    raw = head.encode() + body.encode("cp037")
+    folder = tmp_path / "agent"
+    assert _script_imports(folder, raw) is imports
+    assert browser_tools_found(folder) == (["playwright"] if imports else [])
+
+
+def test_an_ascii_compatible_codec_reads_as_before():
+    raw = b"# coding: utf-7\nimport os\nx = '+AA0-'\n"
+    budget = EscapeBudget()
+    assert _decoded_readings(raw, _coding(raw), budget) == (
+        True,
+        raw.replace(b"\r\n", b"\n").decode("utf-7"),
+        None,
+    )
+    assert budget.left == python_source.LARGEST_ESCAPED_TOTAL - len(raw)
+
+
+def test_a_file_whose_second_reading_is_past_the_total_keeps_the_imports_reading():
+    # A CR asks for the script's reading too, and the total lasts for the first decode only: the
+    # import's reading comes back alone, decoded, the escape on the coding line included.
+    raw = b"# coding: unicode-escape  # \\x41\r\nimport playwright\r\n"
+    budget = EscapeBudget(len(raw) + 1)
+    assert _decoded_readings(raw, _coding(raw), budget) == (
+        True,
+        raw.replace(b"\r\n", b"\n").decode("unicode-escape"),
+        None,
+    )
+
+
+def test_a_coding_line_that_reads_as_another_gives_both_readings():
+    # An import reads the coding line's escape, and the decoded CR in the string; a script
+    # keeps the escape as written, and ends the string's line at the CR.
+    raw = b"# coding: utf-7 +AHA-\r\nimport os\r\nx = '+AA0-'\r\n"
+    budget = EscapeBudget()
+    assert _decoded_readings(raw, _coding(raw), budget) == (
+        True,
+        raw.replace(b"\r\n", b"\n").decode("utf-7"),
+        "# coding: utf-7 +AHA-\nimport os\nx = '\n'\n",
+    )
+    # Each decode is charged.
+    assert budget.left == python_source.LARGEST_ESCAPED_TOTAL - 2 * len(raw)
+
+
+def _compiled_imports(raw: bytes, name: str) -> bool:
+    """Whether importing the file, which compile() stands for, imports ``name``."""
+    try:
+        return name in _names_python_runs(raw)
+    except (SyntaxError, ValueError):
+        return False
+
+
+# Coding lines in a codec that reads its own name as itself, each leaving its decoder in another
+# state: an import decodes the rest in that state, `python file.py` with a fresh decoder.
+_CRAFTED_CODING_LINES = [
+    pytest.param(b"# coding: utf-7 +\n", id="utf-7-open-shift"),
+    pytest.param(b"# coding: utf-7 +\r\n", id="utf-7-open-shift-crlf"),
+    pytest.param(b"#!/usr/bin/env python\n# coding: utf-7 +\n", id="utf-7-second-line"),
+    pytest.param(b"# coding: hz ~{\n", id="hz-gb-mode"),
+    pytest.param(b"# coding: iso2022_jp \x1b$B\n", id="iso2022_jp-escape"),
+    pytest.param(b"# coding: iso2022_jp_2 \x1b$A\n", id="iso2022_jp_2-escape"),
+    pytest.param(b"# coding: unicode-escape \\\n", id="unicode-escape-joins-the-line"),
+    pytest.param(b"# coding: raw-unicode-escape \\u\n", id="raw-unicode-escape-open"),
+    # An import ends lines before it decodes, so the backslash joins the next line to the
+    # comment; a script decodes first, and a backslash before a CR joins nothing.
+    pytest.param(
+        b"# coding: unicode-escape \\\r\n", id="unicode-escape-backslash-crlf"
+    ),
+    pytest.param(b"# coding: unicode-escape \\\r", id="unicode-escape-backslash-cr"),
+    pytest.param(
+        b"# coding: unicode-escape\r\nx = 1  # \\\r\n",
+        id="unicode-escape-backslash-crlf-body",
+    ),
+    # A single shift reads the byte after it: an import's LF, a script's CR.
+    pytest.param(
+        b"# coding: iso2022_jp_2\r\n# \x1b.A\x1bN\r\n", id="iso2022_jp_2-single-shift-crlf"
+    ),
+]
+
+
+@pytest.mark.parametrize("head", _CRAFTED_CODING_LINES)
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"import playwright\n", id="plain"),
+        # Joined to the coding line, the import's line opens a string nothing closes.
+        pytest.param(b'import playwright; x = """\n"""\n', id="string"),
+    ],
+)
+def test_an_import_after_a_crafted_coding_line_is_found(tmp_path, head, body):
+    raw = head + body
+    folder = tmp_path / "agent"
+    if not (_script_imports(folder, raw) or _compiled_imports(raw, "playwright")):
+        pytest.skip("this Python runs neither reading")
+    assert browser_tools_found(folder) == ["playwright"]
+
+
+@pytest.mark.parametrize(
+    "raw, script",
+    [
+        # Only an import reads the line end the escape spells; a script reads a comment.
+        pytest.param(
+            b"# coding: utf-7 +AAo-import playwright\nx = 1\n", False, id="import-only"
+        ),
+        # Only a script reads the import: an import joins it to the coding line.
+        pytest.param(
+            b"# coding: unicode-escape \\\nimport playwright\n", True, id="script-only"
+        ),
+        # An import decodes the `\0` to a NUL and reads no further: only the second text names
+        # playwright, or says `import`.
+        pytest.param(
+            b"# coding: unicode-escape \\0\nimport playwright\n", True, id="nul-head"
+        ),
+        # After this designation and a shift-out, the next line decodes after a CR and not
+        # after an LF: an import, which makes the CR an LF first, refuses the file.
+        pytest.param(
+            b"# coding: iso2022_kr\n# \x1b$(C\x0e\rimport playwright\n",
+            True,
+            id="iso2022_kr-shift-out-cr",
+        ),
+    ],
+)
+def test_each_reading_of_a_crafted_coding_line_is_searched(tmp_path, raw, script):
+    folder = tmp_path / "agent"
+    assert _script_imports(folder, raw) is script
+    assert _compiled_imports(raw, "playwright") is not script
+    assert browser_tools_found(folder) == ["playwright"]
+
+
+# Only a script reads what follows each: an import joins it to the coding line, or reads no
+# further than the NUL the `\0` decodes to, where no `import` is left either.
+_SCRIPT_ONLY_HEADS = [
+    pytest.param(b"# coding: unicode-escape \\\n", id="joined"),
+    pytest.param(b"# coding: unicode-escape \\0\n", id="nul"),
+]
+
+
+@pytest.mark.parametrize("head", _SCRIPT_ONLY_HEADS)
+def test_the_other_readers_search_both_readings(tmp_path, head):
+    traced = head + b"import traceai_openai\n"
+    assert "traceai_openai" not in _names_python_runs(traced)
+    _write(tmp_path / "traced", traced)
+    assert detect_instrumentation(tmp_path / "traced") == "traceai"
+    agent = head + b"import common.web\n"
+    assert "common" not in _names_python_runs(agent)
+    repo = _shared(tmp_path / "walk", agent)
+    assert repo / "common" / "web.py" in imported_by_agent(repo, "agents/a")
+
+
+def test_a_browser_marker_only_the_second_reading_holds_is_found(tmp_path):
+    _write(tmp_path, b'# coding: unicode-escape \\0\nMCP = "@playwright/mcp"\n')
+    assert browser_tools_found(tmp_path) == ["Playwright MCP"]
+
+
+def _parse_charges(monkeypatch) -> list[str]:
+    """The texts each ParseBudget, and not a TokenBudget, is charged for."""
+    charged: list[str] = []
+    real = python_source.ParseBudget.spend
+
+    def spend(self, text):
+        if type(self) is python_source.ParseBudget:
+            charged.append(text)
+        return real(self, text)
+
+    monkeypatch.setattr(python_source.ParseBudget, "spend", spend)
+    return charged
+
+
+@pytest.mark.parametrize(
+    "reader, name",
+    [
+        ("browser", b"playwright"),
+        ("instrumentation", b"traceai_openai"),
+        ("walk", b"common.web"),
+    ],
+)
+def test_each_reading_is_charged_to_the_parse_total(
+    tmp_path, monkeypatch, reader, name
+):
+    # Each reader searches for its own names: the file must name one to be read at all.
+    raw = b"# coding: unicode-escape \\0\nimport " + name + b"\n"
+    _, first, second = _decoded_readings(raw, _coding(raw), EscapeBudget())
+    assert second is not None
+    charged = _parse_charges(monkeypatch)
+    repo = _shared(tmp_path, raw)
+    if reader == "browser":
+        browser_tools_found(repo / "agents" / "a")
+    elif reader == "instrumentation":
+        detect_instrumentation(repo / "agents" / "a")
+    else:
+        imported_by_agent(repo, "agents/a", parse_budget=python_source.ParseBudget())
+    assert first in charged
+    assert second in charged
 
 
 @pytest.mark.parametrize(
@@ -376,19 +786,20 @@ def test_a_decoded_cr_reads_as_todays_code_reads_it(tmp_path, raw, name):
             _ESCAPED + b'x = "\\r"\nimport playwright\n',
             "playwright",
             id="cr-in-string",
+            marks=_KEEPS_A_DECODED_CR,
         ),
         # Python ends the comment at the CR and reads on; the parser keeps it in the comment.
         pytest.param(
             _UTF7 + b"import os  # hi+AA0-, playwright\n",
             "playwright",
             id="comment-cr",
-            marks=_FROM_312,
+            marks=(_FROM_312, _KEEPS_A_DECODED_CR),
         ),
         pytest.param(
             _ESCAPED + b"x = 1  # hi\\r; import playwright\n",
             "playwright",
             id="ue-comment-cr",
-            marks=_FROM_312,
+            marks=(_FROM_312, _KEEPS_A_DECODED_CR),
         ),
         # Python reads a line a decoded CR starts as blank, inside the block; the parser as
         # a line at column 0, which ends it.
@@ -396,27 +807,27 @@ def test_a_decoded_cr_reads_as_todays_code_reads_it(tmp_path, raw, name):
             _UTF7 + b"def f():\n    a = 1\n+AA0-(1)\n    import +AHA-laywright\n",
             "playwright",
             id="cr-in-a-block",
-            marks=_FROM_312,
+            marks=(_FROM_312, _KEEPS_A_DECODED_CR),
         ),
         pytest.param(
             _UTF7
             + b"try:\n    import +AHA-laywright\n+AA0-[0]\nexcept ImportError:\n    pass\n",
             "playwright",
             id="cr-in-a-try",
-            marks=_FROM_312,
+            marks=(_FROM_312, _KEEPS_A_DECODED_CR),
         ),
         pytest.param(
             _UTF7
             + b"try:\n    import +AHQ-raceai_openai\n+AA0-[0]\nexcept ImportError:\n    pass\n",
             "traceai_openai",
             id="cr-in-a-try-traceai",
-            marks=_FROM_312,
+            marks=(_FROM_312, _KEEPS_A_DECODED_CR),
         ),
         pytest.param(
             _UTF7 + b"+AA0-\\+AA0-\n import playwright\n",
             "playwright",
             id="cr-then-continued",
-            marks=_FROM_312,
+            marks=(_FROM_312, _KEEPS_A_DECODED_CR),
         ),
         # More failed cookie places than _coding reads before the cookie: read as a refused
         # codec's file, searched as bytes.
@@ -475,6 +886,68 @@ def test_past_the_total_a_file_reads_as_today(tmp_path, monkeypatch):
     assert browser_tools_found(tmp_path / "spelled") == []
 
 
+def _tool_check(folder: Path) -> object:
+    """The tool check over three named modules, m0 to m2, each a file in ``folder``."""
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.source_tool_evidence import tool_evidence_problems
+
+    entries = [
+        {"tool": f"t{n}", "mode": "import", "module": f"m{n}", "callable": "f"}
+        for n in range(3)
+    ]
+    contract = AgentContract.model_validate({"agent": "a", "tool_entrypoints": entries})
+    return tool_evidence_problems(contract, folder)
+
+
+@pytest.mark.parametrize(
+    "reader, scan, names",
+    [
+        (
+            "browser scan",
+            browser_tools_found,
+            ["a_pad00.py", "a_pad01.py", "a_pad02.py"],
+        ),
+        ("instrumentation scan", detect_instrumentation, ["a0.py", "a1.py", "a2.py"]),
+        ("tool check", _tool_check, ["m0.py", "m1.py", "m2.py"]),
+        (
+            "import walk",
+            lambda folder: imported_by_agent(
+                folder.parent.parent.resolve(), "agents/a"
+            ),
+            ["a0.py", "a1.py", "a2.py"],
+        ),
+    ],
+)
+def test_the_total_running_out_is_logged_once_in_counts(
+    tmp_path, monkeypatch, caplog, reader, scan, names
+):
+    pad = _UTF7 + b"x = 1\n" * 10
+    monkeypatch.setattr(python_source, "LARGEST_ESCAPED_TOTAL", 2 * len(pad))
+    folder = tmp_path / "agents" / "a"
+    # Read in name order: two pads fill the total, and the rest are past it.
+    for name in names:
+        _write(folder, pad, name)
+    _write(folder, _UTF7 + b"import +AHA-laywright\n", "z_main.py")
+    with caplog.at_level(logging.WARNING, logger=python_source.__name__):
+        scan(folder)
+    logged = [r for r in caplog.records if r.name == python_source.__name__]
+    assert [(r.levelno, r.args) for r in logged] == [
+        (logging.WARNING, (reader, 2 * len(pad), 2))
+    ]
+    # Counts alone: never a path or the code. Past the total some readers skip a file, and
+    # others search its bytes: either way a name can be missed.
+    message = logged[0].getMessage()
+    assert message.endswith("a name the rest spell in their codec can be missed")
+    assert all(part not in message for part in ("a_pad", "z_main", "laywright", "tmp"))
+
+
+def test_a_total_that_lasts_logs_nothing(caplog):
+    budget = EscapeBudget(10)
+    with caplog.at_level(logging.WARNING, logger=python_source.__name__):
+        assert budget.spend(b"x" * 10)
+    assert caplog.records == []
+
+
 @pytest.mark.parametrize(
     "codec, word",
     [
@@ -489,7 +962,7 @@ def test_a_raw_safe_codec_reads_as_today(tmp_path, codec, word):
     # CRLF and no final LF: decoding first would end both lines with an LF.
     raw = f"# coding: {codec}\r\nimport playwright\r\nNAME = '{word}'".encode(codec)
     budget = EscapeBudget()
-    assert _decoded_first(raw, _coding(raw), budget) == (False, None)
+    assert _decoded_readings(raw, _coding(raw), budget)[:2] == (False, None)
     path = _write(tmp_path, raw)
     assert read_module(path, needles=(b"playwright",), escapes=budget) == raw.decode(
         codec
@@ -499,7 +972,7 @@ def test_a_raw_safe_codec_reads_as_today(tmp_path, codec, word):
 
 def test_without_a_total_every_codec_reads_as_today(tmp_path):
     unended = _UTF7 + b"import +AHA-laywright"
-    assert _decoded_first(unended, _coding(unended), None) == (False, None)
+    assert _decoded_readings(unended, _coding(unended), None)[:2] == (False, None)
     assert read_module(_write(tmp_path / "utf-7", unended)) == unended.decode("utf-7")
     escaped = _ESCAPED + b"import \\x70laywright\n"
     assert read_module(_write(tmp_path / "unicode-escape", escaped)) is None
@@ -508,6 +981,11 @@ def test_without_a_total_every_codec_reads_as_today(tmp_path):
 @pytest.mark.parametrize("codec", ["rot13", "base64"])
 def test_a_non_text_codec_is_never_charged(tmp_path, codec):
     raw = _in(codec, b"import playwright\n")
+    try:
+        tokenize.detect_encoding(io.BytesIO(raw).readline)
+    except (SyntaxError, LookupError):
+        # From 3.14 detect_encoding decodes the coding line in its codec, which refuses it.
+        pytest.skip(f"this Python refuses a {codec} coding line before reading it")
     assert _coding(raw) is not None
     budget = EscapeBudget()
     assert read_module(_write(tmp_path, raw), escapes=budget) is None
@@ -526,7 +1004,7 @@ def test_a_text_codec_whose_decode_raises_lookup_error_gives_none():
     codecs.register(search)
     try:
         coding = ("lookup-failing", codecs.lookup("lookup-failing"))
-        assert _decoded_first(b"x = 1\n", coding, EscapeBudget()) == (True, None)
+        assert _decoded_readings(b"x = 1\n", coding, EscapeBudget())[:2] == (True, None)
     finally:
         codecs.unregister(search)
 
@@ -577,22 +1055,36 @@ def test_the_union_is_for_unicode_escape_only(tmp_path):
 def test_a_failed_decode_is_still_charged():
     bad = _UTF7 + b"import os\n# +\xff\n"
     budget = EscapeBudget()
-    assert _decoded_first(bad, _coding(bad), budget) == (True, None)
+    assert _decoded_readings(bad, _coding(bad), budget)[:2] == (True, None)
     assert budget.left == python_source.LARGEST_ESCAPED_TOTAL - len(bad)
 
 
 @pytest.mark.parametrize(
     "agent",
     [
-        pytest.param(_ESCAPED + b"import common.web  # see \\r, x\n", id="comment"),
-        pytest.param(_ESCAPED + b'SEP = "\\r"\nimport common.web\n', id="string"),
-        pytest.param(_ESCAPED + b"CR = b'\\r'\nimport common.web\n", id="bytes"),
+        pytest.param(
+            _ESCAPED + b"import common.web  # see \\r, x\n",
+            id="comment",
+            marks=_KEEPS_A_DECODED_CR,
+        ),
+        pytest.param(
+            _ESCAPED + b'SEP = "\\r"\nimport common.web\n',
+            id="string",
+            marks=_KEEPS_A_DECODED_CR,
+        ),
+        pytest.param(
+            _ESCAPED + b"CR = b'\\r'\nimport common.web\n",
+            id="bytes",
+            marks=_KEEPS_A_DECODED_CR,
+        ),
+        # A triple-quoted string holds a line end, so Python runs this one either way.
         pytest.param(
             _ESCAPED + b'"""\\r"""\nimport \\x63ommon.web\n', id="and-an-escaped-import"
         ),
         pytest.param(
             _ESCAPED + b'SEP = "\\r"  # caf\xe9\nimport common.web\n',
             id="and-a-latin-1-byte",
+            marks=_KEEPS_A_DECODED_CR,
         ),
     ],
 )
@@ -651,15 +1143,15 @@ def test_the_walks_total_is_spent_across_one_walk(tmp_path, monkeypatch):
         ) is followed
 
 
-def _punycode_decodes(monkeypatch) -> list[int]:
+def _punycode_decodes(monkeypatch) -> list[bytes]:
     import encodings.punycode
 
-    decoded: list[int] = []
+    decoded: list[bytes] = []
     real = encodings.punycode.punycode_decode
     monkeypatch.setattr(
         encodings.punycode,
         "punycode_decode",
-        lambda *args: decoded.append(len(args[0])) or real(*args),
+        lambda *args: decoded.append(bytes(args[0])) or real(*args),
     )
     return decoded
 
@@ -680,7 +1172,11 @@ def test_the_walk_never_decodes_a_refused_codec(tmp_path, monkeypatch):
         "host.py",
     )
     imported_by_agent(repo, "agents/a")
-    assert (decoded, labels) == ([], [])
+    # From 3.14 detect_encoding decodes the coding line it's handed in its codec: _coding hands
+    # it the line cut to its cookie, padded with spaces and ended with an LF, a few bytes. The
+    # file's body is never decoded.
+    assert all(line.rstrip(b" \n") == b"#coding:punycode" for line in decoded)
+    assert labels == []
 
 
 def test_the_walk_reads_each_coding_line_once(tmp_path, monkeypatch):
@@ -700,6 +1196,27 @@ def test_the_walk_reads_each_coding_line_once(tmp_path, monkeypatch):
         repo / "common" / "web.py",
     ]
     assert sorted(asked) == sorted(path.read_bytes() for path in python)
+
+
+def test_the_walk_parses_each_files_own_readings(tmp_path, monkeypatch):
+    # The second text a crafted coding line gives belongs to its own file: a later file never
+    # parses it again.
+    from fi.alk.harness import credentials
+
+    parsed: list[str] = []
+    real = credentials._python_imports
+    monkeypatch.setattr(
+        credentials,
+        "_python_imports",
+        lambda reading, *args: parsed.append(reading) or real(reading, *args),
+    )
+    repo = _shared(tmp_path, b"")
+    _write(repo / "agents" / "a", b"# coding: unicode-escape \\0\nimport common.web\n", "a.py")
+    _write(repo / "agents" / "a", b"import os\n", "b.py")
+    assert repo / "common" / "web.py" in imported_by_agent(repo, "agents/a")
+    # a.py is read twice, the decoded text cut at its NUL and the text a script reads; b.py once.
+    assert sum("unicode-escape" in reading for reading in parsed) == 2
+    assert sum("import os" in reading for reading in parsed) == 1
 
 
 def test_ci_runs_this_file():
@@ -921,6 +1438,76 @@ def test_every_raw_safe_codec_is_proven():
 def test_the_accepted_codecs_are_exactly_the_three_groups():
     # A codec a new Python adds fails here until it's put in one group or the other.
     assert _accepted_codecs() == _RAW_SAFE_CODECS | _SPELLING_CODECS | {"idna"}
+
+
+def _codec_names() -> list[str]:
+    """Every name a coding line may give a codec in."""
+    names = set(encodings.aliases.aliases) | set(encodings.aliases.aliases.values())
+    names |= {module.name for module in pkgutil.iter_modules(encodings.__path__)}
+    return sorted(names - {"aliases"})
+
+
+def _compiles(name: str) -> bool:
+    try:
+        compile(
+            f"# coding: {name}\nx = 1\n".encode(), "<coding>", "exec", dont_inherit=True
+        )
+    except (LookupError, SyntaxError, ValueError):
+        return False
+    return True
+
+
+def _script_only_codecs(folder: Path) -> dict[str, bytes]:
+    """Every codec `python file.py` runs an import in whose coding line compile() refuses, by
+    its codec info's name, with the file it ran. Python decodes such a file from the byte
+    before the coding line's end and throws the first line it reads away, so the body is tried
+    after each count of NUL bytes that could make that byte part of a whole character."""
+    found: dict[str, bytes] = {}
+    for name in _codec_names():
+        try:
+            codec = codecs.lookup(name)
+            if not getattr(codec, "_is_text_encoding", True):
+                # bytes.decode refuses it, as Python does on a coding line.
+                continue
+            encoder = codecs.getincrementalencoder(name)()
+            # Past its first call an encoder writes no byte-order mark.
+            encoder.encode("")
+            body = encoder.encode("\nimport playwright\n", final=True)
+            unit = len("\n\n".encode(name)) - len("\n".encode(name))
+        except (LookupError, UnicodeError):
+            continue
+        if codec.name in found or _compiles(name):
+            continue
+        for pad in range(unit):
+            raw = _in(name, b"\0" * pad + body)
+            if _script_imports(folder, raw):
+                found[codec.name] = raw
+                break
+    return found
+
+
+# What a script runs a file in on 3.12 to 3.14 besides the EBCDIC codecs. Which of these runs
+# varies by version: 3.14 also decodes the coding line in its codec, and refuses it when that
+# fails.
+_WIDE_OR_PUNYCODE = frozenset(
+    {"utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-32-le", "punycode"}
+)
+
+
+def test_every_codec_a_script_runs_is_read_as_it_runs(tmp_path):
+    ran = _script_only_codecs(tmp_path / "probe")
+    # A codec a new Python runs a script in fails here until it's put in one group or the other.
+    assert set(_EBCDIC) <= set(ran) <= set(_EBCDIC) | _WIDE_OR_PUNYCODE
+    for codec, raw in sorted(ran.items()):
+        # punycode is refused by name and searched as bytes, where its letters are as written.
+        _write(tmp_path / codec, raw)
+        assert browser_tools_found(tmp_path / codec) == ["playwright"], codec
+    # Every codec compile() accepts reads as before; the others are read as a script reads them.
+    for name in _codec_names():
+        if _compiles(name):
+            assert python_source._reads_its_cookie(name), name
+    for codec in set(ran) - {"punycode"}:
+        assert not python_source._reads_its_cookie(codec), codec
 
 
 # Each holds a needle in bytes its codec decodes to other characters, beside an import of
@@ -1351,3 +1938,12 @@ def test_no_decoy_case_regresses(tmp_path, raw):
     )
     assert text is not None
     assert "playwright" in _imported(ast.parse(text))
+
+
+def test_a_file_the_whole_decode_refuses_at_the_totals_edge_is_read_as_past_it(tmp_path):
+    # The total lasts for the first decode and not the second: the file is read as any file
+    # past the total is, not dropped.
+    raw = b"# coding: iso2022_kr\n# \x1b$(C\x0e\rimport playwright\n"
+    path = _write(tmp_path, raw)
+    text = read_module(path, needles=(b"playwright",), escapes=EscapeBudget(len(raw) + 1))
+    assert text is not None and "import playwright" in text

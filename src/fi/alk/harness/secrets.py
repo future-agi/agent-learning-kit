@@ -215,6 +215,31 @@ def client_name_reserved(name: str) -> bool:
     )
 
 
+# Client names an agent may need as its own settings: a proxy, a CA bundle (design call 1) and
+# its locale.
+_AGENT_CLIENT_SETTINGS = frozenset(
+    {"NO_PROXY", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE", "SSL_CERT_DIR",
+     "NODE_EXTRA_CA_CERTS", "LANG", "LC_ALL"}
+)
+
+
+_CREDENTIAL_SUFFIXES = ("_TOKEN", "_PASSWORD", "_USERNAME", "_USER", "_PRIVATE_KEY")
+
+
+def agent_value_name_reserved(name: str) -> bool:
+    """A name a job may not send as a value on any channel (connector_config, environment
+    values): every client-steering name but a proxy or CA bundle. Runtime values reach the
+    Compose subprocess under their own names, where these would steer it."""
+    key = str(name).strip().upper()
+    if key.endswith("_PROXY") or key in _AGENT_CLIENT_SETTINGS:
+        return False
+    # A customer's own credential under a tool's prefix (GIT_TOKEN, DOCKER_PASSWORD): git, ssh
+    # and docker don't read these names.
+    if key.startswith(("GIT_", "SSH_", "DOCKER_")) and key.endswith(_CREDENTIAL_SUFFIXES):
+        return False
+    return client_name_reserved(name)
+
+
 # Carries the aliases the caller sent as target_provider refs to the worker, beside
 # ALK_RUNTIME_CONFIGURATION_NAMES. The server always defines it, empty when there are none.
 TARGET_PROVIDER_ALIASES_ENV = "ALK_TARGET_PROVIDER_ALIASES"
@@ -386,6 +411,7 @@ __all__ = [
     "TARGET_PROVIDER_ALIASES_ENV",
     "WORKER_ENVIRONMENT_NAMES",
     "client_name_reserved",
+    "agent_value_name_reserved",
     "controller_name_reserved",
     "controller_owned_name",
     "resolve_worker_secrets",

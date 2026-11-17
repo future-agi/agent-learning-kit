@@ -588,7 +588,7 @@ def _tools_in(
     scanned = scripts = python = 0
     budget = ParseBudget()
     tokens = TokenBudget()
-    escapes = EscapeBudget()
+    escapes = EscapeBudget(reader="browser scan")
     searched = ParseBudget(_LARGEST_RAW_SEARCH)
     skipped = 0
     for path in sorted(
@@ -619,13 +619,14 @@ def _tools_in(
                 found |= _markers_in(path)
             elif (
                 text := read_module(
-                    path, _largest_read(path), _PYTHON_NAMES, undecoded := [], escapes
+                    path, _largest_read(path), _PYTHON_NAMES, undecoded := [], escapes, also := []
                 )
             ) is not None:
-                markers = _python_markers(text, tokens, path)
-                names = _imports_in(text, path) if budget.spend(text) else set()
-                found |= markers
-                imported |= names
+                # An import and `python file.py` can read a crafted file two ways: each reading
+                # on its own, charged as it's read.
+                for reading in (text, *also):
+                    found |= _python_markers(reading, tokens, path)
+                    imported |= _imports_in(reading, path) if budget.spend(reading) else set()
             elif undecoded:
                 # A codec refused by name, which Python still runs the file in: the browser
                 # packages and tool markers it names, as bytes, count. That leads to a second
