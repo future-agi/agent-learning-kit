@@ -45,6 +45,11 @@ def return_policy() -> str:
     return "Delivered items can be returned within 30 days for a full refund."
 
 
+
+def _setting(name: str) -> str:
+    # Blank counts as unset.
+    return os.getenv(name, "").strip()
+
 async def agent_callback(agent_input):
     # Each request runs in its own event loop on its own thread, and CrewAI's clients are
     # bound to the loop they were first used in, so the model and the agent live for one
@@ -54,15 +59,15 @@ async def agent_callback(agent_input):
     # prefix and `vertex_ai` isn't a CrewAI provider alias, so without it the name goes to
     # LiteLLM whatever `base_url` says, and LiteLLM isn't installed here. It also stops CrewAI
     # switching to the Responses API on a "responses-only" error; the gateway serves chat only.
-    # Blank counts as unset.
-    api_key = os.getenv("OPENAI_API_KEY", "").strip() or None
-    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
     # The same rule as the other reference agents: a key needs the endpoint it belongs to.
-    if api_key and not base_url:
+    # Checked before the key is held in a variable, so the frame that raises has none.
+    if _setting("OPENAI_API_KEY") and not _setting("OPENAI_BASE_URL"):
         raise RuntimeError(
             "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
             "endpoint the key belongs to."
         )
+    api_key = _setting("OPENAI_API_KEY") or None
+    base_url = _setting("OPENAI_BASE_URL") or None
     llm = LLM(model=MODEL, custom_openai=True, base_url=base_url, api_key=api_key)
     agent = Agent(
         role="Customer support agent",

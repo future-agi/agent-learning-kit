@@ -261,6 +261,93 @@ def test_shadowed_case_fails_when_the_framework_is_still_found_with_a_version(
         )
 
 
+def _refusing_module(tmp_path: Path, monkeypatch, body: str):
+    # A stand-in example: `agent.py`, so the check can find its frames.
+    path = tmp_path / "refusing" / "agent.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(textwrap.dedent(body), encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("refusing_agent", path)
+
+    def load(**environment):
+        for name, value in environment.items():
+            monkeypatch.setenv(name, value)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    return load
+
+
+def test_refusal_check_names_every_case_that_fails(tmp_path: Path, monkeypatch) -> None:
+    import reference_agents
+
+    # Refuses only an unset base URL, so the empty and blank cases both fail.
+    load = _refusing_module(
+        tmp_path,
+        monkeypatch,
+        """
+        import os
+
+
+        def call():
+            if os.environ.get("OPENAI_BASE_URL") is None:
+                raise RuntimeError("OPENAI_BASE_URL is empty")
+        """,
+    )
+    with pytest.raises(AssertionError) as failed:
+        reference_agents.assert_refuses_key_without_base_url(
+            load, lambda module: module.call(), monkeypatch
+        )
+    assert "''" in str(failed.value)
+    assert "'   '" in str(failed.value)
+
+
+def test_refusal_check_fails_a_per_call_example_that_refuses_at_import(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import reference_agents
+
+    load = _refusing_module(
+        tmp_path,
+        monkeypatch,
+        """
+        raise RuntimeError("OPENAI_BASE_URL is empty")
+
+
+        def call():
+            pass
+        """,
+    )
+    with pytest.raises(AssertionError, match="import"):
+        reference_agents.assert_refuses_key_without_base_url(
+            load, lambda module: module.call(), monkeypatch
+        )
+
+
+def test_refusal_check_finds_the_key_in_the_examples_frame(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import reference_agents
+
+    load = _refusing_module(
+        tmp_path,
+        monkeypatch,
+        """
+        import os
+
+
+        def call():
+            key = os.environ.get("OPENAI_API_KEY")
+            if key:
+                raise RuntimeError("OPENAI_BASE_URL is empty")
+        """,
+    )
+    with pytest.raises(AssertionError, match="frame"):
+        reference_agents.assert_refuses_key_without_base_url(
+            load, lambda module: module.call(), monkeypatch
+        )
+
+
 # T3: the tracer and an SDK-shaped call ------------------------------------------------------
 
 DRIVER = textwrap.dedent(
@@ -461,7 +548,7 @@ def test_example_has_one_async_callback_and_plain_tools() -> None:
     ]
     assert async_names == ["agent_callback"]
     plain = {node.name for node in module.body if isinstance(node, ast.FunctionDef)}
-    assert plain == set(TOOLS)
+    assert plain == set(TOOLS) | {"_setting"}
 
 
 # T5: requirements ---------------------------------------------------------------------------

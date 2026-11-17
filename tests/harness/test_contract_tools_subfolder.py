@@ -615,7 +615,7 @@ def test_loading_refuses_a_long_tag_prefix():
 
 
 def test_the_check_runs_off_the_loop_and_a_refusal_meanwhile_wins(tmp_path, repo, monkeypatch):
-    import time
+    import threading
 
     from fi.alk.harness import tools
     from fi.alk.harness.failure_file import FAILURE_FILE
@@ -625,38 +625,35 @@ def test_the_check_runs_off_the_loop_and_a_refusal_meanwhile_wins(tmp_path, repo
     arguments = payload(
         runtime={"language": "python"}, hard_constraints=["be polite"], data_store={"kind": "none"}
     )
+    beat = threading.Event()
+    seen: dict = {}
 
-    def slow(*args):
-        time.sleep(0.5)
+    def check_that_waits_for_the_loop(*args):
+        # Off the loop, the loop keeps beating while this waits; on it, no beat could come.
+        seen["thread"] = threading.get_ident()
+        beat.clear()
+        seen["loop_beat_meanwhile"] = beat.wait(10)
 
     async def save(during):
-        worst = [0.0]
+        seen["loop_thread"] = threading.get_ident()
         done = asyncio.Event()
 
-        async def beat():
-            last = time.perf_counter()
+        async def beating():
             while not done.is_set():
+                beat.set()
                 await asyncio.sleep(0.01)
-                now = time.perf_counter()
-                worst[0], last = max(worst[0], now - last), now
 
-        beating = asyncio.create_task(beat())
+        task = asyncio.create_task(beating())
         monkeypatch.setattr(tools, "_builds_a_sibling", during)
         result = await server.tools[0].handler(arguments)
         done.set()
-        await beating
-        return result, worst[0]
+        await task
+        return result
 
-    # The heap the tests before this one built is frozen, so a full collection of it can't land
-    # inside the save. The save's own collections still count.
-    gc.collect()
-    gc.freeze()
-    try:
-        result, worst = asyncio.run(save(slow))
-    finally:
-        gc.unfreeze()
+    result = asyncio.run(save(check_that_waits_for_the_loop))
     assert (destination / "contract.json").exists(), result
-    assert worst < 0.25
+    assert seen["thread"] != seen["loop_thread"]
+    assert seen["loop_beat_meanwhile"] is True
 
     (destination / "contract.json").unlink()
 

@@ -8,10 +8,12 @@ import itertools
 import json
 import os
 import random
+import sys
 import tokenize
 import tracemalloc
 from collections.abc import Iterator
 from pathlib import Path
+from types import BuiltinFunctionType, CodeType, FunctionType, ModuleType
 
 import pytest
 
@@ -1812,6 +1814,26 @@ def _hazard_peak(root: Path) -> int:
         tracemalloc.stop()
 
 
+def _kept_by(*roots: object) -> int:
+    """What ``roots`` keep alive that was made while tracing, each block rounded as allocated.
+
+    Only objects reachable from the walk count, so memory another thread holds at the same
+    moment (a server or loop an earlier test left running) is not charged to the walk."""
+    skip = (type, ModuleType, FunctionType, BuiltinFunctionType, CodeType)
+    seen: set[int] = set()
+    stack = list(roots)
+    total = 0
+    while stack:
+        obj = stack.pop()
+        if id(obj) in seen or isinstance(obj, skip):
+            continue
+        seen.add(id(obj))
+        if tracemalloc.get_object_traceback(obj) is not None:
+            total += _allocated(sys.getsizeof(obj))
+        stack.extend(gc.get_referents(obj))
+    return total
+
+
 def _measure(root: Path) -> dict[str, int]:
     """Walk and join ``root`` under tracemalloc: what was charged, what is really kept."""
     gc.collect()
@@ -1827,6 +1849,7 @@ def _measure(root: Path) -> dict[str, int]:
         join_peak = tracemalloc.get_traced_memory()[1]
         gc.collect()
         live = _rounded_live()
+        kept = _kept_by(walk, result)
     finally:
         tracemalloc.stop()
     join_charged = scan_walk._JOIN_BASE
@@ -1836,6 +1859,7 @@ def _measure(root: Path) -> dict[str, int]:
     return {
         "charged": walk.reader.held,
         "live": live,
+        "kept": kept,
         "walk_peak": walk_peak,
         "join_rise": join_peak - after_walk,
         "join_charged": join_charged,
@@ -1908,15 +1932,15 @@ def test_many_small_files_are_read_whole_and_only_joined_files_count(
 # what is live after the join, the walk's peak (the folders `os.walk` holds until it enters
 # them), or the join's own rise (what the join builds for the files it reaches).
 KEPT = {
-    "templates": "live",
-    "graphs": "live",
-    "prompt_paths": "live",
-    "project_sets": "live",
+    "templates": "kept",
+    "graphs": "kept",
+    "prompt_paths": "kept",
+    "project_sets": "kept",
     "pending_folders": "walk_peak",
     "edges": "join",
     "join_share": "join",
-    "import_levels": "live",
-    "line_numbers": "live",
+    "import_levels": "kept",
+    "line_numbers": "kept",
 }
 
 

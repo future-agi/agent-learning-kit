@@ -21,8 +21,8 @@ tracer records each call made to the three tool functions in `support_agent/agen
 
 ## Environment
 
-- `OPENAI_API_KEY`: the key for the endpoint (required for a turn).
-- `OPENAI_BASE_URL`: the endpoint's base URL (required whenever a key is set; the import is refused otherwise, so the key is never sent to the OpenAI API by default). Set it to the model gateway for the default model. Set OPENAI_BASE_URL; OPENAI_API_BASE alone isn't read.
+- `OPENAI_API_KEY`: the key for the endpoint (required for a turn). A blank value counts as unset, here and for `OPENAI_BASE_URL`.
+- `OPENAI_BASE_URL`: the endpoint's base URL (required whenever a key is set; the import is refused otherwise, so the key is never sent to the OpenAI API by default). Set it to the model gateway for the default model. The check reads `OPENAI_BASE_URL` only, so set it even where `OPENAI_API_BASE` is set.
 - `OPENAI_MODEL`: the model name, default `vertex_ai/gemini-3.7-flash` (a gateway name).
 
 The endpoint must speak chat completions. Install with `pip install -r requirements.txt` on

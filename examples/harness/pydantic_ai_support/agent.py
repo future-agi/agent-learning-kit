@@ -54,6 +54,11 @@ agent = Agent(
 )
 
 
+
+def _setting(name: str) -> str:
+    # Blank counts as unset.
+    return os.getenv(name, "").strip()
+
 async def agent_callback(agent_input):
     # The runner puts the new user message at the end of `messages`. Pydantic AI takes it
     # as the prompt and the turns before it as history, so it is sent once, not twice.
@@ -64,15 +69,15 @@ async def agent_callback(agent_input):
             history.append(ModelRequest(parts=[UserPromptPart(content=message["content"])]))
         elif message["role"] == "assistant":
             history.append(ModelResponse(parts=[TextPart(content=message["content"])]))
-    # Blank counts as unset.
-    api_key = os.getenv("OPENAI_API_KEY", "").strip() or None
-    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
     # With no base URL the client falls back to api.openai.com and would send the key there.
-    if api_key and not base_url:
+    # Checked before the key is held in a variable, so the frame that raises has none.
+    if _setting("OPENAI_API_KEY") and not _setting("OPENAI_BASE_URL"):
         raise RuntimeError(
             "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
             "endpoint the key belongs to."
         )
+    api_key = _setting("OPENAI_API_KEY") or None
+    base_url = _setting("OPENAI_BASE_URL") or None
     # Each request runs in its own event loop, and the provider does not close a client it
     # was handed, so the client lives and dies with the call.
     async with AsyncOpenAI(base_url=base_url, api_key=api_key) as client:

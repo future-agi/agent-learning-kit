@@ -435,6 +435,19 @@ def test_a_key_with_no_base_url_is_refused_before_a_model_is_built(
     )
 
 
+def test_openai_api_base_alone_does_not_satisfy_the_check(example_module, monkeypatch) -> None:
+    # CrewAI itself would take OPENAI_API_BASE, but the rule, as in the other references,
+    # reads OPENAI_BASE_URL only.
+    monkeypatch.setenv("OPENAI_API_BASE", "http://other.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-canary-key")
+    agent = example_module()
+    import crewai
+
+    with pytest.raises(RuntimeError, match="OPENAI_BASE_URL"):
+        asyncio.run(agent.agent_callback(_agent_input(CONVERSATION)))
+    assert crewai.STATE["llms"] == []
+
+
 def test_a_turn_with_neither_key_nor_base_url_fails_with_the_library_error(
     example_module,
 ) -> None:
@@ -491,12 +504,12 @@ def test_example_has_one_async_callback_and_three_plain_tools() -> None:
     ]
     assert async_names == ["agent_callback"]
     plain = [node.name for node in module.body if isinstance(node, ast.FunctionDef)]
-    assert plain == list(TOOLS)
+    assert plain == [*TOOLS, "_setting"]
     # CrewAI refuses a tool with no docstring.
     assert all(
         ast.get_docstring(node)
         for node in module.body
-        if isinstance(node, ast.FunctionDef)
+        if isinstance(node, ast.FunctionDef) and node.name in TOOLS
     )
 
 

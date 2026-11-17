@@ -342,19 +342,26 @@ def _run_one_turn(root_agent) -> list:
     return reached
 
 
-@pytest.mark.parametrize("base_url", [None, "", "   "])
 def test_a_key_set_after_import_is_refused_at_the_first_model_call(
-    load_example, monkeypatch, base_url
+    load_example, monkeypatch
 ) -> None:
-    agent = load_example()
-    monkeypatch.setenv("OPENAI_API_KEY", "secret-canary-key")
-    if base_url is not None:
-        monkeypatch.setenv("OPENAI_BASE_URL", base_url)
+    def load_then_set(**environment):
+        # Imported with nothing set; the key arrives afterwards.
+        agent = load_example()
+        for name, value in environment.items():
+            monkeypatch.setenv(name, value)
+        return agent
 
-    with pytest.raises(RuntimeError, match="OPENAI_BASE_URL") as refused:
-        _run_one_turn(agent.root_agent)
+    assert_refuses_key_without_base_url(
+        load_then_set, lambda agent: _run_one_turn(agent.root_agent), monkeypatch
+    )
 
-    assert "secret-canary-key" not in str(refused.value)
+
+def test_the_model_gets_the_key_and_base_url_stripped(load_example) -> None:
+    agent = load_example(OPENAI_BASE_URL="  http://one.test/v1  ", OPENAI_API_KEY="  one  ")
+
+    assert agent.root_agent.model._additional_args["api_base"] == "http://one.test/v1"
+    assert agent.root_agent.model._additional_args["api_key"] == "one"
 
 
 def test_a_model_call_with_a_url_set_at_call_time_goes_through(
@@ -428,4 +435,5 @@ def test_example_ignores_adks_session_store_and_documents_the_start() -> None:
     assert "adk web --port 8080 ." in readme
     for name in ENVIRONMENT:
         assert name in readme
-    assert "OPENAI_API_BASE alone isn't read" in readme
+    assert "The check reads `OPENAI_BASE_URL` only" in readme
+    assert "A blank value counts as unset" in readme

@@ -387,8 +387,8 @@ def test_a_key_with_no_base_url_is_refused_before_a_client_is_built(
     example_module, monkeypatch
 ) -> None:
     def nothing_built() -> None:
-        import pydantic_ai
         import openai
+        import pydantic_ai
 
         assert openai.CLIENTS == []
         assert pydantic_ai.STATE["runs"] == []
@@ -448,7 +448,7 @@ def test_example_has_one_async_callback_and_plain_tools() -> None:
     ]
     assert async_names == ["agent_callback"]
     plain = {node.name for node in module.body if isinstance(node, ast.FunctionDef)}
-    assert plain == set(TOOLS)
+    assert plain == set(TOOLS) | {"_setting"}
 
 
 # T5: requirements ---------------------------------------------------------------------------
