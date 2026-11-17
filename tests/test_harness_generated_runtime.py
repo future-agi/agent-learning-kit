@@ -1201,7 +1201,10 @@ _CONTROLLER_CANARIES = {
     "SOME_SHELL_NAME": "canary-shell",
 }
 _COMPOSE_LOGGER = "fi.alk.harness.provision"
-_COMPOSE_PIN = {"COMPOSE_EXPERIMENTAL_GIT_REMOTE": "0"}
+_COMPOSE_PIN = {
+    "COMPOSE_EXPERIMENTAL_GIT_REMOTE": "0",
+    "COMPOSE_EXPERIMENTAL_OCI_REMOTE": "0",
+}
 
 
 def _unescape_env_value(text: str) -> str:
@@ -2209,6 +2212,32 @@ def test_manifest_turns_compose_remote_git_off_whatever_the_repository_env_sets(
     assert stop(tmp_path)
     down = next(call for call in calls if "down" in call.argv)
     assert down.env["COMPOSE_EXPERIMENTAL_GIT_REMOTE"] == "0"
+
+
+@pytest.mark.parametrize("manifest", ["", "AGENT_SETTING"])
+def test_manifest_turns_compose_remote_oci_off_whatever_the_repository_env_sets(
+    tmp_path: Path, monkeypatch, manifest: str
+) -> None:
+    _shell(monkeypatch, _CLIENT_SETTINGS, manifest)
+    environment = _compose_environment(tmp_path)
+    source = Path(environment.source)
+    (source / ".env").write_text("COMPOSE_EXPERIMENTAL_OCI_REMOTE=1\n")
+    calls = _record_compose(monkeypatch)
+
+    provisioning._run(environment, "config")
+
+    call = calls[0]
+    assert call.env_files == [str(source / ".env"), str(call.job.path)]
+    assert call.env["COMPOSE_EXPERIMENTAL_OCI_REMOTE"] == "0"
+    assert "COMPOSE_EXPERIMENTAL_OCI_REMOTE" not in call.job.values
+
+    environment.runtime_configuration_names = ["AGENT_SETTING"]
+    environment.running = True
+    environment.save(tmp_path)
+    monkeypatch.setattr(provisioning, "_docker", lambda *_a, **_k: "")
+    assert stop(tmp_path)
+    down = next(call for call in calls if "down" in call.argv)
+    assert down.env["COMPOSE_EXPERIMENTAL_OCI_REMOTE"] == "0"
 
 
 def test_bare_cli_leaves_compose_remote_git_to_the_shell(

@@ -265,6 +265,10 @@ _CLIENT_ENVIRONMENT_NAMES = (
 )
 _LOCAL_DENIED_EXACT = frozenset({"FI_API_KEY", "FI_SECRET_KEY"})
 _LOCAL_DENIED_PREFIXES = ("AGENTCC_", "ALK_", "HARNESS_")
+_REMOTE_INCLUDES_OFF = {
+    "COMPOSE_EXPERIMENTAL_GIT_REMOTE": "0",
+    "COMPOSE_EXPERIMENTAL_OCI_REMOTE": "0",
+}
 # Both supported Compose versions say this when a remote git include is switched off.
 _GIT_REMOTE_DISABLED = "git remote resource is disabled"
 _ENV_FILE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -431,9 +435,10 @@ def _run(
         process_env = _compose_environment(values)
     if _under_sandbox():
         # Compose copies ``COMPOSE_*`` from a repository ``.env`` into its own settings, and the
-        # legacy sandbox Compose would then start git for a remote include with the worker's
-        # environment. The process environment beats every env file, so the switch is set here.
-        process_env["COMPOSE_EXPERIMENTAL_GIT_REMOTE"] = "0"
+        # legacy sandbox Compose would then start git (or fetch an OCI artifact) for a remote
+        # include with the worker's environment. The process environment beats every env file,
+        # so the switches are set here.
+        process_env.update(_REMOTE_INCLUDES_OFF)
     # The file lives in the controller's own private temp directory: never under the source, and
     # never in the world or artifact directory (a cancel SIGTERMs the worker and skips ``finally``,
     # and the world directory is an artifact that is copied for review).
