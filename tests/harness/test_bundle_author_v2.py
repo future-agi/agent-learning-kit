@@ -6989,12 +6989,12 @@ def _compose_gateway_environment(tmp_path, monkeypatch, resolved, target_model, 
     from fi.alk.harness.compose_integration import compile_bundle
 
     source = tmp_path / "source"
-    source.mkdir()
+    source.mkdir(exist_ok=True)
     (source / "compose.yaml").write_text(
         "services:\n  chat:\n    image: example/chat:latest\n" + env_block
     )
     authoring = tmp_path / "authoring"
-    authoring.mkdir()
+    authoring.mkdir(exist_ok=True)
     contract = {
         "modality": "chat",
         "runtime": {
@@ -7046,6 +7046,41 @@ def test_routed_compose_control_service_has_agents_sdk_tracing_off(
         assert environment.count(f"{_TRACING_OFF}=1") == 1
         assert not any(item == f"{_TRACING_OFF}=0" for item in environment)
         assert "MODE=small" in environment or "MODE" not in env_block
+
+
+@pytest.mark.parametrize(
+    "agent_code, target_model, noted",
+    [
+        ("from agents import Agent, Runner\n", "vertex_ai/gemini-3.7-flash", True),
+        (
+            "import agents\nagents.set_default_openai_api('chat_completions')\n",
+            "vertex_ai/gemini-3.7-flash",
+            False,
+        ),
+        ("from agents import Agent\n", "gpt-4o", False),
+        ("print('no sdk')\n", "vertex_ai/gemini-3.7-flash", False),
+    ],
+    ids=["routed-sdk", "routed-sdk-sets-it", "unrouted", "routed-no-sdk"],
+)
+def test_a_compose_run_agents_sdk_agent_on_a_routed_model_is_noted(
+    tmp_path, monkeypatch, resolved_compose_images, agent_code, target_model, noted
+):
+    # No kit hook runs in a Compose project run as is, so the SDK stays on the Responses API,
+    # which the gateway serves only for OpenAI's own models: the reading names the one line.
+    from fi.alk.harness.contract import AgentContract, Runtime
+
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    (authoring / "contract.json").write_text(
+        AgentContract(agent="chat", runtime=Runtime(language="python")).model_dump_json()
+    )
+    (tmp_path / "source").mkdir()
+    (tmp_path / "source" / "agent.py").write_text(agent_code)
+    _compose_gateway_environment(
+        tmp_path, monkeypatch, resolved_compose_images, target_model, ""
+    )
+    notes = json.loads((authoring / "contract.json").read_text())["notes"]
+    assert ('set_default_openai_api("chat_completions")' in notes) is noted
 
 
 @pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])

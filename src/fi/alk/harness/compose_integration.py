@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import tempfile
@@ -44,6 +45,46 @@ def _disable_agents_sdk_tracing(service: dict) -> None:
         if not (isinstance(item, str) and item.partition("=")[0] == "OPENAI_AGENTS_DISABLE_TRACING")
     ]
     service["environment"] = [*kept, "OPENAI_AGENTS_DISABLE_TRACING=1"]
+
+
+_AGENTS_SDK_IMPORT = re.compile(r"^\s*(?:from\s+agents(?:\.|\s+import)|import\s+agents\b)", re.M)
+_CHAT_COMPLETIONS_SET = re.compile(
+    r"set_default_openai_api\(\s*(?:api\s*=\s*)?['\"]chat_completions['\"]"
+)
+_RESPONSES_ROUTE_NOTE = (
+    "This agent runs as its own Docker Compose project, where the kit can't set the OpenAI "
+    "Agents SDK's request style, and the model gateway serves the SDK's default (the Responses "
+    "API) only for OpenAI's own models. Add "
+    'set_default_openai_api("chat_completions") (from agents) to the agent\'s startup, or '
+    "every turn on this model gets the gateway's HTTP 501."
+)
+_SCANNED_FILES = 5_000
+
+
+def _note_the_responses_route(source: Path, authoring: Path) -> None:
+    """Say in the reading's notes when a Compose-run Agents SDK agent on a routed model will be
+    sent to the Responses API: its source imports the SDK and never sets chat completions."""
+    uses_sdk = False
+    for index, path in enumerate(sorted(Path(source).rglob("*.py"))):
+        if index >= _SCANNED_FILES:
+            break
+        if any(part in {".venv", "venv", "node_modules", ".git"} for part in path.parts):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")[:1_000_000]
+        except OSError:
+            continue
+        if _CHAT_COMPLETIONS_SET.search(text):
+            return
+        uses_sdk = uses_sdk or bool(_AGENTS_SDK_IMPORT.search(text))
+    contract_path = Path(authoring) / "contract.json"
+    if not uses_sdk or not contract_path.is_file():
+        return
+    saved = json.loads(contract_path.read_text(encoding="utf-8"))
+    notes = str(saved.get("notes") or "")
+    if _RESPONSES_ROUTE_NOTE not in notes:
+        saved["notes"] = (notes + "\n\n" if notes else "") + _RESPONSES_ROUTE_NOTE
+        contract_path.write_text(json.dumps(saved, indent=2) + "\n", encoding="utf-8")
 
 
 def runtime_capability_briefing() -> str:
@@ -202,6 +243,7 @@ def compile_bundle(*, source, job, authoring, output, contract, include_scenario
     if routed_through_gateway(job.agent.config.get("target_model")):
         # The Agents SDK's own trace export would send the gateway key to OpenAI.
         _disable_agents_sdk_tracing(document["services"][selection.control_service])
+        _note_the_responses_route(source, authoring)
     base = selection.compose_file.parent
 
     from .contract import RuntimeSecretFile
