@@ -38,7 +38,9 @@ def _block_text(block: Any) -> str:
     """Answer text of one content block; "" for any block that is not answer text."""
     kind = _field(block, "type")
     if kind in _TEXT_KINDS or (
-        kind is None and isinstance(_field(block, "text"), str)
+        kind is None
+        and isinstance(_field(block, "text"), str)
+        and _field(block, "thought") is not True
     ):
         text = _field(block, "text")
         if isinstance(text, dict):

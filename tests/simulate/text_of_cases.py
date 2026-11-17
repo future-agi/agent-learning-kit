@@ -109,3 +109,10 @@ CASES = [
     ("number-falls-back-to-str", 42, "42"),
     ("plain-dict-falls-back-to-str", {"a": 1}, "{'a': 1}"),
 ]
+
+CASES += [
+    ("gemini-thought-part-dropped", [{"text": "THOUGHT", "thought": True}, {"text": "Shipped."}], "Shipped."),
+    ("gemini-thought-object-dropped", [NS(text="THOUGHT", thought=True), NS(text="Shipped.")], "Shipped."),
+    ("untyped-text-thought-false-kept", [{"text": "a", "thought": False}, NS(text="b", thought=False)], "ab"),
+    ("untyped-text-no-thought-kept", [{"text": "a"}, NS(text="b", thought=None)], "ab"),
+]
