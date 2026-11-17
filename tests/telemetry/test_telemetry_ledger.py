@@ -99,6 +99,40 @@ def test_redaction_runs_before_addressing(ledger_env, monkeypatch):
     assert row["run_id"] == hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def test_row_text_is_cleaned_before_addressing_and_still_verifies(ledger_env):
+    token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    payload = _payload(
+        trace_ids=[token, "t-plain"],
+        asset_refs=[
+            {"kind": "api_key=hunter2hunter2", "content_address": "c" * 64},
+        ],
+    )
+    row = telemetry.build_ledger_row(payload)
+    blob = telemetry.canonical_row_bytes(row).decode("utf-8")
+    assert token not in blob
+    assert "hunter2hunter2" not in blob
+    assert row["trace_ids"] == ["[redacted]", "t-plain"]
+    # Cleaned before the address is computed, so the stored row still verifies.
+    assert row["run_id"] == hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    telemetry.RunLedger().append(row)
+    assert telemetry.RunLedger().verify()["chain_intact"]
+
+
+def test_row_keeps_content_addresses_and_env_markers(ledger_env, monkeypatch):
+    monkeypatch.setenv("SENTINEL_TOKEN", "sk-sentinel-row-test")
+    address = hashlib.sha256(b"asset").hexdigest()
+    payload = _payload(
+        trace_ids=["t-sk-sentinel-row-test"],
+        required_env=["SENTINEL_TOKEN"],
+        asset_refs=[{"kind": "transcript", "content_address": address}],
+    )
+    row = telemetry.build_ledger_row(
+        payload, required_env=telemetry.declared_required_env(payload)
+    )
+    assert row["trace_ids"] == ["t-[redacted:SENTINEL_TOKEN]"]
+    assert row["asset_refs"] == [{"kind": "transcript", "content_address": address}]
+
+
 def test_scores_fixed_precision_rounding(ledger_env):
     row = telemetry.build_ledger_row(
         _payload(summary={"verdict": "pass", "score": 0.1 + 0.2})

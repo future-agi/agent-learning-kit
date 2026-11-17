@@ -18,6 +18,7 @@ from typing import Any, Mapping, Sequence
 
 from ..live._contract import AGENT_LEARNING_RUN_KIND, EVIDENCE_CLASSES, VERDICTS
 from ..live._transcript import redact_env_values  # the ONE redaction seam
+from ..providers.agent import redact_strings
 from ._contract import (
     LEDGER_ROW_SCHEMA,
     NON_CANONICAL_FIELDS,
@@ -56,7 +57,9 @@ def _redact_value(value: Any, required_env: Sequence[str]) -> Any:
     repr (ARCH §2a determinism rules)."""
 
     if isinstance(value, str):
-        return redact_env_values(value, required_env)
+        # Declared env values first, then the text rule for secrets nobody declared.
+        # Cleaning here, before run_id is computed, keeps RunLedger.verify true.
+        return redact_strings(redact_env_values(value, required_env))
     if isinstance(value, bool):
         return value
     if isinstance(value, float):

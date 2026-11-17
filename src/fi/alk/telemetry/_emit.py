@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from ..providers.agent import redact_strings
 from ._contract import (
     FI_KIT_PHASE_ATTR,
     FI_KIT_RUN_ID_ATTR,
@@ -118,16 +119,28 @@ def _build_provider(project_name: str, headers: Mapping[str, str]) -> tuple[Any,
     return provider, recorder
 
 
-def _scalar(value: Any) -> Any:
+# The ledger row's JSON attribute (`_sync.LEDGER_ROW_ATTR`). It is cleaned when the row is
+# built and its `run_id` is the hash of those exact bytes, so cleaning it again here would
+# send a row that no longer matches its address.
+_ADDRESSED_ATTR = "fi.kit.ledger_row"
+
+
+def _scalar(value: Any, key: str = "") -> Any:
     """OTel span attributes accept str/bool/int/float (and homogeneous lists).
     Coerce anything else to a compact string so a metric mapping never breaks
-    the emit."""
+    the emit. Text that leaves for the account is cleaned of secrets."""
 
-    if isinstance(value, (str, bool, int, float)):
+    if key == _ADDRESSED_ATTR and isinstance(value, str):
         return value
+    if isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return redact_strings(value)
     import json
 
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)[:1024]
+    return redact_strings(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)[:1024]
+    )
 
 
 def keyed_emit(
@@ -163,11 +176,11 @@ def keyed_emit(
             if world:
                 root.set_attribute(FI_KIT_WORLD_ATTR, str(world))
             for key, value in root_attrs.items():
-                root.set_attribute(str(key), _scalar(value))
+                root.set_attribute(str(key), _scalar(value, str(key)))
             for child_name, child_attrs in children:
                 with tracer.start_as_current_span(str(child_name)) as child:
                     for key, value in (child_attrs or {}).items():
-                        child.set_attribute(str(key), _scalar(value))
+                        child.set_attribute(str(key), _scalar(value, str(key)))
         provider.force_flush()
         provider.shutdown()
     except BaseException as exc:  # noqa: BLE001 — degrade-to-local (R§3.5)

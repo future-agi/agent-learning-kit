@@ -269,3 +269,71 @@ def test_run_benchmark_result_carries_telemetry(monkeypatch, tmp_path) -> None:
     assert out["telemetry"]["kind"] == "benchmark"
     assert out["telemetry"]["status"] == "local"
     assert out["telemetry"]["dashboard_url"] is None
+
+
+# --- keyed_emit cleans string attributes, but not the already-addressed ledger row ---
+class _RecordingSpan(_FakeSpan):
+    def __init__(self, sink):
+        self._sink = sink
+
+    def set_attribute(self, key, value):
+        self._sink[key] = value
+
+
+def _recording_provider(monkeypatch, sink):
+    class _Tracer:
+        def start_as_current_span(self, name):
+            return _RecordingSpan(sink)
+
+    class _Provider(_FakeProvider):
+        def get_tracer(self, name):
+            return _Tracer()
+
+    class _Rec:
+        ok = True
+        last_reason = "ok"
+
+    monkeypatch.setattr(_emit, "_build_provider", lambda pn, hd: (_Provider(), _Rec()))
+
+
+def test_keyed_emit_cleans_secrets_in_string_attributes(monkeypatch) -> None:
+    sink: dict = {}
+    _recording_provider(monkeypatch, sink)
+    token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    out = _emit.keyed_emit(
+        span_name="t",
+        root_attrs={"note": f"deploy with {token}", "count": 3, "ok": True, "name": "plain"},
+        children=[("child", {"detail": "api_key=hunter2hunter2"})],
+        project_name="p",
+        headers={"X-Api-Key": "k", "X-Secret-Key": "s"},
+    )
+    assert out["status"] == "synced"
+    assert token not in sink["note"] and "hunter2hunter2" not in sink["detail"]
+    assert sink["count"] == 3 and sink["ok"] is True and sink["name"] == "plain"
+
+
+def test_keyed_emit_sends_the_ledger_row_attribute_byte_for_byte(monkeypatch) -> None:
+    import json
+
+    from fi.alk.telemetry import _sync
+    from fi.alk.telemetry._row import build_ledger_row, canonical_row_address
+
+    sink: dict = {}
+    _recording_provider(monkeypatch, sink)
+    row = build_ledger_row(
+        {
+            "kind": "agent-learning.run.v1",
+            "summary": {"verdict": "pass"},
+            "capture": {"redaction": {"OPENAI_API_KEY": "redact_env_values"}, "reviewed": True},
+        }
+    )
+    sent = json.dumps(row, sort_keys=True, separators=(",", ":"), default=str)
+    assert _emit._ADDRESSED_ATTR == _sync.LEDGER_ROW_ATTR
+    _emit.keyed_emit(
+        span_name="t",
+        root_attrs={_sync.LEDGER_ROW_ATTR: sent},
+        project_name="p",
+        headers={"X-Api-Key": "k", "X-Secret-Key": "s"},
+    )
+    assert sink[_sync.LEDGER_ROW_ATTR] == sent
+    assert canonical_row_address(json.loads(sink[_sync.LEDGER_ROW_ATTR])) == row["run_id"]
