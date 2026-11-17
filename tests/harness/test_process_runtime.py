@@ -11113,8 +11113,11 @@ def test_a_repository_sitecustomize_runs_exactly_once(
     # It ran at start-up, through the kit's chain, not through the test's own call.
     assert json.loads(at_start) == ["ran"]
     assert marker.read_text().splitlines() == ["ran"]
-    assert result.stderr == ""
+    # Where OpenTelemetry is installed (CI), a run with patches logs that they applied; nothing
+    # else may reach stderr.
+    assert set(result.stderr.splitlines()) <= {"simulation mark hook: applied"}
     if customer is None and "HARNESS_TOOL_TRACE" not in environment:
+        assert result.stderr == ""
         # A gateway run without an export: install() does nothing but chain.
         assert "_MarkFinder" not in json.loads(finders)
         assert json.loads(patches) == {}
