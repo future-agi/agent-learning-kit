@@ -35,7 +35,10 @@ AWS_REASONING = {
             {
                 "message": {
                     "role": "model",
-                    "parts": [{"text": "plan the reply", "thought": True}, {"text": ANSWER}],
+                    "parts": [
+                        {"text": "plan the reply", "thought": True},
+                        {"text": ANSWER},
+                    ],
                 }
             },
             ANSWER,

@@ -28,7 +28,10 @@ class _Message:  # an AIMessage-like object with model_dump
             {"result": [{"order_id": "A1", "status": "shipped"}]},
             '[{"order_id": "A1", "status": "shipped"}]',
         ),
-        ({"data": {"name": "Ann", "role": "admin"}}, '{"name": "Ann", "role": "admin"}'),
+        (
+            {"data": {"name": "Ann", "role": "admin"}},
+            '{"name": "Ann", "role": "admin"}',
+        ),
     ],
     ids=[
         "message-object-under-output",

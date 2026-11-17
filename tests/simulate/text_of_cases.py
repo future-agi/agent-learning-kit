@@ -227,9 +227,21 @@ CASES += [
         {"type": "tool_result", "content": [{"type": "text", "text": "leak"}]},
         "",
     ),
-    ("thinking-with-content-is-not-unwrapped", {"type": "thinking", "content": "leak"}, ""),
-    ("thinking-object-with-content-is-not-unwrapped", NS(type="thinking", content="leak"), ""),
-    ("tool-use-with-content-is-not-unwrapped", {"type": "tool_use", "content": "leak"}, ""),
+    (
+        "thinking-with-content-is-not-unwrapped",
+        {"type": "thinking", "content": "leak"},
+        "",
+    ),
+    (
+        "thinking-object-with-content-is-not-unwrapped",
+        NS(type="thinking", content="leak"),
+        "",
+    ),
+    (
+        "tool-use-with-content-is-not-unwrapped",
+        {"type": "tool_use", "content": "leak"},
+        "",
+    ),
     (
         "typed-block-with-an-assistant-role-is-not-a-message",
         [
@@ -240,7 +252,10 @@ CASES += [
     ),
     (
         "thinking-block-with-an-assistant-role-is-not-a-message",
-        [NS(type="thinking", role="assistant", content="leak"), NS(type="text", text="ok")],
+        [
+            NS(type="thinking", role="assistant", content="leak"),
+            NS(type="text", text="ok"),
+        ],
         "ok",
     ),
 ]

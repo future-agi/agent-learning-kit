@@ -1271,11 +1271,15 @@ def _is_block_or_message(item: Any) -> bool:
     )
 
 
-_HISTORY_KINDS = frozenset({"message", "ai", "human", "tool", "system", "assistant", "user"})
+_HISTORY_KINDS = frozenset(
+    {"message", "ai", "human", "tool", "system", "assistant", "user"}
+)
 
 
 def _is_history_item(item: Any) -> bool:
-    get = item.get if isinstance(item, Mapping) else lambda name: getattr(item, name, None)
+    get = (
+        item.get if isinstance(item, Mapping) else lambda name: getattr(item, name, None)
+    )
     return get("type") in _HISTORY_KINDS or get("role") in _CHAT_ROLES
 
 
@@ -1291,7 +1295,9 @@ def _is_bare_block_list(value: Any) -> bool:
 
 
 def _is_untyped_text(item: Any) -> bool:
-    get = item.get if isinstance(item, Mapping) else lambda name: getattr(item, name, None)
+    get = (
+        item.get if isinstance(item, Mapping) else lambda name: getattr(item, name, None)
+    )
     return get("type") is None and isinstance(get("text"), str)
 
 
