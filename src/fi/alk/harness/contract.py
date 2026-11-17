@@ -1552,6 +1552,11 @@ KEPT_AS_WRITTEN = (
     "DeclaredWorker.id",
     "DeclaredWorker.name",
     "DeclaredWorker.tools",
+    # Tool names, a binding kind, an environment variable's name and a process name: read as written.
+    "DeclaredWorker.allowed_tools",
+    "DeclaredWorker.binding",
+    "DeclaredWorker.address_env",
+    "DeclaredWorker.process",
     "ToolSpec.name",
     "ToolSpec.args",
     "ToolSpec.arg_types",

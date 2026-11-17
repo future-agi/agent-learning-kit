@@ -28,7 +28,7 @@ from fi.alk.harness.bundle_author_v2 import (
     resolve_environment_plan,
     sealed_from,
 )
-from fi.alk.harness import bundle_author_v2
+from fi.alk.harness import framework_servers
 from fi.alk.harness.generated_runtime import framework_instrumentation_command
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
 from fi.alk.harness.bundle_v2 import load_bundle_v2
@@ -1745,6 +1745,29 @@ def test_a_native_contract_whose_tools_call_the_shipped_tools_api_runs_it_behind
     assert plan.packaging == "compose"
     assert {process.name for process in plan.processes} >= {"agent", "tools-api", "tool-proxy"}
     assert plan.capabilities["tool_proxy"].service == "tool-proxy"
+
+
+def test_an_agent_in_a_subfolder_runs_the_tools_api_its_own_folder_s_compose_file_ships(tmp_path: Path) -> None:
+    """The agent's folder, not the repository root, holds the Compose file that ships its tools-api."""
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "harness_agents" / "returns_multi_agent"
+    source = tmp_path / "source"
+    shutil.copytree(fixture, source / "apps" / "returns", ignore=shutil.ignore_patterns("__pycache__"))
+    runtime = {
+        "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        "interface": {"kind": "http", "protocol": "openai_chat", "port": 8080,
+                      "path": "/v1/chat/completions", "health_path": "/health"},
+    }
+    entrypoints = [
+        {"tool": "get_order", "mode": "service", "service": "tools-api", "endpoint": "orders/get", "method": "POST"},
+    ]
+
+    plan = resolve_environment_plan(
+        source, _github_job("apps/returns"), contract_modality="chat",
+        contract_interface_kind="http", contract_runtime=runtime, tool_entrypoints=entrypoints,
+    )
+
+    assert plan.packaging == "compose"
+    assert {process.name for process in plan.processes} >= {"agent", "tools-api", "tool-proxy"}
 
 
 def test_tools_routed_to_the_shipped_tools_api_run_it_and_give_each_worker_its_channel_with_no_dependency_listed(
@@ -4437,7 +4460,7 @@ def test_two_concurrent_calls_to_an_adk_server_each_open_their_own_session(monke
     from fi.alk.harness.contract import RuntimeInterface
     from fi.simulate.agent.wrapper import AgentInput
 
-    interface = RuntimeInterface.model_validate(bundle_author_v2._adk_interface_for(["adk", "api_server"], "desk"))
+    interface = RuntimeInterface.model_validate(framework_servers._adk_interface_for(["adk", "api_server"], "desk"))
     opened: list[str] = []
     lock = threading.Lock()
 
@@ -4533,7 +4556,7 @@ def test_adk_http_servers_resolve_the_app_their_agents_directory_serves(
 def test_adk_servers_are_recognised_however_adk_is_invoked_and_however_the_app_is_defined(
     tmp_path: Path, command: list[str], app_name: str
 ) -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_app_name, _adk_server_arguments
+    from fi.alk.harness.framework_servers import _adk_app_name, _adk_server_arguments
 
     nested = tmp_path / "agents" / "nested_app"
     nested.mkdir(parents=True)
@@ -4554,7 +4577,7 @@ def test_adk_servers_are_recognised_however_adk_is_invoked_and_however_the_app_i
 
 
 def test_an_adk_app_without_an_init_file_is_still_the_app_served(tmp_path: Path) -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+    from fi.alk.harness.framework_servers import _adk_app_name
 
     # ADK loads agents_dir/app/agent.py whether or not app/__init__.py exists.
     app = tmp_path / "agents" / "plain_app"
@@ -4582,7 +4605,7 @@ def test_an_adk_app_without_an_init_file_is_still_the_app_served(tmp_path: Path)
 def test_the_adk_agents_directory_is_the_positional_argument_not_an_option_value(
     tmp_path: Path, command: list[str]
 ) -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+    from fi.alk.harness.framework_servers import _adk_app_name
 
     for app in (tmp_path / "agents" / "real_app", tmp_path / "assets" / "logo_app"):
         app.mkdir(parents=True)
@@ -4597,7 +4620,7 @@ def test_every_adk_server_flag_that_takes_no_value_is_known(server: str) -> None
     import click
     from google.adk.cli.cli_tools_click import main
 
-    from fi.alk.harness.bundle_author_v2 import _ADK_SERVER_FLAGS
+    from fi.alk.harness.framework_servers import _ADK_SERVER_FLAGS
 
     flags = {
         name
@@ -4613,7 +4636,7 @@ def test_every_adk_server_option_that_takes_a_value_is_known(server: str) -> Non
     import click
     from google.adk.cli.cli_tools_click import main
 
-    from fi.alk.harness.bundle_author_v2 import _ADK_SERVER_VALUE_OPTIONS
+    from fi.alk.harness.framework_servers import _ADK_SERVER_VALUE_OPTIONS
 
     options = {
         name
@@ -4634,7 +4657,7 @@ def test_every_adk_server_option_that_takes_a_value_is_known(server: str) -> Non
 def test_an_unknown_adk_option_before_the_agents_directory_resolves_no_app(
     tmp_path: Path, command: list[str]
 ) -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+    from fi.alk.harness.framework_servers import _adk_app_name
 
     (tmp_path / "agents" / "real_app").mkdir(parents=True)
     (tmp_path / "agents" / "real_app" / "agent.py").write_text("root_agent = 1\n", encoding="utf-8")
@@ -4655,7 +4678,7 @@ def test_an_unknown_adk_option_before_the_agents_directory_resolves_no_app(
 def test_adk_flags_without_a_value_do_not_swallow_the_agents_directory(
     tmp_path: Path, command: list[str]
 ) -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+    from fi.alk.harness.framework_servers import _adk_app_name
 
     for app in (tmp_path / "agents" / "real_app", tmp_path / "assets" / "logo_app"):
         app.mkdir(parents=True)
@@ -4670,7 +4693,7 @@ def test_adk_flags_without_a_value_do_not_swallow_the_agents_directory(
 def test_an_agents_directory_adk_cannot_serve_resolves_no_app(
     tmp_path: Path, agents_dir: str
 ) -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+    from fi.alk.harness.framework_servers import _adk_app_name
 
     source = tmp_path / "source"
     (source / "only_app").mkdir(parents=True)
@@ -4686,7 +4709,7 @@ def test_an_agents_directory_adk_cannot_serve_resolves_no_app(
 def test_an_app_at_the_checkout_root_resolves_no_name(
     tmp_path: Path, command: list[str]
 ) -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+    from fi.alk.harness.framework_servers import _adk_app_name
 
     # At run time the checkout sits under a per-process directory, so ADK would serve the
     # root app under that directory's name, not the checkout's.
@@ -4696,7 +4719,7 @@ def test_an_app_at_the_checkout_root_resolves_no_name(
 
 
 def test_only_apps_adk_can_load_are_candidates(tmp_path: Path) -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+    from fi.alk.harness.framework_servers import _adk_app_name
 
     agents = tmp_path / "agents"
     for name in ("my-app", ".hidden"):
@@ -4714,7 +4737,7 @@ def test_only_apps_adk_can_load_are_candidates(tmp_path: Path) -> None:
 
 
 def test_an_app_package_is_one_whose_init_binds_root_agent_not_one_that_mentions_it(tmp_path: Path) -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_app_name
+    from fi.alk.harness.framework_servers import _adk_app_name
 
     agents = tmp_path / "agents"
     for name, init in (("bound_app", "from .core import root_agent\n"), ("noted", "# see root_agent in docs\n")):
@@ -4725,7 +4748,7 @@ def test_an_app_package_is_one_whose_init_binds_root_agent_not_one_that_mentions
 
 
 def _fake_adk_cli(monkeypatch, module) -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_server_options
+    from fi.alk.harness.framework_servers import _adk_server_options
 
     monkeypatch.setitem(sys.modules, "google.adk.cli.cli_tools_click", module)
     _adk_server_options.cache_clear()
@@ -4736,7 +4759,7 @@ def test_an_option_the_installed_adk_declares_is_read_from_its_own_cli(monkeypat
 
     import click
 
-    from fi.alk.harness.bundle_author_v2 import _adk_app_name, _adk_server_options
+    from fi.alk.harness.framework_servers import _adk_app_name, _adk_server_options
 
     command = click.Command("web", params=[click.Option(["--release_channel"]), click.Argument(["agents_dir"])])
     _fake_adk_cli(monkeypatch, types.SimpleNamespace(main=click.Group(commands={"web": command, "api_server": command})))
@@ -4750,7 +4773,7 @@ def test_an_option_the_installed_adk_declares_is_read_from_its_own_cli(monkeypat
 
 
 def test_without_adk_s_cli_the_option_copy_still_finds_the_agents_directory(monkeypatch, tmp_path: Path) -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_app_name, _adk_server_options
+    from fi.alk.harness.framework_servers import _adk_app_name, _adk_server_options
 
     _fake_adk_cli(monkeypatch, None)
     app = tmp_path / "agents" / "only_app"
@@ -4764,7 +4787,7 @@ def test_without_adk_s_cli_the_option_copy_still_finds_the_agents_directory(monk
 
 
 def test_a_command_that_only_mentions_adk_is_not_its_server() -> None:
-    from fi.alk.harness.bundle_author_v2 import _adk_server_arguments
+    from fi.alk.harness.framework_servers import _adk_server_arguments
 
     assert _adk_server_arguments(["python", "-m", "google.adk.cli", "deploy"]) is None
     assert _adk_server_arguments(["python", "main.py", "adk", "notes"]) is None
@@ -4897,7 +4920,7 @@ def test_langgraph_dev_serves_the_graph_the_written_interface_names(
     tmp_path: Path,
 ) -> None:
     source = _langgraph_source(tmp_path)
-    interface = bundle_author_v2._langgraph_server_interface(
+    interface = framework_servers._langgraph_server_interface(
         source,
         {
             "command": ["langgraph", "dev", "--port=9000"],
@@ -4908,7 +4931,7 @@ def test_langgraph_dev_serves_the_graph_the_written_interface_names(
     assert interface["request_template"]["assistant_id"] == "coder"
     assert interface["port"] == 9000
     assert (
-        bundle_author_v2._langgraph_server_interface(
+        framework_servers._langgraph_server_interface(
             source, {"command": ["python", "server.py"]}
         )
         is None
@@ -4920,17 +4943,17 @@ def test_langgraph_dev_serves_no_graph_it_would_have_to_guess(tmp_path: Path, mo
     source = _langgraph_source(tmp_path)
     runtime = {"command": [".venv/bin/langgraph", "dev"], "interface": {"model": model}}
     # Three graphs and none named: the server is not taken to serve one, so the agent's interface is asked for.
-    assert bundle_author_v2._langgraph_server_interface(source, runtime) is None
+    assert framework_servers._langgraph_server_interface(source, runtime) is None
     (source / "langgraph.json").write_text(json.dumps({"graphs": {"coder": "./graphs/python/src/coder.py:graph"}}))
-    only = bundle_author_v2._langgraph_server_interface(source, runtime)
+    only = framework_servers._langgraph_server_interface(source, runtime)
     assert only is not None and only["request_template"]["assistant_id"] == "coder"
 
 
 def test_langgraph_up_is_not_taken_for_the_development_server(tmp_path: Path) -> None:
     # ``langgraph up`` builds and runs a Docker image of the app on its own port; a sandbox does not run it.
     source = _langgraph_source(tmp_path)
-    assert bundle_author_v2._langgraph_server_interface(source, {"command": ["langgraph", "up"]}) is None
-    assert bundle_author_v2._native_server_runtime(source, {"command": ["langgraph", "up"]}) is None
+    assert framework_servers._langgraph_server_interface(source, {"command": ["langgraph", "up"]}) is None
+    assert framework_servers.server_runtime(source, {"command": ["langgraph", "up"]}) is None
 
 
 def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> None:
@@ -6901,6 +6924,23 @@ def test_a_sealed_tool_proxy_says_its_door_holds_each_worker_to_its_own_deadline
     sealed = tmp_path / "generated" / "tool-proxy"
     assert {"proxy.py", "world_door.py", "door.json"} <= {one.name for one in sealed.iterdir()}
     assert _door_holds_worker_limits(tmp_path)
+
+
+def test_only_a_sealed_tool_proxy_holds_separate_workers_on_their_own_channels(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _seal_tool_proxy
+    from fi.alk.harness.call_runner import worker_channels_held
+    from fi.alk.harness.world_door import DOOR_FILE
+
+    door = tmp_path / DOOR_FILE
+    assert not worker_channels_held(None)
+    assert not worker_channels_held(tmp_path)
+    door.write_text(json.dumps({"present": True, "surface": "in_process", "workers": ["refund"]}))
+    assert not worker_channels_held(tmp_path)
+    door.write_text(json.dumps({"present": True, "surface": "tool_proxy"}))
+    # A proxy sealed before it held per-worker limits holds no channel either.
+    assert not worker_channels_held(tmp_path)
+    _seal_tool_proxy(tmp_path / "generated" / "tool-proxy", {"tools": [{"name": "a"}]})
+    assert worker_channels_held(tmp_path)
 
 
 def test_the_bundle_says_whether_a_door_stands_in_front_of_the_tools_and_why_not_from_the_contract() -> None:

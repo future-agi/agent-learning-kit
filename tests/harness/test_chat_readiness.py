@@ -988,6 +988,8 @@ def workflow_probe(tmp_path, url, **changes):
         redaction_values={"key": "secret123"}, timeout=1,
     )
     args.update(changes)
+    if args["timeout"] is None:
+        del args["timeout"]
     return probe_chat_workflow(**args)
 
 
@@ -1529,3 +1531,36 @@ def test_the_readiness_call_reads_calls_from_the_bundle_s_own_evidence_seam(tmp_
     asyncio.run(workflow_probe(tmp_path, "http://x", evidence_seam=EvidenceSeam.TOOL_TRACE))
     assert seen["seam"] is EvidenceSeam.TOOL_TRACE
     assert workflow_receipt(tmp_path)[1]["status"] == "passed"
+
+
+@pytest.mark.parametrize(
+    ("config", "budget", "deadline"),
+    [
+        ({}, None, "300s"),
+        ({"chat_call_timeout_seconds": 900}, None, "900s"),
+        ({"chat_call_timeout_seconds": 5000}, None, "3300s"),
+        ({"chat_call_timeout_seconds": 900}, "600", "600s"),
+    ],
+)
+def test_the_private_workflow_keeps_the_agent_s_chat_call_timeout_within_the_budget(
+    tmp_path, monkeypatch, config, budget, deadline
+):
+    from fi.alk.harness import chat_call_runner
+
+    if budget is not None:
+        monkeypatch.setenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", budget)
+    else:
+        monkeypatch.delenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", raising=False)
+
+    async def past_deadline(self, scenario, runtime):
+        raise TimeoutError
+
+    monkeypatch.setattr(chat_call_runner.HostedChatCallRunner, "run", past_deadline)
+    job = SimpleNamespace(metadata={}, require_tool_workflow=True, agent=SimpleNamespace(config=config))
+    with pytest.raises(RuntimeValidationError) as failure:
+        # No timeout given: the probe's own default stands unless the agent sets one.
+        asyncio.run(workflow_probe(tmp_path, "http://127.0.0.1:1", job=job, timeout=None))
+    assert failure.value.diagnostics[0].code == "chat_ingress_timeout"
+    assert f"exceeded its {deadline} deadline" in failure.value.diagnostics[0].redacted_message
+    _path, receipt = workflow_receipt(tmp_path)
+    assert receipt["timeout_seconds"] == float(deadline[:-1])

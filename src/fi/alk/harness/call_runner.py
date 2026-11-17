@@ -2379,6 +2379,12 @@ def write_worker_limits(bundle_dir: Path) -> None:
     (bundle_dir / WORKER_LIMITS_FILE).write_text(json.dumps(sealed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def worker_channels_held(bundle_dir: Path | str | None) -> bool:
+    """Whether this bundle's door holds each separate worker on its own channel: a tool proxy sealed with per-worker
+    limits. The door inside the agent stops the workers it runs, but gives none a channel of its own."""
+    return _door_record(bundle_dir).get("surface") == "tool_proxy" and _door_holds_worker_limits(bundle_dir)
+
+
 def _door_holds_worker_limits(bundle_dir: Path | str | None) -> bool:
     """Whether this bundle's door enforces workers' limits: a tool proxy sealed with its capabilities file, or the
     door inside the agent, which stops the workers it runs at their deadline."""
@@ -2910,7 +2916,13 @@ def hand_off_notices(runtime: Any) -> list[dict[str, Any]]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return []
+        return [
+            {
+                "code": HAND_OFFS_INCOMPLETE,
+                "message": "This trial's record of hand-offs between the app's agents could not be read, so its "
+                "participants may be missing steps.",
+            }
+        ]
     for line in lines:
         try:
             record = json.loads(line)
@@ -4487,6 +4499,8 @@ class CallRunnerImpl:
                     # door stood for these counts, so a reader never takes a record from before it for one.
                     transcript_document["world_actors"] = {
                         "door": True,
+                        # The positive evidence a platform needs before it says a worker was held on its channel.
+                        **({"worker_channels": True} if worker_channels_held(self._context.bundle_dir) else {}),
                         "actions": acted,
                         "decisions": list(actor_decisions),
                         "state_changes": changes or [],

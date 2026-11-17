@@ -4273,6 +4273,35 @@ def test_voice_trial_without_actors_seals_world_changes(tmp_path, monkeypatch) -
     assert "records" in world and "start" in world
     # Counts a door stood for say so, so a reader never takes a record from before the door for one.
     assert world["door"] is True
+    # No tool proxy holds a channel per worker here, so the trial claims none.
+    assert "worker_channels" not in world
+
+
+def test_a_trial_behind_a_sealed_tool_proxy_says_its_workers_were_held_on_their_channels(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness.bundle_author_v2 import _seal_tool_proxy
+    from fi.alk.harness.world_door import DOOR_FILE
+
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    (context.bundle_dir / DOOR_FILE).write_text(json.dumps({"present": True, "surface": "tool_proxy"}))
+    _seal_tool_proxy(context.bundle_dir / "generated" / "tool-proxy", {"tools": [{"name": "issue_refund"}]})
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    rows = [("issue_refund", {"order": 7}, None, True, "", 2.0, "a1", "agent", "committed")]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report()
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    world = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]
+    assert world["door"] is True and world["worker_channels"] is True
 
 
 def test_a_voice_trial_whose_tools_the_door_cannot_see_says_world_changes_were_not_recorded(tmp_path) -> None:

@@ -291,10 +291,11 @@ async def probe_chat_workflow(
     """
     from .authoring_runtime_validation import RuntimeValidationError
     from .call_runner import CallRunnerContext
-    from .chat_call_runner import HostedChatCallRunner, handler_child_for
+    from .chat_call_runner import HostedChatCallRunner, agent_chat_timeout_seconds, handler_child_for
     from .handler_child import HandlerChannel
     from .hosted_scheduler import CallAborted
 
+    timeout = agent_chat_timeout_seconds(job) or timeout
     redactions = {
         **(secret_values or {}),
         **(redaction_values or {}),

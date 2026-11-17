@@ -2574,3 +2574,22 @@ def test_a_hand_off_the_observer_cannot_write_is_said_once_never_read_as_none(tm
     # The marker is not a call, and not an unreadable line that would fail the capture.
     assert cr._read_file_tool_calls(runtime, strict=True) == ([], [])
     assert cr.HAND_OFF_UNRECORDED == bootstrap.HAND_OFF_UNRECORDED
+
+
+def test_a_trace_that_cannot_be_read_marks_the_trial_s_hand_offs_incomplete(tmp_path, monkeypatch) -> None:
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from fi.alk.harness import call_runner as cr
+
+    path = tmp_path / "calls.jsonl"
+    path.write_text("", encoding="utf-8")
+    runtime = SimpleNamespace(metadata={"tool_trace_path": str(path)})
+    assert cr.hand_off_notices(runtime) == []
+
+    def unreadable(*_args, **_kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    [notice] = cr.hand_off_notices(runtime)
+    assert notice["code"] == cr.HAND_OFFS_INCOMPLETE

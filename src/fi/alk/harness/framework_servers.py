@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .contract import Runtime
+
 
 
 def _ignored_parts() -> set[str]:
@@ -381,3 +383,70 @@ def server_command(command: list[str]) -> list[str]:
     if _is_langgraph_server_command(command) and "--no-reload" not in command:
         return [*command, "--no-reload"]
     return command
+
+
+def server_runtime(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | None:
+    """The runtime with its framework server's documented API (``adk web``, ``langgraph dev``) sealed as its interface,
+    a LangGraph port written out so each world's can replace it; None for any other command."""
+    interface = _adk_web_interface(root, runtime) or _langgraph_server_interface(root, runtime)
+    if interface is None:
+        return None
+    command = [str(item) for item in (runtime.get("command") or [])]
+    if _is_langgraph_server_command(command) and not any(
+        token == "--port" or token.startswith("--port=") for token in command
+    ):
+        command = [*command, "--port", str(interface["port"])]
+    return {**runtime, "command": command, "interface": interface}
+
+
+def server_start_folder(root: Path, runtime: dict[str, Any], component: Path) -> Path:
+    """Where the server starts: `langgraph dev` reads its config, and the graphs it names, from the config's folder.
+    Any other runtime starts in `component`."""
+    command = [str(item) for item in (runtime.get("command") or [])]
+    config = _langgraph_config(root, runtime) if _is_langgraph_server_command(command) else None
+    if config is not None and component.is_relative_to(config.parent) and component != config.parent:
+        return config.parent
+    return component
+
+
+def serves_port_option(command: list[str]) -> bool:
+    """Whether the command is a framework server that takes its port as ``--port``."""
+    return _is_adk_web_command(command) or _is_langgraph_server_command(command)
+
+
+def server_app(source: Path, contract: dict[str, Any]) -> dict[str, str]:
+    """The ADK app a build resolves for an ``adk web`` runtime, as manifest metadata."""
+    runtime = contract.get("runtime")
+    runtime = runtime if isinstance(runtime, dict) else {}
+    command = [str(item) for item in (runtime.get("command") or [])]
+    if not _is_adk_web_command(command):
+        return {}
+    app_name = _adk_app_name(source, str(runtime.get("workdir") or ""), command)
+    return {"adk_web_app": app_name or ""}
+
+
+def server_interface_rewritten(sealed: dict[str, Any], metadata: dict[str, Any]) -> bool:
+    """Whether a chat ``adk web`` bundle seals an HTTP interface other than the one its
+    build derived from the app it resolved. A bundle that recorded no app predates that."""
+    runtime = sealed.get("runtime") or {}
+    command = [str(item) for item in (runtime.get("command") or [])]
+    interface = runtime.get("interface")
+    if (
+        str(sealed.get("modality") or "").strip().lower() != "chat"
+        or not _is_adk_web_command(command)
+        or not isinstance(interface, dict)
+        or str(interface.get("kind") or "").strip().lower() not in {"", "http"}
+    ):
+        return False
+    app_name = metadata.get("adk_web_app")
+    if not isinstance(app_name, str):
+        return True
+    if not app_name:
+        # With no resolvable app a build keeps the written interface too.
+        return False
+    own = {"interface": _adk_interface_for(command, app_name)}
+    return _sealed_interface(runtime) != _sealed_interface(own)
+
+
+def _sealed_interface(runtime: dict[str, Any]) -> Any:
+    return Runtime.model_validate(runtime).model_dump(mode="json")["interface"]

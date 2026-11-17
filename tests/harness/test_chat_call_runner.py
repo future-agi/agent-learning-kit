@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -397,6 +398,49 @@ def test_hosted_chat_executes_response_carried_tool_and_uploads_transcript(
     assert b'"name": "lookup_account"' in adapter.uploads[1]
 
 
+@pytest.mark.parametrize("proxy", [True, False])
+def test_a_chat_trial_says_its_workers_were_held_on_their_channels_only_behind_a_sealed_tool_proxy(
+    tmp_path: Path, monkeypatch: Any, proxy: bool
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _seal_tool_proxy
+    from fi.alk.harness.world_door import DOOR_FILE
+
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    context = _context(tmp_path)
+    if proxy:
+        (context.bundle_dir / DOOR_FILE).write_text(json.dumps({"present": True, "surface": "tool_proxy"}))
+        _seal_tool_proxy(context.bundle_dir / "generated" / "tool-proxy", {"tools": [{"name": "lookup_account"}]})
+    adapter = _Adapter()
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080")
+        },
+    )
+    asyncio.run(
+        chat.HostedChatCallRunner(adapter, context).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+
+    world = json.loads(adapter.uploads[0])["world_actors"]
+    assert world["door"] is True
+    assert world.get("worker_channels") is (True if proxy else None)
+
+
 @pytest.mark.parametrize(
     "written,readable,failed",
     [
@@ -747,10 +791,44 @@ def test_hosted_callable_accepts_completed_tool_response_without_second_call(
     assert b"The account is active" in adapter.uploads[0]
 
 
+@pytest.mark.parametrize(
+    ("config", "budget", "expected"),
+    [
+        ({}, None, 90.0),
+        ({"chat_call_timeout_seconds": 900}, None, 900.0),
+        ({"chat_call_timeout_seconds": "900"}, None, 900.0),
+        ({"chat_call_timeout_seconds": 900}, "600", 600.0),
+        ({"chat_call_timeout_seconds": 0}, None, 90.0),
+        ({"chat_call_timeout_seconds": True}, None, 90.0),
+        ({"chat_call_timeout_seconds": "slow"}, None, 90.0),
+    ],
+)
+def test_an_agent_s_chat_call_timeout_sets_each_reply_s_deadline_within_the_budget(
+    tmp_path: Path, monkeypatch: Any, config: dict[str, Any], budget: str | None, expected: float
+) -> None:
+    monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "90")
+    if budget is not None:
+        monkeypatch.setenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", budget)
+    else:
+        monkeypatch.delenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", raising=False)
+    observed = _observed_target_timeouts(tmp_path, monkeypatch, config)
+    assert observed == {"timeout": expected, "total_timeout": expected}
+
+
 def test_hosted_chat_target_timeout_is_configurable(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
+    monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "90")
+    observed = _observed_target_timeouts(tmp_path, monkeypatch, {})
+    assert observed["timeout"] == 90.0
+    assert observed["total_timeout"] == 90.0
+
+
+def _observed_target_timeouts(tmp_path: Path, monkeypatch: Any, config: dict[str, Any]) -> dict[str, float]:
     context = _context(tmp_path)
+    context = replace(
+        context, job=context.job.model_copy(update={"agent": context.job.agent.model_copy(update={"config": config})})
+    )
     contract_path = context.bundle_dir / "contract.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     contract["runtime"]["interface"]["protocol"] = "json_template"
@@ -764,7 +842,6 @@ def test_hosted_chat_target_timeout_is_configurable(
     }
     contract_path.write_text(json.dumps(contract), encoding="utf-8")
     observed: dict[str, float] = {}
-    monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "90")
     monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
@@ -797,9 +874,7 @@ def test_hosted_chat_target_timeout_is_configurable(
             runtime,
         )
     )
-
-    assert observed["timeout"] == 90.0
-    assert observed["total_timeout"] == 90.0
+    return observed
 
 
 def test_hosted_chat_target_timeout_rejects_invalid_values(monkeypatch: Any) -> None:

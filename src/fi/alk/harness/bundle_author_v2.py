@@ -67,28 +67,13 @@ from .bundle_v2 import (
     seal_bundle_v2,
 )
 from .contract import _CHANNEL_WORKER_ID, AgentContract, DataStore, Runtime, ToolEntry, runtime_public_environment
-from .framework_servers import (  # noqa: F401 - the framework launch adapter
+from .framework_servers import (
+    server_app,
     server_command,
-    _adk_server_arguments,
-    _ADK_SERVER_FLAGS,
-    _both_separators,
-    _ADK_SERVER_VALUE_OPTIONS,
-    _UNKNOWN_ADK_OPTION,
-    _adk_server_options,
-    _adk_agents_dir_argument,
-    _is_adk_web_command,
-    _command_port,
-    _adk_app_name,
-    _ADK_APP_NAME,
-    _is_adk_app_directory,
-    _ADK_ROOT_AGENT,
-    _module_bindings,
-    _adk_web_interface,
-    _adk_interface_for,
-    _is_langgraph_server_command,
-    _langgraph_config_argument,
-    _langgraph_config,
-    _langgraph_server_interface,
+    server_interface_rewritten,
+    server_runtime,
+    server_start_folder,
+    serves_port_option,
 )
 from .generated_runtime import (
     GeneratedRuntimeError,
@@ -1969,23 +1954,6 @@ def _runtime_component(root: Path, configured_workdir: str) -> Path:
     return component
 
 
-def _native_server_runtime(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | None:
-    """The runtime with its framework server's documented API (``adk web``, ``langgraph dev``) sealed as its interface,
-    a LangGraph port written out so each world's can replace it; None for any other command."""
-
-    interface = _adk_web_interface(root, runtime) or _langgraph_server_interface(
-        root, runtime
-    )
-    if interface is None:
-        return None
-    command = [str(item) for item in (runtime.get("command") or [])]
-    if _is_langgraph_server_command(command) and not any(
-        token == "--port" or token.startswith("--port=") for token in command
-    ):
-        command = [*command, "--port", str(interface["port"])]
-    return {**runtime, "command": command, "interface": interface}
-
-
 def _submitted_command(process: SourceProcess, command: list[str]) -> list[str]:
     """Run a contract argv inside the dependency environment selected for the source."""
 
@@ -2612,11 +2580,11 @@ def _compose_environment(service: dict[str, Any]) -> dict[str, str]:
     return {}
 
 
-def _compose_service_running(root: Path, command: list[str]) -> dict[str, str]:
-    """The source's one Compose file and its one source-built service that runs exactly `command`, else nothing; a
-    file that publishes no ports names its agent this way only."""
+def _compose_service_running(root: Path, folder: Path, command: list[str]) -> dict[str, str]:
+    """The agent folder's one Compose file, repository-relative, and its one source-built service that runs exactly
+    `command`, else nothing; a file that publishes no ports names its agent this way only."""
     found = [path for name in ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
-             if (path := root / name).is_file()]
+             if (path := folder / name).is_file()]
     if len(found) != 1 or not command:
         return {}
     try:
@@ -2628,7 +2596,9 @@ def _compose_service_running(root: Path, command: list[str]) -> dict[str, str]:
         ]
     except (yaml.YAMLError, AttributeError, BundleAuthorError, OSError):
         return {}
-    return {"compose_file": found[0].name, "service": matches[0]} if len(matches) == 1 else {}
+    if len(matches) != 1:
+        return {}
+    return {"compose_file": found[0].resolve().relative_to(root.resolve()).as_posix(), "service": matches[0]}
 
 
 def _agent_scope(
@@ -2745,7 +2715,7 @@ def resolve_environment_plan(
                 "execution": "auto",
                 "compose_file": "",
                 "service": "",
-                **(_compose_service_running(root, runtime_model.command) if calls_tool_service else {}),
+                **(_compose_service_running(root, agent_root, runtime_model.command) if calls_tool_service else {}),
             }
             try:
                 topology = select_runtime(
@@ -3200,13 +3170,7 @@ def resolve_environment_plan(
         )
         entry = "agent.py"
         if is_declared_runtime or is_graph:
-            component = _runtime_component(root, runtime_workdir)
-            config = (
-                _langgraph_config(root, contract_runtime) if _is_langgraph_server_command(runtime_command) else None
-            )
-            if config is not None and component.is_relative_to(config.parent) and component != config.parent:
-                # `langgraph dev` reads its config, and the graphs it names, from where it starts.
-                component = config.parent
+            component = server_start_folder(root, contract_runtime, _runtime_component(root, runtime_workdir))
             entry = next(
                 (
                     item
@@ -3348,12 +3312,9 @@ def resolve_environment_plan(
                     "started_check": StartedCheck(port=True, timeout_seconds=180),
                 }
             )
-        if is_http_runtime and (
-            _is_adk_web_command(runtime_command)
-            or _is_langgraph_server_command(runtime_command)
-        ):
-            # ADK and LangGraph expose a normal ``--port`` seam. Wire it to the world's allocated port so a
-            # multi-world chat run does not collapse to serial execution or collide on 8080.
+        if is_http_runtime and serves_port_option(runtime_command):
+            # A framework server's ``--port`` seam is wired to the world's allocated port so a multi-world chat run
+            # does not collapse to serial execution or collide on 8080.
             process = _consumable_source_process(
                 process, "PORT", f"{{{{PORT_{control_name}}}}}"
             )
@@ -3577,12 +3538,8 @@ def resolve_environment_plan(
 
     # A voice agent's tool calls are traced by its LiveKit worker, never twice. A Compose agent, selected or authored,
     # gets the framework observation too, but not import-mode tool bindings.
-    control = next(
-        (one for one in processes if isinstance(one, SourceProcess) and one.name == control_name), None
-    )
-    if (runtime_model.command or (control is not None and control.run_command)) and str(
-        contract_modality or ""
-    ).strip().lower() != "voice":
+    compose = isinstance(selected, ComposeSelection) or runtime_model.execution == "compose"
+    if (runtime_model.command or compose) and str(contract_modality or "").strip().lower() != "voice":
         trace_environment = _source_tool_trace_environment(
             root,
             runtime_model,
@@ -4055,7 +4012,7 @@ def author_bundle_v2(
         interface = runtime.get("interface") if isinstance(runtime, dict) else None
         if isinstance(interface, dict):
             contract_interface_kind = str(interface.get("kind") or "").strip().lower()
-            native_runtime = _native_server_runtime(source_root, runtime)
+            native_runtime = server_runtime(source_root, runtime)
             if (
                 contract_modality == "chat"
                 and native_runtime is not None
@@ -4105,7 +4062,7 @@ def author_bundle_v2(
             and not isinstance(interface, dict)
             and runtime.get("command")
         ):
-            native_runtime = _native_server_runtime(source_root, runtime)
+            native_runtime = server_runtime(source_root, runtime)
             if native_runtime is not None:
                 # A framework's own HTTP server runs as it is, with its API described: inside the subprocess bridge
                 # both would bind the same port.
@@ -4434,7 +4391,7 @@ def author_bundle_v2(
                     if _uses_source_tool_trace(plan.processes)
                     else {}
                 ),
-                **_adk_web_app(source_root, contract_body),
+                **server_app(source_root, contract_body),
                 **({"generic_harness": "v1"} if generic_pipeline else {}),
                 **(
                     {
@@ -4646,42 +4603,8 @@ def _built_by_older_alk(
             _interface(sealed) == bridged
             and any("ALK_SUBPROCESS_COMMAND" in env for env in environments)
         )
-        or _adk_interface_written(sealed, metadata)
+        or server_interface_rewritten(sealed, metadata)
     )
-
-
-def _adk_web_app(source: Path, contract: dict[str, Any]) -> dict[str, str]:
-    """The ADK app a build resolves for an ``adk web`` runtime, as manifest metadata."""
-    runtime = contract.get("runtime")
-    runtime = runtime if isinstance(runtime, dict) else {}
-    command = [str(item) for item in (runtime.get("command") or [])]
-    if not _is_adk_web_command(command):
-        return {}
-    app_name = _adk_app_name(source, str(runtime.get("workdir") or ""), command)
-    return {"adk_web_app": app_name or ""}
-
-
-def _adk_interface_written(sealed: dict[str, Any], metadata: dict[str, Any]) -> bool:
-    """Whether a chat ``adk web`` bundle seals an HTTP interface other than the one its
-    build derived from the app it resolved. A bundle that recorded no app predates that."""
-    runtime = sealed.get("runtime") or {}
-    command = [str(item) for item in (runtime.get("command") or [])]
-    interface = runtime.get("interface")
-    if (
-        str(sealed.get("modality") or "").strip().lower() != "chat"
-        or not _is_adk_web_command(command)
-        or not isinstance(interface, dict)
-        or str(interface.get("kind") or "").strip().lower() not in {"", "http"}
-    ):
-        return False
-    app_name = metadata.get("adk_web_app")
-    if not isinstance(app_name, str):
-        return True
-    if not app_name:
-        # With no resolvable app a build keeps the written interface too.
-        return False
-    own = {"runtime": {"interface": _adk_interface_for(command, app_name)}}
-    return _interface(sealed) != _interface(own)
 
 
 def _carry_contract(

@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -196,6 +197,33 @@ def _unproxied_worker_notices(document: Mapping[str, Any], bundle_dir: Any = Non
         "message": "This agent's tools are not reached through the world's tool proxy, so no worker's deadline or "
         "permitted actions were enforced in this trial, and its checks were not graded.",
     }]
+
+
+# An agent's own chat deadline in its config, as `voice_call_timeout_seconds` is for a voice call: how long one reply
+# may take, and the readiness conversation with it. Absent, the defaults stand.
+CHAT_TIMEOUT_CONFIG_KEY = "chat_call_timeout_seconds"
+_BUILD_BUDGET_SECONDS = 3300.0
+
+
+def agent_chat_timeout_seconds(job: Any) -> float | None:
+    """The agent's `chat_call_timeout_seconds`, never past the build's budget
+    (`ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS`); None when it is absent or not a positive number."""
+    agent = getattr(job, "agent", None)
+    config = getattr(agent, "config", None)
+    raw = config.get(CHAT_TIMEOUT_CONFIG_KEY) if isinstance(config, dict) else None
+    if isinstance(raw, bool):
+        return None
+    try:
+        seconds = float(raw) if isinstance(raw, (int, float, str)) else None
+    except ValueError:
+        return None
+    if seconds is None or not math.isfinite(seconds) or seconds <= 0:
+        return None
+    try:
+        budget = float(os.environ.get("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS") or _BUILD_BUDGET_SECONDS)
+    except ValueError:
+        budget = _BUILD_BUDGET_SECONDS
+    return min(seconds, budget)
 
 
 def _chat_target_timeout_seconds() -> float:
@@ -1105,7 +1133,7 @@ class HostedChatCallRunner:
             raise CallAborted("chat_scenario_invalid: instruction is empty")
         from .chat_transport import create_chat_wrapper
 
-        target_timeout = _chat_target_timeout_seconds()
+        target_timeout = agent_chat_timeout_seconds(self._context.job) or _chat_target_timeout_seconds()
         wrapper = create_chat_wrapper(
             interface,
             endpoint.address,
@@ -1278,7 +1306,7 @@ class HostedChatCallRunner:
         )
 
         if door_sees_tools:
-            from .call_runner import upload_end_state
+            from .call_runner import upload_end_state, worker_channels_held
 
             sealed = await asyncio.to_thread(self._records.end, id(runtime), records_dsn)
             kept = await upload_end_state(self._adapter, scenario.scenario_key, sealed, _trial_log(door, trial_started))
@@ -1287,6 +1315,8 @@ class HostedChatCallRunner:
                 **(world_record or {}),
                 **sealed,
                 "door": True,
+                # The positive evidence a platform needs before it says a worker was held on its channel.
+                **({"worker_channels": True} if worker_channels_held(self._context.bundle_dir) else {}),
                 **({"end_state_artifact": kept} if kept else {}),
             }
         else:
