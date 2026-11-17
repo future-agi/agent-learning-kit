@@ -25,6 +25,15 @@ from fi.alk.harness.model_citation import model_problems, named_on
 from fi.alk.harness.tools import accept_contract, contract_tools
 
 MIB = 1024 * 1024
+# How long a check this file holds to "quick" may take: it takes well under a tenth of a second
+# alone, and the bound leaves room for a shared CI runner under load. A check under tracemalloc,
+# which slows Python down several times over, gets its own.
+QUICK_SECONDS = 1.0
+QUICK_SECONDS_TRACED = 5.0
+# The block-comment scans, at a quarter of what the file limit allows: the slowest takes about
+# 0.06 s on a laptop, 0.65-0.87 s was read on CI, and a closer looked for once per opener takes
+# minutes. CI has run up to about 14 times slower than a laptop, so the bound leaves that room.
+BLOCK_SCAN_SECONDS = 5.0
 FIXTURES = Path(__file__).resolve().parents[1] / "providers" / "fixtures" / "authored"
 
 
@@ -32,9 +41,7 @@ FIXTURES = Path(__file__).resolve().parents[1] / "providers" / "fixtures" / "aut
 def _earlier_heap_frozen():
     """Keep a full collection of the heap the tests before this one built out of this file's
     timings: one such pass took 0.3 s inside a timed save on CI. The test's own collections still
-    count. The two checks nearest their line are test_a_crafted_file_of_block_comments_does_not_
-    hold_up_the_check[a-file-of-openers] and test_a_quote_that_grows_when_normalised_costs_little
-    (about 0.27 s against 0.5 s)."""
+    count."""
     gc.freeze()
     try:
         yield
@@ -305,7 +312,7 @@ def test_model_path_outside_the_source_is_refused(root, cited):
     problems, _, took = checked(root, {"name": "gpt-4o", "path": path, "line": 2})
 
     assert problems == [not_a_file(path)]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # The save's one budget
@@ -326,7 +333,7 @@ def test_model_path_spending_the_save_budget_is_refused(tmp_path, root):
     assert result.get("is_error")
     assert text_of(result) == REFUSED + str(PathLookupsSpent())
     assert not (destination / "contract.json").exists()
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 @pytest.mark.parametrize("links", [pytest.param(11, id="lookup-budget-real")])
@@ -425,7 +432,7 @@ def test_model_file_that_cannot_be_read_is_refused(root, cited):
     problems, _, took = answer[0]
 
     assert problems == [unreadable(path)]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # The cited line must be in the file
@@ -627,7 +634,7 @@ def test_a_crafted_model_file_does_not_hold_up_the_save(root, written, line, nam
     problems, _, took = checked(root, {"name": name, "path": "crafted.py", "line": line})
 
     assert problems == ([not_named(name, line, "crafted.py")] if refused else [])
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # Asking once for the prompt's lines
@@ -1027,7 +1034,7 @@ def test_a_crafted_configuration_line_does_not_hold_up_the_check(root):
     problems, _, took = checked(root, {"name": "a", "path": "crafted.yaml", "line": 1})
 
     assert problems == [not_named("a", 1, "crafted.yaml")]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # Names a setting goes by are not models, written in any case
@@ -1627,7 +1634,7 @@ def test_a_quote_of_many_pieces_does_not_hold_up_the_check(root):
     took = time.perf_counter() - started
 
     assert answer is not None
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # A prompt written with Python string prefixes holds its quote
@@ -1755,7 +1762,7 @@ def test_a_crafted_file_of_triple_quotes_does_not_hold_up_the_check(root, writte
 
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
 
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 def test_leaving_the_quote_out_is_not_asked_about(tmp_path, root):
@@ -2118,18 +2125,18 @@ def test_a_value_outside_a_block_comment_is_the_model(root, file, written, line)
     "written",
     [
         pytest.param(
-            "/*\n" * (MIB // 3 - 20) + 'const model = "gpt-4o";\n',
+            "/*\n" * (MIB // 12 - 20) + 'const model = "gpt-4o";\n',
             id="a-file-of-openers",
         ),
         pytest.param(
-            "*/ /*\n" * (MIB // 6 - 20) + 'const model = "gpt-4o";\n',
+            "*/ /*\n" * (MIB // 24 - 20) + 'const model = "gpt-4o";\n',
             id="a-file-of-closers-and-openers",
         ),
         pytest.param(
-            "/* */ " * (MIB // 6 - 20) + '"gpt-4o"\n', id="a-line-of-closed-blocks"
+            "/* */ " * (MIB // 24 - 20) + '"gpt-4o"\n', id="a-line-of-closed-blocks"
         ),
         pytest.param(
-            "<!--\n" * (MIB // 5 - 20) + 'const model = "gpt-4o";\n',
+            "<!--\n" * (MIB // 20 - 20) + 'const model = "gpt-4o";\n',
             id="a-file-of-markup-openers",
         ),
     ],
@@ -2140,7 +2147,7 @@ def test_a_crafted_file_of_block_comments_does_not_hold_up_the_check(root, writt
 
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.js", "line": line})
 
-    assert took < 0.5
+    assert took < BLOCK_SCAN_SECONDS
 
 
 def test_lines_inside_a_block_comment_without_its_closer_are_not_scanned(
@@ -2369,7 +2376,7 @@ def test_a_quote_that_grows_when_normalised_costs_little(root):
     finally:
         tracemalloc.stop()
 
-    assert took < 0.5
+    assert took < QUICK_SECONDS_TRACED
     assert peak < 32 * MIB
 
 
@@ -2444,7 +2451,7 @@ def test_a_crafted_line_of_generic_calls_does_not_hold_up_the_check(root):
 
     _, _, took = checked(root, {"name": "a", "path": "crafted.ts", "line": 1})
 
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 def test_a_crafted_line_of_apostrophes_does_not_hold_up_the_check(root):
@@ -2455,7 +2462,7 @@ def test_a_crafted_line_of_apostrophes_does_not_hold_up_the_check(root):
     problems, _, took = checked(root, {"name": "a", "path": "crafted.py", "line": 1})
 
     assert problems == [not_named("a", 1, "crafted.py")]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # Lines sent alone after a refusal are asked about once more before either side is given up
@@ -2529,7 +2536,7 @@ def test_a_quote_whose_start_matches_everywhere_does_not_hold_up_the_check(root)
     took = time.perf_counter() - started
 
     assert answer is not None
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 def test_a_first_word_found_early_is_tried_again(tmp_path, root):
@@ -2666,15 +2673,25 @@ def test_an_elided_quote_of_a_long_prompt_holds(tmp_path, root):
     assert answer is None
 
 
-def test_a_crafted_long_word_costs_little(root):
-    from fi.alk.harness.model_citation import quote_problem
+def test_a_crafted_long_word_costs_little():
+    from fi.alk.harness.model_citation import _holds, _letters, quote_pieces
 
-    started = time.perf_counter()
-    answer = quote_problem("a " + "a" * MIB + "b", "a" * MIB, "agent.py 1-1")
-    took = time.perf_counter() - started
+    # Each false start at the first word is charged the second word it failed on: without that
+    # charge the search makes a try at every one of a million places. Counted by the searches made,
+    # not by seconds, which a loaded runner moves more than the missing charge does.
+    class Counting(str):
+        searches = 0
 
-    assert answer is not None
-    assert took < 0.25
+        def find(self, *args):
+            Counting.searches += 1
+            return super().find(*args)
+
+    pieces = quote_pieces("a " + "a" * MIB + "b")
+
+    held = _holds(Counting(_letters("a" * MIB)), pieces)
+
+    assert held is False
+    assert Counting.searches < 1_000
 
 
 # Scripts written without spaces: each character is a word
@@ -2795,18 +2812,30 @@ def test_more_comments_and_docstrings_are_not_the_model(root, file, written, lin
     assert problems == [not_named(name, line, file)]
 
 
-def test_a_crafted_file_of_one_byte_lines_and_triple_quotes_costs_little(root):
+def test_a_crafted_file_of_one_byte_lines_and_triple_quotes_costs_little(root, monkeypatch):
+    from fi.alk.harness import model_citation
+
     # Lines with no triple quote, and lines inside a block without its closing quote, are passed
-    # over without a scan.
-    (root / "crafted.py").write_text(
-        '"""\n' + "x\n" * (MIB // 4) + '"""\n' + "y\n" * (MIB // 4) + 'MODEL = "gpt-4o"\n',
-        encoding="utf-8",
-    )
-    line = 2 * (MIB // 4) + 3
+    # over without a scan. The file fits under the size limit, so it is read, not refused unread.
+    half = MIB // 4 - 20
+    written = '"""\n' + "x\n" * half + '"""\n' + "y\n" * half + 'MODEL = "gpt-4o"\n'
+    assert len(written.encode()) <= model_citation.LARGEST_MODEL_FILE
+    (root / "crafted.py").write_text(written, encoding="utf-8")
+    line = 2 * half + 3
+    scanned = []
+    real = model_citation._line_scan
 
-    _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
+    def counting(*args, **kwargs):
+        scanned.append(1)
+        return real(*args, **kwargs)
 
-    assert took < 0.25
+    monkeypatch.setattr(model_citation, "_line_scan", counting)
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
+
+    assert problems == []
+    # The two triple-quote lines and the cited one, not the million between.
+    assert len(scanned) < 20
 
 
 @pytest.mark.parametrize(
@@ -2948,7 +2977,7 @@ def test_a_long_first_word_is_charged_on_every_try(root):
     took = time.perf_counter() - started
 
     assert answer is not None
-    assert took < 0.25
+    assert took < QUICK_SECONDS
 
 
 def test_a_short_unspaced_quote_is_still_searched_with_gaps(tmp_path, root):
@@ -3181,7 +3210,7 @@ def test_an_unclosed_string_of_escapes_costs_one_pass(root, quote):
 
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.ts", "line": 1})
 
-    assert took < 0.25
+    assert took < QUICK_SECONDS
 
 
 @pytest.mark.parametrize(
