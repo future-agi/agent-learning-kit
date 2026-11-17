@@ -117,6 +117,17 @@ def _prompt(messages) -> str:
     return "Conversation so far:\n" + "\n".join(turns) + "\n\nUser: " + new
 
 
+_REFUSAL = (
+    "ANTHROPIC_AUTH_TOKEN is set but ANTHROPIC_BASE_URL is empty: set ANTHROPIC_BASE_URL to "
+    "the endpoint the token belongs to."
+)
+
+
+def _setting(name: str) -> str:
+    # Blank counts as unset.
+    return os.environ.get(name, "").strip()
+
+
 def _env(config_dir: str) -> dict:
     # `ClaudeAgentOptions.env` is merged over the process's own, so the base URL and the
     # token the job supplies are inherited rather than copied here.
@@ -143,7 +154,7 @@ def _env(config_dir: str) -> dict:
                 "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1000000",
             }
         )
-    if os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+    if _setting("ANTHROPIC_AUTH_TOKEN"):
         # Gateway mode: the Bearer token must be the only credential.
         env.update(
             {
@@ -160,6 +171,10 @@ def _env(config_dir: str) -> dict:
 
 
 async def agent_callback(agent_input):
+    # With no base URL the CLI would send the gateway token to Anthropic's own API. Checked on
+    # every call, because the env is read per call.
+    if _setting("ANTHROPIC_AUTH_TOKEN") and not _setting("ANTHROPIC_BASE_URL"):
+        raise RuntimeError(_REFUSAL)
     prompt = _prompt(agent_input.messages)
     config_dir = tempfile.mkdtemp(prefix="claude-config-")
     try:

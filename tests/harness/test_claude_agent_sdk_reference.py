@@ -8,11 +8,9 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import importlib.util
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import textwrap
@@ -21,20 +19,29 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
+# Imported once, before any fixture snapshots `sys.modules`, so a fixture's teardown never
+# drops half of the SDK and leaves the next import mixing two copies of its classes.
+import claude_agent_sdk
 import pytest
-from test_bundle_author_v2 import _authoring, _github_job, _write_callable_contract
+from reference_agents import (
+    DETECTION_CASES,
+    REPO,
+    TOOLS,
+    TRACE_HOOK,
+    assert_bindings_match,
+    assert_detected,
+    assert_pins,
+    build_control_service,
+    fresh_import,
+    run_tracer,
+    write_callable_contract,
+)
 
-from fi.alk.harness.bundle_author_v2 import author_bundle_v2
-from fi.alk.harness.framework_detection import detect_framework, folder_findings
 from fi.simulate import AgentInput
 
-REPO = Path(__file__).resolve().parents[2]
 SUBFOLDER = "examples/harness/claude_agent_sdk_support"
 EXAMPLE = REPO / SUBFOLDER
-BOOTSTRAP = REPO / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
 
-TOOLS = ("look_up_order", "start_return", "return_policy")
-CLAUDE_AGENT_SDK = {"name": "claude_agent_sdk", "version": None}
 MODEL = "vertex_ai/gemini-3.7-flash"
 
 # Cleared so a test sees only what it sets.
@@ -50,110 +57,46 @@ CLEARED_ENV = (
 )
 
 
-def _copy_example(destination: Path) -> Path:
-    shutil.copytree(EXAMPLE, destination, ignore=shutil.ignore_patterns("__pycache__"))
-    return destination
-
-
 # T1: detection ------------------------------------------------------------------------------
 
 
-def test_example_is_found_as_the_run_folder(tmp_path: Path) -> None:
-    run = _copy_example(tmp_path / "run")
-
-    assert detect_framework(run) == CLAUDE_AGENT_SDK
-    assert folder_findings(run).blockers == frozenset()
-
-
-def test_example_is_found_as_a_subfolder_of_a_bigger_tree(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    _copy_example(repo / SUBFOLDER)
-    # A package of the same name deep in the tree must not make the library import look like
-    # the customer's own module.
-    nested = repo / "src/pkg/claude_agent_sdk"
-    nested.mkdir(parents=True)
-    (nested / "__init__.py").write_text("", encoding="utf-8")
-    (nested / "score.py").write_text("def score():\n    return 1\n", encoding="utf-8")
-    (repo / "main.py").write_text("print('hello')\n", encoding="utf-8")
-
-    found = folder_findings(repo / SUBFOLDER, repo_root=repo)
-
-    assert detect_framework(repo / SUBFOLDER, repo_root=repo) == CLAUDE_AGENT_SDK
-    assert found.blockers == frozenset()
-
-
-def test_example_in_place_is_not_shadowed_by_the_repository() -> None:
-    shadows = ("claude_agent_sdk", "claude_code_sdk")
-    parts = EXAMPLE.relative_to(REPO).parts
-    assert not [name for name in shadows if name in parts]
-    assert not [
-        path
-        for path in EXAMPLE.rglob("*")
-        if path.stem in shadows and "__pycache__" not in path.parts
-    ]
-    assert detect_framework(EXAMPLE, repo_root=REPO) == CLAUDE_AGENT_SDK
-
-
-def test_a_module_named_claude_agent_sdk_beside_the_agent_hides_the_framework(
-    tmp_path: Path,
-) -> None:
-    run = _copy_example(tmp_path / "run")
-    assert detect_framework(run) == CLAUDE_AGENT_SDK
-
-    (run / "claude_agent_sdk.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
-
-    assert detect_framework(run) != CLAUDE_AGENT_SDK
+@pytest.mark.parametrize("where", DETECTION_CASES)
+def test_example_is_detected_as_the_claude_agent_sdk(tmp_path: Path, where: str) -> None:
+    # `claude_code_sdk` is the library's earlier name, which detection also reads.
+    assert_detected(
+        EXAMPLE,
+        "claude_agent_sdk",
+        ("claude_agent_sdk", "claude_code_sdk"),
+        where=where,
+        tmp_path=tmp_path,
+        subfolder=SUBFOLDER,
+    )
 
 
 # T2: the build ------------------------------------------------------------------------------
 
 
 def test_build_runs_the_callback_bridge_with_the_generic_tool_tracer(
-    tmp_path: Path,
+    tmp_path: Path, example_module
 ) -> None:
-    source = tmp_path / "source"
-    _copy_example(source / SUBFOLDER)
-    (source / "README.md").write_text("many examples\n", encoding="utf-8")
-    authoring = _authoring(tmp_path)
-    _write_callable_contract(authoring)
-    contract_path = authoring / "contract.json"
-    contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    contract["tool_entrypoints"] = [
-        {"tool": name, "mode": "import", "module": "agent", "callable": name}
-        for name in TOOLS
-    ]
-    contract_path.write_text(json.dumps(contract), encoding="utf-8")
-
-    bundle = author_bundle_v2(
-        source=source,
-        job=_github_job(
-            SUBFOLDER,
-            with_secrets=True,
-            secret_aliases=("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"),
-        ),
-        authoring=authoring,
-        output=tmp_path / "bundle",
+    agent = build_control_service(
+        tmp_path, write_callable_contract, "agent", subfolder=SUBFOLDER, example=EXAMPLE
     )
 
-    agent = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
     assert "ThreadingHTTPServer" in json.dumps(agent.run_command)
     assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "agent:agent_callback"
     assert agent.environment["PORT"] == "{{PORT_agent}}"
     assert "requirements.txt" in json.dumps(agent.build_commands)
     assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     bindings = json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])
-    assert sorted(bindings, key=lambda item: item["name"]) == sorted(
-        ({"name": name, "module": "agent", "callable": name} for name in TOOLS),
-        key=lambda item: item["name"],
-    )
+    # The plain functions, not the `@tool` handlers the SDK calls.
+    assert_bindings_match(bindings, example_module(), "agent")
 
 
 # T3: the real SDK and its bundled CLI, against a local stub of the Messages API --------------
 
 
 def _bundled_cli() -> Path:
-    import claude_agent_sdk
-
     cli = Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude"
     if not cli.is_file():
         pytest.fail(f"the Claude CLI bundled with claude-agent-sdk was not found at {cli}")
@@ -366,33 +309,30 @@ def test_the_real_cli_runs_two_turns_and_only_the_plain_tools_are_traced(
     run = tmp_path / "run"
     run.mkdir()
     shutil.copy2(EXAMPLE / "agent.py", run / "agent.py")
-    shutil.copy2(BOOTSTRAP, run / "sitecustomize.py")
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    shutil.copy2(TRACE_HOOK, hook / "sitecustomize.py")
     trace = tmp_path / "calls.jsonl"
     bindings = [{"name": name, "module": "agent", "callable": name} for name in TOOLS]
     try:
-        completed = subprocess.run(
+        completed = run_tracer(
             [sys.executable, "-c", DRIVER],
-            capture_output=True,
-            text=True,
-            cwd=run,
-            timeout=240,
-            env={
-                **{
-                    k: v
-                    for k, v in os.environ.items()
-                    if k not in CLEARED_ENV and not k.startswith("OTEL_")
-                },
+            hook,
+            run,
+            {
+                **{name: None for name in CLEARED_ENV},
+                **{name: None for name in os.environ if name.startswith("OTEL_")},
                 "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{server.server_address[1]}",
                 "ANTHROPIC_AUTH_TOKEN": "placeholder-not-a-token",
                 "PYTHONPATH": str(run),
                 "HARNESS_TOOL_TRACE": str(trace),
                 "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
             },
+            timeout=240,
         )
     finally:
         server.shutdown()
         server.server_close()
-    assert completed.returncode == 0, completed.stderr[-3000:]
 
     replies = json.loads(completed.stdout.splitlines()[-1])
     assert replies == [
@@ -476,26 +416,9 @@ def _agent_input(messages: list[dict]) -> AgentInput:
 
 @pytest.fixture
 def example_module(tmp_path, monkeypatch):
-    """A fresh import of the example's `agent.py`, with no `ANTHROPIC_*` set."""
-    for name in CLEARED_ENV:
-        monkeypatch.delenv(name, raising=False)
-    saved = sys.modules.get("agent")
-    sys.modules.pop("agent", None)
-    run = tmp_path / "run"
-    run.mkdir()
-    shutil.copy2(EXAMPLE / "agent.py", run / "agent.py")
-
-    def load():
-        spec = importlib.util.spec_from_file_location("agent", run / "agent.py")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["agent"] = module
-        spec.loader.exec_module(module)
-        return module
-
-    yield load
-    sys.modules.pop("agent", None)
-    if saved is not None:
-        sys.modules["agent"] = saved
+    """A fresh import of the example's `agent.py` on the real SDK, with no `ANTHROPIC_*` set."""
+    with fresh_import(tmp_path, monkeypatch, EXAMPLE, clear_env=CLEARED_ENV) as load:
+        yield load
 
 
 class _Seen:
@@ -765,6 +688,7 @@ def test_the_env_passed_to_the_cli_is_exactly_this(
     # Set after the import: the env is built per call, not at import.
     if token:
         monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", token)
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://gateway.test")
     seen = _fake_query(agent, monkeypatch)
 
     _run(agent, CONVERSATION)
@@ -775,6 +699,37 @@ def test_the_env_passed_to_the_cli_is_exactly_this(
     assert "ANTHROPIC_BASE_URL" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
     assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in env
+
+
+@pytest.mark.parametrize("base_url", [None, "", "   "], ids=["unset", "empty", "blank"])
+def test_a_token_with_no_base_url_is_refused_before_the_cli_starts(
+    example_module, monkeypatch, base_url
+) -> None:
+    agent = example_module()
+    # Set after the import: the check runs on every call.
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "secret-canary-token")
+    if base_url is not None:
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", base_url)
+    seen = _fake_query(agent, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_BASE_URL") as refused:
+        _run(agent, CONVERSATION)
+
+    assert "secret-canary-token" not in str(refused.value)
+    # The CLI never started, so the token went nowhere.
+    assert seen.calls == []
+
+
+def test_a_blank_token_is_not_a_token(example_module, monkeypatch) -> None:
+    agent = example_module()
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "   ")
+    seen = _fake_query(agent, monkeypatch)
+
+    _run(agent, CONVERSATION)
+
+    assert seen.calls[0]["options"].env == _expected_env(
+        seen.calls[0]["options"].env["CLAUDE_CONFIG_DIR"], MODEL, window=True, gateway=False
+    )
 
 
 def test_without_a_token_the_customers_own_key_is_not_blanked(
@@ -899,6 +854,4 @@ def test_folder_holds_exactly_the_example_files() -> None:
 
 
 def test_requirements_and_python_version_are_pinned() -> None:
-    lines = (EXAMPLE / "requirements.txt").read_text(encoding="utf-8").splitlines()
-    assert lines == ["claude-agent-sdk==0.2.174", "agent-simulate==0.1.3"]
-    assert (EXAMPLE / ".python-version").read_text(encoding="utf-8").strip() == "3.12"
+    assert_pins(EXAMPLE, ["claude-agent-sdk==0.2.174", "agent-simulate==0.1.3"])

@@ -25,7 +25,9 @@ after each turn.
 - `ANTHROPIC_MODEL`: the model name, default `vertex_ai/gemini-3.7-flash` (a gateway name).
 - `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`: the gateway origin (without `/v1`) and the
   Bearer token. When the token is set, the agent also switches off the Vertex, Bedrock and
-  Foundry flags and blanks `ANTHROPIC_API_KEY`, so the token is the only credential.
+  Foundry flags and blanks `ANTHROPIC_API_KEY`, so the token is the only credential. A token
+  needs a base URL: with a token and no `ANTHROPIC_BASE_URL`, each turn is refused before the
+  CLI starts, naming the missing setting. A blank value counts as unset.
 - `ANTHROPIC_API_KEY`: instead of the two above, the customer's own key (no token set). Set `ANTHROPIC_MODEL` to a Claude model with it; the default `vertex_ai/...` name only works through the gateway.
 
 On the gateway route the platform passes the customer's own key to the agent; the job supplies the rest.
