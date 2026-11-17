@@ -25,12 +25,6 @@ else:
     LANGCHAIN_INSTALLED = True
 
 
-def _message_content(message: Any) -> Any:
-    if isinstance(message, dict):
-        return message.get("content")
-    return getattr(message, "content", None)
-
-
 class LangChainAgentWrapper(AgentWrapper):
     """
     Wrapper for LangChain Runnable or Chain agents.
@@ -84,9 +78,5 @@ class LangChainAgentWrapper(AgentWrapper):
             return text_of(response.content)
         elif isinstance(response, dict) and "output" in response:
             return text_of(response["output"])
-        elif isinstance(response, dict) and response.get("messages"):
-            # A LangGraph graph returns its state; the reply is the last message.
-            last = response["messages"][-1]
-            return text_of(last if isinstance(last, str) else _message_content(last))
-            
+
         return text_of(response)
