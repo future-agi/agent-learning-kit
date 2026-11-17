@@ -252,7 +252,14 @@ def suite_server(
         schema({"sql": str}, ["sql"]),
     )
     async def change_world(args: dict[str, Any]) -> dict[str, Any]:
-        return _ok(world_change(out, str(args.get("sql") or ""))) if (out / "world.sqlite").is_file() else _err(
+        return _ok(
+            world_change(
+                out,
+                str(args.get("sql") or ""),
+                source_root=source_root,
+                contract=contract,
+            )
+        ) if (out / "world.sqlite").is_file() else _err(
             "This environment keeps no world data the chat can change: its agent's data lives "
             "where the agent runs, or its world is described in a form only a new build changes."
         )
@@ -330,18 +337,44 @@ def suite_server(
     )
 
 
-def world_change(out: Path, statement: str) -> str:
-    """Apply one data statement to the authoring world, all or nothing, foreign keys enforced."""
+def world_change(
+    out: Path,
+    statement: str,
+    *,
+    source_root: Path | None = None,
+    contract: AgentContract | None = None,
+) -> str:
+    """Apply one data statement to the authoring world, all or nothing, foreign keys enforced,
+    refusing a value the seed import would refuse in a column the agent's schema types JSON."""
     import sqlite3
 
     verb = statement.strip().split(None, 1)[0].upper() if statement.strip() else ""
     if verb not in ("INSERT", "UPDATE", "DELETE") or ";" in statement.strip().rstrip(";"):
         return "Not changed: give exactly one INSERT, UPDATE or DELETE statement."
+    from collections import Counter
+
+    from .bundle_author_v2 import declared_json_columns
+    from .world_import.sqlite import unreadable_json_values
+
+    json_columns = declared_json_columns(
+        source_root, contract=contract.model_dump() if contract is not None else None
+    )
     connection = sqlite3.connect(out / "world.sqlite")
     try:
         connection.execute("PRAGMA foreign_keys = ON")
+        before = unreadable_json_values(connection, json_columns)
         with connection:
             changed = connection.execute(statement).rowcount
+            # Checked before the commit, so a refused value never reaches the world. A column
+            # breaks when some refused value is held by more cells than before: a world that
+            # already held one can be repaired a cell at a time, but never given another.
+            broke = [
+                column
+                for column, refused in unreadable_json_values(connection, json_columns).items()
+                if refused - before.get(column, Counter())
+            ]
+            if broke:
+                raise _NotJson(broke)
         tables = [row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         )]
@@ -349,11 +382,26 @@ def world_change(out: Path, statement: str) -> str:
             "{}: {}".format(name, connection.execute('SELECT COUNT(*) FROM "%s"' % name).fetchone()[0])
             for name in tables
         )
+    except _NotJson as refused:
+        return (
+            "Not changed: these JSON columns would hold values that are not JSON: "
+            + ", ".join(refused.columns)
+            + ". A JSON column holds JSON text: an object such as '{\"a\": 1}', a list such "
+            "as '[]', or a string in quotes such as '\"2026-06-03\"'."
+        )
     except sqlite3.Error as failed:
         return f"Not changed, the world refused it: {failed}"
     finally:
         connection.close()
     return f"{changed} rows changed. The world now holds {counts}. Re-prove what depends on it, then save_changes."
+
+
+class _NotJson(Exception):
+    """A change that would leave a JSON column holding what the seed import refuses."""
+
+    def __init__(self, columns: list[str]) -> None:
+        super().__init__(", ".join(columns))
+        self.columns = columns
 
 
 def contract_of(out: Path) -> AgentContract | None:
