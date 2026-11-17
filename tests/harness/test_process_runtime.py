@@ -10490,6 +10490,13 @@ _CHAIN_AGAIN = (
     "m._chain()\n"
 )
 
+# What the repository hook logged at start-up, before the test's own _chain() call.
+_LOG_AT_START = (
+    "import json, os\n"
+    "with open(os.environ['REPO_HOOK_LOG']) as log:\n"
+    "    print(json.dumps(log.read().splitlines()))\n"
+)
+
 _INSTALLED_STATE = (
     "import json, sys\n"
     "print(json.dumps([type(f).__name__ for f in sys.meta_path]))\n"
@@ -10515,13 +10522,17 @@ def test_a_repository_sitecustomize_runs_exactly_once(
     )
     assert (captured["world_dir"] / "simulation_mark_bootstrap.py").is_file()
     repo, marker = _repository_marker_hook(tmp_path)
-    result = _start(captured, repo, marker, _CHAIN_AGAIN + _INSTALLED_STATE)
+    result = _start(
+        captured, repo, marker, _LOG_AT_START + _CHAIN_AGAIN + _INSTALLED_STATE
+    )
     assert result.returncode == 0, result.stderr
+    at_start, finders, patches = result.stdout.splitlines()
+    # It ran at start-up, through the kit's chain, not through the test's own call.
+    assert json.loads(at_start) == ["ran"]
     assert marker.read_text().splitlines() == ["ran"]
     assert result.stderr == ""
     if customer is None:
         # Without an export, install() does nothing but chain.
-        finders, patches = result.stdout.splitlines()
         assert "_MarkFinder" not in json.loads(finders)
         assert json.loads(patches) == {}
 

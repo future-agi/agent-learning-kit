@@ -150,6 +150,45 @@ _STANDIN_AGENTS = (
 )
 
 
+# The SDK's own route to its trace exporter (0.18.3): set_default_openai_key(key) with
+# use_for_tracing=True calls set_tracing_export_api_key, which calls
+# tracing.processors.default_exporter().set_api_key.
+_STANDIN_AGENTS_WITH_EXPORTER = (
+    "import os\n"
+    "from .tracing import set_tracing_export_api_key\n"
+    "def _note(line):\n"
+    "    with open(os.environ['STANDIN_CALLS'], 'a') as handle:\n"
+    "        handle.write(line + '\\n')\n"
+    "_note('module-ran')\n"
+    "def set_default_openai_api(api):\n"
+    "    _note(api)\n"
+    "def set_default_openai_key(key, use_for_tracing=True):\n"
+    "    if use_for_tracing:\n"
+    "        set_tracing_export_api_key(key)\n"
+)
+_STANDIN_TRACING = {
+    "__init__.py": (
+        "from .processors import default_exporter\n"
+        "def set_tracing_export_api_key(api_key):\n"
+        "    default_exporter().set_api_key(api_key)\n"
+    ),
+    "processors.py": (
+        "import os\n"
+        "class _Exporter:\n"
+        "    def set_api_key(self, api_key):\n"
+        "        with open(os.environ['STANDIN_CALLS'] + '.key', 'a') as handle:\n"
+        "            handle.write(api_key + '\\n')\n"
+        "_exporter = None\n"
+        "def default_exporter():\n"
+        "    global _exporter\n"
+        "    if _exporter is None:\n"
+        "        _exporter = _Exporter()\n"
+        "    return _exporter\n"
+    ),
+}
+_GATEWAY_KEY = {"OPENAI_API_KEY": "sk-FAKE-GATEWAY"}
+
+
 def _real_openai_agents_installed() -> bool:
     import importlib.metadata
 
@@ -169,6 +208,8 @@ def _chat_style_run(
     agents_source: str = _STANDIN_AGENTS,
     hook_on_path: bool = True,
     flags: tuple[str, ...] = (),
+    exporter: bool = False,
+    extra_env: dict[str, str] | None = None,
 ):
     hook = tmp_path / "hook"
     hook.mkdir()
@@ -180,6 +221,10 @@ def _chat_style_run(
     standin = tmp_path / "standin"
     (standin / "agents").mkdir(parents=True)
     (standin / "agents" / "__init__.py").write_text(agents_source)
+    if exporter:
+        (standin / "agents" / "tracing").mkdir()
+        for name, text in _STANDIN_TRACING.items():
+            (standin / "agents" / "tracing" / name).write_text(text)
     if dist:
         info = standin / "openai_agents-0.24.0.dist-info"
         info.mkdir()
@@ -198,6 +243,7 @@ def _chat_style_run(
     )
     if mark:
         env[_CHAT_MARK] = "1" if mark is True else mark
+    env.update(extra_env or {})
     result = subprocess.run(
         [sys.executable, *flags, "-c", code],
         text=True,
@@ -272,7 +318,13 @@ def test_openai_agents_chat_style_failure_is_one_stderr_line_and_the_import_succ
 
 
 def test_openai_agents_trace_export_key_is_a_fixed_placeholder(tmp_path: Path) -> None:
-    result, lines = _chat_style_run(tmp_path, "import agents\n")
+    result, lines = _chat_style_run(
+        tmp_path,
+        "import agents\n",
+        agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
+        exporter=True,
+        extra_env=_GATEWAY_KEY,
+    )
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     keys = (tmp_path / "calls.txt.key").read_text().splitlines()
@@ -293,6 +345,45 @@ def test_openai_agents_trace_export_key_is_set_when_the_chat_style_setting_fails
     ]
     keys = (tmp_path / "calls.txt.key").read_text().splitlines()
     assert keys == ["alk-tracing-disabled"]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "agents.set_default_openai_key('sk-FAKE-GATEWAY')\n",
+        "agents.set_tracing_export_api_key('sk-FAKE-GATEWAY')\n",
+        "agents.set_tracing_export_api_key('')\n",
+    ],
+    ids=["default_key", "export_key", "empty_key"],
+)
+def test_the_gateway_key_never_becomes_the_trace_export_key(tmp_path: Path, code: str) -> None:
+    # The SDK's set_default_openai_key and set_default_openai_client hand their key to the trace
+    # exporter by default, and an empty key falls back to OPENAI_API_KEY: the gateway key.
+    result, lines = _chat_style_run(
+        tmp_path,
+        "import agents\n" + code,
+        agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
+        exporter=True,
+        extra_env=_GATEWAY_KEY,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    keys = (tmp_path / "calls.txt.key").read_text().splitlines()
+    assert keys[-1] == "alk-tracing-disabled"
+    assert "sk-FAKE-GATEWAY" not in keys
+
+
+def test_an_agents_own_trace_export_key_still_wins(tmp_path: Path) -> None:
+    result, lines = _chat_style_run(
+        tmp_path,
+        "import agents\nagents.set_tracing_export_api_key('sk-agent-own')\n",
+        agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
+        exporter=True,
+        extra_env=_GATEWAY_KEY,
+    )
+    assert result.returncode == 0, result.stderr
+    keys = (tmp_path / "calls.txt.key").read_text().splitlines()
+    assert keys == ["alk-tracing-disabled", "sk-agent-own"]
 
 
 def test_openai_agents_trace_export_key_is_left_alone_without_the_mark(

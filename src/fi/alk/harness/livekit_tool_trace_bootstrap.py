@@ -240,11 +240,38 @@ def _install_worker_isolation() -> None:
 _TRACING_EXPORT_PLACEHOLDER = "alk-tracing-disabled"
 
 
+def _guard_tracing_export_key(module: Any) -> None:
+    """Turn the gateway key into the placeholder whenever the agent hands it to the exporter.
+
+    The SDK's set_default_openai_key and set_default_openai_client pass their key to the trace
+    exporter unless told not to, and an empty key falls back to OPENAI_API_KEY. Any other key
+    the agent sets is its own choice and still wins. Getting the exporter builds it (with its
+    HTTP client) during the agent's ``import agents``, where the SDK would build it on first use.
+    """
+    gateway_keys = {
+        value
+        for value in (os.environ.get("OPENAI_API_KEY"), os.environ.get("AGENTCC_API_KEY"))
+        if value
+    }
+    if not gateway_keys:
+        return
+    exporter = sys.modules[f"{module.__name__}.tracing.processors"].default_exporter()
+    set_api_key = exporter.set_api_key
+
+    def guarded_set_api_key(api_key: str) -> None:
+        if not api_key or api_key in gateway_keys:
+            api_key = _TRACING_EXPORT_PLACEHOLDER
+        set_api_key(api_key)
+
+    exporter.set_api_key = guarded_set_api_key
+
+
 def _set_openai_agents_chat_style(module: Any, reason: str = "") -> None:
     if not reason:
         # Each setting on its own: the trace key placeholder holds even if the chat style fails.
         try:
             module.set_tracing_export_api_key(_TRACING_EXPORT_PLACEHOLDER)
+            _guard_tracing_export_key(module)
         except Exception as exc:  # noqa: BLE001 - a setting we could not make must not stop the agent
             sys.stderr.write(
                 "alk: could not set the OpenAI Agents SDK trace export key: "
