@@ -219,7 +219,13 @@ _STOP_GRACE_SECONDS = 10.0
 _STOP_POLL_SECONDS = 0.05
 _REAP_SECONDS = 5.0
 _STOP_OUTPUT_SECONDS = 150
+# How long a server stop waits for its jobs' cleanup. A deployment gives the service a stop grace
+# above this (Compose's stop_grace_period, e.g. 180s) and an init, or docker kills the cleanup
+# after its default 10 s.
 _CANCEL_WAIT_SECONDS = 170
+# How long a /cancel request waits for the job's cleanup before it answers; the platform's client
+# reads /cancel with a 30 s timeout. The job's own task carries on with the cleanup.
+_CANCEL_RESPONSE_SECONDS = 20
 
 
 def _start_worker(
@@ -858,11 +864,28 @@ class LocalSandbox:
                 _write_json(state_path, state)
         except Exception:
             logger.exception("sandbox job %s: state not written on cancel", job.job_id)
-        if process is not None:
+
+        async def stop_worker() -> None:
+            if process is None:
+                return
             try:
                 await asyncio.to_thread(_stop_worker, process)
             except Exception:
                 logger.exception("sandbox job %s: worker not stopped", job.job_id)
+
+        if canceled:
+            await stop_worker()
+            await self._stop_environment(job, output, state_path, canceled)
+        else:
+            # A service stop: docker kills the server when the worker's grace would end, so the
+            # environment's cleanup starts beside the worker's, not after it.
+            await asyncio.gather(
+                stop_worker(), self._stop_environment(job, output, state_path, canceled)
+            )
+
+    async def _stop_environment(
+        self, job: HarnessJob, output: Path, state_path: Path, canceled: bool
+    ) -> None:
         try:
             await asyncio.wait_for(
                 asyncio.to_thread(stop, output), timeout=_STOP_OUTPUT_SECONDS
@@ -1581,7 +1604,11 @@ class LocalSandbox:
             # The job's own task stops its worker and environment (_cleanup_cancelled).
             # asyncio.wait neither raises the task's cancel into this request nor re-cancels it.
             task.cancel()
-            await asyncio.wait({task}, timeout=_CANCEL_WAIT_SECONDS)
+            await asyncio.wait({task}, timeout=_CANCEL_RESPONSE_SECONDS)
+            if not task.done():
+                # Answer now; the secrets go once the task's cleanup has ended.
+                task.add_done_callback(lambda _task: self._forget_job_secrets(job_id))
+                return self.get(job_id)
         else:
             # Not started, or already ended: nothing else will bring its environment down.
             output = self.artifacts_root / response.job.run_id
@@ -1593,10 +1620,13 @@ class LocalSandbox:
                     updated_at=_now(),
                 )
                 _write_json(state_path, state)
+        self._forget_job_secrets(job_id)
+        return self.get(job_id)
+
+    def _forget_job_secrets(self, job_id: str) -> None:
         self._ephemeral_secrets.pop(job_id, None)
         self._ephemeral_secret_file_names.pop(job_id, None)
         self._delete_job_secret_files(job_id)
-        return self.get(job_id)
 
     def adjust(
         self, job_id: str, request: SandboxAdjustmentRequest

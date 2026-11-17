@@ -2446,8 +2446,9 @@ def test_a_single_worker_stops_well_inside_its_grace(tmp_path, monkeypatch, fake
     assert took < 2, took
 
 
+@pytest.mark.parametrize("route", ["execute", "rerun"])
 def test_a_second_cancel_does_not_cut_the_cleanup_short(
-    tmp_path, monkeypatch, fake_worker, stops
+    tmp_path, monkeypatch, fake_worker, stops, route
 ):
     monkeypatch.setattr(sandbox_server, "_STOP_GRACE_SECONDS", 0.5)
     source = _local_source(tmp_path, monkeypatch)
@@ -2456,14 +2457,17 @@ def test_a_second_cancel_does_not_cut_the_cleanup_short(
     fake_worker.child(_leader(pid_file, ignores=True))
 
     async def scenario():
-        response = sandbox.submit(LocalSandboxRequest(source_path=str(source)))
-        task = sandbox._tasks[response.job.job_id]
+        if route == "rerun":
+            job = await _start_rerun(sandbox, source)
+        else:
+            job = sandbox.submit(LocalSandboxRequest(source_path=str(source))).job
+        task = sandbox._tasks[job.job_id]
         await _until(lambda: pid_file.exists() and pid_file.read_text())
         task.cancel()
         await asyncio.sleep(0.1)
         task.cancel()
         await asyncio.wait({task}, timeout=5)
-        return response.job.job_id
+        return job.job_id
 
     job_id = asyncio.run(scenario())
 
@@ -2756,8 +2760,131 @@ def test_the_server_stops_its_jobs_before_it_exits(tmp_path, monkeypatch, fake_w
         assert task.done()
         assert fake_worker.children[0].poll() is not None
         assert len(stops) == 1
+        return response.job.job_id
 
-    asyncio.run(scenario())
+    job_id = asyncio.run(scenario())
+
+    state = json.loads((sandbox.jobs_root / job_id / "state.json").read_text())
+    assert state["stage"] == "failed"
+    assert state["failure"]["code"] == "service_stopped"
+
+
+@pytest.mark.parametrize("how", ["canceled", "stopped"])
+def test_a_failed_environment_cleanup_is_kept_in_the_detail(
+    tmp_path, monkeypatch, fake_worker, how
+):
+    def fails(_output):
+        raise sandbox_server.ProvisionError("compose down failed")
+
+    monkeypatch.setattr(sandbox_server, "stop", fails)
+    source = _local_source(tmp_path, monkeypatch)
+    sandbox = LocalSandbox(tmp_path / "state")
+    fake_worker.sleeping()
+
+    async def scenario():
+        job_id = sandbox.submit(LocalSandboxRequest(source_path=str(source))).job.job_id
+        task = sandbox._tasks[job_id]
+        await _until(lambda: _running(fake_worker))
+        if how == "canceled":
+            await sandbox.cancel(job_id)
+        else:
+            task.cancel()
+        await asyncio.wait({task}, timeout=10)
+        return job_id
+
+    job_id = asyncio.run(scenario())
+
+    detail = sandbox.get(job_id).status.detail
+    assert detail == f"{how}; isolated environment cleanup failed: compose down failed"
+
+
+def test_an_environment_cleanup_that_hangs_still_ends_the_job(
+    tmp_path, monkeypatch, fake_worker
+):
+    import threading
+
+    monkeypatch.setattr(sandbox_server, "_STOP_OUTPUT_SECONDS", 0.3)
+    released = threading.Event()
+    monkeypatch.setattr(sandbox_server, "stop", lambda _output: released.wait(10))
+    source = _local_source(tmp_path, monkeypatch)
+    sandbox = LocalSandbox(tmp_path / "state")
+    fake_worker.sleeping()
+
+    async def scenario():
+        job_id = sandbox.submit(LocalSandboxRequest(source_path=str(source))).job.job_id
+        task = sandbox._tasks[job_id]
+        await _until(lambda: _running(fake_worker))
+        task.cancel()
+        await asyncio.wait({task}, timeout=5)
+        ended = task.done()
+        released.set()
+        return ended
+
+    assert asyncio.run(scenario())
+
+
+def test_cancel_answers_before_the_platforms_timeout_while_cleanup_runs_on(
+    tmp_path, monkeypatch, fake_worker
+):
+    import threading
+    import time
+
+    # The platform calls /cancel with a 30 s read timeout; a slow compose down mustn't hold it.
+    monkeypatch.setattr(sandbox_server, "_CANCEL_RESPONSE_SECONDS", 0.3)
+    released = threading.Event()
+    monkeypatch.setattr(sandbox_server, "stop", lambda _output: released.wait(10))
+    source = _local_source(tmp_path, monkeypatch)
+    sandbox = LocalSandbox(tmp_path / "state")
+    fake_worker.sleeping()
+
+    async def scenario():
+        job_id = sandbox.submit(LocalSandboxRequest(source_path=str(source))).job.job_id
+        task = sandbox._tasks[job_id]
+        await _until(lambda: _running(fake_worker))
+        started = time.monotonic()
+        response = await sandbox.cancel(job_id)
+        took = time.monotonic() - started
+        still_cleaning = not task.done()
+        released.set()
+        await asyncio.wait({task}, timeout=10)
+        return response, took, still_cleaning, job_id
+
+    response, took, still_cleaning, job_id = asyncio.run(scenario())
+
+    assert took < 2, took
+    assert still_cleaning
+    assert response.status.stage.value == "canceled"
+    # The job's own task clears its secrets once its cleanup ends.
+    assert job_id not in sandbox._ephemeral_secrets
+
+
+def test_a_service_stop_starts_the_environment_cleanup_inside_the_workers_grace(
+    tmp_path, monkeypatch, fake_worker
+):
+    import time
+
+    # docker stop kills the server 10 s after its SIGTERM, the length of the worker's grace, so
+    # compose down has to start without waiting for the worker.
+    monkeypatch.setattr(sandbox_server, "_STOP_GRACE_SECONDS", 3)
+    started_at = []
+    monkeypatch.setattr(sandbox_server, "stop", lambda _output: started_at.append(time.monotonic()))
+    source = _local_source(tmp_path, monkeypatch)
+    sandbox = LocalSandbox(tmp_path / "state")
+    pid_file = tmp_path / "grandchild.pid"
+    fake_worker.child(_leader(pid_file, ignores=True))
+
+    async def scenario():
+        job_id = sandbox.submit(LocalSandboxRequest(source_path=str(source))).job.job_id
+        task = sandbox._tasks[job_id]
+        await _until(lambda: pid_file.exists() and pid_file.read_text())
+        stopped = time.monotonic()
+        task.cancel()
+        await asyncio.wait({task}, timeout=10)
+        return stopped
+
+    stopped = asyncio.run(scenario())
+
+    assert started_at and started_at[0] - stopped < 1.5, started_at
 
 
 def test_an_idle_server_shuts_down_cleanly(tmp_path, caplog):
