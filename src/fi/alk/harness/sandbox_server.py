@@ -72,6 +72,7 @@ from .secrets import (
     TARGET_PROVIDER_ALIASES_ENV,
     agent_value_name_reserved,
     client_name_reserved,
+    tool_credential_name,
     controller_name_reserved,
     resolve_worker_secrets,
     worker_environment,
@@ -1658,11 +1659,12 @@ def _validate_controller_names(
         if _target_alias(reference):
             # The customer agent's own credential (ANTHROPIC_API_KEY, GOOGLE_API_KEY): it reaches
             # only the agent's runtime namespace, so it takes the rule environment values take.
-            if (
-                _runner_owned(alias)
-                or client_name_reserved(alias)
+            # A client-steering name is refused here, but not a customer's credential under a
+            # tool's prefix (GIT_TOKEN), which the value channels and the env file also take.
+            if _runner_owned(alias) or (
+                client_name_reserved(alias) and not tool_credential_name(alias)
             ):
-                raise ValueError(f"secret_alias_reserved: {alias}")
+                raise ValueError(f"secret_alias_reserved: {alias}{_RESERVED_HINT}")
             continue
         # A job-set base URL in the controller would steer the simulator's OpenAI client. Refused
         # here, for controller aliases only: controller_name_reserved also guards key reads.

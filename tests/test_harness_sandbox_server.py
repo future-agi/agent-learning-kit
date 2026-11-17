@@ -3276,3 +3276,16 @@ def test_the_agent_runtime_is_started_without_publishing_its_service_ports(
     command, _environment = _agent_runtime_command({}, tmp_path, monkeypatch, label="ports")
     assert "--no-deps" in command
     assert "-P" not in command and "--service-ports" not in command
+
+
+@pytest.mark.parametrize("name", ["GIT_TOKEN", "DOCKER_PASSWORD", "SSH_PRIVATE_KEY"])
+def test_a_tool_credential_is_accepted_as_a_target_ref(name):
+    # How the platform's create sends every stored value; the same rule as environment values.
+    LocalSandboxRequest(source_path="/tmp/agent", secret_refs={name: _ref("platform-vault", "k")})
+
+
+def test_a_refused_target_alias_says_why():
+    with pytest.raises(ValidationError, match="secret_alias_reserved: DOCKER_CONFIG.*another name"):
+        LocalSandboxRequest(
+            source_path="/tmp/agent", secret_refs={"DOCKER_CONFIG": _ref("platform-vault", "k")}
+        )

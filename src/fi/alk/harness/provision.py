@@ -47,6 +47,7 @@ from .secrets import (
     CONTROLLER_CONNECTION_NAMES,
     RUNTIME_CONFIGURATION_NAMES_ENV,
     client_name_reserved,
+    tool_credential_name,
     controller_name_reserved,
     target_provider_aliases,
     runtime_configuration_value,
@@ -317,7 +318,7 @@ def _runtime_values(
         value = runtime_configuration_value(name).strip()
         if not value:
             continue
-        if client_name_reserved(name):
+        if client_name_reserved(name) and not tool_credential_name(name):
             if skipped is not None:
                 skipped.add(name)
             continue

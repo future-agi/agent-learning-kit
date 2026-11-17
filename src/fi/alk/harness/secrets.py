@@ -233,11 +233,18 @@ def agent_value_name_reserved(name: str) -> bool:
     key = str(name).strip().upper()
     if key.endswith("_PROXY") or key in _AGENT_CLIENT_SETTINGS:
         return False
-    # A customer's own credential under a tool's prefix (GIT_TOKEN, DOCKER_PASSWORD): git, ssh
-    # and docker don't read these names.
-    if key.startswith(("GIT_", "SSH_", "DOCKER_")) and key.endswith(_CREDENTIAL_SUFFIXES):
+    if tool_credential_name(key):
         return False
     return client_name_reserved(name)
+
+
+def tool_credential_name(name: str) -> bool:
+    """A customer's own credential under a tool's prefix (GIT_TOKEN, DOCKER_PASSWORD,
+    SSH_PRIVATE_KEY): git, ssh and docker don't read these names, so on every channel a job's
+    values take (environment values, connector_config, target refs, the Compose env file) they
+    are the agent's settings."""
+    key = str(name).strip().upper()
+    return key.startswith(("GIT_", "SSH_", "DOCKER_")) and key.endswith(_CREDENTIAL_SUFFIXES)
 
 
 # Carries the aliases the caller sent as target_provider refs to the worker, beside
@@ -412,6 +419,7 @@ __all__ = [
     "WORKER_ENVIRONMENT_NAMES",
     "client_name_reserved",
     "agent_value_name_reserved",
+    "tool_credential_name",
     "controller_name_reserved",
     "controller_owned_name",
     "resolve_worker_secrets",

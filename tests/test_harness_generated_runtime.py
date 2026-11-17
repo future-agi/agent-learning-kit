@@ -1735,6 +1735,25 @@ def test_a_jobs_proxy_and_export_settings_reach_only_the_env_file(
     assert call.job.values["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://canary.invalid"
 
 
+def test_a_customers_tool_credential_reaches_the_env_file(tmp_path: Path, monkeypatch) -> None:
+    # GIT_TOKEN, DOCKER_PASSWORD and SSH_PRIVATE_KEY are the agent's: git, ssh and docker don't
+    # read them, so they go to the job's env file like any other agent setting.
+    names = ["GIT_TOKEN", "DOCKER_PASSWORD", "SSH_PRIVATE_KEY", "DOCKER_CONFIG"]
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(names))
+    for name in names:
+        monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", f"{name.lower()}-canary")
+    calls = _record_compose(monkeypatch)
+    environment = _compose_environment(tmp_path, runtime_configuration_names=names)
+
+    provisioning._run(environment, "up")
+
+    job = calls[0].job
+    for name in ("GIT_TOKEN", "DOCKER_PASSWORD", "SSH_PRIVATE_KEY"):
+        assert job.values[name] == f"{name.lower()}-canary", name
+    # A name that steers docker stays out.
+    assert "DOCKER_CONFIG" not in job.values
+
+
 _ROUND_TRIP_VALUES = {
     "PLAIN": "value",
     "DOLLAR": "cost $5 and $HOME",
