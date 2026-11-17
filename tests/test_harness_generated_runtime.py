@@ -430,6 +430,45 @@ def test_provision_builds_generated_runtime_without_touching_source(
     assert runtime["build"]["context"] == str(session / "generated-runtime-context")
 
 
+def test_provision_refuses_forbidden_compose_before_build_or_up(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "agent"
+    session = tmp_path / "session"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    source.joinpath("agent.py").write_text("print('ready')\n")
+    calls: list[tuple[str, ...]] = []
+
+    def run(_environment, *arguments, **_kwargs):
+        calls.append(arguments)
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(
+                {
+                    "name": "p",
+                    "services": {
+                        "agent-runtime": {
+                            "profiles": ["harness-runtime"],
+                            "network_mode": "container:x",
+                            "build": {
+                                "context": str(session / "generated-runtime-context"),
+                                "dockerfile": GENERATED_DOCKERFILE,
+                            },
+                        }
+                    },
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+
+    with pytest.raises(provisioning.ProvisionError, match="network_mode outside the project"):
+        provisioning.provision(source, session, _contract())
+
+    assert any("config" in arguments for arguments in calls)
+    assert not any("build" in arguments or "up" in arguments for arguments in calls)
+
+
 def test_contract_command_changes_runtime_reuse_fingerprint(
     tmp_path: Path, monkeypatch
 ) -> None:
