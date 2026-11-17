@@ -268,8 +268,12 @@ def _checked_contract(
 
 def _contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """The payload as the contract is read from it, shared by the quick check and the full one so
-    neither refuses what the other accepts."""
-    return _without_nulls(unwrapped(payload))
+    neither refuses what the other accepts. The harness records the folder; one the model wrote
+    itself is dropped, never refused."""
+    payload = _without_nulls(unwrapped(payload))
+    if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
+        payload["runtime"].pop("source_subfolder", None)
+    return payload
 
 
 def _quick_schema(payload: dict[str, Any], arrived: list[str]) -> dict[str, Any] | None:
@@ -911,6 +915,21 @@ def contract_tools(
                         # That every tool has none is the real defect, and validate_contract
                         # is where it is caught, with an explanation.
                     },
+                },
+                "workers": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "tools": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["id"],
+                    },
+                    "description": "Agents this one hands work to, if any: an id no other worker has, the name the app "
+                    "gives the agent (its spans carry it), and the names of the tools above that it "
+                    "holds. Leave out for an agent that hands no work on.",
                 },
                 "data_schema": {
                     "type": "object",

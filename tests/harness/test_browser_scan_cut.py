@@ -702,7 +702,9 @@ def test_a_cut_browser_claim_drops_nothing_found(tmp_path, then, outcome):
         pytest.param(
             {f"m{at}.py": b"# coding: utf-7\nimport playwright\n" for at in range(2)},
             {(python_source, "LARGEST_ESCAPED_TOTAL"): 0},
-            "agent type scan cut by decode_total 1",
+            # Said once by the decode budget itself, in counts; the scan's own line leaves it out.
+            "browser scan: decoding Python as Python does stopped at its total of 0 bytes, after 0 "
+            "decodes; a name the rest spell in their codec can be missed",
             id="decode_total",
         ),
         pytest.param({"agent.py": "import playwright\n"}, {}, None, id="uncut"),
