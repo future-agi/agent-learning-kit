@@ -7056,3 +7056,36 @@ def test_a_stage_opened_again_leaves_no_child_behind(tmp_path, plain_repo, monke
 
     assert not started & {child.pid for child in multiprocessing.active_children()}
     assert _submit_tool(_server_of(again))
+
+
+@pytest.mark.parametrize("where", ["scan", "check"])
+def test_a_checker_that_keeps_losing_its_child_ends_the_stage_with_a_failure(
+    tmp_path, plain_repo, monkeypatch, where
+):
+    from fi.alk.harness.save_checker import ChildKeepsEnding
+
+    destination = tmp_path / "out"
+    tool = _submit_tool(
+        contract_tools(destination, scan_root=plain_repo, save_checks="thread")
+    )
+    checker = _checker_of(tool.handler)
+
+    async def worn(*args, **kwargs):
+        raise ChildKeepsEnding(3)
+
+    monkeypatch.setattr(checker, where, worn)
+
+    async def calls():
+        return [await tool.handler(_reading("chat")), await tool.handler(_reading("chat"))]
+
+    first, second = asyncio.run(calls())
+
+    # The stage ends with a failure that names the cause, as the agent-type refusal does.
+    for answer in (first, second):
+        assert not answer.get("is_error")
+        assert _STOP in _text(answer)
+    failure = _failure(destination)
+    assert failure["code"] == "save_checks_child_keeps_ending"
+    assert failure["retryable"] is False
+    assert failure["details"] == {"deaths": 3}
+    assert not (destination / "contract.json").exists()

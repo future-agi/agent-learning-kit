@@ -105,7 +105,7 @@ class ChildKeepsEnding(SaveChecksFailed):
         Exception.__init__(
             self,
             f"The save's checks ended the checker's child {deaths} times in a row. "
-            "Nothing was saved, and this session's saves will not be checked here.",
+            "Nothing was saved, and this reading can't save a contract.",
         )
         self.error, self.message = "ChildKeepsEnding", f"the child ended {deaths} times in a row"
         self.deaths = deaths

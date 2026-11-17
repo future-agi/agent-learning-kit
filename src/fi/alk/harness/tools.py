@@ -54,6 +54,7 @@ from .contract import (
     CONTRACT_FILE,
 )
 from .failure_file import FAILURE_FILE, write_failure_file
+from .job import FailureDomain, HarnessFailure, HarnessStage
 from .instrumentation_evidence import detect_instrumentation
 from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
@@ -695,7 +696,7 @@ def contract_tools(
     """
     # Here rather than at the top: the checker's child imports this module.
     from . import save_checker
-    from .save_checker import SAVE_DEADLINE, NotInTime, Saved
+    from .save_checker import SAVE_DEADLINE, ChildKeepsEnding, NotInTime, Saved
 
     events_schema = CompletedToolEvents.model_json_schema()
     events_schema["properties"]["failure_events"]["items"] = (
@@ -1574,6 +1575,24 @@ def contract_tools(
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
         nonlocal refused, found, cut, sent, saved
+
+        def _end_the_stage(worn: ChildKeepsEnding) -> dict[str, Any]:
+            nonlocal refused
+            # Set first, as for the agent-type refusal: no resubmission gets through.
+            refused = True
+            write_failure_file(
+                HarnessFailure(
+                    domain=FailureDomain.AGENT,
+                    stage=HarnessStage.UNDERSTANDING_AGENT,
+                    code="save_checks_child_keeps_ending",
+                    message=str(worn),
+                    retryable=False,
+                    details={"deaths": worn.deaths},
+                ),
+                destination,
+            )
+            return _ok(_stop_message(destination))
+
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
         looked_before = second_look.given
         sent += 1
@@ -1584,7 +1603,10 @@ def contract_tools(
         # checks less time rather than starting the clock again.
         deadline = asyncio.get_running_loop().time() + SAVE_DEADLINE
         if found is None:
-            answer = await checker.scan(deadline=deadline)
+            try:
+                answer = await checker.scan(deadline=deadline)
+            except ChildKeepsEnding as worn:
+                return _end_the_stage(worn)
             if isinstance(answer, NotInTime):
                 return answer.response
             found, cut = answer.found, answer.cut
@@ -1867,13 +1889,17 @@ def contract_tools(
         # The checks read the customer's files, which can take seconds on a crafted one, so they
         # run where the deadline can stop them. The write stays here, after a refusal that came
         # meanwhile.
-        checked = await checker.check(
-            payload,
-            require_setup_contract=require_setup_contract,
-            asked=asked_before,
-            held=held,
-            deadline=deadline,
-        )
+        try:
+            checked = await checker.check(
+                payload,
+                require_setup_contract=require_setup_contract,
+                asked=asked_before,
+                held=held,
+                deadline=deadline,
+            )
+        except ChildKeepsEnding as worn:
+            nudged.update(asked_before)
+            return _end_the_stage(worn)
         # Whatever this call asked is asked for the calls sent after it.
         nudged.update(asked_before)
         if not isinstance(checked, Saved):
