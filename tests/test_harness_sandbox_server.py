@@ -2718,7 +2718,20 @@ def _compose_session(tmp_path, monkeypatch, services_environment, label):
     docker_calls = []
 
     def fake_run(command, **kwargs):
-        docker_calls.append((list(command), dict(kwargs["env"])))
+        # What Compose sees: the job env file (read now, it is deleted after the call) under the
+        # process environment. Job values reach Compose only through that file.
+        seen = dict(kwargs["env"])
+        if "--env-file" in command:
+            job_file = [c for i, c in enumerate(command) if i and command[i - 1] == "--env-file"][-1]
+            with open(job_file, encoding="utf-8") as handle:
+                lines = handle.read().split("\n")
+            for line in filter(None, lines):
+                key, _, quoted = line.partition("=")
+                seen.setdefault(
+                    key,
+                    re.sub(r"\\(.)", lambda m: "\n" if m.group(1) == "n" else m.group(1), quoted[1:-1]),
+                )
+        docker_calls.append((list(command), seen))
         rendered = {
             "services": {
                 "agent-runtime": {"image": "example", "environment": services_environment}

@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
+import shutil
 import socket
 import subprocess
+import tempfile
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -41,10 +44,13 @@ from .livekit_source import infer_livekit_agent_name_from_source
 from .service_catalog import address, profile_for
 from .secrets import (
     CONTROLLER_CONNECTION_NAMES,
+    client_name_reserved,
     controller_name_reserved,
     target_provider_aliases,
     runtime_configuration_value,
 )
+
+logger = logging.getLogger(__name__)
 
 MANIFEST = "environment.json"
 COMPOSE_FILES = (
@@ -239,43 +245,158 @@ def _declared_port_targets(path: Path) -> dict[int, int]:
     return targets
 
 
+# Compose interpolates ``${NAME}`` in the job's own file, and runs git, credential helpers and
+# buildx as subprocesses of its own. So the job's values reach it through an env file only, never
+# its process environment, and that environment is the branch base below and nothing else.
+#
+# Under the sandbox server (``ALK_RUNTIME_CONFIGURATION_NAMES`` is set in the worker) the base is
+# the client settings ``secrets.worker_environment`` passes. On a bare CLI run it is the
+# developer's own shell minus the names ALK and the platform own.
+_CLIENT_ENVIRONMENT_NAMES = (
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "DOCKER_HOST",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+)
+_LOCAL_DENIED_EXACT = frozenset({"FI_API_KEY", "FI_SECRET_KEY"})
+_LOCAL_DENIED_PREFIXES = ("AGENTCC_", "ALK_", "HARNESS_")
+_ENV_FILE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def _local_denied(name: str) -> bool:
+    """True for a name a bare-CLI run must not hand to a job's Compose file from the shell."""
+    return name in _LOCAL_DENIED_EXACT or name.startswith(_LOCAL_DENIED_PREFIXES)
+
+
+def _under_sandbox() -> bool:
+    # ``in``, never truthiness: the sandbox server sets the manifest to "" for a job with no
+    # environment values, and that worker must still take the strict branch.
+    return "ALK_RUNTIME_CONFIGURATION_NAMES" in os.environ
+
+
+def _compose_base() -> dict[str, str]:
+    if _under_sandbox():
+        return {
+            name: os.environ[name]
+            for name in _CLIENT_ENVIRONMENT_NAMES
+            if name in os.environ
+        }
+    return {k: v for k, v in os.environ.items() if not _local_denied(k)}
+
+
+def _log_skipped_reserved(names: set[str]) -> None:
+    if names:
+        # Names only, never values.
+        logger.warning(
+            "compose: skipped client-reserved names: %s", ", ".join(sorted(names))
+        )
+
+
+def _runtime_values(
+    environment: ProvisionedEnvironment, skipped: set[str] | None = None
+) -> dict[str, str]:
+    """The job's own values for the names it declared, minus names it may not set."""
+    values: dict[str, str] = {}
+    under_sandbox = _under_sandbox()
+    for name in environment.runtime_configuration_names:
+        value = runtime_configuration_value(name).strip()
+        if not value:
+            continue
+        if client_name_reserved(name):
+            if skipped is not None:
+                skipped.add(name)
+            continue
+        if not under_sandbox and _local_denied(name):
+            continue
+        values[name] = value
+    return values
+
+
+def _compose_values(
+    environment: ProvisionedEnvironment,
+    process_overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Everything Compose may interpolate, in order, later winning.
+
+    The job's runtime values come first, so a job's own value never overrides a name ALK owns
+    (the managed ``HARNESS_*_PORT`` names are what ALK's generated files interpolate). Then the
+    ports Docker allocated. Then the per-call overrides: explicit ALK endpoint and
+    credential-path substitutions are the final authority, and applying a job's value after them
+    would silently restore development hostnames at the point Compose starts the runtime.
+    """
+    skipped: set[str] = set()
+    values = _runtime_values(environment, skipped)
+    for layer in (environment.port_variables, process_overrides or {}):
+        for name, value in layer.items():
+            if client_name_reserved(name):
+                skipped.add(name)
+            else:
+                values[name] = value
+    _log_skipped_reserved(skipped)
+    return values
+
+
+def _compose_environment(values: dict[str, str]) -> dict[str, str]:
+    """Compose's own process environment: the branch base, minus anything the job file holds.
+
+    On a bare CLI run the shell can share a name with a job value; the process environment would
+    beat the file, so those names are taken out of it.
+    """
+    base = _compose_base()
+    if _under_sandbox():
+        return base
+    return {k: v for k, v in base.items() if k not in values}
+
+
+def _write_env_file(fd: int, values: dict[str, str]) -> None:
+    """Write ``NAME="value"`` lines through ``fd`` (from ``mkstemp``: 0600, created exclusively)."""
+    with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape") as handle:
+        for name, value in values.items():
+            if not _ENV_FILE_NAME.match(name):
+                logger.warning("compose: skipped invalid env file name: %r", name)
+                continue
+            escaped = (
+                value.replace("\\", "\\\\")
+                .replace('"', '\\"')
+                .replace("$", "\\$")
+                .replace("\n", "\\n")
+            )
+            handle.write(f'{name}="{escaped}"\n')
+
+
 def _run(
     environment: ProvisionedEnvironment,
     *arguments: str,
     check: bool = True,
     timeout: int = 900,
     process_overrides: dict[str, str] | None = None,
+    teardown: bool = False,
 ) -> str:
-    files = ["--file", environment.compose_file]
-    if environment.compose_override_file:
-        files.extend(("--file", environment.compose_override_file))
-    command = [
-        "docker",
-        "compose",
-        *files,
-        "--project-name",
-        environment.project,
-        *arguments,
-    ]
-    # Runtime credentials are inherited by Compose and selected with ``--env NAME``. They must
-    # never be serialized into argv, where error messages and host process listings expose them.
-    process_env = {
-        **os.environ,
-        **environment.port_variables,
-    }
-    # Uploaded values are namespaced inside the harness worker. Expose them under their submitted
-    # names only to Compose, where interpolation and explicitly inherited service variables need
-    # them. This never falls back to runner/controller credentials.
-    for name in environment.runtime_configuration_names:
-        value = runtime_configuration_value(name).strip()
-        if value:
-            process_env[name] = value
-    # Explicit ALK endpoint/credential-path substitutions are the final authority. Applying
-    # uploaded values after these substitutions silently restores development hostnames such as
-    # ``harness`` or ``localhost`` at the exact point Compose starts the submitted runtime.
-    process_env.update(process_overrides or {})
+    """Run one ``docker compose`` call.
 
-    def execute() -> subprocess.CompletedProcess[str]:
+    Runtime credentials are inherited by Compose from the job env file and selected with
+    ``--env NAME``. They must never be serialized into argv, where error messages and host
+    process listings expose them. ``teardown`` tears the project down by name with no file at all:
+    nothing is parsed, so nothing is interpolated and no job value is needed.
+    """
+    if teardown:
+        values: dict[str, str] = {}
+        process_env = {
+            k: v for k, v in _compose_base().items() if not k.startswith("COMPOSE_")
+        }
+    else:
+        values = _compose_values(environment, process_overrides)
+        process_env = _compose_environment(values)
+    # The file lives in the controller's own private temp directory: never under the source, and
+    # never in the world or artifact directory (a cancel SIGTERMs the worker and skips ``finally``,
+    # and the world directory is an artifact that is copied for review).
+    job_directory: str | None = None
+
+    def execute(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             command,
             cwd=environment.source,
@@ -287,29 +408,64 @@ def _run(
         )
 
     try:
-        completed = execute()
-    except FileNotFoundError as exc:
-        raise ProvisionError("Docker is not installed or is not on PATH") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise ProvisionError(f"environment command timed out after {timeout}s") from exc
-    output = ((completed.stdout or "") + (completed.stderr or "")).strip()
-    if (
-        completed.returncode
-        and "all predefined address pools have been fully subnetted" in output
-    ):
-        # Interrupted local runs can leave empty Compose networks behind even after their
-        # containers and volumes are gone. After enough runs Docker cannot allocate another
-        # subnet and every otherwise valid environment becomes unrunnable. Reclaim only empty,
-        # ALK-owned networks, never customer/platform networks or a network with a container.
-        if _remove_unused_harness_networks(exclude_project=environment.project):
-            completed = execute()
-            output = ((completed.stdout or "") + (completed.stderr or "")).strip()
-    if check and completed.returncode:
-        shown = _command_failure_output(output)
-        raise ProvisionError(
-            f"{' '.join(command)} failed ({completed.returncode}): {shown}"
-        )
-    return output
+        if teardown:
+            command = [
+                "docker",
+                "compose",
+                "--project-name",
+                environment.project,
+                *arguments,
+            ]
+        else:
+            job_directory = tempfile.mkdtemp(prefix="alk-compose-env-")
+            descriptor, job_file = tempfile.mkstemp(dir=job_directory)
+            _write_env_file(descriptor, values)
+            files = ["--file", environment.compose_file]
+            if environment.compose_override_file:
+                files.extend(("--file", environment.compose_override_file))
+            # Giving Compose an explicit --env-file stops it reading the repository's ``.env`` by
+            # itself, so that file goes first (as today, now explicit) and the job file, which
+            # wins, after it. A ``.env`` directory would break an explicit --env-file.
+            dotenv = (Path(environment.source) / environment.compose_file).parent / ".env"
+            env_files = [str(dotenv)] if dotenv.is_file() else []
+            env_files.append(job_file)
+            command = [
+                "docker",
+                "compose",
+                *files,
+                "--project-name",
+                environment.project,
+                *(argument for path in env_files for argument in ("--env-file", path)),
+                *arguments,
+            ]
+        try:
+            completed = execute(command)
+        except FileNotFoundError as exc:
+            raise ProvisionError("Docker is not installed or is not on PATH") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ProvisionError(f"environment command timed out after {timeout}s") from exc
+        output = ((completed.stdout or "") + (completed.stderr or "")).strip()
+        if (
+            completed.returncode
+            and "all predefined address pools have been fully subnetted" in output
+        ):
+            # Interrupted local runs can leave empty Compose networks behind even after their
+            # containers and volumes are gone. After enough runs Docker cannot allocate another
+            # subnet and every otherwise valid environment becomes unrunnable. Reclaim only
+            # empty, ALK-owned networks, never customer/platform networks or a network with a
+            # container.
+            if _remove_unused_harness_networks(exclude_project=environment.project):
+                completed = execute(command)
+                output = ((completed.stdout or "") + (completed.stderr or "")).strip()
+        if check and completed.returncode:
+            shown = _command_failure_output(output)
+            raise ProvisionError(
+                f"{' '.join(command)} failed ({completed.returncode}): {shown}"
+            )
+        return output
+    finally:
+        if job_directory is not None:
+            shutil.rmtree(job_directory, ignore_errors=True)
 
 
 def _start_managed_services(
@@ -2412,23 +2568,30 @@ def start_runtime(
         "HARNESS_CALLER_IDENTITY_PREFIX": "fagi-simulator",
         **(overrides or {}),
     }
-    for name in environment.runtime_configuration_names:
-        value = runtime_configuration_value(name).strip()
-        if value:
-            if name == "LIVEKIT_URL":
-                parsed = urlsplit(value)
-                if (parsed.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}:
-                    port = f":{parsed.port}" if parsed.port else ""
-                    value = urlunsplit(
-                        (
-                            parsed.scheme,
-                            f"host.docker.internal{port}",
-                            parsed.path,
-                            parsed.query,
-                            parsed.fragment,
-                        )
+    # Values reach Compose for ``--env NAME`` through the job env file (``_compose_values`` adds
+    # them), so only a value this call changes is passed again as an override.
+    runtime_only: dict[str, str] = {}
+    skipped_reserved: set[str] = set()
+    for name, value in _runtime_values(environment, skipped_reserved).items():
+        rewritten = False
+        if name == "LIVEKIT_URL":
+            parsed = urlsplit(value)
+            if (parsed.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}:
+                port = f":{parsed.port}" if parsed.port else ""
+                value = urlunsplit(
+                    (
+                        parsed.scheme,
+                        f"host.docker.internal{port}",
+                        parsed.path,
+                        parsed.query,
+                        parsed.fragment,
                     )
-            injected.setdefault(name, value)
+                )
+                rewritten = True
+        if name not in injected:
+            injected[name] = value
+            if not rewritten:
+                runtime_only[name] = value
     # LiveKit's production worker defaults to INFO, while its framework-owned tool lifecycle
     # events are DEBUG.  Those events are the only generic evidence available when a submitted
     # agent executes tools entirely in-process and does not implement the optional trace seam.
@@ -2546,11 +2709,21 @@ def start_runtime(
         "LIVEKIT_LOG_LEVEL",
         "TOOLS_API_URL",
     }
+    # No ``--env`` may name a client-steering name, whatever put it in ``injected``.
+    for name in [name for name in injected if client_name_reserved(name)]:
+        del injected[name]
+        skipped_reserved.add(name)
+    _log_skipped_reserved(skipped_reserved)
     for name in sorted(injected):
         value = f"{name}={injected[name]}" if name in explicit_non_secret else name
         arguments.extend(("--env", value))
     arguments.append(service)
-    _run(environment, *arguments, timeout=900, process_overrides=injected)
+    process_overrides = {
+        name: value
+        for name, value in injected.items()
+        if runtime_only.get(name) != value
+    }
+    _run(environment, *arguments, timeout=900, process_overrides=process_overrides)
     deadline = time.monotonic() + 60
     # LiveKit workers commonly stay alive while warming VAD/STT/TTS processes and only register
     # for dispatch afterwards.  Starting a room after five seconds races that registration: the
@@ -2944,7 +3117,18 @@ def stop(destination: str | Path) -> bool:
         stop_runtime(destination)
         environment = ProvisionedEnvironment.load(destination) or environment
     _detach_runner_network(environment)
-    _run(environment, "down", "--volumes", "--remove-orphans", check=False, timeout=120)
+    # Tear down by project name with no file: Compose parses and interpolates nothing, so this
+    # call (the only one the sandbox server makes in its own process, which holds controller
+    # credentials) needs no job value and no ``--file``.
+    _run(
+        environment,
+        "down",
+        "--volumes",
+        "--remove-orphans",
+        check=False,
+        timeout=120,
+        teardown=True,
+    )
     _remove_empty_project_default_network(environment.project)
     environment.running = False
     environment.save(destination)

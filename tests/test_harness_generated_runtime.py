@@ -1,6 +1,10 @@
 import json
+import logging
 import os
+import stat
+import subprocess
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -16,6 +20,7 @@ from fi.alk.harness.generated_runtime import (
 from fi.alk.harness import provision as provisioning
 from fi.alk.harness.contract import Dependency
 from fi.alk.harness.provision import reset, start_runtime, stop, stop_runtime
+from fi.alk.harness.secrets import client_name_reserved
 
 
 def _contract(**runtime) -> AgentContract:
@@ -931,7 +936,9 @@ def test_managed_runtime_uses_generated_private_endpoint_over_submitted_default(
     assert "TOOLS_API_URL=http://tools-api:8080" in arguments
 
 
+
 def test_compose_process_overrides_uploaded_runtime_endpoint(tmp_path: Path, monkeypatch) -> None:
+    """Rewritten for the env file: Compose sees the override, and it is in the file."""
     environment = provisioning.ProvisionedEnvironment(
         source=str(tmp_path),
         compose_file=str(tmp_path / "compose.json"),
@@ -940,13 +947,7 @@ def test_compose_process_overrides_uploaded_runtime_endpoint(tmp_path: Path, mon
     )
     monkeypatch.setenv("ALK_RUNTIME_CONFIGURATION_NAMES", "TOOLS_API_URL")
     monkeypatch.setenv("ALK_RUNTIME_VALUE_TOOLS_API_URL", "http://harness:8787")
-    seen: dict[str, str] = {}
-
-    def run(*_args, **kwargs):
-        seen.update(kwargs["env"])
-        return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
-    monkeypatch.setattr(provisioning.subprocess, "run", run)
+    calls = _record_compose(monkeypatch)
 
     provisioning._run(
         environment,
@@ -954,7 +955,9 @@ def test_compose_process_overrides_uploaded_runtime_endpoint(tmp_path: Path, mon
         process_overrides={"TOOLS_API_URL": "http://tools-api:8080"},
     )
 
-    assert seen["TOOLS_API_URL"] == "http://tools-api:8080"
+    assert _seen(calls[0])["TOOLS_API_URL"] == "http://tools-api:8080"
+    assert calls[0].job.values["TOOLS_API_URL"] == "http://tools-api:8080"
+    assert "TOOLS_API_URL" not in calls[0].env
 
 
 def test_generated_runtime_bundle_is_portable_and_contains_no_host_context(
@@ -1168,3 +1171,753 @@ def test_workspace_self_member_preserves_children_and_unique_extra_owner(
     selection = select_python_extras(tmp_path, ["chat"], required_owner=tmp_path)
     assert selection.names == ("chat",)
     assert not selection.all_packages
+
+
+# ---------------------------------------------------------------------------------------------
+# TH-9550 A-M3: Compose sees only what the job may use.
+#
+# "Present" below means present in what Compose sees: ``{**job_file, **process_env}``, with the
+# job env file parsed from argv inside the patched ``subprocess.run`` (the file is deleted
+# after the call).
+# ---------------------------------------------------------------------------------------------
+
+_CLIENT_SETTINGS = {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/home/worker",
+    "TMPDIR": "/tmp/worker",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "DOCKER_HOST": "tcp://base-docker:2375",
+    "SSL_CERT_FILE": "/etc/ssl/base.pem",
+    "SSL_CERT_DIR": "/etc/ssl/base-certs",
+}
+_CONTROLLER_CANARIES = {
+    "HARNESS_PLATFORM_API_KEY": "canary-platform",
+    "AGENTCC_API_KEY": "canary-agentcc",
+    "FI_API_KEY": "canary-fi",
+    "CARTESIA_API_KEY": "canary-cartesia",
+    "DOCKER_CONFIG": "/canary/docker-config",
+    "SOME_SHELL_NAME": "canary-shell",
+}
+_COMPOSE_LOGGER = "fi.alk.harness.provision"
+
+
+def _unescape_env_value(text: str) -> str:
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\":
+            following = text[index + 1]
+            out.append("\n" if following == "n" else following)
+            index += 2
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)
+
+
+def _parse_env_file(text: str) -> dict[str, str]:
+    """A small reader of the escapes the job file uses: ``\\\\``, ``\\"``, ``\\$`` and ``\\n``."""
+    values: dict[str, str] = {}
+    for line in text.split("\n"):
+        if not line:
+            continue
+        name, separator, rest = line.partition("=")
+        assert separator and rest.startswith('"') and rest.endswith('"'), line
+        values[name] = _unescape_env_value(rest[1:-1])
+    return values
+
+
+def _record_compose(monkeypatch, *, raises=None, returncode=0, output=""):
+    """Patch ``subprocess.run``; for each call keep argv, env and the parsed job env file."""
+    calls: list[types.SimpleNamespace] = []
+
+    def run(command, **kwargs):
+        env_files = [
+            command[index + 1]
+            for index, argument in enumerate(command)
+            if argument == "--env-file"
+        ]
+        job = None
+        if env_files:
+            path = Path(env_files[-1])
+            job = types.SimpleNamespace(
+                path=path,
+                mode=stat.S_IMODE(path.stat().st_mode),
+                directory_mode=stat.S_IMODE(path.parent.stat().st_mode),
+                values=_parse_env_file(path.read_text(encoding="utf-8")),
+            )
+        call = types.SimpleNamespace(
+            argv=list(command),
+            env=dict(kwargs["env"]),
+            env_files=env_files,
+            job=job,
+            cwd=kwargs.get("cwd"),
+        )
+        calls.append(call)
+        if raises is not None:
+            raise raises
+        return types.SimpleNamespace(returncode=returncode, stdout=output, stderr="")
+
+    monkeypatch.setattr(provisioning.subprocess, "run", run)
+    return calls
+
+
+def _seen(call) -> dict[str, str]:
+    """What Compose sees: the job env file under the process environment."""
+    return {**(call.job.values if call.job else {}), **call.env}
+
+
+def _shell(monkeypatch, shell: dict[str, str], manifest: str | None) -> None:
+    """Make ``os.environ`` exactly ``shell`` (plus the manifest when given)."""
+    for name in list(os.environ):
+        if name != "PYTEST_CURRENT_TEST":
+            monkeypatch.delenv(name, raising=False)
+    for name, value in shell.items():
+        monkeypatch.setenv(name, value)
+    if manifest is not None:
+        monkeypatch.setenv("ALK_RUNTIME_CONFIGURATION_NAMES", manifest)
+
+
+def _compose_environment(tmp_path: Path, **fields) -> provisioning.ProvisionedEnvironment:
+    source = tmp_path / "source"
+    source.mkdir(exist_ok=True)
+    values = {
+        "source": str(source),
+        "compose_file": str(source / "compose.yaml"),
+        "project": "compose-env",
+    }
+    values.update(fields)
+    return provisioning.ProvisionedEnvironment(**values)
+
+
+@pytest.mark.parametrize("manifest", ["", "AGENT_SETTING"])
+def test_manifest_compose_environment_is_the_client_settings_only(
+    tmp_path: Path, monkeypatch, manifest: str
+) -> None:
+    shell = {**_CLIENT_SETTINGS, **_CONTROLLER_CANARIES, "LANG": "C.UTF-8"}
+    _shell(monkeypatch, shell, manifest)
+    monkeypatch.delenv("LC_ALL")
+    calls = _record_compose(monkeypatch)
+
+    provisioning._run(_compose_environment(tmp_path), "config")
+
+    seen = _seen(calls[0])
+    for name in _CONTROLLER_CANARIES:
+        assert name not in seen, name
+    assert "ALK_RUNTIME_CONFIGURATION_NAMES" not in seen
+    for name, value in _CLIENT_SETTINGS.items():
+        if name == "LC_ALL":
+            assert name not in seen
+        else:
+            assert seen[name] == value
+    assert set(calls[0].env) == set(_CLIENT_SETTINGS) - {"LC_ALL"}
+
+
+@pytest.mark.parametrize("manifest", [True, False])
+@pytest.mark.parametrize("command", ["config", "up", "build", "run"])
+def test_ports_runtime_values_and_overrides_reach_compose_on_both_branches(
+    tmp_path: Path, monkeypatch, manifest: bool, command: str
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "SETTING_A,SETTING_B" if manifest else None)
+    if manifest:
+        monkeypatch.setenv("ALK_RUNTIME_VALUE_SETTING_A", "job-a")
+        monkeypatch.setenv("ALK_RUNTIME_VALUE_SETTING_B", "job-b")
+    else:
+        monkeypatch.setenv("SETTING_A", "job-a")
+        monkeypatch.setenv("SETTING_B", "job-b")
+    calls = _record_compose(monkeypatch)
+    environment = _compose_environment(
+        tmp_path,
+        port_variables={"TOOLS_PORT": "18090"},
+        runtime_configuration_names=["SETTING_A", "SETTING_B"],
+    )
+
+    provisioning._run(
+        environment, command, process_overrides={"SETTING_B": "override-b", "EXTRA": "x"}
+    )
+
+    seen = _seen(calls[0])
+    assert seen["TOOLS_PORT"] == "18090"
+    assert seen["SETTING_A"] == "job-a"
+    assert seen["SETTING_B"] == "override-b"
+    assert seen["EXTRA"] == "x"
+    assert command in calls[0].argv
+
+
+def test_manifest_runtime_name_that_is_a_controller_name_has_no_bare_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(
+        monkeypatch,
+        {"PATH": "/usr/bin", "GOOGLE_APPLICATION_CREDENTIALS": "/controller/adc.json"},
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    )
+    environment = _compose_environment(
+        tmp_path, runtime_configuration_names=["GOOGLE_APPLICATION_CREDENTIALS"]
+    )
+    calls = _record_compose(monkeypatch)
+
+    provisioning._run(environment, "config")
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in _seen(calls[0])
+
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_GOOGLE_APPLICATION_CREDENTIALS", "/job/adc.json")
+    provisioning._run(environment, "config")
+    assert _seen(calls[1])["GOOGLE_APPLICATION_CREDENTIALS"] == "/job/adc.json"
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in calls[1].env
+
+
+def test_bare_cli_passes_the_shell_minus_the_denied_names(
+    tmp_path: Path, monkeypatch
+) -> None:
+    denied = {
+        "FI_API_KEY": "d1",
+        "FI_SECRET_KEY": "d2",
+        "AGENTCC_BASE_URL": "d3",
+        "ALK_SANDBOX_TOKEN": "d4",
+        "HARNESS_WEBHOOK_URL": "d5",
+    }
+    kept = {"OPENAI_API_KEY": "own-openai", "DOCKER_CONTEXT": "colima", "PATH": "/usr/bin"}
+    _shell(monkeypatch, {**denied, **kept}, None)
+    calls = _record_compose(monkeypatch)
+
+    provisioning._run(_compose_environment(tmp_path), "config")
+
+    seen = _seen(calls[0])
+    for name in denied:
+        assert name not in seen, name
+    for name, value in kept.items():
+        assert seen[name] == value
+
+
+def test_bare_cli_denied_runtime_name_never_reaches_compose_or_the_run_arguments(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(
+        monkeypatch,
+        {"PATH": "/usr/bin", "AGENTCC_API_KEY": "canary-agentcc", "OPENAI_API_KEY": "own"},
+        None,
+    )
+    environment = _compose_environment(
+        tmp_path,
+        runtime_services=["agent-runtime"],
+        running=True,
+        runtime_configuration_names=["AGENTCC_API_KEY", "OPENAI_API_KEY"],
+    )
+    environment.save(tmp_path)
+    calls = _drive_start_runtime(tmp_path, monkeypatch)
+
+    run_call = next(call for call in calls if "run" in call.argv)
+    assert "AGENTCC_API_KEY" not in _seen(run_call)
+    assert "AGENTCC_API_KEY" not in run_call.argv
+    assert _seen(run_call)["OPENAI_API_KEY"] == "own"
+    assert "OPENAI_API_KEY" in run_call.argv
+
+
+def _drive_start_runtime(destination: Path, monkeypatch, **kwargs) -> list:
+    """Run ``start_runtime`` with only ``subprocess.run``, ``_config`` and ``_docker`` patched."""
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
+    calls = _record_compose(monkeypatch)
+    monkeypatch.setattr(
+        provisioning,
+        "_config",
+        lambda _environment: {"services": {"agent-runtime": {"environment": {}}}},
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_docker",
+        lambda *arguments, **_kwargs: (
+            "running" if arguments and arguments[0] == "inspect" else ""
+        ),
+    )
+    provisioning.start_runtime(destination, **kwargs)
+    return calls
+
+
+_RESERVED_NAMES = [
+    "DOCKER_CONFIG",
+    "DOCKER_HOST",
+    "COMPOSE_FILE",
+    "LD_PRELOAD",
+    "https_proxy",
+    "SSL_CERT_FILE",
+    "GIT_SSH_COMMAND",
+    "GCONV_PATH",
+    "BASH_ENV",
+    "SSH_ASKPASS",
+    "XDG_CONFIG_HOME",
+]
+
+
+@pytest.mark.parametrize("manifest", [True, False])
+def test_reserved_client_names_never_set_compose_or_the_run_arguments(
+    tmp_path: Path, monkeypatch, caplog, manifest: bool
+) -> None:
+    runtime_names = (
+        [
+            *_RESERVED_NAMES,
+            "PROXY_PORT",
+            "HARNESS_POSTGRES_PORT",
+            "PYTHONPATH",
+            "NODE_OPTIONS",
+            "GOOGLE_CLOUD_PROJECT",
+            "NODE_ENV",
+            "PYTHONUNBUFFERED",
+        ]
+        if manifest
+        else [
+            "PROXY_PORT",
+            "GOOGLE_CLOUD_PROJECT",
+            "NODE_ENV",
+            "PYTHONUNBUFFERED",
+        ]
+    )
+    _shell(
+        monkeypatch,
+        {"PATH": "/usr/bin", "HOME": "/home/worker", "DOCKER_HOST": "tcp://base:2375"},
+        ",".join(runtime_names) if manifest else None,
+    )
+    for name in runtime_names:
+        monkeypatch.setenv(
+            f"ALK_RUNTIME_VALUE_{name}" if manifest else name, f"/evil/{name}"
+        )
+    environment = _compose_environment(
+        tmp_path,
+        runtime_services=["agent-runtime"],
+        running=True,
+        runtime_configuration_names=runtime_names,
+        port_variables={
+            **{name: f"/evil-port/{name}" for name in _RESERVED_NAMES},
+        },
+        internal_overrides={"DOCKER_HOST": "tcp://evil:1", "HOME": "/evil/home"},
+    )
+    environment.save(tmp_path)
+    caplog.set_level(logging.DEBUG, logger=_COMPOSE_LOGGER)
+
+    calls = _drive_start_runtime(
+        tmp_path, monkeypatch, overrides={name: f"/evil-override/{name}" for name in _RESERVED_NAMES}
+    )
+
+    run_call = next(call for call in calls if "run" in call.argv)
+    seen = _seen(run_call)
+    base = {"PATH": "/usr/bin", "HOME": "/home/worker", "DOCKER_HOST": "tcp://base:2375"}
+    for name in [*_RESERVED_NAMES, "PYTHONPATH", "NODE_OPTIONS"]:
+        assert name not in run_call.job.values, name
+        assert seen.get(name) == base.get(name), name
+    # No port_variables for these here, so the job's own values are kept.
+    # (``HARNESS_*`` runtime names are denied on the bare CLI, so that one is checked on the
+    # manifest branch only.)
+    kept = ["PROXY_PORT", "GOOGLE_CLOUD_PROJECT", "NODE_ENV", "PYTHONUNBUFFERED"]
+    if manifest:
+        kept.append("HARNESS_POSTGRES_PORT")
+    for name in kept:
+        assert run_call.job.values[name] == f"/evil/{name}"
+    env_names = {
+        argument.split("=", 1)[0]
+        for index, argument in enumerate(run_call.argv)
+        if index and run_call.argv[index - 1] == "--env"
+    }
+    assert env_names
+    assert not [name for name in env_names if client_name_reserved(name)]
+    assert not [name for name in run_call.argv if name.startswith("/evil")]
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    for name in ("DOCKER_HOST", "SSH_ASKPASS", "XDG_CONFIG_HOME", "GIT_SSH_COMMAND"):
+        assert name in logged
+    assert "/evil" not in logged
+
+
+def _stop_environment(tmp_path: Path, **fields):
+    environment = _compose_environment(
+        tmp_path, runtime_configuration_names=["AGENT_SETTING"], running=True, **fields
+    )
+    environment.save(tmp_path)
+    return environment
+
+
+def test_stop_tears_down_by_project_with_the_manifest_client_settings_only(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(
+        monkeypatch,
+        {**_CLIENT_SETTINGS, "AGENTCC_API_KEY": "canary", "SOME_SHELL_NAME": "canary"},
+        "AGENT_SETTING",
+    )
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_AGENT_SETTING", "job-value")
+    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "from-shell")
+    _stop_environment(tmp_path)
+    monkeypatch.setattr(provisioning, "_docker", lambda *_a, **_k: "")
+    calls = _record_compose(monkeypatch)
+
+    assert stop(tmp_path)
+
+    call = next(call for call in calls if "down" in call.argv)
+    assert "--file" not in call.argv
+    assert "--env-file" not in call.argv
+    assert call.job is None
+    assert call.argv[:4] == ["docker", "compose", "--project-name", "compose-env"]
+    assert call.env == _CLIENT_SETTINGS
+
+
+def test_stop_without_the_manifest_keeps_the_shell_minus_denied_and_compose_names(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(
+        monkeypatch,
+        {
+            "PATH": "/usr/bin",
+            "DOCKER_CONTEXT": "colima",
+            "DOCKER_CERT_PATH": "/certs",
+            "AGENTCC_API_KEY": "canary",
+            "COMPOSE_FILE": "/elsewhere.yaml",
+            "AGENT_SETTING": "job-value",
+        },
+        None,
+    )
+    _stop_environment(tmp_path)
+    monkeypatch.setattr(provisioning, "_docker", lambda *_a, **_k: "")
+    calls = _record_compose(monkeypatch)
+
+    assert stop(tmp_path)
+
+    call = next(call for call in calls if "down" in call.argv)
+    assert "--file" not in call.argv and "--env-file" not in call.argv
+    assert call.env["DOCKER_CONTEXT"] == "colima"
+    assert call.env["DOCKER_CERT_PATH"] == "/certs"
+    assert "AGENTCC_API_KEY" not in call.env
+    assert "COMPOSE_FILE" not in call.env
+    # The plan wins over the design page's wording: with no manifest the base is the shell minus
+    # the denied names and ``COMPOSE_*``, so a plain shell name is kept (nothing is interpolated).
+    assert call.env.get("AGENT_SETTING") == "job-value"
+
+
+def test_sandbox_server_imports_exactly_three_names_from_provision() -> None:
+    import ast
+
+    path = Path(provisioning.__file__).with_name("sandbox_server.py")
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "provision" and node.level == 1:
+            imported.update(alias.name for alias in node.names)
+    assert imported == {"ProvisionError", "source_fingerprint", "stop"}
+
+
+def test_start_runtime_hands_a_declared_credential_to_compose_through_the_job_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "CARTESIA_TOKEN")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_CARTESIA_TOKEN", "job-token")
+    environment = _compose_environment(
+        tmp_path,
+        runtime_services=["agent-runtime"],
+        running=True,
+        runtime_configuration_names=["CARTESIA_TOKEN"],
+    )
+    environment.save(tmp_path)
+
+    calls = _drive_start_runtime(tmp_path, monkeypatch)
+
+    run_call = next(call for call in calls if "run" in call.argv)
+    assert run_call.job.values["CARTESIA_TOKEN"] == "job-token"
+    assert "CARTESIA_TOKEN" not in run_call.env
+    assert "CARTESIA_TOKEN" in run_call.argv
+    assert "CARTESIA_TOKEN=job-token" not in run_call.argv
+    assert "job-token" not in " ".join(run_call.argv)
+
+
+def test_sandbox_job_plain_name_values_do_not_reach_compose(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fi.alk.harness.secrets import worker_environment
+
+    child = worker_environment(
+        {"AGENT_SETTING": "plain-canary"},
+        runtime_configuration={},
+        host_environment={**_CLIENT_SETTINGS, "AGENTCC_API_KEY": "controller"},
+    )
+    assert child["AGENT_SETTING"] == "plain-canary"  # the plain name is in the worker
+    _shell(monkeypatch, child, "")
+    calls = _record_compose(monkeypatch)
+
+    provisioning._run(_compose_environment(tmp_path), "config")
+
+    seen = _seen(calls[0])
+    assert "AGENT_SETTING" not in seen
+    assert "AGENTCC_API_KEY" not in seen
+
+
+_OWNED_AND_NEUTRAL = {
+    "SSH_ASKPASS": "/job/askpass",
+    "XDG_CONFIG_HOME": "/job/xdg",
+    "GIT_ASKPASS": "/job/git-askpass",
+    "JOB_SETTING": "neutral",
+}
+
+
+@pytest.mark.parametrize("manifest", [True, False])
+def test_no_job_value_is_in_the_compose_process_environment(
+    tmp_path: Path, monkeypatch, manifest: bool
+) -> None:
+    runtime = ["SSH_ASKPASS", "JOB_SETTING"]
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(runtime) if manifest else None)
+    # On the bare CLI a shell name that steers a client is the developer's own and stays in the
+    # base; only the neutral name is set there, the reserved ones come as ports and overrides.
+    for name in runtime if manifest else ["JOB_SETTING"]:
+        monkeypatch.setenv(
+            f"ALK_RUNTIME_VALUE_{name}" if manifest else name, _OWNED_AND_NEUTRAL[name]
+        )
+    calls = _record_compose(monkeypatch)
+    environment = _compose_environment(
+        tmp_path,
+        runtime_configuration_names=runtime,
+        port_variables={"XDG_CONFIG_HOME": "/job/xdg", "PORT_SETTING": "9"},
+    )
+
+    provisioning._run(
+        environment,
+        "up",
+        process_overrides={
+            "GIT_ASKPASS": "/job/git-askpass",
+            "JOB_SETTING": "override-neutral",
+            "OVERRIDE_SETTING": "o",
+        },
+    )
+
+    call = calls[0]
+    for name in (*_OWNED_AND_NEUTRAL, "PORT_SETTING", "OVERRIDE_SETTING"):
+        assert name not in call.env, name
+    assert call.job.values["JOB_SETTING"] == "override-neutral"
+    assert call.job.values["PORT_SETTING"] == "9"
+    assert call.job.values["OVERRIDE_SETTING"] == "o"
+    for name in ("SSH_ASKPASS", "XDG_CONFIG_HOME", "GIT_ASKPASS"):
+        assert name not in call.job.values, name
+
+
+_ROUND_TRIP_VALUES = {
+    "PLAIN": "value",
+    "DOLLAR": "cost $5 and $HOME",
+    "BRACED": "${NAME:-fallback} and ${OTHER}",
+    "QUOTES": "say \"hi\" and 'bye'",
+    "BACKSLASH": "C:\\path\\to\\ \\n not a newline",
+    "HASH": "a # not a comment",
+    "SPACES": "inner  spaces",
+    "EQUALS": "a=b=c",
+    "NEWLINE": "line one\nline two",
+    "UNICODE": "caf\u00e9 \u2603 \u65e5\u672c",
+    "EMPTY_ISH": "x",
+}
+
+
+def test_job_file_is_private_outside_the_source_and_removed_after_the_call(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(_ROUND_TRIP_VALUES))
+    for name, value in _ROUND_TRIP_VALUES.items():
+        monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", value)
+    environment = _compose_environment(
+        tmp_path,
+        runtime_configuration_names=list(_ROUND_TRIP_VALUES),
+    )
+    world = tmp_path / "world"
+    world.mkdir()
+    calls = _record_compose(monkeypatch)
+
+    # Runtime values are stripped (as before); an override keeps its edge whitespace exactly.
+    edge = {"EDGE_SPACES": "  leading and trailing  ", "EDGE_NEWLINE": "line\n"}
+    provisioning._run(environment, "up", process_overrides=edge)
+
+    job = calls[0].job
+    assert job.mode == 0o600
+    assert job.directory_mode == 0o700
+    assert not job.path.exists() and not job.path.parent.exists()
+    for forbidden in (Path(environment.source), world, tmp_path):
+        assert forbidden not in job.path.parents
+    assert job.values == {**_ROUND_TRIP_VALUES, **edge}
+
+
+def test_job_file_is_removed_after_a_timeout_and_after_a_failed_check(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "SETTING")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_SETTING", "v")
+    environment = _compose_environment(tmp_path, runtime_configuration_names=["SETTING"])
+    calls = _record_compose(
+        monkeypatch, raises=subprocess.TimeoutExpired(cmd="docker", timeout=1)
+    )
+
+    with pytest.raises(provisioning.ProvisionError, match="timed out"):
+        provisioning._run(environment, "up", timeout=1)
+
+    assert calls[0].job.values == {"SETTING": "v"}
+    assert not calls[0].job.path.parent.exists()
+
+    failing = _record_compose(monkeypatch, returncode=1, output="boom")
+    with pytest.raises(provisioning.ProvisionError, match="boom"):
+        provisioning._run(environment, "up")
+    assert not failing[0].job.path.parent.exists()
+
+
+def test_job_file_is_removed_after_the_network_reclaim_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "SETTING")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_SETTING", "v")
+    environment = _compose_environment(tmp_path, runtime_configuration_names=["SETTING"])
+    calls = _record_compose(
+        monkeypatch,
+        returncode=1,
+        output="all predefined address pools have been fully subnetted",
+    )
+    monkeypatch.setattr(provisioning, "_remove_unused_harness_networks", lambda **_k: True)
+
+    with pytest.raises(provisioning.ProvisionError):
+        provisioning._run(environment, "up")
+
+    assert len(calls) == 2
+    assert calls[0].job.path == calls[1].job.path
+    assert not calls[1].job.path.parent.exists()
+
+
+def test_job_file_is_removed_when_writing_it_fails(tmp_path: Path, monkeypatch) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "")
+    seen: list[Path] = []
+    real_mkdtemp = provisioning.tempfile.mkdtemp
+
+    def mkdtemp(*args, **kwargs):
+        directory = real_mkdtemp(*args, **kwargs)
+        seen.append(Path(directory))
+        return directory
+
+    def broken_write(_fd, _values):
+        os.close(_fd)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(provisioning.tempfile, "mkdtemp", mkdtemp)
+    monkeypatch.setattr(provisioning, "_write_env_file", broken_write)
+    _record_compose(monkeypatch)
+
+    with pytest.raises(OSError):
+        provisioning._run(_compose_environment(tmp_path), "up")
+
+    assert seen and not seen[0].exists()
+
+
+def test_env_file_arguments_follow_project_name_and_put_the_repository_env_first(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "")
+    environment = _compose_environment(tmp_path)
+    calls = _record_compose(monkeypatch)
+
+    provisioning._run(environment, "up", "--detach")
+    assert len(calls[0].env_files) == 1
+    assert calls[0].env_files[0] == str(calls[0].job.path)
+
+    env_file = Path(environment.source) / ".env"
+    env_file.write_text("FROM_DOTENV=1\n")
+    provisioning._run(environment, "up", "--detach")
+
+    argv = calls[1].argv
+    assert calls[1].env_files == [str(env_file), str(calls[1].job.path)]
+    project = argv.index("--project-name")
+    assert argv[project + 2 : project + 6] == [
+        "--env-file",
+        str(env_file),
+        "--env-file",
+        str(calls[1].job.path),
+    ]
+    assert argv[project + 6 :] == ["up", "--detach"]
+
+    env_file.unlink()
+    env_file.mkdir()
+    provisioning._run(environment, "up")
+    assert len(calls[2].env_files) == 1  # a ``.env`` directory is not passed
+
+    # ``stop`` passes no --env-file, even with a repository .env present.
+    env_file.rmdir()
+    env_file.write_text("FROM_DOTENV=1\n")
+    environment.save(tmp_path)
+    monkeypatch.setattr(provisioning, "_docker", lambda *_a, **_k: "")
+    stop(tmp_path)
+    down = next(call for call in calls if "down" in call.argv and "--volumes" in call.argv)
+    assert "--env-file" not in down.argv
+
+
+def test_alk_values_win_over_a_job_value_of_the_same_name_through_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "HARNESS_POSTGRES_PORT,TOOLS_API_URL")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_HARNESS_POSTGRES_PORT", "1111")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_TOOLS_API_URL", "http://job:1")
+    environment = _compose_environment(
+        tmp_path,
+        port_variables={"HARNESS_POSTGRES_PORT": "0"},
+        runtime_configuration_names=["HARNESS_POSTGRES_PORT", "TOOLS_API_URL"],
+    )
+    calls = _record_compose(monkeypatch)
+
+    provisioning._run(
+        environment, "run", process_overrides={"TOOLS_API_URL": "http://tools-api:8080"}
+    )
+
+    assert calls[0].job.values["HARNESS_POSTGRES_PORT"] == "0"
+    assert calls[0].job.values["TOOLS_API_URL"] == "http://tools-api:8080"
+
+
+def test_alk_values_win_over_a_job_value_of_the_same_name_through_start_runtime(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "HARNESS_POSTGRES_PORT,TOOLS_API_URL")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_HARNESS_POSTGRES_PORT", "1111")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_TOOLS_API_URL", "http://job:1")
+    environment = _compose_environment(
+        tmp_path,
+        runtime_services=["agent-runtime"],
+        running=True,
+        port_variables={"HARNESS_POSTGRES_PORT": "0"},
+        internal_overrides={"TOOLS_API_URL": "http://tools-api:8080"},
+        runtime_configuration_names=["HARNESS_POSTGRES_PORT", "TOOLS_API_URL"],
+    )
+    environment.save(tmp_path)
+
+    calls = _drive_start_runtime(tmp_path, monkeypatch)
+
+    run_call = next(call for call in calls if "run" in call.argv)
+    assert run_call.job.values["HARNESS_POSTGRES_PORT"] == "0"
+    assert run_call.job.values["TOOLS_API_URL"] == "http://tools-api:8080"
+    assert "TOOLS_API_URL=http://tools-api:8080" in run_call.argv
+
+
+def test_bare_cli_shell_name_that_is_also_an_override_is_removed_from_the_process_environment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(
+        monkeypatch,
+        {
+            "PATH": "/usr/bin",
+            "TOOLS_API_URL": "http://shell:1",
+            "SETTING": "shell-setting",
+            "PORT_NAME": "shell-port",
+            "KEPT": "kept",
+        },
+        None,
+    )
+    environment = _compose_environment(
+        tmp_path,
+        port_variables={"PORT_NAME": "7"},
+        runtime_configuration_names=["SETTING"],
+    )
+    calls = _record_compose(monkeypatch)
+
+    provisioning._run(
+        environment, "run", process_overrides={"TOOLS_API_URL": "http://tools-api:8080"}
+    )
+
+    call = calls[0]
+    for name in ("TOOLS_API_URL", "SETTING", "PORT_NAME"):
+        assert name not in call.env, name
+    assert call.env["KEPT"] == "kept"
+    assert _seen(call)["TOOLS_API_URL"] == "http://tools-api:8080"
+    assert _seen(call)["PORT_NAME"] == "7"
+    assert _seen(call)["SETTING"] == "shell-setting"
