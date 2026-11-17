@@ -265,6 +265,8 @@ _CLIENT_ENVIRONMENT_NAMES = (
 )
 _LOCAL_DENIED_EXACT = frozenset({"FI_API_KEY", "FI_SECRET_KEY"})
 _LOCAL_DENIED_PREFIXES = ("AGENTCC_", "ALK_", "HARNESS_")
+# Both supported Compose versions say this when a remote git include is switched off.
+_GIT_REMOTE_DISABLED = "git remote resource is disabled"
 _ENV_FILE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
@@ -425,6 +427,11 @@ def _run(
     else:
         values = _compose_values(environment, process_overrides)
         process_env = _compose_environment(values)
+    if _under_sandbox():
+        # Compose copies ``COMPOSE_*`` from a repository ``.env`` into its own settings, and the
+        # legacy sandbox Compose would then start git for a remote include with the worker's
+        # environment. The process environment beats every env file, so the switch is set here.
+        process_env["COMPOSE_EXPERIMENTAL_GIT_REMOTE"] = "0"
     # The file lives in the controller's own private temp directory: never under the source, and
     # never in the world or artifact directory (a cancel SIGTERMs the worker and skips ``finally``,
     # and the world directory is an artifact that is copied for review).
@@ -498,6 +505,10 @@ def _run(
                 completed = execute(command)
                 output = ((completed.stdout or "") + (completed.stderr or "")).strip()
         if check and completed.returncode:
+            if _under_sandbox() and _GIT_REMOTE_DISABLED in output:
+                raise ProvisionError(
+                    "the compose file uses a git include, which is not allowed in a hosted run"
+                )
             shown = _command_failure_output(output)
             raise ProvisionError(
                 f"{' '.join(command)} failed ({completed.returncode}): {shown}"

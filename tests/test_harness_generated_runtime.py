@@ -1201,6 +1201,7 @@ _CONTROLLER_CANARIES = {
     "SOME_SHELL_NAME": "canary-shell",
 }
 _COMPOSE_LOGGER = "fi.alk.harness.provision"
+_COMPOSE_PIN = {"COMPOSE_EXPERIMENTAL_GIT_REMOTE": "0"}
 
 
 def _unescape_env_value(text: str) -> str:
@@ -1318,7 +1319,7 @@ def test_manifest_compose_environment_is_the_client_settings_only(
             assert name not in seen
         else:
             assert seen[name] == value
-    assert set(calls[0].env) == set(_CLIENT_SETTINGS) - {"LC_ALL"}
+    assert set(calls[0].env) == set(_CLIENT_SETTINGS) - {"LC_ALL"} | set(_COMPOSE_PIN)
 
 
 @pytest.mark.parametrize("manifest", [True, False])
@@ -1562,7 +1563,7 @@ def test_stop_tears_down_by_project_with_the_manifest_client_settings_only(
     assert "--env-file" not in call.argv
     assert call.job is None
     assert call.argv[:4] == ["docker", "compose", "--project-name", "compose-env"]
-    assert call.env == _CLIENT_SETTINGS
+    assert call.env == {**_CLIENT_SETTINGS, **_COMPOSE_PIN}
 
 
 def test_stop_without_the_manifest_keeps_the_shell_minus_denied_and_compose_names(
@@ -2158,3 +2159,69 @@ def test_teardown_runs_from_an_empty_directory_that_is_not_the_source(
     assert "--project-name" in call.argv
     assert "--file" not in call.argv and "--env-file" not in call.argv
     assert not Path(call.cwd).exists()
+
+
+@pytest.mark.parametrize("manifest", ["", "AGENT_SETTING"])
+def test_manifest_turns_compose_remote_git_off_whatever_the_repository_env_sets(
+    tmp_path: Path, monkeypatch, manifest: str
+) -> None:
+    _shell(monkeypatch, _CLIENT_SETTINGS, manifest)
+    environment = _compose_environment(tmp_path)
+    source = Path(environment.source)
+    (source / ".env").write_text("COMPOSE_EXPERIMENTAL_GIT_REMOTE=1\n")
+    calls = _record_compose(monkeypatch)
+
+    provisioning._run(environment, "config")
+
+    call = calls[0]
+    # Both files are handed over, and the process environment still beats them.
+    assert call.env_files == [str(source / ".env"), str(call.job.path)]
+    assert call.env["COMPOSE_EXPERIMENTAL_GIT_REMOTE"] == "0"
+    assert "COMPOSE_EXPERIMENTAL_GIT_REMOTE" not in call.job.values
+
+    # Teardown too.
+    environment.runtime_configuration_names = ["AGENT_SETTING"]
+    environment.running = True
+    environment.save(tmp_path)
+    monkeypatch.setattr(provisioning, "_docker", lambda *_a, **_k: "")
+    assert stop(tmp_path)
+    down = next(call for call in calls if "down" in call.argv)
+    assert down.env["COMPOSE_EXPERIMENTAL_GIT_REMOTE"] == "0"
+
+
+def test_bare_cli_leaves_compose_remote_git_to_the_shell(tmp_path: Path, monkeypatch) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, None)
+    calls = _record_compose(monkeypatch)
+
+    provisioning._run(_compose_environment(tmp_path), "config")
+
+    assert "COMPOSE_EXPERIMENTAL_GIT_REMOTE" not in calls[0].env
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        'git remote resource is disabled by "COMPOSE_EXPERIMENTAL_GIT_REMOTE"',
+        'experimental git remote resource is disabled. "COMPOSE_EXPERIMENTAL_GIT_REMOTE" must be '
+        "set",
+    ],
+)
+def test_a_git_include_is_refused_with_a_clear_error_that_holds_no_value(
+    tmp_path: Path, monkeypatch, message: str
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "SETTING")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_SETTING", "job-secret-canary")
+    environment = _compose_environment(tmp_path, runtime_configuration_names=["SETTING"])
+    calls = _record_compose(
+        monkeypatch,
+        returncode=1,
+        output=f"{message}\ninclude git@github.com:example/remote.git job-secret-canary",
+    )
+
+    with pytest.raises(provisioning.ProvisionError) as raised:
+        provisioning._run(environment, "config")
+
+    text = str(raised.value)
+    assert "git include" in text and "not allowed" in text
+    assert "job-secret-canary" not in text
+    assert len(calls) == 1
