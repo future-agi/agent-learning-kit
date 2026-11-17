@@ -661,6 +661,20 @@ def test_m1_a_tool_defined_inside_async_main_is_matched(tmp_path):
     assert [(r["name"], r["output"]) for r in records] == [("search", "hit z")]
 
 
+def test_l4_an_inherited_method_is_matched_under_the_subclass_name(tmp_path):
+    (tmp_path / "agent.py").write_text(
+        "class Base:\n"
+        "    def _run(self, city):\n        return 'rooms in ' + city\n"
+        "class SearchRooms(Base):\n    pass\n"
+    )
+    result, records = _traced_run(
+        tmp_path, [_unreachable_binding("search_rooms", "SearchRooms._run")],
+        "import agent\nagent.SearchRooms()._run('Oslo')\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert [(r["name"], r["output"]) for r in records] == [("search_rooms", "rooms in Oslo")]
+
+
 # --- Round 2, M5: an include or a uv group may install the CLI, so today's route is kept ------
 
 @pytest.mark.parametrize(

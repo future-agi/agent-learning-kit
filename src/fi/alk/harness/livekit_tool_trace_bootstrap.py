@@ -377,6 +377,18 @@ def _install_declared_python_tools() -> None:
         if key is None:
             # co_qualname exists from Python 3.11; before it, the last name alone decides.
             frame_qualname = getattr(frame.f_code, "co_qualname", None)
+            # A method inherited from a base class carries the base's qualname; the receiver's
+            # own class names it as the reading wrote it.
+            receiver_qualname = None
+            try:
+                receiver = frame.f_locals.get(frame.f_code.co_varnames[0]) if (
+                    frame.f_code.co_argcount and frame.f_code.co_varnames[0] in {"self", "cls"}
+                ) else None
+                if receiver is not None:
+                    owner = receiver if frame.f_code.co_varnames[0] == "cls" else type(receiver)
+                    receiver_qualname = f"{owner.__qualname__}.{frame.f_code.co_name}"
+            except Exception:  # noqa: BLE001 - observation must never reach the agent's call
+                receiver_qualname = None
             key = next(
                 (
                     name
@@ -386,6 +398,7 @@ def _install_declared_python_tools() -> None:
                         frame_qualname is None
                         # A tool defined inside a function is written by its own name.
                         or frame_qualname.rsplit("<locals>.", 1)[-1] == full_name
+                        or receiver_qualname == full_name
                     )
                     and matches_module(frame, module)
                 ),
