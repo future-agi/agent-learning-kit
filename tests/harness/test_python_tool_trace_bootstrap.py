@@ -254,6 +254,8 @@ _STANDIN_TRACING = {
         "        with open(os.environ['STANDIN_CALLS'] + '.key', 'a') as handle:\n"
         "            handle.write(api_key + '\\n')\n"
         "    def export(self, items):\n"
+        "        self._export_with_deadline(items, deadline=None)\n"
+        "    def _export_with_deadline(self, items, deadline):\n"
         "        with open(os.environ['STANDIN_CALLS'] + '.export', 'a') as handle:\n"
         "            handle.write(str(len(items)) + '\\n')\n"
         "_exporter = None\n"
@@ -456,14 +458,25 @@ _EXPORT_A_SPAN = (
     "from agents.tracing.processors import default_exporter\n"
     "default_exporter().export(['span'])\n"
 )
+# The SDK's batch processor calls this one directly when it flushes with a deadline (at exit).
+_EXPORT_A_SPAN_BY_DEADLINE = (
+    "import agents\n"
+    "from agents.tracing.processors import default_exporter\n"
+    "default_exporter()._export_with_deadline(['span'], 1.0)\n"
+)
 
 
-def test_the_sdks_default_exporter_sends_nothing_under_the_mark(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "code", [_EXPORT_A_SPAN, _EXPORT_A_SPAN_BY_DEADLINE], ids=["export", "with_deadline"]
+)
+def test_the_sdks_default_exporter_sends_nothing_under_the_mark(
+    tmp_path: Path, code: str
+) -> None:
     # Whatever key it holds, the SDK's own exporter to OpenAI doesn't send on a gateway run; the
     # kit's span observation is a separate processor and isn't affected.
     result, lines = _chat_style_run(
         tmp_path,
-        _EXPORT_A_SPAN,
+        code,
         agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
         exporter=True,
         extra_env=_GATEWAY_KEY,

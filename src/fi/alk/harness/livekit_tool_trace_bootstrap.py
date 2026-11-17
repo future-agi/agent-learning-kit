@@ -268,7 +268,7 @@ _TRACING_EXPORT_PLACEHOLDER = "alk-tracing-disabled"
 def _guard_tracing_export_key(module: Any) -> None:
     """Keep the SDK's own trace export to OpenAI from sending anything on a gateway run.
 
-    Its default exporter's export does nothing, so spans and the key in its header never leave.
+    Its default exporter's export (both forms) does nothing, so spans and the key in its header never leave.
     The kit's span observation is a separate processor and still runs. As well, the gateway key
     becomes the placeholder whenever the agent hands it to the exporter: the SDK's
     set_default_openai_key and set_default_openai_client pass their key on unless told not to,
@@ -284,10 +284,12 @@ def _guard_tracing_export_key(module: Any) -> None:
         return
     exporter = sys.modules[f"{module.__name__}.tracing.processors"].default_exporter()
 
-    def export_nothing(items: Any) -> None:
+    def export_nothing(items: Any, deadline: Any = None) -> None:
         return None
 
+    # The batch processor calls the deadline form directly when it flushes at exit.
     exporter.export = export_nothing
+    exporter._export_with_deadline = export_nothing
     set_api_key = exporter.set_api_key
 
     def guarded_set_api_key(api_key: str) -> None:
