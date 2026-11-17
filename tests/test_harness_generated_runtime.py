@@ -1255,6 +1255,11 @@ def _record_compose(monkeypatch, *, raises=None, returncode=0, output=""):
             env_files=env_files,
             job=job,
             cwd=kwargs.get("cwd"),
+            cwd_listing=(
+                sorted(entry.name for entry in Path(kwargs["cwd"]).iterdir())
+                if kwargs.get("cwd") and Path(kwargs["cwd"]).is_dir()
+                else None
+            ),
         )
         calls.append(call)
         if raises is not None:
@@ -2134,3 +2139,22 @@ def test_repository_env_that_is_a_symlink_or_resolves_outside_the_source_is_not_
     (source / ".env").write_text("FROM_DOTENV=1\n")
     provisioning._run(environment, "config")
     assert calls[-1].env_files == [str(source / ".env"), str(calls[-1].job.path)]
+
+
+def test_teardown_runs_from_an_empty_directory_that_is_not_the_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(monkeypatch, _CLIENT_SETTINGS, "AGENT_SETTING")
+    environment = _stop_environment(tmp_path)
+    (Path(environment.source) / ".env").write_text("COMPOSE_FILE=/elsewhere.yaml\n")
+    monkeypatch.setattr(provisioning, "_docker", lambda *_a, **_k: "")
+    calls = _record_compose(monkeypatch)
+
+    assert stop(tmp_path)
+
+    call = next(call for call in calls if "down" in call.argv)
+    assert call.cwd != environment.source
+    assert call.cwd_listing == []
+    assert "--project-name" in call.argv
+    assert "--file" not in call.argv and "--env-file" not in call.argv
+    assert not Path(call.cwd).exists()

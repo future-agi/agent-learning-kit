@@ -429,11 +429,15 @@ def _run(
     # never in the world or artifact directory (a cancel SIGTERMs the worker and skips ``finally``,
     # and the world directory is an artifact that is copied for review).
     job_directory: str | None = None
+    # Teardown reads no file, so it runs from an empty directory: Compose then has no repository
+    # ``.env`` to pick up by itself.
+    working_directory = environment.source
+    teardown_directory: str | None = None
 
     def execute(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             command,
-            cwd=environment.source,
+            cwd=working_directory,
             env=process_env,
             capture_output=True,
             text=True,
@@ -443,6 +447,8 @@ def _run(
 
     try:
         if teardown:
+            teardown_directory = tempfile.mkdtemp(prefix="alk-compose-down-")
+            working_directory = teardown_directory
             command = [
                 "docker",
                 "compose",
@@ -498,8 +504,9 @@ def _run(
             )
         return output
     finally:
-        if job_directory is not None:
-            shutil.rmtree(job_directory, ignore_errors=True)
+        for directory in (job_directory, teardown_directory):
+            if directory is not None:
+                shutil.rmtree(directory, ignore_errors=True)
 
 
 def _start_managed_services(
