@@ -32,6 +32,7 @@ from reference_agents import (
     assert_bindings_match,
     assert_detected,
     assert_pins,
+    assert_refuses_key_without_base_url,
     build_control_service,
     fresh_import,
     run_tracer,
@@ -860,6 +861,20 @@ def test_the_env_passed_to_the_cli_is_exactly_this(
     assert "ANTHROPIC_BASE_URL" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
     assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in env
+
+
+def test_a_token_with_no_base_url_is_refused(example_module, monkeypatch) -> None:
+    def run_a_turn(agent) -> None:
+        _fake_query(agent, monkeypatch)
+        _run(agent, CONVERSATION)
+
+    assert_refuses_key_without_base_url(
+        example_module,
+        run_a_turn,
+        monkeypatch,
+        key="ANTHROPIC_AUTH_TOKEN",
+        base_url="ANTHROPIC_BASE_URL",
+    )
 
 
 @pytest.mark.parametrize("base_url", [None, "", "   "], ids=["unset", "empty", "blank"])
