@@ -2215,6 +2215,30 @@ def test_reserved_config_keys_are_refused_at_submit_and_preflight(name, request_
         request_type(source_path="/tmp/agent", connector_config={name: "canary"})
 
 
+_NO_AGENT_NEEDS = [
+    "DOCKER_CONFIG", "COMPOSE_FILE", "BASH_ENV", "ENV", "LD_PRELOAD",
+    "DYLD_INSERT_LIBRARIES", "GIT_SSH_COMMAND", "SSH_ASKPASS", "NODE_OPTIONS",
+]
+_AGENT_SETTINGS = ["HTTPS_PROXY", "http_proxy", "NO_PROXY", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"]
+
+
+@pytest.mark.parametrize("name", _NO_AGENT_NEEDS)
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+def test_a_name_no_agent_needs_is_refused_on_both_channels(name, request_type):
+    # Runtime values reach the Compose subprocess under their own names, where these steer it.
+    with pytest.raises(ValidationError, match=f"connector_config_name_reserved: {name}"):
+        request_type(source_path="/tmp/agent", connector_config={name: "canary"})
+    with pytest.raises(ValidationError, match=f"environment_name_reserved: {name}"):
+        request_type(source_path="/tmp/agent", environment_values={name: "canary"})
+
+
+@pytest.mark.parametrize("name", _AGENT_SETTINGS)
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+def test_proxy_and_ca_names_stay_agent_settings(name, request_type):
+    request_type(source_path="/tmp/agent", connector_config={name: "canary"})
+    request_type(source_path="/tmp/agent", environment_values={name: "canary"})
+
+
 def test_reserved_config_key_is_a_422_over_http(tmp_path):
     client = TestClient(create_app(tmp_path / "state"))
 
@@ -3110,7 +3134,7 @@ def test_an_ordinary_upload_alias_still_uploads_and_validates(tmp_path):
 
 @pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest, SandboxRerunRequest])
 @pytest.mark.parametrize(
-    "name", ["HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "NODE_OPTIONS", "LANG"]
+    "name", ["HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "LANG", "LC_ALL"]
 )
 def test_a_client_name_is_accepted_as_an_environment_value(request_type, name):
     extra = {} if request_type is SandboxRerunRequest else {"source_path": "/tmp/agent"}

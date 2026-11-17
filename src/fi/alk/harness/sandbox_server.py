@@ -68,6 +68,7 @@ from .secrets import (
     RUNTIME_CONFIGURATION_NAMES_ENV,
     SecretResolutionError,
     TARGET_PROVIDER_ALIASES_ENV,
+    agent_value_name_reserved,
     client_name_reserved,
     controller_name_reserved,
     resolve_worker_secrets,
@@ -1620,7 +1621,11 @@ def _validate_controller_names(
 ) -> None:
     """Refuse the names of a job that would reach the controller's own environment."""
     for name in config:
-        if str(name) in _RUNNER_RESERVED_ENVIRONMENT or str(name).startswith("ALK_"):
+        if (
+            str(name) in _RUNNER_RESERVED_ENVIRONMENT
+            or str(name).startswith("ALK_")
+            or agent_value_name_reserved(str(name))
+        ):
             raise ValueError(f"connector_config_name_reserved: {name}")
     _validate_secret_alias_shapes(references)
     for alias, reference in references.items():
@@ -1688,7 +1693,11 @@ def _validate_environment_values(
     for name, secret in values.items():
         if not _ENVIRONMENT_NAME.fullmatch(name):
             raise ValueError(f"environment_name_invalid: {name}")
-        if name in _RUNNER_RESERVED_ENVIRONMENT or name.startswith("ALK_"):
+        if (
+            name in _RUNNER_RESERVED_ENVIRONMENT
+            or name.startswith("ALK_")
+            or agent_value_name_reserved(name)
+        ):
             raise ValueError(f"environment_name_reserved: {name}")
         value = secret.get_secret_value()
         if "\x00" in value:
