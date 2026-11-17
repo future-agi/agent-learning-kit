@@ -18,7 +18,7 @@ from fi.alk.studio._environment_input_types import (
     _canonical_json,
     _content_digest,
 )
-from fi.alk.studio._environment_inputs import _assert_reviewed_snapshot
+from fi.alk.studio._environment_input_snapshots import _assert_reviewed_snapshot
 from fi.simulate.manifest import ManifestError
 from fi.simulate.simulation.models import Persona, Scenario, ScenarioConstraints
 from fi.simulate.suite import evaluate_assertions, validate_deterministic_assertion
@@ -141,15 +141,13 @@ def generate_source_scenarios(
     records = {
         SourceRecordReference(source.pin.source_id, record.record_id): (source, record)
         for source in reviewed.sources
-        if isinstance(source, ReviewedRecordSource)
-        and source.visibility == "agent_visible"
+        if isinstance(source, ReviewedRecordSource) and source.audience.tested_agent
         for record in source.records
     }
     public_policies = tuple(
         source
         for source in reviewed.sources
-        if isinstance(source, ReviewedPolicySource)
-        and source.visibility == "agent_visible"
+        if isinstance(source, ReviewedPolicySource) and source.audience.tested_agent
     )
     public_rules = tuple(
         rule for source in public_policies for rule in source.active_rules
@@ -158,7 +156,8 @@ def generate_source_scenarios(
         rule
         for source in reviewed.sources
         if isinstance(source, ReviewedPolicySource)
-        and source.visibility == "evaluator_only"
+        and not source.audience.tested_agent
+        and not source.audience.participant_ids
         for rule in source.active_rules
     )
     statements = tuple(

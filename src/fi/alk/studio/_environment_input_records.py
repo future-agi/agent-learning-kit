@@ -22,6 +22,7 @@ from fi.alk.studio._environment_input_types import (
     SourceDiagnostic,
     SourceSpan,
     _canonical_json,
+    _normalize_audience,
 )
 
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
@@ -149,7 +150,8 @@ def _review_record_sources(
         reviewed[source_id] = ReviewedRecordSource(
             pin=parsed.pin,
             filename=parsed.filename,
-            visibility=review.visibility,
+            visibility="evaluator_only",
+            audience=_normalize_audience(review.visibility, review.audience),
             fields=review.fields,
             records=tuple(accepted),
             rejected_records=tuple(rejected),
@@ -293,11 +295,21 @@ def _validate_relationships(
                 "source_relationship_missing",
                 "A relationship target must be a stable identifier",
             )
-        missing = [
-            record.as_dict().get(relationship.from_field)
+        missing = tuple(
+            SourceDiagnostic(
+                "source_relationship_missing",
+                "blocking",
+                f"Missing key {record.as_dict().get(relationship.from_field)!r} in "
+                f"{relationship.to_source_id}.{relationship.to_field}",
+                SourceSpan(
+                    relationship.from_source_id,
+                    row=record.source_row,
+                    field=relationship.from_field,
+                ),
+            )
             for record in from_source.records
             if record.as_dict().get(relationship.from_field) not in target_values
-        ]
+        )
         if missing:
             raise EnvironmentInputError(
                 "source_relationship_missing",
@@ -306,6 +318,7 @@ def _validate_relationships(
                     f"contains {len(missing)} value(s) absent from "
                     f"{relationship.to_source_id}.{relationship.to_field}"
                 ),
+                diagnostics=missing,
             )
 
 
@@ -354,13 +367,13 @@ def _apply_synthetic_replacements(
                 if value is not None:
                     values_by_key[(source_id, field)].add(value)
                     original_values.add(value)
-                    if source.visibility == "agent_visible":
+                    if source.audience.untrusted_recipients:
                         visible_original_values.add(value)
     for keys in group_keys.values():
         if not any(mapping_by_key[key].personal_data for key in keys):
             continue
         visible_keys = [
-            key for key in keys if sources[key[0]].visibility == "agent_visible"
+            key for key in keys if sources[key[0]].audience.untrusted_recipients
         ]
         representative = min(visible_keys or keys)
         mapping = mapping_by_key[representative]
@@ -442,6 +455,7 @@ def _apply_synthetic_replacements(
             pin=source.pin,
             filename=source.filename,
             visibility=source.visibility,
+            audience=source.audience,
             fields=source.fields,
             records=tuple(records),
             rejected_records=source.rejected_records,
