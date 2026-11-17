@@ -646,6 +646,45 @@ def test_a_hooks_path_setting_is_not_taken_for_a_secret(tmp_path):
     assert ".githooks/shared-local" in text
 
 
+def test_a_webhook_split_over_short_segments_is_masked(tmp_path):
+    url = "https://hooks.zapier.com/hooks/catch/1234567/ab9cdef1/"
+    source = _source(tmp_path, {".env": f"NOTIFY_TARGET={url}\n"})
+    text = _evidence(tmp_path, source, "POST /hooks/catch/1234567/ab9cdef1/ 404\n")
+    assert "1234567/ab9cdef1" not in text
+
+
+_CERT = (
+    "-----BEGIN CERTIFICATE-----\n" + ("MIIBszCCAVmgAwIBAgIUQ0FOQVJZ" * 2 + "\n") * 20
+    + "-----END CERTIFICATE-----\n"
+)
+
+
+@pytest.mark.parametrize(
+    "path,body",
+    [
+        ("certs/cacert.pem", _CERT * 60),
+        ("models/tokenizer.json", '{"model": {"vocab": {' + ", ".join(f'"w{i}": {i}' for i in range(9000)) + "}}}"),
+    ],
+    ids=["ca-bundle", "tokenizer"],
+)
+def test_a_large_public_listed_file_does_not_withhold_the_evidence(tmp_path, path, body):
+    # A CA bundle and a tokenizer hold nothing secret, so their size doesn't stop the masks.
+    (tmp_path / path).parent.mkdir(parents=True)
+    (tmp_path / path).write_text(body)
+    (tmp_path / ".env").write_text("API_KEY=canary-public-files-0071\n")
+    assert len(body.encode()) > 64 * 1024
+    assert "canary-public-files-0071" in source_secret_masks(tmp_path)
+
+
+def test_a_large_pem_holding_a_private_key_still_fails_closed(tmp_path):
+    (tmp_path / "certs").mkdir()
+    (tmp_path / "certs" / "bundle.pem").write_text(
+        _CERT * 60 + "-----BEGIN PRIVATE KEY-----\nCANARYKEY\n-----END PRIVATE KEY-----\n"
+    )
+    with pytest.raises(OSError):
+        source_secret_masks(tmp_path)
+
+
 def test_a_line_of_an_env_file_that_is_not_a_setting_is_masked_like_a_line(tmp_path):
     source = _source(
         tmp_path,

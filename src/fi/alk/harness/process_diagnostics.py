@@ -21,6 +21,11 @@ from .backends.files import _SKIP_DIRS, secret_text
 MIN_MASKED_LENGTH = 10
 _MAX_MASKED_FILE_BYTES = 64 * 1024  # a credential file is small; a state file is not
 _MAX_MASKED_TOTAL_BYTES = 1024 * 1024  # all listed files together
+_MAX_PUBLIC_FILE_BYTES = 16 * 1024 * 1024  # read to tell a large CA bundle from a key file
+# Listed by a broad glob (*token*.json) but public: a model's tokenizer files.
+_PUBLIC_TOKENIZER_NAMES = frozenset(
+    {"tokenizer.json", "tokenizer_config.json", "special_tokens_map.json"}
+)
 _MAX_WALKED_ENTRIES = 50_000  # directory entries visited, so a huge tree cannot stall a run
 _ENV_LINE = re.compile(
     # The value runs to the end of the line and is stripped in code: a lazy value followed by
@@ -69,6 +74,7 @@ def _looks_like_secret(value: str) -> bool:
             "@" in parts.netloc
             or bool(parts.query)
             or "=" in parts.fragment
+            or _webhook_tail(parts) is not None
             or any(_token_segment(segment) for segment in parts.path.split("/"))
         )
     if len(value) >= 16 and any(c.isalpha() for c in value) and any(c.isdigit() for c in value):
@@ -83,6 +89,24 @@ def _looks_like_secret(value: str) -> bool:
         )
         >= 2
     )
+
+
+_WEBHOOK_SEGMENTS = frozenset({"hook", "hooks", "webhook", "webhooks"})
+
+
+def _webhook_tail(parts) -> str | None:
+    """The path after a webhook's marker (a hooks.* host, or a hook/hooks/webhook(s) segment),
+    which holds its token, perhaps split over short segments; None for any other URL."""
+    segments = [segment for segment in parts.path.split("/")]
+    host = (parts.hostname or "").lower()
+    for index, segment in enumerate(segments):
+        if segment.lower() in _WEBHOOK_SEGMENTS:
+            tail = "/".join(segments[index + 1 :]).strip("/")
+            return tail or None
+    if host.split(".", 1)[0] in _WEBHOOK_SEGMENTS:
+        tail = parts.path.strip("/")
+        return tail or None
+    return None
 
 
 def _token_segment(segment: str) -> bool:
@@ -162,6 +186,10 @@ def _url_masks(value: str, *, named: bool = False) -> set[str]:
     except ValueError:
         return set()
     masks: set[str] = set()
+    tail = _webhook_tail(parts)
+    if tail is not None:
+        # The whole tail, with and without its slashes around it, however the log cuts it.
+        masks.update({tail, tail + "/", "/" + tail})
     segments = parts.path.split("/")
     for index, segment in enumerate(segments):
         if _token_segment(segment) or (named and len(segment) >= 16):
@@ -283,6 +311,8 @@ def source_secret_masks(root: Path) -> frozenset[str]:
                 info = os.fstat(stream.fileno())
                 if not stat.S_ISREG(info.st_mode):
                     continue
+                if _public_listed_file(entry.name, resolved.name, stream, info.st_size):
+                    continue
                 if (
                     info.st_size > _MAX_MASKED_FILE_BYTES
                     or total + info.st_size > _MAX_MASKED_TOTAL_BYTES
@@ -296,6 +326,26 @@ def source_secret_masks(root: Path) -> frozenset[str]:
                 names=(entry.name, resolved.name),
             )
     return frozenset(mask for mask in masks if len(mask) >= MIN_MASKED_LENGTH)
+
+
+def _public_listed_file(name: str, resolved_name: str, stream, size: int) -> bool:
+    """Whether a listed file holds nothing secret, so it needs no masks and its size doesn't
+    withhold the evidence: a model's tokenizer file, or a PEM file of certificates only (a CA
+    bundle). A PEM file holding anything but certificates, a key above all, is not public."""
+    names = {name.casefold(), resolved_name.casefold()}
+    if names & _PUBLIC_TOKENIZER_NAMES:
+        return True
+    if not any(n.endswith((".pem", ".crt", ".cer")) for n in names):
+        return False
+    if size > _MAX_PUBLIC_FILE_BYTES:
+        return False
+    text = stream.read(_MAX_PUBLIC_FILE_BYTES + 1).decode("utf-8", errors="replace")
+    stream.seek(0)
+    kinds = set(re.findall(r"-----BEGIN ([A-Z0-9 ]+)-----", text))
+    outside = re.sub(
+        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", "", text, flags=re.DOTALL
+    )
+    return kinds == {"CERTIFICATE"} and not outside.strip()
 
 
 def mask_source_secrets(text: str, masks: Iterable[str]) -> str:
