@@ -197,6 +197,8 @@ KEPT_WITH_A_URL = (
     "runtime_dependencies[].name",
     "data_store.host",
     "data_store.configured_by",
+    "workers[].id",
+    "workers[].name",
 )
 
 
@@ -222,6 +224,7 @@ def _full_contract() -> AgentContract:
         "dependencies": [{"name": URL, "engine": URL}],
         "runtime_dependencies": [{"name": URL}],
         "data_store": {"kind": "database", "host": URL, "configured_by": URL},
+        "workers": [{"id": URL, "name": URL, "tools": ["post"]}],
     }
     for name in FREE_TEXT:
         model, field = name.split(".")

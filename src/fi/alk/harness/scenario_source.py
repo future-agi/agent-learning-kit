@@ -82,6 +82,16 @@ def sampled_for_calling(scenarios: Sequence[Any]) -> list[Any]:
 _JUDGED_MARKER = "judged (reason not persisted by folder.py's on-disk layout)"
 
 
+class AgentDocumentFailed(RuntimeError):
+    """A build of a folder could not make its agent document. ``code`` and ``message`` go to the
+    platform as the job's failure; the message never carries the customer's own field names."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 class ScenarioDocumentInvalid(RuntimeError):
     """A scenario folder under `<bundle_dir>/scenarios/` is unreadable or malformed: missing
     `scenario.json`, invalid JSON, a field of the wrong shape, or a `setup.py`/`ready.py`/
@@ -821,6 +831,17 @@ class BundleScenarioSource:
                     getattr(exc, "code", ""),
                     " detail=subfolder_mismatch" if mismatch else "",
                 )
+                if job.source.subfolder:
+                    # A folder build with no document registers as the wrong agent: fail it.
+                    code = (
+                        exc.code
+                        if isinstance(exc, AgentBuildError)
+                        else "agent_document_failed"
+                    )
+                    raise AgentDocumentFailed(
+                        code,
+                        f"The agent document for the folder could not be built ({code}).",
+                    ) from exc
         registered = await register_with_platform(
             scenarios_client,
             scenarios,
