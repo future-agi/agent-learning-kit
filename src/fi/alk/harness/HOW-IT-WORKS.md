@@ -101,8 +101,10 @@ has a `source_root` or a `scan_root` reads the customer's files in a child proce
 through a fork server, so a hostile tree can be cut at the save's deadline and its memory
 capped. That child imports the parent's `__main__` module before it serves. A script that calls
 the kit at top level, without an `if __name__ == "__main__":` guard, is therefore run a second
-time inside the child (model calls included), and the child's own nested start fails and falls
-back. Put the kit's calls under the guard. A script that cannot take the guard sets
+time inside the child (model calls included). Its own nested start fails and falls back, and it doesn't
+serve until the script's top level returns. After 15 s the parent kills it and runs that
+call's checks in its own process from then on, with no deadline cut and no memory cap. Put
+the kit's calls under the guard. A script that cannot take the guard sets
 `ALK_SAVE_CHECKS=thread`, which runs the checks in the parent's own process, as before.
 
 ---
