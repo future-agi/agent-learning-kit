@@ -680,17 +680,35 @@ def test_l4_an_inherited_method_is_matched_under_the_subclass_name(tmp_path):
 @pytest.mark.parametrize(
     "line",
     ["-r base.txt", "--requirement base.txt", "--requirement=base.txt", "-c pins.txt",
-     "--constraint pins.txt", "-rbase.txt"],
+     "--constraint pins.txt", "-rbase.txt",
+     "-e ./lib", "--editable ./lib", "./lib", "lib @ file:./lib", "git+https://example.com/lib.git"],
 )
 def test_m5_a_requirements_include_or_constraint_keeps_todays_route(tmp_path, line):
     body = deep_reading()
     source = deep_source(
         tmp_path,
         requirements=DEEP_REQUIREMENTS + line + "\n",
-        extra={f"{DEEP}/base.txt": "langgraph-cli\n", f"{DEEP}/pins.txt": "langgraph-cli\n"},
+        extra={f"{DEEP}/base.txt": "langgraph-cli\n", f"{DEEP}/pins.txt": "langgraph-cli\n",
+               f"{DEEP}/lib/pyproject.toml": "[project]\nname='lib'\nversion='1'\ndependencies=['langgraph-cli[inmem]']\n"},
     )
     manifest, output = bundled(tmp_path, source, DEEP, contract=body)
     todays_route(manifest, output, body)
+
+
+def test_m5_a_dockerfile_keeps_todays_route(tmp_path):
+    """Round 3, M2: the app's own Dockerfile may install the CLI, which the kit can't see."""
+    body = deep_reading()
+    source = deep_source(
+        tmp_path,
+        extra={f"{DEEP}/Dockerfile": "FROM python:3.12\nRUN pip install 'langgraph-cli[inmem]'\n"},
+    )
+    manifest, output = bundled(tmp_path, source, DEEP, contract=body)
+    todays_route(manifest, output, body)
+
+
+def test_m5_a_runtime_dockerfile_keeps_the_command(tmp_path):
+    root, run_folder, runtime = _scoped(deep_source(tmp_path), dockerfile=f"{DEEP}/Dockerfile.agent")
+    assert not bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
 
 
 @pytest.mark.parametrize(

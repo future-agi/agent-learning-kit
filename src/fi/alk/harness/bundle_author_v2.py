@@ -1921,6 +1921,9 @@ def _runtime_component(root: Path, configured_workdir: str) -> Path:
 
 _LANGGRAPH_JSON_LARGEST = 64 * 1024
 _REQUIREMENT_INCLUDE = re.compile(r"^(?:-r|--requirement|-c|--constraint)(?:\s|=|[^\s-]|$)")
+# A requirement that installs from a path, a URL or a VCS: the package may depend on the CLI
+# unseen. (`-e`, `--editable`, `./lib`, `/abs/lib`, `lib @ file:./lib`, `git+https://...`.)
+_UNSEEN_INSTALL = re.compile(r"^(?:-e\b|--editable\b|\.|/|[^#]*(?:\s@\s|://|git\+))")
 _LANGGRAPH_CLI = re.compile(r"^langgraph[-_.]cli(?:\s|\[|[<>=!~@;]|$)", re.IGNORECASE)
 
 
@@ -1935,7 +1938,8 @@ def _langgraph_command_cannot_run(
     requirement or project dependency names ``langgraph-cli``; ``langgraph.json`` is at most
     64 KB, has no ``http`` or ``auth`` key (custom routes or auth make the app more than its
     graph), and declares one graph; no requirements line is an include (``-r``, ``-c``) and no
-    uv dependency group is declared, since either may install the CLI unseen; and no Compose
+    uv dependency group is declared, since either may install the CLI unseen; no editable, path
+    or URL requirement and no Dockerfile (for the same reason); and no Compose
     selection: a Compose service builds its own
     image, which this can't see, and a ``callable`` interface is refused on a Compose selection.
     """
@@ -1948,6 +1952,9 @@ def _langgraph_command_cannot_run(
     )
     if any((lookup / name).is_file() for name in COMPOSE_FILE_NAMES):
         # `auto`, which a native reading becomes on the graph route, would select this file.
+        return False
+    if (run_folder / "Dockerfile").is_file() or runtime.get("dockerfile"):
+        # The app's own image may install the CLI, which this can't see.
         return False
     command = runtime.get("command")
     if (
@@ -1965,6 +1972,7 @@ def _langgraph_command_cannot_run(
         if any(
             _LANGGRAPH_CLI.match(requirement.strip())
             or _REQUIREMENT_INCLUDE.match(requirement.strip())
+            or _UNSEEN_INSTALL.match(requirement.strip())
             for requirement in requirements
             if isinstance(requirement, str)
         ):
