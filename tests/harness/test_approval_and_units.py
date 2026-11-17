@@ -107,7 +107,7 @@ def test_a_scenario_without_an_approver_in_its_cast_or_on_a_read_tool_is_refused
     assert any("needs an actor in this scenario permitted" in one for one in _unlisted_actors(alone, tmp_path))
     with_one = alone.model_copy(update={"actors": [{"id": "approver"}]})
     assert _unlisted_actors(Scenario.model_validate(with_one.model_dump()), tmp_path) == []
-    on_read = {**with_one.model_dump(), "faults": [{**HOLD, "action": "ledger.lookup"}]}
+    on_read = {**with_one.model_dump(), "faults": [{**HOLD, "action": "lookup"}]}
     said = accept_scenario(
         on_read, world_root=tmp_path, catalogue=Catalogue(sub_goals=[]), kept=[], persist=False,
         read_tools={"lookup"},
@@ -148,8 +148,10 @@ def test_submitting_reads_each_tool_s_effect_from_its_entrypoint(tmp_path):
         args = {"name": "s", "instruction": "x", "actors": [{"id": "approver"}], "faults": [hold]}
         return asyncio.run(submit(args))["content"][0]["text"]
 
-    assert "only reads" in said("ledger.lookup")
-    assert "only reads" not in said("ledger.update")
+    assert "only reads" in said("lookup")
+    assert "only reads" not in said("update")
+    # Another service's action with the same last part is not that read tool.
+    assert "only reads" not in said("ledger.lookup")
 
 
 def _dispatcher_brief(tmp_path, goal: str) -> str:

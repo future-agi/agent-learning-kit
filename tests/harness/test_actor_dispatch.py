@@ -743,3 +743,35 @@ def test_an_action_on_the_agent_s_second_call_never_counts_a_door_mark_or_a_stop
 
     asyncio.run(scenario())
     assert len(sent) == 1 and sent[0][1]["X-ALK-Parent-Event"] == "a2"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "reached"),
+    [
+        ({"@sam": "someone else"}, False),
+        ({"to": "@samantha"}, False),
+        ({"to": "reply to @sam"}, False),
+        ({"to": ["@robin", "@sam"]}, True),
+        ('{"cc": {"slack": "@sam"}}', True),
+    ],
+    ids=["key only", "longer value", "inside a sentence", "in a list", "nested, as logged text"],
+)
+def test_an_actor_comes_in_only_when_an_argument_value_is_one_of_its_identities_whole(arguments, reached):
+    log = [{"name": "post_message", "actor_id": "agent", "action_id": "a1", "arguments": arguments}]
+    action = {"action": "slack.post_message", "trigger": {"kind": "contacted"}}
+    dispatcher, sent = _dispatcher([{"id": "coworker", "actions": [action]}], log)
+
+    asyncio.run(_ticks(dispatcher))
+
+    assert bool(sent) is reached
+
+
+@pytest.mark.parametrize(("logged", "fired"), [("ticket.update", False), ("update", True)])
+def test_an_actor_waiting_on_a_tool_with_no_route_comes_in_only_on_that_tool_never_another_service_s(logged, fired):
+    log = [{"name": "update", "action": logged, "actor_id": "agent", "action_id": "a1"}]
+    action = {"action": "records.approve", "trigger": {"kind": "on_tool", "tool": "update"}}
+    dispatcher, sent = _dispatcher([{"id": "reviewer", "actions": [action]}], log)
+
+    asyncio.run(_ticks(dispatcher))
+
+    assert bool(sent) is fired

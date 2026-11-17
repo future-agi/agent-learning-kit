@@ -112,7 +112,7 @@ from .scenario import (
 )
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
-from .world_door import ToolCall, call_effect
+from .world_door import ToolCall, call_effect, route_action
 from .world.snapshot import read_manifest, restore
 
 logger = logging.getLogger(__name__)
@@ -1527,16 +1527,21 @@ def _service_tools(contract: Any) -> set[str]:
 
 
 def _read_tools(contract: Any) -> set[str]:
-    """The agent's tools that only read, by the rule the world's door applies: the declared effect, else the method."""
-    entries = (one if isinstance(one, dict) else one.model_dump() for one in (contract.tool_entrypoints or []))
-    return {
-        str(entry.get("tool") or "")
+    """The agent's tools that only read, by the rule the world's door applies (the declared effect, else the method),
+    each by its name and by its route's world action, the two names a fault can give it."""
+    entries = [one if isinstance(one, dict) else one.model_dump() for one in (contract.tool_entrypoints or [])]
+    reads = [
+        entry
         for entry in entries
         if call_effect(
             ToolCall(action="", name="", method=str(entry.get("method") or "POST"), effect=str(entry.get("effect") or ""))
         )
         == "read"
-    } - {""}
+    ]
+    return (
+        {str(entry.get("tool") or "") for entry in reads}
+        | {route_action(str(entry.get("endpoint") or "")) for entry in reads}
+    ) - {""}
 
 
 def _call_actors_that_cannot_run(
@@ -1649,7 +1654,7 @@ def accept_scenario(
     if reading := [
         fault.action
         for fault in scenario.faults
-        if fault.mode == "approval_required" and fault.action.rsplit(".", 1)[-1] in (read_tools or set())
+        if fault.mode == "approval_required" and fault.action in (read_tools or set())
     ]:
         return _err(
             "Not kept. faults: approval_required holds a change, and " + ", ".join(reading) + " only reads; set it "

@@ -29,7 +29,7 @@ from .actors import (
     ScheduledAction,
     is_pre_run,
 )
-from .world_door import calls_tool, is_attempt, logged_as, same_action
+from .world_door import calls_tool, is_attempt, logged_as, same_action, same_json
 
 logger = logging.getLogger(__name__)
 
@@ -97,13 +97,26 @@ class DoorActs:
 
 
 def contacts(arguments: Any, actor: Actor) -> bool:
-    """Whether an action is addressed to one of this actor's identities: an argument value equal to one, compared
-    in the same encoding so any character matches."""
-    said = json.dumps(arguments or {}, default=str)
-    return any(
-        identity and json.dumps(identity) in said
-        for identity in actor.identities.values()
-    )
+    """Whether an action is addressed to one of this actor's identities: an argument value, at any depth, that is one
+    of them whole. Keys are never values, so `{"manager": "someone-else"}` does not contact the actor `manager`."""
+    if isinstance(arguments, (str, bytes)):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            return False
+    identities = [one for one in actor.identities.values() if one not in (None, "")]
+
+    def values(value: Any) -> Any:
+        if isinstance(value, dict):
+            for one in value.values():
+                yield from values(one)
+        elif isinstance(value, (list, tuple)):
+            for one in value:
+                yield from values(one)
+        else:
+            yield value
+
+    return any(same_json(value, identity) for value in values(arguments) for identity in identities)
 
 
 def _request_arguments(cause: str, log: list[dict[str, Any]]) -> dict[str, Any]:
@@ -157,9 +170,14 @@ class ActorDispatcher:
         from fi.simulate.simulation.call_actors import LIMIT_DEFAULTS
 
         given = limits or {}
-        # Live turns this trial may take, per actor and in all; a scenario's or the environment's limits set them.
-        self.turns_per_actor = given.get("live_turns_per_actor") or LIMIT_DEFAULTS["live_turns_per_actor"]
-        self.turns_per_trial = given.get("live_turns_per_trial") or LIMIT_DEFAULTS["live_turns_per_trial"]
+        # Live turns this trial may take, per actor and in all; a scenario's or the environment's limits set them. An
+        # explicit null is no limit; a value never set is the default.
+        self.turns_per_actor: int | None = (
+            given["live_turns_per_actor"] if "live_turns_per_actor" in given else LIMIT_DEFAULTS["live_turns_per_actor"]
+        )
+        self.turns_per_trial: int | None = (
+            given["live_turns_per_trial"] if "live_turns_per_trial" in given else LIMIT_DEFAULTS["live_turns_per_trial"]
+        )
         self.act = act
         # Writes a `per_trial` pre-run session's messages inside this trial, from each actor's own brief.
         self.write_session = write_session
@@ -390,9 +408,8 @@ class ActorDispatcher:
     def _turn_left(self, actor: Actor) -> bool:
         """Whether a live turn is within the actor's own cap and the trial's: every way a live turn starts asks this."""
         own = actor.max_turns if actor.max_turns is not None else self.turns_per_actor
-        return (
-            self.live_turns.get(actor.id, 0) < own
-            and sum(self.live_turns.values()) < self.turns_per_trial
+        return (own is None or self.live_turns.get(actor.id, 0) < own) and (
+            self.turns_per_trial is None or sum(self.live_turns.values()) < self.turns_per_trial
         )
 
     def _live_due(
@@ -960,16 +977,46 @@ def build_dispatcher(
         and listed[entry.id].play != "mocked"
         and not listed[entry.id].channel
     }
+    # An actor outside the cast that a cast actor falls back to (or one after it) can be asked to answer instead: a
+    # live one needs its own brief and the decider, as a cast actor does.
+    cast_ids = {entry.id for entry in cast}
+    reached: list[str] = []
+    waiting = [
+        listed[entry.id].activation.fallback
+        for entry in cast
+        if entry.id in listed and listed[entry.id].activation is not None
+    ]
+    while waiting:
+        one = waiting.pop()
+        if one in listed and one not in cast_ids and one not in reached:
+            reached.append(one)
+            if listed[one].activation is not None:
+                waiting.append(listed[one].activation.fallback)
+    briefs.update(
+        {
+            actor_id: brief_text(
+                actor_brief(
+                    with_knowledge_read(listed[actor_id].model_dump(exclude_none=True), bundle_dir, records) or {},
+                    scenario=dict(doc),
+                )
+            )
+            for actor_id in reached
+            if listed[actor_id].play != "mocked" and not listed[actor_id].channel
+        }
+    )
     world_actions = action_descriptions(contract)
     names_actor = actions_naming_actor(contract)
+    # One resolution of the environment's and the scenario's limits, its model for every decider.
+    limits = _live_limits(listing.limits, doc.get("limits"))
+    model = limits.get("model")
     return ActorDispatcher(
         listed,
         cast,
         act=act,
-        decide=live_decider(meter, listing.limits.model) if briefs else None,
+        decide=live_decider(meter, model) if briefs else None,
         briefs=briefs,
         pre_run=sessions,
-        write_session=live_decider(meter, listing.limits.model)
+        write_session=live_decider(meter, model)
         if in_sessions
         else None,
         session_briefs=session_briefs,
@@ -980,18 +1027,20 @@ def build_dispatcher(
         records=records,
         names_actor=names_actor,
         reported=reported,
-        limits=_live_limits(listing.limits, doc.get("limits")),
+        limits=limits,
         action_fields=action_fields(contract),
         columns=columns,
     )
 
 
 def _live_limits(environment: Any, scenario: Any) -> dict[str, Any]:
-    """The environment's actor limits with the scenario's own on top; unset values take the defaults in the dispatcher."""
+    """The environment's actor limits with the scenario's own on top; unset values take the defaults in the dispatcher,
+    and an explicit null is no limit."""
     from .actors import Limits
 
     own = Limits.model_validate(scenario) if isinstance(scenario, dict) else None
-    return environment.merged(own).model_dump(exclude_none=True)
+    # As set, explicit nulls (no limit) kept: a value left out takes the default in the dispatcher.
+    return environment.merged(own).model_dump(exclude_unset=True)
 
 
 def described_with_units(tool: dict[str, Any]) -> str:

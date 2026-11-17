@@ -4,13 +4,14 @@ Never raises into its caller. Copied into each bundle: standard library only, pl
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from urllib import error, request
@@ -18,6 +19,8 @@ from urllib import error, request
 # The agent under test in the action log; no actor takes this id.
 AGENT = "agent"
 OUTCOMES = ("committed", "refused", "faulted", "duplicate")
+# The HTTP answer a committed key gave, replayed as it was to a retry: status, content type and the raw body (base64).
+Response = dict[str, Any]
 # Longest a scenario's fault holds a call, and how long a log write may hold the answer before the row is given up.
 MAX_FAULT_SECONDS = 30.0
 # Every fault a scenario can set on one of the agent's calls, and the two that hold the call before answering.
@@ -148,9 +151,9 @@ class ActionLog(Protocol):
 
     def rows(self) -> list[dict[str, Any]]: ...
 
-    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any] | None:
-        """The action, arguments and result an actor's key first committed; the action is None on a row written
-        before actions were recorded."""
+    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any, Response | None] | None:
+        """The action, arguments, result and HTTP response an actor's key first committed; the action is None on a
+        row written before actions were recorded, the response None on a key settled before responses were kept."""
         ...
 
     def claim(self, key: str, actor: str) -> str | None:
@@ -158,8 +161,9 @@ class ActionLog(Protocol):
         this one left it in (`pending`, `committed`, `unknown`). Raises when the claim cannot be kept."""
         ...
 
-    def settle(self, key: str, actor: str, state: str | None) -> None:
-        """A claimed key's state once its action ran; None releases it (refused: nothing took effect)."""
+    def settle(self, key: str, actor: str, state: str | None, response: Response | None = None) -> None:
+        """A claimed key's state once its action ran, with the response it answered when it committed; None releases
+        it (refused: nothing took effect)."""
         ...
 
     def agent_calls(self, action: str, name: str) -> int: ...
@@ -185,10 +189,80 @@ def action_matches(logged: str, action: str) -> bool:
 
 
 def calls_tool(logged: str, tool: str) -> bool:
-    """Whether a logged world action is a call an `on_tool` trigger waits for. A trigger names the world action in
-    full; one that names only a tool (no route to read it from) is matched by the logged action's last part, as before
-    actions were logged in full."""
-    return action_matches(logged, tool) or ("." not in tool and bool(tool) and logged.rsplit(".", 1)[-1] == tool)
+    """Whether a logged world action is a call an `on_tool` trigger waits for. A trigger names the world action in full
+    (its route, read from the contract) or, for a tool with no route, the tool, which is how such a call is logged;
+    never by a last part, so `ticket.update` is not `crm.update`."""
+    return action_matches(logged, tool)
+
+
+def same_json(one: Any, other: Any) -> bool:
+    """Whether two values are the same JSON, nested values included: `true` is never `1`, `1.0` never the integer `1`,
+    and `null` only `null`. Python's own equality takes `True == 1`."""
+    if isinstance(one, bool) or isinstance(other, bool):
+        return type(one) is type(other) and one == other
+    if isinstance(one, Mapping) or isinstance(other, Mapping):
+        return (
+            isinstance(one, Mapping)
+            and isinstance(other, Mapping)
+            and one.keys() == other.keys()
+            and all(same_json(one[key], other[key]) for key in one)
+        )
+    if isinstance(one, (list, tuple)) or isinstance(other, (list, tuple)):
+        return (
+            isinstance(one, (list, tuple))
+            and isinstance(other, (list, tuple))
+            and len(one) == len(other)
+            and all(same_json(a, b) for a, b in zip(one, other))
+        )
+    return type(one) is type(other) and one == other
+
+
+def calls_in(row: Mapping[str, Any]) -> int:
+    """How many of the agent's calls one log row stands for: a mark for a door out of reach counts every call made
+    while it was, with how many in its arguments; any other row is one call."""
+    arguments = row.get("arguments")
+    if isinstance(arguments, (str, bytes)):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            arguments = None
+    if row.get("error") == DOOR_OUT_OF_REACH and isinstance(arguments, dict):
+        count = arguments.get("count")
+        if isinstance(count, int) and not isinstance(count, bool):
+            return max(count, 1)
+    return 1
+
+
+def _response(outcome: Outcome) -> Response:
+    """The HTTP answer a call gave, as a retry with its key replays it."""
+    return {
+        "status": outcome.status,
+        "content_type": outcome.content_type,
+        "body": base64.b64encode(outcome.body).decode("ascii") if outcome.body is not None else None,
+    }
+
+
+def route_action(endpoint: str) -> str:
+    """A tool's route as the HTTP door names its calls: the path with `/` as `.`, a `{part}` kept."""
+    return endpoint.split("?", 1)[0].strip("/").replace("/", ".")
+
+
+def routed_faults(faults: Sequence[Any], contract: Any) -> list[dict[str, Any]]:
+    """The scenario's faults with each one that names a tool by its name renamed to the world action of that tool's
+    route, from the contract's own tool entrypoints, so the HTTP door, which sees only routes, holds it. A tool with no
+    route (one the agent runs in its own process) keeps its name, which the in-process door matches."""
+    entries = contract.get("tool_entrypoints") if isinstance(contract, Mapping) else getattr(contract, "tool_entrypoints", None)
+    routes: dict[str, str] = {}
+    for entry in entries or []:
+        entry = entry if isinstance(entry, Mapping) else entry.model_dump()
+        tool, route = str(entry.get("tool") or ""), route_action(str(entry.get("endpoint") or ""))
+        if tool and route:
+            routes[tool] = route
+    return [
+        {**one, "action": routes[str(one.get("action"))]} if str(one.get("action") or "") in routes else dict(one)
+        for one in faults or []
+        if isinstance(one, Mapping)
+    ]
 
 
 def same_action(row: Mapping[str, Any], action: str) -> bool:
@@ -369,12 +443,13 @@ class WorldDoor:
                 elif claimed is not None:
                     return self._key_unknown(call, key, on_behalf_of)
             if known is None:
-                self._keyed[slot] = ("pending", call.action, call.arguments, None)
+                self._keyed[slot] = ("pending", call.action, call.arguments, None, None)
                 outcome = self._attempt(call, key, on_behalf_of)
                 if outcome.outcome == "committed":
                     # Committed, even when a fault then lost the answer: a retry with this key is answered from it.
-                    self._keyed[slot] = ("committed", call.action, call.arguments, outcome.result)
-                    self._settle(key, call.actor, "committed", logged)
+                    answered = _response(outcome)
+                    self._keyed[slot] = ("committed", call.action, call.arguments, outcome.result, answered)
+                    self._settle(key, call.actor, "committed", logged, answered)
                 elif (
                     outcome.outcome == "faulted"
                     # An approval that could not be read held the call before the world saw it.
@@ -383,7 +458,7 @@ class WorldDoor:
                 ):
                     # The world failed mid-action, or the call ran and its answer was lost: whether it applied it is
                     # unknown, so the key is never run again.
-                    self._keyed[slot] = ("unknown", call.action, call.arguments, None)
+                    self._keyed[slot] = ("unknown", call.action, call.arguments, None, None)
                     self._settle(key, call.actor, "unknown", logged)
                 else:
                     # Refused, or held by the scenario's fault before the world saw it: nothing took effect, and a
@@ -391,10 +466,10 @@ class WorldDoor:
                     del self._keyed[slot]
                     self._settle(key, call.actor, None, logged)
                 return outcome
-            state, action, arguments, result = known
+            state, action, arguments, result, answered = known
             if state != "committed":
                 return self._key_unknown(call, key, on_behalf_of)
-            if (action is not None and action != call.action) or arguments != call.arguments:
+            if (action is not None and action != call.action) or not same_json(arguments, call.arguments):
                 outcome = Outcome(
                     "refused",
                     409,
@@ -403,8 +478,18 @@ class WorldDoor:
                 )
                 self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
                 return outcome
-            # Answered from the first result; the world never sees the same action twice.
-            outcome = Outcome("duplicate", 200, result=result)
+            # Answered as the first call was, its status, content type and body; the world never sees it twice.
+            outcome = (
+                Outcome(
+                    "duplicate",
+                    int(answered.get("status") or 200),
+                    result=result,
+                    body=base64.b64decode(answered["body"]) if answered.get("body") is not None else None,
+                    content_type=answered.get("content_type"),
+                )
+                if answered
+                else Outcome("duplicate", 200, result=result)
+            )
             self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
             return outcome
 
@@ -466,11 +551,13 @@ class WorldDoor:
                     return self._run(call, key, None, wait=True)
         return self._run(call, key, on_behalf_of)
 
-    def _settle(self, key: str, actor: str, state: str | None, logged: bool = True) -> None:
+    def _settle(
+        self, key: str, actor: str, state: str | None, logged: bool = True, response: Response | None = None
+    ) -> None:
         if not logged:
             return
         try:
-            self.log.settle(key, actor, state)
+            self.log.settle(key, actor, state, response)
         except Exception:  # noqa: BLE001 - a key left pending is never run again: the safe side
             pass
 
@@ -501,7 +588,10 @@ class WorldDoor:
         trial's faults cannot be read."""
         faults = [one for one in self.faults() or [] if isinstance(one, dict)]
         names = (call.action, call.name) if self.faults_by_tool else (call.action,)
-        return [one for one in faults if one.get("action") in names]
+        # A fault on a route with a part (`orders.{id}.cancel`) holds every call of it (`orders.1043.cancel`).
+        return [
+            one for one in faults if any(action_matches(name, str(one.get("action") or "")) for name in names)
+        ]
 
     def _approved(self, fault: Mapping[str, Any]) -> bool:
         """Whether an actor has committed the fault's `approval` action in this trial, with arguments that include its
@@ -519,7 +609,7 @@ class WorldDoor:
                 row.get("outcome") == "committed"
                 and str(row.get("actor_id") or AGENT) != AGENT
                 and action_matches(logged_as(row), str(fault.get("approval") or ""))
-                and all(arguments.get(name) == value for name, value in wanted.items())
+                and all(name in arguments and same_json(arguments[name], value) for name, value in wanted.items())
             ):
                 return True
         return False
@@ -774,9 +864,12 @@ class RecordExecutor:
             params = list(values.values())
         else:
             assignments = ", ".join(f"{quoted[one]} = {mark}" for one in values)
-            matches = " AND ".join(f"{quoted[one]} = {mark}" for one in where)
+            # `= NULL` matches no row in SQL: a null in `where` is `IS NULL`, with nothing bound.
+            matches = " AND ".join(
+                f"{quoted[one]} IS NULL" if where[one] is None else f"{quoted[one]} = {mark}" for one in where
+            )
             sql = f'UPDATE "{collection}" SET {assignments} WHERE {matches}'
-            params = [*values.values(), *where.values()]
+            params = [*values.values(), *(value for value in where.values() if value is not None)]
         try:
             changed = self.execute(sql, params)
         except Exception as exc:
@@ -858,7 +951,8 @@ _BASIC = "name, arguments, result, ok, error, at"
 # failed write can leave without the row.
 _KEYS_DDL = (
     "CREATE TABLE IF NOT EXISTS _alk_action_keys "
-    "(actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (actor_id, idempotency_key))"
+    "(actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (actor_id, idempotency_key));"
+    "ALTER TABLE _alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
 )
 
 
@@ -924,7 +1018,7 @@ class PostgresLog:
             columns = [one[0] for one in cursor.description or []]
             return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
-    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any] | None:
+    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any, Response | None] | None:
         action = _ACTION if self._records_action() else "NULL"
         with self._connect() as connection:
             row = connection.execute(
@@ -932,7 +1026,13 @@ class PostgresLog:
                 "WHERE idempotency_key = %s AND actor_id = %s AND outcome = 'committed' ORDER BY at LIMIT 1",
                 (key, actor),
             ).fetchone()
-        return (row[0], row[1], row[2]) if row else None
+            if not row:
+                return None
+            self._keys_table(connection)
+            kept = connection.execute(
+                "SELECT response FROM _alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
+            ).fetchone()
+        return (row[0], row[1], row[2], kept[0] if kept and isinstance(kept[0], dict) else None)
 
     def _keys_table(self, connection: Any) -> None:
         """The keys table, made once per log; two first claims at once can race on creating it, and the loser finds it
@@ -960,16 +1060,18 @@ class PostgresLog:
             ).fetchone()
         return str(found[0]) if found else "pending"
 
-    def settle(self, key: str, actor: str, state: str | None) -> None:
+    def settle(self, key: str, actor: str, state: str | None, response: Response | None = None) -> None:
         with self._connect() as connection:
             if state is None:
                 connection.execute(
                     "DELETE FROM _alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
                 )
             else:
+                self._keys_table(connection)
                 connection.execute(
-                    "UPDATE _alk_action_keys SET state = %s WHERE actor_id = %s AND idempotency_key = %s",
-                    (state, actor, key),
+                    "UPDATE _alk_action_keys SET state = %s, response = %s::jsonb "
+                    "WHERE actor_id = %s AND idempotency_key = %s",
+                    (state, json.dumps(response) if response is not None else None, actor, key),
                 )
 
     def agent_calls(self, action: str, name: str) -> int:
@@ -980,9 +1082,12 @@ class PostgresLog:
         else:
             match, params = "name = %s", (name,)
         with self._connect() as connection:
+            # A mark for a door out of reach stands for every call made while it was, with how many in its arguments.
             row = connection.execute(
-                f"SELECT count(*) FROM _alk_tool_trace WHERE {match}{clause}",  # noqa: S608 - fixed clauses
-                params,
+                "SELECT COALESCE(SUM(CASE WHEN error = %s AND jsonb_typeof(arguments -> 'count') = 'number' "
+                "THEN GREATEST((arguments ->> 'count')::numeric::int, 1) ELSE 1 END), 0) "
+                f"FROM _alk_tool_trace WHERE {match}{clause}",
+                (DOOR_OUT_OF_REACH, *params),
             ).fetchone()
         return int(row[0]) if row else 0
 
@@ -1027,6 +1132,7 @@ class MemoryLog:
     def __init__(self) -> None:
         self._rows: list[dict[str, Any]] = []
         self._keys: dict[tuple[str, str], str] = {}
+        self._responses: dict[tuple[str, str], Response] = {}
         self._lock = threading.Lock()
 
     def records_actors(self) -> bool:
@@ -1039,12 +1145,14 @@ class MemoryLog:
                 self._keys[(actor, key)] = "pending"
             return found
 
-    def settle(self, key: str, actor: str, state: str | None) -> None:
+    def settle(self, key: str, actor: str, state: str | None, response: Response | None = None) -> None:
         with self._lock:
             if state is None:
                 self._keys.pop((actor, key), None)
             else:
                 self._keys[(actor, key)] = state
+                if response is not None:
+                    self._responses[(actor, key)] = response
 
     def write(self, row: dict[str, Any]) -> None:
         with self._lock:
@@ -1054,7 +1162,7 @@ class MemoryLog:
         with self._lock:
             return [dict(one) for one in self._rows]
 
-    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any] | None:
+    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any, Response | None] | None:
         found = next(
             (
                 one
@@ -1065,11 +1173,15 @@ class MemoryLog:
             ),
             None,
         )
-        return (found.get("action"), found["arguments"], found["result"]) if found else None
+        if not found:
+            return None
+        with self._lock:
+            answered = self._responses.get((actor, key))
+        return (found.get("action"), found["arguments"], found["result"], answered)
 
     def agent_calls(self, action: str, name: str) -> int:
         return sum(
-            1
+            calls_in(one)
             for one in self.rows()
             if one.get("actor_id") == AGENT
             and (one.get("action") == action if one.get("action") else one.get("name") in (action, name))
@@ -1098,14 +1210,14 @@ class TeeLog:
     def rows(self) -> list[dict[str, Any]]:
         return self.primary.rows()
 
-    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any] | None:
+    def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any, Response | None] | None:
         return self.primary.committed(key, actor)
 
     def claim(self, key: str, actor: str) -> str | None:
         return self.primary.claim(key, actor)
 
-    def settle(self, key: str, actor: str, state: str | None) -> None:
-        self.primary.settle(key, actor, state)
+    def settle(self, key: str, actor: str, state: str | None, response: Response | None = None) -> None:
+        self.primary.settle(key, actor, state, response)
 
     def agent_calls(self, action: str, name: str) -> int:
         return self.primary.agent_calls(action, name)

@@ -7,6 +7,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+import test_egress_proxy
 
 from fi.alk.harness.world_door import (
     AGENT,
@@ -19,6 +20,10 @@ from fi.alk.harness.world_door import (
     ToolCall,
     WorldDoor,
 )
+
+# The Postgres fixture: a fresh action log in its own schema of the test database.
+world_log = test_egress_proxy.world_log
+
 
 
 class _Executor:
@@ -999,3 +1004,147 @@ def test_a_write_is_held_while_the_trial_s_faults_cannot_be_read_and_a_read_stil
     assert read.outcome == "committed"
     assert retry.outcome == "committed"
     assert [call.action for call in executor.ran] == ["orders.find", "orders.refund"]
+
+
+@pytest.mark.parametrize(
+    ("tool", "endpoint", "action", "method"),
+    [
+        ("issue_refund", "/orders/refund/", "orders.refund", "POST"),
+        ("find_order", "/orders/{order_id}", "orders.1043", "GET"),
+    ],
+    ids=["route", "parameterized GET route"],
+)
+def test_a_fault_the_platform_names_by_the_tool_holds_the_call_the_http_door_sees_on_its_route(
+    tool, endpoint, action, method
+):
+    from fi.alk.harness.world_door import routed_faults
+
+    contract = {"tool_entrypoints": [{"tool": tool, "endpoint": endpoint}]}
+    faults = routed_faults([{"action": tool, "mode": "unavailable"}], contract)
+    executor = _Executor()
+    door = _door(executor, faults=faults)
+
+    outcome = door.enter(ToolCall(action=action, name=action.rsplit(".", 1)[-1], arguments={}, method=method))
+
+    assert outcome.outcome == "faulted" and executor.ran == []
+    # Another service's route with the same last part is never held by it.
+    other = door.enter(ToolCall(action="tickets.refund", name="refund", arguments={}, method=method))
+    assert other.outcome == "committed"
+
+
+def test_a_keyed_retry_with_true_where_the_first_sent_1_is_another_write_never_its_duplicate():
+    executor = _Executor()
+    door = _door(executor)
+    first = door.enter(ToolCall(action="settings.update", name="update", arguments={"enabled": 1}, key="k-1"))
+    again = door.enter(ToolCall(action="settings.update", name="update", arguments={"enabled": True}, key="k-1"))
+
+    assert first.outcome == "committed"
+    assert (again.outcome, again.refusal_code) == ("refused", "idempotency_conflict")
+
+
+def test_an_approval_recorded_with_true_does_not_meet_an_approved_when_of_1():
+    door = _door(
+        faults=[{"action": "orders.refund", "mode": "approval_required", "approval": "crm.approve",
+                 "approved_when": {"order_id": 1}}]
+    )
+    door.enter(ToolCall(action="crm.approve", name="approve", arguments={"order_id": True}, actor="manager"))
+
+    held = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order_id": 1}))
+
+    assert (held.outcome, held.refusal_code) == ("refused", "approval_missing")
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "content_type"),
+    [(201, b"created order 7", "text/plain"), (204, b"", None)],
+    ids=["201 text/plain", "204 no content"],
+)
+@pytest.mark.parametrize("recovered", [False, True], ids=["same door", "door restarted on the log"])
+def test_a_keyed_retry_is_answered_with_the_first_call_s_status_body_and_type(status, body, content_type, recovered):
+    class _Answering(_Executor):
+        def run(self, call):
+            self.ran.append(call)
+            return Executed(status, None, body=body, content_type=content_type)
+
+    executor = _Answering()
+    log = MemoryLog()
+    first_door = _door(executor, log=log)
+    call = ToolCall(action="orders.create", name="create", arguments={"order": 7}, key="k-1")
+    first = first_door.enter(call)
+    retry = (_door(executor, log=log) if recovered else first_door).enter(call)
+
+    assert first.outcome == "committed" and retry.outcome == "duplicate" and len(executor.ran) == 1
+    assert (retry.status, retry.answer(), retry.content_type) == (status, body, content_type)
+
+
+def test_a_fault_on_call_2_is_past_once_a_door_mark_counts_two_calls_made_while_it_was_out_of_reach():
+    from fi.alk.harness.world_door import DOOR_OUT_OF_REACH, EVIDENCE_INCOMPLETE
+
+    log = MemoryLog()
+    log.write({"name": "refund", "action": "orders.refund", "actor_id": "agent", "outcome": "unrecorded",
+               "error": DOOR_OUT_OF_REACH, "refusal_code": EVIDENCE_INCOMPLETE, "arguments": {"count": 2}})
+    executor = _Executor()
+    door = _door(executor, log=log, faults=[{"action": "orders.refund", "mode": "unavailable", "on_call": 2}])
+
+    third = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}))
+
+    assert third.outcome == "committed" and len(executor.ran) == 1
+
+
+def test_an_actor_s_change_whose_where_names_a_null_field_reaches_the_record_holding_null():
+    import sqlite3
+
+    from fi.alk.harness.world_door import RecordExecutor, Routed
+
+    db = sqlite3.connect(":memory:", check_same_thread=False)
+    db.execute('CREATE TABLE "tickets" (id TEXT, assigned_to TEXT, status TEXT)')
+    db.execute("INSERT INTO tickets VALUES ('t1', NULL, 'open')")
+    db.execute("INSERT INTO tickets VALUES ('t2', 'sam', 'open')")
+    door = WorldDoor(
+        Routed(None, RecordExecutor(lambda sql, params: db.execute(sql.replace("%s", "?"), params).rowcount)),
+        MemoryLog(),
+        DictRoster({"lead": {"permitted_actions": ["tickets.change"]}}),
+    )
+
+    outcome = door.enter(
+        ToolCall(
+            action="tickets.change",
+            name="change",
+            arguments={"where": {"assigned_to": None}, "set": {"status": "triaged"}},
+            actor="lead",
+            form="record",
+        )
+    )
+
+    assert outcome.outcome == "committed", outcome
+    assert db.execute("SELECT id, status FROM tickets ORDER BY id").fetchall() == [("t1", "triaged"), ("t2", "open")]
+
+
+def test_the_durable_log_counts_a_mark_s_calls_and_replays_a_keyed_answer(world_log):
+    """On the world's own table: a mark for two calls counts two, and a door started fresh on the log answers a keyed
+    retry with the first call's status, type and body."""
+    from fi.alk.harness.world_door import (
+        DOOR_OUT_OF_REACH,
+        EVIDENCE_INCOMPLETE,
+        PostgresLog,
+    )
+
+    dsn, _rows = world_log
+    log = PostgresLog(dsn)
+    log.write({"name": "refund", "action": "orders.refund", "arguments": {"count": 2}, "result": None, "ok": False,
+               "error": DOOR_OUT_OF_REACH, "at": 1.0, "action_id": "m1", "outcome": "unrecorded",
+               "refusal_code": EVIDENCE_INCOMPLETE, "actor_id": "agent"})
+    assert log.agent_calls("orders.refund", "refund") == 2
+
+    class _Answering(_Executor):
+        def run(self, call):
+            self.ran.append(call)
+            return Executed(201, None, body=b"created", content_type="text/plain")
+
+    executor = _Answering()
+    call = ToolCall(action="orders.create", name="create", arguments={"order": 7}, key="k-1")
+    WorldDoor(executor, PostgresLog(dsn), DictRoster({})).enter(call)
+    retry = WorldDoor(executor, PostgresLog(dsn), DictRoster({})).enter(call)
+
+    assert len(executor.ran) == 1 and retry.outcome == "duplicate"
+    assert (retry.status, retry.answer(), retry.content_type) == (201, b"created", "text/plain")

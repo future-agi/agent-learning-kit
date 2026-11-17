@@ -2148,3 +2148,80 @@ def test_an_actor_decides_from_its_goal_and_acts_on_what_it_decided(tmp_path):
     assert [(url, arguments) for url, _headers, arguments in sent] == [
         ("http://p/crm/approve", {"deal_id": 7, "discount_percent": 20})
     ]
+
+
+def _models_used(monkeypatch):
+    from fi.alk.harness import actor_dispatch
+
+    used: list = []
+    decided: list = []
+
+    def live_decider(meter, model):
+        used.append(model)
+        return lambda situation, actor: decided.append(actor.id) or "{}"
+
+    monkeypatch.setattr(actor_dispatch, "live_decider", live_decider)
+    return used, decided
+
+
+def test_a_live_actor_outside_the_cast_that_a_cast_actor_falls_back_to_is_briefed_and_decides(tmp_path, monkeypatch):
+    from fi.alk.harness.actor_dispatch import build_dispatcher
+    from fi.alk.harness.actors import save_actors
+
+    _, decided = _models_used(monkeypatch)
+    approver = Actor(
+        id="approver",
+        name="Dana",
+        permitted_actions=["approvals.change"],
+        activation={"trigger": {"kind": "contacted"}, "timeout_seconds": 30, "fallback": "manager"},
+        identities={"mail": "dana@example.org"},
+    )
+    manager = Actor(id="manager", name="Priya", play="live", permitted_actions=["approvals.change"])
+    save_actors(tmp_path, ActorList(actors=[approver, manager]))
+    dispatcher = build_dispatcher(
+        {"actors": [{"id": "approver"}]},
+        tmp_path,
+        act=door_acts(_sent_to([])),
+        read_log=list,
+        records=None,
+        trial_id="t",
+    )
+
+    assert "manager" in dispatcher.briefs and dispatcher.decide is not None
+    asyncio.run(dispatcher._answer_instead("manager", "", []))
+    assert decided == ["manager"]
+
+
+def test_the_scenario_s_limits_keep_an_explicit_no_limit_and_its_model_plays_every_actor(tmp_path, monkeypatch):
+    from fi.alk.harness.actor_dispatch import build_dispatcher
+    from fi.alk.harness.actors import Limits, save_actors
+
+    used, _ = _models_used(monkeypatch)
+    watcher = Actor(id="watcher", name="Priya", play="live", permitted_actions=["chat.post_message"])
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[watcher],
+            limits=Limits(model="env-model", live_turns_per_actor=3, live_turns_per_trial=5),
+        ),
+    )
+    dispatcher = build_dispatcher(
+        {
+            "actors": [{"id": "watcher"}],
+            "pre_run": [],
+            "limits": {"live_turns_per_actor": None, "model": "scn-model"},
+        },
+        tmp_path,
+        act=door_acts(_sent_to([])),
+        read_log=list,
+        records=None,
+        trial_id="t",
+    )
+
+    assert used and set(used) == {"scn-model"}
+    # No limit per actor, as the scenario says; the environment's own cap for the trial still holds.
+    assert (dispatcher.turns_per_actor, dispatcher.turns_per_trial) == (None, 5)
+    dispatcher.live_turns["watcher"] = 4
+    assert dispatcher._turn_left(watcher)
+    dispatcher.live_turns["watcher"] = 5
+    assert not dispatcher._turn_left(watcher)

@@ -72,6 +72,7 @@ from .world_door import (
     APPROVAL_REQUIRED,
     APPROVAL_UNKNOWN,
     FAULTS_UNKNOWN,
+    calls_in,
     DOOR_OUT_OF_REACH,
     EGRESS_BLOCKED,
     EVIDENCE_INCOMPLETE,
@@ -79,7 +80,9 @@ from .world_door import (
     is_attempt,
     is_read,
     logged_as,
+    routed_faults,
     same_action,
+    same_json,
 )
 from .actors import (
     AGENT,
@@ -960,15 +963,6 @@ def _unrecorded(row: Mapping[str, Any]) -> bool:
     return row.get("refusal_code") == EVIDENCE_INCOMPLETE
 
 
-def _calls_marked(row: Mapping[str, Any]) -> int:
-    """How many of the agent's calls one mark stands for: a mark for a door out of reach counts every call made while
-    it was, with how many in its arguments; any other mark is one call."""
-    arguments = _arguments(row.get("arguments"))
-    if row.get("error") == DOOR_OUT_OF_REACH and isinstance(arguments, dict):
-        return _int_or(arguments.get("count"), 1)
-    return 1
-
-
 def evidence_notices(
     log: Sequence[Mapping[str, Any]] | None, calls: Sequence[Call] = (), held: Collection[str] = ()
 ) -> list[dict[str, Any]]:
@@ -977,7 +971,7 @@ def evidence_notices(
     (`held`) are counted against the rows the log holds for it, so a door down for the rest of the trial is seen."""
     missing = [row for row in log or () if _unrecorded(row)]
     why = sorted({str(row.get("error") or "") for row in missing} - {""})
-    count = sum(_calls_marked(row) for row in missing)
+    count = sum(calls_in(row) for row in missing)
     for tool in sorted(set(held)):
         made = sum(1 for call in calls if call.name == tool)
         logged = sum(
@@ -985,7 +979,7 @@ def evidence_notices(
             for row in log or ()
             if (row.get("actor_id") or AGENT) == AGENT and str(row.get("name") or "") == tool and is_attempt(row)
         )
-        marked = sum(_calls_marked(row) for row in missing if str(row.get("name") or "") == tool)
+        marked = sum(calls_in(row) for row in missing if str(row.get("name") or "") == tool)
         unseen = made - logged - marked
         if unseen > 0:
             count += unseen
@@ -1021,7 +1015,7 @@ def one_call_per_lost_answer(calls: Sequence[Call], log: Sequence[Mapping[str, A
             for call in kept
             if call.name == str(row.get("name") or "")
             and not call.answer_lost
-            and _loose_arguments(call.arguments) == wanted
+            and same_json(_loose_arguments(call.arguments), wanted)
         ]
         ran = next((call for call in same if call.ok), None)
         heard = next((call for call in same if not call.ok), None)
@@ -1316,7 +1310,7 @@ def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[s
     is the agent's own words, so a retry that rewords it is still the same write; any other argument may name the
     record, so a different value (order-A, order-B, or 7, 8) is another write."""
     one, two = _arguments(first.get("arguments")), _arguments(later.get("arguments"))
-    if _exactly(one, two):
+    if same_json(one, two):
         return True
     if not isinstance(one, dict) or not isinstance(two, dict):
         return False
@@ -1324,16 +1318,11 @@ def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[s
     if not carried:
         return False
     others = (set(one) | set(two)) - set(fixed)
-    return all(_exactly(one.get(field), two.get(field)) for field in carried) and all(
-        _exactly(one.get(field), two.get(field))
+    return all(same_json(one.get(field), two.get(field)) for field in carried) and all(
+        same_json(one.get(field), two.get(field))
         for field in others
         if not (_free_text(field) and isinstance(one.get(field), str) and isinstance(two.get(field), str))
     )
-
-
-def _exactly(one: Any, two: Any) -> bool:
-    """Equal as the same JSON: `true` is never `1`, nor `1.0` the integer `1`."""
-    return json.dumps(one, sort_keys=True, default=str) == json.dumps(two, sort_keys=True, default=str)
 
 
 def _arguments(value: Any) -> Any:
@@ -2095,8 +2084,8 @@ def _read_file_tool_calls(
             not (_call_id(extra) and _call_id(one))
             and _tool_key(extra.name) in {_tool_key(one.name), _tool_key(as_written)}
             and extra.ok == one.ok
-            and extra.arguments == one.arguments
-            and _loose(extra.result) == _loose(one.result)
+            and same_json(extra.arguments, one.arguments)
+            and same_json(_loose(extra.result), _loose(one.result))
             for one, as_written in timed
         ):
             calls.remove(extra)
@@ -2447,11 +2436,17 @@ def _argument_values(call: Call) -> dict[str, Any] | None:
 
 
 def _loose(value: Any) -> Any:
+    """A value as two traces of one call may each give it: JSON text read as its value, and any number as a float,
+    nested values too; `true` stays `true`, never the number 1."""
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except ValueError:
             return value
+    if isinstance(value, dict):
+        return {key: _loose(one) for key, one in value.items()}
+    if isinstance(value, list):
+        return [_loose(one) for one in value]
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     return value
@@ -3304,7 +3299,7 @@ class CallRunnerImpl:
             return SimulationReport.model_validate(result)
 
         async def place_with_actors() -> SimulationReport:
-            faults = list(doc.get("faults") or [])
+            faults = routed_faults(doc.get("faults") or [], _bundle_contract(self._context.bundle_dir))
             proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
             if faults or proxied:
                 # Written every trial, none included, so nothing an earlier trial left can apply.
@@ -3371,7 +3366,7 @@ class CallRunnerImpl:
                 actor_usage=meter.rows(),
                 limits=actor_limits(doc, self._context.bundle_dir, "voice"),
                 actor_briefs=actors.briefs if actors is not None else None,
-                faults=list(doc.get("faults") or []),
+                faults=routed_faults(doc.get("faults") or [], _bundle_contract(self._context.bundle_dir)),
                 solution=list(doc.get("solution") or []),
             )
         except (CallAborted, WorldUnavailable):

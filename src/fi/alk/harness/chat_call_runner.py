@@ -934,7 +934,14 @@ class HostedChatCallRunner:
         # Read the world's table whenever the trial is proxied, cast or not, so the fault notices see those calls.
         proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
         # The scenario's faults are a rule of its graded trials; a readiness probe checks the tools' binding without them.
-        faults = [] if self._context.readiness_probe else list(document.get("faults") or [])
+        from .call_runner import _bundle_contract
+        from .world_door import routed_faults
+
+        faults = (
+            []
+            if self._context.readiness_probe
+            else routed_faults(document.get("faults") or [], _bundle_contract(self._context.bundle_dir))
+        )
         door = chat_door(
             target_world,
             world_db.address

@@ -646,3 +646,17 @@ def test_a_mark_for_several_calls_counts_each_of_them_once():
     [notice] = evidence_notices(log, calls, {"issue_refund"})
 
     assert notice["count"] == 2
+
+
+def test_a_call_whose_flag_is_true_is_never_taken_for_the_lost_answer_of_a_call_sent_with_1():
+    """`89` and `89.0` are one amount across two traces; `true` is never the number 1."""
+    from fi.alk.harness.call_runner import one_call_per_lost_answer
+    from fi.alk.harness.world.runtime import Call
+
+    log = [{"name": "issue_refund", "actor_id": "agent", "outcome": "committed", "error": "response_lost",
+            "arguments": {"order_id": "1043", "notify": 1, "amount": 89.0}}]
+    other = Call(name="issue_refund", arguments={"order_id": "1043", "notify": True, "amount": 89}, ok=True)
+
+    [kept] = one_call_per_lost_answer([other], log)
+
+    assert not kept.answer_lost

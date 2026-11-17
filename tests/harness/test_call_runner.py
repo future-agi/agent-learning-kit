@@ -3612,3 +3612,25 @@ def test_a_retry_whose_flag_is_true_where_the_first_had_1_is_another_write():
         _logged("issue_refund", {"order": 7, "notify": True}),
     ]
     assert duplicate_commits(log) == []
+
+
+def test_a_voice_trial_writes_a_fault_named_by_its_tool_as_that_tool_s_route_action(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    (context.bundle_dir / "contract.json").write_text(
+        json.dumps({"tool_entrypoints": [{"tool": "issue_refund", "endpoint": "/orders/refund/"}]})
+    )
+    document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["faults"] = [{"action": "issue_refund", "mode": "unavailable"}]
+    document.write_text(json.dumps(body))
+    written: list[list] = []
+    monkeypatch.setattr(cr, "_write_trial_state", lambda runtime, faults: written.append(list(faults)))
+
+    async def place_call(spec):
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+
+    assert written and written[0] == [{"action": "orders.refund", "mode": "unavailable"}]

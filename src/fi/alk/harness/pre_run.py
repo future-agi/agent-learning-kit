@@ -11,7 +11,7 @@ from typing import Any
 
 from fi.simulate.simulation.call_actors import LIMIT_DEFAULTS
 
-from .actors import Actor, PreRunSession, Reference, ThreadMessage, session_fingerprint
+from .actors import Actor, Limits, PreRunSession, Reference, ThreadMessage, session_fingerprint
 
 # What an actor is asked each turn of a pre-run session.
 SESSION_ASK = (
@@ -262,7 +262,11 @@ async def written(
         for actor_id in session.actors
         if actor_id in listed
     }
-    write = write or _model_writer(listing.limits.model)
+    # The scenario's own model over the environment's, as the trial's actors are played on.
+    own = document.get("limits")
+    write = write or _model_writer(
+        listing.limits.merged(Limits.model_validate(own) if isinstance(own, dict) else None).model
+    )
     out = []
     for session in sessions:
         out.append(
