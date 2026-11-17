@@ -21,6 +21,25 @@ ROLE_MAX_LENGTH = 160
 ID_PATTERN = r"[a-z0-9_]{1,64}"
 
 
+def fields_holding_a_credential(entry: BaseModel) -> list[str]:
+    """The fields of an actor record that hold a credential, by name. The list is replayed as saved,
+    so a credential in it is refused where it is written; the value is never echoed back."""
+    from ..providers.secret_shapes import credential_in
+
+    return [
+        name
+        for name, value in entry.model_dump(mode="json").items()
+        if credential_in(value)
+    ]
+
+
+def credential_problem(field: str) -> str:
+    return (
+        f"{field} holds a credential. An actor is replayed as saved, so give the agent the secret "
+        "through its settings and use a placeholder here"
+    )
+
+
 class CallActor(BaseModel):
     """One entry of the environment's list."""
 
@@ -148,6 +167,13 @@ def save_call_actors(root: Path, listing: CallActorList) -> None:
     """Write the actors who speak on calls back into the one actor list, keeping every other field of each."""
     from .actors import Actor, ActorList, load_actors, save_actors
 
+    refused = [
+        credential_problem(field)
+        for one in listing.call_actors
+        for field in fields_holding_a_credential(one)
+    ]
+    if refused:
+        raise ValueError("; ".join(refused))
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     listed = load_actors(root)
@@ -185,6 +211,7 @@ def entry_problems(actor: CallActor, *, modality: str) -> list[str]:
         problems.append(f"channel {actor.channel!r} is not one of {sorted(CHANNELS)}")
     elif modality not in channel["modalities"]:
         problems.append(f"a {modality} agent cannot be reached through {actor.channel}")
+    problems.extend(credential_problem(one) for one in fields_holding_a_credential(actor))
     named = str(actor.persona.get("name") or "").strip()
     if named and named != actor.name:
         problems.append(

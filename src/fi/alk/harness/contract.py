@@ -1864,8 +1864,9 @@ def validate_tool_workflow(contract: AgentContract) -> None:
 
 
 _KEPT_AS_WRITTEN_ADVICE = (
-    "A tool's example values and endpoints are kept as written, so give the agent the secret "
-    "through its settings and use a placeholder here."
+    "A tool's example values and endpoints, and the runtime, dependency and data store fields, "
+    "are kept as written, so give the agent the secret through its settings and use a "
+    "placeholder here."
 )
 
 
@@ -1893,6 +1894,20 @@ def _credential_problems(contract: AgentContract) -> list[str]:
                 f"tool_entrypoints[{entry.tool}].endpoint holds a credential. "
                 f"{_KEPT_AS_WRITTEN_ADVICE}"
             )
+    kept: dict[str, Any] = {}
+    if contract.runtime is not None:
+        for field in ("install", "workspaces", "compose_overrides"):
+            kept[f"runtime.{field}"] = getattr(contract.runtime, field)
+    for group in ("dependencies", "runtime_dependencies"):
+        for dependency in getattr(contract, group):
+            kept[f"{group}[{dependency.name}].reached"] = dependency.reached.model_dump()
+    if contract.data_store is not None:
+        kept["data_store"] = contract.data_store.model_dump()
+    problems.extend(
+        f"{where} holds a credential. {_KEPT_AS_WRITTEN_ADVICE}"
+        for where, value in kept.items()
+        if credential_in(value)
+    )
     return problems
 
 

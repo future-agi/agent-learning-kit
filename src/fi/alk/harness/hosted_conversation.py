@@ -706,11 +706,19 @@ def _cleaned_adk_database(path: Path) -> bytes | None:
                 return target.read_bytes()
         finally:
             memory.close()
-    except Exception as exc:  # noqa: BLE001 - an unknown schema or a damaged file is left out.
+    except (sqlite3.Error, ValueError, OSError, RecursionError) as exc:
+        # A damaged file or an unknown schema: left out. SQLite and JSON errors carry no row values.
         logger.warning(
             "the session database was left out of the workspace checkpoint, because it could not "
             "be cleaned (%s); a resumed session opens fresh",
             type(exc).__name__,
+            exc_info=True,
+        )
+        return None
+    except Exception:  # noqa: BLE001 - a bug in the cleaner also fails closed, but is not hidden.
+        logger.exception(
+            "the session database was left out of the workspace checkpoint, because cleaning it "
+            "failed unexpectedly; a resumed session opens fresh"
         )
         return None
 

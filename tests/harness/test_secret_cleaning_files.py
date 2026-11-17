@@ -320,3 +320,82 @@ def test_honest_copied_files_are_not_refused():
         ready_code="def ready(world):\n    return True\n",
     )
     assert _copied_file_problems(scenario, _catalogue_with_check(CHECK + "# done\n")) == []
+
+
+# The structured fields the world replays (an actor's scheduled arguments, a pre-run thread's
+# arguments, a fault's approved_when) are kept as written and a credential in one is refused; the
+# prose the agent or the actors are given (starts_with.text, an actor's instruction and knowledge)
+# is refused when cleaning would change it.
+AWS = "AKIA" + "IOSFODNN7EXAMPLE"
+
+
+def _replayed(**fields) -> Scenario:
+    return _scenario(instruction="Ask to reset it.", **fields)
+
+
+STRUCTURED = [
+    (
+        "actors[0].actions[0].arguments",
+        {"actors": [{"id": "it_desk", "actions": [{"action": "rotate", "arguments": {"key_id": AWS}}]}]},
+    ),
+    (
+        "pre_run[0].thread[0].arguments",
+        {
+            "pre_run": [
+                {"actors": ["it_desk"], "thread": [{"actor": "it_desk", "action": "post", "arguments": {"text": AWS}}]}
+            ]
+        },
+    ),
+    (
+        "faults[0].approved_when",
+        {
+            "faults": [
+                {"action": "rotate", "mode": "approval_required", "approval": "approve", "approved_when": {"key_id": AWS}}
+            ]
+        },
+    ),
+]
+
+PROSE = [
+    ("starts_with.text ", {"starts_with": {"text": f"Please rotate key {AWS}"}}),
+    ("actors[0].instruction ", {"actors": [{"id": "it_desk", "instruction": f"You hold {AWS}"}]}),
+    ("actors[0].knowledge ", {"actors": [{"id": "it_desk", "knowledge": [{"kind": "facts", "text": f"the key is {AWS}"}]}]}),
+]
+
+
+@pytest.mark.parametrize("field,fields", STRUCTURED, ids=[one[0] for one in STRUCTURED])
+def test_a_credential_in_a_structured_replayed_field_is_refused_named_and_kept(field, fields):
+    from fi.alk.harness.folder import clean_scenario_document, document_for
+
+    scenario = _replayed(**fields)
+    problems = [one for one in validate_scenario(scenario, _catalogue(), {}) if "holds a credential" in one]
+    assert len(problems) == 1 and problems[0].startswith(field)
+    assert AWS not in problems[0]
+    # Never rewritten, so a refused value cannot be saved as a masked one.
+    assert AWS in json.dumps(clean_scenario_document(document_for(scenario)))
+
+
+@pytest.mark.parametrize("start,fields", PROSE, ids=[one[0].strip() for one in PROSE])
+def test_replayed_prose_the_cleaner_would_change_is_refused(start, fields):
+    problems = _cleaning_problems(_replayed(**fields))
+    assert len(problems) == 1 and problems[0].startswith(start)
+    assert AWS not in problems[0]
+
+
+def test_honest_structured_and_prose_replayed_fields_are_not_refused():
+    scenario = _replayed(
+        starts_with={"text": "Please rotate the key for the it desk"},
+        actors=[
+            {
+                "id": "it_desk",
+                "instruction": "You hold the shared key",
+                "knowledge": [{"kind": "facts", "text": "keys rotate monthly"}],
+                "actions": [{"action": "rotate", "arguments": {"key_id": "$KEY_ID"}}],
+            }
+        ],
+        faults=[
+            {"action": "rotate", "mode": "approval_required", "approval": "approve", "approved_when": {"key_id": "k-77"}}
+        ],
+    )
+    assert _cleaning_problems(scenario) == []
+    assert not [one for one in validate_scenario(scenario, _catalogue(), {}) if "holds a credential" in one]

@@ -537,9 +537,10 @@ _RULE1_BARE = re.compile(
 )
 # A userinfo with no // at all, `host: admin:pw@db:5432`, after whitespace, = , a quote or a
 # bracket: only when a port follows the host, which an e-mail address, a time (10:30@venue) or
-# `a:b@c` never has. Anchored on the token's start, so no position is tried twice.
+# `a:b@c` never has. Anchored on the token's start, so no position is tried twice. What follows the
+# user's ":" is not a scheme (jdbc:mysql://root:pw@db): rule 1 cleans that as a URL and keeps it.
 _RULE1_HOSTPORT = re.compile(
-    r"(?<![^\s=\"'`(,\[{|])([A-Za-z_][A-Za-z0-9_.\-]{0,63}:(?!/)\S{1,64}@)"
+    r"(?<![^\s=\"'`(,\[{|])([A-Za-z_][A-Za-z0-9_.\-]{0,63}:(?![A-Za-z0-9+.\-]*://)(?!/)\S{1,64}@)"
     r"(?=[A-Za-z0-9_.\-]+:\d{1,5}(?![A-Za-z0-9_])|\[[0-9A-Fa-f:.%]+\]:\d{1,5}(?!\d)"
     r"|(?:tcp|udp|unix)\()"
 )
@@ -1366,6 +1367,23 @@ def _reads_as_prose(text: str) -> bool:
     return bool(_WORDS.fullmatch(decoded) or _PATH.fullmatch(decoded))
 
 
+# Letter segments joined by / _ or - in any case (America/Los_Angeles, created_at_desc_order), and a
+# dashed id made of letter runs and digit runs (ABC-DEF-123456789). A key mixes letters and digits
+# inside one run, so neither shape reads a key; a mixed-case alphanumeric run keeps the length rule.
+_NAME_SEGMENTS = re.compile(r"[A-Za-z]+(?:[/_\-][A-Za-z]+)+")
+_DASHED_ID = re.compile(r"(?:[A-Za-z]+|\d+)(?:-(?:[A-Za-z]+|\d+))+")
+
+
+def _reads_as_names_or_an_id(text: str) -> bool:
+    decoded = unquote_plus(text)
+    if _NAME_SEGMENTS.fullmatch(decoded):
+        return True
+    if not _DASHED_ID.fullmatch(decoded):
+        return False
+    # Mostly digits and dashes: a hex digest cut into letter-only and digit-only runs is not one.
+    return 2 * sum(char.isdigit() or char == "-" for char in decoded) > len(decoded)
+
+
 def query_param_holds_credential(name: str, text: str) -> bool:
     """Whether one query or fragment parameter is a credential: its name holds a marker or is one
     of key, sig, signature, pwd, pass or auth, or its value is 16 or more key characters that are
@@ -1379,7 +1397,12 @@ def query_param_holds_credential(name: str, text: str) -> bool:
         return False
     return bool(
         _KEY_VALUE.fullmatch(text)
-        and not (_UUID.fullmatch(text) or text.isdigit() or _reads_as_prose(text))
+        and not (
+            _UUID.fullmatch(text)
+            or text.isdigit()
+            or _reads_as_prose(text)
+            or _reads_as_names_or_an_id(text)
+        )
     )
 
 
@@ -1480,11 +1503,32 @@ def credential_in_check_code(code: str) -> bool:
     )
 
 
+# An argument name is judged by the named-value rule's forms, as the whole name or its last word
+# (reset_token, clientSecret, db_password), and `authorization` or a bare cookie or credential only
+# alone: authorization_status, credential_type, secretary_name, cookie_flavor, token_count and
+# tokenizer name honest enums. Pass and pwd are not argument names: as bare words they are not
+# secrets (a shell's pwd, a boarding pass).
+_ARGUMENT_FORMS = frozenset(
+    form.replace("-", "_") for form in _FORMS if form not in {"pass", "pwd"}
+) | {"passphrase"}
+_ARGUMENT_WHOLE_NAMES = frozenset({"authorization", "cookie", "credential", "credentials"})
+_CAMEL_JOIN = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _names_a_credential_argument(name: str) -> bool:
+    if name in _PAGINATION:
+        return False
+    words = _CAMEL_JOIN.sub("_", name).lower().replace("-", "_")
+    return words in _ARGUMENT_WHOLE_NAMES or any(
+        words == form or words.endswith("_" + form) for form in _ARGUMENT_FORMS
+    )
+
+
 def credential_named_arg_values_refusal(arg_name: str, values: object) -> bool:
-    """Whether a tool argument named `arg_name` may not list `values`: its name holds a credential
-    marker and some value is not a reference (`$...`, `<...>`, `{{...}}`). The agent's settings
+    """Whether a tool argument named `arg_name` may not list `values`: its name is a credential's
+    (see `_names_a_credential_argument`) and some value is not a reference (`$...`, `<...>`, `{{...}}`). The agent's settings
     carry such a secret, and a shapeless one (hunter2) can't be told from honest text."""
-    if not _names_a_credential(arg_name) or values is None:
+    if not _names_a_credential_argument(arg_name) or values is None:
         return False
     listed = values if isinstance(values, (list, tuple)) else [values]
     return any(not _is_reference(value) for value in listed)

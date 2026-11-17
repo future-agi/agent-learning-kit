@@ -523,6 +523,14 @@ def _credentials_in_kept_fields(scenario: Scenario) -> list[str]:
         "persona.metadata": persona.metadata if persona else None,
         "persona.scripted_caller": persona.scripted_caller if persona else None,
     }
+    for index, actor in enumerate(scenario.actors):
+        for step, action in enumerate(actor.actions):
+            kept[f"actors[{index}].actions[{step}].arguments"] = action.arguments
+    for index, session in enumerate(scenario.pre_run):
+        for step, message in enumerate(session.thread):
+            kept[f"pre_run[{index}].thread[{step}].arguments"] = message.arguments
+    for index, fault in enumerate(scenario.faults):
+        kept[f"faults[{index}].approved_when"] = fault.approved_when
     return [
         f"{field} holds a credential. A scenario's {field.split('.')[-1]} is kept as written, so "
         "give the agent the secret through its settings and use a placeholder here"
@@ -550,8 +558,8 @@ def _credentials_in_copied_files(scenario: Scenario, catalogue: Catalogue) -> li
 def _fields_the_cleaner_would_change(scenario: Scenario) -> list[str]:
     """Fields the saved file would hold differently from the document submitted.
 
-    The run replays `instruction` and the persona's prose to the simulated caller from the
-    saved copy, and names the folder and the checks from `name`, `scenario_key` and the sub-goal
+    The run replays `instruction`, the persona's prose, `starts_with.text` and each actor's
+    instruction and knowledge from the saved copy, and names the folder and the checks from `name`, `scenario_key` and the sub-goal
     ids, so each must come back from cleaning exactly as it went in. Refused instead of masked, so
     the proof never changes after submission. The value is never echoed back."""
     persona = scenario.persona
@@ -566,6 +574,11 @@ def _fields_the_cleaner_would_change(scenario: Scenario) -> list[str]:
                 if name not in {"metadata", "scripted_caller", "multilingual"}
             }
         )
+    if scenario.starts_with is not None:
+        replayed["starts_with.text"] = scenario.starts_with.text
+    for index, actor in enumerate(scenario.actors):
+        replayed[f"actors[{index}].instruction"] = actor.instruction
+        replayed[f"actors[{index}].knowledge"] = actor.knowledge
     named = {
         "name": scenario.name,
         "scenario_key": scenario.scenario_key,

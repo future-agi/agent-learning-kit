@@ -120,6 +120,10 @@ _KEPT = {
     "a reference with an empty default": "postgres://svc:${A:-}@db/app",
     "a reference with a reference as its default": "postgres://svc:${A:-$B}@db/app",
     "a prose query": "https://shop.example.com/search?q=red+running+shoes+size",
+    "a mixed-case path in a query": "https://api.example.com/forecast?tz=America/Los_Angeles",
+    "an encoded mixed-case path in a query": "https://api.example.com/forecast?timezone=America%2FNew_York",
+    "a snake_case sort key": "https://api.example.com/orders?sort=created_at_desc_order",
+    "a dashed id of mostly digits": "https://api.example.com/items?sku=ABC-DEF-123456789",
     "an encoded path in a query": "/login?next=%2Faccount%2Fsettings%2Fbilling",
     "userinfo password, a full shell reference": "postgres://svc:${DB_PASSWORD}@db/app",
     "userinfo password, a full variable": "postgres://svc:$DB_PASSWORD@db/app",
@@ -211,9 +215,11 @@ def test_a_pagination_or_token_count_argument_may_list_values() -> None:
 
 
 # Time grows with the size, so a pattern that restarts at each position of one long run
-# shows at 16 KiB already. Each size must stay under 2 s, and 1 MiB under 64 times the
-# 64 KiB time plus 0.5 s: linear growth with room for a slow runner, where a quadratic
-# pattern would need 256 times as long.
+# shows at 16 KiB already. 1 MiB must take under 64 times the 64 KiB time plus 0.5 s: linear
+# growth with room for a slow runner, where a quadratic pattern would need 256 times as long.
+# Each size is timed three times and the median is read, so one stall on a loaded runner moves
+# neither side of the ratio. There is no absolute bound: it measures the runner's load, not the
+# pattern's growth.
 _RUNS = {
     "letters": "a",
     "scheme characters": "a.-",
@@ -238,6 +244,10 @@ def _seconds(function, text: str) -> float:
     return time.perf_counter() - start
 
 
+def _median_seconds(function, text: str, runs: int = 3) -> float:
+    return sorted(_seconds(function, text) for _ in range(runs))[runs // 2]
+
+
 @pytest.mark.parametrize("run", sorted(_RUNS))
 @pytest.mark.parametrize(
     "function",
@@ -253,8 +263,7 @@ def test_a_long_run_is_read_in_linear_time(function, run: str) -> None:
     times = {}
     for kib in (16, 64, 256, 1024):
         text = (unit * (kib * 1024 // len(unit) + 1))[: kib * 1024]
-        times[kib] = _seconds(function, text)
-        assert times[kib] < 2.0, times
+        times[kib] = _median_seconds(function, text)
     assert times[1024] < 64 * times[64] + 0.5, times
 
 
@@ -337,9 +346,43 @@ def test_a_credential_named_argument_may_not_list_values() -> None:
     )
 
 
-@pytest.mark.parametrize("name", ["PASSWORD", "api_key", "reset_token", "clientSecret"])
-def test_the_argument_name_is_matched_by_the_cleaners_markers(name: str) -> None:
+@pytest.mark.parametrize(
+    "name",
+    [
+        "PASSWORD",
+        "passwd",
+        "api_key",
+        "apiKey",
+        "api-key",
+        "secret",
+        "client_secret",
+        "reset_token",
+        "clientSecret",
+        "access_token",
+        "token",
+        "Authorization",
+        "db_password",
+    ],
+)
+def test_the_argument_name_is_judged_by_the_named_value_forms(name: str) -> None:
     assert secret_shapes.credential_named_arg_values_refusal(name, ["x1"]) is True
+
+
+@pytest.mark.parametrize(
+    "name,values",
+    [
+        ("authorization_status", ["approved", "denied", "pending"]),
+        ("credential_type", ["passport", "driver_license"]),
+        ("secretary_name", ["Ana"]),
+        ("cookie_flavor", ["oatmeal", "chocolate"]),
+        ("token_count", [5, 10]),
+        ("tokenizer", ["cl100k", "o200k"]),
+    ],
+)
+def test_an_honest_argument_that_only_contains_a_marker_may_list_values(
+    name: str, values: list
+) -> None:
+    assert secret_shapes.credential_named_arg_values_refusal(name, values) is False
 
 
 @pytest.mark.parametrize("reference", ["$PASSWORD", "<password>", "{{password}}"])
@@ -500,8 +543,5 @@ def test_unbounded_padding_is_cleaned_in_linear_time(shape: str) -> None:
     times = {}
     for kib in (64, 1024):
         text = build(kib * 1024)
-        start = time.perf_counter()
-        agent._redact(text)
-        times[kib] = time.perf_counter() - start
-        assert times[kib] < 2.0, times
+        times[kib] = _median_seconds(agent._redact, text)
     assert times[1024] < 32 * times[64] + 0.5, times

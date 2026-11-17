@@ -711,3 +711,34 @@ def test_a_key_holding_a_key_shape_is_still_cleaned(ledger_env):
 
     cleaned = _row._redact_value({"run ghp_" + "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5": 1}, ())
     assert not any("ghp_aB3" in key for key in cleaned)
+
+
+def test_sync_run_refuses_a_row_written_before_cleaning_and_leaves_the_cursor(
+    ledger_env, monkeypatch, stub_collector
+):
+    from fi.alk.telemetry import _emit
+    from fi.alk.telemetry._row import canonical_row_address
+
+    monkeypatch.setenv("AGENT_LEARNING_API_KEY", "key-x")
+    monkeypatch.setenv("AGENT_LEARNING_SECRET_KEY", "secret-x")
+    monkeypatch.setenv("FI_BASE_URL", stub_collector)
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        _emit, "keyed_emit", lambda **kwargs: sent.append(kwargs) or {"status": "synced"}
+    )
+    ledger = telemetry.RunLedger()
+    # A row an older kit wrote: only the declared env values were removed from it.
+    legacy = dict(telemetry.build_ledger_row(_payload()))
+    legacy["note"] = "key sk-proj-" + "Ab12Cd34Ef56Gh78Ij90Kl12Mn34Op56Qr78St90UvWx"
+    legacy["run_id"] = canonical_row_address(legacy)
+
+    result = _sync.sync_run(legacy, ledger=ledger)
+
+    assert result == {"status": "refused", "reason": "row_not_cleaned", "sent": False}
+    assert sent == []
+    assert ledger.read_cursor()["synced"] == {}
+
+    # A row built now is already clean, so the check never refuses it.
+    clean = telemetry.build_ledger_row(_payload())
+    assert _sync.sync_run(clean, ledger=ledger)["status"] == "synced"
+    assert len(sent) == 1

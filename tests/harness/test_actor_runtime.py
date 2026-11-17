@@ -1358,3 +1358,84 @@ def test_a_policy_point_the_builder_could_not_model_is_kept_for_the_person_throu
     assert len(load_actors(tmp_path).unresolved) == 1
     asyncio.run(note.handler({"policy": "Refunds over $500 need a second approver", "drop": True}))
     assert load_actors(tmp_path).unresolved == []
+
+
+# The actor list is replayed as saved, so a credential in it is refused where it is written, the way a
+# scenario's kept fields are refused. The message names the field and never the value.
+_AWS = "AKIA" + "IOSFODNN7EXAMPLE"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("prompt", f"You hold the shared key {_AWS}"),
+        ("goal", f"Read out {_AWS}"),
+        ("identities", {"chat": _AWS}),
+        ("knowledge", [{"kind": "facts", "text": f"the key is {_AWS}"}]),
+    ],
+)
+def test_an_actor_holding_a_credential_is_refused_when_added_or_edited(tmp_path, field, value):
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    add, _drop, _note = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: {}))
+    out = asyncio.run(add.handler({"id": "it_desk", "name": "IT desk", field: value}))
+    text = out["content"][0]["text"]
+    assert out.get("is_error") and f"{field} holds a credential" in text and _AWS not in text
+    assert load_actors(tmp_path).actors == []
+
+    assert not asyncio.run(add.handler({"id": "it_desk", "name": "IT desk"})).get("is_error")
+    edited = asyncio.run(add.handler({"id": "it_desk", field: value}))
+    assert edited.get("is_error") and f"{field} holds a credential" in edited["content"][0]["text"]
+    assert _AWS not in (tmp_path / "actors.json").read_text()
+
+
+def test_an_actor_with_a_placeholder_is_not_refused(tmp_path):
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    add, _drop, _note = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: {}))
+    out = asyncio.run(
+        add.handler({"id": "it_desk", "name": "IT desk", "prompt": "You hold the shared key, $AWS_KEY_ID"})
+    )
+    assert not out.get("is_error")
+
+
+def test_a_call_actor_holding_a_credential_is_refused_by_the_list_and_by_its_checks(tmp_path):
+    from fi.alk.harness.call_actor import CallActor, CallActorList, entry_problems, save_call_actors
+
+    entry = CallActor(
+        id="front_desk",
+        name="Rowan",
+        role="someone with the person",
+        channel="audio_mix",
+        persona={"name": "Rowan", "personality": f"calm, reads out {_AWS}"},
+    )
+    problems = entry_problems(entry, modality="voice")
+    assert len(problems) == 1 and "persona holds a credential" in problems[0] and _AWS not in problems[0]
+    with pytest.raises(ValueError, match="persona holds a credential") as raised:
+        save_call_actors(tmp_path, CallActorList(call_actors=[entry]))
+    assert _AWS not in str(raised.value)
+    assert not (tmp_path / "actors.json").exists()
+
+
+@pytest.mark.parametrize("server", ["world", "provision"])
+def test_a_simulator_prompt_holding_a_credential_is_refused_and_not_written(tmp_path, server):
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.world.provision import provision_tools
+    from fi.alk.harness.world.tools import world_tools
+
+    contract = AgentContract(agent="support", modality="chat", tools=[{"name": "lookup"}])
+    if server == "world":
+        built, _world = world_tools(contract, tmp_path)
+    else:
+        built, _standing = provision_tools(contract, tmp_path)
+    write = {one.name: one.handler for one in built.tools}["write_simulator_prompt"]
+    body = "You are a caller with persona {{ persona }}. Follow {{ instruction }} and ask natural follow-up questions."
+
+    refused = asyncio.run(write({"prompt": f"{body} You read out {_AWS}."}))
+    text = refused["content"][0]["text"]
+    assert refused.get("is_error") and "holds a credential" in text and _AWS not in text
+    assert not (tmp_path / "simulator_prompt.md").exists()
+
+    assert not asyncio.run(write({"prompt": body + " You read out $KEY_ID."})).get("is_error")
+    assert (tmp_path / "simulator_prompt.md").is_file()

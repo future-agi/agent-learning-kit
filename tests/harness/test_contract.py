@@ -317,3 +317,78 @@ def test_contract_without_workers_is_unchanged():
     )
     assert contract.workers == []
     assert "WORKERS" not in contract.brief()
+
+
+# `write_contract` keeps these fields as written, so a credential in one would be saved and sent on.
+_URL_WITH_PASSWORD = "https://deploy:s3cretPass@pypi.internal.example.com/simple"
+_GITHUB_TOKEN = "ghp_" + "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5"
+
+
+def _kept_field_contract(**fields):
+    from fi.alk.harness.contract import AgentContract
+
+    return AgentContract(agent="support", real_use_cases=["log in"], **fields)
+
+
+_KEPT_FIELDS = {
+    "runtime.install": (
+        lambda: {
+            "runtime": {
+                "language": "python",
+                "install": f"pip install --index-url {_URL_WITH_PASSWORD} -r requirements.txt",
+            }
+        },
+        _URL_WITH_PASSWORD,
+    ),
+    "runtime.workspaces": (
+        lambda: {"runtime": {"language": "python", "workspaces": {"work": _GITHUB_TOKEN}}},
+        _GITHUB_TOKEN,
+    ),
+    "runtime.compose_overrides": (
+        lambda: {
+            "runtime": {
+                "execution": "compose",
+                "compose_file": "compose.yaml",
+                "service": "app",
+                "compose_overrides": [f"overrides/{_GITHUB_TOKEN}.yaml"],
+            }
+        },
+        _GITHUB_TOKEN,
+    ),
+    "dependencies[db].reached": (
+        lambda: {
+            "dependencies": [
+                {"name": "db", "reached": {"dsn_env": f"postgres://svc:{'Zq9fakePw41'}@db.internal/app"}}
+            ]
+        },
+        "Zq9fakePw41",
+    ),
+    "data_store": (
+        lambda: {"data_store": {"kind": "postgres", "configured_by": _URL_WITH_PASSWORD}},
+        _URL_WITH_PASSWORD,
+    ),
+}
+
+
+@pytest.mark.parametrize("where", sorted(_KEPT_FIELDS))
+def test_a_credential_in_a_kept_runtime_dependency_or_data_store_field_is_a_problem(where):
+    build, secret = _KEPT_FIELDS[where]
+    contract = _kept_field_contract(**build())
+    problems = _credential_problems(contract)
+    assert len(problems) == 1, problems
+    assert problems[0].startswith(f"{where} holds a credential")
+    assert secret not in problems[0]
+    assert "placeholder" in problems[0]
+
+
+def test_honest_runtime_dependency_and_data_store_fields_are_not_credential_problems():
+    contract = _kept_field_contract(
+        runtime={
+            "language": "python",
+            "install": "pip install -r requirements.txt",
+            "workspaces": {"work": "workspace"},
+        },
+        dependencies=[{"name": "db", "reached": {"dsn_env": "DATABASE_URL", "host": "db.internal", "port": 5432}}],
+        data_store={"kind": "postgres", "configured_by": "DATABASE_URL", "host": "db.internal"},
+    )
+    assert _credential_problems(contract) == []

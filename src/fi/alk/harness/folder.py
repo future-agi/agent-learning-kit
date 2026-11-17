@@ -165,14 +165,63 @@ def _clean_except(document: dict[str, Any], kept: tuple[str, ...]) -> dict[str, 
     return {key: document[key] if key in kept else prose[key] for key in document}
 
 
+# Structured fields inside the scenario's lists are kept exactly too, for the same reason: the world
+# replays an actor's scheduled arguments and a pre-run thread's arguments as written, and a fault
+# holds a call until its arguments include `approved_when`.
+def _clean_entries(entries: Any, kept: tuple[str, ...]) -> Any:
+    if not isinstance(entries, list):
+        return redact_strings(entries)
+    return [
+        _clean_except(entry, kept) if isinstance(entry, dict) else redact_strings(entry)
+        for entry in entries
+    ]
+
+
+def _clean_actor(entry: Any) -> Any:
+    if not isinstance(entry, dict):
+        return redact_strings(entry)
+    cleaned = _clean_except(entry, ("actions",))
+    if "actions" in entry:
+        cleaned["actions"] = _clean_entries(entry["actions"], ("arguments",))
+    return cleaned
+
+
+def _clean_pre_run(entry: Any) -> Any:
+    if not isinstance(entry, dict):
+        return redact_strings(entry)
+    cleaned = _clean_except(entry, ("thread",))
+    if "thread" in entry:
+        cleaned["thread"] = _clean_entries(entry["thread"], ("arguments",))
+    return cleaned
+
+
 def clean_scenario_document(document: dict[str, Any]) -> dict[str, Any]:
     """A scenario document with its prose cleaned and its kept-exactly fields untouched.
 
     Works on a whole document or on part of one, and cleaning twice changes nothing more."""
+    nested = {"actors", "pre_run", "faults"}
     cleaned = _clean_except(
-        {k: v for k, v in document.items() if k != "persona" or not isinstance(v, dict)},
+        {
+            k: v
+            for k, v in document.items()
+            if (k != "persona" or not isinstance(v, dict)) and k not in nested
+        },
         KEPT_SCENARIO_FIELDS,
     )
+    if "actors" in document:
+        actors = document["actors"]
+        cleaned["actors"] = (
+            [_clean_actor(one) for one in actors] if isinstance(actors, list) else redact_strings(actors)
+        )
+    if "pre_run" in document:
+        sessions = document["pre_run"]
+        cleaned["pre_run"] = (
+            [_clean_pre_run(one) for one in sessions]
+            if isinstance(sessions, list)
+            else redact_strings(sessions)
+        )
+    if "faults" in document:
+        cleaned["faults"] = _clean_entries(document["faults"], ("approved_when",))
     persona = document.get("persona")
     if isinstance(persona, dict):
         cleaned["persona"] = _clean_except(persona, KEPT_PERSONA_FIELDS)

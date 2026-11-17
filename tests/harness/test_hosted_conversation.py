@@ -1537,3 +1537,72 @@ def test_a_line_stored_raw_before_the_mirror_cleaned_comes_back_cleaned_on_load(
         PlatformSessionStore(second).load({"project_key": "p", "session_id": SESSION_ID})  # type: ignore[arg-type]
     )
     assert again == loaded
+
+
+def test_a_workspace_holding_the_actor_list_and_the_simulator_prompt_packs_no_credential(tmp_path):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+    from fi.alk.harness.world.tools import world_actor_tools, world_tools
+    from fi.alk.harness.contract import AgentContract
+
+    key = "AKIA" + "IOSFODNN7EXAMPLE"
+    add, _drop, _note = world_actor_tools(tmp_path, SimpleNamespace(modality="chat", model_dump=lambda: {}))
+    contract = AgentContract(agent="support", modality="chat", tools=[{"name": "lookup"}])
+    server, _world = world_tools(contract, tmp_path)
+    write = {one.name: one.handler for one in server.tools}["write_simulator_prompt"]
+    body = "You are a caller with persona {{ persona }}. Follow {{ instruction }} and ask natural follow-up questions."
+
+    # What the builder sends first holds the key; each writer refuses it, then takes the placeholder.
+    assert asyncio.run(
+        add.handler({"id": "it_desk", "name": "IT desk", "prompt": f"You hold the shared key {key}", "identities": {"aws": key}})
+    ).get("is_error")
+    assert asyncio.run(write({"prompt": f"{body} The caller reads out {key}"})).get("is_error")
+    assert not asyncio.run(add.handler({"id": "it_desk", "name": "IT desk", "prompt": "You hold the shared key $AWS_KEY_ID"})).get("is_error")
+    assert not asyncio.run(write({"prompt": body + " The caller reads out $AWS_KEY_ID"})).get("is_error")
+
+    members = _members(_workspace_archive(tmp_path))
+    assert "actors.json" in members and "simulator_prompt.md" in members
+    assert not [name for name, content in members.items() if key.encode() in content]
+
+
+def test_an_unexpected_failure_cleaning_the_session_database_is_logged_with_its_traceback(
+    tmp_path, caplog, monkeypatch
+):
+    from fi.alk.harness import hosted_conversation
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+
+    _adk_database(tmp_path / ".futureagi-adk.db")
+    (tmp_path / "contract.json").write_text("{}")
+
+    def new_shape(*_args, **_kwargs):
+        raise TypeError("an event shape the cleaner does not know")
+
+    monkeypatch.setattr(hosted_conversation, "_clean_adk_event", new_shape)
+    with caplog.at_level("WARNING"):
+        archive = _workspace_archive(tmp_path)
+
+    # Left out, so nothing raw leaves, and loud enough that a bug here is not mistaken for a damaged file.
+    assert sorted(_members(archive)) == ["contract.json"]
+    unexpected = [one for one in caplog.records if "session database" in one.getMessage()]
+    assert len(unexpected) == 1
+    assert unexpected[0].levelname == "ERROR"
+    assert unexpected[0].exc_info and unexpected[0].exc_info[0] is TypeError
+
+
+def test_a_damaged_session_database_is_a_warning_with_its_traceback(tmp_path, caplog):
+    import sqlite3
+
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+
+    database = tmp_path / ".futureagi-adk.db"
+    _adk_database(database)
+    with sqlite3.connect(database) as one:
+        one.execute("UPDATE events SET event_data = 'not json' WHERE rowid = 1")
+
+    with caplog.at_level("WARNING"):
+        _workspace_archive(tmp_path)
+
+    expected = [one for one in caplog.records if "session database" in one.getMessage()]
+    assert len(expected) == 1 and expected[0].levelname == "WARNING"
+    assert expected[0].exc_info and issubclass(expected[0].exc_info[0], ValueError)

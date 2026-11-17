@@ -1814,6 +1814,37 @@ def test_a_password_that_reads_like_a_port_is_masked(text: str) -> None:
     assert _redact(text) == _PORT_LIKE[text]
 
 
+# A scheme such as jdbc: before the real one is not a user, so the URL is cleaned as a URL and its
+# scheme stays.
+_SCHEME_BEFORE_THE_URL = {
+    "jdbc:mysql://root:Xk9Qp2@db.example.com:3306/app": "jdbc:mysql://db.example.com:3306/app",
+    "jdbc:postgresql://app:Xk9Qp2@db.example.com:5432/app": "jdbc:postgresql://db.example.com:5432/app",
+    "spring.datasource.url=jdbc:mysql://root:Xk9Qp2@db:3306/app": "spring.datasource.url=jdbc:mysql://db:3306/app",
+}
+
+
+@pytest.mark.parametrize("text", list(_SCHEME_BEFORE_THE_URL))
+def test_a_url_after_a_scheme_is_cleaned_as_a_url_and_keeps_both_schemes(text: str) -> None:
+    assert _redact(text) == _SCHEME_BEFORE_THE_URL[text]
+
+
+# A port must end the authority: a password that starts like one and then holds + or = or a name
+# is still a password. Loosening the port's lookahead to "anything but a name character or @"
+# reads the start as a port and leaks the rest.
+_NOT_A_PORT = {
+    "digits then +": "postgres://app:7+Qp/Zr8x@db.example.com:5432/app",
+    "digits then =": "postgres://app:12=ab/cdef@db.example.com:5432/app",
+    "a template then +": "postgres://app:${X}+y/zzz@db.example.com:5432/app",
+    "a port name then +": "postgres://app:DB_PORT+q/zzz@db.example.com:5432/app",
+}
+
+
+@pytest.mark.parametrize("name", list(_NOT_A_PORT))
+def test_a_password_that_starts_like_a_port_but_does_not_end_one_is_masked(name: str) -> None:
+    out = _redact(_NOT_A_PORT[name])
+    assert out == "postgres://db.example.com:5432/app", out
+
+
 # -- Round 5, fix 4: more key shapes ------------------------------------------------------------
 
 _MORE_SHAPES = {
