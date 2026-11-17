@@ -76,6 +76,81 @@ def test_declared_python_tool_is_traced_without_changing_result(tmp_path: Path) 
     assert finished - forecast["at"] >= 0.2
 
 
+def test_a_large_tool_result_is_cut_without_breaking_the_trace_line(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "agent.py").write_text("def search(query):\n    return 'x' * 20000\n")
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "search", "module": "agent", "callable": "search"}]
+    )
+
+    subprocess.run(
+        [sys.executable, "-c", "from agent import search\nsearch('q' * 30000)\n"],
+        check=True,
+        env=env,
+    )
+
+    # Every line stays JSON, so the call is still evidence; its values are cut instead.
+    (record,) = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert record["name"] == "search"
+    assert record["truncated"] is True
+    assert record["output"] == "x" * 2000 + " [cut from 20000 characters]"
+    assert record["arguments"] == {"query": "q" * 2000 + " [cut from 30000 characters]"}
+
+
+def test_a_cut_keeps_the_type_of_every_value_that_fits(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text(
+        "def list_slots(clinic_id, days):\n"
+        "    return {'count': 3, 'slots': 'y' * 20000}\n"
+    )
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "list_slots", "module": "agent", "callable": "list_slots"}]
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from agent import list_slots\nlist_slots(5, ['mon', 'tue'])\n",
+        ],
+        check=True,
+        env=env,
+    )
+
+    # Only the oversize value is cut, so a check still compares the id and the count as numbers.
+    (record,) = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert record["truncated"] is True
+    assert record["arguments"] == {"clinic_id": 5, "days": ["mon", "tue"]}
+    assert record["output"] == {
+        "count": 3,
+        "slots": "y" * 2000 + " [cut from 20000 characters]",
+    }
+
+
+def test_a_record_of_many_small_values_stays_bounded(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text(
+        "def export(rows):\n    return {f'k{index}': 'v' * 100 for index in range(200)}\n"
+    )
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "export", "module": "agent", "callable": "export"}]
+    )
+
+    subprocess.run(
+        [sys.executable, "-c", "from agent import export\nexport(7)\n"],
+        check=True,
+        env=env,
+    )
+
+    # No single value is oversize, so the whole output is cut as text to keep the line bounded.
+    (line,) = trace.read_text().splitlines()
+    record = json.loads(line)
+    assert len(line) < 3000
+    assert record["truncated"] is True
+    assert record["arguments"] == {"rows": 7}
+    assert record["output"].startswith('{"k0": "' + "v" * 100)
+    assert record["output"].endswith(" characters]")
+
+
 def test_declared_python_tool_does_not_match_same_named_functions_in_other_modules(
     tmp_path: Path,
 ) -> None:

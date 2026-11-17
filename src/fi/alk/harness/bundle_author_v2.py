@@ -61,6 +61,8 @@ from .bundle_v2 import (
 from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
+    framework_instrumentation_command,
+    uv_run_project,
     _python_language_version,
     select_python_extras,
     python_workspace_root,
@@ -3180,19 +3182,30 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
+    # A voice agent's tool calls are traced by its LiveKit worker, never twice.
     if (
         not isinstance(selected, ComposeSelection)
         and runtime_model.command
-        and contract_interface_kind == "command"
+        and str(contract_modality or "").strip().lower() != "voice"
     ):
         trace_environment = _source_tool_trace_environment(
-            root, runtime_model, tool_entrypoints or []
+            root,
+            runtime_model,
+            (tool_entrypoints or []) if contract_interface_kind == "command" else [],
         )
         if trace_environment:
             processes = [
-                process.model_copy(update={
-                    "environment": {**process.environment, **trace_environment},
-                })
+                process.model_copy(
+                    update={
+                        "environment": {**process.environment, **trace_environment},
+                        "build_commands": [
+                            *process.build_commands,
+                            framework_instrumentation_command(
+                                uv_run_project(process.run_command)
+                            ),
+                        ],
+                    }
+                )
                 if isinstance(process, SourceProcess) and process.name == control_name
                 else process
                 for process in processes
@@ -3219,12 +3232,14 @@ def _source_tool_trace_environment(
             declared.append({
                 "name": entry.tool, "module": entry.module, "callable": entry.callable,
             })
-    if not declared:
-        return {}
+    # Every Python agent's framework spans are read for its tool calls and the agent that made
+    # each, so any multi-agent source is observed without changes to it.
     environment = {
         "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-        "ALK_TOOL_TRACE_BINDINGS": json.dumps(declared, sort_keys=True),
+        "ALK_OBSERVE_FRAMEWORKS": "1",
     }
+    if declared:
+        environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(declared, sort_keys=True)
     component = _runtime_component(source, runtime.workdir)
     project = _pyproject_document(component / "pyproject.toml").get("project", {})
     requirements = list(project.get("dependencies", []))
@@ -3250,6 +3265,15 @@ _SOURCE_TOOL_TRACE_VERSION = 1
 
 
 def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
+    """Whether ALK traces the source's tools or its framework spans; LiveKit's own trace alone does not count."""
+    return any(
+        {"ALK_TOOL_TRACE_BINDINGS", "ALK_OBSERVE_FRAMEWORKS"}
+        & set(getattr(process, "environment", None) or {})
+        for process in processes
+    )
+
+
+def _binds_source_tools(processes: Sequence[Any]) -> bool:
     return any(
         "ALK_TOOL_TRACE_BINDINGS" in (getattr(process, "environment", None) or {})
         for process in processes
@@ -3513,12 +3537,9 @@ def _with_source_tool_trace(
             if key not in {"HARNESS_TOOL_TRACE", "ALK_TOOL_TRACE_BINDINGS"}
         }
         if bindings:
-            environment.update(
-                {
-                    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-                    "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
-                }
-            )
+            environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(bindings)
+        if bindings or "ALK_OBSERVE_FRAMEWORKS" in environment:
+            environment["HARNESS_TOOL_TRACE"] = "{{WORLD_DIR}}/agent-tool-calls.jsonl"
         updated.append(process.model_copy(update={"environment": environment}))
     return tuple(updated)
 
@@ -3697,7 +3718,7 @@ def author_bundle_v2(
         if contract_modality == "chat"
         else []
     )
-    if trace_bindings and not _uses_source_tool_trace(plan.processes):
+    if trace_bindings and not _binds_source_tools(plan.processes):
         plan = replace(
             plan,
             processes=_with_source_tool_trace(
@@ -4251,7 +4272,7 @@ def _carry_contract(
     traced_command = (
         isinstance(interface, dict)
         and str(interface.get("kind") or "").strip().lower() == "command"
-        and _uses_source_tool_trace(processes)
+        and _binds_source_tools(processes)
     )
     if (
         str(body.get("modality") or "").strip().lower() == "chat"
@@ -4488,13 +4509,69 @@ if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
 
 
+# A table as a schema names it: bare or quoted, with an optional bare or quoted schema.
+_SQL_TABLE = r'(?:"?[A-Za-z_]\w*"?\s*\.\s*)?"?([A-Za-z_]\w*)"?'
+# Where a column's type ends in its definition: at its first default or constraint.
+_COLUMN_TYPE_END = re.compile(
+    r"\s(?:DEFAULT|NOT|NULL|PRIMARY|REFERENCES|CHECK|UNIQUE|CONSTRAINT|COLLATE|GENERATED)\b",
+    re.IGNORECASE,
+)
+# Table-level clauses that sit among the column definitions.
+_NOT_COLUMNS = ("PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT")
+
+
+def _sql_code(text: str) -> str:
+    """``text`` without its comments, and with each string literal emptied to ``''``, so a
+    quote, comma, parenthesis or ``--`` inside a default never reads as SQL."""
+    out: list[str] = []
+    at = 0
+    while at < len(text):
+        if text[at] == "'":
+            end = at + 1
+            while end < len(text) and not (
+                text[end] == "'" and text[end + 1 : end + 2] != "'"
+            ):
+                end += 2 if text[end : end + 2] == "''" else 1
+            out.append("''")
+            at = end + 1
+        elif text.startswith("--", at):
+            end = text.find("\n", at)
+            at = len(text) if end < 0 else end
+        elif text.startswith("/*", at):
+            end = text.find("*/", at + 2)
+            out.append(" ")
+            at = len(text) if end < 0 else end + 2
+        else:
+            out.append(text[at])
+            at += 1
+    return "".join(out)
+
+
+def _column_kind(definition: str) -> str | None:
+    """What a column definition declares, as the gates read it: ``boolean``, ``text[]`` (any
+    array), ``jsonb`` or ``json``. Read off the type alone, never its default or constraints,
+    so ``jsonb DEFAULT '[]'`` is JSON and ``jsonb[]`` an array."""
+    kind = _COLUMN_TYPE_END.split(" " + definition.strip(), maxsplit=1)[0].strip().upper()
+    if kind.startswith("BOOL"):
+        return "boolean"
+    if "[" in kind or kind.startswith("ARRAY") or kind.endswith(" ARRAY"):
+        return "text[]"
+    if kind.startswith("JSONB"):
+        return "jsonb"
+    if kind.startswith("JSON"):
+        return "json"
+    return None
+
+
 def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
-    """Column declarations read off the agent's own schema, keyed by table and column."""
+    """Column declarations read off the agent's own schema, keyed by table and column: those
+    of each ``CREATE TABLE`` and each ``ALTER TABLE ... ADD COLUMN``. A schema-qualified
+    table is keyed by its own name, as the world names it."""
     declared: dict[tuple[str, str], str] = {}
     for path in paths:
-        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        sql = _sql_code(path.read_text(encoding="utf-8"))
         for found in re.finditer(
-            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s*\(',
+            rf"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?{_SQL_TABLE}\s*\(",
             sql,
             re.IGNORECASE,
         ):
@@ -4503,24 +4580,44 @@ def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
                 depth += (sql[at] == "(") - (sql[at] == ")")
                 at += 1
             for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
-                words = part.strip().split()
-                if len(words) < 2:
+                words = part.strip().split(None, 1)
+                if len(words) < 2 or words[0].strip('"').upper() in _NOT_COLUMNS:
                     continue
-                name = words[0].strip('"')
-                if name.upper() in (
-                    "PRIMARY",
-                    "FOREIGN",
-                    "UNIQUE",
-                    "CHECK",
-                    "CONSTRAINT",
-                ):
+                if kind := _column_kind(words[1]):
+                    declared[(found.group(1).lower(), words[0].strip('"').lower())] = kind
+        for found in re.finditer(
+            rf"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?{_SQL_TABLE}\s+([^;]*)",
+            sql,
+            re.IGNORECASE,
+        ):
+            for part in re.split(r",(?![^()]*\))", found.group(2)):
+                added = re.match(
+                    r'\s*ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s+(.+)',
+                    part,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                if not added or added.group(1).upper() in _NOT_COLUMNS:
                     continue
-                kind = words[1].upper()
-                rest = " ".join(words[1:]).upper()
-                if kind.startswith("BOOL"):
-                    declared[(found.group(1).lower(), name.lower())] = "boolean"
-                elif "[]" in rest or kind.startswith("ARRAY"):
-                    declared[(found.group(1).lower(), name.lower())] = "text[]"
-                elif kind.startswith("JSONB"):
-                    declared[(found.group(1).lower(), name.lower())] = "jsonb"
+                if kind := _column_kind(added.group(2)):
+                    declared[(found.group(1).lower(), added.group(1).lower())] = kind
     return declared
+
+
+def declared_json_columns(
+    source: Path | str | None, *, contract: dict[str, Any] | None = None
+) -> set[tuple[str, str]]:
+    """The ``(table, column)`` pairs the agent's own schema declares JSON or JSONB.
+
+    These are the types the validation seed imports against (``inspect_postgres`` on the same
+    schema), known here before any database exists, so a world can be checked where it is
+    written. Empty when the source declares no schema file, for example when its tables exist
+    only in ORM migrations.
+    """
+    if not source:
+        return set()
+    try:
+        declared = _schema_column_types(_source_schema_paths(Path(source), contract=contract))
+    except (OSError, ValueError, BundleAuthorError):
+        # A missing or unreadable schema is reported where the bundle is compiled.
+        return set()
+    return {key for key, kind in declared.items() if kind in ("json", "jsonb")}
