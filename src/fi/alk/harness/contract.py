@@ -1407,9 +1407,18 @@ class AgentContract(BaseModel):
             )
         if self.workers:
             parts.append(
-                "WORKERS (agents this one hands work to, and the tools each holds):\n  - "
+                "WORKERS (agents this one hands work to, and the tools each holds). Each one whose work the world can "
+                "show gets its own checks: a sub-goal with `subject: worker:<id>` (see 'When the agent hands work to "
+                "workers'):\n  - "
                 + "\n  - ".join(
                     f"{one.id} ({one.name or one.id}): {', '.join(one.tools) or 'no tools'}"
+                    + (
+                        f"; may use only {', '.join(one.allowed_tools)}"
+                        if one.allowed_tools and set(one.allowed_tools) != set(one.tools)
+                        else ""
+                    )
+                    + ("; its own channel to the world" if one.binding == "separate" else "")
+                    + f"; its checks take subject worker:{one.id}"
                     for one in self.workers
                 )
             )

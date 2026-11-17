@@ -375,3 +375,26 @@ def test_a_subject_the_platform_would_refuse_is_refused_by_the_harness_too(subje
     assert not re.match(PLATFORM_SUBJECT, subject.strip())
     with pytest.raises(ValueError):
         SubGoal.model_validate({"name": "g", "subject": subject})
+
+
+def test_every_authoring_stage_reads_each_worker_s_limits_and_the_subject_its_checks_take() -> None:
+    """The returns reference app's two workers, as the scenario planner, its writers and the builder all read them."""
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "tools": [{"name": name} for name in ("get_order", "list_refunds", "issue_refund")],
+            "workers": [
+                {"id": "order_lookup", "name": "Order lookup", "binding": "separate", "address_env": "LOOKUP_URL",
+                 "tools": ["get_order", "list_refunds"]},
+                {"id": "refund", "name": "Refund worker", "binding": "separate", "address_env": "REFUND_URL",
+                 "tools": ["list_refunds", "issue_refund"], "allowed_tools": ["issue_refund"]},
+            ],
+        }
+    )
+    brief = contract.brief()
+    assert "subject: worker:<id>" in brief
+    assert "refund (Refund worker): list_refunds, issue_refund; may use only issue_refund" in brief
+    assert "its checks take subject worker:refund" in brief and "its checks take subject worker:order_lookup" in brief
+    assert "its own channel to the world" in brief
+    # With no workers, nothing about them.
+    assert "WORKERS" not in AgentContract.model_validate({"agent": "solo"}).brief()
