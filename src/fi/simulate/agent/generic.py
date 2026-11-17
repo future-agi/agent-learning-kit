@@ -1249,10 +1249,19 @@ def _content_blocks_text(value: Any) -> str:
     return text_of(value) if isinstance(value, (str, list, tuple)) else ""
 
 
+_REPLY_ITEM_KINDS = frozenset(
+    {
+        "text", "output_text", "refusal", "thinking", "redacted_thinking", "reasoning",
+        "tool_use", "server_tool_use", "tool_result", "image", "message",
+        "ai", "human", "tool", "system", "assistant", "user",
+    }
+)
+_CHAT_ROLES = frozenset({"assistant", "user", "system", "tool", "developer"})
+
+
 def _is_block_or_message(item: Any) -> bool:
-    if isinstance(item, Mapping):
-        return "type" in item or "role" in item
-    return hasattr(item, "type") or hasattr(item, "role")
+    get = item.get if isinstance(item, Mapping) else lambda name: getattr(item, name, None)
+    return get("type") in _REPLY_ITEM_KINDS or get("role") in _CHAT_ROLES
 
 
 def _reply_text(value: Any) -> str:

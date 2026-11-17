@@ -273,6 +273,8 @@ def _generic_reply(reply):
         "list-of-dict-messages",
     ],
 )
+
+
 def test_generic_agent_wrapper_keeps_only_the_text(reply, expected):
     out = _generic_reply(reply)
     assert out == expected
@@ -300,3 +302,16 @@ def test_the_frameworks_probe_reports_only_the_text_of_a_block_reply():
     assert result["response"]["content"] == ANSWER
     payload = json.dumps(result, default=str)
     assert "sig-abc" not in payload and "plan the reply" not in payload
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"result": [{"type": "order", "id": "A1"}]}, '[{"type": "order", "id": "A1"}]'),
+        ({"data": [{"name": "Ann", "role": "admin"}]}, '[{"name": "Ann", "role": "admin"}]'),
+        ({"output": [THINKING]}, ""),
+    ],
+    ids=["records-with-type-stay-json", "records-with-role-stay-json", "thinking-only-stays-empty"],
+)
+def test_records_with_a_type_or_role_key_stay_json(reply, expected):
+    assert _generic_reply(reply) == expected
