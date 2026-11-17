@@ -167,9 +167,10 @@ _BUILD_FOLDERS = frozenset({"dist", "build", "out"})
 # What a build writes: an entry with one of these suffixes is looked for with every script
 # suffix of the same stem, so `.mjs` and `.cjs` are found from `.ts` as `.js` is.
 _BUILT_SUFFIXES = frozenset({".js", ".mjs", ".cjs", ".jsx"})
-# The flavour a bundler adds to a built name (`index.esm.js` from `src/index.ts`). Only these are
-# dropped to find a source, and only after the exact name: `app.module.js` is never `app.ts`.
-_BUILD_FLAVOURS = frozenset({".esm", ".cjs", ".umd", ".min"})
+# The flavour a bundler adds to a built name (`index.esm.js`, `index.umd.min.js` from
+# `src/index.ts`). Only these are dropped to find a source, as many as are stacked, and only after
+# the exact name: `app.module.js` is never `app.ts`.
+_BUILD_FLAVOURS = frozenset({".esm", ".es", ".cjs", ".umd", ".min", ".modern", ".bundle"})
 _SCRIPT_IMPORT = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
 )
@@ -1661,8 +1662,10 @@ def imported_by_agent(
                 # One suffix off, as `script_candidates` joins them: app.module.js is app.module.ts.
                 stem = built.parent / built.stem
                 candidates += [Path(f"{stem}{suffix}") for suffix in _SCRIPT_SUFFIXES]
-                if stem.suffix in _BUILD_FLAVOURS:
-                    plain = stem.parent / stem.stem
+                plain = stem
+                while plain.suffix in _BUILD_FLAVOURS:
+                    plain = plain.parent / plain.stem
+                if plain != stem:
                     flavoured += [Path(f"{plain}{suffix}") for suffix in _SCRIPT_SUFFIXES]
             else:
                 candidates += [*script_candidates(built), *script_index(built)]

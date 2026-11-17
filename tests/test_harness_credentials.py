@@ -853,6 +853,12 @@ def _ts_monorepo(tmp_path, main):
         "dist/esm/index.js",
         # Rollup's flavoured name for the same src/index.ts.
         "dist/index.esm.js",
+        # Check of e94c4640 (L1, L2): other bundlers' flavours, and flavours stacked.
+        "dist/index.es.js",
+        "dist/index.modern.js",
+        "dist/index.bundle.js",
+        "dist/index.esm.min.js",
+        "dist/index.umd.min.js",
     ],
 )
 def test_a_package_main_in_an_uncommitted_build_folder_is_found_in_src(tmp_path, main):
@@ -944,6 +950,32 @@ def test_a_dotted_build_entry_with_no_source_of_its_own_takes_no_shorter_name(tm
     )
 
     assert _required(discover_credentials(root, agent_subfolder="agents/a"))["APP_API_KEY"] is False
+
+
+@pytest.mark.parametrize(
+    "main, own, other",
+    [
+        # Check of e94c4640 (L3): the exact path comes before the dual build's folder dropped...
+        ("dist/cjs/worker.js", "src/cjs/worker.ts", "src/worker.ts"),
+        # ...and the exact name before a flavour dropped.
+        ("dist/index.esm.js", "src/index.esm.ts", "src/index.ts"),
+    ],
+)
+def test_a_build_entry_takes_its_exact_source_before_a_fallback(tmp_path, main, own, other):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": main}),
+            f"packages/shared/{own}": "export const k = process.env.OWN_API_KEY;\n",
+            f"packages/shared/{other}": "export const o = process.env.OTHER_API_KEY;\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["OWN_API_KEY"] is True
+    assert required["OTHER_API_KEY"] is False
 
 
 def test_a_build_folder_main_is_entered_through_src_index(tmp_path):
