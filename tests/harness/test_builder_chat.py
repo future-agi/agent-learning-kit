@@ -4206,3 +4206,28 @@ def test_a_restored_pending_question_still_matches_the_question_asked_again(tmp_
     again = [one for one in client.events if one["kind"] == "question_requested"][-1]["message_id"]
     assert restored["message_id"] == asked
     assert again == asked
+
+
+def test_a_resubmitted_scenario_is_not_a_change_because_the_saved_copy_was_cleaned(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.catalogue import Catalogue
+    from fi.alk.harness.folder import write_folder
+    from fi.alk.harness.scenario import Scenario
+
+    key = "ghp_" + "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5"
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    raw = {
+        "name": "one",
+        "scenario_key": "one",
+        "instruction": f"ask for a refund, quoting {key}",
+        "use_case": "refunds",
+        "persona": {"name": "Ana", "personality": f"calm, mentions {key}", "accent": "American"},
+    }
+    write_folder(Scenario.model_validate(raw), Catalogue(), tmp_path)
+    assert key not in (tmp_path / "scenarios" / "one" / "scenario.json").read_text()
+
+    assert not runtime._changes_situation(raw)
+    assert not runtime._changes_meaning(raw)
+    assert runtime._changes_situation({**raw, "instruction": "ask for a cancellation"})
+    assert runtime._changes_meaning({**raw, "instruction": "ask for a cancellation"})

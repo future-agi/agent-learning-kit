@@ -1045,8 +1045,11 @@ class HostedChatRuntime:
             held = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return False
+        from .folder import clean_scenario_document
         from .scenario import Scenario
 
+        # The saved file was cleaned when it was written, so the submission is cleaned the same
+        # way before the two are compared; an unchanged scenario would otherwise read as changed.
         try:
             saved_now = Scenario.model_validate(held).model_dump()
             submitted = Scenario.model_validate(
@@ -1054,12 +1057,14 @@ class HostedChatRuntime:
             ).model_dump()
         except ValueError:
             saved_now, submitted = held, {**held, **change}
+        saved_now, submitted = clean_scenario_document(saved_now), clean_scenario_document(submitted)
         if any(
             field in named and submitted.get(field) != saved_now.get(field)
             for field in fields
         ):
             return True
-        persona, before = change.get("persona") or {}, held.get("persona") or {}
+        persona = clean_scenario_document({"persona": change.get("persona") or {}})["persona"]
+        before = clean_scenario_document({"persona": held.get("persona") or {}})["persona"]
         if whole_persona:
             from .scenario import Persona
 

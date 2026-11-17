@@ -1,0 +1,188 @@
+"""Scenario and sub-goal files: prose is cleaned where each writer saves it, the closed list of
+kept-exactly fields is never rewritten, and a credential in one of those is refused at submission."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue, validate_sub_goal
+from fi.alk.harness.scenario import Persona, Scenario, Step, validate_scenario
+
+KEY = "ghp_" + "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5"
+CHECK = "def check(world, calls):\n    return None\n"
+
+
+def _scenario(**fields) -> Scenario:
+    body = {
+        "name": "reset",
+        "instruction": f"Ask to reset it; the caller read out {KEY}.",
+        "tests": "the reset flow",
+        "keywords": [f"token {KEY}", "reset"],
+        "persona": Persona(
+            name="Ana",
+            personality=f"calm, mentions {KEY}",
+            metadata={"verification_token": "RT4821X"},
+            scripted_caller={"reset_token": "RT4821X", "new_password": "Blue-Sky-42"},
+        ),
+        "variables": {"reset_token": "RT4821X"},
+        "fixture": {"origin": "seed", "credentials": {"new_password": "Blue-Sky-42"}},
+        "solution": [
+            Step(
+                tool="reset",
+                arguments={"reset_token": "RT4821X", "new_password": "Blue-Sky-42"},
+                environment_arguments={"reset_token": "RT4821X"},
+                fixed={"new_password": "the caller"},
+            )
+        ],
+        "alternatives": [[Step(tool="reset", arguments={"reset_token": "RT4821X"})]],
+        "sub_goals": ["reset-done"],
+    }
+    body.update(fields)
+    return Scenario(**body)
+
+
+def _catalogue() -> Catalogue:
+    return Catalogue(
+        sub_goals=[
+            SubGoal(
+                name="reset-done",
+                what=f"the reset happened; a note quoted {KEY}",
+                check=CHECK + "# reset_token RT4821X\n",
+                reference=f"from the caller, who said {KEY}",
+            )
+        ]
+    )
+
+
+def _assert_cleaned_but_exact(document: dict) -> None:
+    assert KEY not in json.dumps(document)
+    assert document["persona"]["metadata"] == {"verification_token": "RT4821X"}
+    assert document["persona"]["scripted_caller"] == {
+        "reset_token": "RT4821X",
+        "new_password": "Blue-Sky-42",
+    }
+    assert document["variables"] == {"reset_token": "RT4821X"}
+    assert document["fixture"]["credentials"] == {"new_password": "Blue-Sky-42"}
+    step = document["solution"][0]
+    assert step["arguments"] == {"reset_token": "RT4821X", "new_password": "Blue-Sky-42"}
+    assert step["environment_arguments"] == {"reset_token": "RT4821X"}
+    assert step["fixed"] == {"new_password": "the caller"}
+    assert document["alternatives"][0][0]["arguments"] == {"reset_token": "RT4821X"}
+
+
+def test_the_shared_helper_cleans_prose_and_keeps_the_closed_list():
+    from fi.alk.harness.folder import clean_scenario_document
+
+    document = _scenario().model_dump()
+    cleaned = clean_scenario_document(document)
+    _assert_cleaned_but_exact(cleaned)
+    assert "[redacted]" in cleaned["instruction"]
+    assert "[redacted]" in cleaned["keywords"][0]
+    assert "[redacted]" in cleaned["persona"]["personality"]
+    assert KEY in json.dumps(document), "the input is left as it was"
+    assert clean_scenario_document(cleaned) == cleaned
+
+
+def test_the_catalogue_helper_cleans_every_field_but_check():
+    from fi.alk.harness.catalogue import clean_catalogue
+
+    cleaned = clean_catalogue(_catalogue().model_dump())
+    goal = cleaned["sub_goals"][0]
+    assert KEY not in json.dumps(cleaned)
+    assert "[redacted]" in goal["what"] and "[redacted]" in goal["reference"]
+    assert goal["check"] == CHECK + "# reset_token RT4821X\n"
+
+
+def test_write_folder_and_the_index_clean_the_scenario_file(tmp_path: Path):
+    from fi.alk.harness.folder import read_folder, write_folder, write_index
+
+    scenario = _scenario()
+    root = write_folder(scenario, _catalogue(), tmp_path)
+    saved = json.loads((root / "scenario.json").read_text(encoding="utf-8"))
+    _assert_cleaned_but_exact(saved)
+    index = write_index([scenario], tmp_path)
+    _assert_cleaned_but_exact(json.loads(index.read_text(encoding="utf-8"))[0])
+    back = read_folder(tmp_path, "reset")
+    assert back.solution[0].arguments["new_password"] == "Blue-Sky-42"
+    assert back.persona.scripted_caller["reset_token"] == "RT4821X"
+
+
+def test_save_catalogue_cleans_what_and_keeps_check(tmp_path: Path):
+    path = save_catalogue(_catalogue(), tmp_path)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert KEY not in json.dumps(saved)
+    assert saved["sub_goals"][0]["check"] == CHECK + "# reset_token RT4821X\n"
+
+
+def test_certify_only_pruning_cleans_the_scenarios_it_rewrites(tmp_path: Path):
+    from fi.alk.harness.authoring_entrypoint import _prune_suite_to_catalogue
+
+    output = tmp_path / "out"
+    folder = output / "scenarios" / "reset"
+    (folder / "checks").mkdir(parents=True)
+    document = _scenario().model_dump()
+    (folder / "scenario.json").write_text(json.dumps(document), encoding="utf-8")
+    (folder / "setup.py").write_text("def setup(world):\n    return None\n")
+    (folder / "ready.py").write_text("def ready(world):\n    return None\n")
+    (output / "sub_goals.json").write_text(
+        Catalogue(sub_goals=[SubGoal(name="reset-done", what="x", check=CHECK)]).model_dump_json(),
+        encoding="utf-8",
+    )
+    _prune_suite_to_catalogue(output)
+    _assert_cleaned_but_exact(json.loads((folder / "scenario.json").read_text(encoding="utf-8")))
+
+
+def test_sealing_copies_scenarios_cleaned(tmp_path: Path):
+    from fi.alk.harness.bundle_author_v2 import _copy_scenarios
+
+    authoring, staging = tmp_path / "authoring", tmp_path / "staging"
+    folder = authoring / "scenarios" / "reset"
+    folder.mkdir(parents=True)
+    staging.mkdir()
+    (folder / "scenario.json").write_text(json.dumps(_scenario().model_dump()), encoding="utf-8")
+    _copy_scenarios(authoring, staging, count=1)
+    _assert_cleaned_but_exact(
+        json.loads((staging / "scenarios" / "reset" / "scenario.json").read_text(encoding="utf-8"))
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("fixture", {"origin": "seed", "url": "https://x.example/api?api_key=abc"}),
+        ("variables", {"link": f"/c?sig=abcDEF123%2F&k={KEY}"}),
+        ("persona", Persona(name="Ana", metadata={"note": KEY})),
+        ("persona", Persona(name="Ana", scripted_caller={"key": KEY})),
+        ("solution", [Step(tool="t", arguments={"auth": f"Bearer {KEY}"})]),
+        ("solution", [Step(tool="t", environment_arguments={"dsn": "postgres://u:hunter2@db/x"})]),
+        ("alternatives", [[Step(tool="t", arguments={"x": KEY})]]),
+        ("solution", [Step(tool="t", fixed={"x": KEY})]),
+    ],
+)
+def test_a_credential_in_a_kept_field_is_refused_and_named(field, value):
+    scenario = _scenario(**{field: value})
+    problems = [
+        one
+        for one in validate_scenario(scenario, _catalogue(), {})
+        if "holds a credential" in one
+    ]
+    assert len(problems) == 1
+    assert problems[0].startswith(field if field != "persona" else "persona.")
+    assert KEY not in problems[0]
+
+
+def test_honest_scenario_data_is_not_refused():
+    problems = validate_scenario(_scenario(), _catalogue(), {})
+    assert not [one for one in problems if "holds a credential" in one]
+
+
+def test_a_credential_in_check_code_is_refused_and_a_placeholder_is_not():
+    bad = SubGoal(name="g", what="w", check=CHECK + 'password = "hunter2"\n')
+    assert any("holds a credential" in one for one in validate_sub_goal(bad))
+    good = SubGoal(name="g", what="w", check=CHECK + "password = '$PASSWORD'\n")
+    assert not any("holds a credential" in one for one in validate_sub_goal(good))
+    keyed = SubGoal(name="g", what="w", check=CHECK + f"# {KEY}\n")
+    assert any("holds a credential" in one for one in validate_sub_goal(keyed))

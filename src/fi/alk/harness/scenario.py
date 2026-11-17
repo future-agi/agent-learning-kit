@@ -25,6 +25,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from ..providers.secret_shapes import credential_in
 from .catalogue import Catalogue
 from .simulator import variables_in
 
@@ -492,6 +493,29 @@ def scenario_edit_problems(scenario: Scenario) -> list[str]:
     return problems
 
 
+def _credentials_in_kept_fields(scenario: Scenario) -> list[str]:
+    """The fields a scenario keeps exactly as written that hold a credential.
+
+    They are never cleaned, since the world replays them and the caller reads them as facts, so a
+    credential in one would be saved and sent on as it is. Refused here instead; the value is
+    never echoed back."""
+    persona = scenario.persona
+    kept = {
+        "solution": [step.model_dump() for step in scenario.solution],
+        "alternatives": [[step.model_dump() for step in way] for way in scenario.alternatives],
+        "variables": scenario.variables,
+        "fixture": scenario.fixture,
+        "persona.metadata": persona.metadata if persona else None,
+        "persona.scripted_caller": persona.scripted_caller if persona else None,
+    }
+    return [
+        f"{field} holds a credential. A scenario's {field.split('.')[-1]} is kept as written, so "
+        "give the agent the secret through its settings and use a placeholder here"
+        for field, value in kept.items()
+        if credential_in(value)
+    ]
+
+
 def validate_scenario(
     scenario: Scenario,
     catalogue: Catalogue,
@@ -506,7 +530,7 @@ def validate_scenario(
     Whether it can actually be passed is a different question, and no amount of reading settles
     it. That is what the gates are for.
     """
-    problems: list[str] = []
+    problems: list[str] = _credentials_in_kept_fields(scenario)
     if not scenario.name.strip():
         problems.append("no name")
     if not scenario.instruction.strip():

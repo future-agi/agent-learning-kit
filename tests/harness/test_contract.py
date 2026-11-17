@@ -1,7 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from fi.alk.harness.contract import AgentContract, RuntimeInterface, validate_contract
+from fi.alk.harness.contract import (
+    AgentContract,
+    RuntimeInterface,
+    ToolEntry,
+    ToolSpec,
+    validate_contract,
+)
 
 
 def test_response_path_schema_describes_supported_selector_in_authoring_and_repair(tmp_path):
@@ -180,3 +186,71 @@ def test_http_server_keeps_source_owned_message_template_argument():
     command = ["server", "--chat-template", "{{messages}}"]
     runtime = Runtime(command=command, interface={"kind": "http", "protocol": "openai_chat", "port": 8080, "path": "/v1/chat/completions"})
     assert runtime.command == command
+
+
+def _credential_contract(arg_values=None, endpoint=""):
+    return AgentContract(
+        agent="support",
+        real_use_cases=["log in"],
+        tools=[ToolSpec(name="login", args=["password", "q"], arg_values=arg_values or {})],
+        tool_entrypoints=[
+            ToolEntry(tool="login", mode="service", service="api", endpoint=endpoint)
+        ],
+    )
+
+
+def _credential_problems(contract):
+    return [problem for problem in validate_contract(contract) if "holds a credential" in problem]
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "/v1/search?key=AbCdEf123456",
+        "/c?sv=2020&sig=abcDEF123%2F",
+        "/v1/items?pwd=hunter2",
+        "/login?auth=hunter2",
+    ],
+)
+def test_an_endpoint_with_a_credential_in_its_query_is_a_problem(endpoint):
+    problems = _credential_problems(_credential_contract(endpoint=endpoint))
+    assert len(problems) == 1
+    assert "tool_entrypoints[login].endpoint holds a credential" in problems[0]
+    assert "through its settings" in problems[0]
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "/v1/items?id=77",
+        "https://x.example.com/v1?api-version=2024-01-01",
+        "/docs#install",
+        "HTTPS://API.EXAMPLE.COM/v1",
+        "{HOST}:{PORT}/v1",
+        "ssh://git@github.com/org/repo",
+    ],
+)
+def test_an_honest_endpoint_is_not_a_credential_problem(endpoint):
+    assert _credential_problems(_credential_contract(endpoint=endpoint)) == []
+
+
+def test_a_credential_shaped_example_value_is_a_problem():
+    problems = _credential_problems(
+        _credential_contract(arg_values={"q": ["/x?sig=abcDEF123%2F"]})
+    )
+    assert len(problems) == 1
+    assert "tools[login].arg_values.q holds a credential" in problems[0]
+
+
+def test_a_credential_named_argument_may_not_list_values():
+    problems = _credential_problems(
+        _credential_contract(arg_values={"password": ["hunter2", "correcthorse"]})
+    )
+    assert len(problems) == 1
+    assert "tools[login].arg_values.password holds a credential" in problems[0]
+    assert "hunter2" not in problems[0]
+
+
+def test_a_credential_named_argument_may_list_references():
+    contract = _credential_contract(arg_values={"password": ["$PASSWORD", "{{pw}}"]})
+    assert _credential_problems(contract) == []

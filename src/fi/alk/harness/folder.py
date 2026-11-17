@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..providers.agent import redact_strings
 from .catalogue import Catalogue, SubGoal
 from .scenario import Scenario
 from .world.runtime import GeneratedWorld
@@ -147,12 +148,38 @@ def document_for(scenario: Scenario) -> dict:
     return body
 
 
+# Kept exactly as written: the world replays these and the caller reads them as facts, so a masked
+# value fails a correct agent. A credential in one is refused at submission instead
+# (`scenario.validate_scenario`). Every string field not listed here is prose and is cleaned.
+KEPT_SCENARIO_FIELDS = ("solution", "alternatives", "fixed", "variables", "fixture")
+KEPT_PERSONA_FIELDS = ("metadata", "scripted_caller")
+
+
+def _clean_except(document: dict[str, Any], kept: tuple[str, ...]) -> dict[str, Any]:
+    prose = redact_strings({key: value for key, value in document.items() if key not in kept})
+    return {key: document[key] if key in kept else prose[key] for key in document}
+
+
+def clean_scenario_document(document: dict[str, Any]) -> dict[str, Any]:
+    """A scenario document with its prose cleaned and its kept-exactly fields untouched.
+
+    Works on a whole document or on part of one, and cleaning twice changes nothing more."""
+    cleaned = _clean_except(
+        {k: v for k, v in document.items() if k != "persona" or not isinstance(v, dict)},
+        KEPT_SCENARIO_FIELDS,
+    )
+    persona = document.get("persona")
+    if isinstance(persona, dict):
+        cleaned["persona"] = _clean_except(persona, KEPT_PERSONA_FIELDS)
+    return {key: cleaned[key] for key in document}
+
+
 def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) -> Path:
     """Write one scenario out as its own folder of files."""
     root = folder_for(destination, scenario.name)
     (root / "checks").mkdir(parents=True, exist_ok=True)
 
-    body = document_for(scenario)
+    body = clean_scenario_document(document_for(scenario))
     (root / "scenario.json").write_text(
         json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -240,7 +267,7 @@ def write_index(scenarios: list[Scenario], destination: Path) -> Path:
         json.dumps(
             [
                 {
-                    **document_for(one),
+                    **clean_scenario_document(document_for(one)),
                     "steps": len(one.solution),
                     "folder": f"{SCENARIOS}/{one.name}",
                 }

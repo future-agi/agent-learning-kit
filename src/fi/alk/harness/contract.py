@@ -30,6 +30,7 @@ from fi.simulate.agent.wrappers.http_events import (
 )
 
 from ..providers.agent import _redact
+from ..providers.secret_shapes import credential_in, credential_named_arg_values_refusal
 from .observations import HttpObservation
 
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
@@ -1686,6 +1687,39 @@ def validate_tool_workflow(contract: AgentContract) -> None:
     )
 
 
+_KEPT_AS_WRITTEN_ADVICE = (
+    "A tool's example values and endpoints are kept as written, so give the agent the secret "
+    "through its settings and use a placeholder here."
+)
+
+
+def _credential_problems(contract: AgentContract) -> list[str]:
+    """Credentials in the two tool fields that are stored and sent on exactly as written.
+
+    They are refused here rather than cleaned: the world answers with `arg_values` and the tool
+    proxy calls `endpoint` as written, so a masked copy would break both. This runs in
+    `validate_contract` so a failed amend leaves the held contract as it was. A value is never
+    echoed back, since it is the secret."""
+    problems: list[str] = []
+    for tool in contract.tools:
+        for arg, values in tool.arg_values.items():
+            where = f"tools[{tool.name}].arg_values.{arg}"
+            if credential_named_arg_values_refusal(arg, values):
+                problems.append(
+                    f"{where} holds a credential: the argument's name says so, and it lists values. "
+                    "Leave its values out, since the agent's settings carry the secret."
+                )
+            elif credential_in(values):
+                problems.append(f"{where} holds a credential. {_KEPT_AS_WRITTEN_ADVICE}")
+    for entry in contract.tool_entrypoints:
+        if credential_in(entry.endpoint):
+            problems.append(
+                f"tool_entrypoints[{entry.tool}].endpoint holds a credential. "
+                f"{_KEPT_AS_WRITTEN_ADVICE}"
+            )
+    return problems
+
+
 def validate_contract(contract: AgentContract) -> list[str]:
     """Structural problems that make a contract unusable downstream.
 
@@ -1721,6 +1755,7 @@ def validate_contract(contract: AgentContract) -> list[str]:
             problems.append(
                 f"tool[{tool.name}]:types-for-unknown-args:{','.join(unknown)}"
             )
+    problems.extend(_credential_problems(contract))
     # Conversational agents may expose no tools. Zero-argument tools are also legitimate;
     # cardinality alone is not evidence that authoring omitted something.
     if not contract.real_use_cases:
