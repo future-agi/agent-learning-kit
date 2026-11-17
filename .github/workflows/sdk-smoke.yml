@@ -110,6 +110,8 @@ jobs:
           tests/harness/test_google_adk_reference.py
           tests/harness/test_python_source_codecs.py
           tests/harness/test_executor_completed_counts.py
+          tests/harness/test_deep_agents_reference.py
+          tests/harness/test_langgraph_http_adapter.py
           tests/harness/test_reading_entry.py
           tests/harness/test_agent_reading.py
           tests/harness/test_scan_walk.py
