@@ -195,11 +195,15 @@ def test_a_callback_that_returns_graph_state_keeps_the_last_message_text(state_a
     assert content == "The status is complete."
 
 
-def test_a_callback_that_returns_a_message_list_keeps_the_assistant_text(message_list_adapter):
+def test_a_callback_that_returns_a_message_list_keeps_the_assistant_text(
+    message_list_adapter,
+):
     assert _ask(message_list_adapter) == "The status is complete."
 
 
-def test_a_callback_dict_with_block_content_sends_its_text_and_keeps_its_other_keys(tmp_path):
+def test_a_callback_dict_with_block_content_sends_its_text_and_keeps_its_other_keys(
+    tmp_path,
+):
     served = _serve(tmp_path, "chat_agent:content_dict_reply")
     try:
         body = _ask_body(next(served))

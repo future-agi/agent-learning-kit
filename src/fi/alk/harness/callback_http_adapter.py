@@ -110,7 +110,11 @@ def _json_body(value: Any) -> dict[str, Any]:
     if hasattr(value, "model_dump"):
         body = value.model_dump(mode="json", exclude_none=True)
     elif isinstance(value, dict):
-        body = value if "content" in value or "messages" not in value else {"content": _text_of(value)}
+        body = (
+            value
+            if "content" in value or "messages" not in value
+            else {"content": _text_of(value)}
+        )
     else:
         body = {"content": _text_of(value)}
     if not isinstance(body, dict):
