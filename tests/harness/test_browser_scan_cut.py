@@ -676,6 +676,15 @@ def test_a_cut_browser_claim_drops_nothing_found(tmp_path, then, outcome):
         assert _refused_with(output) == _READ_MESSAGE
 
 
+def _scan_records(caplog):
+    # Only the scan's own cut line: the decoder logs its own warning when its total runs out.
+    return [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == agent_type_check.__name__
+    ]
+
+
 @pytest.mark.parametrize(
     "files, totals, said",
     [
@@ -713,11 +722,11 @@ def test_the_cut_is_logged_once(tmp_path, monkeypatch, caplog, files, totals, sa
         browser_scan(tmp_path)
         browser_scan(tmp_path)
         browser_tools_found(tmp_path)
-        first = [(record.levelno, record.getMessage()) for record in caplog.records]
+        first = _scan_records(caplog)
         caplog.clear()
         agent_type_check._scan.cache_clear()
         browser_scan(tmp_path)
-        again = [(record.levelno, record.getMessage()) for record in caplog.records]
+        again = _scan_records(caplog)
     assert first == again == ([] if said is None else [(logging.WARNING, said)])
 
 

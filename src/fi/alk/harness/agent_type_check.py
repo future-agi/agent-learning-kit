@@ -683,7 +683,7 @@ def _tools_in(
     scanned = scripts = python = 0
     budget = ParseBudget()
     tokens = TokenBudget()
-    escapes = EscapeBudget()
+    escapes = EscapeBudget(reader="browser scan")
     searched = ParseBudget(_LARGEST_RAW_SEARCH)
     unread = [_UNREAD_SEARCH_TOTAL]
     ordered = sorted(
@@ -725,20 +725,23 @@ def _tools_in(
                 found |= _markers_in(path)
             elif (
                 text := read_module(
-                    path, _largest_read(path), _PYTHON_NAMES, undecoded := [], escapes
+                    path, _largest_read(path), _PYTHON_NAMES, undecoded := [], escapes, also := []
                 )
             ) is not None:
-                markers = _python_markers(text, tokens, path)
-                if markers is None:
-                    cut["token_total"] += 1
-                    markers = set()
-                found |= markers
-                if not budget.spend(text):
-                    cut["parse_total"] += 1
-                elif (names := _imports_in(text, path)) is None:
-                    cut["parse_failed"] += 1
-                else:
-                    imported |= names
+                # An import and `python file.py` can read a crafted file two ways: each reading
+                # on its own, charged as it's read.
+                for reading in (text, *also):
+                    markers = _python_markers(reading, tokens, path)
+                    if markers is None:
+                        cut["token_total"] += 1
+                        markers = set()
+                    found |= markers
+                    if not budget.spend(reading):
+                        cut["parse_total"] += 1
+                    elif (names := _imports_in(reading, path)) is None:
+                        cut["parse_failed"] += 1
+                    else:
+                        imported |= names
             elif undecoded:
                 # A codec refused by name, which Python still runs the file in: the browser
                 # packages and tool markers it names, as bytes, count. That leads to a second

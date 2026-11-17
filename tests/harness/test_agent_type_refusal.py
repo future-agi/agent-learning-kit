@@ -2099,6 +2099,33 @@ def test_scan_finds_the_agents_own_folder(tmp_path):
             },
             ["puppeteer"],
         ),
+        # A package folder is entered through its package.json entry, not only its index.
+        (
+            {
+                "packages/shared/package.json": json.dumps({"main": "lib/llm.js", "dependencies": {"puppeteer": "1"}}),
+                "packages/shared/lib/llm.js": 'const puppeteer = require("puppeteer");\n',
+                "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+            },
+            ["puppeteer"],
+        ),
+        # A package folder is entered through its package.json entry, not only its index.
+        (
+            {
+                "packages/shared/package.json": json.dumps({"exports": "./lib/llm.js", "dependencies": {"puppeteer": "1"}}),
+                "packages/shared/lib/llm.js": 'const puppeteer = require("puppeteer");\n',
+                "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+            },
+            ["puppeteer"],
+        ),
+        # A package folder is entered through its package.json entry, not only its index.
+        (
+            {
+                "packages/shared/package.json": json.dumps({"exports": {".": "./lib/llm.js"}, "dependencies": {"puppeteer": "1"}}),
+                "packages/shared/lib/llm.js": 'const puppeteer = require("puppeteer");\n',
+                "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+            },
+            ["puppeteer"],
+        ),
         (
             {
                 "examples/common/web.py": "import playwright\n",
@@ -6397,6 +6424,211 @@ def test_a_large_data_file_a_script_imports_doesnt_say_stopped(tmp_path):
 
     _, stopped = _save_walk(repo)
     assert not stopped
+
+
+def _package_repo(tmp_path: Path, manifest: bytes, extra: dict[str, str] | None = None) -> Path:
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "packages/shared/index.js": "export const x = 1;\n",
+            "packages/shared/lib/llm.js": "export const y = 1;\n",
+            "agents/a/index.js": 'require("../../packages/shared");\n',
+            **(extra or {}),
+        },
+    ).resolve()
+    (repo / "packages" / "shared" / "package.json").write_bytes(manifest)
+    return repo
+
+
+def test_a_package_main_inside_the_repository_is_followed(tmp_path):
+    repo = _package_repo(tmp_path, b'{"main": "../../agents/b/entry.js"}', {"agents/b/entry.js": ""})
+
+    found, stopped = _save_walk(repo)
+
+    assert (repo / "agents" / "b" / "entry.js") in found
+    assert not stopped
+
+
+def test_a_package_main_leading_out_of_the_repository_is_not_read(tmp_path, monkeypatch):
+    repo = _package_repo(tmp_path, b'{"main": "../../../../outside.js"}')
+    outside = (tmp_path / "outside.js").resolve()
+    outside.write_text("x = 1\n")
+    opened: list[Path] = []
+    real = Path.open
+
+    def spy(path, *args, **kwargs):
+        opened.append(path)
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", spy)
+
+    found, _ = _save_walk(repo)
+
+    assert any(path.name == "package.json" for path in opened)  # Read, to find its main.
+    assert outside not in found and outside not in [path.resolve() for path in opened]
+    assert (repo / "packages" / "shared" / "index.js") in found  # Fell back to the index.
+
+
+def test_an_oversized_package_json_is_unread_and_its_main_not_followed(tmp_path):
+    from fi.alk.harness import credentials
+
+    padding = " " * credentials._LARGEST_PACKAGE_JSON
+    repo = _package_repo(tmp_path, b'{"main": "lib/llm.js"' + padding.encode() + b"}")
+
+    found, stopped = _save_walk(repo)
+
+    assert stopped
+    assert (repo / "packages" / "shared" / "lib" / "llm.js") not in found
+    assert (repo / "packages" / "shared" / "index.js") in found
+
+
+@pytest.mark.parametrize("manifest", [b'{"main": 3}', b'{"main": ["lib/llm.js"]}', b"{not json", b'{"main": ""}'])
+def test_a_package_main_that_is_not_a_usable_string_falls_back_to_the_index(tmp_path, manifest):
+    repo = _package_repo(tmp_path, manifest)
+
+    found, stopped = _save_walk(repo)
+
+    assert (repo / "packages" / "shared" / "index.js") in found
+    assert (repo / "packages" / "shared" / "lib" / "llm.js") not in found
+    assert not stopped
+
+
+def test_the_same_package_json_through_several_links_is_read_once(tmp_path, monkeypatch):
+    links = [f"l{n}" for n in range(10)]
+    repo = _package_repo(
+        tmp_path,
+        b'{"main": "lib/llm.js"}',
+        {"agents/a/index.js": "".join(f'require("../../{name}");\n' for name in links)},
+    )
+    for name in links:
+        os.symlink("packages/shared", repo / name)
+    real = Path.open
+    reads: list[Path] = []
+
+    def spy(path, *args, **kwargs):
+        if path.name == "package.json":
+            reads.append(path.resolve())
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", spy)
+
+    found, stopped = _save_walk(repo)
+
+    assert (repo / "packages" / "shared" / "lib" / "llm.js") in found
+    assert not stopped
+    assert len(reads) == 1
+
+
+def test_package_jsons_past_the_total_read_are_unread_and_not_opened(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    # Room for one manifest and a little: the second is over it, the third is not opened at all.
+    monkeypatch.setattr(credentials, "_PACKAGE_JSONS_READ", 100)
+    manifest = b'{"main": "lib/llm.js", "pad": "' + b"x" * 40 + b'"}'
+    names = ["one", "two", "three"]
+    files = {"agents/a/index.js": "".join(f'require("../../packages/{n}");\n' for n in names)}
+    for name in names:
+        files[f"packages/{name}/index.js"] = "export const x = 1;\n"
+        files[f"packages/{name}/lib/llm.js"] = "export const y = 1;\n"
+    repo = _tree(tmp_path / "repo", files).resolve()
+    for name in names:
+        (repo / "packages" / name / "package.json").write_bytes(manifest)
+    real = Path.open
+    reads: list[Path] = []
+
+    def spy(path, *args, **kwargs):
+        if path.name == "package.json":
+            reads.append(path)
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", spy)
+
+    found, stopped = _save_walk(repo)
+
+    assert stopped
+    assert len(reads) == 2
+    assert (repo / "packages" / "one" / "lib" / "llm.js") in found
+    for name in ("two", "three"):
+        assert (repo / "packages" / name / "lib" / "llm.js") not in found
+        assert (repo / "packages" / name / "index.js") in found
+
+
+def test_a_package_entry_longer_than_the_longest_name_says_stopped(tmp_path):
+    from fi.alk.harness import credentials
+
+    long_entry = "x" * (credentials._LONGEST_NAME + 1)
+    repo = _package_repo(tmp_path, json.dumps({"main": long_entry}).encode())
+
+    found, stopped = _save_walk(repo)
+
+    assert stopped
+    assert (repo / "packages" / "shared" / "index.js") in found
+
+
+def _counted_lookups(monkeypatch) -> list[Path]:
+    """Every file the walk looks up on disk, in order."""
+    from fi.alk.harness import credentials
+
+    looked: list[Path] = []
+    real = credentials._file_inside
+
+    def counting(candidate, *args, **kwargs):
+        looked.append(candidate)
+        return real(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(credentials, "_file_inside", counting)
+    return looked
+
+
+def _bundle_walk(repo: Path, subfolder: str = "agents/a"):
+    """The walk with bundling's limits: the files reached, and stopped."""
+    from fi.alk.harness.credentials import imported_by_agent
+
+    stopped: list[bool] = []
+    found = imported_by_agent(repo, subfolder, stopped=stopped)
+    return found, stopped[0]
+
+
+@pytest.mark.parametrize("walk", [_save_walk, _bundle_walk], ids=["save", "bundle"])
+def test_a_package_entry_deeper_than_the_walk_follows_says_stopped_and_is_not_looked_up(
+    tmp_path, monkeypatch, walk
+):
+    from fi.alk.harness import credentials
+
+    # Short enough to pass the name's length, but past the depth any lookup follows.
+    deep_entry = "a/" * (credentials._DEEPEST_FOLLOWED + 6) + "x.js"
+    repo = _package_repo(tmp_path, json.dumps({"main": deep_entry, "exports": deep_entry}).encode())
+    looked = _counted_lookups(monkeypatch)
+
+    found, stopped = walk(repo)
+
+    assert stopped
+    assert (repo / "packages" / "shared" / "index.js") in found
+    # Its candidates were never built, so none was looked up and refused for its depth.
+    assert not [path for path in looked if "a/a/a/a" in str(path)]
+
+
+@pytest.mark.parametrize("walk", [_save_walk, _bundle_walk], ids=["save", "bundle"])
+def test_a_package_entry_is_resolved_once_for_all_the_paths_that_reach_it(
+    tmp_path, monkeypatch, walk
+):
+    def entry_lookups(links: int) -> int:
+        names = [f"l{n}" for n in range(links)]
+        repo = _package_repo(
+            tmp_path / str(links),
+            b'{"main": "lib/missing.js", "exports": "./lib/gone.js"}',
+            {"agents/a/index.js": "".join(f'require("../../{name}");\n' for name in names)},
+        )
+        for name in names:
+            os.symlink("packages/shared", repo / name)
+        looked = _counted_lookups(monkeypatch)
+        found, _ = walk(repo)
+        assert (repo / "packages" / "shared" / "index.js") in found
+        return len([path for path in looked if path.name.startswith(("missing", "gone"))])
+
+    # A crafted repository reaches one package.json by thousands of paths: what its entries
+    # resolve to is looked up once, not again for each path.
+    assert entry_lookups(40) == entry_lookups(1) > 0
 
 
 @pytest.mark.parametrize("where", ["own-link", "imported-link"])
