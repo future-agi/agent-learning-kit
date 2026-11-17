@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from fi.alk.harness import hosted_authoring_entrypoint as entrypoint
 
 
@@ -337,4 +339,64 @@ def test_good_subfolder_continues(tmp_path, monkeypatch):
     assert _run_authoring(authoring, tmp_path, "agents/a") == 0
 
     assert calls == ["compose", "auto"]
+    assert not (tmp_path / "authoring" / "failure.json").exists()
+
+
+def _write_non_github_folder_job(tmp_path: Path, **source) -> Path:
+    body = json.loads(_subfolder_job(tmp_path, "agents/a").read_text())
+    body["source"] = {"kind": "archive", "archive_artifact_id": "art-1", **source}
+    path = tmp_path / "job.json"
+    path.write_text(json.dumps(body), encoding="utf-8")
+    return path
+
+
+def test_subfolder_on_a_non_github_source_writes_failure_and_exits_refused(tmp_path, monkeypatch):
+    from platform_failure_rules import assert_platform_reads
+
+    authoring, calls = _watch_authoring(monkeypatch)
+    source = tmp_path / "source"
+    source.mkdir()
+
+    code = authoring.main(
+        [
+            str(_write_non_github_folder_job(tmp_path, subfolder="agents/a")),
+            "--source",
+            str(source),
+            "--output",
+            str(tmp_path / "authoring"),
+        ]
+    )
+
+    assert code == 78
+    failure = _written_failure(tmp_path)
+    assert_platform_reads(failure)
+    assert failure == {
+        "domain": "agent",
+        "stage": "acquiring_source",
+        "code": "subfolder_not_found",
+        "message": failure["message"],
+        "retryable": False,
+        "details": {"subfolder": "agents/a"},
+    }
+    assert "GitHub" in failure["message"]
+    assert calls == []
+
+
+def test_other_invalid_job_still_raises_in_authoring(tmp_path, monkeypatch):
+    import pydantic
+
+    authoring, _calls = _watch_authoring(monkeypatch)
+    source = tmp_path / "source"
+    source.mkdir()
+
+    with pytest.raises(pydantic.ValidationError):
+        authoring.main(
+            [
+                str(_write_non_github_folder_job(tmp_path, archive_artifact_id="")),
+                "--source",
+                str(source),
+                "--output",
+                str(tmp_path / "authoring"),
+            ]
+        )
     assert not (tmp_path / "authoring" / "failure.json").exists()

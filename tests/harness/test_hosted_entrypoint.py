@@ -19,8 +19,11 @@ from types import SimpleNamespace
 from typing import Any, Callable
 from unittest import mock
 
+from platform_failure_rules import assert_platform_reads
+
 from fi.alk.harness import hosted_entrypoint as he
 from fi.alk.harness import outbound as ob
+from fi.alk.harness import scenario_source as scenario_source_module
 from fi.alk.harness.bundle_v2 import (
     BUNDLE_V2_SCHEMA_VERSION,
     EnvironmentBundleV2,
@@ -5265,7 +5268,57 @@ def test_bad_subfolder_fails_terminal_before_compose(monkeypatch):
         "stage": "acquiring_source",
         "code": "subfolder_not_found",
         "message": subfolder_not_found("agents/missing").message,
+        "retryable": False,
+        "details": {"subfolder": "agents/missing"},
     }
+    assert_platform_reads(terminal[0]["payload"]["failure"])
+
+
+def test_subfolder_on_a_non_github_source_fails_terminal_not_crashed(monkeypatch):
+    harness = _build_harness(scenarios=[])
+    body = json.loads(_job().model_dump_json())
+    body["source"] = {"kind": "archive", "archive_artifact_id": "art-1", "subfolder": "agents/a"}
+    harness.job_path.write_text(json.dumps(body), encoding="utf-8")
+    started: list[str] = []
+    monkeypatch.setattr(
+        he, "initialize_hosted_compose", lambda job, source: started.append("compose")
+    )
+
+    assert _run(harness) == he.EXIT_OK
+
+    assert started == []
+    assert harness.provisioner.provision_calls == 0
+    [terminal] = harness.transport.terminal_events()
+    failure = terminal["payload"]["failure"]
+    assert failure["domain"] == "agent"
+    assert failure["stage"] == "acquiring_source"
+    assert failure["code"] == "subfolder_not_found"
+    assert "GitHub" in failure["message"]
+    assert failure["retryable"] is False
+    assert failure["details"] == {"subfolder": "agents/a"}
+    assert_platform_reads(failure)
+
+
+def test_other_malformed_job_still_exits_crashed():
+    harness = _build_harness(scenarios=[])
+    body = json.loads(_job().model_dump_json())
+    body["source"] = {"kind": "archive", "subfolder": ""}  # no locator: not this reason
+    harness.job_path.write_text(json.dumps(body), encoding="utf-8")
+
+    assert _run(harness) == he.EXIT_CRASHED
+    assert harness.transport.terminal_events() == []
+
+
+def test_a_job_malformed_otherwise_too_still_exits_crashed():
+    # The folder on a non-GitHub source is reported only when it's the job's one fault.
+    harness = _build_harness(scenarios=[])
+    body = json.loads(_job().model_dump_json())
+    body["source"] = {"kind": "archive", "archive_artifact_id": "art-1", "subfolder": "agents/a"}
+    body.pop("job_id")
+    harness.job_path.write_text(json.dumps(body), encoding="utf-8")
+
+    assert _run(harness) == he.EXIT_CRASHED
+    assert harness.transport.terminal_events() == []
 
 
 def _harness_with_a_packaged_agent(
@@ -5300,6 +5353,64 @@ def _harness_with_a_packaged_agent(
                 bundle_dir, files
             ),
         )
+
+
+def _folder_build(harness: Harness, subfolder: str = "agents/a") -> None:
+    """Make ``harness`` a build of the folder ``subfolder``; its saved contract names no folder."""
+    (harness.source / subfolder).mkdir(parents=True)
+    (harness.source / subfolder / "main.py").write_text("x = 1\n", encoding="utf-8")
+    body = json.loads(harness.job_path.read_text(encoding="utf-8"))
+    body["source"]["subfolder"] = subfolder
+    harness.job_path.write_text(json.dumps(body), encoding="utf-8")
+
+
+def _failed_document_terminal(harness: Harness) -> dict[str, Any]:
+    assert _run(harness) == he.EXIT_OK
+    assert [body for _, body in harness.transport.scenarios_calls if "agent" in body] == []
+    [terminal] = harness.transport.terminal_events()
+    return terminal["payload"]["failure"]
+
+
+def test_a_folder_build_whose_document_fails_fails_with_the_builds_own_code() -> None:
+    harness = _harness_with_a_packaged_agent()
+    _folder_build(harness)
+
+    failure = _failed_document_terminal(harness)
+
+    assert failure["domain"] == "agent"
+    assert failure["code"] == "agent_invalid"
+    assert failure["stage"] == "validating_scenarios"
+    assert "agent_invalid" in failure["message"]
+    assert_platform_reads(failure)
+
+
+def test_a_folder_build_whose_document_raises_otherwise_fails_agent_document_failed() -> None:
+    harness = _harness_with_a_packaged_agent()
+    _folder_build(harness)
+
+    with mock.patch.object(
+        scenario_source_module, "authored_agent_document", side_effect=RuntimeError("boom /secret")
+    ):
+        failure = _failed_document_terminal(harness)
+
+    assert failure["domain"] == "agent"
+    assert failure["code"] == "agent_document_failed"
+    assert "secret" not in failure["message"]
+    assert_platform_reads(failure)
+
+
+def test_a_build_without_a_folder_keeps_going_without_the_document() -> None:
+    harness = _harness_with_a_packaged_agent()
+    with mock.patch.object(
+        scenario_source_module, "authored_agent_document", side_effect=RuntimeError("boom")
+    ):
+        assert _run(harness) == he.EXIT_OK
+
+    assert [body for _, body in harness.transport.scenarios_calls if "agent" in body] == []
+    assert harness.transport.scenarios_calls
+    assert not any(
+        event["payload"].get("failure") for event in harness.transport.terminal_events()
+    )
 
 
 def _posted_framework(harness: Harness) -> dict[str, Any]:

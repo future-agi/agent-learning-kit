@@ -66,6 +66,7 @@ from pydantic import (
     JsonValue,
     ValidationError,
     field_serializer,
+    model_serializer,
     model_validator,
 )
 from fi.simulate.results.futureagi import MAX_TARGET_LATENCY_TURNS
@@ -753,6 +754,23 @@ class TerminalFailure(BaseModel):
     message: str
 
 
+class TerminalEventFailure(TerminalFailure):
+    """The terminal *event's* failure: ``TerminalFailure``, plus ``retryable`` and ``details`` when
+    the failure names them. A key that wasn't given is left out of the wire body, so every
+    failure that never carried them is byte-for-byte what it was."""
+
+    retryable: bool | None = None
+    details: dict[str, Any] | None = None
+
+    @model_serializer(mode="wrap")
+    def _only_what_was_given(self, handler):
+        body = handler(self)
+        for name in ("retryable", "details"):
+            if name not in self.model_fields_set:
+                body.pop(name, None)
+        return body
+
+
 class ScenarioCounts(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -767,7 +785,7 @@ class TerminalPayload(BaseModel):
 
     stage: HarnessStage
     reason: TerminalReason | None
-    failure: TerminalFailure | None
+    failure: TerminalEventFailure | None
     scenario_counts: ScenarioCounts
 
     @model_validator(mode="after")
@@ -3285,6 +3303,7 @@ __all__ = [
     "SpooledRecord",
     "StageChangedPayload",
     "SubGoalResult",
+    "TerminalEventFailure",
     "TerminalFailure",
     "TerminalPayload",
     "TerminalReason",

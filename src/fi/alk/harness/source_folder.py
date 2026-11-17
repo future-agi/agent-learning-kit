@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Any
 
+from pydantic import ValidationError
+
 from .failure_file import write_failure_file
 from .job import FailureDomain, HarnessFailure, HarnessStage
 
@@ -121,6 +123,31 @@ def subfolder_not_found(
         ),
         retryable=False,
         details={"subfolder": subfolder, **(details or {})},
+    )
+
+
+_NOT_GITHUB_REASON = "subfolder_requires_github_source"
+
+
+def non_github_folder_failure(error: ValidationError, raw_job: Any) -> HarnessFailure | None:
+    """The failure for a job refused only because a folder is named on a source that isn't GitHub.
+
+    The job can't be parsed, so nothing but that one reason is read from it: the error's reason
+    for ``source``, and the folder as the raw job gives it. ``None`` for any other malformed job.
+    """
+    # Only when it's the job's one fault: a job that is malformed otherwise too stays a crash, as
+    # any other malformed job is.
+    errors = error.errors(include_url=False, include_context=False, include_input=False)
+    if len(errors) != 1 or not (
+        errors[0].get("loc") == ("source",)
+        and str(errors[0].get("msg", "")).endswith(_NOT_GITHUB_REASON)
+    ):
+        return None
+    source = raw_job.get("source") if isinstance(raw_job, dict) else None
+    named = source.get("subfolder") if isinstance(source, dict) else None
+    return subfolder_not_found(
+        named if isinstance(named, str) else "",
+        message="A folder can be built only from a GitHub source; this job names a folder on another kind of source.",
     )
 
 

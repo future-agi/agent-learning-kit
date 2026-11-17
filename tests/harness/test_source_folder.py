@@ -6,6 +6,8 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+from platform_failure_rules import assert_platform_reads, platform_failure_problems
+
 from fi.alk.harness import source_folder
 from fi.alk.harness.source_folder import (
     SubfolderNotFound,
@@ -333,3 +335,20 @@ def test_bind_runtime_allows_compose_file_above(repo: Path) -> None:
     for name in ("compose.yaml", "agents/a/compose.yaml"):
         bound = bind_runtime({"compose_file": name}, repo, "agents/a")
         assert bound["compose_file"] == name
+
+
+def test_the_folder_failure_reads_whole_to_the_platform() -> None:
+    assert_platform_reads(subfolder_not_found("agents/x").model_dump(mode="json"))
+    assert_platform_reads(subfolder_not_found("a" * 100_000).model_dump(mode="json"))
+
+
+def test_the_platform_guard_names_what_the_platform_refuses() -> None:
+    whole = subfolder_not_found("agents/x").model_dump(mode="json")
+    assert platform_failure_problems({**whole, "domain": "nope"})
+    assert platform_failure_problems({**whole, "stage": "s" * 65})
+    assert platform_failure_problems({**whole, "code": "Bad-Code"})
+    assert platform_failure_problems({**whole, "code": "c" * 129})
+    assert platform_failure_problems({**whole, "message": "m" * 2001})
+    assert platform_failure_problems({**whole, "retryable": "no"})
+    assert platform_failure_problems({**whole, "details": ["x"]})
+    assert platform_failure_problems("failure")
