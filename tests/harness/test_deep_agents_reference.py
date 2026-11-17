@@ -33,7 +33,7 @@ from reference_agents import (
 
 SUBFOLDER = "examples/harness/deep_agents_support"
 EXAMPLE = REPO / SUBFOLDER
-ENVIRONMENT = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL")
+ENVIRONMENT = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_MODEL")
 DEFAULT_MODEL = "vertex_ai/gemini-3.7-flash"
 
 # `Tool.ainvoke` follows langchain-core 1.8.0 (tools/structured.py:174-185, tools/base.py:933,
@@ -310,7 +310,7 @@ def test_import_without_a_key_succeeds_with_a_placeholder(example_module) -> Non
     assert model.use_responses_api is False
 
 
-@pytest.mark.parametrize("key", ["", "   "])
+@pytest.mark.parametrize("key", ["", "   "], ids=["empty", "blank"])
 def test_an_empty_or_blank_key_also_gets_the_placeholder(example_module, key) -> None:
     example_module(OPENAI_API_KEY=key)
     import langchain_openai
@@ -320,7 +320,7 @@ def test_an_empty_or_blank_key_also_gets_the_placeholder(example_module, key) ->
     assert model.base_url is None
 
 
-@pytest.mark.parametrize("base_url", [None, "", "   "])
+@pytest.mark.parametrize("base_url", [None, "", "   "], ids=["unset", "empty", "blank"])
 def test_a_key_with_no_base_url_is_refused_at_import(example_module, base_url) -> None:
     environment = {"OPENAI_API_KEY": "secret-canary-key"}
     if base_url is not None:
@@ -334,6 +334,26 @@ def test_a_key_with_no_base_url_is_refused_at_import(example_module, base_url) -
 
     # Refused before any client exists, so nothing could have been sent.
     assert langchain_openai.INSTANCES == []
+
+
+def test_openai_api_base_alone_does_not_satisfy_the_check(example_module) -> None:
+    with pytest.raises(RuntimeError, match="OPENAI_BASE_URL"):
+        example_module(OPENAI_API_KEY="secret-canary-key", OPENAI_API_BASE="http://other.test/v1")
+
+
+def test_the_base_url_reaches_the_client_stripped(example_module) -> None:
+    example_module(OPENAI_API_KEY="k", OPENAI_BASE_URL="  http://gateway.test/v1  ")
+    import langchain_openai
+
+    (model,) = langchain_openai.INSTANCES
+    assert model.base_url == "http://gateway.test/v1"
+
+
+def test_no_module_name_holds_the_key(example_module) -> None:
+    agent = example_module(OPENAI_API_KEY="secret-canary-key", OPENAI_BASE_URL="http://g.test/v1")
+
+    # A traceback that prints module variables would show it.
+    assert not [name for name, value in vars(agent).items() if value == "secret-canary-key"]
 
 
 def test_importing_twice_under_different_environments(example_module) -> None:
