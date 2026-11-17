@@ -9,6 +9,7 @@ model is saved exactly as before.
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import json
 import os
@@ -25,6 +26,20 @@ from fi.alk.harness.tools import accept_contract, contract_tools
 
 MIB = 1024 * 1024
 FIXTURES = Path(__file__).resolve().parents[1] / "providers" / "fixtures" / "authored"
+
+
+@pytest.fixture(autouse=True)
+def _earlier_heap_frozen():
+    """Keep a full collection of the heap the tests before this one built out of this file's
+    timings: one such pass took 0.3 s inside a timed save on CI. The test's own collections still
+    count. The two checks nearest their line are test_a_crafted_file_of_block_comments_does_not_
+    hold_up_the_check[a-file-of-openers] and test_a_quote_that_grows_when_normalised_costs_little
+    (about 0.27 s against 0.5 s)."""
+    gc.freeze()
+    try:
+        yield
+    finally:
+        gc.unfreeze()
 
 EMPTY_NAME = (
     "model: name is empty; give the model's name as written in the source, or leave model out"
