@@ -167,6 +167,7 @@ def sibling(source_root, runtime, subfolder):
 STAGES = {
     ("tools", "_tools_in_agent_folder"): scan,
     ("instrumentation_evidence", "detect_instrumentation"): instrumentation,
+    ("tools", "detect_instrumentation"): instrumentation,
     ("tools", "validate_contract"): validate,
     ("source_tool_evidence", "tool_evidence_problems"): tool_evidence,
     ("tools", "_copy_prompt"): copy_prompt,

@@ -716,3 +716,18 @@ def test_both_checkers_preload_one_list_that_names_the_save_checks():
 def test_ci_runs_this_file():
     workflows = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "sdk-smoke.yml"
     assert "tests/harness/test_save_child.py" in workflows.read_text(encoding="utf-8")
+
+
+def test_the_kits_stand_in_reaches_the_saves_own_instrumentation_read(monkeypatch):
+    import _save_stand_ins
+
+    # `tools` binds detect_instrumentation by name, so the stand-in must name that binding too.
+    for target, attribute in _save_stand_ins.STAGES:
+        module = sys.modules.get(f"fi.alk.harness.{target}") or __import__(
+            f"fi.alk.harness.{target}", fromlist=["_"]
+        )
+        monkeypatch.setattr(module, attribute, getattr(module, attribute))
+
+    save_child._install_stand_in("_save_stand_ins")
+
+    assert tools.detect_instrumentation is _save_stand_ins.instrumentation
