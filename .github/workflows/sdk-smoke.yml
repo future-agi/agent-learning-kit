@@ -101,6 +101,7 @@ jobs:
           tests/harness/test_reading_guidance.py
           tests/harness/test_reading_replay.py
           tests/harness/test_chat_readiness.py
+          tests/harness/test_python_tool_trace_bootstrap.py
           tests/harness/test_simulation_mark_bootstrap.py
           tests/harness/test_process_preflight.py
           tests/providers
