@@ -646,6 +646,52 @@ def test_host_escape_compose_features_are_rejected(service):
         _validate_compose_security({"services": {"agent": service}})
 
 
+_DOCKER_SOCKET_AND_PARENTS = [
+    "/",
+    "/run",
+    "/var",
+    "/var/run",
+    "/var/run/docker.sock",
+    "/run/docker.sock",
+    "/var/run/",
+    "/var/run/.",
+    "/var/./run",
+    "/var//run/docker.sock",
+    "/run/./docker.sock/",
+    "/var/run/../run",
+    "//",
+]
+
+
+@pytest.mark.parametrize("source", _DOCKER_SOCKET_AND_PARENTS)
+@pytest.mark.parametrize("form", ["long", "short"])
+def test_a_bind_of_the_docker_socket_or_a_parent_is_rejected(source, form):
+    volume = (
+        {"type": "bind", "source": source, "target": "/h"}
+        if form == "long"
+        else f"{source}:/h:ro"
+    )
+    with pytest.raises(ProvisionError, match="agent: Docker socket mount"):
+        _validate_compose_security({"services": {"agent": {"volumes": [volume]}}})
+
+
+@pytest.mark.parametrize(
+    "volume",
+    [
+        {"type": "bind", "source": "/var/run/other", "target": "/h"},
+        {"type": "bind", "source": "/srv/data", "target": "/h"},
+        {"type": "bind", "source": "./data", "target": "/h"},
+        {"type": "bind", "source": "/run/user", "target": "/h"},
+        {"type": "volume", "source": "data", "target": "/h"},
+        "/srv/data:/h",
+        "./data:/h",
+        "data:/h",
+    ],
+)
+def test_a_bind_elsewhere_is_not_a_docker_socket_mount(volume):
+    _validate_compose_security({"services": {"agent": {"volumes": [volume]}}})
+
+
 def _svc(**fields):
     return {"services": {"agent": fields, "db": {}}}
 

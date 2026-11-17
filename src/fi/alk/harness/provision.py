@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import posixpath
 import re
 import secrets
 import socket
@@ -525,6 +526,30 @@ _NETWORK_HINT = (
 )
 
 
+# The Docker socket and every directory that holds it: a bind of any of them hands the container
+# the daemon, which undoes every rule below.
+_DOCKER_SOCKET_AND_PARENTS = frozenset(
+    {"/", "/run", "/var", "/var/run", "/var/run/docker.sock", "/run/docker.sock"}
+)
+
+
+def _mounts_docker_socket(volume: Any) -> bool:
+    """True for a bind (long or short form) whose resolved source is the socket or a parent."""
+    if isinstance(volume, dict):
+        if str(volume.get("type") or "bind") != "bind":
+            return False
+        source = str(volume.get("source") or "")
+    else:
+        text = str(volume)
+        if "docker.sock:" in text:
+            return True
+        source = text.split(":", 1)[0]
+    if not source.startswith("/"):
+        return False
+    resolved = posixpath.normpath(re.sub(r"/{2,}", "/", source))
+    return resolved in _DOCKER_SOCKET_AND_PARENTS
+
+
 def _validate_compose_security(config: dict[str, Any]) -> None:
     """Reject host-escape primitives before any submitted container is created.
 
@@ -588,15 +613,7 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
         if service.get("devices"):
             violations.append(f"{name}: host devices")
         for volume in service.get("volumes") or []:
-            source = (
-                str(volume.get("source") or "")
-                if isinstance(volume, dict)
-                else str(volume)
-            )
-            if (
-                source in {"/var/run/docker.sock", "/run/docker.sock"}
-                or "docker.sock:" in source
-            ):
+            if _mounts_docker_socket(volume):
                 violations.append(f"{name}: Docker socket mount")
     project = str(config.get("name") or "")
     for key, spec in (config.get("networks") or {}).items():
