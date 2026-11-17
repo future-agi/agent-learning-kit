@@ -57,6 +57,34 @@ def test_snapshot_counts_its_rows() -> None:
     assert snapshot.counts() == {"orders": 2, "menu": 0}
 
 
+def test_postgres_catalogue_table_names_are_text() -> None:
+    """SQL_ASCII clusters return catalogue names as bytes; later queries bind text names."""
+
+    class Result:
+        def fetchall(self):
+            return [(b"orders",), ("returns",)]
+
+    class Connection:
+        def execute(self, _statement):
+            return Result()
+
+    assert PostgresStore()._tables(Connection()) == ["orders", "returns"]
+
+
+def test_postgres_catalogue_primary_key_names_are_text() -> None:
+    """SQL identifiers always receive text even when the cluster returns catalogue bytes."""
+
+    class Result:
+        def fetchall(self):
+            return [(b"slot",), ("region",)]
+
+    class Connection:
+        def execute(self, _statement, _params):
+            return Result()
+
+    assert PostgresStore()._primary_key(Connection(), "orders") == ["slot", "region"]
+
+
 # --- with docker: a real engine, really reset -------------------------------------------
 
 pg = pytest.mark.skipif(not docker_available(), reason="docker daemon unavailable")

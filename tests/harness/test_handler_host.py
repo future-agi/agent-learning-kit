@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import sqlite3
 
 import pytest
 
@@ -100,6 +101,65 @@ def test_an_isolated_handler_cannot_read_the_builders_environment(monkeypatch):
 
     assert ok, error
     assert result == {"direct": None, "via_collections": None}
+
+
+def test_an_isolated_handler_cannot_attach_a_host_sqlite_file(monkeypatch, tmp_path):
+    secret = tmp_path / "secret.sqlite"
+    with sqlite3.connect(secret) as connection:
+        connection.execute("CREATE TABLE secrets (value TEXT)")
+        connection.execute("INSERT INTO secrets VALUES ('host-secret')")
+    monkeypatch.setenv("ALK_HANDLER_ISOLATION", "process")
+    world = _world(
+        {
+            "read_host": (
+                "def handle(args, db):\n"
+                "    db.execute('ATTACH DATABASE ? AS host', (args['path'],))\n"
+                "    return db.query('SELECT value FROM host.secrets')\n"
+            )
+        },
+        isolated=True,
+    )
+
+    call = world.call("read_host", {"path": str(secret)})
+
+    assert not call.ok
+    assert call.result is None
+
+
+def test_an_isolated_handler_cannot_write_a_host_sqlite_file(monkeypatch, tmp_path):
+    exported = tmp_path / "exported.sqlite"
+    monkeypatch.setenv("ALK_HANDLER_ISOLATION", "process")
+    world = _world(
+        {
+            "write_host": (
+                "def handle(args, db):\n"
+                "    db.execute('VACUUM INTO ?', (args['path'],))\n"
+                "    return {'written': True}\n"
+            )
+        },
+        isolated=True,
+    )
+
+    call = world.call("write_host", {"path": str(exported)})
+
+    assert not call.ok
+    assert not exported.exists()
+
+
+def test_an_isolated_handler_cannot_run_an_unlisted_sqlite_pragma(monkeypatch):
+    monkeypatch.setenv("ALK_HANDLER_ISOLATION", "process")
+    world = _world(
+        {
+            "change_journal": (
+                "def handle(args, db):\n    return db.query('PRAGMA journal_mode')\n"
+            )
+        },
+        isolated=True,
+    )
+
+    call = world.call("change_journal", {})
+
+    assert not call.ok
 
 
 def test_a_refusal_keeps_its_category():
