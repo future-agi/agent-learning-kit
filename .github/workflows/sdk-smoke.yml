@@ -104,14 +104,20 @@ jobs:
           tests/providers
           tests/harness/test_scenario_source_provision_agent.py
           tests/harness/test_framework_detection.py
+          tests/harness/test_openai_agents_reference.py
           tests/harness/test_hosted_entrypoint.py
           tests/harness/test_hosted_entrypoint_provision_retry.py
+          tests/harness/test_pydantic_ai_reference.py
           tests/harness/test_instrumentation_evidence.py
           tests/harness/test_agent_type_refusal.py
+          tests/harness/test_google_adk_reference.py
           tests/harness/test_python_source_codecs.py
           tests/harness/test_executor_completed_counts.py
+          tests/harness/test_deep_agents_reference.py
+          tests/harness/test_langgraph_http_adapter.py
           tests/harness/test_reading_entry.py
           tests/harness/test_agent_reading.py
+          tests/harness/test_crewai_reference.py
           tests/harness/test_scan_walk.py
           tests/harness/test_scan_folders.py
           tests/harness/test_scan_document.py
