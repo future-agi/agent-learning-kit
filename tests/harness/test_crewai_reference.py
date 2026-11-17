@@ -22,7 +22,10 @@ from reference_agents import (
     TOOLS,
     TRACE_HOOK,
     assert_bindings_match,
+    assert_a_failing_turn_keeps_the_key_out_of_its_frames,
     assert_detected,
+    assert_each_conversation_has_its_own_orders,
+    assert_tool_calls_keep_each_conversations_orders,
     assert_pins,
     assert_refuses_key_without_base_url,
     build_control_service,
@@ -419,6 +422,40 @@ def test_import_needs_no_key_and_no_base_url(example_module) -> None:
     assert agent.MODEL == "vertex_ai/gemini-3.7-flash"
 
 
+def test_each_conversation_has_its_own_orders(example_module, monkeypatch) -> None:
+    agent = example_module()
+    assert_each_conversation_has_its_own_orders(agent)
+
+    # The same through the callback, with CrewAI running each tool on its worker thread.
+    import crewai
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def turn(thread_id: str, name: str, **arguments: str) -> str:
+        crewai.STATE["script"] = [(name, arguments)]
+        crewai.STATE["results"] = []
+        turn_input = _agent_input(CONVERSATION).model_copy(update={"thread_id": thread_id})
+        asyncio.run(agent.agent_callback(turn_input))
+        (result,) = crewai.STATE["results"]
+        return result
+
+    assert_tool_calls_keep_each_conversations_orders(turn)
+
+
+def test_a_turn_that_fails_later_keeps_the_key_out_of_its_frames(example_module) -> None:
+    def make_it_fail() -> None:
+        import crewai
+
+        crewai.STATE["raise"] = ConnectionError("model unreachable")
+
+    assert_a_failing_turn_keeps_the_key_out_of_its_frames(
+        example_module,
+        lambda agent: asyncio.run(agent.agent_callback(_agent_input(CONVERSATION))),
+        make_it_fail,
+    )
+
+
 def test_a_key_with_no_base_url_is_refused_before_a_model_is_built(
     example_module, monkeypatch
 ) -> None:
@@ -433,6 +470,19 @@ def test_a_key_with_no_base_url_is_refused_before_a_model_is_built(
         monkeypatch,
         after_refusal=nothing_built,
     )
+
+
+def test_openai_api_base_alone_does_not_satisfy_the_check(example_module, monkeypatch) -> None:
+    # CrewAI itself would take OPENAI_API_BASE, but the rule, as in the other references,
+    # reads OPENAI_BASE_URL only.
+    monkeypatch.setenv("OPENAI_API_BASE", "http://other.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-canary-key")
+    agent = example_module()
+    import crewai
+
+    with pytest.raises(RuntimeError, match="OPENAI_BASE_URL"):
+        asyncio.run(agent.agent_callback(_agent_input(CONVERSATION)))
+    assert crewai.STATE["llms"] == []
 
 
 def test_a_turn_with_neither_key_nor_base_url_fails_with_the_library_error(
@@ -491,12 +541,12 @@ def test_example_has_one_async_callback_and_three_plain_tools() -> None:
     ]
     assert async_names == ["agent_callback"]
     plain = [node.name for node in module.body if isinstance(node, ast.FunctionDef)]
-    assert plain == list(TOOLS)
+    assert plain == ["_orders", *TOOLS, "_setting"]
     # CrewAI refuses a tool with no docstring.
     assert all(
         ast.get_docstring(node)
         for node in module.body
-        if isinstance(node, ast.FunctionDef)
+        if isinstance(node, ast.FunctionDef) and node.name in TOOLS
     )
 
 

@@ -1660,10 +1660,15 @@ _RULE1_SHAPES = {
 
 
 def _with_and_without_1b(shape: str, expression: str) -> tuple[float, float]:
-    """The best of 5 without rule 1b and with it, interleaved in one process."""
+    """The best of 5 without rule 1b and with it, interleaved in one process.
+
+    At 1 MiB: the cost of rule 1b against the cleaner without it is a ratio, the same at any
+    size, and test_rule_1s_shapes_grow_with_the_text pins growth from 1 MiB to 5 MiB. At 5 MiB the
+    23 shapes took over three minutes and pushed CI's test step past its time limit.
+    """
     code = (
         _SETUP
-        + f"M = {5 * _MIB}\n"
+        + f"M = {_MIB}\n"
         + f"value = {expression}\n"
         + "from fi.alk.providers import secret_shapes\n"
         + "with_1b = secret_shapes.rule1b\n"
