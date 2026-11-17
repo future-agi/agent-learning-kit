@@ -484,3 +484,69 @@ def test_a_value_that_cannot_be_printed_never_reaches_the_agents_call(
     assert [r["arguments"] for r in records if r["arguments"] == {"x": "second"}] == [
         {"x": "second"}
     ]
+
+
+GENERATORS = (
+    "def bare(n):\n    yield 1\n    yield 2\n"
+    "def guarded(n):\n    try:\n        yield 1\n        yield 2\n    finally:\n        pass\n"
+)
+
+
+@pytest.mark.parametrize(
+    "driver",
+    [
+        pytest.param("g = agent.{n}(3); next(g); g.close()", id="closed"),
+        pytest.param("g = agent.{n}(3); next(g); del g", id="abandoned"),
+        pytest.param("for _ in agent.{n}(3):\n    break", id="break"),
+    ],
+)
+@pytest.mark.parametrize("name", ["bare", "guarded"])
+def test_l2_a_generator_closed_early_is_recorded_and_is_not_an_error(
+    tmp_path: Path, name: str, driver: str
+) -> None:
+    records = _run_agent(
+        tmp_path, GENERATORS, [name], "import agent\n" + driver.format(n=name) + "\n"
+    )
+    assert [(r["name"], r["arguments"], r["is_error"]) for r in records] == [
+        (name, {"n": 3}, False)
+    ]
+
+
+ASYNC_TOOLS = (
+    "import asyncio\n"
+    "async def inner():\n    await asyncio.sleep(10)\n"
+    "async def direct(q):\n    await asyncio.sleep(10)\n    return 1\n"
+    "async def nested(q):\n    await inner()\n    return 1\n"
+    "async def guarded(q):\n    try:\n        await asyncio.sleep(10)\n    finally:\n        pass\n"
+    "async def reraises(q):\n    try:\n        await asyncio.sleep(10)\n"
+    "    except asyncio.CancelledError:\n        await asyncio.sleep(0)\n        raise\n"
+    "async def replaces(q):\n    try:\n        await asyncio.sleep(10)\n"
+    "    except asyncio.CancelledError:\n        raise ValueError('own')\n"
+    "async def fails(q):\n    await asyncio.sleep(0)\n    raise ValueError('own')\n"
+)
+CANCEL_DRIVER = (
+    "import asyncio, agent\n"
+    "async def main():\n"
+    "    task = asyncio.ensure_future(agent.{n}('x'))\n"
+    "    await asyncio.sleep(0.05)\n"
+    "    task.cancel()\n"
+    "    try:\n        await task\n    except BaseException:\n        pass\n"
+    "asyncio.run(main())\n"
+)
+
+
+@pytest.mark.parametrize("name", ["direct", "nested", "guarded", "reraises"])
+def test_l3_a_cancelled_coroutine_is_recorded_as_cancelled_not_as_a_raise(
+    tmp_path: Path, name: str
+) -> None:
+    records = _run_agent(tmp_path, ASYNC_TOOLS, [name], CANCEL_DRIVER.format(n=name))
+    assert [(r["name"], r["is_error"]) for r in records] == [(name, False)]
+    assert "cancel" in records[0]["output"]
+
+
+@pytest.mark.parametrize("name", ["replaces", "fails"])
+def test_l3_a_tool_that_raises_its_own_error_is_still_an_error(
+    tmp_path: Path, name: str
+) -> None:
+    records = _run_agent(tmp_path, ASYNC_TOOLS, [name], CANCEL_DRIVER.format(n=name))
+    assert [(r["name"], r["is_error"]) for r in records] == [(name, True)]

@@ -334,6 +334,9 @@ def _install_declared_python_tools() -> None:
     # frame id -> (frame, entry time). Holding the frame keeps its id from being
     # reused while an entry for it is still open.
     entries: dict[int, tuple[Any, float]] = {}
+    # frame id -> (how it was last thrown into, the instruction it was thrown at). A frame that
+    # `close()` or a task's `cancel()` ended is not a tool that raised.
+    thrown: dict[int, tuple[str, int]] = {}
 
     def profile(frame: Any, event: str, value: Any) -> None:
         if getattr(active, "busy", False):
@@ -347,6 +350,12 @@ def _install_declared_python_tools() -> None:
             entry = entries.get(id(frame))
             if entry is None or entry[0] is not frame:
                 entries[id(frame)] = (frame, time.time())
+                thrown.pop(id(frame), None)
+            # On a throw into the frame the call event's value is the thrown exception.
+            if isinstance(value, GeneratorExit):
+                thrown[id(frame)] = ("closed", frame.f_lasti)
+            elif isinstance(value, BaseException) and type(value).__name__ == "CancelledError":
+                thrown[id(frame)] = ("cancelled", frame.f_lasti)
             return
         if event != "return":
             return
@@ -356,14 +365,40 @@ def _install_declared_python_tools() -> None:
             opname = dis.opname[code.co_code[frame.f_lasti]]
         except (IndexError, TypeError):
             opname = "RETURN_VALUE"
-        if opname == "RETURN_GENERATOR" or (
-            code.co_flags & suspendable and opname.startswith("YIELD")
+        ended_by = None
+        mark = thrown.get(id(frame))
+        if mark is not None:
+            kind, thrown_at = mark
+            try:
+                bare_raise = opname == "RAISE_VARARGS" and code.co_code[frame.f_lasti + 1] == 0
+            except IndexError:
+                bare_raise = False
+            # The thrown exception passed through: a re-raise, an unwinding `finally`, an awaited
+            # callee ending, or (a generator) a frame closed at its `yield` without running.
+            if (
+                opname in {"CLEANUP_THROW", "RERAISE"}
+                or bare_raise
+                or (
+                    kind == "closed"
+                    and opname.startswith("YIELD")
+                    and frame.f_lasti == thrown_at
+                )
+            ):
+                ended_by = kind
+        if ended_by is None and (
+            opname == "RETURN_GENERATOR"
+            or (code.co_flags & suspendable and opname.startswith("YIELD"))
         ):
             return
-        raised = not opname.startswith("RETURN")
+        thrown.pop(id(frame), None)
+        raised = ended_by is None and not opname.startswith("RETURN")
         entry = entries.pop(id(frame), None)
         if raised:
             value = "the tool raised an exception"
+        elif ended_by == "cancelled":
+            value = "the tool was cancelled before it finished"
+        elif ended_by == "closed":
+            value = "the generator was closed before it finished"
         started = entry[1] if entry is not None else time.time()
         key = next(
             (
