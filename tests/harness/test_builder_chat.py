@@ -176,6 +176,23 @@ def test_a_change_to_the_world_data_alone_is_saved(tmp_path, monkeypatch):
     assert len(client.published) == 1
 
 
+def test_a_change_to_the_cast_alone_is_saved(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None
+    )
+
+    (tmp_path / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+    result = asyncio.run(runtime._save_changes())
+
+    assert result.get("unchanged") is not True
+    assert len(client.published) == 1
+
+
 def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     client = BuilderClient(applied=False)
     runtime = _runtime(tmp_path, client, monkeypatch)
@@ -749,6 +766,22 @@ def test_one_yes_to_every_change_runs_the_rest_of_its_message_and_the_next_messa
     ]
 
 
+def test_the_question_before_a_change_shows_names_as_they_are_written(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    runtime, guarded, ran, _offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: _CONFIRM)
+    questions = []
+    asked = runtime._ask
+
+    async def ask(tool, payload, context):
+        questions.append(payload["question"])
+        return await asked(tool, payload, context)
+
+    runtime._ask = ask
+    assert asyncio.run(guarded("add_actor")({"id": "zoe", "name": "Zoë Müller"})).get("is_error") is None
+    assert "Zoë Müller" in questions[0] and "\\u00eb" not in questions[0]
+
+
 def test_a_yes_to_one_change_runs_only_that_change_and_a_no_still_refuses(tmp_path, monkeypatch):
     from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
 
@@ -1096,6 +1129,11 @@ def test_file_tools_on_any_backend_never_return_credentials(tmp_path):
     (work / "scenarios" / "a.json").write_text("SENTINEL-free")
     (work / ".env").write_text("SENTINEL=1")
     (work / "service_account.json").write_text('{"SENTINEL": 1}')
+    # The names TH-9042 added, each holding the same marker.
+    added = (".pgpass", ".kube/config", ".docker/config.json", "infra/terraform.tfstate", "gcp-key.json", "id_ed25519")
+    for name in added:
+        (work / name).parent.mkdir(parents=True, exist_ok=True)
+        (work / name).write_text("SENTINEL=2")
     tools = {spec.name: _spec_tool(spec.name, spec) for spec in file_tools(str(work / "scenarios"))}
 
     def run(name, **args):
@@ -1109,6 +1147,38 @@ def test_file_tools_on_any_backend_never_return_credentials(tmp_path):
     assert ".env" not in run("Glob", pattern="*", path="..")
     assert "a.json" in run("Glob", pattern="*.json")
     assert "kept out of this session" in run("Grep", pattern="x", path="/")
+    assert "SENTINEL=2" not in run("Grep", pattern="SENTINEL", path="..")
+    for name in added:
+        assert "SENTINEL=2" not in run("Read", file_path=f"../{name}"), name
+        assert name.rsplit("/", 1)[-1] not in run("Glob", pattern="**/*", path=".."), name
+
+
+def test_the_gate_judges_a_call_where_the_session_resolves_it(tmp_path):
+    """Through the hook itself, with the payload's cwd: a relative path resolves in the session's
+    folder, not the harness's (TH-9042)."""
+    from fi.alk.harness.config import gate_hooks
+
+    session = tmp_path / "session"
+    (session / "k").mkdir(parents=True)
+    (session / ".pgpass").write_text("x")
+    (session / "notes.txt").symlink_to(".pgpass")
+    refuse = gate_hooks(["Read", "Glob", "Grep"])["PreToolUse"][0].hooks[0]
+
+    def denied(tool, arguments, cwd=str(session)):
+        payload = {"tool_name": tool, "tool_input": arguments, "cwd": cwd}
+        answer = asyncio.run(refuse(payload, None, None))
+        return answer.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    assert denied("Grep", {"pattern": "x", "path": "notes.txt"})
+    assert denied("Read", {"file_path": "notes.txt"})
+    assert denied("Grep", {"pattern": "x", "path": "."}, cwd="/run")
+    assert denied("Glob", {"pattern": "**/.kube/config"})
+    assert denied("Glob", {"pattern": "**/*.tfstate"})
+    for name in (".pgpass", ".kube/config", ".docker/config.json", "x.tfstate", "gcp-key.json", "id_ecdsa_sk"):
+        assert denied("Read", {"file_path": str(session / name)}), name
+    assert not denied("Read", {"file_path": str(session / ".kube" / "configmap.yaml")})
+    assert not denied("Grep", {"pattern": "x", "path": "k"})
+    assert not denied("Grep", {"pattern": "x", "path": "notes.txt"}, cwd=str(tmp_path))
 
 
 class RebuildClient(BuilderClient):
@@ -2463,6 +2533,70 @@ def test_declared_tool_evidence_must_be_in_the_agents_folder(tmp_path):
     assert not own.get("is_error"), own
 
 
+def _declare_from(tmp_path, evidence_file: str, quote: str):
+    root, source, contract, kept = _two_agent_world(tmp_path, "")
+    server = builder.suite_server(root, kept, contract, source)
+    declare = next(one for one in server.tools if one.name == "declare_tool")
+    return source, asyncio.run(
+        declare.handler(
+            {
+                "name": "cancel_a",
+                "description": "cancel",
+                "evidence_file": evidence_file,
+                "evidence_quote": quote,
+                "why": "the agent has it",
+            }
+        )
+    )
+
+
+def test_declared_tool_evidence_never_checks_a_guess_against_a_listed_file(tmp_path):
+    answers = []
+    for case, make in {
+        "listed": lambda src: (src / ".env").write_text("API_KEY=canary-value\n"),
+        "link": lambda src: (
+            (src / ".env").write_text("API_KEY=canary-value\n"),
+            (src / "notes.txt").symlink_to(src / ".env"),
+        ),
+        "missing": lambda src: None,
+    }.items():
+        world = tmp_path / case
+        world.mkdir()
+        root, source, contract, kept = _two_agent_world(world, "")
+        make(source)
+        server = builder.suite_server(root, kept, contract, source)
+        declare = next(one for one in server.tools if one.name == "declare_tool")
+        path = "notes.txt" if case == "link" else ".env"
+        for quote in ("API_KEY=canary-value", "API_KEY=c", "API_KEY=zzz"):
+            answers.append(
+                asyncio.run(
+                    declare.handler(
+                        {
+                            "name": "cancel_a",
+                            "description": "cancel",
+                            "evidence_file": path,
+                            "evidence_quote": quote,
+                            "why": "x",
+                        }
+                    )
+                )
+            )
+
+    texts = {one["content"][0]["text"] for one in answers}
+    # A link is named differently from the file it points at, so its text differs only by name.
+    assert all(one["is_error"] for one in answers)
+    assert {t.replace("notes.txt", ".env") for t in texts} == {
+        ".env is kept out of this session because it holds credentials; "
+        "name a file in the agent's code or configuration"
+    }
+
+
+def test_declared_tool_evidence_from_a_normal_file_still_works(tmp_path):
+    _, result = _declare_from(tmp_path, "agents/a/agent.py", "def cancel_a():")
+
+    assert not result.get("is_error"), result
+
+
 # -- Change review r2, A-H1: what the chat sends the platform loses URL credentials ------------------
 
 _SECRET_URL = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"
@@ -3106,3 +3240,152 @@ def test_random_splits_never_send_a_credential_the_stripped_whole_drops():
         if leaked:
             found.append((text, leaked))
     assert found == []
+
+
+
+
+def test_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.backends import ToolSpec
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "instruction": "ask for a refund"})
+    )
+    ran, asked, answers = [], [], ["No", _CONFIRM, "No"]
+
+    async def handler(args):
+        ran.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    async def ask(tool, payload, context):
+        asked.append(tool)
+        return {"content": [{"type": "text", "text": answers.pop(0)}]}
+
+    runtime._ask = ask
+    add, drop, submit = (
+        runtime._confirmed(ToolSpec(name, "", {}, handler))
+        for name in ("add_actor", "drop_actor", "submit_scenario")
+    )
+    friend = {
+        "name": "one",
+        "instruction": "ask for a refund",
+        "actors": [{"id": "friend"}],
+    }
+    assert asyncio.run(add.handler({"id": "friend"}))["is_error"] is True
+    assert asyncio.run(drop.handler({"id": "friend"})).get("is_error") is None
+    assert asyncio.run(submit.handler(friend))["is_error"] is True
+    assert asked == ["add_actor", "drop_actor", "submit_scenario"]
+    assert ran == [{"id": "friend"}]
+    assert runtime._changes_situation(friend)
+
+
+def test_a_change_to_a_scenario_s_world_actors_waits_for_a_yes_and_no_repair_makes_it(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.backends import ToolSpec
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "instruction": "ask for a refund"})
+    )
+    acted = {
+        "name": "one",
+        "instruction": "ask for a refund",
+        "actors": [{"id": "reviewer", "actions": []}],
+    }
+    assert runtime._changes_situation(acted) and runtime._changes_meaning(acted)
+    ran, asked = [], []
+
+    async def handler(args):
+        ran.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    async def ask(tool, payload, context):
+        asked.append(tool)
+        return {"content": [{"type": "text", "text": "No"}]}
+
+    runtime._ask = ask
+    submit = runtime._confirmed(ToolSpec("submit_scenario", "", {}, handler))
+    assert asyncio.run(submit.handler(acted))["is_error"] is True
+    assert (asked, ran) == (["submit_scenario"], [])
+
+
+def test_the_world_offers_only_actions_an_actor_can_send():
+    from fi.alk.harness.actors import world_action_names
+
+    contract = {
+        "tool_entrypoints": [
+            {"tool": "read", "endpoint": "records/read"},
+            {"tool": "approve", "endpoint": "/records/approve", "method": "post"},
+            {"tool": "look", "endpoint": "records/look", "method": "GET"},
+            {
+                "tool": "cancel",
+                "endpoint": "records/{record_id}/cancel",
+                "method": "POST",
+            },
+            {"tool": "local", "endpoint": ""},
+        ]
+    }
+    assert world_action_names(contract) == ["records.approve", "records.read"]
+
+
+def test_the_build_adds_actors_without_asking_and_never_drops_one(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.backends import ToolSpec
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    ran = []
+
+    async def handler(args):
+        ran.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    add, drop = (
+        runtime._confirmed(ToolSpec(name, "", {}, handler))
+        for name in ("add_actor", "drop_actor")
+    )
+    runtime._from_platform = True
+    assert asyncio.run(add.handler({"id": "friend"})).get("is_error") is None
+    dropped = asyncio.run(drop.handler({"id": "friend"}))
+    assert dropped["is_error"] is True and "aim_for" in dropped["content"][0]["text"]
+    assert ran == [{"id": "friend"}]
+
+
+def test_stale_pre_run_sessions_are_written_again_before_a_save_seals_the_scenarios(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    (tmp_path / "world.sqlite").write_bytes(b"before")
+    runtime._published_fingerprint()
+    order = []
+
+    async def refresh(root, write=None):
+        order.append(("refresh", root))
+        return []
+
+    monkeypatch.setattr("fi.alk.harness.pre_run.refresh_stale", refresh)
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: order.append(("reseal", root)))
+
+    (tmp_path / "world.sqlite").write_bytes(b"after")
+    asyncio.run(runtime._save_changes())
+
+    assert order == [("refresh", runtime.workspace), ("reseal", runtime.workspace)]
+
+
+def test_a_change_waiting_on_the_person_asks_to_be_answered_with_an_option(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    runtime, guarded, _ran, _offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: _CONFIRM)
+    asked = []
+
+    async def ask(tool, payload, context):
+        asked.append(payload)
+        return {"content": [{"type": "text", "text": _CONFIRM}]}
+
+    runtime._ask = ask
+    asyncio.run(guarded("edit_scenario")({"scenario_key": "one", "instruction": "ask for an exchange"}))
+
+    assert [one.get("options_only") for one in asked] == [True]

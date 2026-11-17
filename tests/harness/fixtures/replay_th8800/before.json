@@ -28,14 +28,16 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "5f7b7525456f1162dc8ffd176b8e5a65870f0b10d0d98cd54cf224cb298d7bf1",
-  "sealed_sha": "d786410313f7b8ee7339dd25ccfd3cdf7dae331fb9ff23f97549ba2566eb158d",
+  "saved_sha": "05bd25ac7ed553916c83689c2b0f228519c24188a611ab98d289830dde689586",
+  "sealed_sha": "981c7f97afc45de6ea2473ea9f739cec35dc1cdcf902af8ff16c87435df5297c",
   "trace_version": null
  },
  "deep_agents_12_nov_reading": {
   "control_environment": {
    "ALK_OBSERVE_FRAMEWORKS": "1",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"examples.harness.deep_agents_support.agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"examples.harness.deep_agents_support.agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"examples.harness.deep_agents_support.agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"examples.harness.deep_agents_support.agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"examples.harness.deep_agents_support.agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"examples.harness.deep_agents_support.agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
    "HARNESS_MODE": "1",
    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
    "PORT": "{{PORT_agent}}"
@@ -71,14 +73,16 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "7a0ce26bbf307fd90822183b1031866bc9f13ac9d71902b8062fcc5e3341f56a",
-  "sealed_sha": "38cac431d74b2c78d3e6a14e4c5a84e12b6bee7677c6627cb8897420ac56ad0f",
+  "saved_sha": "67d1f98ebca3830d6a0381c296df3ebff0c8f92a9e0fe2a0bef7863a5f158da0",
+  "sealed_sha": "84d549b9e803d2f7220b1f0c426e598a064397f31f910d18a4423830a21efaeb",
   "trace_version": 1
  },
  "google_adk": {
   "control_environment": {
    "ALK_OBSERVE_FRAMEWORKS": "1",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"support_agent.agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"support_agent.agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"support_agent.agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"support_agent.agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"support_agent.agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"support_agent.agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
    "HARNESS_MODE": "1",
    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
    "PORT": "{{PORT_agent}}"
@@ -110,14 +114,16 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "b68b470dc927e1bc9be641d62c7f4507184f85def691b455c04e0a3d4cda11cf",
-  "sealed_sha": "09a92fe49a5b819075f7f829669ac8909454c368aba3ff80080e7d4ecb70056e",
+  "saved_sha": "b6c06fcc8ae6686ef872b1905ab106afc7701511e4f505d6faa735631fca3f6c",
+  "sealed_sha": "d9a91b2b4f99d82f1bcf17b5499ef9f53f42292e6e63a1c64edffc525aa881b4",
   "trace_version": 1
  },
  "h2_two_graphs_with_the_cli_installed": {
   "control_environment": {
    "ALK_OBSERVE_FRAMEWORKS": "1",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
    "HARNESS_MODE": "1",
    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
    "PORT": "{{PORT_agent}}"
@@ -148,14 +154,16 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "feec93bb63901503656044623ec6866b380dd885ea8db02e4d2c4c63aa9a9c2d",
-  "sealed_sha": "617f8d2fa78ce01ca5a452e43a91b220c4eea9a15411bd4c9c13505641411308",
+  "saved_sha": "c6444ea290c50b67cb9649fdb878a19bd2617914c7e1ae7727dbed955815ba12",
+  "sealed_sha": "46b50b80d10858877e920e3025ab62cd7a239e56cbef2c3460f417129887f2be",
   "trace_version": 1
  },
  "h3_no_subfolder_root_relative_module": {
   "control_environment": {
    "ALK_CALLBACK_ENTRYPOINT": "examples.harness.support.agent:agent_callback",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"examples.harness.support.agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"examples.harness.support.agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"examples.harness.support.agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"examples.harness.support.agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"examples.harness.support.agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"examples.harness.support.agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
    "HARNESS_MODE": "1",
    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
    "PORT": "{{PORT_agent}}"
@@ -187,8 +195,8 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "e057ac2cd3089d7d2596c0d630fa9563e87a18e591891166881add599a5924a7",
-  "sealed_sha": "e3a32d1cefa46b4cc226711851613221f7dbc7fa3fdf22dfe40c643af24461fd",
+  "saved_sha": "256b0d041d25b0fe2a14c100de9910407288e2b79c8f3d979de8314fd52a6348",
+  "sealed_sha": "570142ade527887256514b4eca4a3cccc3eb70bd6df0eb3ecc2c3c422fdd679f",
   "trace_version": 1
  },
  "h3_no_subfolder_unreachable_root_relative_module": {
@@ -220,14 +228,16 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "cbd55605f0da3f2175e4f90fbc7d29980148e27cff38de3221ac5fe8fdf451c0",
-  "sealed_sha": "648db30968ff034d1658a6035edd2d3be8bea4adfaf305f1c2fec4f6edfa5603",
+  "saved_sha": "abd845c2047ccb29bfbef72b6fe41a73806bfa4c413c29543dad6d2c2ae034ba",
+  "sealed_sha": "6e58e6b3efec1f0dccae735a81172bea6a3a2f6fc593eb673a64434d29e65aca",
   "trace_version": null
  },
  "h4_agent_folder_inside_a_regular_package": {
   "control_environment": {
    "ALK_CALLBACK_ENTRYPOINT": "tools:agent_callback",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"bench.envs.retail.tools\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"bench.envs.retail.tools\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"bench.envs.retail.tools\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"bench.envs.retail.tools\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"bench.envs.retail.tools\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"bench.envs.retail.tools\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
    "HARNESS_MODE": "1",
    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
    "PORT": "{{PORT_agent}}"
@@ -267,8 +277,8 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "dbc2cf4014ebf4e54f51b080973e0a5007e379b2222fc24e139935b5591b5969",
-  "sealed_sha": "ec007ed91a6546be2d88a7aadb0114932fc86ccff3d64e6ad804779c44f6d09c",
+  "saved_sha": "e8b52365dffbe5769f96622ce2bafe550c4d57cc537e8cdacfea2a6564337c9e",
+  "sealed_sha": "86d4af18d5abec8346cc342346cc8f060e5b83fe081812a187d689c35e45440f",
   "trace_version": 1
  },
  "h4_unreachable_inside_a_regular_package": {
@@ -308,14 +318,16 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "1980415a75954c2cd56abce462f749ab9392204568492eb307d44003bf964ecb",
-  "sealed_sha": "8add565f49aaef5bc5dfd6618ce8e629957226e3435d5cfd81228ea2dd07b19c",
+  "saved_sha": "02227ba89f5a016c3771f88ae67f8ec738cf2c70afd64e9f7903a9ab8cef8793",
+  "sealed_sha": "dd9c3afe752c4458944ab67dd5128ef7def71575d86e8397cbe7a1eabe836d82",
   "trace_version": null
  },
  "langchain_harbor_hotels": {
   "control_environment": {
    "ALK_OBSERVE_FRAMEWORKS": "1",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"check_availability\", \"module\": \"agent\", \"callable\": \"check_availability\"}, {\"name\": \"book_room\", \"module\": \"agent\", \"callable\": \"book_room\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"check_availability\", \"module\": \"agent\", \"name\": \"check_availability\"}, {\"callable\": \"book_room\", \"module\": \"agent\", \"name\": \"book_room\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
    "HARNESS_MODE": "1",
    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
    "PORT": "{{PORT_agent}}"
@@ -326,7 +338,8 @@
   ],
   "run_command": [
    "python",
-   "agent.py"
+   "-m",
+   "agent"
   ],
   "saved_entries": [
    [
@@ -340,14 +353,16 @@
     "book_room"
    ]
   ],
-  "saved_sha": "80487d33c19fe821bae13a7978ce5fa2c73ed680b9833990d0e6e95cb2dfe879",
-  "sealed_sha": "fb8bb4f2641518f847b050bf9de89f66ec1cdd6e94da211c5b26cc5070682062",
+  "saved_sha": "d56a398561250588bea08c526c40944236e0c9ce51709a6658e721f07e257f67",
+  "sealed_sha": "5bf268a01381b05b09dda3c390af9e8fb8eb0b0c46f6589a2517983fb4a6d5b9",
   "trace_version": 1
  },
  "langgraph_json_with_http": {
   "control_environment": {
    "ALK_OBSERVE_FRAMEWORKS": "1",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
    "HARNESS_MODE": "1",
    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
    "PORT": "{{PORT_agent}}"
@@ -378,8 +393,8 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "feec93bb63901503656044623ec6866b380dd885ea8db02e4d2c4c63aa9a9c2d",
-  "sealed_sha": "617f8d2fa78ce01ca5a452e43a91b220c4eea9a15411bd4c9c13505641411308",
+  "saved_sha": "c6444ea290c50b67cb9649fdb878a19bd2617914c7e1ae7727dbed955815ba12",
+  "sealed_sha": "46b50b80d10858877e920e3025ab62cd7a239e56cbef2c3460f417129887f2be",
   "trace_version": 1
  },
  "livekit_voice_with_unreachable": {
@@ -404,6 +419,8 @@
   "control_environment": {
    "ALK_CALLBACK_ENTRYPOINT": "agent:agent_callback",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"svc.agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"svc.agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"svc.agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"svc.agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"svc.agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"svc.agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
    "HARNESS_MODE": "1",
    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
    "PORT": "{{PORT_agent}}"
@@ -438,13 +455,13 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "787e149107d18ceff987e388173f1cabe4bb371e80820dc55e5e8d4940670b73",
-  "sealed_sha": "4e28b79d13570e402d3cbc0a65da5d563663c62c2432f851e8376c5b33be5143",
+  "saved_sha": "3e3468fece2bf36e5c7d28dd63c04911e60c0fddcd82e9167750d75cb656085b",
+  "sealed_sha": "2c05e57fd4e2fe9d8e0b7c6e26f09b9e8f886341910b6aab715596f5fb593a3e",
   "trace_version": 1
  },
  "provider_chat_source": {
   "saved_entries": [],
-  "saved_sha": "5705f539a00886a4bc8bacb34fcf50b35e22d145e36391de98b192ad73050c1d"
+  "saved_sha": "11c46ed8f4bddb11f2df20b73c2f22d06bdd247a186c0676dead93fd40b86a97"
  },
  "provider_no_prompt": {
   "saved_entries": [
@@ -454,7 +471,7 @@
     "search_faq"
    ]
   ],
-  "saved_sha": "f1f7c76b6891587ea81aece46ac231aba45e50ff3b7c181966cfbb56af5f6c91"
+  "saved_sha": "11727f79bda961ea84ea3f0af886abae3ee20f40a1ef44c1e4f20d8ff1add0ba"
  },
  "provider_no_tools": {
   "saved_entries": [],
@@ -468,7 +485,7 @@
     ""
    ]
   ],
-  "saved_sha": "09ff5b9bb98a8389e55d3d360264a54a1d17db948bc56c8bb0a64d33baa20155"
+  "saved_sha": "396aa779e7e0ac487e0253aa952e7a1d98f03cf494e0ff323b188655f1ad9c85"
  },
  "provider_service_tool": {
   "saved_entries": [
@@ -478,7 +495,7 @@
     ""
    ]
   ],
-  "saved_sha": "85233451e2edf65c00c404adf7b46ecd3ebe6b0f0dd65ac529863490b81c92de"
+  "saved_sha": "fa590163e1d7d5fa9aec50cf711f32994c5fd93e35beb74ad7e894ea88ffa076"
  },
  "provider_traceai_instrumented": {
   "saved_entries": [
@@ -488,7 +505,7 @@
     "get_invoice"
    ]
   ],
-  "saved_sha": "9722e63739401d4c3a665c224e100feba0e23a6478ca9ecd83cf5771b14e2566"
+  "saved_sha": "a204ad8c51fc791e6392505b64108e14deae961a391bd6595b3a8a22979096c2"
  },
  "provider_voice_source": {
   "saved_entries": [
@@ -503,12 +520,14 @@
     "Receptionist.book_slot"
    ]
   ],
-  "saved_sha": "bd57b2a73dbfc20885e5bb6b21405ce3e55aa0e9050426e69b7fabff015d0605"
+  "saved_sha": "6b6a37b4bba55c9a1dfc234de7144e8c4f7128d2923495eaa8f7272e3e33d33f"
  },
  "pydantic_ai": {
   "control_environment": {
    "ALK_CALLBACK_ENTRYPOINT": "agent:agent_callback",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
    "HARNESS_MODE": "1",
    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
    "PORT": "{{PORT_agent}}"
@@ -540,8 +559,8 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "2f74cf3b525d1e6d1734cd5fa5e1e1c75d8adbde9ebcee53ab6675cd7b998dd8",
-  "sealed_sha": "da6ab4e58a44e1d2c25c825248a175dab4eea321fc8c059ca50d13d06ac45461",
+  "saved_sha": "2274151c219aa11edb5c173c12e2bac12fae8b8d1f008c930a1e9f943378c28d",
+  "sealed_sha": "1ffe5a670007eea85017caae36df54a211abe2167abd12f65ed8e64343f9a439",
   "trace_version": 1
  },
  "saved_unreachable_entry_with_module_and_callable": {
@@ -573,14 +592,16 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "1b67abc4cf39fc002a40ae155dcb692f77e77dbdbd9a68523354c8864019fec8",
-  "sealed_sha": "59d143a1f793deb377c03aa83cd1ffa0f38453fe298a628bdeb623bc4d32c90e",
+  "saved_sha": "bfd0da555f3c189c935206fadbc8b0175fb2e89312c682170c37e07fd9060a1c",
+  "sealed_sha": "6fedb3eecb2b38db2e5542e48588f57c3942d5c2902c55d0913db7c2837d2360",
   "trace_version": null
  },
  "uv_run_langgraph_dev": {
   "control_environment": {
    "ALK_OBSERVE_FRAMEWORKS": "1",
    "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
    "HARNESS_MODE": "1",
    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
    "PORT": "{{PORT_agent}}"
@@ -615,8 +636,8 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "207916e4e81f7e2fe635d17b2bfa9fddf5309d378cef490ade161890cb21b525",
-  "sealed_sha": "209e6023c14589cff173661bc3adc49ad83cd4457869c3b0716c775c8d0a48a0",
+  "saved_sha": "7a87aaa0afec68ec07b1c1e0781210ada14984b0d5219ab65d3e2d837bb817c3",
+  "sealed_sha": "4389725c0239165f10d57f5ff89f112d1bc9cca48755fdf5af6208c7512a2d67",
   "trace_version": 1
  },
  "workdir_deeper_than_the_subfolder": {
@@ -648,8 +669,8 @@
     "return_policy"
    ]
   ],
-  "saved_sha": "920c959d3670a6bb833f29141ac48f5a0703b1be9e40afad8c7ab564e7364161",
-  "sealed_sha": "f6bfd212a2e07b5fe9fbaa64896d88409d44b12c0b4f01c0391b3b8caa301900",
+  "saved_sha": "44f9bed2658cd4b01ef08237d37aacd1d0c06501097366aca81bec862563f2cf",
+  "sealed_sha": "76131ed8f907f651c481250bf591c64ceea1b35ba93529e1d7a1deb88ac2a1cb",
   "trace_version": null
  }
 }

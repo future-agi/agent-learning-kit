@@ -106,8 +106,19 @@ Find, in roughly this order:
    when a record says so; and each argument whose text the agent writes itself rather than takes
    from the person or a record. `refuses`: every refusal by value or by something outside the
    call, and every refusal returned as an ordinary value rather than an error. `inputs_from`: an
-   argument whose value must come from an earlier tool's output, and that tool. Fill these for
-   every tool that has them; a writer sees nothing else.
+   argument whose value must come from an earlier tool's output, and that tool. `arg_units`: the
+   unit or format of every amount, duration, date or time argument whose name does not say it
+   (a currency's minor or major unit, seconds or milliseconds, an ISO date or a timestamp), from the
+   code that reads it, the data it holds, or what the person you work with told you. When the code or
+   its data and the person's words disagree (they name one unit, the column holds another), the code
+   wins: record what it
+   does and tell them about the mismatch. The agent, the world and every actor read the field by it,
+   so a field left without one is read three ways. `returns`: every field the tool hands back, with
+   its type and the same unit or format rule (`{"<an id field>": "string", "<an amount field>":
+   "integer, <its minor unit and currency>"}`), read from the code that builds the result or the
+   record it returns. `tables_read` and `tables_changed`: the world's tables the tool reads, and
+   the ones it adds to, changes or deletes from, read from its code. Fill these for every
+   tool that has them; a writer sees nothing else.
 
 6. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
    wording from its system prompt or its validation code. These matter: the agent under test is
@@ -233,6 +244,10 @@ Find, in roughly this order:
    Agents SDK's `@function_tool` (imported from `agents`) turns the def into a `FunctionTool`.
    Record that one as `unreachable`, but still fill in `module` and `callable` with the def's own
    name: the kit can't call it, but watches it when it knows where it is, and records its calls.
+
+   Record each entry's effect: "read" when the code only reads (a lookup, a search, a list),
+   "write" when it creates, changes or deletes anything. Leave it empty only when you cannot tell;
+   an empty one counts as a write unless the endpoint is called with GET.
 
    Some tools cannot be reached at all. A framework may define them as closures inside a class,
    so there is nothing importable. **Record that plainly rather than leaving the entry blank**:

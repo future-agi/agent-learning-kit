@@ -19,13 +19,13 @@ from fi.simulate.agent.wrappers.http_events import (
     CompletedToolEvents,
     CompletedToolRows,
 )
+from fi.simulate.agent.wrappers.http_stream import HTTPStreamSpec
 
 from .agent_type_check import (
     SECOND_LOOK_READ,
     SecondLook,
     agent_type_failure,
-    browser_tools_found,
-    browser_tools_in_agent,
+    browser_scan,
     code_the_agent_reaches,
     failure_message,
     is_browser,
@@ -33,6 +33,7 @@ from .agent_type_check import (
 )
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
+from .backends.files import secret_text
 
 from .contract import (
     prompt_quote,
@@ -426,6 +427,29 @@ def _checked_against_source(
             problems.append(str(invalid))
     elif runtime is not None and runtime.source_subfolder:
         runtime = runtime.model_copy(update={"source_subfolder": ""})
+    if runtime is not None and source_root is not None:
+        # The first save is the only place a listed name can be stopped from entering the
+        # contract: a later repair judges only the names it adds. Only this model-facing route
+        # asks (the kit's own write_contract does not pass through here). The name isn't echoed.
+        from .runtime_repair import (
+            _SHELL_LAUNCHERS,
+            _runs_inline_code,
+            _runtime_names_listed_file,
+        )
+
+        if _runtime_names_listed_file(source_root.resolve(), runtime):
+            problems.append(
+                "runtime: a command or path in the runtime names a file that is kept out of "
+                "this task; name only the program and the source files it runs"
+            )
+        elif _runs_inline_code(runtime.command) and not (
+            # A shell is its own policy (saved at the root, refused by repair and in a folder).
+            runtime.command and Path(runtime.command[0]).name.casefold() in _SHELL_LAUNCHERS
+        ):
+            problems.append(
+                "runtime: the command hands an interpreter its program as an argument "
+                "(-c, -e, -p, --eval, --print); name the source file it runs instead"
+            )
     if problems:
         return _problems(problems, arrived)
     return contract.model_copy(
@@ -574,6 +598,14 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
             # target; each is charged to the save's budget.
             found_at[where.path] = resolved_in_source(root, where.path)
         path = found_at[where.path]
+        if path is not None and secret_text(path.relative_to(root).as_posix()):
+            # Judged where it resolves, inside the source, before anything is opened: a file
+            # that exists, one that doesn't and a link to either get this same answer.
+            problems.append(
+                f"system_prompt_from[{index}]: {where.path} is kept out of this session because "
+                "it holds credentials; name the file the prompt is written in"
+            )
+            continue
         raw = None
         if path is not None and path not in lines_of and path not in too_large:
             raw = read_source(path, _LARGEST_PROMPT_FILE)
@@ -695,16 +727,16 @@ def _builds_a_sibling(source_root: Path, runtime: Runtime, subfolder: str) -> st
 
 def _tools_in_agent_folder(
     scan_root: Path | None, subfolder: str | None, reached: list[Path] | None = None
-) -> list[str]:
-    """The browser tools this agent uses, which a sibling's aren't. ``reached`` is filled with
-    the code it reaches outside its folder."""
+) -> tuple[list[str], frozenset[str]]:
+    """The browser tools this agent uses, which a sibling's aren't, and the limits that cut the
+    scan. ``reached`` is filled with the code it reaches outside its folder."""
     if not scan_root or not subfolder:
-        return browser_tools_found(scan_root)
+        return browser_scan(scan_root)
     try:
-        return browser_tools_in_agent(scan_root, subfolder, reached)
+        return browser_scan(scan_root, subfolder, reached)
     except SubfolderNotFound:
         # The folder check reports this; the model's reading shouldn't be refused for it too.
-        return []
+        return [], frozenset()
 
 
 def contract_tools(
@@ -725,6 +757,21 @@ def contract_tools(
     events_schema["properties"]["failure_events"]["items"] = (
         events_schema.pop("$defs")["CompletedToolFailureEvent"]
     )
+    sse_schema = HTTPStreamSpec.model_json_schema()
+    sse_definitions = sse_schema.pop("$defs")
+
+    def inline_sse_references(value):
+        if isinstance(value, dict):
+            reference = value.get("$ref")
+            if reference:
+                name = reference.rsplit("/", 1)[-1]
+                return inline_sse_references(sse_definitions[name])
+            return {key: inline_sse_references(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [inline_sse_references(item) for item in value]
+        return value
+
+    sse_schema = inline_sse_references(sse_schema)
     observation_schema = HttpObservation.model_json_schema()
     observation_schema["properties"]["parameters"]["additionalProperties"] = (
         observation_schema.pop("$defs")["ObservationParameter"]
@@ -749,11 +796,13 @@ def contract_tools(
     refused = False
     second_look = SecondLook()
     found: list[str] | None = None
+    # Set with found, from the same scan: a later call skips the scan and must still see its cut.
+    cut: frozenset[str] = frozenset()
     # Calls in one message check side by side, so the one sent last can finish first; it's the
     # model's last word, and an earlier call that finishes later mustn't write over it.
     sent = saved = 0
     # Calls in one message share one scan: each running its own takes that many times longer.
-    scan: asyncio.Future[list[str]] | None = None
+    scan: asyncio.Future[tuple[list[str], frozenset[str]]] | None = None
     # The code outside the folder the scan found the agent reaches, for the instrumentation
     # check, so the save walks the imports once.
     reach: list[Path] = []
@@ -894,6 +943,33 @@ def contract_tools(
                                 "description": "Real permitted values per argument where it is "
                                 "constrained to a set, an enum or a lookup: "
                                 '{"priority": ["low", "normal", "urgent"]}.',
+                            },
+                            "arg_units": {
+                                "type": "object",
+                                "description": "The unit or format of every amount, duration, date or "
+                                "time argument whose name does not say it, from the code that reads it, the "
+                                "data it holds or what the person you work with said; when the code and "
+                                "their words disagree, the code's: "
+                                '{"<an amount field>": "<its minor unit and currency>", "timeout": "milliseconds"}.',
+                            },
+                            "returns": {
+                                "type": "object",
+                                "description": "Every field the tool hands back, with its type and, where the "
+                                "name does not say it, its unit or format, read from the code that builds the "
+                                "result or the record it returns: "
+                                '{"<an id field>": "string", "<an amount field>": "integer, <its minor unit and '
+                                'currency>"}.',
+                            },
+                            "tables_read": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "The world's tables the tool reads, declared from its code.",
+                            },
+                            "tables_changed": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "The world's tables the tool adds to, changes or deletes from, "
+                                "declared from its code.",
                             },
                             "description": {"type": "string"},
                             "requires": {
@@ -1166,6 +1242,12 @@ def contract_tools(
                                 "enum": ["POST"],
                                 "description": "HTTP method used by the submitted implementation.",
                             },
+                            "effect": {
+                                "type": "string",
+                                "enum": ["read", "write"],
+                                "description": "read when the tool only reads (a lookup, a search, a list), write "
+                                "when it changes anything. Leave out to go by the HTTP method.",
+                            },
                             "notes": {
                                 "type": "string",
                                 "description": "Anything about reaching it that the fields above "
@@ -1214,6 +1296,13 @@ def contract_tools(
                             "type": "string",
                             "description": "The module that loader is imported from, so it can "
                             "be called rather than reimplemented.",
+                        },
+                        "loads": {
+                            "type": "string",
+                            "enum": ["", "start", "each_call"],
+                            "description": "When that loader runs, read from the code: `start` when "
+                            "the agent loads its data once as it starts, `each_call` when it reads "
+                            "it again on every request. Empty when the code does not show it.",
                         },
                         "version": {
                             "type": "string",
@@ -1447,6 +1536,10 @@ def contract_tools(
                                     "type": "string",
                                     "description": RuntimeInterface.model_fields["response_path"].description,
                                 },
+                                "sse": {
+                                    **sse_schema,
+                                    "description": RuntimeInterface.model_fields["sse"].description,
+                                },
                                 "completed_tools": CompletedToolRows.model_json_schema(),
                                 "completed_tool_events": events_schema,
                                 "local_auth": LocalHttpAuth.model_json_schema(),
@@ -1600,7 +1693,7 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, sent, saved, scan
+        nonlocal refused, found, cut, sent, saved, scan
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
         looked_before = second_look.given
         sent += 1
@@ -1620,7 +1713,7 @@ def contract_tools(
                     asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder, reach)
                 )
             # Shielded: one call cancelled mustn't cancel the scan the others wait on.
-            found = await asyncio.shield(scan)
+            found, cut = await asyncio.shield(scan)
             # A call running alongside this one may have refused while this one waited.
             if refused or (destination / FAILURE_FILE).is_file():
                 return _ok(_stop_message(destination))
@@ -1632,7 +1725,9 @@ def contract_tools(
                     "job is work on websites or a computer."
                 ]
             )
-        verdict = second_look.verdict(claimed, receipt, found, given_before=looked_before)
+        verdict = second_look.verdict(
+            claimed, receipt, found, given_before=looked_before, cut=cut
+        )
         if verdict == "refuse":
             # Set first: if the write fails, the model must not get a resubmission through.
             refused = True
@@ -1644,7 +1739,7 @@ def contract_tools(
                 write_failure_file(agent_type_failure(found), destination)
             return _ok(_stop_message(destination))
         if verdict == "second_look":
-            return _problems([second_look.issue(claimed, found, _new_receipt())])
+            return _problems([second_look.issue(claimed, found, _new_receipt(), cut=cut)])
         data_store = payload.get("data_store")
         if not isinstance(data_store, dict):
             data_store = {}

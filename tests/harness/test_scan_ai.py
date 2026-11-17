@@ -613,6 +613,12 @@ _HIDDEN = (
     "id_rsa",
     "terraform.tfvars",
     "secrets/keys.py",
+    # Names only the shared list covers, not the scan's own (TH-9042).
+    ".pgpass",
+    ".kube/config",
+    "infra/x.tfstate",
+    "gcp-key.json",
+    ".docker/config.json",
 )
 
 
