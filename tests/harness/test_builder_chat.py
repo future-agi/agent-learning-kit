@@ -4681,6 +4681,34 @@ def test_the_round_five_seams_stay_linear_over_many_deltas(shape: str, size: int
     assert _seconds(deltas) < (0.5 if size < 1024 * 1024 else 6.0)
 
 
+def test_a_question_nobody_answers_reaches_the_claude_cli_as_a_permission_result(
+    tmp_path, monkeypatch
+):
+    from claude_agent_sdk.types import PermissionResultDeny
+
+    # For the Claude CLI the ask callback is its permission callback, which must return a
+    # permission result; a plain dict there is a TypeError inside the SDK.
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    runtime.backend_name = "claude"
+
+    runtime._from_platform = True
+    question = {"questions": [{"question": "Which?", "options": [{"label": "A"}]}]}
+    nobody = asyncio.run(runtime._ask("AskUserQuestion", question, None))
+    assert isinstance(nobody, PermissionResultDeny)
+    assert "Nobody answers" in nobody.message
+
+    runtime._from_platform = False
+    runtime.stopping.set()
+    stopped = asyncio.run(runtime._ask("AskUserQuestion", question, None))
+    assert isinstance(stopped, PermissionResultDeny)
+    assert "stopped" in stopped.message
+
+    # The kit's own confirmation asks without the CLI's question shape and reads a tool result.
+    runtime._from_platform = True
+    confirm = asyncio.run(runtime._ask("submit_scenario", {"question": "Confirm?"}, None))
+    assert "Nobody answers" in confirm["content"][0]["text"]
+
+
 def test_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(
     tmp_path, monkeypatch
 ):
