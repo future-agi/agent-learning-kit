@@ -82,6 +82,8 @@ def _text_of(content: Any) -> str:
             is_block = not isinstance(item, str) and not _is_message(item)
             piece = item if isinstance(item, str) else _block_text(item)
             if not piece:
+                if not isinstance(item, str) and _field(item, "type") not in _TEXT_KINDS:
+                    after_block = False
                 continue
             if text and not (is_block and after_block):
                 text += " "

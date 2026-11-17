@@ -116,3 +116,20 @@ CASES += [
     ("untyped-text-thought-false-kept", [{"text": "a", "thought": False}, NS(text="b", thought=False)], "ab"),
     ("untyped-text-no-thought-kept", [{"text": "a"}, NS(text="b", thought=None)], "ab"),
 ]
+
+CASES += [
+    (
+        "text-around-thinking-joined-by-a-space",
+        [{"type": "text", "text": "Let me check."}, THINKING, {"type": "text", "text": "It shipped today."}],
+        "Let me check. It shipped today.",
+    ),
+    (
+        "text-around-server-tool-joined-by-a-space",
+        [
+            {"type": "text", "text": "Let me check."},
+            {"type": "server_tool_use", "id": "s1", "name": "web_search", "input": {}},
+            {"type": "text", "text": "It shipped today."},
+        ],
+        "Let me check. It shipped today.",
+    ),
+]
