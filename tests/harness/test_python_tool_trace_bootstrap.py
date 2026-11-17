@@ -550,3 +550,62 @@ def test_l3_a_tool_that_raises_its_own_error_is_still_an_error(
 ) -> None:
     records = _run_agent(tmp_path, ASYNC_TOOLS, [name], CANCEL_DRIVER.format(n=name))
     assert [(r["name"], r["is_error"]) for r in records] == [(name, True)]
+
+
+BAD_EXITS = (
+    "class BadExit:\n    def __str__(self):\n        raise SystemExit(3)\n    __repr__ = __str__\n"
+    "class BadInt:\n    def __str__(self):\n        raise KeyboardInterrupt\n    __repr__ = __str__\n"
+    "def t(x):\n    return 'ok'\n"
+)
+
+
+@pytest.mark.parametrize("bad", ["BadExit", "BadInt"])
+def test_l1_an_argument_whose_text_exits_never_ends_the_agent(tmp_path: Path, bad: str) -> None:
+    records = _run_agent(
+        tmp_path, BAD_EXITS, ["t"],
+        f"import agent\nassert agent.t(agent.{bad}()) == 'ok'\nassert agent.t('second') == 'ok'\n",
+    )
+    assert {"x": "second"} in [r["arguments"] for r in records]
+    assert any(r["arguments"] == {"x": f"<unprintable {bad}>"} for r in records)
+
+
+@pytest.mark.parametrize(
+    "first_call",
+    [
+        pytest.param("agent.t(2000)", id="deep-return"),
+        pytest.param("agent.t({(1, 2): 'a'})", id="tuple-key-argument"),
+        pytest.param("agent.t({1: 'a', 'b': 2})", id="mixed-key-argument"),
+    ],
+)
+def test_l3_a_value_that_cannot_be_encoded_still_records_the_call(
+    tmp_path: Path, first_call: str
+) -> None:
+    source = (
+        "def t(x):\n"
+        "    if x == 2000:\n"
+        "        deep = {}\n"
+        "        for _ in range(x):\n            deep = {'k': deep}\n"
+        "        return deep\n"
+        "    return 'ok'\n"
+    )
+    records = _run_agent(
+        tmp_path, source, ["t"], f"import agent\n{first_call}\nagent.t('second')\n"
+    )
+    assert [r["name"] for r in records] == ["t", "t"]
+    assert records[0]["is_error"] is False
+    assert records[1]["arguments"] == {"x": "second"}
+
+
+def test_m2_a_caught_recursion_error_does_not_turn_tracing_off(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def t(x):\n    return 'ok'\n",
+        ["t"],
+        "import agent\n"
+        "agent.t('first')\n"
+        "def down(n):\n    return down(n + 1)\n"
+        "try:\n    down(0)\nexcept RecursionError:\n    pass\n"
+        "open('agent.py').close()\n"
+        "agent.t('second')\n",
+    )
+    assert [r["arguments"] for r in records] == [{"x": "first"}, {"x": "second"}]

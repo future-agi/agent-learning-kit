@@ -55,11 +55,17 @@ _MAX_VALUE_CHARS = 2000
 
 
 def _text(value: Any) -> str:
-    """A value's text for a trace line; one that cannot be printed gets a placeholder."""
+    """A value's text for a trace line; one that cannot be printed gets a placeholder.
+
+    ``BaseException`` is caught around ``str()`` alone: a ``SystemExit`` or ``KeyboardInterrupt``
+    raised there exists only because the tracer asked for the text, and must not end the agent."""
     try:
         return str(value)
-    except Exception:  # noqa: BLE001 - observation must never reach the agent's call
-        return f"<unprintable {type(value).__name__}>"
+    except BaseException:  # noqa: BLE001 - observation must never reach the agent's call
+        try:
+            return f"<unprintable {type(value).__name__}>"
+        except BaseException:  # noqa: BLE001
+            return "<unprintable value>"
 
 
 def _cut_text(value: Any) -> Any:
@@ -477,12 +483,44 @@ def _install_declared_python_tools() -> None:
             with path.open("a", encoding="utf-8") as trace:
                 trace.write(line + "\n")
         except Exception:  # noqa: BLE001 - observation must never reach the agent's call
-            pass
+            # A value json cannot encode (a very deep one, tuple keys, mixed key types) still
+            # leaves the call on record, with its values replaced by text.
+            try:
+                minimal = {
+                    "name": key,
+                    "arguments": "the tracer could not encode this value",
+                    "output": "the tracer could not encode this value",
+                    "is_error": raised,
+                    "at": started,
+                    "truncated": True,
+                }
+                with Path(os.environ["HARNESS_TOOL_TRACE"]).open("a", encoding="utf-8") as trace:
+                    trace.write(json.dumps(minimal, sort_keys=True) + "\n")
+            except Exception:  # noqa: BLE001 - observation must never reach the agent's call
+                pass
         finally:
             active.busy = False
 
     sys.setprofile(profile)
     threading.setprofile(profile)
+
+    rearming = threading.local()
+
+    def rearm(event: str, args: Any) -> None:
+        # CPython drops a profile function whose call raised, even one the tracer caught inside
+        # a deep recursion; put it back on the next audited event of the thread.
+        try:
+            if getattr(rearming, "now", False) or sys.getprofile() is not None:
+                return
+            rearming.now = True
+            try:
+                sys.setprofile(profile)
+            finally:
+                rearming.now = False
+        except Exception:  # noqa: BLE001 - observation must never reach the agent's call
+            pass
+
+    sys.addaudithook(rearm)
 
 
 try:
