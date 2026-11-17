@@ -271,6 +271,9 @@ def _run(
         value = runtime_configuration_value(name).strip()
         if value:
             process_env[name] = value
+    # The kit's own port allocations win over a job value of the same name, which could
+    # otherwise publish a port on an address of the job's choosing (MY_PORT=0.0.0.0:2375).
+    process_env.update(environment.port_variables)
     # Explicit ALK endpoint/credential-path substitutions are the final authority. Applying
     # uploaded values after these substitutions silently restores development hostnames such as
     # ``harness`` or ``localhost`` at the exact point Compose starts the submitted runtime.

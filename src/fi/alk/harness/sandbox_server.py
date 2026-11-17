@@ -34,7 +34,9 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from fi.simulate.runtime.spec import SecretRef
 
@@ -83,6 +85,9 @@ _SANDBOX_FILE_PREFIX = "ALK_SECRET_FILE_"
 
 
 class LocalSandboxRequest(BaseModel):
+    # A 422 must not echo a submitted value (a secret) back.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     source_path: str | None = None
     source_id: str | None = None
     provider_only: bool = False
@@ -135,6 +140,9 @@ class LocalSandboxRequest(BaseModel):
 
 
 class SandboxPreflightRequest(BaseModel):
+    # A 422 must not echo a submitted value (a secret) back.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     source_path: str | None = None
     source_id: str | None = None
     github_repository: str | None = None
@@ -167,6 +175,9 @@ class SandboxRerunRequest(BaseModel):
     deliberately supplied again (or resolved from fresh references); they are never recovered
     from the completed job's persisted payload.
     """
+    # A 422 must not echo a submitted value (a secret) back.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
 
     secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
     environment_values: dict[str, SecretStr] = Field(default_factory=dict)
@@ -1628,8 +1639,8 @@ def _validate_controller_names(
     """Refuse the names of a job that would reach the controller's own environment."""
     for name in config:
         if (
-            str(name) in _RUNNER_RESERVED_ENVIRONMENT
-            or str(name).startswith("ALK_")
+            str(name).upper() in _RUNNER_RESERVED_ENVIRONMENT
+            or str(name).upper().startswith("ALK_")
             or agent_value_name_reserved(str(name))
         ):
             raise ValueError(f"connector_config_name_reserved: {name}{_RESERVED_HINT}")
@@ -1700,8 +1711,8 @@ def _validate_environment_values(
         if not _ENVIRONMENT_NAME.fullmatch(name):
             raise ValueError(f"environment_name_invalid: {name}")
         if (
-            name in _RUNNER_RESERVED_ENVIRONMENT
-            or name.startswith("ALK_")
+            name.upper() in _RUNNER_RESERVED_ENVIRONMENT
+            or name.upper().startswith("ALK_")
             or agent_value_name_reserved(name)
         ):
             raise ValueError(f"environment_name_reserved: {name}{_RESERVED_HINT}")
@@ -2280,6 +2291,20 @@ def create_app(root: Path | None = None) -> FastAPI:
         root or Path(os.getenv("ALK_SANDBOX_ROOT", "./artifacts/sandbox")),
         max_concurrency=int(os.getenv("ALK_SANDBOX_MAX_CONCURRENCY", "2")),
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_request, exc: RequestValidationError):
+        # FastAPI's default 422 carries each error's input: a submitted value, maybe a secret.
+        # The location and message say what to fix; the value stays out.
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {key: error[key] for key in ("type", "loc", "msg") if key in error}
+                    for error in exc.errors()
+                ]
+            },
+        )
 
     @app.get("/health")
     async def health() -> dict[str, str]:

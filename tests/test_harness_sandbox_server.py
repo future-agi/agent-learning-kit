@@ -2236,6 +2236,58 @@ def test_a_name_no_agent_needs_is_refused_on_both_channels(name, request_type):
         request_type(source_path="/tmp/agent", environment_values={name: "canary"})
 
 
+def test_a_job_value_does_not_override_the_kits_port_variable(tmp_path, monkeypatch):
+    # The kit allocates the published port; a job value of the same name (MY_PORT=1.2.3.4:9, or
+    # 0.0.0.0:2375) must not replace it in Compose's environment.
+    from fi.alk.harness import provision
+
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_MY_PORT", "1.2.3.4:9")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(dict(kwargs["env"]))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(provision.subprocess, "run", fake_run)
+    compose = tmp_path / "compose.yml"
+    compose.write_text("services: {}\n")
+    environment = provision.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(compose),
+        project="fagi-harness-port",
+        runtime_configuration_names=["MY_PORT"],
+        port_variables={"MY_PORT": "0"},
+    )
+    provision._run(environment, "ps")
+    assert calls[0]["MY_PORT"] == "0"
+
+
+@pytest.mark.parametrize(
+    "field", ["environment_values", "connector_config"]
+)
+def test_a_refused_value_is_not_echoed_in_the_422(tmp_path, field):
+    client = TestClient(create_app(tmp_path / "state"))
+    response = client.post(
+        "/v1/jobs",
+        json={"source_path": "/tmp/agent", field: {"DOCKER_CONFIG": "canary-echo-0042"}},
+    )
+    assert response.status_code == 422
+    assert "canary-echo-0042" not in response.text
+
+
+def test_a_rerun_refuses_a_name_no_agent_needs():
+    with pytest.raises(ValidationError, match="environment_name_reserved: DOCKER_CONFIG"):
+        SandboxRerunRequest(environment_values={"DOCKER_CONFIG": "x"})
+
+
+@pytest.mark.parametrize("name", ["alk_sandbox_token", "Alk_Anything", "pythonpath"])
+def test_a_runner_name_is_refused_in_any_case(name):
+    with pytest.raises(ValidationError, match="name_reserved"):
+        LocalSandboxRequest(source_path="/tmp/agent", connector_config={name: "x"})
+    with pytest.raises(ValidationError, match="name_reserved"):
+        LocalSandboxRequest(source_path="/tmp/agent", environment_values={name: "x"})
+
+
 def test_a_refused_name_says_why_and_what_to_do(request_type=LocalSandboxRequest):
     with pytest.raises(ValidationError, match="steers a process the runner starts.*another name"):
         request_type(source_path="/tmp/agent", environment_values={"DOCKER_CONFIG": "x"})
