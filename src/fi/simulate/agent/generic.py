@@ -7747,7 +7747,7 @@ def _stream_chunk_text(chunk: Any) -> str:
         ):
             value = chunk.get(key)
             if value is not None:
-                return _stringify(value)
+                return _reply_text(value)
         for key in ("message", "chunk"):
             if key in chunk:
                 return _message_content(chunk[key])
@@ -7763,7 +7763,7 @@ def _stream_chunk_text(chunk: Any) -> str:
         if hasattr(chunk, attr):
             value = getattr(chunk, attr)
             if value is not None:
-                return _stringify(value)
+                return _reply_text(value)
     if hasattr(chunk, "message"):
         return _message_content(getattr(chunk, "message"))
     if hasattr(chunk, "choices"):
