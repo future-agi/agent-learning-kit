@@ -11,10 +11,13 @@ from collections.abc import Mapping
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Any
 
+from pydantic import ValidationError
+
 from .failure_file import write_failure_file
-from .job import FailureDomain, HarnessFailure, HarnessStage
+from .job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage
 
 SUBFOLDER_NOT_FOUND = "subfolder_not_found"
+SUBFOLDER_REQUIRES_GITHUB_SOURCE = "subfolder_requires_github_source"
 
 # A link loop or an over-long name is a fault in the path the customer named, not in our disk.
 _PATH_ERRNOS = {errno.ELOOP, errno.ENAMETOOLONG}
@@ -122,6 +125,45 @@ def subfolder_not_found(
         retryable=False,
         details={"subfolder": subfolder, **(details or {})},
     )
+
+
+_NOT_GITHUB_REASON = SUBFOLDER_REQUIRES_GITHUB_SOURCE
+
+
+def non_github_folder_failure(error: ValidationError, raw_job: Any) -> HarnessFailure | None:
+    """The failure for a job refused only because a folder is named on a source that isn't GitHub.
+
+    The job can't be parsed, so nothing but that one reason is read from it: the error's reason
+    for ``source``, and the folder as the raw job gives it. ``None`` for any other malformed job.
+    """
+    # Only when it's the job's one fault: a job that is malformed otherwise too stays a crash, as
+    # any other malformed job is.
+    errors = error.errors(include_url=False, include_context=False, include_input=False)
+    if len(errors) != 1 or not (
+        errors[0].get("loc") == ("source",)
+        and str(errors[0].get("msg", "")).endswith(_NOT_GITHUB_REASON)
+    ):
+        return None
+    source = raw_job.get("source") if isinstance(raw_job, dict) else None
+    if not isinstance(source, dict):
+        return None
+    # The job's own checks never run while its source is refused, so pydantic names the source
+    # alone: the job is checked again without the folder, and a fault found then is a crash too.
+    try:
+        HarnessJob.model_validate(
+            {**raw_job, "source": {k: v for k, v in source.items() if k != "subfolder"}}
+        )
+    except (ValidationError, ValueError):
+        return None
+    named = source.get("subfolder")
+    failure = subfolder_not_found(
+        named if isinstance(named, str) else "",
+        message="A folder can be built only from a GitHub source; this job names a folder on another kind of source.",
+    )
+    # A code of its own: the platform shows its own text for subfolder_not_found ("The folder
+    # named isn't in the repository."), which is wrong here; for a code it has no text for, it
+    # shows this message.
+    return failure.model_copy(update={"code": SUBFOLDER_REQUIRES_GITHUB_SOURCE})
 
 
 def _named(folder: str) -> str:
