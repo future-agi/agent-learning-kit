@@ -3330,6 +3330,43 @@ _CHAT_CASES = {
     "named kebab": "cloud.aws.credentials.secret-key: Zq8wYv3Lp9Kd2xT ok",
     "named quoted with spaces": 'cfg "password": "correct horse battery 9" ok more',
     "named break + 4": "password:\n   Zq8wYv3Lp9 ok",
+    "escaped sk-proj in a repr": "got " + repr("key below\n" + _SKP) + " back",
+    "escaped ghp in JSON": 'then {"text": "a\\t' + _GH + '"} done',
+    "escaped password in a repr": "got " + repr("ok\npassword=hunter22x9") + " back",
+    "escaped pem with no END in JSON": 'body {"key": "-----BEGIN RSA PRIVATE KEY-----\\nMIIEFAKEQUJDREVG\\nABCDEFFAKE=="} ok',
+    "bare // at its colon": "run --db //admin:Xk9Qp2Zr8@db.example.com/app now and more",
+    "bare // broken by a space": "use //bot:hun ter2@h.io/v1 now and later",
+    "bare // after (": "see (//admin:Xk9Qp2Zr8@db.example.com/app) now and more",
+    "bare // with an @ in the password": "use //admin:P@ss9Xk9Qp@db.example.com/app now and more",
+    "header Token scheme": "send Authorization: Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE now",
+    "header bare uuid": 'then {"Authorization": "3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b"} ok',
+    "escaped u000a key": "got a\\u000a" + _SKP + " back",
+    "nested JSON named value": 'got {"content": "{\\"password\\": \\"correct horse 9 battery\\"}"} back',
+    "curl -u at its space": "run curl -s -u admin:Xk9Qp2Zr8wq https://h/v1 now",
+    "--password at its space": "then mysql --password Xk9Qp2Zr8wq db ok",
+    "host:port userinfo": "set host: admin:Xk9Qp2Zr8@db.example.com:5432 for now",
+    "three runs in a password": "see https://bot:hun ter 2@h/v1 now and later on",
+    "wide run in a password": "see https://bot:hun     ter2@h/v1 now and later on",
+    "blank line in a password": "see https://bot:hun\n\n  ter2@h/v1 now and later",
+    "fragment after an address": "see https://x.com/a #ops&token=Zq8wYv3Lp9Kd now and later",
+    "quoted --password with a space": 'then mysql --password "Xk9 Qp2Zr8wq" db ok',
+    "curl -u 390 characters on": "curl " + "a " * 192 + "-u admin:Xk9Qp2Zr8wq https://h/v1 now",
+    "CRLF blank line in a password": "see https://bot:hun\r\n\r\n  ter2@h/v1 now and later",
+    "Token then an escaped break": 'send {"Authorization": "Token\\u000aTk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE"} now',
+    "Bearer then \\x0a": 'send {"Authorization": "Bearer\\x0a3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b"} now',
+    "Go header Set": 'then req.Header.Set("Authorization", "Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE") ok',
+    "host:port IPv6": "set host: admin:Xk9Qp2Zr8@[::1]:5432 for now",
+    "host:port Go DSN": "set DSN=root:Xk9Qp2Zr8@tcp(db.example.com:3306)/app for now",
+    "bare // after <": "see <code>//a:Xk9Qp2Zr8wq@h.io/x</code> now and later",
+    "curl -u continued": "run curl -s \\\n  -u admin:Xk9Qp2Zr8wq \\\n  https://h/v1 now",
+    "mysql -p": "then mysql -uroot -pXk9Qp2Zr8wq db ok",
+    "redis-cli -a": "then redis-cli -a Xk9Qp2Zr8wq ping ok",
+    "sqlplus": "then sqlplus admin/Xk9Qp2Zr8wq@db.example.com/app ok",
+    "URL broken after =": "see https://h/x?token=\nXk9Qp2Zr8wqLm7 more and later",
+    "URL broken in a name": "see https://h/x?a=1&api_ke\ny=Xk9Qp2Zr8wqLm7 more and later",
+    "escaped \\U before a key": "got a\\U0001f511" + _GH + " back",
+    "bearer at its space": "run curl -H 'Authorization: Bearer 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b' now",
+    "basic at its space": 'then {"Authorization": "Basic dXNlcjpGQUtFZmFrZTAxMjM0NTY3ODk="} ok',
     "conn string": "Use DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=FAKEazureFAKEkey0123"
     "456789abcdef==;EndpointSuffix=core.windows.net then go",
     "azure key, spaced": "set AZURE_KEY = "
@@ -3337,6 +3374,16 @@ _CHAT_CASES = {
     + "== ok",
 }
 _PLANTED = [
+    "3f6a8c2e-1b4d",
+    "Xk9Qp2Zr8wq",
+    "Xk9Qp2Zr8",
+    "Xk9Qp2Zr8wqLm7",
+    "ter 2",
+    "correct horse 9",
+    "Tk4fR9xQ2mZ7",
+    "ss9Xk9Qp",
+    "Xk9Qp2Zr8",
+    "dXNlcjpGQUtFZmFrZTAx",
     "hun ter2",
     "ter2@",
     "hunter22",
@@ -4604,6 +4651,34 @@ def test_a_scheme_line_then_a_lone_colon_line_past_n_streams_as_stored(size) -> 
     _assert_swept([("scheme, :, //", text, "s3cretpw9x")], size, at_least=1)
 
 
+_R5_STREAM_SHAPES = {
+    "bare // starts": " //a:b ",
+    "bare // after =": "=//a:b",
+    "bearer words": "bearer ",
+    "basic then a run": "basic " + "a" * 15 + " ",
+    "escaped starts": "\\nsk-\\tAKIA ",
+    "runs words": "https://u:a b c d ",
+    "fragment words": "https://x.com #a&b=c ",
+    "curl words": "curl ",
+    "curl -u words": "curl -u a:b ",
+    "nested JSON words": '{\\"password\\": \\"a1 b\\"} ',
+    "header words": "authorization: token ",
+    "header then a value": "authorization: token " + "a1" * 8 + " ",
+    "bare // after (": "(//a:b ",
+    "bare // with @": " //a:p@q ",
+}
+
+
+@pytest.mark.parametrize("size", [64 * 1024, 1024 * 1024], ids=["64KiB", "1MiB"])
+@pytest.mark.parametrize("shape", list(_R5_STREAM_SHAPES))
+def test_the_round_five_seams_stay_linear_over_many_deltas(shape: str, size: int) -> None:
+    """The candidates the stream holds for a bare //, bearer and basic, in 1 KiB deltas: under
+    0.5 s at 64 KiB and under 6 s at 1 MiB, best of 3 (a quadratic hold took minutes)."""
+    unit = _R5_STREAM_SHAPES[shape]
+    text = (unit * (size // len(unit) + 1))[:size]
+    deltas = [text[at : at + 1024] for at in range(0, size, 1024)]
+
+    assert _seconds(deltas) < (0.5 if size < 1024 * 1024 else 6.0)
 
 
 def test_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(
