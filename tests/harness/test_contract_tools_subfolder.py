@@ -2414,24 +2414,24 @@ def test_a_child_that_dies_in_the_instrumentation_part_does_not_save_it_as_none(
     assert _saved(destination)["instrumentation"] == "traceai"
 
 
-def test_after_three_deaths_the_saves_fail_and_the_checks_never_run_here(tmp_path, repo):
-    from fi.alk.harness.save_checker import SaveChecksFailed
-
+def test_after_three_deaths_the_stage_ends_and_the_checks_never_run_here(tmp_path, repo):
     _session(repo, instrumentation={"value": "traceai"})
     destination, submit, checker = _child_server(tmp_path, repo)
 
     async def calls():
         ended = [await submit(_plain("tool_evidence:exit")) for _ in range(2)]
-        with pytest.raises(SaveChecksFailed) as third:
-            await submit(_plain("tool_evidence:exit"))
-        with pytest.raises(SaveChecksFailed):
-            await submit(_plain("after"))
-        return ended, third.value
+        third = await submit(_plain("tool_evidence:exit"))
+        return ended, third, await submit(_plain("after"))
 
-    ended, third = asyncio.run(calls())
+    ended, third, fourth = asyncio.run(calls())
 
     assert all("not checked in time" in _text(one) for one in ended), ended
-    assert "3 times in a row" in str(third)
+    # The third death in a row ends the stage with a failure that names it, as a refusal does.
+    for answer in (third, fourth):
+        assert "Don't submit again or do more work" in _text(answer)
+    failure = json.loads((destination / "failure.json").read_text(encoding="utf-8"))
+    assert failure["code"] == "save_checks_child_keeps_ending"
+    assert failure["details"] == {"deaths": 3}
     assert not (destination / "contract.json").exists()
     assert checker._thread_reason is None
     assert checker.ran_in_child == 3
