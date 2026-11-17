@@ -68,6 +68,7 @@ def test_every_copy_keeps_the_text_of_every_reply_shape(copy_name, content, expe
 
 GUARDED = (
     "_TEXT_KINDS",
+    "_ENVELOPE_KINDS",
     "_MISSING",
     "_MOST_DEPTH",
     "_field",
