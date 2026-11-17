@@ -3776,6 +3776,9 @@ def test_a_worker_s_call_whose_answer_differs_from_the_door_s_row_is_still_a_byp
     # The same door row with no worker's record beside it names no one.
     alone = cr._merge_span_calls(fresh(own_channel, shared_issue), fresh(span_list))
     assert cr.channel_bypasses(alone, _RETURNS_WORKERS) == []
+    # Nor does a record with no time, which nothing places beside the row.
+    untimed = replace(span_issue, at=0.0)
+    assert cr.channel_bypasses([replace(shared_issue, at=0.0), untimed], _RETURNS_WORKERS) == []
     # Nor does a worker's record of another call.
     other = replace(span_issue, arguments={"amount": 75.0, "order_id": "1049"})
     assert cr.channel_bypasses(cr._merge_span_calls(fresh(shared_issue), fresh(other)), _RETURNS_WORKERS) == []

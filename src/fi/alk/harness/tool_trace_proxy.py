@@ -94,10 +94,9 @@ def _trial_row(column: str, *, strict: bool = False) -> tuple | None:
 
 
 def _trial_faults() -> list[dict]:
-    """This trial's faults on the agent's calls, written by the runner into the world's database; never from a request.
-    Known limit: an agent whose own tools service holds the world's database URL can read and write that table too.
-    No row, or no table (no faults were ever set), is no faults; a database that cannot be read raises, since a hold
-    may be among the faults it holds."""
+    """This trial's faults on the agent's calls, as the runner wrote them into the world's database, never from a
+    request (an agent holding the world's database URL could reach that table too). No row or table is no faults; a
+    database that cannot be read raises, since a hold may be among them."""
     global _FAULTS_TRIAL
     row = _trial_row("faults, xmin::text", strict=True)
     _FAULTS_TRIAL = row[1] if row and len(row) > 1 else None
@@ -130,6 +129,17 @@ def _worker_deadlines() -> dict:
     return {str(worker): float(at) for worker, at in value.items() if isinstance(at, (int, float))} if isinstance(value, dict) else {}
 
 
+def _sealed_routes() -> list:
+    """The world's own routes as sealed; none when nothing was sealed. A sealed file that cannot be read raises, so a
+    templated permission is refused rather than checked against no routes."""
+    if not os.path.exists(ACTIONS_FILE):
+        return []
+    actions = _read_json(ACTIONS_FILE)
+    if actions is None:
+        raise ValueError("the sealed routes could not be read")
+    return list(actions)
+
+
 def _worker_limits() -> dict:
     """What this trial's workers may do: the sealed allow-lists, when the bundle has them, and the deadline. A seal
     that is present but unreadable is an empty allow-list, and so is a missing one while this trial gave its workers
@@ -137,7 +147,7 @@ def _worker_limits() -> dict:
     limits: dict = {
         "deadline_at": _worker_deadline(),
         "deadlines": _worker_deadlines(),
-        "routes": list((_read_json(ACTIONS_FILE) or {}).keys()),
+        "routes": _sealed_routes(),
     }
     if os.path.exists(WORKER_PERMISSIONS_FILE) or _channels_given():
         sealed = _read_json(WORKER_PERMISSIONS_FILE) or {}

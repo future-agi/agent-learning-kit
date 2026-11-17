@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -1489,3 +1490,36 @@ def test_a_worker_is_due_at_the_earlier_of_its_own_deadline_and_the_trial_s():
     assert worker_due(100.0, None) == 100.0
     assert worker_due(None, None) is None
     assert worker_due(True, None) is None
+
+
+@pytest.mark.parametrize("builder", ["runner", "record", "chat"])
+def test_the_runner_s_doors_check_an_actor_s_template_against_the_sealed_routes(tmp_path, builder):
+    """Through the doors the runners build for actors: a sealed route is never a template's value, and a sealed file
+    that cannot be read refuses the template as the world's failure."""
+    from fi.alk.harness.call_runner import record_door, runner_door
+    from fi.alk.harness.chat_call_runner import chat_door
+
+    sealed = tmp_path / "generated" / "tool-proxy"
+    sealed.mkdir(parents=True)
+    (sealed / "actions.json").write_text(json.dumps({"GET orders.{order_id}": "get_order", "GET orders.export": "export"}))
+    roster = {"manager": {"permitted_actions": ["GET orders.{order_id}"], "on_behalf_of": None}}
+
+    def door():
+        if builder == "runner":
+            built = runner_door("http://tools", "postgresql://unused", 5.0, tmp_path)
+        elif builder == "record":
+            built = record_door("postgresql://unused", tmp_path)
+        else:
+            built = chat_door(object(), None, roster, [], bundle_dir=tmp_path)
+        built.executor, built.log, built.roster = _Executor(), MemoryLog(), DictRoster(roster)
+        return built
+
+    def enter(one, action):
+        return one.enter(ToolCall(action=action, name="x", actor="manager", method="GET", key=f"k:{action}"))
+
+    open_door = door()
+    assert enter(open_door, "orders.1043").outcome == "committed"
+    # `orders.export` is the world's own route, never an order id.
+    assert enter(open_door, "orders.export").refusal_code == "not_permitted"
+    (sealed / "actions.json").write_text("{not json")
+    assert enter(door(), "orders.1043").refusal_code == LIMITS_UNREADABLE

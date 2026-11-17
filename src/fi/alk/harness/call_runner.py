@@ -2129,9 +2129,8 @@ def _limits_not_held_cause(
     document: Mapping[str, Any], bundle_dir: Path | str | None
 ) -> tuple[str, str, list[str]]:
     """Which of this trial's worker limits this environment cannot hold, why, and the workers they fall on, as (limit,
-    cause, workers); ("", "", []) when every limit it relies on holds. The one rule both the run
-    (`trial_worker_deadlines`) and the seal (`write_worker_limits`) read. An empty limit with a cause means no limit
-    at all is held, so every worker the scenario relies on is listed."""
+    cause, workers); ("", "", []) when every limit holds, and an empty limit with a cause when none holds. The one
+    rule the run (`trial_worker_deadlines`) and the seal (`write_worker_limits`) both read."""
     if not trial_relies_on_worker_limits(document, bundle_dir):
         return "", "", []
     relied = _workers_relied_on(document, bundle_dir)
@@ -2241,10 +2240,9 @@ def _sealed_tool_proxy(bundle_dir: Path | str | None) -> bool:
 
 
 def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | str | None) -> tuple[str, set[str]]:
-    """Which limit, if any, this trial puts on a worker the world cannot tell apart, and every worker with a limit
-    that cannot be held: a deadline naming a shared worker, one deadline for all when no worker is separate, or
-    permitted tools on a shared worker. A deadline counts only on a worker this scenario relies on
-    (`_workers_relied_on`), and permitted tools only on a worker one of its sub-goals is about."""
+    """Which limit, if any, this trial puts on a worker the world cannot tell apart, and every worker with a limit that
+    cannot be held: a deadline on a shared worker it relies on, one deadline for all with no separate worker, or
+    permitted tools on a shared worker a sub-goal is about."""
     if bundle_dir is None:
         return "", set()
     workers = [one for one in _bundle_contract(Path(bundle_dir)).get("workers") or [] if isinstance(one, dict)]
@@ -2254,9 +2252,8 @@ def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | st
     everyone = worker_deadline(document) is not None
     record = _door_record(bundle_dir)
     if record.get("surface") == "in_process":
-        # The door inside the agent holds a deadline by stopping the workers it was told it runs, and no worker's
-        # permitted tools, since no call there names its worker. A listed worker it never saw run as a task of its own
-        # is recorded at the seal (`deadlines_not_enforced`), and only its own checks go ungraded.
+        # The door inside the agent holds a deadline by stopping the workers it runs, and no worker's permitted tools.
+        # A worker it never saw run as its own task is recorded at the seal (`deadlines_not_enforced`).
         stopped = {str(one) for one in record.get("workers") or []}
         late = {one for one in named if one not in stopped}
         deadline = bool(late) or (everyone and (not stopped or bool(ids - stopped)))
@@ -2346,10 +2343,9 @@ _SEALED_LIMIT = {"A worker deadline": "deadline", "A worker's permitted tools": 
 
 
 def write_worker_limits(bundle_dir: Path) -> None:
-    """Seal, per scenario, the hold the run decides for it (`_limits_not_held_cause`), beside the contract, catalogue
-    and door outcome it reads; a bundle declaring no workers gets none. Written after `door.json` and the tool proxy's
-    seal, since the hold depends on them. Whether a deadline on the door inside the agent holds is known only at run
-    time (`deadlines_not_enforced`): such a scenario seals `held: false` with `deadline: "decided_at_run"`."""
+    """Seal, per scenario, the hold the run decides for it (`_limits_not_held_cause`), after `door.json` and the tool
+    proxy's seal it depends on; none without declared workers. A deadline on the in-process door is decided at run
+    time, so such a scenario seals `held: false` with `deadline: "decided_at_run"`."""
     workers = [one for one in _bundle_contract(bundle_dir).get("workers") or [] if isinstance(one, dict)]
     if not workers:
         return
@@ -2424,7 +2420,23 @@ def _set_trial_faults(
         logger.warning("trial faults could not be cleared before a trial with none: %s", type(exc).__name__)
 
 
-def runner_door(tools_url: str, dsn: str, timeout: float) -> Any:
+def sealed_routes(bundle_dir: Any) -> Callable[[], dict[str, Any]]:
+    """The world's own routes as the bundle sealed them (the tool proxy's `actions.json`), for the door to check an
+    actor's templated permission against; none when nothing was sealed, and raises when the file cannot be read."""
+
+    def read() -> dict[str, Any]:
+        path = Path(bundle_dir) / "generated" / "tool-proxy" / "actions.json" if bundle_dir is not None else None
+        if path is None or not path.is_file():
+            return {"routes": []}
+        actions = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(actions, dict):
+            raise ValueError("the sealed routes are not a JSON object")
+        return {"routes": list(actions)}
+
+    return read
+
+
+def runner_door(tools_url: str, dsn: str, timeout: float, bundle_dir: Any = None) -> Any:
     """The world's door in the runner's process: the agent's tools service behind it, the world's own action log, actor
     list and records. Actors' actions enter here; the agent's own calls keep going through the tool proxy."""
     from .world_door import (
@@ -2441,10 +2453,11 @@ def runner_door(tools_url: str, dsn: str, timeout: float) -> Any:
         Routed(HttpExecutor(tools_url, timeout=timeout), RecordExecutor(PostgresRecords(dsn))),
         PostgresLog(dsn),
         PostgresRoster(dsn),
+        workers=sealed_routes(bundle_dir),
     )
 
 
-def record_door(dsn: str) -> Any:
+def record_door(dsn: str, bundle_dir: Any = None) -> Any:
     """The world's door in the runner's process for an agent whose tools run in its own process: an actor's record
     change runs on the world's database; an action on one of the agent's own tools is refused, since only the agent's
     process can run it."""
@@ -2455,6 +2468,7 @@ def record_door(dsn: str) -> Any:
         Routed(_NotHere(), RecordExecutor(PostgresRecords(dsn))),
         PostgresLog(dsn),
         PostgresRoster(dsn),
+        workers=sealed_routes(bundle_dir),
     )
 
 
@@ -2490,7 +2504,7 @@ def _actor_dispatcher(
         return build_dispatcher(
             dict(doc),
             bundle_dir,
-            act=DoorActs(record_door(database.address), _bundle_contract(bundle_dir)),
+            act=DoorActs(record_door(database.address, bundle_dir), _bundle_contract(bundle_dir)),
             read_log=_ActionLog(database.address),
             records=_world_records(runtime),
             columns=_world_columns(runtime),
@@ -2506,7 +2520,7 @@ def _actor_dispatcher(
     return build_dispatcher(
         dict(doc),
         bundle_dir,
-        act=DoorActs(runner_door(tools.address, database.address, budget), _bundle_contract(bundle_dir)),
+        act=DoorActs(runner_door(tools.address, database.address, budget, bundle_dir), _bundle_contract(bundle_dir)),
         read_log=_ActionLog(database.address),
         records=_world_records(runtime),
         columns=_world_columns(runtime),
@@ -2561,7 +2575,9 @@ def channel_bypasses(calls: Sequence[Call], contract_workers: Sequence[Any]) -> 
                     if index not in used
                     and _tool_key(one.name) == _tool_key(call.name)
                     and same_json(one.arguments, call.arguments)
-                    and abs((one.at or 0.0) - (call.at or 0.0)) <= _BYPASS_PAIR_SECONDS
+                    # A row or record with no time cannot be placed beside the other, so it is never paired.
+                    and bool(one.at and call.at)
+                    and abs(one.at - call.at) <= _BYPASS_PAIR_SECONDS
                     and any(is_worker_call(one, str(w["id"]), str(w.get("name") or "")) for w in separate)
                 ),
                 None,

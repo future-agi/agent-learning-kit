@@ -350,10 +350,9 @@ def fixed_fields(solution: Sequence[Any], action: str) -> set[str]:
 
 
 def same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[str]) -> bool:
-    """Whether two writes of one action are the same write: equal arguments, or equal on every fixed argument either
-    carries and on every other argument but the agent's own words. Free text the solution does not fix is the agent's
-    own words, so a retry that rewords it is still the same write; any other argument may name the record, so a
-    different value (order-A, order-B, or 7, 8) is another write."""
+    """Whether two writes of one action are the same write: equal arguments, or equal on every fixed argument and on
+    every other argument but the agent's own free text, so a reworded retry is the same write and another value
+    (order-A, order-B) is another write."""
     one, two = row_arguments(first.get("arguments")), row_arguments(later.get("arguments"))
     if exactly(one, two):
         return True

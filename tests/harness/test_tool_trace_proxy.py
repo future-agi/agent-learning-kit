@@ -640,3 +640,18 @@ def test_a_single_agent_build_logs_its_calls_as_before_with_no_attribution(proxy
     url, rows = proxy
     assert _post(url, "/ok", {})[0] == 201
     assert [(one["worker_id"], one["attribution"]) for one in rows()] == [(None, None)]
+
+
+def test_the_proxy_reads_its_sealed_routes_strictly(tmp_path, monkeypatch):
+    from fi.alk.harness import tool_trace_proxy as proxy
+
+    actions = tmp_path / "actions.json"
+    monkeypatch.setattr(proxy, "ACTIONS_FILE", str(actions))
+    # Nothing sealed: no routes, and nothing to refuse.
+    assert proxy._sealed_routes() == []
+    actions.write_text(json.dumps({"GET orders.{order_id}": "get_order", "GET orders.export": "export"}))
+    assert proxy._sealed_routes() == ["GET orders.{order_id}", "GET orders.export"]
+    # Sealed but unreadable: never read as no routes, which would let a template stand for a sealed route.
+    actions.write_text("{not json")
+    with pytest.raises(ValueError):
+        proxy._sealed_routes()

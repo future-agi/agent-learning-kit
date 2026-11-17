@@ -332,10 +332,12 @@ def chat_door(
     faults: list[Any],
     tools_url: str | None = None,
     service_actions: set[str] | None = None,
+    bundle_dir: Any = None,
 ) -> Any:
     """The world's door for a chat run: the agent's own tools service runs its service actions and every actor's tool
     action when it has one, the world's own handlers the rest; the trial's action log is kept in memory (mirrored to the world's table when it keeps actors), and
     who may do what is the environment's actor list."""
+    from .call_runner import sealed_routes
     from .world_door import (
         AGENT,
         DictRoster,
@@ -375,6 +377,7 @@ def chat_door(
         DictRoster(roster),
         faults=lambda: [one for one in faults if isinstance(one, dict)],
         faults_by_tool=True,
+        workers=sealed_routes(bundle_dir),
     )
 
 
@@ -1064,6 +1067,7 @@ class HostedChatCallRunner:
             faults,
             tools_url=service.address if service is not None else None,
             service_actions=service_actions(self._contract),
+            bundle_dir=self._context.bundle_dir,
         )
         acts = DoorActs(door, self._contract.model_dump())
         meter = ActorMeter()
