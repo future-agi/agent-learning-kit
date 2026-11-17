@@ -49,7 +49,10 @@ _SAFE_RUNTIME_LAUNCHERS = {
     "pnpm",
     "yarn",
 }
-_SHELL_LAUNCHERS = {"sh", "bash", "zsh", "dash", "fish", "cmd", "powershell"}
+_SHELL_LAUNCHERS = {
+    "sh", "bash", "zsh", "dash", "fish", "cmd", "powershell", "pwsh",
+    "ash", "ksh", "mksh", "csh", "tcsh", "xonsh",
+}
 _PACKAGE_RUNNER_SUBCOMMANDS = {
     "bun": {"x"},
     "npm": {"exec"},
@@ -1014,11 +1017,16 @@ _PYTHON_VALUE_OPTIONS = frozenset({"--check-hash-based-pycs"})
 _SCRIPT_VALUE_OPTIONS = frozenset({"-r", "--require", "--import"})
 # Standard modules that run their arguments (or stdin) as code: `python -m timeit "<code>"`.
 _PYTHON_CODE_MODULES = frozenset({"timeit", "code", "pdb"})
-# Interpreters that take Python's own options, and those that take node's.
-_PYTHON_NAMES = ("python", "pypy", "ipython")
-_SCRIPT_INTERPRETERS = frozenset(
-    {"node", "nodejs", "bun", "deno", "perl", "ruby", "php", "ts-node", "tsx"}
+# Interpreters that take Python's own options, and those that take a script's, matched by their
+# name with any version suffix (python3.12, node20, ruby3.2, perl5.36.0).
+_PYTHON_NAME = re.compile(r"(python|pypy|ipython|graalpy|micropython|py)[\d.]*")
+_SCRIPT_NAME = re.compile(
+    r"(node|nodejs|bun|deno|perl|ruby|php|lua|luajit|rscript|ts-node|tsx)[\d.]*"
 )
+# A runner that runs the command after it (uv run, npm exec, bunx x, pnpm dlx): any of the base's
+# code tokens after it is refused, whatever the program it runs is called.
+_RUNNER_VERBS = frozenset({"run", "exec", "x", "dlx"})
+_CODE_TOKENS = frozenset({"-c", "-e", "--eval"})
 
 
 def _runs_inline_code(command: list[str]) -> bool:
@@ -1029,8 +1037,10 @@ def _runs_inline_code(command: list[str]) -> bool:
     mistaken for code."""
     for index, token in enumerate(command):
         name = Path(token).name.casefold()
-        python = name.startswith(_PYTHON_NAMES) or name == "py"
-        script = name in _SCRIPT_INTERPRETERS
+        if name in _RUNNER_VERBS and _CODE_TOKENS & set(command[index + 1:]):
+            return True
+        python = bool(_PYTHON_NAME.fullmatch(name))
+        script = bool(_SCRIPT_NAME.fullmatch(name))
         shell = name in _SHELL_LAUNCHERS
         if not (python or script or shell):
             continue
@@ -1039,8 +1049,8 @@ def _runs_inline_code(command: list[str]) -> bool:
         takes_value = _PYTHON_VALUE_OPTIONS if python else _SCRIPT_VALUE_OPTIONS
         options = iter(command[index + 1:])
         for option in options:
-            if python and option == "-m":
-                if next(options, "") in _PYTHON_CODE_MODULES:
+            if python and (module := _python_module_option(option, options)) is not None:
+                if module in _PYTHON_CODE_MODULES:
                     return True
                 # A module that runs another command (uv, poetry): its later tokens are read too.
                 break
@@ -1066,6 +1076,20 @@ def _runs_inline_code(command: list[str]) -> bool:
                     # A preload given as a data: URL is code written into the command.
                     return True
     return False
+
+
+def _python_module_option(option: str, options) -> str | None:
+    """The module a python option names: -m <module>, -m<module>, or a cluster holding m
+    (-Bm <module>, -Bmtimeit). None when the option names no module."""
+    if not option.startswith("-") or option.startswith("--"):
+        return None
+    for position, letter in enumerate(option[1:], start=1):
+        if letter == "m":
+            rest = option[position + 1 :]
+            return rest or next(options, "")
+        if letter in "WXc" or not letter.isalpha():
+            return None
+    return None
 
 
 def _python_cluster_runs_code(option: str, *, shell: bool = False) -> bool:

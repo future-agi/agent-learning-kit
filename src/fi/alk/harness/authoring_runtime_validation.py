@@ -1629,6 +1629,16 @@ async def _validate_and_repair(
                     )
                     if contract.data_store is not None:
                         return 1
+                    # The contract can quote the source, so it is masked like the guidance, and
+                    # left out if the masks can't be built.
+                    contract_masks = await source_masks_or_none()
+                    contract_text = (
+                        "(withheld)"
+                        if contract_masks is None
+                        else mask_source_secrets(
+                            contract.model_dump_json(indent=2), contract_masks
+                        )
+                    )
                     with tempfile.TemporaryDirectory(
                         prefix="alk-storage-repair-"
                     ) as candidate_dir:
@@ -1647,7 +1657,7 @@ async def _validate_and_repair(
                                         "Record explicit filesystem, in_memory, none, or database storage "
                                         "only when source supports it. Do not invent a schema or change "
                                         "source behavior. Only data_store will be promoted. Current contract:\n"
-                                        + contract.model_dump_json(indent=2)
+                                        + contract_text
                                     ),
                                 ],
                             )

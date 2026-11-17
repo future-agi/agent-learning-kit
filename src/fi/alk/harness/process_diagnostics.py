@@ -7,7 +7,7 @@ import stat
 import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 from fi._diagnostics import sanitize_diagnostic
 
@@ -68,6 +68,7 @@ def _looks_like_secret(value: str) -> bool:
         return (
             "@" in parts.netloc
             or bool(parts.query)
+            or "=" in parts.fragment
             or any(_token_segment(segment) for segment in parts.path.split("/"))
         )
     if len(value) >= 16 and any(c.isalpha() for c in value) and any(c.isdigit() for c in value):
@@ -139,7 +140,44 @@ def _line_values(line: str, *, only_secrets: bool = False) -> set[str]:
             )
             values.add(expanded)
             values.update(line.strip() for line in expanded.splitlines())
+    # A secret URL's parts, since a log can print it in pieces or in its canonical form.
+    named = not only_secrets or _secret_name(match.group("name"))
+    for value in tuple(values):
+        if "://" in value:
+            values |= _url_masks(value, named=named)
     return values
+
+
+_DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
+
+
+def _url_masks(value: str, *, named: bool = False) -> set[str]:
+    """The parts of a URL a log may print apart from it: its token-shaped path segments (and the
+    path from the first of them), its query and fragment values, its userinfo password, and the
+    URL with the host lowercased and a default port dropped (as httpx logs it). With ``named``
+    (the setting's name says secret), every long path segment counts as a token."""
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        return set()
+    masks: set[str] = set()
+    segments = parts.path.split("/")
+    for index, segment in enumerate(segments):
+        if _token_segment(segment) or (named and len(segment) >= 16):
+            masks.add(segment)
+            masks.add("/".join(segments[index:]))
+    for field in (parts.query, parts.fragment):
+        masks.update(item for _, item in parse_qsl(field, keep_blank_values=False))
+    if parts.password:
+        masks.update({parts.password, unquote(parts.password)})
+    host = (parts.hostname or "").lower()
+    if host:
+        netloc = host if port in (None, _DEFAULT_PORTS.get(parts.scheme.lower())) else f"{host}:{port}"
+        if "@" in parts.netloc:
+            netloc = parts.netloc.rsplit("@", 1)[0] + "@" + netloc
+        masks.add(urlunsplit((parts.scheme.lower(), netloc, parts.path, parts.query, parts.fragment)))
+    return masks
 
 
 def _json_strings(value) -> set[str]:

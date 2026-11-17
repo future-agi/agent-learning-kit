@@ -532,3 +532,11 @@ def test_a_path_off_the_list_is_judged_quickly():
         files.secret_text(f"frontend/src/components/widget_{index}/index.tsx")
     took = time.perf_counter() - started
     assert took < 1.0, took
+
+
+def test_every_glob_is_ascii():
+    # secret_text's quick check matches lower() against the pieces; for a non-ASCII glob letter
+    # (ſ, K) re's case-insensitive match differs from lower().
+    from fi.alk.harness.backends import files
+
+    assert all(glob.isascii() for glob in files.ALL_SECRET_GLOBS)

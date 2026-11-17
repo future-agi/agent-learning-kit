@@ -569,6 +569,53 @@ def test_a_webhook_url_with_its_token_in_the_path_is_masked(tmp_path, line, url)
 
 
 @pytest.mark.parametrize(
+    "line,logged,token",
+    [
+        # urllib3 at DEBUG logs the path apart from the host.
+        (
+            f"SLACK_WEBHOOK_URL={_SLACK}",
+            'https://hooks.slack.com:443 "POST /services/T0FAKE1234/B0FAKE5678/fakeWebhookSecretValue24 HTTP/1.1" 404',
+            "fakeWebhookSecretValue24",
+        ),
+        # An access log prints only the path.
+        (
+            f"NOTIFY_TARGET={_DISCORD}",
+            "POST /api/webhooks/1234567890123/fake-Discord_Webhook_Token_Value_abcdefghijkl 404",
+            "fake-Discord_Webhook_Token_Value_abcdefghijkl",
+        ),
+        # httpx lowercases the host and drops the default port before it logs.
+        (
+            "SLACK_WEBHOOK_URL=https://Hooks.Slack.com/services/T0/B0/fakeWebhookSecretValue24",
+            'HTTP Request: POST https://hooks.slack.com/services/T0/B0/fakeWebhookSecretValue24 "404"',
+            "fakeWebhookSecretValue24",
+        ),
+        (
+            "DISCORD_WEBHOOK=https://discord.com:443/api/webhooks/1/fake-Discord_Webhook_Token_Value_abcdefghijkl",
+            'HTTP Request: POST https://discord.com/api/webhooks/1/fake-Discord_Webhook_Token_Value_abcdefghijkl "404"',
+            "fake-Discord_Webhook_Token_Value_abcdefghijkl",
+        ),
+        # A letters-only token under a webhook name: the name marks it.
+        (
+            "SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T0/B0/abcdefghijklmnopqrstuvwx",
+            "POST /services/T0/B0/abcdefghijklmnopqrstuvwx 404",
+            "abcdefghijklmnopqrstuvwx",
+        ),
+        # A token in the fragment.
+        (
+            "CALLBACK=https://app.example.test/cb#access_token=fakeFragmentToken12345",
+            "redirect to https://app.example.test/cb#access_token=fakeFragmentToken12345",
+            "fakeFragmentToken12345",
+        ),
+    ],
+    ids=["urllib3-path", "path-only", "host-case", "default-port", "letters-under-name", "fragment"],
+)
+def test_a_secret_urls_token_is_masked_however_the_log_prints_it(tmp_path, line, logged, token):
+    source = _source(tmp_path, {".env": line + "\n"})
+    text = _evidence(tmp_path, source, logged + "\n")
+    assert token not in text
+
+
+@pytest.mark.parametrize(
     "url",
     [
         "https://api.example.com/v1/chat/completions",

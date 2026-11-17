@@ -3399,3 +3399,39 @@ def test_the_scenario_retry_guidance_is_masked(tmp_path, monkeypatch):
     assert "rejected and undone" in seen[1]
     assert all("canary-retry-secret-0042" not in guidance for guidance in seen)
     assert "<redacted>" in seen[1]
+
+
+def test_the_storage_repair_masks_the_contract_it_adds(tmp_path, monkeypatch):
+    # The storage repair adds the saved contract after the repair's own mask; a contract can
+    # quote the source, so the contract is masked too.
+    from fi.alk.harness import cli
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / ".env").write_text("API_KEY=canary-contract-secret-77\n")
+    contract = AgentContract(agent="canary-contract-secret-77", runtime=Runtime(language="python"))
+    (authoring / "contract.json").write_text(contract.model_dump_json(indent=2) + "\n")
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_storage_declaration_missing",
+        message="no storage declared",
+    )
+    seen = []
+
+    async def understand(args):
+        seen.extend(args.guidance)
+        return 1
+
+    monkeypatch.setattr(cli, "_understand", understand)
+
+    async def validate(*_args):
+        raise RuntimeValidationError("environment", "no storage", diagnostics=(diagnostic,))
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=1)
+    with pytest.raises(RuntimeValidationError):
+        asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+    assert seen
+    assert all("canary-contract-secret-77" not in text for text in seen)
