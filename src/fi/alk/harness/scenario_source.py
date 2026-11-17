@@ -228,14 +228,19 @@ def _compile_entry(
 
         def deferred(*args: object) -> object:
             # Compatibility for injected worlds; hosted worlds execute the source in a worker.
-            namespace: dict[str, Any] = {}
+            from .checks import check_namespace
+
+            namespace: dict[str, Any] = check_namespace()
             exec(code, namespace)  # noqa: S102 - compatibility for injected local worlds
             return namespace[entry](*args)
 
         deferred._alk_source = source
         deferred._alk_entry = entry
         return deferred
-    namespace: dict[str, Any] = {}
+    from .checks import check_namespace
+
+    # A scenario file's checks see the same names as every other check.
+    namespace: dict[str, Any] = check_namespace()
     try:
         exec(code, namespace)  # noqa: S102 - scenario code is meant to be exec'd; see CONTRACT QUESTIONS
     except (Exception, SystemExit, KeyboardInterrupt) as exc:  # noqa: BLE001 - see R1-1
