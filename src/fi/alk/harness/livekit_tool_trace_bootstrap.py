@@ -242,19 +242,19 @@ _TRACING_EXPORT_PLACEHOLDER = "alk-tracing-disabled"
 
 def _set_openai_agents_chat_style(module: Any, reason: str = "") -> None:
     if not reason:
+        # Each setting on its own: the trace key placeholder holds even if the chat style fails.
+        try:
+            module.set_tracing_export_api_key(_TRACING_EXPORT_PLACEHOLDER)
+        except Exception as exc:  # noqa: BLE001 - a setting we could not make must not stop the agent
+            sys.stderr.write(
+                "alk: could not set the OpenAI Agents SDK trace export key: "
+                f"{type(exc).__name__}\n"
+            )
         try:
             module.set_default_openai_api("chat_completions")
+            return
         except Exception as exc:  # noqa: BLE001 - a setting we could not make must not stop the agent
             reason = type(exc).__name__
-        else:
-            try:
-                module.set_tracing_export_api_key(_TRACING_EXPORT_PLACEHOLDER)
-            except Exception as exc:  # noqa: BLE001 - a setting we could not make must not stop the agent
-                sys.stderr.write(
-                    "alk: could not set the OpenAI Agents SDK trace export key: "
-                    f"{type(exc).__name__}\n"
-                )
-            return
     sys.stderr.write(
         f"alk: could not set the OpenAI Agents SDK to chat completions: {reason}\n"
     )

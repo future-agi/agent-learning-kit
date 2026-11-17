@@ -279,6 +279,22 @@ def test_openai_agents_trace_export_key_is_a_fixed_placeholder(tmp_path: Path) -
     assert keys == ["alk-tracing-disabled"]
 
 
+def test_openai_agents_trace_export_key_is_set_when_the_chat_style_setting_fails(
+    tmp_path: Path,
+) -> None:
+    source = _STANDIN_AGENTS.replace(
+        "def set_default_openai_api(api):\n    _note(api)\n", ""
+    )
+    assert "set_default_openai_api" not in source
+    result, lines = _chat_style_run(tmp_path, "import agents\n", agents_source=source)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.splitlines() == [
+        "alk: could not set the OpenAI Agents SDK to chat completions: AttributeError"
+    ]
+    keys = (tmp_path / "calls.txt.key").read_text().splitlines()
+    assert keys == ["alk-tracing-disabled"]
+
+
 def test_openai_agents_trace_export_key_is_left_alone_without_the_mark(
     tmp_path: Path,
 ) -> None:
@@ -499,7 +515,9 @@ def test_openai_agents_setting_without_reason_writes_the_exception_name(
     hook = _load_hook(monkeypatch)
     hook._set_openai_agents_chat_style(object())
     hook._set_openai_agents_chat_style(None, "its loader cannot be wrapped")
+    # An SDK with neither setter: one line for each setting that could not be made.
     assert capsys.readouterr().err.splitlines() == [
+        "alk: could not set the OpenAI Agents SDK trace export key: AttributeError",
         "alk: could not set the OpenAI Agents SDK to chat completions: AttributeError",
         "alk: could not set the OpenAI Agents SDK to chat completions: "
         "its loader cannot be wrapped",
