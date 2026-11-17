@@ -1068,6 +1068,53 @@ def test_start_runtime_runs_the_config_it_validated(tmp_path: Path, monkeypatch)
     assert "container:x" not in stdin
 
 
+def test_start_runtime_validates_with_exactly_the_overrides_compose_run_gets(
+    tmp_path: Path, monkeypatch
+) -> None:
+    environment = provisioning.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.json"),
+        project="runtime-validation",
+        runtime_services=["agent-runtime"],
+        running=True,
+    )
+    environment.save(tmp_path)
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
+    # No runner container: the trace mount then needs no Docker.
+    monkeypatch.delenv("ALK_RUNNER_CONTAINER", raising=False)
+    calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def run(_environment, *arguments, **kwargs):
+        calls.append((arguments, dict(kwargs.get("process_overrides") or {})))
+        if "config" in arguments:
+            return json.dumps(
+                {
+                    "name": "runtime-validation",
+                    "services": {"agent-runtime": {"environment": {}}},
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(
+        provisioning,
+        "_docker",
+        lambda *arguments, **_kwargs: (
+            "running" if arguments and arguments[0] == "inspect" else ""
+        ),
+    )
+
+    provisioning.start_runtime(tmp_path, trace_path=tmp_path / "t.jsonl")
+
+    configs = [overrides for arguments, overrides in calls if "config" in arguments]
+    runs = [overrides for arguments, overrides in calls if "run" in arguments]
+    assert len(runs) == 1
+    # Every variable ``compose run`` gets is present when the file is checked, including the
+    # ones added late (trace and credential keys).
+    assert "HARNESS_TOOL_TRACE" in runs[0]
+    assert configs[-1] == runs[0]
+
+
 def test_start_runtime_runs_when_the_file_is_clean_with_injected_values(
     tmp_path: Path, monkeypatch
 ) -> None:
