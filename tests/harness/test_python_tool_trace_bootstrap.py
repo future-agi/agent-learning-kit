@@ -315,7 +315,11 @@ def _chat_style_run(
     env = {
         key: value
         for key, value in os.environ.items()
-        if key not in {_CHAT_MARK, "HARNESS_TOOL_TRACE", "PYTHONPATH"}
+        if key
+        not in {
+            _CHAT_MARK, "HARNESS_TOOL_TRACE", "PYTHONPATH", "OPENAI_API_KEY",
+            "AGENTCC_API_KEY", "OPENAI_AGENTS_DISABLE_TRACING",
+        }
     }
     env["STANDIN_CALLS"] = str(calls)
     env["PYTHONPATH"] = os.pathsep.join(
@@ -388,7 +392,8 @@ def test_openai_agents_chat_style_failure_is_one_stderr_line_and_the_import_succ
     result, lines = _chat_style_run(
         tmp_path,
         "import agents\nprint('imported')\n",
-        agents_source="def set_tracing_export_api_key(key):\n    pass\n",
+        agents_source="from .tracing import set_tracing_export_api_key\n",
+        exporter=True,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "imported"
@@ -414,11 +419,13 @@ def test_openai_agents_trace_export_key_is_a_fixed_placeholder(tmp_path: Path) -
 def test_openai_agents_trace_export_key_is_set_when_the_chat_style_setting_fails(
     tmp_path: Path,
 ) -> None:
-    source = _STANDIN_AGENTS.replace(
+    source = _STANDIN_AGENTS_WITH_EXPORTER.replace(
         "def set_default_openai_api(api):\n    _note(api)\n", ""
     )
     assert "set_default_openai_api" not in source
-    result, lines = _chat_style_run(tmp_path, "import agents\n", agents_source=source)
+    result, lines = _chat_style_run(
+        tmp_path, "import agents\n", agents_source=source, exporter=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stderr.splitlines() == [
         "alk: could not set the OpenAI Agents SDK to chat completions: AttributeError"
@@ -515,19 +522,40 @@ def test_an_exporter_the_agent_builds_itself_sends_nothing_under_the_mark(
     assert not (tmp_path / "calls.txt.export").exists()
 
 
-def test_where_the_export_cant_be_kept_local_the_sdks_own_switch_is_set(
+_SWITCH_AFTER_IMPORT = (
+    "import os, agents\nprint(os.environ.get('OPENAI_AGENTS_DISABLE_TRACING'))\n"
+)
+
+
+def test_the_hook_turns_the_sdks_tracing_back_on_once_its_export_is_local(
     tmp_path: Path,
 ) -> None:
-    # The stand-in has no tracing module to reach: the SDK's switch, read on first use, does it.
+    # The build sets the switch; with the export local, the kit's span observation can run.
     result, lines = _chat_style_run(
         tmp_path,
-        "import os, agents\nprint(os.environ.get('OPENAI_AGENTS_DISABLE_TRACING'))\n",
-        extra_env=_GATEWAY_KEY,
+        _SWITCH_AFTER_IMPORT,
+        agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
+        exporter=True,
+        extra_env={**_GATEWAY_KEY, "OPENAI_AGENTS_DISABLE_TRACING": "1"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "None"
+
+
+def test_where_the_export_cant_be_kept_local_the_sdks_tracing_stays_off(
+    tmp_path: Path,
+) -> None:
+    # The stand-in has no tracing module to reach, so the build's switch is left on.
+    result, lines = _chat_style_run(
+        tmp_path,
+        _SWITCH_AFTER_IMPORT,
+        extra_env={**_GATEWAY_KEY, "OPENAI_AGENTS_DISABLE_TRACING": "1"},
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "1"
     assert result.stderr.splitlines() == [
-        "alk: could not keep the OpenAI Agents SDK trace export local: KeyError"
+        "alk: could not keep the OpenAI Agents SDK trace export local (KeyError), so its "
+        "tracing stays off and its spans aren't observed"
     ]
 
 
@@ -555,9 +583,10 @@ def test_openai_agents_trace_export_key_is_left_alone_without_the_mark(
 def test_openai_agents_without_the_trace_key_setter_is_one_stderr_line_and_the_agent_runs(
     tmp_path: Path,
 ) -> None:
-    source = _STANDIN_AGENTS.split("def set_tracing_export_api_key")[0]
+    # The SDK's tracing is there, but not the setter.
+    source = _STANDIN_AGENTS.split("def set_tracing_export_api_key")[0] + "from . import tracing\n"
     result, lines = _chat_style_run(
-        tmp_path, "import agents\nprint('imported')\n", agents_source=source
+        tmp_path, "import agents\nprint('imported')\n", agents_source=source, exporter=True
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "imported"
@@ -709,6 +738,8 @@ def _load_hook(monkeypatch: pytest.MonkeyPatch, mark: str | None = None):
     else:
         monkeypatch.setenv(_CHAT_MARK, mark)
     monkeypatch.delenv("HARNESS_TOOL_TRACE", raising=False)
+    for name in ("OPENAI_API_KEY", "AGENTCC_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
     spec = importlib.util.spec_from_file_location(
         "alk_hook_under_test",
         Path(__file__).resolve().parents[2]
@@ -767,6 +798,8 @@ def test_openai_agents_setting_without_reason_writes_the_exception_name(
     # An SDK with neither setter: one line for each setting that could not be made.
     assert capsys.readouterr().err.splitlines() == [
         "alk: could not set the OpenAI Agents SDK trace export key: AttributeError",
+        "alk: could not keep the OpenAI Agents SDK trace export local (AttributeError), so "
+        "its tracing stays off and its spans aren't observed",
         "alk: could not set the OpenAI Agents SDK to chat completions: AttributeError",
         "alk: could not set the OpenAI Agents SDK to chat completions: "
         "its loader cannot be wrapped",
@@ -788,13 +821,14 @@ class _RaisingFinder:
 @pytest.mark.parametrize(
     "other", [_OldStyleLoaderFinder, _RaisingFinder], ids=["old_style_loader", "finder_raises"]
 )
-def test_where_the_hook_cant_wrap_the_sdk_the_sdks_own_switch_is_set(
+def test_where_the_hook_cant_wrap_the_sdk_the_builds_switch_is_left_on(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], other
 ) -> None:
     hook = _load_hook(monkeypatch)
-    monkeypatch.setenv("OPENAI_AGENTS_DISABLE_TRACING", "unset-by-the-test")
-    monkeypatch.delenv("OPENAI_AGENTS_DISABLE_TRACING")
+    monkeypatch.setenv("OPENAI_AGENTS_DISABLE_TRACING", "1")
     finder = hook._OpenAIAgentsFinder()
     monkeypatch.setattr(sys, "meta_path", [finder, other()])
     finder.find_spec("agents")
     assert os.environ.get("OPENAI_AGENTS_DISABLE_TRACING") == "1"
+    # A finder that raised may be tried again on a later import: the hook stays armed for it.
+    assert finder.armed is (other is _RaisingFinder)

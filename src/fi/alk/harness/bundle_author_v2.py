@@ -2596,6 +2596,8 @@ def resolve_environment_plan(
                 if routed_through_gateway(job.agent.config.get("target_model")):
                     # Read at start-up by the shared sitecustomize hook.
                     environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
+                    # Off until the hook has kept the SDK's export local; it then turns it on.
+                    environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
             if is_livekit and service_name == control_name:
                 environment.setdefault(
                     "LIVEKIT_AGENT_NAME",
@@ -2865,12 +2867,11 @@ def resolve_environment_plan(
             environment["PORT"] = f"{{{{PORT_{control_name}}}}}"
         if routed_through_gateway(job.agent.config.get("target_model")):
             # Read at start-up by the shared sitecustomize hook.
-            # The hook also keeps the SDK's own trace export from reaching OpenAI. The SDK's
-            # tracing switch isn't set: it would also stop the kit's span observation. A Python
-            # started with -I, -E or -S never loads the hook, so only the switch covers it.
+            # The SDK's tracing is off until the kit's hook has kept its export from reaching
+            # OpenAI; the hook then turns it back on, so the kit's span observation runs. A
+            # process the hook never reaches (python -I, a shell around it) keeps it off.
             environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
-            if _python_skips_the_hook(runtime_command):
-                environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
+            environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
         callback_entrypoint = (
             discovered_callback or _callback_entrypoint(run_folder)
             if is_callback
@@ -3219,21 +3220,6 @@ def resolve_environment_plan(
         capabilities=capabilities,
         readiness=tuple(readiness),
     )
-
-
-def _python_skips_the_hook(command: Sequence[str]) -> bool:
-    """Whether a command starts Python with -I, -E or -S, which ignore PYTHONPATH or skip
-    ``sitecustomize``, so the kit's hook never loads."""
-    for index, token in enumerate(command):
-        if not Path(token).name.startswith(("python", "pypy")):
-            continue
-        for flag in command[index + 1 :]:
-            if not flag.startswith("-") or flag.startswith("--") or flag in {"-c", "-m"}:
-                return False
-            if set(flag[1:]) & {"I", "E", "S"}:
-                return True
-        return False
-    return False
 
 
 def _source_tool_trace_environment(
