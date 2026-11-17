@@ -2180,6 +2180,8 @@ def test_teardown_runs_from_an_empty_directory_that_is_not_the_source(
 
     call = next(call for call in calls if "down" in call.argv)
     assert call.cwd != environment.source
+    assert not Path(call.cwd).resolve().is_relative_to(Path(environment.source).resolve())
+    assert Path(call.cwd).parent == Path(tempfile.gettempdir())
     assert call.cwd_listing == []
     assert "--project-name" in call.argv
     assert "--file" not in call.argv and "--env-file" not in call.argv
