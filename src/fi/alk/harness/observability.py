@@ -294,6 +294,7 @@ class _CleaningExporter(SpanExporter):
 # outbound.redact_outbound_text's floor: a shorter declared value would mask ordinary words.
 _SHORTEST_SECRET = 8
 _SHORTEST_PIN = 4
+_SHORTEST_TAIL = 4
 
 
 # Platform settings the simulator and gateway channels carry beside their credentials. A span
@@ -423,14 +424,15 @@ _DIGIT_WORDS = (
 
 
 # What people put between spoken digits: spaces (one or more), or a comma, dot or dash with
-# spaces around it. Digits may also run together in groups ("48 21").
+# spaces around it. Always between single digits: a group ("48.21", "4,821") is a price or a
+# count, not a PIN read out.
 _PIN_SEPARATOR = r"(?:[ ]*[,.\-][ ]*|[ ]+)"
 _PIN_BEFORE = re.compile(rf"[0-9]{_PIN_SEPARATOR}?\Z")
 
 
 class _SpokenPin:
-    """A PIN's digits as they are written out, with the separators of _PIN_SEPARATOR between
-    them or none, not part of a longer run of digits.
+    """A PIN's digits as they are written out, one by one with a separator of _PIN_SEPARATOR
+    between them, not part of a longer run of digits.
 
     The pattern starts with the PIN's first digit, so re skips ahead to it instead of trying
     every position. The digit before the match can't be a lookbehind of fixed width, since the
@@ -438,7 +440,7 @@ class _SpokenPin:
     only where a match is found."""
 
     def __init__(self, pin: str) -> None:
-        digits = rf"{_PIN_SEPARATOR}?".join(pin)
+        digits = _PIN_SEPARATOR.join(pin)
         self._pattern = re.compile(rf"{digits}(?!{_PIN_SEPARATOR}?[0-9])")
 
     def sub(self, replacement: str, text: str) -> str:
@@ -562,14 +564,18 @@ class _CutSecret:
 
 
 class _CutTail:
-    """A form of a declared value, as its head of any length (1 or more) ends text known to be a
-    cut: text that ends where traceai or an environment limit cuts (ends), or that ends in the
+    """A form of a declared value, as its head ends text known to be a cut (a head of at least
+    _SHORTEST_TAIL characters, or half of a value shorter than 8): text that ends where traceai or an environment limit cuts (ends), or that ends in the
     "..." traceai adds after a cut (dotted). _CutSecret takes a head of 8 or more anywhere a cut
     could be; this takes the shorter ones, only at the one place the cut is certain, because a
     short head elsewhere is just a word."""
 
     def __init__(self, value: str) -> None:
         self._value = value
+        # A head of one to three characters says nothing about a long key, and 500-character
+        # text ending in a letter is common. Four characters, or half of a value shorter than
+        # eight, so that a short value still goes when its head is most of it.
+        self._floor = min(_SHORTEST_TAIL, -(-len(value) // 2))
 
     def sub(self, replacement: str, text: str, ends: bool, dotted: bool) -> str:
         value = self._value
@@ -577,12 +583,13 @@ class _CutTail:
         # The "..." goes first: the head before it, then the end of the text itself.
         for before_dots in ((True,) if dotted else ()) + ((False,) if ends else ()):
             end = len(text) - 3 if before_dots else len(text)
-            start = text.find(first, max(0, end - len(value)), end)
+            last = end - self._floor + 1
+            start = text.find(first, max(0, end - len(value)), last)
             while start != -1:
                 if value.startswith(text[start:end]):
                     text = text[:start] + replacement + text[end:]
                     break
-                start = text.find(first, start + 1, end)
+                start = text.find(first, start + 1, last)
         return text
 
 

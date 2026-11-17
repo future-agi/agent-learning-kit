@@ -1823,7 +1823,7 @@ def _cut_head(head, length=5000, ending="..."):
         ("hunter12", "hunter1"),
         ("Zq7Hk", "Zq7"),
         ("Zq7Hk", "Zq7Hk"),
-        ("hunter12", "h"),
+        ("hunter12", "hunt"),
     ],
 )
 def test_a_short_head_of_a_declared_value_at_a_traceai_cut_is_replaced(value, head):
@@ -1870,8 +1870,8 @@ def test_a_short_head_that_is_not_at_a_cut_is_kept(text):
         "Four , Eight , Two , One",
         "4 - 8 - 2 - 1",
         "4  8  2  1",
-        "48 21",
-        "4 82 1",
+        "4-8-2-1",
+        "4.8.2.1",
     ],
 )
 def test_a_four_digit_value_as_people_write_it_out_is_replaced(spoken):
@@ -1894,6 +1894,65 @@ def test_a_four_digit_value_as_people_write_it_out_is_replaced(spoken):
 )
 def test_a_longer_run_than_the_pin_in_the_wider_forms_is_kept(text):
     out = _export_one(_readable(**{"output.value": text}), ("4821",)).attributes[
+        "output.value"
+    ]
+
+    assert out == text
+
+
+@pytest.mark.parametrize(
+    "head, kept",
+    [
+        ("h", True),
+        ("hu", True),
+        ("hun", True),
+        ("hunt", False),
+    ],
+)
+def test_a_head_of_a_long_value_at_a_cut_is_masked_from_four_characters(head, kept):
+    text = _cut_head(head)
+
+    out = _export_one(_readable(**{"output.value": text}), ("hunter12",)).attributes[
+        "output.value"
+    ]
+
+    assert (out == text) is kept
+
+
+def test_a_three_character_head_of_a_long_key_at_a_cut_is_kept():
+    text = _cut_head(CUT_SECRET[:3])
+
+    out = _export_one(_readable(**{"output.value": text}), (CUT_SECRET,)).attributes[
+        "output.value"
+    ]
+
+    assert out == text
+
+
+@pytest.mark.parametrize("head, kept", [("Z", True), ("Zq", True), ("Zq7", False)])
+def test_a_head_of_a_five_character_value_needs_half_of_it(head, kept):
+    text = _cut_head(head)
+
+    out = _export_one(_readable(**{"output.value": text}), ("Zq7Hk",)).attributes[
+        "output.value"
+    ]
+
+    assert (out == text) is kept
+
+
+@pytest.mark.parametrize(
+    "declared, text",
+    [
+        ("4821", "balance is $48.21 today"),
+        ("4821", "used 4,821 tokens"),
+        ("4821", "used 48 21 times"),
+        ("1500", "costs $15.00"),
+        ("1500", "1,500 users"),
+        ("8080", "80.80%"),
+    ],
+)
+def test_a_price_or_a_count_with_the_pins_digits_is_kept(declared, text):
+    out = _export_one(_readable(**{"output.value": text}), (declared,)).attributes[
         "output.value"
     ]
 
