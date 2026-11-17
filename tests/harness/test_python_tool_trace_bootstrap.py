@@ -8,6 +8,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 
 def _trace_environment(tmp_path: Path, bindings: list[dict[str, str]]):
     bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
@@ -328,9 +330,6 @@ def test_an_async_tool_that_awaits_another_bound_tool_records_both_once(
         ("inner", 5, 10),
         ("outer", 5, 11),
     ]
-
-
-import pytest
 
 
 @pytest.mark.parametrize("module", [".", "/", "..", "agent\x00"])
