@@ -367,7 +367,9 @@ def _remove_leftover_job_directories(project: str) -> None:
         shutil.rmtree(leftover, ignore_errors=True)
 
 
-def _repository_env_file_usable(dotenv: Path, environment: ProvisionedEnvironment) -> bool:
+def _repository_env_file_usable(
+    dotenv: Path, environment: ProvisionedEnvironment
+) -> bool:
     """True for a regular ``.env`` that is not a link and resolves inside the source.
 
     A link (or a compose directory that is one) could hand Compose any file on the host, and
@@ -464,7 +466,9 @@ def _run(
                 *arguments,
             ]
         else:
-            job_directory = tempfile.mkdtemp(prefix=_job_directory_prefix(environment.project))
+            job_directory = tempfile.mkdtemp(
+                prefix=_job_directory_prefix(environment.project)
+            )
             descriptor, job_file = tempfile.mkstemp(dir=job_directory)
             _write_env_file(descriptor, values)
             files = ["--file", environment.compose_file]
@@ -474,7 +478,11 @@ def _run(
             # itself, so that file goes first (as today, now explicit) and the job file, which
             # wins, after it. A ``.env`` directory would break an explicit --env-file.
             dotenv = (Path(environment.source) / environment.compose_file).parent / ".env"
-            env_files = [str(dotenv)] if _repository_env_file_usable(dotenv, environment) else []
+            env_files = (
+                [str(dotenv)]
+                if _repository_env_file_usable(dotenv, environment)
+                else []
+            )
             env_files.append(job_file)
             command = [
                 "docker",

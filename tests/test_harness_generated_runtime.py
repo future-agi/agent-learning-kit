@@ -1935,7 +1935,7 @@ def test_env_file_text_escapes_dollar_quote_backslash_and_newline_exactly() -> N
     try:
         provisioning._write_env_file(fd, {"A": 'x$y"z\\w\nv', "B": "${HOME}"})
         assert Path(path).read_text(encoding="utf-8") == (
-            'A="x\\$y\\"z\\\\w\\nv"\n' 'B="\\${HOME}"\n'
+            'A="x\\$y\\"z\\\\w\\nv"\nB="\\${HOME}"\n'
         )
     finally:
         os.unlink(path)
@@ -1964,9 +1964,15 @@ def test_hosted_uploaded_google_credential_reaches_compose_as_the_container_path
     for name in list(os.environ):
         if name not in {"PYTEST_CURRENT_TEST", "PATH", "HOME"}:
             monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("ALK_RUNTIME_CONFIGURATION_NAMES", "GOOGLE_APPLICATION_CREDENTIALS")
-    monkeypatch.setenv("ALK_RUNTIME_VALUE_GOOGLE_APPLICATION_CREDENTIALS", str(credential))
-    monkeypatch.setenv("ALK_RUNTIME_SECRET_FILE_NAMES", "GOOGLE_APPLICATION_CREDENTIALS")
+    monkeypatch.setenv(
+        "ALK_RUNTIME_CONFIGURATION_NAMES", "GOOGLE_APPLICATION_CREDENTIALS"
+    )
+    monkeypatch.setenv(
+        "ALK_RUNTIME_VALUE_GOOGLE_APPLICATION_CREDENTIALS", str(credential)
+    )
+    monkeypatch.setenv(
+        "ALK_RUNTIME_SECRET_FILE_NAMES", "GOOGLE_APPLICATION_CREDENTIALS"
+    )
     monkeypatch.setenv("ALK_HOSTED_EXECUTION", "1")
     monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
     source = tmp_path / "source"
@@ -1984,7 +1990,11 @@ def test_hosted_uploaded_google_credential_reaches_compose_as_the_container_path
     def run(command, **kwargs):
         files = [command[i + 1] for i, a in enumerate(command) if a == "--env-file"]
         text = Path(files[-1]).read_text(encoding="utf-8") if files else ""
-        calls.append(types.SimpleNamespace(argv=list(command), env=dict(kwargs["env"]), text=text))
+        calls.append(
+            types.SimpleNamespace(
+                argv=list(command), env=dict(kwargs["env"]), text=text
+            )
+        )
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(provisioning.subprocess, "run", run)
@@ -2027,7 +2037,11 @@ def test_every_reserved_name_stays_out_of_the_job_file_and_compose_environment(
     tmp_path: Path, monkeypatch, caplog, manifest: bool
 ) -> None:
     reserved = _every_reserved_name()
-    base = {"PATH": "/usr/bin", "HOME": "/home/worker", "DOCKER_HOST": "tcp://base:2375"}
+    base = {
+        "PATH": "/usr/bin",
+        "HOME": "/home/worker",
+        "DOCKER_HOST": "tcp://base:2375",
+    }
     # On the bare CLI a shell value is not a runtime value, so the runtime layer is manifest-only.
     runtime_names = reserved if manifest else []
     _shell(monkeypatch, base, ",".join(runtime_names) if manifest else None)
@@ -2045,7 +2059,9 @@ def test_every_reserved_name_stays_out_of_the_job_file_and_compose_environment(
     caplog.set_level(logging.DEBUG, logger=_COMPOSE_LOGGER)
 
     calls = _drive_start_runtime(
-        tmp_path, monkeypatch, overrides={name: f"/evil-override/{name}" for name in reserved}
+        tmp_path,
+        monkeypatch,
+        overrides={name: f"/evil-override/{name}" for name in reserved},
     )
 
     assert calls
@@ -2056,7 +2072,9 @@ def test_every_reserved_name_stays_out_of_the_job_file_and_compose_environment(
         for name in reserved:
             assert call.env.get(name) == base.get(name), name
         assert not [value for value in call.env.values() if value.startswith("/evil")]
-        assert not [value for value in call.job.values.values() if value.startswith("/evil")]
+        assert not [
+            value for value in call.job.values.values() if value.startswith("/evil")
+        ]
         assert not [argument for argument in call.argv if argument.startswith("/evil")]
         env_names = {
             call.argv[index]
@@ -2090,7 +2108,9 @@ def test_stop_removes_the_job_directories_a_killed_worker_left_for_its_project_o
     (leftover / "job").write_text('OPENAI_API_KEY="leftover"\n')
     other = Path(tempfile.mkdtemp(prefix="alk-compose-env-other.", dir=temp))
     (other / "job").write_text('OPENAI_API_KEY="other"\n')
-    longer = Path(tempfile.mkdtemp(prefix="alk-compose-env-compose-env-extra.", dir=temp))
+    longer = Path(
+        tempfile.mkdtemp(prefix="alk-compose-env-compose-env-extra.", dir=temp)
+    )
     monkeypatch.setattr(provisioning, "_docker", lambda *_a, **_k: "")
 
     assert stop(tmp_path)
@@ -2124,7 +2144,9 @@ def test_repository_env_that_is_a_symlink_or_resolves_outside_the_source_is_not_
     # A regular ``.env`` in a compose directory that is itself a link out of the source.
     (source / ".env").unlink()
     (source / "linked").symlink_to(outside, target_is_directory=True)
-    linked = _compose_environment(tmp_path, compose_file=str(source / "linked" / "compose.yaml"))
+    linked = _compose_environment(
+        tmp_path, compose_file=str(source / "linked" / "compose.yaml")
+    )
     provisioning._run(linked, "config")
 
     for call in calls:
@@ -2189,7 +2211,9 @@ def test_manifest_turns_compose_remote_git_off_whatever_the_repository_env_sets(
     assert down.env["COMPOSE_EXPERIMENTAL_GIT_REMOTE"] == "0"
 
 
-def test_bare_cli_leaves_compose_remote_git_to_the_shell(tmp_path: Path, monkeypatch) -> None:
+def test_bare_cli_leaves_compose_remote_git_to_the_shell(
+    tmp_path: Path, monkeypatch
+) -> None:
     _shell(monkeypatch, {"PATH": "/usr/bin"}, None)
     calls = _record_compose(monkeypatch)
 
@@ -2211,7 +2235,9 @@ def test_a_git_include_is_refused_with_a_clear_error_that_holds_no_value(
 ) -> None:
     _shell(monkeypatch, {"PATH": "/usr/bin"}, "SETTING")
     monkeypatch.setenv("ALK_RUNTIME_VALUE_SETTING", "job-secret-canary")
-    environment = _compose_environment(tmp_path, runtime_configuration_names=["SETTING"])
+    environment = _compose_environment(
+        tmp_path, runtime_configuration_names=["SETTING"]
+    )
     calls = _record_compose(
         monkeypatch,
         returncode=1,
