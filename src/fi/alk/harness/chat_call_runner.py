@@ -19,11 +19,13 @@ from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, HTTPCallFailure
 from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
+    ToolCaptureFailed,
     _clear_file_tool_calls,
-    _collect_file_tool_calls,
+    _with_span_calls,
     _with_scenario_edits,
 )
 from .contract import AgentContract
+from .privilege import IsolationMode, isolation_mode
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
@@ -36,7 +38,8 @@ from .usage import (
     failure_domain_for_code,
     simulator_funding,
 )
-from .world.runtime import Call, GeneratedWorld
+from .handler_child import ChildWorld, HandlerChannel, HandlerChild, start_handler_child
+from .world.runtime import Call, GeneratedWorld, graded_calls, trace_row
 from .world.stores.postgres import AttachedPostgresStore
 
 logger = logging.getLogger(__name__)
@@ -177,11 +180,22 @@ class _HostedToolStore:
         return self._store.add(collection, dict(record))
 
 
+def handler_sources(bundle_dir: Path, contract: AgentContract) -> dict[str, str]:
+    """Each declared tool's generated handler source, by tool name."""
+    sources: dict[str, str] = {}
+    for tool in contract.tools:
+        path = bundle_dir / "handlers" / f"{tool.name}.py"
+        if path.is_file():
+            sources[tool.name] = path.read_text(encoding="utf-8")
+    return sources
+
+
 def _tool_world(
     bundle_dir: Path,
     contract: AgentContract,
     runtime: EnvironmentRuntime,
     source_directory: Path | None = None,
+    handler_channel: HandlerChannel | None = None,
 ) -> GeneratedWorld:
     if runtime.metadata.get("observation_mode") == "native":
         import random
@@ -195,20 +209,75 @@ def _tool_world(
         raise CallAborted(
             "chat_world_unavailable: world_db postgres endpoint is absent"
         )
+    tools = [tool.model_dump(mode="json") for tool in contract.tools]
+    if handler_channel is not None:
+        # Under per-user isolation the handlers, and the agent code they import, run in the
+        # handler child; nothing of the agent's code is imported into this process. State is
+        # read as the harness, as with one fixed user, so checks grade the same rows.
+        return ChildWorld(
+            store=_HostedToolStore(endpoint.address),
+            channel=handler_channel,
+            tools=tools,
+            refusal_signature=contract.refusal_signature,
+        )
     world = GeneratedWorld(store=_HostedToolStore(endpoint.address))
-    world.tools = [tool.model_dump(mode="json") for tool in contract.tools]
-    world.handlers = {}
-    for tool in contract.tools:
-        path = bundle_dir / "handlers" / f"{tool.name}.py"
-        if path.is_file():
-            world.handlers[tool.name] = path.read_text(encoding="utf-8")
+    world.tools = tools
+    world.handlers = handler_sources(bundle_dir, contract)
     world.refusal_signature = contract.refusal_signature
     if source_directory is not None:
+        if isolation_mode() is IsolationMode.PER_USER:
+            # This process holds the harness's capabilities; the agent's code runs only in its
+            # handler child.
+            raise CallAborted(
+                "handler_child_required: per-user isolation never imports the agent's code here",
+                code="call_failed",
+            )
         world.reach(
             str(source_directory),
             contract_folder(contract),
         )
     return world
+
+
+def handler_child_for(
+    context: CallRunnerContext, runtime: EnvironmentRuntime
+) -> HandlerChild | None:
+    """Under per-user isolation, the process a conversation's generated tool handlers run in.
+
+    None with one fixed user, and for a world that runs no generated handlers.
+    """
+    if isolation_mode() is not IsolationMode.PER_USER:
+        return None
+    if runtime.metadata.get("observation_mode") == "native":
+        return None
+    endpoint = runtime.endpoints.get("world_db")
+    contract_path = context.bundle_dir / "contract.json"
+    if (
+        endpoint is None
+        or endpoint.protocol != "postgres"
+        or not contract_path.is_file()
+    ):
+        return None
+    if endpoint.tool_address is None:
+        # The world's own role is what the agent's code may use; without one (an authoring lane)
+        # there is no safe address to hand it, so the conversation does not start.
+        raise CallAborted(
+            "handler_world_unscoped: this world has no role of its own",
+            code="call_failed",
+        )
+    contract = AgentContract.model_validate_json(
+        contract_path.read_text(encoding="utf-8")
+    )
+    return start_handler_child(
+        handlers=handler_sources(context.bundle_dir, contract),
+        tools=[tool.model_dump(mode="json") for tool in contract.tools],
+        refusal_signature=contract.refusal_signature,
+        dsn=endpoint.tool_address,
+        source=context.source_directory,
+        work_directory=context.work_directory,
+        world_index=runtime.world_index,
+        subfolder=contract_folder(contract),
+    )
 
 
 def _tools(contract: AgentContract) -> list[dict[str, Any]]:
@@ -533,6 +602,7 @@ class HostedChatCallRunner:
             self._contract,
             runtime,
             self._context.source_directory,
+            self._context.handler_channel,
         )
         from .chat_transport import create_chat_wrapper
 
@@ -617,9 +687,16 @@ class HostedChatCallRunner:
         # The submitted agent may execute tools entirely inside its Python process instead
         # of returning tool requests over HTTP. These observed calls belong to the same attempt;
         # do not replay the tool through the generated world or fabricate evidence from text.
-        traced_calls = _collect_file_tool_calls(runtime)
-        if traced_calls and not transcript.calls:
-            transcript.calls.extend(traced_calls)
+        try:
+            transcript.calls[:] = _with_span_calls(
+                transcript.calls, runtime, strict=True
+            )
+            capture_failed = False
+        except ToolCaptureFailed as exc:
+            logger.warning("tool capture failed for %s: %s", scenario.scenario_key, exc)
+            capture_failed = True
+        # Calls returned over HTTP are recorded here as they run, so they are a full capture.
+        capture_failed = capture_failed and not graded_calls(transcript.calls)
 
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
@@ -630,19 +707,7 @@ class HostedChatCallRunner:
         calls = tuple(transcript.calls)
         if calls:
             tool_trace = "\n".join(
-                json.dumps(
-                    {
-                        "name": call.name,
-                        "arguments": call.arguments,
-                        "result": call.result,
-                        "ok": call.ok,
-                        "error": call.error,
-                        "refused": call.refused,
-                        "at": call.at,
-                    },
-                    sort_keys=True,
-                    default=str,
-                )
+                json.dumps(trace_row(call), sort_keys=True, default=str)
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(
@@ -652,6 +717,7 @@ class HostedChatCallRunner:
             )
         outcome = CallOutcome(
             calls=calls,
+            tool_capture_failed=capture_failed,
             turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),

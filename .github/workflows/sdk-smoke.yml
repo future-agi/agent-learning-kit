@@ -120,3 +120,14 @@ jobs:
           tests/test_release_workflow.py
           tests/test_release_pr_step.py
           tests/episode
+      - name: Run the measuring suite with the SDK instrumentors
+        # ALK's own environment has no traceAI instrumentors, so these tests would skip. They
+        # run here with them, on the OpenTelemetry the lock pins (1.39.1): an older SDK flushes
+        # differently, and measuring has to work on it.
+        run: >-
+          python -m pip install
+          'traceai-openai==0.1.15' 'traceai-anthropic==0.1.14' 'traceai-langchain==0.2.1'
+          'openai==2.54.0' 'anthropic==2.8.0' 'langchain-openai==1.8.0' 'langfuse==4.15.6'
+          'opentelemetry-api==1.39.1' 'opentelemetry-sdk==1.39.1'
+          'opentelemetry-exporter-otlp-proto-http==1.39.1' 'opentelemetry-proto==1.39.1'
+          && python -m pytest -q tests/harness/test_simulation_measure.py
