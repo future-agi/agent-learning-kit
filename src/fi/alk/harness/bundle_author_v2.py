@@ -152,7 +152,9 @@ _TOOL_TRACE_DDL = (
     # full) for a table made before it was recorded.
     "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS action text, ADD COLUMN IF NOT EXISTS agent_tool text, "
     "ADD COLUMN IF NOT EXISTS provider_call_id text, ADD COLUMN IF NOT EXISTS tool_call_id text, "
-    "ADD COLUMN IF NOT EXISTS status text, ADD COLUMN IF NOT EXISTS effect text;\n"
+    "ADD COLUMN IF NOT EXISTS status text, ADD COLUMN IF NOT EXISTS effect text, "
+    # How each call was made and the scenario's fault the door applied on it.
+    "ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb;\n"
 )
 
 

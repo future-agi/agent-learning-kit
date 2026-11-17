@@ -5098,3 +5098,13 @@ def test_a_call_runner_reads_a_trial_s_start_before_the_scenario_s_setup_writes(
 
     asyncio.run(scenario())
     assert read == {"start": {}, "call": {"approvals": [{"id": 1, "status": "declined"}]}}
+
+
+def test_an_actor_who_waited_and_never_spoke_says_why_it_waited_in_the_verdict() -> None:
+    waited = {"actor": "jordan", "name": "Jordan", "triggered": True, "delivered": 0, "dropped": [],
+              "waited": ["already handled"]}
+    scenario = SimpleNamespace(sub_goals=[], speaking_actors=("jordan",))
+
+    missing = hs._call_actors_missing(scenario, replace(_call_outcome(), call_actors=(waited,)))
+
+    assert missing == "Jordan (not_delivered: waited (already handled))"

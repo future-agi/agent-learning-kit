@@ -567,6 +567,14 @@ class ChatActors:
         decide = decider(self.meter, self.limits.get("model") or self.model)
         return (await decide(brief, str(actor["id"]), actor.get("model"))).strip()
 
+    def _waited(self, actor_id: Any) -> list[str]:
+        """Why an actor chose to say nothing yet, each time it waited."""
+        return [
+            str(e.get("why") or "")
+            for e in self.events
+            if e["actor"] == actor_id and e["kind"] == "waited" and e.get("why")
+        ]
+
     def summary(self) -> list[dict[str, Any]]:
         """Each actor the conversation included: triggered, delivered, dropped, as a call records them."""
         out = [
@@ -580,6 +588,8 @@ class ChatActors:
                     for e in self.events
                     if e["actor"] == one["id"] and e["kind"] in ("dropped", "timeout")
                 ],
+                # Why it chose to say nothing yet, each time it waited: the reader's reason when it never spoke.
+                **({"waited": waited} if (waited := self._waited(one["id"])) else {}),
             }
             for one in self.actors
         ]

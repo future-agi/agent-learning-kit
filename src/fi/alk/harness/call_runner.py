@@ -1637,6 +1637,17 @@ def fault_notices(
                 continue
         agent_rows = [row for row in log or [] if (row.get("actor_id") or AGENT) == AGENT]
         rows = [row for row in agent_rows if same_action(row, action)]
+        # A fault that names its method holds only calls made with it: a GET of the route is not a call of its DELETE.
+        # A row from a log that kept no method still counts, as before methods were logged.
+        method = str(fault.get("method") or "").upper()
+        if method:
+            rows = [row for row in rows if not row.get("method") or str(row["method"]).upper() == method]
+        # The row the door wrote when it applied this very fault says so, wherever it sits among the action's calls.
+        if any(
+            isinstance(row.get("fault"), Mapping) and same_json(row["fault"], fault) and _fault_applied(row, fault)
+            for row in rows
+        ):
+            continue
         # The door numbers an action's calls by its rows, so the fault is on the row of its own call: another
         # fault's row, or a world failure on another call, is not this one applied. An approval hold is in force on
         # every call the door saw, refused or let through after the approval.

@@ -1604,10 +1604,14 @@ def _call_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
                 for row in outcome.world_actions
                 if str(row.get("actor_id") or "") == actor_id and row.get("outcome") == "refused"
             ]
+            # An actor who chose to wait and never spoke: why it waited, as it said.
+            waited = [str(one) for one in report.get("waited") or [] if one]
             if why == "not_delivered" and dropped:
                 why = f"{why}: {dropped[0]}"
             elif why == "not_delivered" and refused:
                 why = f"{why}: the world refused its {refused[0]}"
+            elif why == "not_delivered" and waited:
+                why = f"{why}: waited ({waited[-1]})"
             missing.append(f"{report.get('name') or actor_id} ({why})")
     # An actor acting through the world that could not act at all (no door, not listed) is the scenario's problem too.
     for report in outcome.call_actors:

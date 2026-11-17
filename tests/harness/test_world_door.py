@@ -745,8 +745,8 @@ def test_two_calls_at_once_never_both_take_a_one_shot_fault():
     import time as clock
 
     class _SlowCount(MemoryLog):
-        def agent_calls(self, action, name):
-            made = super().agent_calls(action, name)
+        def agent_calls(self, action, name, method=None):
+            made = super().agent_calls(action, name, method)
             # Both calls read the count before either row lands, unless the door holds them apart.
             clock.sleep(0.05)
             return made
@@ -1139,6 +1139,12 @@ def test_the_durable_log_counts_a_mark_s_calls_and_replays_a_keyed_answer(world_
 
     dsn, _rows = world_log
     log = PostgresLog(dsn)
+    # Calls counted by the method they were made with, on a table that gains the column when first written.
+    log.write({"name": "1043", "action": "orders.1043", "arguments": {}, "result": None, "ok": True, "error": "",
+               "at": 0.5, "action_id": "g1", "outcome": "committed", "actor_id": "agent", "method": "GET"})
+    assert (log.agent_calls("orders.1043", "1043", "DELETE"), log.agent_calls("orders.1043", "1043", "GET")) == (0, 1)
+    # A route with a part counts each call of it, whichever part the call named.
+    assert log.agent_calls("orders.{order_id}", "x", "GET") == 1
     log.write({"name": "refund", "action": "orders.refund", "arguments": {"count": 2}, "result": None, "ok": False,
                "error": DOOR_OUT_OF_REACH, "at": 1.0, "action_id": "m1", "outcome": "unrecorded",
                "refusal_code": EVIDENCE_INCOMPLETE, "actor_id": "agent"})
@@ -1195,3 +1201,46 @@ def test_a_mark_s_count_reads_the_same_in_memory_as_in_the_durable_log():
         return {"error": DOOR_OUT_OF_REACH, "arguments": {"count": count}}
 
     assert [calls_in(mark(one)) for one in (2, 2.0, 2.5, "2", True, None)] == [2, 2, 3, 1, 1, 1]
+
+
+def _get_and_delete():
+    from fi.alk.harness.world_door import routed_faults
+
+    contract = {
+        "tool_entrypoints": [
+            {"tool": "get_order", "endpoint": "/orders/{order_id}", "method": "GET"},
+            {"tool": "cancel_order", "endpoint": "/orders/{order_id}", "method": "DELETE"},
+        ]
+    }
+    return routed_faults([{"action": "cancel_order", "mode": "unavailable", "on_call": 1}], contract)
+
+
+def test_the_trial_reads_a_delete_s_fault_as_applied_though_a_get_of_the_route_came_first():
+    from fi.alk.harness.call_runner import fault_notices, unmeasured_reasons
+    from fi.alk.harness.world.runtime import Call
+
+    faults = _get_and_delete()
+    log = MemoryLog()
+    door = _door(_Executor(), faults=faults, log=log)
+    door.enter(ToolCall(action="orders.1043", name="1043", arguments={}, method="GET", effect="read"))
+    door.enter(ToolCall(action="orders.1043", name="1043", arguments={}, method="DELETE"))
+
+    calls = [Call(name="get_order", arguments={}, ok=True), Call(name="cancel_order", arguments={}, ok=False)]
+    notices = fault_notices(faults, log.rows(), calls)
+
+    assert notices == [] and not unmeasured_reasons(notices)
+
+
+def test_a_door_restarted_mid_trial_never_applies_a_method_s_first_call_fault_again():
+    faults = _get_and_delete()
+    log = MemoryLog()
+    executor = _Executor()
+    first = _door(executor, faults=faults, log=log).enter(
+        ToolCall(action="orders.1043", name="1043", arguments={}, method="DELETE")
+    )
+
+    again = _door(executor, faults=faults, log=log).enter(
+        ToolCall(action="orders.1044", name="1044", arguments={}, method="DELETE")
+    )
+
+    assert (first.outcome, again.outcome) == ("faulted", "committed")

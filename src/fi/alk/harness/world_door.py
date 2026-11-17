@@ -169,7 +169,10 @@ class ActionLog(Protocol):
         it (refused: nothing took effect)."""
         ...
 
-    def agent_calls(self, action: str, name: str) -> int: ...
+    def agent_calls(self, action: str, name: str, method: str | None = None) -> int:
+        """The agent's calls of this action logged so far, a door mark counting every call it stands for; with
+        `method`, only the calls made with it."""
+        ...
 
 
 def logged_as(row: Mapping[str, Any]) -> str:
@@ -185,10 +188,14 @@ def action_matches(logged: str, action: str) -> bool:
         return bool(action)
     if "{" not in action:
         return False
-    pattern = ".".join(
+    return re.fullmatch(action_pattern(action), logged) is not None
+
+
+def action_pattern(action: str) -> str:
+    """A world action as a regular expression its calls match: a `{part}` stands for any one part."""
+    return ".".join(
         "[^.]+" if part.startswith("{") and part.endswith("}") else re.escape(part) for part in action.split(".")
     )
-    return re.fullmatch(pattern, logged) is not None
 
 
 def calls_tool(logged: str, tool: str) -> bool:
@@ -634,8 +641,12 @@ class WorldDoor:
         only the calls made with that method (a GET of the route is not a call of its DELETE), which the log, keeping
         no method, cannot tell apart: this door's own count numbers them."""
         by_method = any(one.get("method") for one in named)
+        # A fault on a route with a part counts every call of the route (`orders.1043`, then `orders.1044`).
+        counted = str(named[0].get("action") or call.action)
         try:
-            made = 0 if by_method else self.log.agent_calls(call.action, call.name)
+            made = self.log.agent_calls(
+                counted, call.name, (call.method or "").upper() if by_method else None
+            )
         except Exception:  # noqa: BLE001 - which call this is is unknown: a guess would fault every call as the first
             return None
         if self.trial is not None:
@@ -643,7 +654,7 @@ class WorldDoor:
             if current != self._numbered_trial:
                 self._numbered.clear()
                 self._numbered_trial = current
-        slot = f"{call.action}\x00{(call.method or '').upper()}" if by_method else call.action
+        slot = f"{counted}\x00{(call.method or '').upper()}" if by_method else counted
         made = max(made, self._numbered.get(slot, 0))
         self._numbered[slot] = made + 1
         return next(
@@ -763,6 +774,10 @@ class WorldDoor:
             "parent_event_id": call.parent,
             "on_behalf_of": on_behalf_of,
             "effect": call_effect(call),
+            # How the call was made and the scenario's fault the door applied on it: two tools can share a route
+            # under different methods, and a fault is found on the row of the call it held.
+            "method": (call.method or "").upper() or None,
+            "fault": outcome.fault,
         }
         if wait:
             self._write_row(row)
@@ -967,6 +982,11 @@ _ACTION = "action"
 # Written beside either set of columns when the table has it: a log made before effects were recorded has no column.
 _EFFECT = "effect"
 _BASIC = "name, arguments, result, ok, error, at"
+# Written when the table has them: how a call was made, and the scenario's fault the door applied on it.
+_CALL_COLUMNS = ("method", "fault")
+_CALL_COLUMNS_DDL = (
+    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb"
+)
 # Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a
 # failed write can leave without the row.
 _KEYS_DDL = (
@@ -984,6 +1004,7 @@ class PostgresLog:
         self.dsn = dsn
         self.connect_seconds = connect_seconds
         self._columns: frozenset[str] | None = None
+        self._call_columns_tried = False
         self._keys_made = False
 
     def _connect(self, **options: Any) -> Any:
@@ -1010,19 +1031,37 @@ class PostgresLog:
     def _records_action(self) -> bool:
         return _ACTION in self._table_columns()
 
+    def _ensure_call_columns(self) -> None:
+        """The method and fault columns, added once to a log made before they were recorded (additive: older rows
+        keep them empty); a table the door cannot alter keeps its columns, and its rows are written without them."""
+        if self._call_columns_tried or not self.records_actors():
+            return
+        import psycopg
+
+        self._call_columns_tried = True
+        try:
+            with self._connect() as connection:
+                connection.execute(_CALL_COLUMNS_DDL)
+        except psycopg.Error:
+            # The columns stay as they were; rows are written in that shape.
+            return
+        self._columns = None
+
     def write(self, row: dict[str, Any]) -> None:
         extended = self.records_actors()
         if not extended and row.get("actor_id") != AGENT:
             return
+        self._ensure_call_columns()
         columns = _EXTENDED if extended else _BASIC
         if extended and self._records_action():
             columns += ", " + _ACTION
-        if _EFFECT in self._table_columns():
-            columns += ", " + _EFFECT
+        for optional in (_EFFECT, *_CALL_COLUMNS):
+            if optional in self._table_columns():
+                columns += ", " + optional
         keys = [one.strip() for one in columns.split(",")]
         values = [
             json.dumps(row.get(key), default=str)
-            if key in ("arguments", "result")
+            if key in ("arguments", "result") or (key == "fault" and row.get(key) is not None)
             else row.get(key)
             for key in keys
         ]
@@ -1094,9 +1133,20 @@ class PostgresLog:
                     (state, json.dumps(response) if response is not None else None, actor, key),
                 )
 
-    def agent_calls(self, action: str, name: str) -> int:
+    def agent_calls(self, action: str, name: str, method: str | None = None) -> int:
         clause = " AND actor_id = 'agent'" if self.records_actors() else ""
-        if self._records_action():
+        extra: tuple[str, ...] = ()
+        if method:
+            self._ensure_call_columns()
+            if "method" not in self._table_columns():
+                # A log that keeps no method cannot tell a GET of the route from its DELETE: this door's count numbers.
+                return 0
+            clause += " AND upper(method) = %s"
+            extra = (method.upper(),)
+        if self._records_action() and "{" in action:
+            # A route with a part: every call of the route, whichever part it named.
+            match, params = "action ~ %s", ("^" + action_pattern(action) + "$",)
+        elif self._records_action():
             # A row from before actions were recorded counts by its name, as `same_action` reads it.
             match, params = "(action = %s OR (action IS NULL AND name IN (%s, %s)))", (action, action, name)
         else:
@@ -1107,7 +1157,7 @@ class PostgresLog:
                 "SELECT COALESCE(SUM(CASE WHEN error = %s AND jsonb_typeof(arguments -> 'count') = 'number' "
                 "THEN GREATEST((arguments ->> 'count')::numeric::int, 1) ELSE 1 END), 0) "
                 f"FROM _alk_tool_trace WHERE {match}{clause}",
-                (DOOR_OUT_OF_REACH, *params),
+                (DOOR_OUT_OF_REACH, *params, *extra),
             ).fetchone()
         return int(row[0]) if row else 0
 
@@ -1199,12 +1249,15 @@ class MemoryLog:
             answered = self._responses.get((actor, key))
         return (found.get("action"), found["arguments"], found["result"], answered)
 
-    def agent_calls(self, action: str, name: str) -> int:
+    def agent_calls(self, action: str, name: str, method: str | None = None) -> int:
         return sum(
             calls_in(one)
             for one in self.rows()
             if one.get("actor_id") == AGENT
-            and (one.get("action") == action if one.get("action") else one.get("name") in (action, name))
+            and (
+                action_matches(str(one["action"]), action) if one.get("action") else one.get("name") in (action, name)
+            )
+            and (not method or str(one.get("method") or "").upper() == method.upper())
         )
 
 
@@ -1239,8 +1292,8 @@ class TeeLog:
     def settle(self, key: str, actor: str, state: str | None, response: Response | None = None) -> None:
         self.primary.settle(key, actor, state, response)
 
-    def agent_calls(self, action: str, name: str) -> int:
-        return self.primary.agent_calls(action, name)
+    def agent_calls(self, action: str, name: str, method: str | None = None) -> int:
+        return self.primary.agent_calls(action, name, method)
 
 
 class DictRoster:
