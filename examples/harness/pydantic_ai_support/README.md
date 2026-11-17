@@ -15,7 +15,7 @@ turn; a `system_prompt` would be dropped once there is history.
 ## Environment
 
 - `OPENAI_API_KEY`: the key for the endpoint (required for a turn).
-- `OPENAI_BASE_URL`: the endpoint's base URL (required whenever a key is set; a turn is refused otherwise, so the key is never sent to the OpenAI API by default). Set it to the model gateway for the default model.
+- `OPENAI_BASE_URL`: the endpoint's base URL (required whenever a key is set; a turn is refused otherwise, so the key is never sent to the OpenAI API by default; a blank value counts as unset). Set it to the model gateway for the default model.
 - `OPENAI_MODEL`: the model name, default `vertex_ai/gemini-3.7-flash` (a gateway name).
 
 The endpoint must speak chat completions. The model is built as an `OpenAIChatModel`;
