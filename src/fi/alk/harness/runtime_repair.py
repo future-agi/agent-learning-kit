@@ -1012,6 +1012,8 @@ _FOLDER_FLAGS = ("--directory", "--cwd", "--chdir", "--project", "--prefix", "--
 
 _PYTHON_VALUE_OPTIONS = frozenset({"--check-hash-based-pycs"})
 _SCRIPT_VALUE_OPTIONS = frozenset({"-r", "--require", "--import"})
+# Standard modules that run their arguments (or stdin) as code: `python -m timeit "<code>"`.
+_PYTHON_CODE_MODULES = frozenset({"timeit", "code", "pdb"})
 
 
 def _runs_inline_code(command: list[str]) -> bool:
@@ -1032,7 +1034,11 @@ def _runs_inline_code(command: list[str]) -> bool:
         takes_value = _PYTHON_VALUE_OPTIONS if python else _SCRIPT_VALUE_OPTIONS
         options = iter(command[index + 1:])
         for option in options:
-            if not option.startswith("-") or option == "-m":
+            if python and option == "-m":
+                return next(options, "") in _PYTHON_CODE_MODULES
+            if name == "deno" and option == "eval":
+                return True
+            if not option.startswith("-"):
                 break
             if option in {"-c", "-e", "--eval", "-p", "--print"}:
                 return True
@@ -1040,10 +1046,17 @@ def _runs_inline_code(command: list[str]) -> bool:
                 return True
             if script and option.startswith(("--eval", "--print", "-e", "-p")):
                 return True
+            if script and option.split("=", 1)[0] in takes_value and "=" in option:
+                if option.split("=", 1)[1].startswith("data:"):
+                    return True
+                continue
             if option in takes_value or (
                 python and option.startswith("-") and not option.startswith("--") and option[-1] in "WX"
             ):
-                next(options, None)
+                value = next(options, "")
+                if script and value.startswith("data:"):
+                    # A preload given as a data: URL is code written into the command.
+                    return True
     return False
 
 

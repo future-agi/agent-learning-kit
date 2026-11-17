@@ -3299,3 +3299,35 @@ def test_an_exact_inline_flag_among_the_interpreters_own_options_is_inline_code(
     from fi.alk.harness.runtime_repair import _runs_inline_code
 
     assert _runs_inline_code(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["python", "-m", "timeit", "-n1", "print(1)"],
+        ["python3", "-B", "-m", "code"],
+        ["python", "-m", "pdb", "-c", "continue", "app.py"],
+        ["node", "--import", "data:text/javascript,console.log(1)", "app.js"],
+        ["node", "-r", "data:text/javascript,1", "app.js"],
+        ["node", "--import=data:text/javascript,1", "app.js"],
+        ["deno", "eval", "console.log(1)"],
+    ],
+)
+def test_a_module_or_url_that_runs_its_argument_as_code_is_inline_code(command) -> None:
+    from fi.alk.harness.runtime_repair import _runs_inline_code
+
+    assert _runs_inline_code(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["python", "-m", "uvicorn", "main:app"],
+        ["node", "--import", "./tracing.mjs", "app.js"],
+        ["deno", "run", "main.ts"],
+    ],
+)
+def test_an_ordinary_module_or_preload_is_not_inline_code(command) -> None:
+    from fi.alk.harness.runtime_repair import _runs_inline_code
+
+    assert not _runs_inline_code(command)
