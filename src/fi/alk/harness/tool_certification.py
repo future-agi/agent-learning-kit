@@ -11,11 +11,13 @@ import hashlib
 import json
 from enum import Enum
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .contract import AgentContract, runtime_owns_tools
+from .world_door import READ_METHODS
 
 TOOL_CERTIFICATION_SCHEMA_VERSION = "futureagi.tool-certification.v1"
 
@@ -270,6 +272,46 @@ def certify_tool_inventory(
     return ToolCertificationReport.create(results)
 
 
+
+def compare_declared_tables(
+    report: ToolCertificationReport, contract: AgentContract, proofs: Mapping[str, Any]
+) -> tuple[ToolCertificationReport, list[str]]:
+    """Each tool's declared `tables_changed` against the tables its scenarios' proof runs changed. A proof run counts
+    for a tool only when that tool was the one tool that wrote in it; any other run that changed tables is skipped and
+    named. A changed table the tool does not declare is flagged in its row's reason, its availability unchanged."""
+    reads = {
+        entry.tool
+        for entry in contract.tool_entrypoints
+        if entry.effect == "read" or (entry.effect != "write" and entry.method.upper() in READ_METHODS)
+    }
+    changed_by: dict[str, set[str]] = {}
+    skipped: list[str] = []
+    for key, proof in sorted(proofs.items()):
+        trial = proof.get("trial") if isinstance(proof, Mapping) else None
+        if not isinstance(trial, Mapping) or not trial.get("changed"):
+            continue
+        writers = sorted({str(name) for name in trial.get("calls") or () if name not in reads})
+        if trial.get("unattributable"):
+            skipped.append(f"{key}: {trial['unattributable']}")
+        elif len(writers) != 1:
+            skipped.append(f"{key}: {len(writers)} tools wrote in it, so no one tool changed its tables")
+        else:
+            changed_by.setdefault(writers[0], set()).update(str(name) for name in trial["changed"])
+    declared = {tool.name: set(tool.tables_changed) for tool in contract.tools}
+    rows = []
+    for row in report.tools:
+        undeclared = sorted(changed_by.get(row.tool, set()) - declared.get(row.tool, set()))
+        if undeclared:
+            row = row.model_copy(
+                update={
+                    "reason": f"{row.reason}; its proof runs changed {', '.join(undeclared)}, "
+                    "which its declared tables_changed does not list"
+                }
+            )
+        rows.append(row)
+    return ToolCertificationReport.create(rows), skipped
+
+
 __all__ = [
     "TOOL_CERTIFICATION_SCHEMA_VERSION",
     "ToolAvailability",
@@ -277,4 +319,5 @@ __all__ = [
     "ToolCertificationReport",
     "ToolProbeMode",
     "certify_tool_inventory",
+    "compare_declared_tables",
 ]

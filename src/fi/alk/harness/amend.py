@@ -20,6 +20,7 @@ the same kind of guess it exists to prevent.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from ..providers.agent import _redact
 from .contract import (
@@ -31,6 +32,20 @@ from .contract import (
 )
 
 CONTRACT = CONTRACT_FILE
+
+
+def _kept_shape(written: Any, before: Any) -> Any:
+    """``written`` without the empty keys ``before`` never had, so an edit never shows a change to a field nobody
+    set."""
+    if isinstance(written, dict) and isinstance(before, dict):
+        return {
+            key: _kept_shape(value, before.get(key))
+            for key, value in written.items()
+            if key in before or value not in ("", None, [], {})
+        }
+    if isinstance(written, list) and isinstance(before, list) and len(written) == len(before):
+        return [_kept_shape(one, was) for one, was in zip(written, before)]
+    return written
 
 
 def widen(
@@ -218,6 +233,8 @@ def fix_tool(
     why: str,
     args: list[str] | None = None,
     arg_types: dict[str, str] | None = None,
+    arg_units: dict[str, str] | None = None,
+    returns: dict[str, str] | None = None,
     description: str = "",
     refuses: str = "",
     effects: str = "",
@@ -260,6 +277,7 @@ def fix_tool(
         spec.args = list(args)
         spec.arg_types = {k: v for k, v in spec.arg_types.items() if k in spec.args}
         spec.arg_values = {k: v for k, v in spec.arg_values.items() if k in spec.args}
+        spec.arg_units = {k: v for k, v in spec.arg_units.items() if k in spec.args}
         changed.append(f"arguments are now {', '.join(args)}")
         if orphaned:
             changed.append(f"dropped values recorded for {', '.join(orphaned)}")
@@ -269,6 +287,22 @@ def fix_tool(
             return False, f"{tool_name} takes no argument called {', '.join(unknown)}"
         spec.arg_types.update(arg_types)
         changed.append("types updated")
+    if arg_units:
+        unknown = sorted(set(arg_units) - set(spec.args))
+        if unknown:
+            return False, f"{tool_name} takes no argument called {', '.join(unknown)}"
+        spec.arg_units.update(arg_units)
+        changed.append(
+            "units updated ("
+            + "; ".join(
+                f"{field} in {unit}{_code_says(contract, spec, field)}" for field, unit in sorted(arg_units.items())
+            )
+            + "); if the code that reads a field or the data it holds says otherwise, the code's unit is the one to "
+            "record, and the person is told about the mismatch"
+        )
+    if returns:
+        spec.returns.update(returns)
+        changed.append("returned fields updated")
     if description:
         spec.description = description
         changed.append("description updated")
@@ -278,7 +312,7 @@ def fix_tool(
             changed.append(f"{field} updated")
     if not changed:
         return False, (
-            "nothing to change: give args, arg_types, description, refuses, effects, inputs_from, "
+            "nothing to change: give args, arg_types, arg_units, returns, description, refuses, effects, inputs_from, "
             "or remove"
         )
 
@@ -317,7 +351,7 @@ def drop_tool_references(contract: AgentContract) -> list[str]:
 def _persist(contract: AgentContract, destination: Path) -> None:
     """Save the contract the stage is holding. Its free text is cleaned in place as it is saved,
     so the stage goes on working from what was saved."""
-    write_contract(contract, Path(destination))
+    write_contract(contract, Path(destination), shape=_kept_shape)
 
 
 def not_offered(contract: AgentContract, candidates: dict[str, set[str]]) -> list[str]:
@@ -337,3 +371,14 @@ def not_offered(contract: AgentContract, candidates: dict[str, set[str]]) -> lis
             if absent:
                 missing.append(f"{tool.name}.{argument}: {', '.join(absent)}")
     return missing
+
+
+def _code_says(contract: Any, spec: Any, field: str) -> str:
+    """What the code and the world's data say about a field, beside the unit just recorded for it: its declared type
+    and each stored column of that name, so the unit is checked against them where it is written."""
+    seen = [f"the code types it {spec.arg_types[field]}"] if spec.arg_types.get(field) else []
+    for collection, columns in sorted((getattr(contract, "data_schema", None) or {}).items()):
+        if isinstance(columns, dict) and field in columns:
+            seen.append(f"{collection}.{field} is stored as {columns[field]}")
+    return f" ({'; '.join(seen)})" if seen else ""
+

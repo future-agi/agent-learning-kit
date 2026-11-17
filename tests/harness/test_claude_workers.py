@@ -220,3 +220,10 @@ def test_a_built_in_the_backend_cannot_supply_is_refused() -> None:
 
     with pytest.raises(ValueError, match="WebSearch"):
         ClaudeBackend()._options(spec)
+
+
+def test_a_session_given_no_tools_is_offered_none_of_the_cli_s_own():
+    bare = ClaudeBackend()._options(SessionSpec(system_prompt="Decide.", max_turns=1, gated=False))
+    assert bare.tools == []
+    reading = ClaudeBackend()._options(SessionSpec(system_prompt="Read.", builtins=("Read",)))
+    assert reading.tools != []
