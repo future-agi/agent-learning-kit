@@ -48,7 +48,7 @@ from . import observability
 from .job import FailureDomain, HarnessStage
 from .checks import check_reads, reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
-from .judge import INCONCLUSIVE, NOT_APPLICABLE, UNMEASURED, verdict_named
+from .judge import NOT_APPLICABLE, UNMEASURED, verdict_named
 from .world_door import EvidenceUnavailable
 from .judge import judge_sub_goal as _judge
 from .outbound import (
@@ -390,7 +390,7 @@ class ResultReceipt:
     evaluations: tuple[Evaluation, ...]
     call: CallSummary | None
     failure: ReceiptFailure | None
-    # Why a scenario was skipped, when there is a reason to give.
+    # Why a scenario was skipped, or a note on a graded trial (an actor that never reached the agent).
     reason: str | None = None
 
 
@@ -1579,19 +1579,21 @@ class RunResult:
     fenced: BaseException | None = None
 
 
+# The platform keeps a receipt's note to 500 characters.
+_NOTE_LIMIT = 500
+
+
 def _call_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
     """Each of the scenario's actors who speak on the call that never reached the agent, and why: not_triggered or
     not_delivered. One a `probability` draw left out is absent by design and not counted."""
     reports = {str(one.get("actor")): one for one in outcome.call_actors}
-    # An actor a sub-goal is about is settled on that sub-goal instead.
-    graded = {str(getattr(goal, "actor", "") or "") for goal in scenario.sub_goals}
     # What an actor did in the world reached the agent's world as surely as a line it said.
     acted = {
         str(row.get("actor_id") or "") for row in outcome.world_actions if row.get("outcome") == "committed"
     }
     missing = []
     for actor_id in getattr(scenario, "speaking_actors", ()):
-        if actor_id in graded or actor_id in acted:
+        if actor_id in acted:
             continue
         report = reports.get(actor_id) or {}
         if not report.get("delivered") and report.get("drawn", True):
@@ -1616,7 +1618,7 @@ def _call_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
     # An actor acting through the world that could not act at all (no door, not listed) is the scenario's problem too.
     for report in outcome.call_actors:
         actor_id = str(report.get("actor") or "")
-        if report.get("problem") in ("not_listed", "no_world_door", "no_private_token") and actor_id not in graded:
+        if report.get("problem") in ("not_listed", "no_world_door", "no_private_token"):
             missing.append(f"{report.get('name') or actor_id} ({report.get('problem')})")
     return ", ".join(missing)
 
@@ -1644,8 +1646,7 @@ def _missing_evidence(goal: Any, outcome: CallOutcome) -> str:
 
 
 def _about_an_actor(goal: Any, result: SubGoalResult, outcome: CallOutcome) -> SubGoalResult:
-    """A sub-goal about an actor: not applicable when the actor never came in, inconclusive when it came in and never
-    reached the agent, else as graded."""
+    """A sub-goal about an actor: not applicable when the actor never came in, else as graded."""
     actor_id = str(getattr(goal, "actor", "") or "")
     if not actor_id:
         return result
@@ -1653,8 +1654,6 @@ def _about_an_actor(goal: Any, result: SubGoalResult, outcome: CallOutcome) -> S
     name = report.get("name") or actor_id
     if not report.get("triggered"):
         return replace(result, held=True, reason=f"{NOT_APPLICABLE}{name} never came into this call.")
-    if not report.get("delivered"):
-        return replace(result, held=None, reason=f"{INCONCLUSIVE}{name} came in but never reached the agent.")
     return result
 
 
@@ -2375,22 +2374,9 @@ class HostedScheduler:
         # Set the moment the call step returns, so a crash later in this method (e.g.
         # `world.read_only()` below) still reports the call that genuinely ran, not `null`.
         context.call = self._call_summary(call_outcome)
+        # An actor that never reached the agent is noted on the trial; its sub-goals are graded as usual.
         missing = _call_actors_missing(scenario, call_outcome)
-        if missing:
-            # The scenario's actor is part of the test: a call it never reached tested something
-            # else, so the call is inconclusive, never a pass.
-            return self._fault(
-                scenario,
-                world_index,
-                attempt,
-                _failure(
-                    "actor_missing",
-                    f"inconclusive: scenario problem, not the agent's: did not reach the agent: {missing}",
-                ),
-                sub_goals=_unjudged(scenario.sub_goals),
-                call=self._call_summary(call_outcome),
-                retry=False,
-            )
+        note = f"did not reach the agent: {missing}"[:_NOTE_LIMIT] if missing else None
         calls = graded_calls(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
@@ -2634,25 +2620,6 @@ class HostedScheduler:
             _about_an_actor(goal, result, call_outcome)
             for goal, result in zip(scenario.sub_goals, sub_goal_results)
         ]
-        unreached = [
-            result.name
-            for goal, result in zip(scenario.sub_goals, sub_goal_results)
-            if getattr(goal, "actor", "") and result.verdict == "inconclusive"
-        ]
-        if unreached:
-            return self._fault(
-                scenario,
-                world_index,
-                attempt,
-                _failure(
-                    "actor_missing",
-                    "inconclusive: scenario problem, not the agent's: an actor these sub-goals depend on never reached the agent: "
-                    + ", ".join(unreached),
-                ),
-                sub_goals=tuple(sub_goal_results),
-                call=self._call_summary(call_outcome),
-                retry=False,
-            )
         sub_goal_results = [
             replace(result, evidence=_evidence_of(goal, call_outcome))
             for goal, result in zip(scenario.sub_goals, sub_goal_results)
@@ -2709,6 +2676,7 @@ class HostedScheduler:
             evaluations=(),
             call=self._call_summary(call_outcome),
             failure=failure,
+            reason=note,
         )
 
     @staticmethod

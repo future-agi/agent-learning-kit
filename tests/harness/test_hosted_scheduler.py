@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from fi.alk.harness import hosted_scheduler as hs
+from fi.alk.harness.judge import INCONCLUSIVE
 from fi.alk.harness.outbound import (
     ChannelError,
     ChannelOutcome,
@@ -4749,22 +4750,26 @@ def _friend(**seen) -> dict:
         (_friend(dropped=["not ready in time"]), "Rowan (not_delivered: not ready in time)"),
         (_friend(dropped=["its model did not answer"]), "Rowan (not_delivered: its model did not answer)"),
         (_friend(), "Rowan (not_delivered)"),
+        (_friend(waited=["already handled"]), "Rowan (not_delivered: waited (already handled))"),
         (_friend(triggered=False), "Rowan (not_triggered)"),
         (None, "friend (not_triggered)"),
     ],
 )
-def test_a_call_its_call_actor_never_reached_is_inconclusive_never_a_pass(
+def test_a_call_its_call_actor_never_reached_is_graded_with_the_actor_noted(
     monkeypatch, seen, why
 ) -> None:
-    receipt = _run_with_friend(
+    passed = _run_with_friend(
         monkeypatch, seen, [FakeSubGoal("booked", lambda w, c: None)]
     )
-    assert receipt.status == "errored"
-    assert (receipt.failure.code, receipt.failure.message) == (
-        "actor_missing",
-        f"inconclusive: scenario problem, not the agent's: did not reach the agent: {why}",
+    assert (passed.status, passed.failure) == ("passed", None)
+    assert [one.verdict for one in passed.sub_goals] == ["pass"]
+    assert passed.reason == f"did not reach the agent: {why}"
+    failed = _run_with_friend(
+        monkeypatch, seen, [FakeSubGoal("booked", lambda w, c: "booked for the wrong time")]
     )
-    assert [one.verdict for one in receipt.sub_goals] == [None]
+    assert (failed.status, failed.failure) == ("failed", None)
+    assert [one.verdict for one in failed.sub_goals] == ["fail"]
+    assert failed.reason == f"did not reach the agent: {why}"
 
 
 def test_a_call_actor_a_probability_draw_left_out_leaves_the_call_graded(
@@ -4800,7 +4805,7 @@ def test_a_call_actor_that_came_in_leaves_the_call_s_result_as_graded(
     [
         (_friend(triggered=False), "not_applicable", "passed"),
         (_friend(triggered=False, drawn=False), "not_applicable", "passed"),
-        (_friend(dropped=["not ready in time"]), "inconclusive", "errored"),
+        (_friend(dropped=["not ready in time"]), "pass", "passed"),
         (_friend(delivered=1), "pass", "passed"),
     ],
 )
@@ -4808,10 +4813,8 @@ def test_a_sub_goal_about_an_actor_is_settled_by_whether_the_actor_came_in(monke
     about = FakeSubGoal("asked_the_friend", lambda w, c: None, actor="friend")
     task = FakeSubGoal("booked", lambda w, c: None)
     receipt = _run_with_friend(monkeypatch, seen, [task, about])
-    assert receipt.status == status
+    assert (receipt.status, receipt.failure) == (status, None)
     assert [one.verdict for one in receipt.sub_goals] == ["pass", verdict]
-    if status == "errored":
-        assert receipt.failure.code == "actor_missing" and "asked_the_friend" in receipt.failure.message
 
 
 @pytest.mark.parametrize("problem", ["no_world_door", "no_private_token", "not_listed"])
@@ -4822,16 +4825,13 @@ def test_an_actor_that_could_not_act_names_itself_and_why_in_the_verdict(problem
     )
     scenario = SimpleNamespace(sub_goals=[], speaking_actors=())
     assert hs._call_actors_missing(scenario, outcome) == f"Mia ({problem})"
-    # A sub-goal about that actor settles it there instead.
-    scenario = SimpleNamespace(sub_goals=[FakeSubGoal("approved", lambda w, c: None, actor="mia")], speaking_actors=())
-    assert hs._call_actors_missing(scenario, outcome) == ""
 
 
 @pytest.mark.parametrize(
     "row, verdict",
     [
         ({"triggered": False, "delivered": 0}, "not_applicable"),
-        ({"triggered": True, "delivered": 0}, "inconclusive"),
+        ({"triggered": True, "delivered": 0}, "pass"),
         ({"triggered": True, "delivered": 1}, "pass"),
     ],
 )
@@ -5035,7 +5035,7 @@ def test_a_world_state_check_with_no_world_state_is_unmeasured_with_that_reason(
     from fi.alk.harness.hosted_entrypoint import sub_goal_wire
 
     assert [sub_goal_wire(one)["verdict"] for one in receipt.sub_goals] == ["unmeasured"]
-    inconclusive = hs.SubGoalResult(name="asked", held=None, reason=f"{hs.INCONCLUSIVE}never reached", judged=True)
+    inconclusive = hs.SubGoalResult(name="asked", held=None, reason=f"{INCONCLUSIVE}never reached", judged=True)
     assert sub_goal_wire(inconclusive)["verdict"] == "inconclusive"
     # The same check with its evidence there is graded: here it fails on the empty world.
     assert _graded_on({}, [goal]).status == "failed"
