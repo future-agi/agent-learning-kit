@@ -120,6 +120,7 @@ def test_invalid_base64_is_rejected(encoded):
         )
     )
     assert response["ok"] is False
+    assert response["operation"] == "prepare"
     assert response["error"]["code"] == "source_request_invalid"
 
 

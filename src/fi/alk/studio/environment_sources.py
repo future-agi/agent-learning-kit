@@ -105,6 +105,7 @@ class CompileRequest(_ImmutableValue):
 
 def execute_request(payload: bytes) -> dict[str, Any]:
     """Return one versioned success/error envelope without filesystem writes."""
+    operation: str | None = None
     try:
         if not isinstance(payload, bytes) or len(payload) > MAX_REQUEST_BYTES:
             raise EnvironmentInputError(
@@ -115,6 +116,8 @@ def execute_request(payload: bytes) -> dict[str, Any]:
             object_pairs_hook=_unique_object,
             parse_constant=_reject_json_constant,
         )
+        if isinstance(data, dict) and isinstance(data.get("operation"), str):
+            operation = data["operation"]
         request = TypeAdapter(
             PrepareRequest | AcceptRequest | CompileRequest
         ).validate_json(_canonical_json(data))
@@ -164,19 +167,26 @@ def execute_request(payload: bytes) -> dict[str, Any]:
             "The source request is invalid",
             (),
         )
-    return _error_response(code, message, diagnostics)
+    return _error_response(code, message, diagnostics, operation=operation)
 
 
 def request_too_large_response() -> dict[str, Any]:
-    return _error_response("source_too_large", "Request exceeds the size limit", ())
+    return _error_response(
+        "source_too_large", "Request exceeds the size limit", (), operation=None
+    )
 
 
 def _error_response(
-    code: str, message: str, diagnostics: tuple[Any, ...]
+    code: str,
+    message: str,
+    diagnostics: tuple[Any, ...],
+    *,
+    operation: str | None,
 ) -> dict[str, Any]:
     return {
         "version": RESPONSE_VERSION,
         "ok": False,
+        "operation": operation,
         "error": {
             "code": code,
             "message": message,
@@ -197,15 +207,12 @@ def main() -> int:
                 payload = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
             response = execute_request(payload)
         except OSError:
-            response = {
-                "version": RESPONSE_VERSION,
-                "ok": False,
-                "error": {
-                    "code": "source_request_invalid",
-                    "message": "The request file could not be read",
-                    "diagnostics": [],
-                },
-            }
+            response = _error_response(
+                "source_request_invalid",
+                "The request file could not be read",
+                (),
+                operation=None,
+            )
     sys.stdout.write(_canonical_json(response) + "\n")
     return 0 if response["ok"] else 1
 
