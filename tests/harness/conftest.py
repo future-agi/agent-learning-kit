@@ -1,6 +1,8 @@
 import hashlib
 import json
 import os
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -39,10 +41,30 @@ def _no_controller_mark_left_behind():
     # Hosted authoring's main() marks its own process as a sandbox controller and loads a .env into
     # the runtime namespace. A test that runs it in-process must not leave either behind for later
     # tests in the session, which would then take the controller's .env path, not the local one.
-    marked = "ALK_RUNTIME_CONFIGURATION_NAMES" in os.environ
+    marks = ("ALK_RUNTIME_CONFIGURATION_NAMES", "ALK_TARGET_PROVIDER_ALIASES")
+    marked = {name for name in marks if name in os.environ}
     runtime = {name for name in os.environ if name.startswith("ALK_RUNTIME_VALUE_")}
     yield
-    if not marked:
-        os.environ.pop("ALK_RUNTIME_CONFIGURATION_NAMES", None)
+    for name in marks:
+        if name not in marked:
+            os.environ.pop(name, None)
     for name in [n for n in os.environ if n.startswith("ALK_RUNTIME_VALUE_") and n not in runtime]:
         del os.environ[name]
+
+
+@pytest.fixture
+def chown_path():
+    """Where a fake ``chown`` call lands; ``user_files.own_tree`` passes a name in a descriptor."""
+
+    def resolve(path, dir_fd=None) -> Path:
+        if dir_fd is None:
+            return Path(path)
+        if sys.platform == "darwin":
+            import fcntl
+
+            base = fcntl.fcntl(dir_fd, fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0].decode()
+        else:
+            base = os.readlink(f"/proc/self/fd/{dir_fd}")
+        return Path(os.path.normpath(os.path.join(base, path)))
+
+    return resolve

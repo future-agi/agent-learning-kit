@@ -9,6 +9,7 @@ model is saved exactly as before.
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import json
 import os
@@ -25,6 +26,20 @@ from fi.alk.harness.tools import accept_contract, contract_tools
 
 MIB = 1024 * 1024
 FIXTURES = Path(__file__).resolve().parents[1] / "providers" / "fixtures" / "authored"
+
+
+@pytest.fixture(autouse=True)
+def _earlier_heap_frozen():
+    """Keep a full collection of the heap the tests before this one built out of this file's
+    timings: one such pass took 0.3 s inside a timed save on CI. The test's own collections still
+    count. The two checks nearest their line are test_a_crafted_file_of_block_comments_does_not_
+    hold_up_the_check[a-file-of-openers] and test_a_quote_that_grows_when_normalised_costs_little
+    (about 0.27 s against 0.5 s)."""
+    gc.freeze()
+    try:
+        yield
+    finally:
+        gc.unfreeze()
 
 EMPTY_NAME = (
     "model: name is empty; give the model's name as written in the source, or leave model out"
@@ -143,15 +158,16 @@ def test_a_contract_without_a_model_saves_and_builds_as_before(tmp_path):
 
     assert not result.get("is_error"), result
     raw = (tmp_path / "out" / "contract.json").read_bytes()
+    # The bytes and hash dev writes for this contract, `workers` included since #226.
     assert hashlib.sha256(raw).hexdigest() == (
-        "7a61d8e863f75541c6d32c287fea02fb7a605d3b440a91f4c1b4212a3e1832b6"
+        "5705f539a00886a4bc8bacb34fcf50b35e22d145e36391de98b192ad73050c1d"
     )
     assert "model" not in json.loads(raw)
     document = build_authored_agent(
         AgentContract.model_validate(json.loads(raw)).model_dump(mode="json")
     )
     assert document["setup_hash"] == (
-        "sh1:3854d6ecb87a1ee2890c5c16f25e854e20be84c109dc80311ad292e6f656d622"
+        "sh1:7aedd9f36dd3ed3fd5a1c7fd67d8a2ec6abe34ed09d616b7dccccf49e8cb1aa3"
     )
     assert document["model"] is None
 

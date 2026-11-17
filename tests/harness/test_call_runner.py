@@ -176,6 +176,196 @@ def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> N
     assert calls[1].error == "declined"
 
 
+def test_the_sealed_trace_row_keeps_the_runtime_worker_task_and_event_ids(
+    tmp_path: Path,
+) -> None:
+    from fi.alk.harness.world.runtime import trace_row
+
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {
+            "name": "lookup",
+            "arguments": {},
+            "output": "found",
+            "is_error": False,
+            "source": "crewai",
+            "agent_key": "researcher",
+            "task_name": "Find weather",
+            "event_id": "e2",
+            "parent_event_id": "e1",
+        },
+        {"name": "lookup", "arguments": {}, "output": "found", "is_error": False},
+    )
+    observed, plain = (
+        trace_row(call)
+        for call in cr._collect_file_tool_calls(
+            _runtime(metadata={"tool_trace_path": str(trace)})
+        )
+    )
+
+    assert (observed["worker_id"], observed["task_label"]) == (
+        "researcher",
+        "Find weather",
+    )
+    assert observed["runtime_ids"] == {"event_id": "e2", "parent_event_id": "e1"}
+    assert not {
+        "worker_id",
+        "worker_label",
+        "task_id",
+        "task_label",
+        "runtime_ids",
+    } & set(plain)
+
+
+# A worker's run, as a CrewAI agent records it: a hand-off, not a call checks grade.
+_HANDOFF_LINE = {
+    "name": "Draft checker",
+    "arguments": {},
+    "output": "valid",
+    "is_error": False,
+    "source": "crewai",
+    "agent_key": "DraftFlow",
+    "delegated_to": "Draft checker",
+    "at": 4.0,
+    "ended_at": 6.5,
+    "kind": "handoff",
+}
+
+_SPAN_LINES = (
+    {
+        "name": "ask_writer",
+        "arguments": {},
+        "output": None,
+        "is_error": False,
+        "source": "otel",
+        "agent_key": "Coordinator",
+        "delegated_to": "Writer",
+        "at": 1.0,
+        "ended_at": 3.0,
+    },
+    {
+        "name": "draft_note",
+        "arguments": {},
+        "output": None,
+        "is_error": False,
+        "source": "otel",
+        "agent_key": "Writer",
+        "at": 2.0,
+    },
+)
+
+
+def _observed() -> list[Call]:
+    # Stamped once their results were read, later than they started and in the other order.
+    return [
+        Call(
+            name="ask_writer",
+            arguments={"topic": "tides"},
+            result="done",
+            ok=True,
+            at=9.2,
+        ),
+        Call(
+            name="draft_note",
+            arguments={"topic": "tides"},
+            result="drafted",
+            ok=True,
+            at=9.1,
+        ),
+    ]
+
+
+def test_span_lines_name_the_agent_of_calls_another_source_observed_and_add_none(
+    tmp_path: Path,
+) -> None:
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        *_SPAN_LINES,
+        {"name": "draft_note", "arguments": {}, "output": "written", "is_error": False},
+    )
+    calls = cr._with_span_calls(
+        _observed(), _runtime(metadata={"tool_trace_path": str(trace)})
+    )
+    assert [
+        (c.name, c.arguments, c.worker_id, c.delegated_to, c.at, c.ended_at)
+        for c in calls
+    ] == [
+        ("ask_writer", {"topic": "tides"}, "Coordinator", "Writer", 1.0, 3.0),
+        ("draft_note", {"topic": "tides"}, "Writer", "", 2.0, 0.0),
+    ]
+
+
+def test_a_runtime_s_hand_off_keeps_when_the_worker_returned_and_is_never_graded(
+    tmp_path: Path,
+) -> None:
+    # CrewAI's observer writes each agent a flow runs as a hand-off, with its own start and end.
+    from fi.alk.harness.world.runtime import graded_calls, trace_row
+
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {
+            "name": "Draft checker",
+            "arguments": {},
+            "output": "valid",
+            "is_error": False,
+            "source": "crewai",
+            "agent_key": "DraftFlow",
+            "delegated_to": "Draft checker",
+            "at": 4.0,
+            "ended_at": 6.5,
+            "kind": "handoff",
+        },
+    )
+    calls = cr._collect_file_tool_calls(
+        _runtime(metadata={"tool_trace_path": str(trace)})
+    )
+    (row,) = (trace_row(call) for call in calls)
+    assert (
+        row["worker_id"],
+        row["delegated_to"],
+        row["at"],
+        row["ended_at"],
+        row["kind"],
+    ) == ("DraftFlow", "Draft checker", 4.0, 6.5, "delegated")
+    assert graded_calls(calls) == []
+
+
+def test_a_span_that_recorded_no_arguments_reads_as_none_not_as_raw_text(
+    tmp_path: Path,
+) -> None:
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {**_SPAN_LINES[1], "arguments": "", "output": ""},
+        {"name": "note", "arguments": "not json", "output": "", "is_error": False},
+    )
+    calls = cr._collect_file_tool_calls(
+        _runtime(metadata={"tool_trace_path": str(trace)})
+    )
+    assert [(c.name, c.arguments) for c in calls] == [
+        ("note", {"raw": "not json"}),
+        ("draft_note", {}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "seam", [EvidenceSeam.TOOL_TRACE, EvidenceSeam.HTTP_TOOL, None]
+)
+def test_a_process_agent_s_seam_calls_keep_their_evidence_and_take_the_agent_from_its_spans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seam: EvidenceSeam | None
+) -> None:
+    trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPAN_LINES)
+    for reader in ("_collect_tool_trace_calls", "_collect_http_tool_calls"):
+        monkeypatch.setattr(cr, reader, lambda runtime, **_: tuple(_observed()))
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=seam)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
+    calls = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    # With no seam, the spans are the only evidence.
+    assert [(c.name, c.result, c.worker_id) for c in calls] == [
+        ("ask_writer", "done" if seam else None, "Coordinator"),
+        ("draft_note", "drafted" if seam else None, "Writer"),
+    ]
+
+
 def test_a_result_traced_as_the_text_of_a_dict_reaches_checks_as_the_dict(tmp_path: Path) -> None:
     trace = tmp_path / "agent-tool-calls.jsonl"
     trace.write_text(
@@ -1189,7 +1379,9 @@ def test_non_completed_tool_trace_call_preserves_evidence_and_uploads_trace(
         refused=False,
         at="2026-01-01T00:00:01.000Z",
     )
-    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda runtime: (captured,))
+    monkeypatch.setattr(
+        cr, "_collect_tool_trace_calls", lambda runtime, **_: (captured,)
+    )
 
     async def place_call(spec):
         failure = SimulationFailure(
@@ -1670,6 +1862,217 @@ def test_tool_trace_missing_endpoint_degrades_to_no_calls() -> None:
     assert cr._collect_tool_trace_calls(runtime) == ()
 
 
+def test_a_strict_tool_trace_read_says_the_capture_failed(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
+    with pytest.raises(cr.ToolCaptureFailed, match="tool_trace read failed"):
+        cr._collect_tool_trace_calls(
+            _runtime(endpoints={"database": _postgres_endpoint()}), strict=True
+        )
+    with pytest.raises(cr.ToolCaptureFailed, match="no world database"):
+        cr._collect_tool_trace_calls(_runtime(endpoints={}), strict=True)
+
+
+def test_a_strict_trace_file_read_fails_only_on_a_file_it_cannot_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    # No file: the agent called no tool, or nothing wrote one. Neither is a failed read.
+    assert cr._collect_file_tool_calls(runtime, strict=True) == ()
+    _trace_lines(trace, {"name": "lookup", "arguments": {}})
+
+    def refuse(*_args: Any, **_kwargs: Any) -> str:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(type(trace), "read_text", refuse)
+    assert cr._collect_file_tool_calls(runtime) == ()
+    with pytest.raises(cr.ToolCaptureFailed, match="tool_trace file unreadable"):
+        cr._collect_file_tool_calls(runtime, strict=True)
+
+
+@pytest.mark.parametrize(
+    "lines,failed,names",
+    [
+        pytest.param(['{"name": "lookup", "argu'], True, [], id="cut-json-line"),
+        pytest.param(['["lookup"]'], True, [], id="not-an-object"),
+        pytest.param(['{"arguments": {}}'], True, [], id="no-name"),
+        pytest.param(
+            ['{"name": "lookup", "arguments": {}}', '{"name": "book", "argu'],
+            False,
+            ["lookup"],
+            id="one-bad-line-among-good",
+        ),
+        pytest.param(["", "   "], False, [], id="blank-lines-only"),
+    ],
+)
+def test_a_trace_file_with_no_readable_record_is_a_failed_capture(
+    tmp_path: Path, lines: list[str], failed: bool, names: list[str]
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    trace.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+
+    # Lenient reads drop what they cannot parse, as before.
+    assert [call.name for call in cr._collect_file_tool_calls(runtime)] == names
+    if failed:
+        with pytest.raises(cr.ToolCaptureFailed, match="no readable record"):
+            cr._collect_file_tool_calls(runtime, strict=True)
+    else:
+        calls = cr._collect_file_tool_calls(runtime, strict=True)
+        assert [call.name for call in calls] == names
+
+
+class _NoTablePsycopg:
+    """Connects, then finds no `_alk_tool_trace` table, as a world whose seed never ran."""
+
+    class UndefinedTable(Exception):
+        sqlstate = "42P01"
+
+    def connect(self, dsn: str, **kwargs: Any) -> Any:
+        missing = self.UndefinedTable('relation "_alk_tool_trace" does not exist')
+
+        class Connection:
+            def execute(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise missing
+
+            def __enter__(self) -> Any:
+                return self
+
+            def __exit__(self, *exc_info: Any) -> bool:
+                return False
+
+        return Connection()
+
+
+@pytest.mark.parametrize(
+    "seam,trace,database,failed,captured",
+    [
+        pytest.param(
+            EvidenceSeam.HTTP_TOOL, "none", None, False, [], id="http-tool-empty"
+        ),
+        pytest.param(
+            EvidenceSeam.HTTP_TOOL,
+            "unreadable",
+            None,
+            True,
+            [],
+            id="trace-file-unreadable",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE, "none", "empty", False, [], id="tool-trace-empty"
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "none",
+            "down",
+            True,
+            [],
+            id="tool-trace-connection-refused",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "none",
+            "no-table",
+            True,
+            [],
+            id="tool-trace-table-missing",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "unreadable",
+            "rows",
+            False,
+            ["lookup"],
+            id="trace-file-unreadable-but-the-seam-captured",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "spans",
+            "down",
+            False,
+            ["ask_writer", "draft_note"],
+            id="span-lines-with-the-database-down",
+        ),
+        # A hand-off is kept for the record but is not a call checks grade, so it does not
+        # stand in for the database the seam could not read.
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "handoff",
+            "down",
+            True,
+            ["Draft checker"],
+            id="handoff-only-with-the-database-down",
+        ),
+        pytest.param(
+            EvidenceSeam.TOOL_TRACE,
+            "handoff",
+            "empty",
+            False,
+            ["Draft checker"],
+            id="handoff-only-with-the-database-read",
+        ),
+        pytest.param(
+            EvidenceSeam.HTTP_TOOL, "cut", None, True, [], id="trace-file-of-cut-lines"
+        ),
+    ],
+)
+def test_a_completed_call_says_whether_its_tool_capture_failed(
+    tmp_path: Path,
+    monkeypatch,
+    seam: EvidenceSeam,
+    trace: str,
+    database: str | None,
+    failed: bool,
+    captured: list[str],
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=seam)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    trace_path = tmp_path / "agent-tool-calls.jsonl"
+    columns = ["name", "arguments", "result", "ok", "error", "at"]
+    if database == "down":
+        monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
+    elif database == "no-table":
+        monkeypatch.setitem(sys.modules, "psycopg", _NoTablePsycopg())
+    elif database is not None:
+        rows = [("lookup", {}, "ok", True, "", 1.0)] if database == "rows" else []
+        monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    read_text = Path.read_text
+
+    def read_unless_refused(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == trace_path:
+            raise PermissionError("denied")
+        return read_text(self, *args, **kwargs)
+
+    async def place_call(spec):
+        # Written during the call, after the runner cleared the previous attempt's file.
+        if trace == "unreadable":
+            _trace_lines(trace_path, {"name": "lookup", "arguments": {}})
+            monkeypatch.setattr(type(trace_path), "read_text", read_unless_refused)
+        elif trace == "spans":
+            _trace_lines(trace_path, *_SPAN_LINES)
+        elif trace == "handoff":
+            _trace_lines(trace_path, _HANDOFF_LINE)
+        elif trace == "cut":
+            trace_path.write_text('{"name": "lookup", "argu\n', encoding="utf-8")
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    outcome = _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(
+            metadata={
+                "livekit_agent_name": "agent-w0",
+                "tool_trace_path": str(trace_path),
+            },
+            endpoints={"database": _postgres_endpoint()} if database else None,
+        ),
+    )
+
+    assert outcome.tool_capture_failed is failed
+    assert [call.name for call in outcome.calls] == captured
+
+
 def test_tool_trace_result_string_form_is_truncated_at_2000_chars(monkeypatch) -> None:
     long_string = "x" * 3000
     columns = ["name", "arguments", "result", "ok", "error", "at"]
@@ -2064,3 +2467,193 @@ def test_a_tool_result_sent_as_text_is_read_back_into_its_shape():
     assert _structured("[INFO] booked") == "[INFO] booked"
     assert _structured({"id": 7}) == {"id": 7}
     assert len(_structured("x" * 5000)) == 2000
+
+
+# --- TH-9550, amendment 4.1 (1b): a local job's Google settings go with the job's own file ---
+
+_JOB_ADC = json.dumps({"type": "service_account", "project_id": "job-canary"})
+_JOB_GOOGLE = {
+    "GOOGLE_APPLICATION_CREDENTIALS_JSON": _JOB_ADC,
+    "GOOGLE_CLOUD_PROJECT": "job-project",
+    "GOOGLE_CLOUD_LOCATION": "job-location",
+    "GOOGLE_GENAI_USE_VERTEXAI": "true",
+    "GOOGLE_API_KEY": "job-google-key-canary",
+    "GEMINI_API_KEY": "job-gemini-key-canary",
+    "OPENAI_API_KEY": "job-openai-key-canary",
+}
+_GOOGLE_SETTINGS = ("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GOOGLE_GENAI_USE_VERTEXAI")
+
+
+def _local_call_environment(tmp_path, *, secrets, environ, simulator_secrets=None):
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        execution=ExecutionMode.LOCAL,
+        secrets=secrets,
+        simulator_secrets=simulator_secrets if simulator_secrets is not None else {},
+    )
+    return cr.CallRunnerImpl(FakeAdapter(), context, environ=environ)
+
+
+def _assert_customer_keys_kept(call_environment):
+    # The gate is about the Google settings only: the customer's keys stay (1b).
+    assert call_environment["GOOGLE_API_KEY"] == "job-google-key-canary"
+    assert call_environment["GEMINI_API_KEY"] == "job-gemini-key-canary"
+    assert call_environment["OPENAI_API_KEY"] == "job-openai-key-canary"
+
+
+def test_the_jobs_google_settings_replace_the_hosts_when_the_jobs_own_file_is_in_effect(tmp_path):
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=dict(_JOB_GOOGLE),
+        environ={"GOOGLE_CLOUD_PROJECT": "host-project"},
+    )
+
+    call_environment = runner._environ
+
+    assert runner._adc_path is not None
+    assert call_environment["GOOGLE_APPLICATION_CREDENTIALS"] == str(runner._adc_path)
+    assert Path(call_environment["GOOGLE_APPLICATION_CREDENTIALS"]).read_text() == _JOB_ADC
+    assert call_environment["GOOGLE_CLOUD_PROJECT"] == "job-project"
+    assert call_environment["GOOGLE_CLOUD_LOCATION"] == "job-location"
+    assert call_environment["GOOGLE_GENAI_USE_VERTEXAI"] == "true"
+    assert "host-project" not in call_environment.values()
+    _assert_customer_keys_kept(call_environment)
+
+
+def test_the_jobs_google_settings_are_dropped_when_the_host_has_a_credentials_file(tmp_path):
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=dict(_JOB_GOOGLE),
+        environ={
+            "GOOGLE_APPLICATION_CREDENTIALS": "/host/google.json",
+            "GOOGLE_CLOUD_PROJECT": "host-project",
+        },
+    )
+
+    call_environment = runner._environ
+
+    assert runner._adc_path is None
+    assert call_environment["GOOGLE_APPLICATION_CREDENTIALS"] == "/host/google.json"
+    assert call_environment["GOOGLE_CLOUD_PROJECT"] == "host-project"
+    assert "GOOGLE_CLOUD_LOCATION" not in call_environment
+    assert "GOOGLE_GENAI_USE_VERTEXAI" not in call_environment
+    assert "job-project" not in call_environment.values()
+    _assert_customer_keys_kept(call_environment)
+
+
+def test_the_jobs_google_settings_are_dropped_without_the_jobs_own_file(tmp_path):
+    secrets = {name: value for name, value in _JOB_GOOGLE.items() if "JSON" not in name}
+
+    runner = _local_call_environment(
+        tmp_path, secrets=secrets, environ={"GOOGLE_CLOUD_PROJECT": "host-project"}
+    )
+
+    call_environment = runner._environ
+    assert runner._adc_path is None
+    assert call_environment["GOOGLE_CLOUD_PROJECT"] == "host-project"
+    assert "GOOGLE_CLOUD_LOCATION" not in call_environment
+    assert "GOOGLE_GENAI_USE_VERTEXAI" not in call_environment
+    _assert_customer_keys_kept(call_environment)
+
+
+def test_the_jobs_google_settings_are_dropped_when_the_file_in_effect_is_the_platforms(tmp_path):
+    platform_adc = json.dumps({"type": "service_account", "project_id": "platform-canary"})
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=dict(_JOB_GOOGLE),
+        environ={},
+        simulator_secrets={"SIMULATOR_GOOGLE_APPLICATION_CREDENTIALS_JSON": platform_adc},
+    )
+
+    call_environment = runner._environ
+
+    assert Path(call_environment["GOOGLE_APPLICATION_CREDENTIALS"]).read_text() == platform_adc
+    for name in _GOOGLE_SETTINGS:
+        assert name not in call_environment
+
+
+def test_the_hosts_google_settings_are_removed_when_the_jobs_own_file_is_in_effect_and_it_sends_none(
+    tmp_path,
+):
+    # The job sends its credentials JSON and no project, location or switch; the host has all
+    # three. The host's must not join the job's file.
+    secrets = {"GOOGLE_APPLICATION_CREDENTIALS_JSON": _JOB_ADC}
+
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=secrets,
+        environ={
+            "GOOGLE_CLOUD_PROJECT": "host-project",
+            "GOOGLE_CLOUD_LOCATION": "host-location",
+            "GOOGLE_GENAI_USE_VERTEXAI": "host-switch",
+        },
+    )
+
+    call_environment = runner._environ
+    assert runner._adc_path is not None
+    assert Path(call_environment["GOOGLE_APPLICATION_CREDENTIALS"]).read_text() == _JOB_ADC
+    for name in _GOOGLE_SETTINGS:
+        assert name not in call_environment
+    assert not {"host-project", "host-location", "host-switch"} & set(call_environment.values())
+
+
+_VERTEX_ONLY_JOB = {
+    "LIVEKIT_API_KEY": "lk-key",
+    "LIVEKIT_API_SECRET": "lk-secret",
+    "DEEPGRAM_API_KEY": "dg-key",
+    "GOOGLE_APPLICATION_CREDENTIALS_JSON": _JOB_ADC,
+    "GOOGLE_CLOUD_PROJECT": "job-project",
+}
+
+
+def test_the_config_check_does_not_count_the_jobs_project_the_gate_drops(tmp_path):
+    # The host has a credentials file and no project, so the gate drops the job's project and
+    # the call runs with none. The check must say Vertex is not ready, not pass.
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=dict(_VERTEX_ONLY_JOB),
+        environ={"GOOGLE_APPLICATION_CREDENTIALS": "/host/google.json"},
+    )
+
+    assert "GOOGLE_CLOUD_PROJECT" not in runner._environ
+    assert runner._missing_config is not None
+    assert any("VERTEX_ADC" in alias for alias in runner._missing_config.aliases)
+
+
+def test_the_config_check_counts_the_jobs_project_when_the_gate_keeps_it(tmp_path):
+    runner = _local_call_environment(
+        tmp_path, secrets=dict(_VERTEX_ONLY_JOB), environ={}
+    )
+
+    assert runner._environ["GOOGLE_CLOUD_PROJECT"] == "job-project"
+    assert runner._missing_config is None
+
+
+def test_the_platforms_google_settings_do_not_pair_with_the_jobs_own_file(tmp_path):
+    # The platform holds a project but no credentials file, so the job's file is the one in
+    # effect: its project goes with it, and the platform's never sits beside it.
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=dict(_VERTEX_ONLY_JOB),
+        environ={},
+        simulator_secrets={"GOOGLE_CLOUD_PROJECT": "platform-project"},
+    )
+
+    assert runner._environ["GOOGLE_CLOUD_PROJECT"] == "job-project"
+    assert "platform-project" not in runner._environ.values()
+
+
+def test_the_platforms_google_settings_are_dropped_when_the_jobs_own_file_sends_none(tmp_path):
+    secrets = dict(_VERTEX_ONLY_JOB)
+    del secrets["GOOGLE_CLOUD_PROJECT"]
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=secrets,
+        environ={},
+        simulator_secrets={
+            "GOOGLE_CLOUD_PROJECT": "platform-project",
+            "GOOGLE_CLOUD_LOCATION": "platform-location",
+        },
+    )
+
+    assert not {"platform-project", "platform-location"} & set(runner._environ.values())

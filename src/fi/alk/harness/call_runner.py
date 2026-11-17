@@ -31,6 +31,7 @@ from __future__ import annotations
 import ast
 import atexit
 import asyncio
+import dataclasses
 import gc
 import json
 import random
@@ -41,7 +42,7 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from fi import agentcc, simulate
 from fi.simulate.runtime import (
@@ -81,7 +82,16 @@ from .simulator_voice import (
     simulator_definition,
 )
 from .world.errors import WorldUnavailable
-from .world.runtime import Call, tool_call_attribution
+from .world.runtime import (
+    Call,
+    graded_calls,
+    runtime_ids,
+    tool_call_attribution,
+    trace_row,
+)
+
+if TYPE_CHECKING:
+    from .handler_child import HandlerChannel
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +109,12 @@ GOOGLE_APPLICATION_CREDENTIALS_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS"
 GOOGLE_CLOUD_PROJECT_ALIAS = "GOOGLE_CLOUD_PROJECT"
 GOOGLE_CLOUD_LOCATION_ALIAS = "GOOGLE_CLOUD_LOCATION"
 GOOGLE_GENAI_USE_VERTEXAI_ALIAS = "GOOGLE_GENAI_USE_VERTEXAI"
+# Settings of the job's own Google credentials file; used only with that file (see CallRunnerImpl).
+_JOB_GOOGLE_SETTING_ALIASES = (
+    GOOGLE_CLOUD_LOCATION_ALIAS,
+    GOOGLE_CLOUD_PROJECT_ALIAS,
+    GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
+)
 OPENAI_API_KEY_ALIAS = "OPENAI_API_KEY"
 VAPI_API_KEY_ALIAS = "VAPI_API_KEY"
 VAPI_PUBLIC_API_KEY_ALIAS = "VAPI_PUBLIC_API_KEY"
@@ -255,6 +271,9 @@ class CallRunnerContext:
     source_directory: Path | None = None
     simulator_provider_secret_values: Mapping[str, str] = field(default_factory=dict)
     usage_reporter: UsageReporter | None = None
+    # Under per-user isolation, where the conversation's tool calls run: a handler child's
+    # socket. None runs them in this process, as with one fixed user.
+    handler_channel: "HandlerChannel | None" = None
 
 
 # --- pre-dial validation -----------------------------------------------------------------------
@@ -302,6 +321,7 @@ def _check_config(
     job: HarnessJob,
     target_provider_secret_values: Mapping[str, str],
     simulator_values: Mapping[str, str] | None = None,
+    call_environment: Mapping[str, str] | None = None,
 ) -> _MissingVoiceConfig | None:
     simulator_values = simulator_values or {}
 
@@ -313,6 +333,13 @@ def _check_config(
             if job.execution is ExecutionMode.LOCAL
             else None
         )
+
+    def google_project() -> str | None:
+        # A local job's call runs on its environment, where the 1b gate has already dropped the
+        # job's project if the host's credentials file is in effect; count only what the call has.
+        if call_environment is not None and job.execution is ExecutionMode.LOCAL:
+            return call_environment.get(GOOGLE_CLOUD_PROJECT_ALIAS)
+        return simulator_value(GOOGLE_CLOUD_PROJECT_ALIAS)
 
     config = job.agent.config
     llm_provider = str(
@@ -372,7 +399,7 @@ def _check_config(
                 simulator_value(GOOGLE_APPLICATION_CREDENTIALS_ALIAS)
                 or simulator_value(GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS)
             )
-            and simulator_value(GOOGLE_CLOUD_PROJECT_ALIAS)
+            and google_project()
         )
         if not has_api_key and not has_vertex_adc:
             missing_aliases.append(
@@ -686,6 +713,17 @@ def _find_postgres_endpoint(runtime: EnvironmentRuntime) -> Any | None:
     return None
 
 
+class ToolCaptureFailed(RuntimeError):
+    """A capture surface the bundle declares could not be read for this call. Not the same as an
+    empty capture: the agent may have acted through a tool that nothing recorded. Raised only by
+    a collector asked to be ``strict``; the message never carries a DSN. ``calls`` holds what was
+    still captured that checks do not grade, such as hand-offs, so it stays visible."""
+
+    def __init__(self, message: str, *, calls: tuple[Call, ...] = ()) -> None:
+        super().__init__(message)
+        self.calls = calls
+
+
 def _collect_http_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     """No guest-side capture surface exists anywhere in this repo for the
     `http_tool` evidence seam. Verified, not assumed: `world/handle.py::HostedWorld.call()`
@@ -723,16 +761,22 @@ def _clear_tool_trace_calls(dsn: str) -> None:
         )
 
 
-def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+def _collect_tool_trace_calls(
+    runtime: EnvironmentRuntime, *, strict: bool = False
+) -> tuple[Call, ...]:
     """`_alk_tool_trace`'s name and column shape are an isolated local
     convention -- unpinned by any contract (the only harness-reserved table anywhere in this
     repo is `_alk_conformance`, unrelated), no producer exists yet. Isolated in this one function
     (+ `_clear_tool_trace_calls`) so a real producer's disagreement on the name/shape is a one-line
     change. Any failure (missing table, connection refused, malformed row) degrades to `()` --
     never a crash, never fabricated evidence, matching `_collect_http_tool_calls`'s stopped
-    behavior above."""
+    behavior above. ``strict`` raises `ToolCaptureFailed` instead of returning `()` when there is
+    no world database to read or the read fails, so the call is not graded as one that made no
+    tool call."""
     endpoint = _find_postgres_endpoint(runtime)
     if endpoint is None:
+        if strict:
+            raise ToolCaptureFailed("tool_trace seam has no world database to read")
         return ()
     try:
         import psycopg
@@ -755,6 +799,10 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         logger.debug(
             "tool_trace read failed; treating as no evidence: %s", type(exc).__name__
         )
+        if strict:
+            raise ToolCaptureFailed(
+                f"tool_trace read failed: {type(exc).__name__}"
+            ) from None
         return ()
 
     calls: list[Call] = []
@@ -805,32 +853,70 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
 # Marks lines written by livekit_tool_trace_bootstrap._record. That module is copied into the
 # agent's interpreter as a standalone sitecustomize, so it cannot import this constant.
 _LIVEKIT_HOOK_SOURCE = "livekit"
+_SPAN_SOURCE = "otel"
 _MISSING = object()
 
 
-def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+def _collect_file_tool_calls(
+    runtime: EnvironmentRuntime, *, strict: bool = False
+) -> tuple[Call, ...]:
+    return _with_span_calls((), runtime, strict=strict)
+
+
+def _with_span_calls(
+    observed: Sequence[Call], runtime: EnvironmentRuntime, *, strict: bool = False
+) -> tuple[Call, ...]:
+    """Calls another source saw, else the trace file's own lines, joined with the file's span lines."""
+    written, from_spans = _read_file_tool_calls(runtime, strict=strict)
+    return _merge_span_calls(list(observed) or written, from_spans)
+
+
+def _read_file_tool_calls(
+    runtime: EnvironmentRuntime, *, strict: bool = False
+) -> tuple[list[Call], list[Call]]:
+    """The attempt's tool-trace file: its written lines and its span lines. No file is no
+    evidence either way: the file is removed before the call, and an agent that called no tool
+    never writes it. ``strict`` raises `ToolCaptureFailed` when a file is there and cannot be
+    read, or when it holds records and none of them can be read as a call."""
     path = _tool_trace_file(runtime)
     if path is None or not path.is_file():
-        return ()
+        return [], []
     calls: list[Call] = []
     # Agent-written calls not yet timed by the hook line for the same call.
     untimed: list[Call] = []
+    from_spans: list[Call] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return ()
+    except OSError as exc:
+        if strict:
+            raise ToolCaptureFailed(
+                f"tool_trace file unreadable: {type(exc).__name__}"
+            ) from None
+        return [], []
+    # Records that cannot be read as a call: a cut JSON line, a value that is not an object, a
+    # record with no name. One among good records is dropped; a file of nothing else is not a
+    # call that used no tool.
+    unreadable = 0
     for line in lines:
+        if not line.strip():
+            continue
         try:
             record = json.loads(line)
         except ValueError:
+            unreadable += 1
             continue
         if not isinstance(record, dict):
+            unreadable += 1
             continue
         name = record.get("name")
         if not isinstance(name, str) or not name:
+            unreadable += 1
             continue
         arguments = record.get("arguments")
-        if isinstance(arguments, str):
+        if isinstance(arguments, str) and not arguments.strip():
+            # A span that recorded no arguments.
+            arguments = {}
+        elif isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments)
             except ValueError:
@@ -847,8 +933,15 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             ok=not is_error,
             error=str(output) if is_error and output is not None else None,
             **tool_call_attribution(record),
+            runtime_ids=runtime_ids(record),
+            handoff=record.get("kind") == "handoff",
             at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
         )
+        ended = record.get("ended_at")
+        call.ended_at = float(ended) if isinstance(ended, (int, float)) else 0.0
+        if record.get("source") == _SPAN_SOURCE:
+            from_spans.append(call)
+            continue
         if record.get("source") != _LIVEKIT_HOOK_SOURCE:
             calls.append(call)
             if not call.at:
@@ -880,7 +973,394 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             continue
         untimed.remove(written)
         written.at = call.at
-    return tuple(calls)
+    if strict and unreadable and not calls and not from_spans:
+        raise ToolCaptureFailed(
+            f"tool_trace file has no readable record ({unreadable} unreadable)"
+        )
+    return calls, from_spans
+
+
+def _tool_key(name: str) -> str:
+    """A tool's name as two tracers of one call may spell it ("Delegate work" or "delegate_work")."""
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def _keep_recorded_parents(from_spans: list[Call]) -> None:
+    """A span's parent stands only when it is a hand-off the spans recorded; a call of an agent run the framework
+    records as handed control sits in that control pass, on that record alone (`parent_event_id` and `passed`)."""
+    handed = {
+        span.runtime_ids.get("event_id")
+        for span in from_spans
+        if span.delegated_to or span.transferred
+    } - {None}
+    passed = {
+        span.runtime_ids.get("event_id")
+        for span in from_spans
+        if span.transferred and span.handoff
+    } - {None}
+    for span in from_spans:
+        agent_run = span.runtime_ids.get("parent_event_id")
+        if not span.parent_span_id and agent_run in passed:
+            span.parent_span_id, span.relationship = agent_run, "observed"
+        elif span.parent_span_id and span.parent_span_id not in handed:
+            span.parent_span_id, span.relationship = "", ""
+
+
+def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, ...]:
+    """Count a call a framework span and another tracer both report once, with the span's agent, hand-off and times."""
+    # A background job is written when it starts and again when it ends; the later line carries its return.
+    ended = {
+        span.runtime_ids.get("event_id")
+        for span in from_spans
+        if span.delegated_to and span.ended_at
+    } - {None}
+    from_spans = [
+        span
+        for span in from_spans
+        if not (
+            span.delegated_to
+            and not span.ended_at
+            and span.runtime_ids.get("event_id") in ended
+        )
+    ]
+    _keep_recorded_parents(from_spans)
+    if not calls:
+        # A span is written when it ends, so a hand-off lands after the calls it led to.
+        return tuple(sorted(from_spans, key=lambda call: call.at))
+    launched = {span.runtime_ids.get("event_id"): span.name for span in from_spans}
+    merged = list(calls)
+    waiting: list[Call] = []
+    for span in from_spans:
+        if (
+            span.delegated_to
+            and launched.get(span.runtime_ids.get("parent_event_id")) == span.name
+        ):
+            # A job's hand-off sits under the call that launched it and is not that call again.
+            merged.append(span)
+        else:
+            waiting.append(span)
+    span_ids = set(launched) - {None}
+    tools: dict[str, tuple[list[Call], list[Call]]] = {}
+    for span in waiting:
+        tools.setdefault(_tool_key(span.name), ([], []))[0].append(span)
+    for call in calls:
+        if _tool_key(call.name) in tools:
+            tools[_tool_key(call.name)][1].append(call)
+    unknown: set[str | None] = set()
+    for spans, natives in tools.values():
+        groups, apart, can_be = _pair_tool(spans, natives, span_ids)
+        # A span no call left could be is a call only the spans saw.
+        merged.extend(apart)
+        for spans_left, calls_left in groups:
+            # Which of these calls each span is, nothing says: their ids and places stay unknown rather than be swapped.
+            unknown |= {span.runtime_ids.get("event_id") for span in spans_left}
+            # Only a call every one of these spans could be takes what they agree on.
+            shared = [call for call in calls_left if all(can_be(span, call) for span in spans_left)]
+            if len(spans_left) >= len(calls_left):
+                _lend_shared(spans_left, shared)
+            # More spans than the calls they could be are more calls than the other tracer saw: each extra is kept,
+            # owned by no one.
+            extras = [_unowned(span) for span in spans_left[len(calls_left) :]]
+            _lend_shared(spans_left, extras)
+            merged.extend(extras)
+    for call in merged:
+        if call.parent_span_id and call.parent_span_id in unknown:
+            call.parent_span_id, call.relationship = "", ""
+    return tuple(sorted(merged, key=lambda call: call.at))
+
+
+def _pair_tool(
+    spans: list[Call], natives: list[Call], span_ids: set[str]
+) -> tuple[list[tuple[list[Call], list[Call]]], list[Call], Callable[[Call, Call], bool]]:
+    """Pair one tool's spans with the calls another tracer saw of it, on evidence that holds across the two tracers'
+    clocks: an event id, then arguments and outcome between competing calls, then order when the spans did not
+    overlap, then calls that are the same in all but time. Returns the unpaired spans and calls in groups that could be
+    each other, the spans that can be none of the calls left, and the test of whether a span could be a call."""
+    by_id = {
+        call.runtime_ids["event_id"]: call
+        for call in natives
+        if call.runtime_ids.get("event_id")
+    }
+    rest: list[Call] = []
+    for span in spans:
+        own = by_id.pop(span.runtime_ids.get("event_id", ""), None)
+        if own is None:
+            rest.append(span)
+        else:
+            _lend_span(span, own)
+    # A call holding another span's event id is that span's, whatever else fits.
+    free = [
+        call for call in natives if call.runtime_ids.get("event_id") not in span_ids
+    ]
+    values = {id(call): _argument_values(call) for call in [*rest, *free]}
+
+    def fit(span: Call, call: Call) -> tuple[bool, bool] | None:
+        """How strongly a span claims a call: matching arguments, then outcome; None when anything both recorded
+        differs."""
+        if _recorded_differently(span, call):
+            return None
+        mine, theirs = values[id(span)], values[id(call)]
+        shared = (
+            mine.keys() & theirs.keys()
+            if mine is not None and theirs is not None
+            else set()
+        )
+        if any(mine[key] != theirs[key] for key in shared):
+            return None
+        return bool(shared), call.ok == span.ok
+
+    if len(rest) == 1 and len(free) == 1:
+        # Nothing competes, but count alone is not identity: each tracer may have missed a different call.
+        if _compatible(rest[0], free[0], fit):
+            _lend_span(rest[0], free[0])
+            return [], [], lambda _span, _call: False
+        return [], rest, lambda _span, _call: False
+    contested_spans: list[Call] = []
+    contested_calls: list[Call] = []
+    while True:
+        claims: dict[int, tuple[Call, list[tuple[tuple[bool, bool], Call]]]] = {}
+        for span in rest:
+            fits = [
+                (fit(span, call), call) for call in free if _compatible(span, call, fit)
+            ]
+            if not fits:
+                continue
+            best = max(strength for strength, _ in fits)
+            top = [call for strength, call in fits if strength == best]
+            if len(top) == 1:
+                claims.setdefault(id(top[0]), (top[0], []))[1].append((best, span))
+        if not claims:
+            break
+        for call, claimants in claims.values():
+            claimants.sort(key=lambda claim: claim[0], reverse=True)
+            free = [c for c in free if c is not call]
+            if len(claimants) > 1 and claimants[0][0] == claimants[1][0]:
+                # Two spans claim one call equally: neither takes it.
+                contested_calls.append(call)
+                contested_spans.extend(span for _, span in claimants)
+                rest = [s for s in rest if not any(s is span for _, span in claimants)]
+            else:
+                _lend_span(claimants[0][1], call)
+                rest = [s for s in rest if s is not claimants[0][1]]
+    if rest and len(rest) == len(free) and _pair_in_order(rest, free, fit):
+        rest, free = [], []
+    rest, free = _pair_interchangeable(rest, free, fit)
+    left = [*free, *contested_calls]
+
+    def can_be(span: Call, call: Call) -> bool:
+        return _compatible(span, call, fit)
+
+    spans_left = [*rest, *contested_spans]
+    apart = [span for span in spans_left if not any(can_be(span, call) for call in left)]
+    spans_left = [span for span in spans_left if not any(span is other for other in apart)]
+    return _compatible_groups(spans_left, left, can_be), apart, can_be
+
+
+def _compatible_groups(
+    spans: list[Call], calls: list[Call], can_be: Callable[[Call, Call], bool]
+) -> list[tuple[list[Call], list[Call]]]:
+    """Spans and calls left unpaired, in groups that share no possible pairing: a span counts only against the calls
+    it could be, so an unrelated call never absorbs another call's span. Calls no span could be are left out."""
+    group = list(range(len(spans)))
+
+    def root(index: int) -> int:
+        while group[index] != index:
+            group[index] = group[group[index]]
+            index = group[index]
+        return index
+
+    owner: dict[int, int] = {}
+    for at, span in enumerate(spans):
+        for position, call in enumerate(calls):
+            if not can_be(span, call):
+                continue
+            if position in owner:
+                group[root(at)] = root(owner[position])
+            else:
+                owner[position] = at
+    found: dict[int, tuple[list[Call], list[Call]]] = {}
+    for at, span in enumerate(spans):
+        found.setdefault(root(at), ([], []))[0].append(span)
+    for position, call in enumerate(calls):
+        if position in owner:
+            found[root(owner[position])][1].append(call)
+    return list(found.values())
+
+
+def _compatible(span: Call, call: Call, fit: Callable[[Call, Call], Any]) -> bool:
+    """Whether a span and a call can be one call: nothing both recorded differs, and they agree on the outcome or
+    record the same result (two tracers can read one refusal differently)."""
+    strength = fit(span, call)
+    return strength is not None and (
+        strength[1]
+        or (_kept_result(span) and _kept_result(call) and _same_result(span, call))
+    )
+
+
+def _kept_result(call: Call) -> bool:
+    # A tracer that wrote no output, or only part of it, recorded nothing to compare.
+    return call.result not in (None, "") and not call.output_omitted
+
+
+def _same_result(span: Call, call: Call) -> bool:
+    return _loose(span.result) == _loose(call.result)
+
+
+def _recorded_differently(span: Call, call: Call) -> bool:
+    """Whether a span and a call each recorded something about the call that the other contradicts: its result, the
+    worker that made it, the worker it handed work to, or whether it was a worker's run. Event ids are not compared
+    here: each tracer may number events in its own way, and a shared id is matched before any of this."""
+    return (
+        (_kept_result(span) and _kept_result(call) and not _same_result(span, call))
+        or _other_worker(span, call)
+        or bool(
+            span.delegated_to
+            and call.delegated_to
+            and _tool_key(span.delegated_to) != _tool_key(call.delegated_to)
+        )
+        or span.handoff != call.handoff
+    )
+
+
+def _pair_in_order(
+    spans: list[Call], calls: list[Call], fit: Callable[[Call, Call], Any]
+) -> bool:
+    """Pair spans that did not overlap with the calls in the order each tracer stamped them. Each side is read on its
+    own clock, so an offset between the clocks cannot change the pairing; overlapping spans are never paired by time."""
+    spans = sorted(spans, key=lambda span: span.at)
+    calls = sorted(calls, key=lambda call: call.at)
+    # A span with no end may still be running when the next starts.
+    apart = all(a.ended_at and a.ended_at < b.at for a, b in zip(spans, spans[1:]))
+    stamped = len(calls) == 1 or all(
+        a.at and a.at < b.at for a, b in zip(calls, calls[1:])
+    )
+    if not (
+        apart
+        and stamped
+        and all(_compatible(span, call, fit) for span, call in zip(spans, calls))
+    ):
+        return False
+    for span, call in zip(spans, calls):
+        _lend_span(span, call)
+    return True
+
+
+def _pair_interchangeable(
+    spans: list[Call], calls: list[Call], fit: Callable[[Call, Call], Any]
+) -> tuple[list[Call], list[Call]]:
+    """Pair spans whose only fitting calls are the same in all but time: whichever each takes, the trace reads the
+    same. Returns the spans and calls left."""
+    if not (spans and calls):
+        return spans, calls
+    alike: dict[str, list[Call]] = {}
+    for call in calls:
+        alike.setdefault(_digest(call), []).append(call)
+    wanting: dict[str, list[Call]] = {}
+    for span in spans:
+        fitting = [
+            digest
+            for digest, group in alike.items()
+            if _compatible(span, group[0], fit)
+        ]
+        if len(fitting) == 1:
+            wanting.setdefault(fitting[0], []).append(span)
+    taken: set[int] = set()
+    for digest, claimants in wanting.items():
+        if len(claimants) <= len(alike[digest]):
+            for span, call in zip(claimants, alike[digest]):
+                _lend_span(span, call)
+                taken.update((id(span), id(call)))
+    return (
+        [span for span in spans if id(span) not in taken],
+        [call for call in calls if id(call) not in taken],
+    )
+
+
+def _argument_values(call: Call) -> dict[str, Any] | None:
+    """A call's arguments as both tracers would agree on them ("5" and 5 alike), or None when it kept none whole."""
+    if call.input_omitted or not call.arguments or set(call.arguments) == {"raw"}:
+        return None
+    return {key: _loose(value) for key, value in call.arguments.items()}
+
+
+def _loose(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return value
+
+
+def _digest(call: Call) -> str:
+    """Everything a call carries but its times."""
+    fields = {
+        key: value for key, value in vars(call).items() if key not in ("at", "ended_at")
+    }
+    return json.dumps(fields, sort_keys=True, default=repr)
+
+
+def _unowned(span: Call) -> Call:
+    return dataclasses.replace(
+        span,
+        worker_id="",
+        worker_label="",
+        delegated_to="",
+        transferred=False,
+        runtime_ids={},
+        parent_span_id="",
+        relationship="",
+    )
+
+
+def _lend_shared(spans: list[Call], calls: list[Call]) -> None:
+    """Give calls no span can be told apart from what every one of their spans agrees on: a hand-off or worker that
+    certainly happened, whichever call is whose."""
+
+    def agreed(read: Callable[[Call], Any]) -> Any:
+        values = {read(span) for span in spans}
+        return values.pop() if len(values) == 1 else None
+
+    worker = agreed(lambda span: (span.worker_id, span.worker_label))
+    delegated_to = agreed(lambda span: span.delegated_to)
+    transferred = agreed(lambda span: span.transferred)
+    for call in calls:
+        if worker and not (call.worker_id or call.worker_label):
+            call.worker_id, call.worker_label = worker
+        call.delegated_to = call.delegated_to or delegated_to or ""
+        call.transferred = call.transferred or bool(transferred)
+
+
+def _worker_names(call: Call) -> set[str]:
+    return {_tool_key(name) for name in (call.worker_id, call.worker_label) if name}
+
+
+def _other_worker(span: Call, call: Call) -> bool:
+    """Whether two records name different workers. Tracers spell a worker in different id spaces (a framework's
+    hashed key, its role name), so they are the same worker when any name either recorded matches, and different only
+    when both named a worker and no name matches."""
+    mine, theirs = _worker_names(span), _worker_names(call)
+    return bool(mine and theirs and not (mine & theirs))
+
+
+def _lend_span(span: Call, other: Call) -> None:
+    """Give another tracer's call the span's agent, hand-off and times, keeping what it recorded itself."""
+    if not (other.worker_id or other.worker_label):
+        other.worker_id, other.worker_label = span.worker_id, span.worker_label
+    other.delegated_to = other.delegated_to or span.delegated_to
+    other.transferred = other.transferred or span.transferred
+    other.ended_at = other.ended_at or span.ended_at
+    if not other.runtime_ids:
+        # The span's place among the agents goes with its ids: a parent is an id in the same record.
+        other.runtime_ids = span.runtime_ids
+        other.parent_span_id, other.relationship = (
+            span.parent_span_id,
+            span.relationship,
+        )
+    # A span starts when the call does; another tracer may stamp a call only once it reads its result.
+    other.at = span.at or other.at
 
 
 def _target_metrics(case: Any) -> dict[str, Any] | None:
@@ -1046,6 +1526,8 @@ class CallRunnerImpl:
         # Local SDK runs remain BYOK and historically carry simulator keys in the one local
         # target map. Hosted runs deliberately do not fall back: their simulator credentials must
         # come from platform configuration and must not be confused with customer-agent keys.
+        job_google_credentials = False
+        job_google_settings: dict[str, str] = {}
         if context.job.execution is ExecutionMode.LOCAL:
             for alias in (
                 LIVEKIT_URL_ALIAS,
@@ -1056,9 +1538,6 @@ class CallRunnerImpl:
                 GEMINI_API_KEY_ALIAS,
                 GOOGLE_API_KEY_ALIAS,
                 GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS,
-                GOOGLE_CLOUD_PROJECT_ALIAS,
-                GOOGLE_CLOUD_LOCATION_ALIAS,
-                GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
                 OPENAI_API_KEY_ALIAS,
                 SIMULATOR_LLM_PROVIDER_ALIAS,
                 SIMULATOR_LLM_MODEL_ALIAS,
@@ -1071,6 +1550,13 @@ class CallRunnerImpl:
                     value = context.target_provider_secret_values.get(alias)
                     if value:
                         simulator_secret_values[alias] = value
+                        if alias == GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS:
+                            job_google_credentials = True
+            # The job's Google settings go with the job's own credentials file, not before.
+            for alias in _JOB_GOOGLE_SETTING_ALIASES:
+                value = context.target_provider_secret_values.get(alias)
+                if value:
+                    job_google_settings[alias] = value
         # Provider libraries read ambient credentials. Supply a private snapshot to
         # each call subprocess, never export credentials into the parent process.
         ambient = os.environ if environ is None else environ
@@ -1103,6 +1589,17 @@ class CallRunnerImpl:
             value = context.target_provider_secret_values.get(alias)
             if value:
                 target_environ[alias] = value
+        # The job's own credentials file is in effect only if it is the one copied from the job's
+        # target values and no GOOGLE_APPLICATION_CREDENTIALS is set (_materialize_vertex_adc
+        # writes the file only then). Then the job's project, location and Vertex switch replace
+        # the host's and the platform's, which would otherwise win. Otherwise they are dropped.
+        if job_google_credentials and not target_environ.get(
+            GOOGLE_APPLICATION_CREDENTIALS_ALIAS
+        ):
+            for alias in _JOB_GOOGLE_SETTING_ALIASES:
+                target_environ.pop(alias, None)
+                simulator_secret_values.pop(alias, None)
+            target_environ.update(job_google_settings)
         for alias in (
             LIVEKIT_URL_ALIAS,
             LIVEKIT_API_KEY_ALIAS,
@@ -1154,6 +1651,7 @@ class CallRunnerImpl:
             context.job,
             context.target_provider_secret_values,
             simulator_secret_values,
+            target_environ,
         )
         self._scenario_room_counts: dict[str, int] = {}
         self._closed = False
@@ -1507,30 +2005,26 @@ class CallRunnerImpl:
         # tool activity in its partial receipt.  Previously the early CallAborted below discarded
         # every tool call from failed calls, making a real upstream tool error indistinguishable
         # from a proxy/transport failure.
-        calls = self._collect_calls(runtime) if case is not None else ()
+        capture_failed = False
+        try:
+            calls = self._collect_calls(runtime) if case is not None else ()
+        except ToolCaptureFailed as exc:
+            logger.warning("tool capture failed for %s: %s", scenario_key, exc)
+            calls, capture_failed = exc.calls, True
         # Provider-hosted agents execute tools outside the guest process, so their
         # authoritative call evidence is returned by Vapi/Retell after the call.
         # Preserve provider-native controls such as ``end_call`` because scenario
         # checks may verify termination ordering. Fall back to that observed stream
         # when the submitted backend exposes no local trace seam; never infer calls
         # from transcript prose.
-        if not calls and case is not None:
-            calls = _collect_provider_tool_calls(case)
+        # Hand-offs are kept for the record but are not calls checks grade, so they neither stand
+        # in for the provider's stream nor count as a capture.
+        if not graded_calls(calls) and case is not None:
+            calls = (*calls, *_collect_provider_tool_calls(case))
+        capture_failed = capture_failed and not graded_calls(calls)
         if calls:
             tool_trace = "\n".join(
-                json.dumps(
-                    {
-                        "name": call.name,
-                        "arguments": call.arguments,
-                        "result": call.result,
-                        "ok": call.ok,
-                        "error": call.error,
-                        "refused": call.refused,
-                        "at": call.at,
-                    },
-                    sort_keys=True,
-                    default=str,
-                )
+                json.dumps(trace_row(call), sort_keys=True, default=str)
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(
@@ -1584,6 +2078,7 @@ class CallRunnerImpl:
 
         base = CallOutcome(
             calls=calls,
+            tool_capture_failed=capture_failed,
             turns=turns,
             started_at=format_rfc3339_millis(case_started_at),
             ended_at=format_rfc3339_millis(ended_at),
@@ -1745,16 +2240,34 @@ class CallRunnerImpl:
         return replace(base, calls=calls)
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+        """Raises `ToolCaptureFailed` when nothing was captured and a declared surface could not
+        be read. `http_tool` has no surface to fail, so an empty one stays an ordinary empty
+        capture."""
         seam = self._context.evidence_seam
-        file_calls = _collect_file_tool_calls(runtime)
-        if file_calls:
-            return file_calls
+        unread: ToolCaptureFailed | None = None
+        try:
+            written, from_spans = _read_file_tool_calls(runtime, strict=True)
+        except ToolCaptureFailed as exc:
+            written, from_spans, unread = [], [], exc
+        if graded_calls(written):
+            return _merge_span_calls(written, from_spans)
+        # Hand-offs alone are not a capture: the seam's own record still decides.
         if seam is EvidenceSeam.HTTP_TOOL:
-            return _collect_http_tool_calls(runtime)
-        if seam is EvidenceSeam.TOOL_TRACE:
-            return _collect_tool_trace_calls(runtime)
-        # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
-        # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading rather
-        # than crashing keeps this on the scheduler's own evidence_missing path, never a raw
-        # exception).
-        return ()
+            observed = list(_collect_http_tool_calls(runtime))
+        elif seam is EvidenceSeam.TOOL_TRACE:
+            # The bundle's seed creates the table, so a missing one is a failed capture too. The
+            # file's span lines still count when the database cannot be read.
+            try:
+                observed = list(_collect_tool_trace_calls(runtime, strict=True))
+            except ToolCaptureFailed as exc:
+                observed, unread = [], unread or exc
+        else:
+            # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
+            # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading
+            # rather than crashing keeps this on the scheduler's own evidence_missing path, never
+            # a raw exception).
+            observed = []
+        calls = _merge_span_calls([*written, *observed], from_spans)
+        if unread is not None and not graded_calls(calls):
+            raise ToolCaptureFailed(str(unread), calls=calls) from None
+        return calls
