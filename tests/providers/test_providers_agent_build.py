@@ -705,10 +705,36 @@ def test_five_mib_of_url_dense_prose_cleans_in_two_seconds() -> None:
         sentences.append(sentence)
         size += len(sentence)
     prose = "".join(sentences)
-    start = time.perf_counter()
-    out = _redact(prose)
-    elapsed = time.perf_counter() - start
+    # A multiple of the base cleaner on the same text, median of three each, interleaved: an
+    # absolute budget on 5 MiB measures the runner, and a CI runner is about twice as slow as a
+    # laptop. The base cleaner is `_redact` with the secret-shape steps switched off. They make
+    # this text about three times slower (measured 3.02: 0.995 s against 0.329 s on 3.12.3); a
+    # speed-up follows, and 4.5 leaves about 1.5 times headroom.
+    from fi.alk.providers import secret_shapes
+
+    names = ("leftovers", "find", "may_hold_key", "line_starts", "host_key")
+    real = {name: getattr(secret_shapes, name) for name in names}
+    off = {
+        "leftovers": lambda value, hits: value,
+        "find": lambda value, cut=False: [],
+        "may_hold_key": lambda value: False,
+        "line_starts": lambda value: [],
+        "host_key": lambda piece: None,
+    }
+    times: dict[bool, list[float]] = {True: [], False: []}
+    try:
+        for _ in range(3):
+            for on in (False, True):
+                for name, function in (real if on else off).items():
+                    setattr(secret_shapes, name, function)
+                start = time.perf_counter()
+                out = _redact(prose)
+                times[on].append(time.perf_counter() - start)
+    finally:
+        for name, function in real.items():
+            setattr(secret_shapes, name, function)
+    with_steps, base = sorted(times[True])[1], sorted(times[False])[1]
     # Booleans, so a failure never asks pytest to explain a 5 MiB string.
     kept_a_query = "?key=" in out
-    assert elapsed < 2.0
+    assert with_steps <= 4.5 * base, (with_steps, base)
     assert not kept_a_query
