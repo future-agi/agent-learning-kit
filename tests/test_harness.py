@@ -1096,7 +1096,12 @@ def test_environment_reset_recreates_only_recorded_services_without_building(
     provisioning.reset(output)
 
     assert calls[0] == ("down", "--volumes", "--remove-orphans")
-    assert calls[1] == ("up", "--detach", "--no-build", "--wait", "db")
+    up = ("up", "--detach", "--no-build", "--wait", "db")
+    assert up in calls
+    # The file is checked after ``down`` and before anything starts.
+    checked = next(index for index, call in enumerate(calls) if "config" in call)
+    assert checked < calls.index(up)
+    assert not any("build" in call for call in calls)
 
 
 def test_runtime_replaces_a_placeholder_google_credential_mount(tmp_path, monkeypatch):
