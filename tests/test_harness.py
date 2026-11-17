@@ -1342,6 +1342,22 @@ def test_github_source_reads_like_a_repository(tmp_path):
     assert "https://github.com/acme/agent" in source.briefing()
 
 
+def test_the_briefing_file_list_leaves_out_credential_files(tmp_path):
+    listed = (
+        ".env.production", ".aws/credentials", "deploy/gcp-sa.json", ".kube/config",
+        "infra/prod.tfvars", ".netrc.bak",
+    )  # fmt: skip
+    for name in (*listed, "agent.py", "deploy/app.yaml"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("canary\n")
+
+    briefing = RepoSource(name="a", root=tmp_path).briefing()
+
+    assert "- agent.py" in briefing and "- deploy/app.yaml" in briefing
+    for name in listed:
+        assert f"- {name}" not in briefing, name
+
+
 def test_spec_source_gets_no_file_tools_because_there_is_nothing_to_read():
     source = SpecSource(
         name="a", system_prompt="you are a bot", tool_schema=[{"name": "t"}]
@@ -4735,6 +4751,54 @@ def test_claude_backend_routes_gemini_through_agentcc(monkeypatch):
     assert options.env["ANTHROPIC_MODEL"] == model
     assert options.env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "1"
 
+
+def test_gateway_mode_switches_off_every_other_claude_provider_route(monkeypatch):
+    from fi.alk.harness.config import provider_env
+
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://gateway.futureagi.test")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "internal-key")
+
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+
+    # Set in the process around the kit, any of these would send the CLI somewhere else.
+    for name in (
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "ANTHROPIC_UNIX_SOCKET",
+    ):
+        assert env[name] == "", name
+
+
+
+@pytest.mark.parametrize("mode", ["vertex", "agentcc"])
+def test_every_mode_switches_off_the_claude_routes_it_does_not_use(monkeypatch, mode):
+    from fi.alk.harness.config import provider_env
+
+    for name in ("ALK_CLAUDE_GATEWAY_URL", "ALK_CLAUDE_GATEWAY_API_KEY", "AGENTCC_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    if mode == "agentcc":
+        monkeypatch.setenv("AGENTCC_API_KEY", "sk-agentcc-test")
+        monkeypatch.setenv("AGENTCC_BASE_URL", "https://gateway.example.test/")
+
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+
+    # Set in the process around the kit, any of these would send the CLI somewhere else.
+    assert env["CLAUDE_CODE_USE_VERTEX"] == ("1" if mode == "vertex" else "0")
+    for name in (
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "ANTHROPIC_UNIX_SOCKET",
+    ):
+        assert env.get(name) == "", name
 
 def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
     from fi.alk.harness.build import environment_turns_for, turns_for

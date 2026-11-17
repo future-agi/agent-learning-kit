@@ -50,6 +50,7 @@ from .base import (
     WorkerSpec,
     tool_input_schema,
 )
+from .files import secret_read_rules
 
 logger = logging.getLogger(__name__)
 
@@ -546,12 +547,18 @@ class ClaudeBackend:
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose
             # whole job is to validate that change.
             options.permission_mode = "default"
-            # A worker's granted built-ins are the session's too, so none of them is disallowed.
-            options.disallowed_tools = [name for name in UNWANTED if name not in builtins]
             options.hooks = gate_hooks(allowed)
             options.can_use_tool = spec.permission_override or permission_gate(
                 spec.ask, allowed
             )
+        # Every session, gated or not, carries the secret list as Read deny rules: Claude Code's own
+        # Grep and Glob turn them into exclusions, which the gate (it sees only a call's
+        # arguments) can't do for a search that starts above a credential file.
+        options.disallowed_tools = [
+            # A worker's granted built-ins are the session's too, so none of them is disallowed.
+            *([name for name in UNWANTED if name not in builtins] if spec.gated else []),
+            *secret_read_rules(),
+        ]
         if spec.thinking:
             options.thinking = thinking_config()
         return options
