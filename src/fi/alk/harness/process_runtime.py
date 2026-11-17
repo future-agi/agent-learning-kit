@@ -4630,12 +4630,13 @@ def _datadir_copy_baseline_path(work_directory: Path, process_name: str) -> Path
 
 def sealed_seed_digest(*, host: str, port: int, credentials: EngineCredentials, dbname: str) -> dict[str, str]:
     """The seed's records as one hash per table, read before its template is sealed; empty when they cannot be read,
-    and then trials are compared with the first trial's start instead."""
-    from psycopg.conninfo import make_conninfo
-
-    from .world_snapshot import digest, snapshot
-
+    and then trials are compared with the first trial's start instead. An install without the database driver
+    cannot read them either."""
     try:
+        from psycopg.conninfo import make_conninfo
+
+        from .world_snapshot import digest, snapshot
+
         return digest(
             snapshot(
                 make_conninfo(
