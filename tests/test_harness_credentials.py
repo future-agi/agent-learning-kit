@@ -824,6 +824,38 @@ def test_a_package_main_that_does_not_resolve_falls_back_to_the_index_before_exp
         assert required["SHARED_API_KEY"] is False
 
 
+def _ts_monorepo(tmp_path, main):
+    return _agents_repo(
+        tmp_path,
+        {
+            "package.json": json.dumps({"workspaces": ["agents/*", "packages/*"]}),
+            "agents/a/package.json": json.dumps({"name": "a"}),
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps(
+                {"name": "shared", "main": main, "dependencies": {"puppeteer": "^23.0.0"}}
+            ),
+            "packages/shared/src/index.ts": (
+                "import puppeteer from 'puppeteer';\n"
+                "export const k = process.env.SHARED_API_KEY;\n"
+            ),
+        },
+    )
+
+
+@pytest.mark.parametrize("main", ["dist/index.js", "./build/index.js", "out/index.js"])
+def test_a_package_main_in_an_uncommitted_build_folder_is_found_in_src(tmp_path, main):
+    # Dileep, #225 (4596906756): the usual TypeScript monorepo shape. `main` points at build
+    # output that isn't committed; the code is in src/. The whole-repo build and the folder
+    # build agree, and the browser check sees what the package imports.
+    from fi.alk.harness.agent_type_check import browser_tools_in_agent
+
+    root = _ts_monorepo(tmp_path, main)
+
+    assert _required(discover_credentials(root))["SHARED_API_KEY"] is True
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["SHARED_API_KEY"] is True
+    assert "puppeteer" in browser_tools_in_agent(root, "agents/a")
+
+
 @pytest.mark.parametrize("make", ["link", "fifo"])
 def test_the_import_walk_does_not_read_a_link_or_a_pipe(tmp_path, make):
     from fi.alk.harness.credentials import imported_by_agent

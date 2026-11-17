@@ -161,6 +161,9 @@ _LARGEST_PACKAGE_JSON = 64 * 1024
 # largest): an honest manifest is under 2 KB, so a repository reaches this only when crafted, and
 # a dense 64 KB one takes about 2 ms to parse, so this holds what they cost to a fraction of a second.
 _PACKAGE_JSONS_READ = 1024 * 1024
+# The folders a package's build writes to and doesn't commit: an entry there is looked for under
+# src/, where it is built from.
+_BUILD_FOLDERS = frozenset({"dist", "build", "out"})
 _SCRIPT_IMPORT = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
 )
@@ -1613,8 +1616,24 @@ def imported_by_agent(
                 unread[0] = True
             elif is_within(target, root):  # Never read when it leads out of the repository.
                 hit = found_at((*script_candidates(target), *script_index(target)))
+                if hit is None:
+                    hit = built_from_source(manifest.parent, target)
         entry_hits[(manifest, which)] = hit
         return hit
+
+    def built_from_source(package: Path, target: Path) -> Path | None:
+        """An entry in a build folder that isn't committed (`dist/index.js`), found where it is
+        built from: the same path under `src/` with the script suffixes, then `src/index.*`.
+        Looked up through the walk's charged lookups like any other candidate."""
+        try:
+            inside = target.relative_to(package).parts
+        except ValueError:
+            return None
+        if len(inside) < 2 or inside[0] not in _BUILD_FOLDERS:
+            return None
+        source = package / "src"
+        built = source.joinpath(*inside[1:])
+        return found_at((*script_candidates(built), *script_index(built), *script_index(source)))
 
     def script_module(path: Path, name: str) -> Path | None:
         if len(name) > _LONGEST_NAME:

@@ -6578,6 +6578,30 @@ def test_a_package_entry_is_resolved_once_for_all_the_paths_that_reach_it(
     assert entry_lookups(40) == entry_lookups(1) > 0
 
 
+@pytest.mark.parametrize("walk", [_save_walk, _bundle_walk], ids=["save", "bundle"])
+def test_a_build_folder_entry_s_source_is_looked_up_once_and_charged(tmp_path, monkeypatch, walk):
+    # #225, Dileep (4596906756): `main` in an uncommitted build folder is looked for under src/.
+    # Those lookups go through the walk's charged lookups, and are made once per manifest.
+    def source_lookups(links: int) -> int:
+        names = [f"l{n}" for n in range(links)]
+        repo = _package_repo(
+            tmp_path / str(links),
+            b'{"main": "dist/index.js"}',
+            {
+                "packages/shared/src/other.ts": "export const x = 1;\n",
+                "agents/a/index.js": "".join(f'require("../../{name}");\n' for name in names),
+            },
+        )
+        for name in names:
+            os.symlink("packages/shared", repo / name)
+        looked = _counted_lookups(monkeypatch)
+        found, _ = walk(repo)
+        assert (repo / "packages" / "shared" / "index.js") in found  # Then the package's index.
+        return len([path for path in looked if "src" in path.parts])
+
+    assert source_lookups(40) == source_lookups(1) > 0
+
+
 @pytest.mark.parametrize("where", ["own-link", "imported-link"])
 def test_a_file_link_to_code_says_the_walk_stopped(tmp_path, where):
     repo = _tree(
