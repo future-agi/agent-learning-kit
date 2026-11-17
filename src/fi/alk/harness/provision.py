@@ -661,6 +661,7 @@ _ALLOWED_SERVICE_FIELDS = frozenset(
         "deploy", "cap_drop", "profiles", "links", "scale", "pull_policy", "tty",
         "stdin_open", "post_start", "pre_stop", "attach", "develop", "network_mode", "pid", "ipc",
         "uts", "userns_mode", "cgroup", "volumes_from", "security_opt",
+        "blkio_config", "cpu_count", "cpu_percent", "cpu_rt_runtime", "cpu_rt_period",
     }
 )  # fmt: skip
 

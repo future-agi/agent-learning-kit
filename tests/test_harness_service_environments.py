@@ -753,6 +753,28 @@ def test_service_fields_on_the_allowlist_are_accepted():
             tmpfs=["/tmp"],
             mem_limit="1g",
             develop={"watch": [{"path": "./src", "action": "sync", "target": "/app"}]},
+            # The fields real jobs use, written out one by one (not looped over the allowlist),
+            # so dropping any of them from the allowlist turns this red.
+            container_name="job-agent",
+            cpus=1.5,
+            extra_hosts=["a:1.2.3.4"],
+            hostname="agent",
+            init=True,
+            pids_limit=200,
+            pull_policy="missing",
+            read_only=True,
+            shm_size="1g",
+            stdin_open=True,
+            stop_grace_period="10s",
+            stop_signal="SIGINT",
+            tty=True,
+            ulimits={"nofile": {"soft": 1024, "hard": 2048}},
+            # Resource limits only; Compose renders them and nothing here reaches the host.
+            blkio_config={"weight": 300},
+            cpu_count=2,
+            cpu_percent=50,
+            cpu_rt_runtime="400ms",
+            cpu_rt_period="1400us",
             **{"x-anything": {"a": 1}},
         )
     )
