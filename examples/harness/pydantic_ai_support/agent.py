@@ -18,12 +18,17 @@ _SEED_ORDERS = {
 
 # Each conversation gets its own copy of the orders, so a return started in one scenario is
 # not there in the next. The callback names the conversation; the tools read it.
+# A conversation is the thread the kit names, one per scenario, so a scenario run twice on one
+# agent process would see its first run's returns.
 _CONVERSATION = contextvars.ContextVar("conversation", default="")
 _ORDERS_BY_CONVERSATION: dict[str, dict] = {}
 
 
 def _orders() -> dict:
-    return _ORDERS_BY_CONVERSATION.setdefault(_CONVERSATION.get(), copy.deepcopy(_SEED_ORDERS))
+    conversation = _CONVERSATION.get()
+    if conversation not in _ORDERS_BY_CONVERSATION:
+        _ORDERS_BY_CONVERSATION[conversation] = copy.deepcopy(_SEED_ORDERS)
+    return _ORDERS_BY_CONVERSATION[conversation]
 
 
 def look_up_order(order_id: str) -> str:
@@ -65,10 +70,10 @@ agent = Agent(
 )
 
 
-
 def _setting(name: str) -> str:
     # Blank counts as unset.
     return os.getenv(name, "").strip()
+
 
 async def agent_callback(agent_input):
     _CONVERSATION.set(str(getattr(agent_input, "thread_id", "") or ""))
@@ -78,26 +83,32 @@ async def agent_callback(agent_input):
     history = []
     for message in earlier:
         if message["role"] == "user":
-            history.append(ModelRequest(parts=[UserPromptPart(content=message["content"])]))
+            history.append(
+                ModelRequest(parts=[UserPromptPart(content=message["content"])])
+            )
         elif message["role"] == "assistant":
             history.append(ModelResponse(parts=[TextPart(content=message["content"])]))
     # With no base URL the client falls back to api.openai.com and would send the key there.
-    # Checked before the key is held in a variable, so the frame that raises has none.
     if _setting("OPENAI_API_KEY") and not _setting("OPENAI_BASE_URL"):
         raise RuntimeError(
             "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
             "endpoint the key belongs to."
         )
-    api_key = _setting("OPENAI_API_KEY") or None
-    base_url = _setting("OPENAI_BASE_URL") or None
     # Each request runs in its own event loop, and the provider does not close a client it
     # was handed, so the client lives and dies with the call.
-    async with AsyncOpenAI(base_url=base_url, api_key=api_key) as client:
+    # Passed straight in, not held in a variable, so no failure later in the turn shows the key
+    # in this frame.
+    async with AsyncOpenAI(
+        base_url=_setting("OPENAI_BASE_URL") or None,
+        api_key=_setting("OPENAI_API_KEY") or None,
+    ) as client:
         # A model object, because a name string is resolved by prefix: `openai:` would use
         # the Responses API, which the model gateway serves only for OpenAI-format routes,
         # and a bare vertex_ai/... name is rejected.
         model = OpenAIChatModel(MODEL, provider=OpenAIProvider(openai_client=client))
-        result = await agent.run(latest["content"], message_history=history, model=model)
+        result = await agent.run(
+            latest["content"], message_history=history, model=model
+        )
     # Content only: tool calls in the reply would be run by the caller against its own
     # world and the agent called again.
     return {"content": str(result.output)}

@@ -24,6 +24,7 @@ from reference_agents import (
     TOOLS,
     TRACE_HOOK,
     assert_bindings_match,
+    assert_a_failing_turn_keeps_the_key_out_of_its_frames,
     assert_detected,
     assert_each_conversation_has_its_own_orders,
     assert_pins,
@@ -533,6 +534,19 @@ def test_each_conversation_has_its_own_orders(example_module, monkeypatch) -> No
     monkeypatch.setattr(agent.Runner, "run", run)
     asyncio.run(agent.agent_callback(_agent_input(CONVERSATION)))
     assert seen == ["scenario-one"]
+
+
+def test_a_turn_that_fails_later_keeps_the_key_out_of_its_frames(example_module) -> None:
+    def make_it_fail() -> None:
+        import agents
+
+        agents.STATE["raise"] = ConnectionError("model unreachable")
+
+    assert_a_failing_turn_keeps_the_key_out_of_its_frames(
+        example_module,
+        lambda agent: asyncio.run(agent.agent_callback(_agent_input(CONVERSATION))),
+        make_it_fail,
+    )
 
 
 def test_a_key_with_no_base_url_is_refused_before_a_client_is_built(

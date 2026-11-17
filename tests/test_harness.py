@@ -4674,6 +4674,32 @@ def test_gateway_mode_switches_off_every_other_claude_provider_route(monkeypatch
         assert env[name] == "", name
 
 
+
+@pytest.mark.parametrize("mode", ["vertex", "agentcc"])
+def test_every_mode_switches_off_the_claude_routes_it_does_not_use(monkeypatch, mode):
+    from fi.alk.harness.config import provider_env
+
+    for name in ("ALK_CLAUDE_GATEWAY_URL", "ALK_CLAUDE_GATEWAY_API_KEY", "AGENTCC_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    if mode == "agentcc":
+        monkeypatch.setenv("AGENTCC_API_KEY", "sk-agentcc-test")
+        monkeypatch.setenv("AGENTCC_BASE_URL", "https://gateway.example.test/")
+
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+
+    # Set in the process around the kit, any of these would send the CLI somewhere else.
+    assert env["CLAUDE_CODE_USE_VERTEX"] == ("1" if mode == "vertex" else "0")
+    for name in (
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "ANTHROPIC_UNIX_SOCKET",
+    ):
+        assert env.get(name) == "", name
+
 def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
     from fi.alk.harness.build import environment_turns_for, turns_for
     from fi.alk.harness.contract import AgentContract, ToolSpec
