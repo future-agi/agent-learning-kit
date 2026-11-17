@@ -15,6 +15,7 @@ import sys
 import tempfile
 import textwrap
 import threading
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -80,7 +81,12 @@ def test_build_runs_the_callback_bridge_with_the_generic_tool_tracer(
     tmp_path: Path, example_module
 ) -> None:
     agent = build_control_service(
-        tmp_path, write_callable_contract, "agent", subfolder=SUBFOLDER, example=EXAMPLE
+        tmp_path,
+        write_callable_contract,
+        "agent",
+        subfolder=SUBFOLDER,
+        example=EXAMPLE,
+        secret_aliases=("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"),
     )
 
     assert "ThreadingHTTPServer" in json.dumps(agent.run_command)
@@ -162,7 +168,9 @@ class _MessagesStub(BaseHTTPRequestHandler):
             {"path": self.path, "headers": dict(self.headers.items()), "body": request}
         )
         if "count_tokens" in self.path:
-            # Answered as the gateway does for a non-Anthropic provider, if the CLI asks.
+            # Answered as the gateway does for a non-Anthropic provider, if the CLI asks. The
+            # bundled CLI didn't call count_tokens, or send a request without tools, in these
+            # runs, so this branch and `_plan`'s no-tools branch are there only in case.
             self._json(501, {"type": "error", "error": {"type": "api_error", "message": "no"}})
             return
         model_name = request.get("model", MODEL)
@@ -276,6 +284,35 @@ class _MessagesStub(BaseHTTPRequestHandler):
         event("message_stop", {"type": "message_stop"})
 
 
+PROVIDER_SWITCHES = (
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_GATEWAY",
+)
+PROXY_NAMES = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy")
+
+
+class _ElsewhereRecorder(BaseHTTPRequestHandler):
+    """A proxy that records every request it gets and refuses it."""
+
+    requests: list[str] = []
+
+    def _refuse(self) -> None:
+        self.requests.append(f"{self.command} {self.path}")
+        self.send_response(403)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_GET = do_POST = do_PUT = do_HEAD = do_CONNECT = _refuse
+
+    def log_message(self, format, *args) -> None:
+        return
+
+
 DRIVER = textwrap.dedent(
     """
     import asyncio
@@ -306,6 +343,10 @@ def test_the_real_cli_runs_two_turns_and_only_the_plain_tools_are_traced(
     _MessagesStub.requests = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _MessagesStub)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    _ElsewhereRecorder.requests = []
+    elsewhere = ThreadingHTTPServer(("127.0.0.1", 0), _ElsewhereRecorder)
+    threading.Thread(target=elsewhere.serve_forever, daemon=True).start()
+    proxy = f"http://127.0.0.1:{elsewhere.server_address[1]}"
     run = tmp_path / "run"
     run.mkdir()
     shutil.copy2(EXAMPLE / "agent.py", run / "agent.py")
@@ -324,6 +365,15 @@ def test_the_real_cli_runs_two_turns_and_only_the_plain_tools_are_traced(
                 **{name: None for name in os.environ if name.startswith("OTEL_")},
                 "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{server.server_address[1]}",
                 "ANTHROPIC_AUTH_TOKEN": "placeholder-not-a-token",
+                # A customer key and every provider switch set around the agent: in gateway
+                # mode none of them may change where the turn goes or what it carries.
+                "ANTHROPIC_API_KEY": "secret-canary-key",
+                **{name: "1" for name in PROVIDER_SWITCHES},
+                "ANTHROPIC_UNIX_SOCKET": str(tmp_path / "no-such.sock"),
+                # Anything not sent straight to the stub reaches this recorder instead.
+                **{name: proxy for name in PROXY_NAMES},
+                "NO_PROXY": "127.0.0.1,localhost",
+                "no_proxy": "127.0.0.1,localhost",
                 "PYTHONPATH": str(run),
                 "HARNESS_TOOL_TRACE": str(trace),
                 "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
@@ -333,6 +383,8 @@ def test_the_real_cli_runs_two_turns_and_only_the_plain_tools_are_traced(
     finally:
         server.shutdown()
         server.server_close()
+        elsewhere.shutdown()
+        elsewhere.server_close()
 
     replies = json.loads(completed.stdout.splitlines()[-1])
     assert replies == [
@@ -355,13 +407,32 @@ def test_the_real_cli_runs_two_turns_and_only_the_plain_tools_are_traced(
     assert sent, "the CLI never reached the stub"
     assert {r["body"].get("model") for r in sent if r["body"].get("tools")} == {MODEL}
     assert all(r["headers"].get("Authorization") == "Bearer placeholder-not-a-token" for r in sent)
+    # The token is the only credential, and nothing went anywhere but the stub.
+    assert not [r for r in _MessagesStub.requests if "x-api-key" in {h.lower() for h in r["headers"]}]
+    assert "secret-canary-key" not in json.dumps(_MessagesStub.requests)
+    assert _ElsewhereRecorder.requests == []
     with_tools = [r for r in sent if r["body"].get("tools")]
     # Two turns, each asking for a tool and then answering after its result.
     assert len(with_tools) == 4
+    # The arguments each tool takes, as the model is told them: a model told of none would
+    # call the tool without them.
+    expected_arguments = {
+        "mcp__support__look_up_order": ["order_id"],
+        "mcp__support__start_return": ["order_id", "reason"],
+        "mcp__support__return_policy": [],
+    }
     for request in with_tools:
         assert sorted(t["name"] for t in request["body"]["tools"]) == sorted(
             f"mcp__support__{name}" for name in TOOLS
         )
+        for declared in request["body"]["tools"]:
+            schema = declared["input_schema"]
+            wanted = expected_arguments[declared["name"]]
+            assert sorted(schema.get("properties", {})) == wanted, declared
+            assert sorted(schema.get("required", [])) == wanted, declared
+            assert all(
+                schema["properties"][name].get("type") == "string" for name in wanted
+            ), declared
 
     def user_text(request: dict) -> str:
         first = request["body"]["messages"][0]
@@ -509,6 +580,89 @@ def test_callback_raises_on_an_error_a_wrong_subtype_or_no_result(
         _run(agent, CONVERSATION)
 
 
+def _failing_query(agent, monkeypatch, *messages, error: Exception) -> _Seen:
+    # As the real SDK does on an error result: the result frame, then the exception.
+    seen = _Seen()
+
+    async def query(*, prompt, options):
+        seen.calls.append({"prompt": prompt, "options": options})
+        for message in messages:
+            yield message
+        raise error
+
+    monkeypatch.setattr(agent, "query", query)
+    return seen
+
+
+def test_an_error_result_the_sdk_raises_becomes_the_turn_failed_error(
+    example_module, monkeypatch
+) -> None:
+    from claude_agent_sdk import ResultError
+
+    agent = example_module()
+    error = ResultError(
+        "Claude Code returned an error result: API Error: 400",
+        {"subtype": "error_during_execution", "result": "API Error: 400"},
+        exit_code=1,
+    )
+    seen = _failing_query(
+        agent,
+        monkeypatch,
+        _result(is_error=True, subtype="error_during_execution", result="API Error: 400"),
+        error=error,
+    )
+
+    with pytest.raises(RuntimeError, match="error_during_execution"):
+        _run(agent, CONVERSATION)
+    assert not Path(seen.calls[0]["options"].env["CLAUDE_CONFIG_DIR"]).exists()
+
+
+def test_a_cli_that_fails_with_no_result_becomes_a_runtime_error(
+    example_module, monkeypatch
+) -> None:
+    from claude_agent_sdk import ProcessError
+
+    agent = example_module()
+    _failing_query(agent, monkeypatch, error=ProcessError("Command failed", 1, "boom"))
+
+    with pytest.raises(RuntimeError, match="the Claude CLI failed"):
+        _run(agent, CONVERSATION)
+
+
+def test_error_text_is_capped_and_holds_no_credential(example_module, monkeypatch) -> None:
+    agent = example_module()
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "secret-canary-token")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://gateway.test")
+    echoed = "upstream said: Bearer secret-canary-token " + "x" * 5000
+    _fake_query(agent, monkeypatch, _result(is_error=True, result=echoed))
+
+    with pytest.raises(RuntimeError) as failed:
+        _run(agent, CONVERSATION)
+
+    message = "".join(traceback.format_exception(failed.value))
+    assert "secret-canary-token" not in message
+    assert len(str(failed.value)) < 1000
+
+
+def test_a_turn_that_does_not_finish_is_stopped_and_cleaned_up(
+    example_module, monkeypatch
+) -> None:
+    agent = example_module()
+    monkeypatch.setattr(agent, "TURN_TIMEOUT_SECONDS", 0.2, raising=False)
+    seen = _Seen()
+
+    async def query(*, prompt, options):
+        seen.calls.append({"prompt": prompt, "options": options})
+        await asyncio.sleep(3)
+        yield _result()
+
+    monkeypatch.setattr(agent, "query", query)
+
+    with pytest.raises(RuntimeError, match="did not finish within"):
+        _run(agent, CONVERSATION)
+    assert not Path(seen.calls[0]["options"].env["CLAUDE_CONFIG_DIR"]).exists()
+
+
 def test_prompt_with_no_earlier_turn_is_the_last_message(example_module, monkeypatch) -> None:
     agent = example_module()
     seen = _fake_query(agent, monkeypatch)
@@ -610,10 +764,12 @@ def test_handlers_return_the_plain_tool_output_as_text_content(example_module) -
 
 def test_a_query_that_raises_propagates_and_cleans_up(example_module, monkeypatch) -> None:
     agent = example_module()
-    _fake_query(agent, monkeypatch, error=ValueError("error result"))
+    seen = _fake_query(agent, monkeypatch, error=ValueError("error result"))
 
     with pytest.raises(ValueError, match="error result"):
         _run(agent, CONVERSATION)
+
+    assert not Path(seen.calls[0]["options"].env["CLAUDE_CONFIG_DIR"]).exists()
 
 
 def test_options_close_off_everything_but_the_three_support_tools(
@@ -664,6 +820,11 @@ def _expected_env(config_dir: str, model: str, *, window: bool, gateway: bool) -
         env["CLAUDE_CODE_USE_VERTEX"] = ""
         env["CLAUDE_CODE_USE_BEDROCK"] = ""
         env["CLAUDE_CODE_USE_FOUNDRY"] = ""
+        env["CLAUDE_CODE_USE_ANTHROPIC_AWS"] = ""
+        env["CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD"] = ""
+        env["CLAUDE_CODE_USE_MANTLE"] = ""
+        env["CLAUDE_CODE_USE_GATEWAY"] = ""
+        env["ANTHROPIC_UNIX_SOCKET"] = ""
         env["ANTHROPIC_API_KEY"] = ""
         env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
         env["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] = "1"
@@ -703,7 +864,7 @@ def test_the_env_passed_to_the_cli_is_exactly_this(
 
 @pytest.mark.parametrize("base_url", [None, "", "   "], ids=["unset", "empty", "blank"])
 def test_a_token_with_no_base_url_is_refused_before_the_cli_starts(
-    example_module, monkeypatch, base_url
+    example_module, monkeypatch, capfd, base_url
 ) -> None:
     agent = example_module()
     # Set after the import: the check runs on every call.
@@ -711,13 +872,18 @@ def test_a_token_with_no_base_url_is_refused_before_the_cli_starts(
     if base_url is not None:
         monkeypatch.setenv("ANTHROPIC_BASE_URL", base_url)
     seen = _fake_query(agent, monkeypatch)
+    folders = set(Path(tempfile.gettempdir()).glob("claude-config-*"))
 
     with pytest.raises(RuntimeError, match="ANTHROPIC_BASE_URL") as refused:
         _run(agent, CONVERSATION)
 
-    assert "secret-canary-token" not in str(refused.value)
-    # The CLI never started, so the token went nowhere.
+    assert "secret-canary-token" not in "".join(traceback.format_exception(refused.value))
+    printed = capfd.readouterr()
+    assert "secret-canary-token" not in printed.out + printed.err
+    assert not [name for name, value in vars(agent).items() if value == "secret-canary-token"]
+    # The CLI never started and no config folder was made, so the token went nowhere.
     assert seen.calls == []
+    assert set(Path(tempfile.gettempdir()).glob("claude-config-*")) == folders
 
 
 def test_a_blank_token_is_not_a_token(example_module, monkeypatch) -> None:
