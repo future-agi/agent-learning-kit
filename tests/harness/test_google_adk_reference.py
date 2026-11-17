@@ -33,6 +33,7 @@ from reference_agents import (
     assert_bindings_match,
     assert_detected,
     assert_pins,
+    assert_refuses_key_without_base_url,
     build_control_service,
     copy_example,
     fresh_import,
@@ -296,18 +297,11 @@ def test_import_needs_no_environment_and_keeps_the_default_gateway_model(
     assert [tool.__name__ for tool in agent.root_agent.tools] == list(TOOLS)
 
 
-@pytest.mark.parametrize("base_url", [None, "", "   "])
 def test_a_key_with_no_base_url_is_refused_before_a_model_is_built(
-    load_example, base_url
+    load_example, monkeypatch
 ) -> None:
-    environment = {"OPENAI_API_KEY": "secret-canary-key"}
-    if base_url is not None:
-        environment["OPENAI_BASE_URL"] = base_url
-
-    with pytest.raises(RuntimeError, match="OPENAI_BASE_URL") as refused:
-        load_example(**environment)
-
-    assert "secret-canary-key" not in str(refused.value)
+    # Refused at import, before the model is built.
+    assert_refuses_key_without_base_url(load_example, None, monkeypatch)
 
 
 def test_a_blank_key_is_not_a_key(load_example) -> None:
