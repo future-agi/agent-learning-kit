@@ -1265,9 +1265,10 @@ def _is_block_or_message(item: Any) -> bool:
 
 
 def _reply_text(value: Any) -> str:
-    """Answer text for a list of content blocks or messages, else the stringified value."""
-    if isinstance(value, (list, tuple)) and any(
-        _is_block_or_message(item) for item in value
+    """Answer text for a message, a block, or a list of them, else the stringified value."""
+    if _is_block_or_message(value) or (
+        isinstance(value, (list, tuple))
+        and any(_is_block_or_message(item) for item in value)
     ):
         return text_of(value)
     return _stringify(value)
