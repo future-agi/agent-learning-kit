@@ -1318,6 +1318,36 @@ def _looks_like_parts(value: Any, parts: Any) -> bool:
     )
 
 
+def _has_field(item: Any, name: str) -> bool:
+    if isinstance(item, Mapping):
+        return name in item
+    return hasattr(item, name)
+
+
+def _is_single_reply(value: Any) -> bool:
+    """True when one value (not a list) is a message, a block or a thinking part.
+
+    A record that merely has a ``type`` or ``role`` of its own (``{"type": "user", "id": 1}``,
+    ``{"type": "message", "text": "..."}``) is not one; it stays JSON.
+    """
+    if isinstance(value, (list, tuple)):
+        return False
+    kind = _field_of(value, "type")
+    if kind is None:
+        return _is_block_or_message(value) and (
+            _has_field(value, "content")
+            or _field_of(value, "thought") is True
+            or _field_of(value, "reasoningContent") is not None
+        )
+    if kind in _HISTORY_KINDS:
+        return _has_field(value, "content")
+    if kind in ("text", "output_text"):
+        return isinstance(_field_of(value, "text"), (str, dict))
+    if kind == "refusal":
+        return _field_of(value, "refusal") is not None
+    return kind in _REPLY_ITEM_KINDS
+
+
 def _reply_text(value: Any) -> str:
     """Answer text for a message, a block, or a list of them, else the stringified value."""
     parts = _field_of(value, "parts")
@@ -1326,7 +1356,7 @@ def _reply_text(value: Any) -> str:
     message = _field_of(value, "message")
     if message is not None and _is_block_or_message(message):
         return _message_content(message)
-    if _is_block_or_message(value) or (
+    if _is_single_reply(value) or (
         isinstance(value, (list, tuple))
         and any(_is_block_or_message(item) for item in value)
     ):

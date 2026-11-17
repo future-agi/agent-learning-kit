@@ -119,3 +119,44 @@ def test_a_raw_bedrock_converse_response_keeps_only_its_answer(reply, expected):
 )
 def test_a_langchain_message_chunk_keeps_only_its_answer(reply, expected):
     _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"data": {"type": "user", "id": 42}}, '{"type": "user", "id": 42}'),
+        (
+            {"result": {"type": "message", "text": "Your order shipped"}},
+            '{"type": "message", "text": "Your order shipped"}',
+        ),
+        ({"result": {"type": "tool"}}, '{"type": "tool"}'),
+        ({"result": {"type": "system"}}, '{"type": "system"}'),
+        (
+            {"output": {"type": "text", "value": "v"}},
+            '{"type": "text", "value": "v"}',
+        ),
+        (
+            {"data": {"role": "user", "name": "n"}},
+            '{"role": "user", "name": "n"}',
+        ),
+        (
+            {"response": {"role": "assistant", "text": "Hi there"}},
+            '{"role": "assistant", "text": "Hi there"}',
+        ),
+        ({"output": {"type": "text", "text": ANSWER}}, ANSWER),
+        ({"output": {"type": "thinking", "thinking": PLAN}}, ""),
+    ],
+    ids=[
+        "user-typed-record",
+        "slack-message-record",
+        "tool-typed-record",
+        "system-typed-record",
+        "text-typed-record-without-text",
+        "user-role-record-without-content",
+        "assistant-role-record-with-text",
+        "typed-text-block-keeps-its-text",
+        "typed-thinking-block-gives-nothing",
+    ],
+)
+def test_a_record_under_a_reply_key_stays_json(reply, expected):
+    _check(reply, expected)
