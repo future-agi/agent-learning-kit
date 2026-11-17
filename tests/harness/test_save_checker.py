@@ -26,6 +26,7 @@ from fi.alk.harness import save_checker
 from fi.alk.harness.contract import AgentContract
 from fi.alk.harness.save_checker import (
     STAGES,
+    ChildKeepsEnding,
     NotInTime,
     Refused,
     Saved,
@@ -1189,6 +1190,30 @@ def test_a_session_answer_after_an_idle_death_does_not_reset_the_death_count(
     assert isinstance(cut, NotInTime)
     assert worn.deaths == 3
     assert checker.ran_in_child == 2
+    assert checker._thread_reason is None
+    assert thread_checks == []
+
+
+def test_three_deaths_in_the_session_job_end_the_scan_too(
+    tmp_path: Path, thread_checks: list[dict[str, Any]]
+) -> None:
+    # Every child ends in the session job, so no save is ever sent. The scan, which a submit
+    # asks first, must say so rather than answer "still running" for ever.
+    checker, folder = _checker(tmp_path, {"session": [[["die", 3]]]})
+
+    async def main() -> Any:
+        for _ in range(6):
+            try:
+                await _scan(checker, seconds=3.0)
+            except ChildKeepsEnding as worn:
+                return worn
+        return None
+
+    worn = asyncio.run(main())
+
+    assert isinstance(worn, ChildKeepsEnding)
+    assert worn.deaths == 3
+    assert len(_pids(folder)) == 3
     assert checker._thread_reason is None
     assert thread_checks == []
 

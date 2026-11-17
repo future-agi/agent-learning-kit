@@ -562,6 +562,7 @@ class SaveChecker:
         if self._gave_way():
             return _THREAD
         self._raise_stand_in()
+        self._raise_worn_out()
         if self._scan is not None:
             return self._scan
         self._raise_failed("scan", seen)
