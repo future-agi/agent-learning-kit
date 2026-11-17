@@ -225,6 +225,41 @@ def test_bindings_check_accepts_a_plain_top_level_def(tmp_path: Path) -> None:
     assert_bindings_match(binding, _shapes_module(tmp_path), "m", tools=("d",))
 
 
+def test_bindings_check_refuses_a_tool_bound_to_another_tools_function(tmp_path: Path) -> None:
+    module_source = tmp_path / "pair.py"
+    module_source.write_text("def d(): ...\n\n\ndef e(): ...\n", encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("pair", module_source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    swapped = [
+        {"name": "d", "module": "m", "callable": "e"},
+        {"name": "e", "module": "m", "callable": "d"},
+    ]
+    with pytest.raises(AssertionError):
+        assert_bindings_match(swapped, module, "m", tools=("d", "e"))
+
+
+def test_shadowed_case_fails_when_the_framework_is_still_found_with_a_version(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import reference_agents
+
+    # The first call is the unshadowed copy; the second, after the plant, still finds it.
+    found = iter(
+        [{"name": "openai_agents", "version": None}, {"name": "openai_agents", "version": "1"}]
+    )
+    monkeypatch.setattr(reference_agents, "detect_framework", lambda *a, **k: next(found))
+    with pytest.raises(AssertionError):
+        assert_detected(
+            EXAMPLE,
+            "openai_agents",
+            "agents",
+            where="shadowed",
+            tmp_path=tmp_path,
+            subfolder=SUBFOLDER,
+        )
+
+
 # T3: the tracer and an SDK-shaped call ------------------------------------------------------
 
 DRIVER = textwrap.dedent(
