@@ -19,7 +19,6 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import ModuleType
 
-import pytest
 from test_bundle_author_v2 import (
     _authoring,
     _github_job,
@@ -270,6 +269,49 @@ def assert_bindings_match(
 # The key and the base URL -------------------------------------------------------------------
 
 
+def _refusal_problem(
+    load: Callable[..., ModuleType],
+    call: Callable[[ModuleType], object] | None,
+    environment: Mapping[str, str],
+    base_url: str,
+    canary: str,
+) -> str | None:
+    """What is wrong with one case's refusal, or None."""
+    refused: BaseException | None = None
+    if call is None:
+        try:
+            load(**environment)
+        except RuntimeError as exc:
+            refused = exc
+        if refused is None:
+            return "the import was not refused"
+    else:
+        try:
+            module = load(**environment)
+        except Exception as exc:  # noqa: BLE001 - reported, not raised
+            return f"the import failed, where the call should refuse: {type(exc).__name__}"
+        try:
+            call(module)
+        except RuntimeError as exc:
+            refused = exc
+        if refused is None:
+            return "the call was not refused"
+    if base_url not in str(refused):
+        return f"the refusal does not name {base_url}"
+    if canary in "".join(traceback.format_exception(refused)):
+        return "the key is in the refusal or its traceback"
+    frames = []
+    trace = refused.__traceback__
+    while trace is not None:
+        frames.append(trace.tb_frame)
+        trace = trace.tb_next
+    # A traceback that prints variables would show the example's own frame.
+    for frame in frames:
+        if frame.f_code.co_filename.endswith("agent.py") and canary in repr(frame.f_locals):
+            return "the key is in a variable of the example's frame"
+    return None
+
+
 def assert_refuses_key_without_base_url(
     load: Callable[..., ModuleType],
     call: Callable[[ModuleType], object] | None,
@@ -281,21 +323,27 @@ def assert_refuses_key_without_base_url(
 ) -> None:
     """With `key` set and `base_url` unset, empty or blank, the example refuses.
 
-    The refusal is a RuntimeError naming `base_url`, raised at import when `call` is None and
-    otherwise by `call(module)`; the key is nowhere in it or its traceback. `load(**env)` is
-    the test file's fresh-import fixture; `after_refusal()` checks each case's side effects.
+    The refusal is a RuntimeError naming `base_url`: raised at import when `call` is None, and
+    otherwise by `call(module)` after an import that succeeds. The key is nowhere in it, its
+    traceback or the example's frames. `load(**env)` is the test file's fresh-import fixture;
+    `after_refusal()` checks each refused case's side effects. Every case runs, and the
+    failure names each case that went wrong.
     """
     canary = "secret-canary-key"
+    problems = []
     for value in (None, "", "   "):
         monkeypatch.delenv(base_url, raising=False)
         environment = {key: canary} if value is None else {key: canary, base_url: value}
-        with pytest.raises(RuntimeError, match=base_url) as refused:
-            module = load(**environment)
-            if call is not None:
-                call(module)
-        assert canary not in "".join(traceback.format_exception(refused.value)), repr(value)
-        if after_refusal is not None:
-            after_refusal()
+        problem = _refusal_problem(load, call, environment, base_url, canary)
+        if problem is None and after_refusal is not None:
+            try:
+                after_refusal()
+            except AssertionError as exc:
+                problem = f"after the refusal: {exc}"
+        if problem is not None:
+            label = "unset" if value is None else repr(value)
+            problems.append(f"{base_url} {label}: {problem}")
+    assert not problems, "\n".join(problems)
 
 
 # The tracer ---------------------------------------------------------------------------------

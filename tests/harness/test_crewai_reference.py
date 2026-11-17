@@ -491,12 +491,12 @@ def test_example_has_one_async_callback_and_three_plain_tools() -> None:
     ]
     assert async_names == ["agent_callback"]
     plain = [node.name for node in module.body if isinstance(node, ast.FunctionDef)]
-    assert plain == list(TOOLS)
+    assert plain == [*TOOLS, "_setting"]
     # CrewAI refuses a tool with no docstring.
     assert all(
         ast.get_docstring(node)
         for node in module.body
-        if isinstance(node, ast.FunctionDef)
+        if isinstance(node, ast.FunctionDef) and node.name in TOOLS
     )
 
 

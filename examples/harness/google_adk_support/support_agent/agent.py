@@ -4,8 +4,6 @@ from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
 
 MODEL = os.getenv("OPENAI_MODEL", "vertex_ai/gemini-3.7-flash")
-API_KEY = os.getenv("OPENAI_API_KEY")
-BASE_URL = os.getenv("OPENAI_BASE_URL")
 
 _REFUSAL = (
     "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
@@ -13,9 +11,13 @@ _REFUSAL = (
 )
 
 
+def _setting(name: str) -> str:
+    # Blank counts as unset. Read where it's used, so no module name holds the key.
+    return os.getenv(name, "").strip()
+
+
 def _key_without_base_url() -> bool:
-    key = os.getenv("OPENAI_API_KEY", "").strip()
-    return bool(key) and not os.getenv("OPENAI_BASE_URL", "").strip()
+    return bool(_setting("OPENAI_API_KEY")) and not _setting("OPENAI_BASE_URL")
 
 
 # With no base URL LiteLLM's openai/ provider falls back to api.openai.com and would send the key there.
@@ -75,8 +77,8 @@ root_agent = Agent(
     name="support_agent",
     model=LiteLlm(
         model="openai/" + MODEL,
-        api_base=BASE_URL,
-        api_key=API_KEY,
+        api_base=_setting("OPENAI_BASE_URL") or None,
+        api_key=_setting("OPENAI_API_KEY") or None,
     ),
     # No braces in the text: ADK fills `{name}` from session state and fails on a missing key.
     instruction=(

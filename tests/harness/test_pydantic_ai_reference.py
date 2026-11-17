@@ -448,7 +448,7 @@ def test_example_has_one_async_callback_and_plain_tools() -> None:
     ]
     assert async_names == ["agent_callback"]
     plain = {node.name for node in module.body if isinstance(node, ast.FunctionDef)}
-    assert plain == set(TOOLS)
+    assert plain == set(TOOLS) | {"_setting"}
 
 
 # T5: requirements ---------------------------------------------------------------------------
