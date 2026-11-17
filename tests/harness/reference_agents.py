@@ -5,8 +5,10 @@ authoring helpers of `test_bundle_author_v2`.
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib
+import inspect
 import json
 import os
 import shutil
@@ -14,6 +16,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
+from types import ModuleType
 
 from test_bundle_author_v2 import (
     _authoring,
@@ -193,8 +196,7 @@ def assert_detected(
         assert detect_framework(run) == expected
         (run / f"{names[0]}.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
         found = detect_framework(run)
-        blockers = folder_findings(run).blockers
-        assert not (found == expected and blockers == frozenset())
+        assert found != expected, f"a shadowed import is still detected: {found!r}"
     else:
         raise ValueError(f"unknown case {where!r}")
 
@@ -240,6 +242,23 @@ def build_control_service(
         output=tmp_path / "bundle",
     )
     return next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
+
+
+def assert_bindings_match(
+    bindings: Sequence[Mapping[str, str]],
+    module: ModuleType,
+    module_name: str,
+    tools: Sequence[str] = TOOLS,
+) -> None:
+    """Each binding names a plain function the example's `module` really defines, one per tool."""
+    assert sorted(item["name"] for item in bindings) == sorted(tools)
+    # The tracer binds by the function's code name and module, so read the source: it holds
+    # whether or not an SDK decorator wraps the function.
+    tree = ast.parse(inspect.getsource(module))
+    plain = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    for item in bindings:
+        assert item["module"] == module_name
+        assert item["callable"] in plain, f"{item['callable']} is not a top-level def"
 
 
 # The tracer ---------------------------------------------------------------------------------
