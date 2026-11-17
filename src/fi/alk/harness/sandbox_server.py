@@ -304,8 +304,7 @@ class LocalSandbox:
         if not _ENVIRONMENT_NAME.fullmatch(name):
             raise HTTPException(status_code=400, detail="environment_name is invalid")
         if (
-            name in _RUNNER_RESERVED_ENVIRONMENT
-            or name.startswith("ALK_")
+            _runner_owned(name)
             or client_name_reserved(name)
         ):
             raise HTTPException(status_code=400, detail="environment_name is reserved")
@@ -1627,6 +1626,12 @@ def _validate_secret_alias_shapes(references: dict[str, SecretRef]) -> None:
             raise ValueError(f"secret_reference_name_invalid: {alias}")
 
 
+def _runner_owned(name: str) -> bool:
+    """A name the runner owns, in any case: its reserved environment and the ALK_ prefix."""
+    key = str(name).strip().upper()
+    return key in _RUNNER_RESERVED_ENVIRONMENT or key.startswith("ALK_")
+
+
 _RESERVED_HINT = (
     " (the name steers a process the runner starts, or is the runner's own; send the value "
     "under another name and read that name in the agent)"
@@ -1638,11 +1643,7 @@ def _validate_controller_names(
 ) -> None:
     """Refuse the names of a job that would reach the controller's own environment."""
     for name in config:
-        if (
-            str(name).upper() in _RUNNER_RESERVED_ENVIRONMENT
-            or str(name).upper().startswith("ALK_")
-            or agent_value_name_reserved(str(name))
-        ):
+        if _runner_owned(str(name)) or agent_value_name_reserved(str(name)):
             raise ValueError(f"connector_config_name_reserved: {name}{_RESERVED_HINT}")
     _validate_secret_alias_shapes(references)
     for alias, reference in references.items():
@@ -1651,15 +1652,14 @@ def _validate_controller_names(
         if reference.manager == "mounted" and reference.key.startswith(
             _SANDBOX_FILE_PREFIX
         ):
-            if client_name_reserved(alias):
+            if _runner_owned(alias) or client_name_reserved(alias):
                 raise ValueError(f"secret_alias_reserved: {alias}")
             continue
         if _target_alias(reference):
             # The customer agent's own credential (ANTHROPIC_API_KEY, GOOGLE_API_KEY): it reaches
             # only the agent's runtime namespace, so it takes the rule environment values take.
             if (
-                alias in _RUNNER_RESERVED_ENVIRONMENT
-                or alias.startswith("ALK_")
+                _runner_owned(alias)
                 or client_name_reserved(alias)
             ):
                 raise ValueError(f"secret_alias_reserved: {alias}")
@@ -1710,11 +1710,7 @@ def _validate_environment_values(
     for name, secret in values.items():
         if not _ENVIRONMENT_NAME.fullmatch(name):
             raise ValueError(f"environment_name_invalid: {name}")
-        if (
-            name.upper() in _RUNNER_RESERVED_ENVIRONMENT
-            or name.upper().startswith("ALK_")
-            or agent_value_name_reserved(name)
-        ):
+        if _runner_owned(name) or agent_value_name_reserved(name):
             raise ValueError(f"environment_name_reserved: {name}{_RESERVED_HINT}")
         value = secret.get_secret_value()
         if "\x00" in value:

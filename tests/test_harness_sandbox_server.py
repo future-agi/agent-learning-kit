@@ -2280,7 +2280,10 @@ def test_a_rerun_refuses_a_name_no_agent_needs():
         SandboxRerunRequest(environment_values={"DOCKER_CONFIG": "x"})
 
 
-@pytest.mark.parametrize("name", ["alk_sandbox_token", "Alk_Anything", "pythonpath"])
+@pytest.mark.parametrize(
+    "name",
+    ["alk_sandbox_token", "Alk_Anything", "pythonpath", "fi_api_key", "harness_platform_url"],
+)
 def test_a_runner_name_is_refused_in_any_case(name):
     with pytest.raises(ValidationError, match="name_reserved"):
         LocalSandboxRequest(source_path="/tmp/agent", connector_config={name: "x"})
@@ -3223,3 +3226,30 @@ def test_a_target_provider_ref_under_a_neutral_alias_reaches_only_the_runtime_na
         "ALK_RUNTIME_VALUE_MY_AGENT_KEY"
     ]
     assert worker[_ALIASES_ENV] == "MY_AGENT_KEY"
+
+
+@pytest.mark.parametrize("name", ["fi_api_key", "harness_platform_url", "Alk_X"])
+def test_a_runner_name_is_refused_in_any_case_as_a_target_alias(name):
+    with pytest.raises(ValidationError, match=f"secret_alias_reserved: {name}"):
+        LocalSandboxRequest(
+            source_path="/tmp/agent", secret_refs={name: _ref("environment", "MY_SOURCE")}
+        )
+
+
+@pytest.mark.parametrize("name", ["fi_api_key", "harness_platform_url"])
+def test_a_runner_name_is_refused_in_any_case_for_an_upload(tmp_path, name):
+    from fastapi import HTTPException
+
+    sandbox = LocalSandbox(tmp_path / "state")
+    with pytest.raises(HTTPException, match="environment_name is reserved"):
+        asyncio.run(_upload_credential(sandbox, name))
+
+
+def test_the_agent_runtime_is_started_without_publishing_its_service_ports(
+    tmp_path, monkeypatch
+):
+    # A job value can stand in for a port variable at the agent runtime's start; that's safe only
+    # while the run publishes no service ports.
+    command, _environment = _agent_runtime_command({}, tmp_path, monkeypatch, label="ports")
+    assert "--no-deps" in command
+    assert "-P" not in command and "--service-ports" not in command

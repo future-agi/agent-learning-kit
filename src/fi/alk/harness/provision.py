@@ -556,9 +556,6 @@ def _write_port_override(
     generated Compose override makes isolation universal while leaving container ports intact.
     """
     services: list[tuple[str, list[dict[str, Any]], bool]] = []
-    dynamic_targets = set(
-        _declared_port_targets(Path(environment.compose_file)).values()
-    )
     bind_host = os.environ.get("ALK_DOCKER_BIND_HOST", "").strip() or (
         "127.0.0.1" if _published_host() == "127.0.0.1" else "0.0.0.0"
     )
@@ -571,8 +568,11 @@ def _write_port_override(
         ports: list[dict[str, Any]] = []
         for item in service.get("ports") or []:
             target = int(item.get("target") or 0)
-            if not target or target in dynamic_targets:
+            if not target:
                 continue
+            # Every published port, a variable one too: Docker picks the host port on the kit's
+            # bind host, and _published_port reads it back. A fixed 0.0.0.0:2375 beside a
+            # variable port on the same target can't slip through.
             ports.append(
                 {
                     "target": target,
