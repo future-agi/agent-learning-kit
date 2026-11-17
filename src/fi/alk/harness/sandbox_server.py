@@ -1604,14 +1604,10 @@ class LocalSandbox:
             # asyncio.wait neither raises the task's cancel into this request nor re-cancels it.
             task.cancel()
             await asyncio.wait({task}, timeout=_CANCEL_RESPONSE_SECONDS)
+            # The job's task clears its secrets as it ends (_release_job), while it still holds
+            # the job; clearing them here could take a rerun's that has already started.
             if not task.done():
-                # Answer now; the secrets go once the task's cleanup has ended, unless a new run
-                # of the job holds them by then.
-                task.add_done_callback(
-                    lambda done: self._forget_job_secrets(job_id)
-                    if self._tasks.get(job_id) in (None, done)
-                    else None
-                )
+                # Answer now; the task carries on with its cleanup.
                 answer = self.get(job_id)
                 return answer.model_copy(
                     update={
@@ -1631,7 +1627,8 @@ class LocalSandbox:
                     updated_at=_now(),
                 )
                 _write_json(state_path, state)
-        self._forget_job_secrets(job_id)
+            # No task of the job is running, so these secrets are its last.
+            self._forget_job_secrets(job_id)
         return self.get(job_id)
 
     def _release_job(self, job_id: str) -> None:

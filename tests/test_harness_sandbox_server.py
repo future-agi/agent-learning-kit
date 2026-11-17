@@ -2463,6 +2463,12 @@ def test_a_second_cancel_does_not_cut_the_cleanup_short(
             job = sandbox.submit(LocalSandboxRequest(source_path=str(source))).job
         task = sandbox._tasks[job.job_id]
         await _until(lambda: pid_file.exists() and pid_file.read_text())
+        # As cancel() does: the job is marked canceled first, so its cleanup takes the ordered
+        # path (the worker's grace, then stop), which a second cancel could cut short.
+        state_path = sandbox.jobs_root / job.job_id / "state.json"
+        state = json.loads(state_path.read_text())
+        state.update(stage="canceled")
+        state_path.write_text(json.dumps(state))
         task.cancel()
         await asyncio.sleep(0.1)
         task.cancel()
@@ -2943,6 +2949,61 @@ def test_a_service_stop_starts_the_environment_cleanup_inside_the_workers_grace(
     stopped = asyncio.run(scenario())
 
     assert started_at and started_at[0] - stopped < 1.5, started_at
+
+
+def test_a_rerun_that_lands_as_the_cleanup_ends_keeps_its_secrets(
+    tmp_path, monkeypatch, fake_worker
+):
+    import time
+
+    # The cleanup ends inside cancel()'s wait; a rerun takes the job before cancel() resumes.
+    monkeypatch.setattr(sandbox_server, "stop", lambda _output: time.sleep(0.1))
+    source = _local_source(tmp_path, monkeypatch)
+    sandbox = LocalSandbox(tmp_path / "state")
+    fake_worker.sleeping()
+
+    async def scenario():
+        job_id = sandbox.submit(LocalSandboxRequest(source_path=str(source))).job.job_id
+        old = sandbox._tasks[job_id]
+        await _until(lambda: _running(fake_worker))
+        new = asyncio.get_running_loop().create_future()
+
+        def rerun_takes_the_job(_done):
+            sandbox._tasks[job_id] = new
+            sandbox._ephemeral_secrets[job_id] = {"NEW_RUN_KEY": "kept"}
+
+        old.add_done_callback(rerun_takes_the_job)
+        await sandbox.cancel(job_id)
+        new.set_result(None)
+        return job_id
+
+    job_id = asyncio.run(scenario())
+
+    assert sandbox._ephemeral_secrets.get(job_id) == {"NEW_RUN_KEY": "kept"}
+
+
+def test_the_server_stops_waiting_for_a_hung_cleanup(tmp_path, monkeypatch, fake_worker):
+    import threading
+    import time
+
+    monkeypatch.setattr(sandbox_server, "_CANCEL_WAIT_SECONDS", 0.3)
+    released = threading.Event()
+    monkeypatch.setattr(sandbox_server, "stop", lambda _output: released.wait(10))
+    source = _local_source(tmp_path, monkeypatch)
+    fake_worker.sleeping()
+    app = create_app(tmp_path / "state")
+    sandbox = app.state.sandbox
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            sandbox.submit(LocalSandboxRequest(source_path=str(source)))
+            await _until(lambda: _running(fake_worker))
+            started = time.monotonic()
+        took = time.monotonic() - started
+        released.set()
+        return took
+
+    assert asyncio.run(scenario()) < 3
 
 
 def test_an_idle_server_shuts_down_cleanly(tmp_path, caplog):
