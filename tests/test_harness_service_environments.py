@@ -2213,3 +2213,149 @@ HTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
     finally:
         world.close()
         stop(session)
+
+
+def _vol(spec, key="data", **service):
+    return {
+        "name": "job",
+        "services": {"agent": service},
+        "volumes": {key: spec},
+    }
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        (
+            _vol(
+                {
+                    "name": "job_data",
+                    "driver": "local",
+                    "driver_opts": {"type": "none", "o": "bind", "device": "/var/run"},
+                }
+            ),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol(
+                {
+                    "name": "job_data",
+                    "driver_opts": {"type": "none", "o": "bind", "device": "/"},
+                },
+                volumes=[
+                    {
+                        "type": "volume",
+                        "source": "data",
+                        "target": "/h",
+                        "volume": {"subpath": "var/run"},
+                    }
+                ],
+            ),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol({"name": "job_data", "driver_opts": {"device": "/var/run"}}),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol({"name": "job_data", "driver_opts": {"o": "bind"}}),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol({"name": "job_data", "driver_opts": {"type": "bind"}}),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol({"name": "job_data", "driver_opts": {"type": "nfs", "device": ":/x"}}),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol(
+                {
+                    "name": "job_data",
+                    "driver_opts": {"type": "tmpfs", "device": "/", "o": "bind"},
+                }
+            ),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol({"name": "otherjob_data", "external": True}),
+            "volume data: external",
+        ),
+        (_vol({"name": "job_data", "external": True}), "volume data: external"),
+        (_vol({"name": "otherjob_data"}), "volume data: named outside the project"),
+        (_vol({"name": "job_other"}), "volume data: named outside the project"),
+        (_vol({"name": "job_data", "driver": "nfs"}), "volume data: driver"),
+        (_vol({"name": "job_data", "driver": "rexray/s3fs"}), "volume data: driver"),
+        (
+            _vol(
+                {"name": "job_data"},
+                volumes=[{"type": "image", "source": "alpine", "target": "/h"}],
+            ),
+            "agent: volume type",
+        ),
+        (
+            _vol(
+                {"name": "job_data"},
+                volumes=[{"type": "npipe", "source": "x", "target": "/h"}],
+            ),
+            "agent: volume type",
+        ),
+    ],
+)
+def test_a_named_volume_that_reaches_outside_the_project_is_rejected(config, expected):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(config)
+    assert expected in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        _vol({}),
+        _vol({"name": "job_data"}),
+        _vol({"name": "job_data", "driver": "local"}),
+        _vol({"name": "job_data", "driver": ""}),
+        _vol({"name": "job_data", "driver_opts": {}}),
+        _vol({"name": "job_data", "labels": {"a": "b"}}),
+        _vol(
+            {
+                "name": "job_data",
+                "driver_opts": {"type": "tmpfs", "device": "tmpfs", "o": "size=64m"},
+            }
+        ),
+        _vol(None),
+        _vol(
+            {"name": "job_data"},
+            volumes=[
+                {"type": "volume", "source": "data", "target": "/h"},
+                {"type": "tmpfs", "target": "/t"},
+                {"type": "bind", "source": "/srv/data", "target": "/b"},
+                {
+                    "type": "volume",
+                    "source": "data",
+                    "target": "/s",
+                    "volume": {"subpath": "sub"},
+                },
+            ],
+        ),
+    ],
+)
+def test_a_named_volume_inside_the_project_is_accepted(config):
+    _validate_compose_security(config)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        _vol({"name": "CANARY-7f3a"}),
+        _vol({"name": "job_data", "driver": "CANARY-7f3a"}),
+        _vol({"name": "job_data", "driver_opts": {"device": "CANARY-7f3a"}}),
+        _vol({"name": "job_data"}, volumes=[{"type": "CANARY-7f3a", "target": "/h"}]),
+    ],
+)
+def test_a_volume_refusal_never_contains_a_value(config):
+    with pytest.raises(ProvisionError) as error:
+        _validate_compose_security(config)
+    assert "CANARY" not in str(error.value)
+    assert "7f3a" not in str(error.value)

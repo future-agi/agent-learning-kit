@@ -570,6 +570,20 @@ _ALLOWED_SERVICE_FIELDS = frozenset(
 )  # fmt: skip
 
 
+def _volume_options_are_private(options: Any) -> bool:
+    """True for no options, or a tmpfs volume: the only ``local`` options that stay in memory."""
+    if not options:
+        return True
+    if not isinstance(options, dict) or set(options) - {"type", "device", "o"}:
+        return False
+    mount_options = {part.strip() for part in str(options.get("o") or "").split(",")}
+    return (
+        str(options.get("type") or "") == "tmpfs"
+        and str(options.get("device") or "tmpfs") == "tmpfs"
+        and not mount_options & {"bind", "rbind"}
+    )
+
+
 def _validate_compose_security(config: dict[str, Any]) -> None:
     """Reject host-escape primitives before any submitted container is created.
 
@@ -641,7 +655,30 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
         for volume in service.get("volumes") or []:
             if _mounts_docker_socket(volume):
                 violations.append(f"{name}: Docker socket mount")
+            # ``image`` mounts another image's root filesystem; ``npipe`` and ``cluster`` are
+            # not Linux mounts. Compose's own default for a long entry is ``volume`` or ``bind``.
+            if isinstance(volume, dict) and str(volume.get("type") or "bind") not in {
+                "bind",
+                "volume",
+                "tmpfs",
+            }:
+                violations.append(f"{name}: volume type")
     project = str(config.get("name") or "")
+    for key, spec in (config.get("volumes") or {}).items():
+        if not isinstance(spec, dict):
+            continue
+        # A named volume is only the job's own while it is created under the job's project and
+        # driven by ``local`` without options: ``o=bind`` with a ``device`` is a host bind, and
+        # a ``subpath`` of it reaches anything below that device.
+        if spec.get("external"):
+            violations.append(f"volume {key}: external")
+        declared = spec.get("name")
+        if declared and declared != f"{project}_{key}":
+            violations.append(f"volume {key}: named outside the project")
+        if str(spec.get("driver") or "") not in {"", "local"}:
+            violations.append(f"volume {key}: driver")
+        if not _volume_options_are_private(spec.get("driver_opts")):
+            violations.append(f"volume {key}: driver_opts")
     for key, spec in (config.get("networks") or {}).items():
         if not isinstance(spec, dict):
             continue
