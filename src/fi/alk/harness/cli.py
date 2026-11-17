@@ -43,6 +43,7 @@ from .session import TEXT, Event
 from .secrets import (
     CONTROLLER_CONNECTION_NAMES,
     RUNNER_RESERVED_ENVIRONMENT,
+    RUNTIME_CONFIGURATION_NAMES_ENV,
     client_name_reserved,
     runtime_configuration_environment,
 )
@@ -849,7 +850,7 @@ async def _simulate(args: argparse.Namespace) -> int:
 
 
 _LOG = logging.getLogger(__name__)
-_MANIFEST = "ALK_RUNTIME_CONFIGURATION_NAMES"
+_MANIFEST = RUNTIME_CONFIGURATION_NAMES_ENV
 
 
 def _load_connection_env(source: Path) -> list[str]:
