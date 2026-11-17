@@ -55,6 +55,13 @@ def _serve(tmp_path, entrypoint, stub_fi=False):
         "        {'role': 'assistant', 'content': 'The status is complete.'},\n"
         "    ]\n"
         "\n"
+        "def content_dict_reply(agent_input):\n"
+        "    return {'content': [\n"
+        "        {'type': 'thinking', 'thinking': 'hmm', 'signature': 'sig-abc'},\n"
+        "        {'type': 'text', 'text': 'The status '},\n"
+        "        {'type': 'text', 'text': 'is complete.'},\n"
+        "    ], 'tool_calls': [{'id': 'c1'}]}\n"
+        "\n"
         "def thinking_reply(agent_input):\n"
         "    return [\n"
         "        {'type': 'thinking', 'thinking': 'hmm', 'signature': 'sig-abc'},\n"
@@ -137,6 +144,22 @@ def test_a_callback_answers_from_the_request_thread(adapter):
         assert json.loads(response.read())["content"] == "thread t1"
 
 
+def _ask_body(base):
+    body = json.dumps(
+        {
+            "thread_id": "t1",
+            "execution_id": "e1",
+            "messages": [{"role": "user", "content": "hello"}],
+            "new_message": {"role": "user", "content": "hello"},
+        }
+    ).encode()
+    request = urllib.request.Request(
+        f"{base}/invoke", data=body, headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read())
+
+
 def _ask(base):
     body = json.dumps(
         {
@@ -174,3 +197,13 @@ def test_a_callback_that_returns_graph_state_keeps_the_last_message_text(state_a
 
 def test_a_callback_that_returns_a_message_list_keeps_the_assistant_text(message_list_adapter):
     assert _ask(message_list_adapter) == "The status is complete."
+
+
+def test_a_callback_dict_with_block_content_sends_its_text_and_keeps_its_other_keys(tmp_path):
+    served = _serve(tmp_path, "chat_agent:content_dict_reply")
+    try:
+        body = _ask_body(next(served))
+        assert body["content"] == "The status is complete."
+        assert body["tool_calls"] == [{"id": "c1"}]
+    finally:
+        next(served, None)
