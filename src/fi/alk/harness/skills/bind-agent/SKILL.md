@@ -20,9 +20,12 @@ and whether it is sealed.
    brief says the mode is `canonical`) or has no tools (`conversation_only`), there is no binding
    to write: go to step 4. A tool with the environment's name but other arguments is listed under
    "same name, different arguments" and is mapped like any other.
-3. Write the binding and a trajectory for every scenario it can reach, and submit them with
-   `submit_binding`. A refusal lists exactly what is wrong; fix it and submit again. Then
-   `run_proof`. It replays every trajectory through the binding on a fresh PostgreSQL world and
+3. Write the binding and submit it with `submit_binding`. Code derives the trajectory of every
+   scenario whose reference solution the binding inverts (an agent tool mapped onto one
+   environment tool, its arguments renamed, converted, mapped or aliased); the reply says how many
+   it derived and which scenarios still need a trajectory from you, with the reason. Write those
+   (and any derived one you know the agent would make differently) and submit again. A refusal
+   lists exactly what is wrong; fix it and submit again. Then `run_proof`. It replays every trajectory through the binding on a fresh PostgreSQL world and
    says, per scenario, `proved`, `failed` (with the reason) or `unscorable`. Repair what failed and
    repeat until no scenario fails. A tool the environment cannot serve is `unsupported`, with the
    reason: never bend a mapping to make a scenario pass.

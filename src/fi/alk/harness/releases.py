@@ -478,7 +478,9 @@ class SuiteReleaseV1(_Strict):
 # --- bindings and run manifests --------------------------------------------------------------------
 
 
-Connector = Literal["livekit", "vapi", "retell", "retell_chat", "phone", "hosted_agent"]
+Connector = Literal[
+    "livekit", "vapi", "retell", "retell_chat", "phone", "hosted_agent", "mcp_client"
+]
 
 
 class AgentRef(_Strict):
@@ -1934,11 +1936,13 @@ TOOL_SERVER_DIRECTORY = "generated/tool-server"
 TOOLS_CAPABILITY = "tools"
 PROVIDER_TOOL_PATH = "/provider/tools"
 PROVIDER_EVENT_PATH = "/provider/events"
-# Our own agent (`hosted_agent.py`) reaches the world through its MCP endpoint (`world_mcp.py`).
+# Our own agent (`hosted_agent.py`) reaches the world through its MCP endpoint (`world_mcp.py`),
+# and so does a customer's declared agent (`adaptation/declared.py`), under its own tool names.
 HOSTED_AGENT = "hosted_agent"
+MCP_CLIENT = "mcp_client"
 WORLD_MCP = "world-mcp"
 WORLD_MCP_CAPABILITY = "world_mcp"
-_COMPOSABLE_CONNECTORS = {"retell_chat", "retell", "vapi", HOSTED_AGENT}
+_COMPOSABLE_CONNECTORS = {"retell_chat", "retell", "vapi", HOSTED_AGENT, MCP_CLIENT}
 _COMPOSABLE_MODES = {BindingMode.CANONICAL, BindingMode.TOOL_ROUTED}
 _ARG_TYPES = {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}
 
@@ -2107,6 +2111,8 @@ def compose_bundle(
             f"job connector {connector} differs from the binding's {binding.agent.connector}",
         )
     hosted = connector == HOSTED_AGENT
+    declared = connector == MCP_CLIENT
+    over_mcp = hosted or declared
     if (
         binding.mode not in _COMPOSABLE_MODES
         or connector not in _COMPOSABLE_CONNECTORS
@@ -2115,7 +2121,8 @@ def compose_bundle(
         raise ReleaseError(
             "compose_unsupported",
             f"{binding.mode.value} bindings on {connector} are not composed; canonical on "
-            f"{', '.join(sorted(_COMPOSABLE_CONNECTORS))} and tool_routed on provider agents are",
+            f"{', '.join(sorted(_COMPOSABLE_CONNECTORS))}, tool_routed on provider agents and "
+            f"on {MCP_CLIENT} are",
         )
     target_id = ""
     if hosted:
@@ -2128,6 +2135,17 @@ def compose_bundle(
         if spec.digest() != binding.agent.provider_digest:
             raise ReleaseError(
                 "run_inputs_mismatch", "the run's agent spec is not the one bound"
+            )
+    elif declared:
+        from .adaptation.declared import declared_digest
+
+        try:
+            digest = declared_digest(job.agent.config)
+        except ValueError as exc:
+            raise ReleaseError("compose_job_invalid", str(exc)) from exc
+        if digest != binding.agent.provider_digest:
+            raise ReleaseError(
+                "run_inputs_mismatch", "the run's declared agent is not the one bound"
             )
     else:
         target_key = "assistant_id" if connector == "vapi" else "agent_id"
@@ -2151,10 +2169,13 @@ def compose_bundle(
         list(binding.agent_tools) if binding.mode is BindingMode.TOOL_ROUTED else tools
     )
     agent_tool_names = sorted(tool.name for tool in agent_tools)
-    modality = "chat" if connector in ("retell_chat", HOSTED_AGENT) else "voice"
-    # Provider agents reach the world's tools through the webhook tool server; our agent reaches
-    # the same tools over MCP. Both run from the same directory through WorldTools.
-    if hosted:
+    modality = (
+        "chat" if connector in ("retell_chat", HOSTED_AGENT, MCP_CLIENT) else "voice"
+    )
+    # Provider agents reach the world's tools through the webhook tool server; our agent and a
+    # declared agent reach the same tools over MCP (a declared agent under its own tool names,
+    # through the binding). All run from the same directory through WorldTools.
+    if over_mcp:
         server_name, capability, health = WORLD_MCP, WORLD_MCP_CAPABILITY, "/healthz"
         run_command = [interpreter, "-m", "fi.alk.harness.world_mcp"]
         server_environment: dict[str, str] = {}
@@ -2278,7 +2299,7 @@ def compose_bundle(
             metadata={
                 **(
                     {}
-                    if hosted
+                    if over_mcp
                     else {
                         "provider_import": ProviderImportSpec(
                             type=ProviderType.VAPI
