@@ -6890,7 +6890,9 @@ def test_routed_sdk_agent_in_a_repo_with_an_agents_folder_has_tracing_off_until_
     assert environment[_TRACING_OFF] == "1"
 
 
-@pytest.mark.parametrize("customer_value", [None, "0"], ids=["unset", "customer_zero"])
+@pytest.mark.parametrize(
+    "customer_value", [None, "0", "1"], ids=["unset", "customer_zero", "customer_one"]
+)
 def test_routed_compose_runtime_control_service_has_tracing_off_until_the_hook(
     tmp_path: Path, customer_value: str | None
 ) -> None:
@@ -6924,6 +6926,9 @@ def test_routed_compose_runtime_control_service_has_tracing_off_until_the_hook(
     assert environment[_GATEWAY_MARK] == "1"
     # A customer's own "0" doesn't turn it on before the hook has kept the export local.
     assert environment[_TRACING_OFF] == "1"
+    # The marker tells the hook the switch is the kit's to turn back on; a customer's own "1"
+    # stays theirs.
+    assert ("ALK_SDK_TRACING_OFF_BY_KIT" in environment) is (customer_value != "1")
 
 
 def test_routed_command_agent_keeps_framework_observation_with_tracing_off_until_the_hook(

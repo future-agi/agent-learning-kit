@@ -268,6 +268,7 @@ _TRACING_EXPORT_PLACEHOLDER = "alk-tracing-disabled"
 # off again, so the kit's span observation (a processor of the SDK's tracing) runs. The SDK reads
 # the switch on first use, after its import.
 _SDK_TRACING_SWITCH = "OPENAI_AGENTS_DISABLE_TRACING"
+_SDK_TRACING_BY_KIT = "ALK_SDK_TRACING_OFF_BY_KIT"
 
 
 def _guard_tracing_export_key(module: Any) -> None:
@@ -326,7 +327,9 @@ def _set_openai_agents_chat_style(module: Any, reason: str = "") -> None:
                 "observed\n"
             )
         else:
-            os.environ.pop(_SDK_TRACING_SWITCH, None)
+            # Only the kit's own switch: a customer who turned their tracing off keeps it off.
+            if os.environ.pop(_SDK_TRACING_BY_KIT, None) == "1":
+                os.environ.pop(_SDK_TRACING_SWITCH, None)
         try:
             module.set_default_openai_api("chat_completions")
             return

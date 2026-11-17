@@ -2597,7 +2597,7 @@ def resolve_environment_plan(
                     # Read at start-up by the shared sitecustomize hook.
                     environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
                     # Off until the hook has kept the SDK's export local; it then turns it on.
-                    environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
+                    _sdk_tracing_off_until_the_hook(environment)
             if is_livekit and service_name == control_name:
                 environment.setdefault(
                     "LIVEKIT_AGENT_NAME",
@@ -2871,7 +2871,7 @@ def resolve_environment_plan(
             # OpenAI; the hook then turns it back on, so the kit's span observation runs. A
             # process the hook never reaches (python -I, a shell around it) keeps it off.
             environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
-            environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
+            _sdk_tracing_off_until_the_hook(environment)
         callback_entrypoint = (
             discovered_callback or _callback_entrypoint(run_folder)
             if is_callback
@@ -3220,6 +3220,15 @@ def resolve_environment_plan(
         capabilities=capabilities,
         readiness=tuple(readiness),
     )
+
+
+def _sdk_tracing_off_until_the_hook(environment: dict[str, str]) -> None:
+    """Turn the Agents SDK's tracing off for a gateway-routed process. The marker tells the kit's
+    hook the switch is the kit's to turn back on once the SDK's export is local; a customer's own
+    switch, already on, stays theirs."""
+    if environment.get("OPENAI_AGENTS_DISABLE_TRACING") != "1":
+        environment["ALK_SDK_TRACING_OFF_BY_KIT"] = "1"
+    environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
 
 
 def _source_tool_trace_environment(

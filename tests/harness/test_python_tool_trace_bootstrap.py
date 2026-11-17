@@ -243,9 +243,17 @@ _STANDIN_AGENTS_WITH_EXPORTER = (
 )
 _STANDIN_TRACING = {
     "__init__.py": (
+        "import os\n"
         "from .processors import default_exporter\n"
         "def set_tracing_export_api_key(api_key):\n"
         "    default_exporter().set_api_key(api_key)\n"
+        # The SDK reads its switch once, on the first trace it creates.
+        "_disabled = None\n"
+        "def create_trace():\n"
+        "    global _disabled\n"
+        "    if _disabled is None:\n"
+        "        _disabled = os.environ.get('OPENAI_AGENTS_DISABLE_TRACING') == '1'\n"
+        "    return not _disabled\n"
     ),
     "processors.py": (
         "import os\n"
@@ -527,6 +535,10 @@ _SWITCH_AFTER_IMPORT = (
 )
 
 
+_KIT_SWITCH = {"OPENAI_AGENTS_DISABLE_TRACING": "1", "ALK_SDK_TRACING_OFF_BY_KIT": "1"}
+_FIRST_TRACE = "import agents\nfrom agents import tracing\nprint(tracing.create_trace())\n"
+
+
 def test_the_hook_turns_the_sdks_tracing_back_on_once_its_export_is_local(
     tmp_path: Path,
 ) -> None:
@@ -536,10 +548,40 @@ def test_the_hook_turns_the_sdks_tracing_back_on_once_its_export_is_local(
         _SWITCH_AFTER_IMPORT,
         agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
         exporter=True,
-        extra_env={**_GATEWAY_KEY, "OPENAI_AGENTS_DISABLE_TRACING": "1"},
+        extra_env={**_GATEWAY_KEY, **_KIT_SWITCH},
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "None"
+
+
+@pytest.mark.parametrize("mark, traced", [(True, "True"), (False, "False")])
+def test_the_first_trace_runs_under_the_mark_and_not_without_it(
+    tmp_path: Path, mark: bool, traced: str
+) -> None:
+    # The SDK caches its switch on its first trace; the hook turns it on before that.
+    result, lines = _chat_style_run(
+        tmp_path,
+        _FIRST_TRACE,
+        agents_source=_STANDIN_AGENTS_WITH_EXPORTER + "from . import tracing\n",
+        exporter=True,
+        extra_env={**_GATEWAY_KEY, **_KIT_SWITCH},
+        mark=mark,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == traced
+
+
+def test_a_customers_own_tracing_switch_is_left_on(tmp_path: Path) -> None:
+    # Without the kit's marker the switch is the customer's: their tracing stays off.
+    result, lines = _chat_style_run(
+        tmp_path,
+        _SWITCH_AFTER_IMPORT,
+        agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
+        exporter=True,
+        extra_env={**_GATEWAY_KEY, "OPENAI_AGENTS_DISABLE_TRACING": "1"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "1"
 
 
 def test_where_the_export_cant_be_kept_local_the_sdks_tracing_stays_off(
