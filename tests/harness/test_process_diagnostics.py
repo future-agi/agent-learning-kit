@@ -600,6 +600,18 @@ def test_a_webhook_url_with_its_token_in_the_path_is_masked(tmp_path, line, url)
             "POST /services/T0/B0/abcdefghijklmnopqrstuvwx 404",
             "abcdefghijklmnopqrstuvwx",
         ),
+        # urllib3 prints the query percent-encoded: an Azure SAS sig ends in %3D.
+        (
+            "BLOB_URL=https://acct.blob.core.windows.net/c?sv=2022-11-02&sp=r&sig=AbCd%2BEfGh%2FIjKlMnOpQrStUvWxYz0123456789ab%3D",
+            'https://acct.blob.core.windows.net:443 "GET /c?sv=2022-11-02&sp=r&sig=AbCd%2BEfGh%2FIjKlMnOpQrStUvWxYz0123456789ab%3D HTTP/1.1" 200',
+            "AbCd%2BEfGh",
+        ),
+        # A token used as the URL's username.
+        (
+            "REPO=https://ghp_fakeGithubToken0123456789abcd@github.com/o/r.git",
+            "cloning from ghp_fakeGithubToken0123456789abcd@github.com/o/r.git",
+            "ghp_fakeGithubToken0123456789abcd",
+        ),
         # A token in the fragment.
         (
             "CALLBACK=https://app.example.test/cb#access_token=fakeFragmentToken12345",
@@ -607,7 +619,10 @@ def test_a_webhook_url_with_its_token_in_the_path_is_masked(tmp_path, line, url)
             "fakeFragmentToken12345",
         ),
     ],
-    ids=["urllib3-path", "path-only", "host-case", "default-port", "letters-under-name", "fragment"],
+    ids=[
+        "urllib3-path", "path-only", "host-case", "default-port", "letters-under-name",
+        "sas-encoded", "username-token", "fragment",
+    ],
 )
 def test_a_secret_urls_token_is_masked_however_the_log_prints_it(tmp_path, line, logged, token):
     source = _source(tmp_path, {".env": line + "\n"})
@@ -623,8 +638,16 @@ def test_a_secret_urls_token_is_masked_however_the_log_prints_it(tmp_path, line,
         "https://api.openai.com/v1/models/gpt-4o-mini-2024-07-18",
         "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-001",
         "https://aiplatform.googleapis.com/v1/projects/my-project-123456/locations/us-central1",
+        "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct",
+        "https://api.anthropic.com/v1/models/claude-3-5-sonnet-20241022",
+        "https://api.anthropic.com/v1/models/claude-sonnet-4-20250514",
+        "https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+        "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
     ],
-    ids=["plain", "hf-model", "openai-model", "gemini-model", "vertex-project"],
+    ids=[
+        "plain", "hf-model", "openai-model", "gemini-model", "vertex-project",
+        "meta-llama-3", "claude-3-5", "claude-sonnet-4", "deepseek", "llama-4-maverick",
+    ],
 )
 def test_a_url_with_a_model_or_plain_path_is_left_alone(tmp_path, url):
     # A model-not-found 404 names the model's URL; the repair has to read it.
@@ -674,6 +697,16 @@ def test_a_large_public_listed_file_does_not_withhold_the_evidence(tmp_path, pat
     (tmp_path / ".env").write_text("API_KEY=canary-public-files-0071\n")
     assert len(body.encode()) > 64 * 1024
     assert "canary-public-files-0071" in source_secret_masks(tmp_path)
+
+
+def test_a_commented_ca_bundle_does_not_withhold_the_evidence(tmp_path):
+    # certifi's and curl's bundles carry # comments between the certificates.
+    bundle = "".join(f"# Issuer: CN=Example Root {i}\n# Label: \"Example {i}\"\n" + _CERT for i in range(60))
+    (tmp_path / "package" / "certifi").mkdir(parents=True)
+    (tmp_path / "package" / "certifi" / "cacert.pem").write_text(bundle)
+    (tmp_path / ".env").write_text("API_KEY=canary-public-files-0072\n")
+    assert len(bundle.encode()) > 64 * 1024
+    assert "canary-public-files-0072" in source_secret_masks(tmp_path)
 
 
 def test_a_large_pem_holding_a_private_key_still_fails_closed(tmp_path):

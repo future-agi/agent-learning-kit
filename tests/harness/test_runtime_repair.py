@@ -348,6 +348,14 @@ def _validate_native(tmp_path, command, **fields):
         pytest.param(["npx", "-c", "echo hi"], id="npx-c"),
         pytest.param(["npm", "exec", "-c", "echo hi"], id="npm-exec-c"),
         pytest.param(["uv", "run", "julia", "-e", "x"], id="uv-julia-e"),
+        pytest.param(["npm", "--prefix", ".", "exec", "-c", "base64 .e*"], id="npm-prefix-exec-c"),
+        pytest.param(["pnpm", "-C", ".", "exec", "-c", "base64 .e*"], id="pnpm-C-exec-c"),
+        pytest.param(["pnpm", "--dir", ".", "dlx", "-c", "base64 .e*"], id="pnpm-dir-dlx-c"),
+        pytest.param(["pnpm", "exec", "--shell-mode", "base64 .e*"], id="pnpm-shell-mode"),
+        pytest.param(["npm", "exec", "--package", "cowsay", "-c", "x"], id="npm-exec-package-c"),
+        pytest.param(["npx", "-p", "cowsay", "-c", "x"], id="npx-p-c"),
+        pytest.param(["npm", "exec", "--call=x"], id="npm-call-joined"),
+        pytest.param(["python", "-m", "cProfile", "-m", "timeit", "x"], id="python-cprofile-timeit"),
     ],
 )
 def test_runtime_patch_refuses_inline_code_joined_to_its_flag(tmp_path, command) -> None:
@@ -366,6 +374,8 @@ def test_runtime_patch_refuses_inline_code_joined_to_its_flag(tmp_path, command)
         ["pnpm", "dlx", "serve", "-c", "serve.json"],
         ["python", "main.py", "--mode", "x", "-c", "conf"],
         ["uv", "run", "uvicorn", "main:app", "--port", "8000"],
+        ["deno", "run", "-c", "deno.json", "main.ts"],
+        ["pixi", "run", "-e", "prod", "start"],
     ],
 )
 def test_a_programs_own_c_or_e_flag_after_a_runner_is_not_inline_code(command) -> None:
@@ -3379,3 +3389,64 @@ def test_an_ordinary_module_or_preload_is_not_inline_code(command) -> None:
     from fi.alk.harness.runtime_repair import _runs_inline_code
 
     assert not _runs_inline_code(command)
+
+
+@pytest.mark.parametrize(
+    "command, evidence",
+    [
+        (["uv", "run", "uvicorn", "main:app", "--port", "8080"], "import uvicorn\n"),
+        (
+            ["bundle", "exec", "rails", "server", "-e", "production"],
+            "# run with: bundle exec rails server\ngem 'rails'\n",
+        ),
+    ],
+)
+def test_a_program_a_runner_runs_is_accepted_when_the_source_names_it(
+    tmp_path, command, evidence
+) -> None:
+    contract, patch = _native_patch(
+        tmp_path,
+        Runtime(
+            language="python",
+            workdir="service",
+            command=command,
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+    (tmp_path / "service" / "app.py").write_text(evidence)
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+    assert repaired.runtime.command == command
+
+
+def test_a_launcher_is_evidenced_only_as_a_whole_word(tmp_path) -> None:
+    # "scripts" in a package.json is not evidence for a program called script.
+    contract, patch = _native_patch(
+        tmp_path,
+        Runtime(
+            language="python",
+            workdir="service",
+            command=["script", "app.py"],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+    (tmp_path / "service" / "app.py").write_text('{"scripts": {"start": "node x"}}\n')
+    with pytest.raises(ValueError, match="runtime_repair_launcher_not_source_evidenced"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+        )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(["uv", "run", "script", "-q", "-c", "base64 .e*", "/dev/null"], id="uv-script-c"),
+        pytest.param(["uv", "run", "flock", "/tmp/l", "-c", "base64 .e*"], id="uv-flock-c"),
+        pytest.param(["uv", "run", "git", "-c", "alias.x=!base64 .e*", "x"], id="uv-git-c"),
+    ],
+)
+def test_a_program_a_safe_launcher_runs_needs_its_own_evidence(tmp_path, command) -> None:
+    # uv vouches for itself, not for the program it runs: script and flock hand a shell its -c.
+    with pytest.raises(ValueError, match="runtime_repair_launcher_not_source_evidenced"):
+        _validate_native(tmp_path, command)

@@ -112,8 +112,14 @@ def _webhook_tail(parts) -> str | None:
 def _token_segment(segment: str) -> bool:
     """Whether one segment of a URL's path is a token, as a webhook's is. Stricter than a whole
     value's rule, so a model or project name in a path (gpt-4o-mini-2024-07-18,
-    Llama-3.1-8B-Instruct, my-project-123456) is left for the repair to read."""
-    if _HEX_RUN.fullmatch(segment) or _LONG_RUN.fullmatch(segment):
+    Llama-3.1-8B-Instruct, my-project-123456, claude-sonnet-4-20250514) is left for the repair
+    to read: a token has one long piece between its separators, a model id has many short ones.
+    A webhook's token, whatever its pieces, is caught by its marker (_webhook_tail)."""
+    if _HEX_RUN.fullmatch(segment):
+        return True
+    if max(len(piece) for piece in re.split(r"[-_.]", segment)) < 16:
+        return False
+    if _LONG_RUN.fullmatch(segment):
         return True
     if len(segment) < 24 or "." in segment:
         return False
@@ -197,8 +203,15 @@ def _url_masks(value: str, *, named: bool = False) -> set[str]:
             masks.add("/".join(segments[index:]))
     for field in (parts.query, parts.fragment):
         masks.update(item for _, item in parse_qsl(field, keep_blank_values=False))
-    if parts.password:
-        masks.update({parts.password, unquote(parts.password)})
+        # As a log prints them, percent-encoded (an Azure SAS sig ends in %3D), and whole.
+        masks.update(pair.partition("=")[2] for pair in field.split("&"))
+        if field:
+            masks.add(field)
+    if parts.query:
+        masks.add(parts.path + "?" + parts.query)
+    for field in (parts.password, parts.username):
+        if field and len(field) >= MIN_MASKED_LENGTH:
+            masks.update({field, unquote(field)})
     host = (parts.hostname or "").lower()
     if host:
         netloc = host if port in (None, _DEFAULT_PORTS.get(parts.scheme.lower())) else f"{host}:{port}"
@@ -311,7 +324,15 @@ def source_secret_masks(root: Path) -> frozenset[str]:
                 info = os.fstat(stream.fileno())
                 if not stat.S_ISREG(info.st_mode):
                     continue
-                if _public_listed_file(entry.name, resolved.name, stream, info.st_size):
+                rest = _public_listed_file(entry.name, resolved.name, stream, info.st_size)
+                if rest is not None:
+                    # Only what isn't public is masked, and only it counts against the bounds.
+                    size = len(rest.encode())
+                    if size > _MAX_MASKED_FILE_BYTES or total + size > _MAX_MASKED_TOTAL_BYTES:
+                        raise OSError("a listed file is too large to mask")
+                    total += size
+                    if rest.strip():
+                        masks |= _masks_of(rest, names=(entry.name, resolved.name))
                     continue
                 if (
                     info.st_size > _MAX_MASKED_FILE_BYTES
@@ -328,24 +349,25 @@ def source_secret_masks(root: Path) -> frozenset[str]:
     return frozenset(mask for mask in masks if len(mask) >= MIN_MASKED_LENGTH)
 
 
-def _public_listed_file(name: str, resolved_name: str, stream, size: int) -> bool:
-    """Whether a listed file holds nothing secret, so it needs no masks and its size doesn't
-    withhold the evidence: a model's tokenizer file, or a PEM file of certificates only (a CA
-    bundle). A PEM file holding anything but certificates, a key above all, is not public."""
+def _public_listed_file(name: str, resolved_name: str, stream, size: int) -> str | None:
+    """What of a listed file needs masks, when part of it is public: "" for a model's tokenizer
+    file, or the text outside the certificates of a PEM file of certificates only (a CA bundle,
+    whose comments stay masked). None for any other file, a PEM holding a key above all."""
     names = {name.casefold(), resolved_name.casefold()}
     if names & _PUBLIC_TOKENIZER_NAMES:
-        return True
+        return ""
     if not any(n.endswith((".pem", ".crt", ".cer")) for n in names):
-        return False
+        return None
     if size > _MAX_PUBLIC_FILE_BYTES:
-        return False
+        return None
     text = stream.read(_MAX_PUBLIC_FILE_BYTES + 1).decode("utf-8", errors="replace")
     stream.seek(0)
     kinds = set(re.findall(r"-----BEGIN ([A-Z0-9 ]+)-----", text))
-    outside = re.sub(
+    if kinds != {"CERTIFICATE"}:
+        return None
+    return re.sub(
         r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", "", text, flags=re.DOTALL
     )
-    return kinds == {"CERTIFICATE"} and not outside.strip()
 
 
 def mask_source_secrets(text: str, masks: Iterable[str]) -> str:

@@ -1033,6 +1033,64 @@ _RUNNERS = frozenset(
      "cargo", "go", "deno", "conda", "mamba", "pixi"}
 )
 _STANDALONE_RUNNERS = frozenset({"npx", "bunx", "pnpx"})
+# A runner's own options that run their value in a shell; other runners' -c and -e are a config
+# file or an environment (deno run -c deno.json, pixi run -e prod).
+_RUNNER_CODE_OPTIONS = {
+    "npm": frozenset({"-c", "--call"}),
+    "npx": frozenset({"-c", "--call"}),
+    "pnpm": frozenset({"-c", "--shell-mode"}),
+    "pnpx": frozenset({"-c", "--shell-mode"}),
+}
+# A runner's options that take the next token as their value.
+_RUNNER_VALUE_OPTIONS = frozenset({*_FOLDER_FLAGS, "-C", "-p", "--package"})
+# Safe launchers that run a program named after their verb: that program needs evidence too.
+_LAUNCHERS_OF_A_PROGRAM = frozenset(
+    {"uv", "poetry", "pdm", "rye", "hatch", "pixi", "conda", "mamba", "bundle"}
+)
+_PROGRAM_VALUE_OPTIONS = frozenset(
+    {"--with", "--python", "-p", "--project", "--directory", "--env-file", "--extra",
+     "--group", "--package", "--index", "--from", "-e", "--environment", "-n", "--name"}
+)
+_SOURCE_SUFFIXES = (".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".php", ".pl", ".lua")
+# Modules that run another module named by their own -m (python -m cProfile -m timeit <code>).
+_PYTHON_RUNNING_MODULES = frozenset({"cProfile", "profile", "trace"})
+
+
+def _runner_verb(command: list[str], index: int) -> int | None:
+    """The index of the verb after the runner at ``index``, past its global options
+    (npm --prefix . exec, pnpm -C . dlx)."""
+    positions = iter(range(index + 1, len(command)))
+    for position in positions:
+        token = command[position]
+        if token in _RUNNER_VALUE_OPTIONS:
+            next(positions, None)
+            continue
+        if token.startswith("-"):
+            continue
+        return position
+    return None
+
+
+def _runner_options_run_code(runner: str, options: list[str]) -> bool:
+    """Whether a runner's own options, before the program it runs, hand a shell its code."""
+    codes = _RUNNER_CODE_OPTIONS.get(runner, frozenset())
+    remaining = iter(options)
+    for option in remaining:
+        if option == "--" or not option.startswith("-"):
+            return False
+        name = option.partition("=")[0]
+        if name in codes or any(
+            not code.startswith("--") and option.startswith(code) and len(option) > len(code)
+            for code in codes
+        ):
+            return True
+        if option in ("-p", "--package"):
+            next(remaining, None)
+    return False
+
+
+def _whole_word(name: str, text: str) -> bool:
+    return bool(re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", text))
 _CODE_TOKENS = frozenset({"-c", "-e", "--eval"})
 
 
@@ -1044,15 +1102,18 @@ def _runs_inline_code(command: list[str]) -> bool:
     mistaken for code."""
     for index, token in enumerate(command):
         name = Path(token).name.casefold()
-        previous = Path(command[index - 1]).name.casefold() if index else ""
-        if name in _STANDALONE_RUNNERS or (name in _RUNNER_VERBS and previous in _RUNNERS):
-            # Only the runner's own options, before the program it runs: the program's own -c
-            # config or -e environment after it is not code.
-            for option in command[index + 1:]:
-                if option in _CODE_TOKENS or option == "--call":
-                    return True
-                if option == "--" or not option.startswith("-"):
-                    break
+        # Only the runner's own options, before the program it runs: the program's own -c
+        # config or -e environment after it is not code.
+        if name in _STANDALONE_RUNNERS and _runner_options_run_code(name, command[index + 1:]):
+            return True
+        if name in _RUNNERS:
+            verb = _runner_verb(command, index)
+            if (
+                verb is not None
+                and command[verb].casefold() in _RUNNER_VERBS
+                and _runner_options_run_code(name, command[verb + 1:])
+            ):
+                return True
         python = bool(_PYTHON_NAME.fullmatch(name))
         script = bool(_SCRIPT_NAME.fullmatch(name))
         shell = name in _SHELL_LAUNCHERS
@@ -1066,6 +1127,16 @@ def _runs_inline_code(command: list[str]) -> bool:
             if python and (module := _python_module_option(option, options)) is not None:
                 if module in _PYTHON_CODE_MODULES:
                     return True
+                if module in _PYTHON_RUNNING_MODULES:
+                    later = list(options)
+                    for position, option in enumerate(later):
+                        named = (
+                            later[position + 1]
+                            if option in ("-m", "--module") and position + 1 < len(later)
+                            else option[2:] if option.startswith("-m") else None
+                        )
+                        if named in _PYTHON_CODE_MODULES:
+                            return True
                 # A module that runs another command (uv, poetry): its later tokens are read too.
                 break
             if name == "deno" and option == "eval":
@@ -1616,18 +1687,42 @@ def validate_runtime_plan_patch(
         launcher = Path(runtime.command[0]).name.casefold()
         if launcher in _SHELL_LAUNCHERS or _runs_inline_code(runtime.command):
             raise ValueError("runtime_repair_inline_or_shell_command_forbidden")
-        if launcher not in _SAFE_RUNTIME_LAUNCHERS:
-            declared = "\n".join(
-                path.read_text(encoding="utf-8", errors="replace")[:100_000]
-                for path in evidence_files
-            )
-            if runtime.command[0] not in declared:
-                raise ValueError("runtime_repair_launcher_not_source_evidenced")
-        entry_tokens = runtime.command[1:]
-        subcommand = next(
-            (token.casefold() for token in entry_tokens if not token.startswith("-")),
-            "",
+        declared = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")[:100_000]
+            for path in evidence_files
         )
+        if launcher not in _SAFE_RUNTIME_LAUNCHERS and not _whole_word(
+            runtime.command[0], declared
+        ):
+            raise ValueError("runtime_repair_launcher_not_source_evidenced")
+        if launcher in _LAUNCHERS_OF_A_PROGRAM:
+            # A safe launcher doesn't vouch for the program it runs (uv run script -c ...).
+            verb = _runner_verb(runtime.command, 0)
+            if verb is not None and runtime.command[verb].casefold() in {"run", "exec"}:
+                program = None
+                arguments = iter(runtime.command[verb + 1:])
+                for token in arguments:
+                    if token in _PROGRAM_VALUE_OPTIONS:
+                        next(arguments, None)
+                    elif token == "--":
+                        continue
+                    elif not token.startswith("-"):
+                        program = token
+                        break
+                name = Path(program).name.casefold() if program else ""
+                if program and not (
+                    _PYTHON_NAME.fullmatch(name)
+                    or _SCRIPT_NAME.fullmatch(name)
+                    or (
+                        program.endswith(_SOURCE_SUFFIXES)
+                        and ((workdir / program).is_file() or (root / program).is_file())
+                    )
+                    or _whole_word(program, declared)
+                ):
+                    raise ValueError("runtime_repair_launcher_not_source_evidenced")
+        entry_tokens = runtime.command[1:]
+        verb = _runner_verb(runtime.command, 0)
+        subcommand = runtime.command[verb].casefold() if verb is not None else ""
         if (
             launcher in _PACKAGE_RUNNERS
             or subcommand in _PACKAGE_RUNNER_SUBCOMMANDS.get(launcher, set())
