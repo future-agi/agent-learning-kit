@@ -66,6 +66,22 @@ CASES = [
     ("message-dict-none-content", {"role": "assistant", "content": None}, ""),
     ("message-object-blocks", NS(type="ai", content=_blocks()), ANSWER),
     ("message-object-string", NS(content="hi"), "hi"),
+    (
+        "message-list-answer-of-the-assistant",
+        [{"role": "user", "content": "q"}, {"role": "assistant", "content": _blocks()}],
+        ANSWER,
+    ),
+    (
+        "message-object-list",
+        [NS(type="human", content="q"), NS(type="ai", content=_blocks())],
+        ANSWER,
+    ),
+    (
+        "state-last-message",
+        {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": _blocks()}]},
+        ANSWER,
+    ),
+    ("state-empty-messages", {"messages": []}, "{'messages': []}"),
     ("number-falls-back-to-str", 42, "42"),
     ("plain-dict-falls-back-to-str", {"a": 1}, "{'a': 1}"),
 ]

@@ -40,6 +40,21 @@ def _serve(tmp_path, entrypoint, stub_fi=False):
         "def reply(agent_input):\n"
         "    return {'content': 'thread ' + agent_input.thread_id}\n"
         "\n"
+        "def state_reply(agent_input):\n"
+        "    return {'messages': [\n"
+        "        {'role': 'user', 'content': 'q'},\n"
+        "        {'role': 'assistant', 'content': [\n"
+        "            {'type': 'thinking', 'thinking': 'hmm', 'signature': 'sig-abc'},\n"
+        "            {'type': 'text', 'text': 'The status is complete.'},\n"
+        "        ]},\n"
+        "    ]}\n"
+        "\n"
+        "def message_list_reply(agent_input):\n"
+        "    return [\n"
+        "        {'role': 'user', 'content': 'q'},\n"
+        "        {'role': 'assistant', 'content': 'The status is complete.'},\n"
+        "    ]\n"
+        "\n"
         "def thinking_reply(agent_input):\n"
         "    return [\n"
         "        {'type': 'thinking', 'thinking': 'hmm', 'signature': 'sig-abc'},\n"
@@ -95,6 +110,16 @@ def thinking_adapter(tmp_path):
     yield from _serve(tmp_path, "chat_agent:thinking_reply")
 
 
+@pytest.fixture
+def state_adapter(tmp_path):
+    yield from _serve(tmp_path, "chat_agent:state_reply")
+
+
+@pytest.fixture
+def message_list_adapter(tmp_path):
+    yield from _serve(tmp_path, "chat_agent:message_list_reply")
+
+
 def test_a_callback_answers_from_the_request_thread(adapter):
     """The request thread is not the main thread; nothing imported there may require it."""
     body = json.dumps(
@@ -140,3 +165,12 @@ def test_the_adapter_runs_against_an_fi_simulate_without_agent_content(tmp_path)
         assert _ask(next(served)) == "The status is complete."
     finally:
         next(served, None)
+
+
+def test_a_callback_that_returns_graph_state_keeps_the_last_message_text(state_adapter):
+    content = _ask(state_adapter)
+    assert content == "The status is complete."
+
+
+def test_a_callback_that_returns_a_message_list_keeps_the_assistant_text(message_list_adapter):
+    assert _ask(message_list_adapter) == "The status is complete."

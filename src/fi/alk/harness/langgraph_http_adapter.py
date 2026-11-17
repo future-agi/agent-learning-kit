@@ -38,6 +38,8 @@ def _block_text(block: Any) -> str:
     if kind == "refusal":
         refusal = _field(block, "refusal")
         return refusal if isinstance(refusal, str) else ""
+    if kind == "ai" or _field(block, "role") == "assistant":
+        return _text_of(_field(block, "content"))
     return ""
 
 
@@ -58,6 +60,13 @@ def _text_of(content: Any) -> str:
         return "".join(
             item if isinstance(item, str) else _block_text(item) for item in content
         )
+    if (
+        isinstance(content, dict)
+        and "content" not in content
+        and isinstance(content.get("messages"), list)
+        and content["messages"]
+    ):
+        return _text_of(content["messages"][-1])
     kind = _field(content, "type")
     if kind in _TEXT_KINDS or kind == "refusal":
         return _block_text(content)
