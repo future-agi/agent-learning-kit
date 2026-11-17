@@ -627,6 +627,18 @@ def catalogue_problems(
     return []
 
 
+def worker_subjects_note(contract: Any) -> str:
+    """For a tool that writes sub-goals: the contract's declared workers, each a subject its own checks take."""
+    ids = [str(one.id) for one in getattr(contract, "workers", None) or [] if str(one.id).strip()]
+    if not ids:
+        return ""
+    return (
+        " This agent's declared workers: "
+        + ", ".join(f"`worker:{one}`" for one in ids)
+        + ". For each one whose actions the world records, add one sub-goal with that subject checking its own work."
+    )
+
+
 def save_catalogue(catalogue: Catalogue, destination: Path) -> Path:
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)

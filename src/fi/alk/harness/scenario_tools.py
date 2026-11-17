@@ -40,6 +40,7 @@ from .call_actor import (
     scenario_problems,
 )
 from .catalogue import (
+    worker_subjects_note,
     CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     NO_OVERLAY,
@@ -2284,6 +2285,7 @@ def scenario_tools(
         "is what makes one available. Leave it empty for an ordinary task sub-goal. "
         "`subject` is `task` (the default) or `worker:<id>` for one of the contract's workers: that check is "
         "given only that worker's calls, and is inconclusive when the worker made none."
+        + worker_subjects_note(contract)
         + (
             " `actor` names the actor this sub-goal depends on, by id, when it grades how the agent dealt with that "
             "actor (it always grades the agent, never the actor): it reads not applicable on a call the actor never "
