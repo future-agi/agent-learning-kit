@@ -957,6 +957,19 @@ _PORT_TEMPLATE = re.compile(
 _PORTISH_PASSWORD = re.compile(
     _SCHEME + r"[^\s/?#@:]*:(?P<password>(?P<run>[^\s/?#@:]+)[/ ][^\s@]{1,64})@"
 )
+# A password of digits followed by one unencoded / or space, more text and then the @ of a
+# host (https://bot:8812/x@db.example.com): the cleaner reads the digits as a port and masks
+# nothing. No ? or # may come before the @, which keeps an address in a query and an @handle in
+# a path (localhost:8080/users/@me) out, and the host must be a dotted name, an IPv4 address, a
+# :port host or localhost.
+_NUMERIC_PASSWORD = re.compile(
+    _SCHEME
+    + r"[^\s/?#@:]*:\d+[/ ][^\s?#@]{1,64}@"
+    # A dotted name that starts with a letter, an IPv4 address (a version, 1.2, is neither), a
+    # host with a port, or localhost.
+    + r"(?:[A-Za-z][A-Za-z0-9_\-]*\.[A-Za-z0-9]|\d{1,3}(?:\.\d{1,3}){3}(?![\d.])"
+    + r"|[A-Za-z0-9_\-]+:\d|localhost(?![A-Za-z0-9_\-]))"
+)
 # A value that is only a reference: ${API_KEY}, $API_KEY, <API_KEY>, {{api_key}}, {API_KEY}.
 _REF = re.compile(r"\$\{?[A-Z_][A-Z0-9_]*\}?|<[^>]*>|\{\{?[^{}]*\}\}?")
 # A query value that reads as words (q=red+running+shoes) or as a path (next=%2Faccount%2Fbilling)
@@ -1052,6 +1065,8 @@ def credential_in(value: object) -> bool:
             return True
     # A URL password the cleaner removes whole: one broken by /, ?, # or a space. A password
     # that is only a reference (<db password>) is no secret.
+    if _NUMERIC_PASSWORD.search(value):
+        return True
     # A password that starts like a port ($ecret) and holds a / or a space is not read as one by
     # the cleaner's rule 1, so it is looked for here.
     if any(

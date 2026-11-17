@@ -12,6 +12,12 @@ from fi.alk.providers import agent, secret_shapes
 
 # ------------------------------------------------------------------------------ credential_in
 _REFUSED = {
+    "numeric password, a slash, then an at": "https://bot:8812/x@db.example.com/",
+    "numeric password, a space, then an at": "https://bot:12 34@db.example.com",
+    "numeric password, a slash, then an at and a port host": "https://bot:8812/x@db:5432/app",
+    "numeric password, a slash, then an at and an address": "https://bot:8812/x@10.0.0.5/app",
+    "numeric password, a slash, then an at and localhost": "https://bot:8812/x@localhost/app",
+    "a value broken by a space in a credential-named query": "https://h/x?token=abc def",
     "a bare lower-case variable": "postgres://svc:$ecret@db/app",
     "a bare lower-case variable, underscored": "postgres://svc:$db_password@db/app",
     "a bare lower-case variable, no scheme": "svc:$db_password@db.internal/app",
@@ -95,6 +101,13 @@ def test_credential_in_refuses_a_password_holding_a_url_break(
 
 
 _KEPT = {
+    "a port, a path and an address in a query": "http://localhost:8080/register?email=a@b.com",
+    "a port, a path and an at-handle": "http://localhost:8080/users/@me",
+    "localhost and a port": "http://localhost:3000",
+    "a version after an at": "https://db:5432/lodash@4.17.21",
+    "an address in prose, two words": "mail me, qa @acme.com for details, qa@acme.com in prose",
+    "a template host with an at-handle": "http://{HOST}:{PORT}/v1/users/@me",
+    "a value broken by a space under an ordinary query name": "https://h/x?q=abc def",
     "a port template then a path with an at": "http://svc:$PORT/path@x",
     "a braced port template then a path with an at": "http://svc:${PORT}/path@x",
     "a numeric port then a path with an at": "http://db:8080/pkg@1.2",
@@ -213,6 +226,9 @@ _RUNS = {
     "a digit-led scheme and a colon": "1a:",
     "a port-shaped run then a space": "x://a:b ",
     "a port-shaped run then a slash": "x://a:$b/",
+    "digits then a slash": "x://a:1/",
+    "digits then a space": "x://a:1 ",
+    "one long digit run after a colon": "x://a:" + "1" * 4096,
 }
 
 
