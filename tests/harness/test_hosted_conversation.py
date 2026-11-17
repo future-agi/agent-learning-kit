@@ -1323,6 +1323,9 @@ def _adk_database(path: Path) -> None:
 
     asyncio.run(write())
     with sqlite3.connect(path) as database:
+        # Some SQLite builds (Debian and Ubuntu's) zero a deleted row's page by default; turn that
+        # off so the freed page keeps the text everywhere, which is what the copy has to drop.
+        database.execute("PRAGMA secure_delete = OFF")
         database.execute("DELETE FROM events WHERE invocation_id = 'i3'")
 
 
