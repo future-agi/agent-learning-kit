@@ -329,9 +329,15 @@ def _secret_patterns(secret_values: tuple[str, ...]) -> tuple[Any, ...]:
         and value.isdigit()
     }
     patterns: list[Any] = sorted(forms, key=len, reverse=True)
+    # After the whole values, so a complete secret is never left to the cut rule.
+    patterns.extend(_CutSecret(value) for value in sorted(long))
     if short:
         alternatives = "|".join(re.escape(value) for value in sorted(short, key=len, reverse=True))
-        patterns.append(re.compile(rf"(?<![0-9])(?:{alternatives})(?![0-9])"))
+        # The regex runs only on text that holds one of the values: most text holds none, and a
+        # substring test is far cheaper than trying the pattern at every position.
+        patterns.append(
+            _Guarded(re.compile(rf"(?<![0-9])(?:{alternatives})(?![0-9])"), tuple(short))
+        )
     # A PIN is spoken on calls, so a 4-digit value also goes when its digits are spaced out or
     # said as words. A longer run of digits around the spaced form is not the PIN.
     for value in sorted(short):
@@ -356,9 +362,72 @@ _DIGIT_WORDS = (
 
 def _spoken_pin_patterns(pin: str) -> list[Any]:
     separated = r"[ .\-]".join(pin)
-    spaced = re.compile(rf"(?<![0-9])(?<![0-9][ .\-]){separated}(?![0-9])(?![ .\-][0-9])")
+    # The first digit comes before the lookbehinds: a pattern that starts with a lookbehind is
+    # tried at every position of every string, one that starts with a literal lets re skip ahead
+    # to it. The lookbehinds then look back from that digit, so the same text matches.
+    first = pin[0]
+    spaced = re.compile(
+        rf"{first}(?<![0-9]{first})(?<![0-9][ .\-]{first})"
+        rf"{separated[1:]}(?![0-9])(?![ .\-][0-9])"
+    )
     words = r"[ \-]+".join(_DIGIT_WORDS[int(digit)] for digit in pin)
     return [spaced, re.compile(rf"\b{words}\b", re.IGNORECASE)]
+
+
+class _Guarded:
+    """A pattern that runs only on text holding one of its needles."""
+
+    def __init__(self, pattern: Any, needles: tuple[str, ...]) -> None:
+        self._pattern = pattern
+        self._needles = needles
+
+    def sub(self, replacement: str, text: str) -> str:
+        if any(needle in text for needle in self._needles):
+            return self._pattern.sub(replacement, text)
+        return text
+
+
+class _CutSecret:
+    """A declared secret that traceai's cut ran through: its first characters, at least
+    _SHORTEST_SECRET of them, followed by "..." or by the end of the text.
+
+    One search finds where the first _SHORTEST_SECRET characters occur; the match is then extended
+    by comparing characters, so the cost doesn't grow with the number of prefixes. A prefix
+    followed by anything else is ordinary text that happens to begin like the secret, and stays.
+    """
+
+    def __init__(self, value: str) -> None:
+        self._value = value
+        self._head = value[:_SHORTEST_SECRET]
+
+    def sub(self, replacement: str, text: str) -> str:
+        value, head = self._value, self._head
+        out: list[str] = []
+        done = 0
+        at = text.find(head)
+        while at != -1:
+            reach = _SHORTEST_SECRET
+            limit = min(len(value), len(text) - at)
+            while reach < limit and text[at + reach] == value[reach]:
+                reach += 1
+            # The longest prefix that ends where a cut would: the value itself is already gone,
+            # so a full-length match means only that more of the text follows it.
+            while reach >= _SHORTEST_SECRET:
+                end = at + reach
+                if end == len(text) or text.startswith("...", end):
+                    break
+                reach -= 1
+            if reach >= _SHORTEST_SECRET:
+                out.append(text[done:at])
+                out.append(replacement)
+                done = at + reach
+                at = text.find(head, done)
+            else:
+                at = text.find(head, at + 1)
+        if not out:
+            return text
+        out.append(text[done:])
+        return "".join(out)
 
 
 def _mask(text: str, secrets: tuple[Any, ...]) -> str:

@@ -1336,3 +1336,112 @@ def test_a_lone_surrogate_in_plain_text_does_not_cost_the_attribute_its_export()
     assert copy.attributes["input.value"] == "a \ufffd b"
     encoded = encoders.encode_spans([copy]).SerializeToString()
     assert b"a \xef\xbf\xbd b" in encoded
+
+
+# -- A declared secret that traceai's cut runs through ----------------------------------------
+
+CUT_SECRET = "sk-live-A1b2C3d4E5f6G7h8J9k0"
+
+
+def _cut_through(length, secret=CUT_SECRET):
+    """What traceai records when it cuts a value of `length` characters one character short of
+    the end of the secret: a short .env-like head, then all of the secret but its last character."""
+    lead = "HOME=/home/app PATH=/usr/bin:/bin LANG=C.UTF-8 TERM=xterm OPENAI_API_KEY="
+    lead = lead + "x" * (length - len(secret) + 1 - len(lead))
+    return lead, (lead + secret)[:length]
+
+
+@pytest.mark.parametrize("length", [100, 500, 1000, 2000, 5000])
+@pytest.mark.parametrize("ending", ["...", "...]", ""])
+def test_a_declared_secret_cut_through_by_traceai_is_replaced(length, ending):
+    lead, cut = _cut_through(length)
+    assert cut.endswith(CUT_SECRET[:-1])
+
+    out = _export_one(
+        _readable(**{"output.value": cut + ending}), (CUT_SECRET,)
+    ).attributes["output.value"]
+
+    assert out == lead + "***" + ending
+
+
+def test_a_declared_secrets_first_characters_in_honest_text_are_kept():
+    # A cut is told by what follows the prefix: "..." or the end of the string. The same
+    # characters followed by anything else are somebody's text, and the whole-value rule
+    # already covers the secret itself.
+    text = "keys look like sk-live-A1b2 and sk-live-X; sk-live- alone is a prefix. sk-live-A1b2..x"
+
+    out = _export_one(_readable(**{"output.value": text}), (CUT_SECRET,)).attributes[
+        "output.value"
+    ]
+
+    assert out == text
+    whole = _export_one(
+        _readable(**{"output.value": f"k={CUT_SECRET} then {CUT_SECRET[:12]}..."}),
+        (CUT_SECRET,),
+    ).attributes["output.value"]
+    assert whole == "k=*** then ***..."
+
+
+def test_a_cut_prefix_that_reaches_a_dot_of_the_secret_is_still_found():
+    secret = "abcdefgh.ijklmnop"
+
+    out = _export_one(
+        _readable(**{"output.value": "k=abcdefgh... and k=abcdefgh.ij..."}), (secret,)
+    ).attributes["output.value"]
+
+    assert out == "k=***... and k=***..."
+
+
+# -- What the spoken-PIN patterns cost on text that has no PIN ---------------------------------
+
+
+def _best_of(runs, work):
+    import time
+
+    best = float("inf")
+    for _ in range(runs):
+        started = time.perf_counter()
+        work()
+        best = min(best, time.perf_counter() - started)
+    return best
+
+
+def test_declared_pins_cost_a_fraction_of_a_lookbehind_first_pattern_on_prose():
+    # 1,280 strings of 5,000 characters with no PIN in them. A pattern that starts with a
+    # lookbehind is tried at every position of every string; one that starts with the PIN's
+    # first digit lets re skip ahead to it, and the plain short-number pattern runs only on text
+    # that holds a declared value. Measured against the lookbehind-first form on the same
+    # strings, so a slow runner slows both sides alike: the bound is one fifth of its time.
+    import re
+
+    words = "the agent opened the report and read the totals back to the caller slowly ".split()
+    prose = " ".join(words[i % len(words)] for i in range(1000))[:5000]
+    texts = [prose[i % 7 :] + " " * (i % 7) for i in range(1280)]
+    pins = ("4821", "7305")
+
+    def lookbehind_first(pin):
+        separated = r"[ .\-]".join(pin)
+        return re.compile(
+            rf"(?<![0-9])(?<![0-9][ .\-]){separated}(?![0-9])(?![ .\-][0-9])"
+        )
+
+    old = [lookbehind_first(pin) for pin in pins]
+    old.append(re.compile(r"(?<![0-9])(?:4821|7305)(?![0-9])"))
+    # What the exporter runs for the digits: the plain and the spaced patterns. The spoken-words
+    # patterns are left out; they start with a word boundary and are not what this pins.
+    ours = [
+        pattern
+        for pattern in observability._secret_patterns(pins)
+        if not (isinstance(pattern, re.Pattern) and pattern.flags & re.IGNORECASE)
+    ]
+    assert len(ours) == 3
+
+    def mask_with(patterns):
+        return lambda: [
+            [pattern.sub("***", text) for pattern in patterns] for text in texts
+        ]
+
+    before = _best_of(2, mask_with(old))
+    after = _best_of(2, mask_with(ours))
+
+    assert after * 5 < before, (before, after)
