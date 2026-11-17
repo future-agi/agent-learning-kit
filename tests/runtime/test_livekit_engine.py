@@ -4985,3 +4985,44 @@ def test_a_call_actor_line_cut_short_stops_its_audio(monkeypatch) -> None:
     asyncio.run(cut(call.say(frames(), "a line", "Near")))
     asyncio.run(cut(call.play(frames(), 1.0, "a line", "Near")))
     assert spoken.stopped and played.stopped
+
+
+def test_a_tool_call_the_world_holds_is_not_silence_and_the_wait_restarts_once_it_is_answered() -> None:
+    """As in the payment-timeout trials: the caller asked for the refund, then the target went quiet while the world
+    held its refund call. The backstop waits through the hold, and counts its quiet from the hold's end."""
+    import time as clock
+
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[SimpleNamespace(type="message", role="assistant", text_content="Yes, go ahead and submit it.")]
+        )
+    )
+    held_until = clock.time() + 0.3
+
+    async def run() -> float:
+        token = livekit.TARGET_BUSY_UNTIL.set(lambda: held_until)
+        try:
+            started = clock.time()
+            await asyncio.wait_for(livekit._wait_for_conversation_silence(session, quiet_seconds=0.1), timeout=3)
+            return clock.time() - started
+        finally:
+            livekit.TARGET_BUSY_UNTIL.reset(token)
+
+    waited = asyncio.run(run())
+    assert waited >= 0.3 + 0.1
+
+    # A check that fails, or none at all, leaves the backstop as it always was.
+    def failing() -> float:
+        raise RuntimeError("log unreadable")
+
+    async def unchanged(check) -> float:
+        token = livekit.TARGET_BUSY_UNTIL.set(check)
+        try:
+            started = clock.time()
+            await asyncio.wait_for(livekit._wait_for_conversation_silence(session, quiet_seconds=0.05), timeout=3)
+            return clock.time() - started
+        finally:
+            livekit.TARGET_BUSY_UNTIL.reset(token)
+
+    assert asyncio.run(unchanged(failing)) < 0.3
+    assert asyncio.run(unchanged(None)) < 0.3

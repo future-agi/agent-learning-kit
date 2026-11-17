@@ -4061,6 +4061,25 @@ _STOP_POLL_SECONDS = 0.25
 _STOPPED_CLEANUP_SECONDS = 8.0
 
 
+# Until when the target is known to be working with nobody speaking (a tool call the harness's world is holding for
+# its timeout), as an epoch second; read while a conversation runs. Unset, the silence backstop is as it always was.
+TARGET_BUSY_UNTIL: contextvars.ContextVar[Callable[[], float | None] | None] = contextvars.ContextVar(
+    "livekit_target_busy_until", default=None
+)
+
+
+def _target_held() -> bool:
+    """Whether the hosting harness says the target is still working on a held tool call."""
+    check = TARGET_BUSY_UNTIL.get()
+    if check is None:
+        return False
+    try:
+        until = check()
+    except Exception:  # noqa: BLE001 - a failing check is no hold
+        return False
+    return until is not None and time.time() < until
+
+
 def _stop_requested() -> bool:
     check = STOP_CHECK.get()
     try:
@@ -4364,7 +4383,8 @@ async def _wait_for_conversation_silence(
             await asyncio.sleep(0.1)
             continue
         now = loop.time()
-        participant_busy = _either_side_busy(session)
+        # A tool call the world holds keeps the target working in silence: the wait starts again once it is answered.
+        participant_busy = _either_side_busy(session) or _target_held()
         floor, _ = _turn_requirements(min_turn_messages)
         # Far enough in for the measured window to beat the fixed one. A third of the floor is a
         # threshold, not a derived figure: enough turns to have timed a reply, well short of done.

@@ -37,6 +37,7 @@ import gc
 import inspect
 import json
 import random
+import re
 import time
 import logging
 import os
@@ -244,16 +245,29 @@ _CONVERSATION_STALL_FAILURE_CODES = frozenset(
 )
 
 
-def _attributed_stall(case: Any) -> tuple[str, str] | None:
-    """Attribute a speech stall from committed transcript turns, without guessing."""
-    if (
-        case.failure is None
-        or case.failure.code not in _CONVERSATION_STALL_FAILURE_CODES
-    ):
+# Markdown an agent's reply may close on after its last sentence: emphasis, code, quotes and closing brackets.
+_MARKDOWN_TAIL = re.compile(r"[\s*_`~\])}\"'\u201d\u2019]+$")
+# A last line that is a list item, a table row or a code fence ends a block, not a sentence cut short.
+_MARKDOWN_BLOCK_END = re.compile(r"^(?:[-*+]\s+\S|\d+[.)]\s+\S|\||```)")
+
+
+def _ends_a_turn(content: str) -> bool:
+    """Whether a reply ends where a speaker could stop: a sentence's end, once trailing markdown is set aside, or a
+    markdown block's last list item, table row or code fence."""
+    text = content.rstrip()
+    if not text:
+        return False
+    if _MARKDOWN_BLOCK_END.match(text.splitlines()[-1].strip()):
+        return True
+    text = _MARKDOWN_TAIL.sub("", text)
+    return bool(text) and text[-1] in ".?!"
+
+
+def _stall_attribution(messages: Sequence[Any]) -> tuple[str, str] | None:
+    """Who stalled, from the committed transcript's last turn, without guessing."""
+    if not messages:
         return None
-    if case.result is None or not case.result.messages:
-        return None
-    last = case.result.messages[-1]
+    last = messages[-1]
     if not isinstance(last, dict):
         return None
     role = str(last.get("role") or "").strip().lower()
@@ -264,7 +278,7 @@ def _attributed_stall(case: Any) -> tuple[str, str] | None:
             "Target agent produced no response after the caller's final transcribed turn",
         )
     if role in {"assistant", "agent"}:
-        if content and content[-1] not in ".?!":
+        if content and not _ends_a_turn(content):
             return (
                 "target_agent_stalled",
                 "Target agent stopped mid-utterance and produced no further speech",
@@ -274,6 +288,39 @@ def _attributed_stall(case: Any) -> tuple[str, str] | None:
             "Simulated caller produced no response after the target agent's final turn",
         )
     return None
+
+
+def _attributed_stall(case: Any) -> tuple[str, str] | None:
+    """Attribute a speech stall from committed transcript turns, without guessing."""
+    if (
+        case.failure is None
+        or case.failure.code not in _CONVERSATION_STALL_FAILURE_CODES
+    ):
+        return None
+    if case.result is None or not case.result.messages:
+        return None
+    return _stall_attribution(case.result.messages)
+
+
+def _call_ending_facts(case: Any) -> list[str]:
+    """What else the engine recorded about how the call ended, kept beside the verdict it does not change: a stall
+    under a failure that took precedence (a transcript that could not be fully captured), and each teardown step that
+    failed."""
+    metadata = (case.result.metadata if case.result is not None else None) or {}
+    facts: list[str] = []
+    stop = str(metadata.get("stop_reason") or "")
+    if (
+        case.failure is not None
+        and case.failure.code not in _CONVERSATION_STALL_FAILURE_CODES
+        and stop in _CONVERSATION_STALL_FAILURE_CODES
+    ):
+        stalled = _stall_attribution(case.result.messages if case.result is not None else [])
+        facts.append(f"the conversation had also stalled ({stalled[0]}: {stalled[1]})" if stalled else
+                     "the conversation had also stalled")
+    if metadata.get("cleanup_status") == "failed":
+        steps = [str(one) for one in metadata.get("cleanup_errors") or [] if one]
+        facts.append("call teardown failed at " + (", ".join(steps[:5]) if steps else "an unrecorded step"))
+    return facts
 
 
 # C3 §4.5: the engine's dispatch-ack ladder marks +60s exhaustion with this structured
@@ -304,13 +351,73 @@ class ArtifactUploader(Protocol):
 PlaceCall = Callable[[SimulationSpec], Awaitable[SimulationReport]]
 
 
+# Given to the call's process when the scenario holds a tool call for its timeout: the world's database, whose action
+# log says which of the agent's calls the door is holding and for how long.
+TOOL_HOLD_DSN = "ALK_TOOL_HOLD_DSN"
+# How often the hold is read again; the engine asks every tenth of a second.
+_HOLD_READ_SECONDS = 1.0
+
+
+def held_until(rows: Sequence[Mapping[str, Any]]) -> float | None:
+    """When the latest of the agent's calls the door is holding for a timeout fault is answered, as an epoch second;
+    None when it holds none. The door logs the call before it holds it, for the fault's `delay_seconds`."""
+    from .world_door import MAX_FAULT_SECONDS, is_timeout
+
+    ends: list[float] = []
+    for row in rows:
+        fault = row.get("fault")
+        if isinstance(fault, str):
+            with contextlib.suppress(ValueError):
+                fault = json.loads(fault)
+        at = row.get("at")
+        if not isinstance(fault, Mapping) or not is_timeout(fault) or not isinstance(at, (int, float)):
+            continue
+        try:
+            delay = min(max(float(fault.get("delay_seconds", MAX_FAULT_SECONDS)), 0.0), MAX_FAULT_SECONDS)
+        except (TypeError, ValueError):
+            delay = MAX_FAULT_SECONDS
+        ends.append(float(at) + delay)
+    return max(ends) if ends else None
+
+
+def _hold_reader(dsn: str) -> Callable[[], float | None]:
+    """The engine's check of a held tool call, read from the action log at most once a second; a failed read is no
+    hold."""
+    last: list[float | None] = [None]
+    read_at = [float("-inf")]
+
+    def read() -> float | None:
+        now = time.monotonic()
+        if now - read_at[0] >= _HOLD_READ_SECONDS:
+            read_at[0] = now
+            try:
+                last[0] = held_until(_read_action_log(dsn, timeout_ms=500))
+            except Exception:  # noqa: BLE001 - the backstop then waits as it always has
+                last[0] = None
+        return last[0]
+
+    return read
+
+
 async def _default_place_call(
     spec: SimulationSpec, stop_when: Callable[[list[dict[str, Any]], Any], bool] | None = None
 ) -> SimulationReport:
-    if stop_when is None:
-        return await SimulationRunner().run(spec)
-    # Checked by the engine between turns: a user stop hangs up at the next turn boundary with the engine's own report.
-    return await SimulationRunner().run(spec, stop_when=stop_when)
+    dsn = os.environ.get(TOOL_HOLD_DSN, "").strip()
+    busy, token = None, None
+    if dsn:
+        # Only a scenario that holds a tool call loads the engine's switch; every other call runs as it always has.
+        from fi.simulate.simulation.engines.livekit import TARGET_BUSY_UNTIL as busy
+
+        token = busy.set(_hold_reader(dsn))
+    try:
+        if stop_when is None:
+            return await SimulationRunner().run(spec)
+        # Checked by the engine between turns: a user stop hangs up at the next turn boundary with the engine's own
+        # report.
+        return await SimulationRunner().run(spec, stop_when=stop_when)
+    finally:
+        if busy is not None and token is not None:
+            busy.reset(token)
 
 
 def _takes_stop_when(place_call: Any) -> bool:
@@ -4187,6 +4294,13 @@ class CallRunnerImpl:
 
         world_database = _find_postgres_endpoint(runtime)
         records_dsn = world_database.address if world_database is not None else None
+        from .world_door import is_timeout
+
+        if records_dsn and any(isinstance(one, Mapping) and is_timeout(one) for one in doc.get("faults") or []):
+            # The engine's silence backstop waits while the world holds one of the agent's calls for its timeout.
+            call_environ[TOOL_HOLD_DSN] = records_dsn
+        else:
+            call_environ.pop(TOOL_HOLD_DSN, None)
 
         async def place_with_world_actors() -> SimulationReport:
             # The trial's starting records, after its reset: whether it started from the seed.
@@ -4695,9 +4809,15 @@ class CallRunnerImpl:
                 and case.failure.code == _VOICE_DISPATCH_UNACKNOWLEDGED
                 else None
             )
+            facts = _call_ending_facts(case)
+            if facts:
+                # Both facts reach the receipt; the precedence that chose the code is unchanged.
+                reason = f"{reason}; " + "; ".join(facts)
             attributed = _attributed_stall(case)
             if attributed is not None:
                 code, reason = attributed
+                if facts:
+                    reason = f"{reason}; " + "; ".join(facts)
                 await record_voice_usage(
                     outcome="failed",
                     failure_domain=failure_domain_for_code(code),

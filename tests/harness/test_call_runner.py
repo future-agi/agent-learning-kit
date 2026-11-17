@@ -1835,6 +1835,96 @@ def test_silence_after_caller_turn_is_attributed_to_target_agent(
     assert "Target agent produced no response" in str(exc)
 
 
+# The payment-timeout voice trials' last turns: the agent's markdown reply, and one cut off mid-sentence.
+_MARKDOWN_REPLY = (
+    "Here's what I found:\n\n- **Order 1045:** Head torch, $35.00, delivered 5 days ago.\n"
+    "- **Return window:** It's inside the 30-day window, with 25 days left.\n- **Refunds issued:** None"
+)
+_CUT_OFF_REPLY = (
+    "Please don't assume the refund has gone through. I can check the order again in a little while. "
+    "Would you like me to do that, or would you prefer to"
+)
+
+
+@pytest.mark.parametrize(
+    ("last", "code"),
+    [
+        (_MARKDOWN_REPLY, "simulator_stalled"),
+        ("The refund is **submitted.**", "simulator_stalled"),
+        ("```\nrefund: R-1043\n```", "simulator_stalled"),
+        (_CUT_OFF_REPLY, "target_agent_stalled"),
+    ],
+)
+def test_a_reply_ending_in_markdown_is_not_read_as_stopped_mid_utterance(
+    tmp_path: Path, last: str, code: str
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            case_status=CaseStatus.FAILED,
+            failure=SimulationFailure(
+                stage=FailureStage.RUNNING,
+                code="conversation_stalled",
+                message="Conversation produced no new speech for the stall deadline",
+                retryable=True,
+            ),
+            transcript="user: I'd like a refund for order 1045.\nassistant: " + last,
+            messages=[
+                {"role": "user", "content": "I'd like a refund for order 1045."},
+                {"role": "assistant", "content": last},
+            ],
+        )
+
+    exc = _run_expect_abort(
+        cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert exc.code == code
+
+
+def test_a_stall_under_a_transcript_failure_and_a_failed_teardown_both_reach_the_receipt(tmp_path: Path) -> None:
+    """As the payment-timeout trial afba0ff3 ended: the caller asked for the refund, the agent went quiet while its
+    refund was held, the transcript could not be fully captured, and a teardown step failed."""
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            case_status=CaseStatus.FAILED,
+            failure=SimulationFailure(
+                stage=FailureStage.FINALIZING,
+                code="transcript_finalization_failed",
+                message="The final call transcript could not be completely captured",
+                retryable=True,
+            ),
+            transcript="assistant: Would you like me to go ahead?\nuser: Yes, go ahead and submit the refund.",
+            messages=[
+                {"role": "assistant", "content": "Would you like me to go ahead?"},
+                {"role": "user", "content": "Yes, go ahead and submit the refund."},
+            ],
+            result_metadata={
+                "stop_reason": "conversation_stalled",
+                "cleanup_status": "failed",
+                "cleanup_errors": ["delete_room:TimeoutError"],
+            },
+        )
+
+    exc = _run_expect_abort(
+        cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    # The transcript failure still decides the code; the stall and the teardown are said beside it.
+    assert exc.code != "target_agent_stalled"
+    message = str(exc)
+    assert "could not be completely captured" in message
+    assert "also stalled (target_agent_stalled: Target agent produced no response" in message
+    assert "call teardown failed at delete_room:TimeoutError" in message
+
+
 def test_provider_tool_failure_is_attributed_to_target_agent(tmp_path: Path) -> None:
     _job_obj, context = _context(tmp_path=tmp_path)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
@@ -4777,3 +4867,75 @@ def test_a_worker_s_call_and_the_door_s_row_of_it_are_one_call_though_the_tool_r
     assert [(one.name, one.channel) for one in merged] == [("issue_refund", "refund")]
     # A tracer that is not the door, answering differently, is still another call.
     assert len(cr._merge_span_calls([replace(door, channel=None)], [span])) == 2
+
+
+def test_the_hold_on_a_timed_out_tool_call_is_read_from_the_door_s_own_rows() -> None:
+    # As the door logs the payment-timeout trials' refund calls: before it holds each one, with the scenario's fault.
+    rows = [
+        {"name": "lookup_order", "at": 100.0, "outcome": "committed", "fault": None},
+        {"name": "issue_refund", "at": 110.0, "outcome": "faulted",
+         "fault": {"mode": "timeout_before_commit", "action": "issue_refund"}},
+        {"name": "issue_refund", "at": 141.0, "outcome": "faulted",
+         "fault": '{"mode": "timeout_after_commit", "action": "issue_refund", "delay_seconds": 12}'},
+        {"name": "issue_refund", "at": 150.0, "outcome": "faulted", "fault": {"mode": "unavailable"}},
+    ]
+    # Held for the fault's delay, or the door's 30 s when it names none; an unavailable answer is not held.
+    assert cr.held_until(rows[:2]) == 140.0
+    assert cr.held_until(rows) == 153.0
+    assert cr.held_until([rows[0], rows[3]]) is None
+    assert cr.held_until([{"at": 1.0, "fault": {"mode": "timeout_before_commit", "delay_seconds": 600}}]) == 31.0
+
+
+@pytest.mark.parametrize(
+    ("faults", "held"),
+    [
+        ([{"action": "issue_refund", "mode": "timeout_before_commit"}], True),
+        ([{"action": "issue_refund", "mode": "unavailable"}], False),
+        ([], False),
+    ],
+)
+def test_only_a_scenario_that_holds_a_tool_call_gives_the_call_the_hold_to_wait_through(
+    tmp_path: Path, monkeypatch, faults, held
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    doc = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    doc.write_text(json.dumps({**json.loads(doc.read_text()), "faults": faults}))
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg([], ["name"]))
+    seen: list[dict[str, str]] = []
+
+    async def worker(module, payload, *, environ, **_kwargs):
+        seen.append(dict(environ))
+        return _report().model_dump(mode="json")
+
+    monkeypatch.setattr(cr, "run_json_worker", worker)
+    _run(
+        cr.CallRunnerImpl(FakeAdapter(), context),
+        _FakeScenario("k1"),
+        _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert (seen[0].get(cr.TOOL_HOLD_DSN) == _postgres_endpoint().address) is held
+    assert (cr.TOOL_HOLD_DSN in seen[0]) is held
+
+
+def test_the_call_process_waits_through_the_hold_it_is_given(monkeypatch) -> None:
+    from fi.simulate.simulation.engines import livekit
+
+    seen: list[object] = []
+
+    async def run(self, spec, **_kwargs):
+        seen.append(livekit.TARGET_BUSY_UNTIL.get())
+        return "report"
+
+    monkeypatch.setattr(cr.SimulationRunner, "run", run)
+    monkeypatch.setattr(cr, "_read_action_log", lambda dsn, **_: [
+        {"at": 10.0, "fault": {"mode": "timeout_before_commit", "delay_seconds": 5}}
+    ])
+    monkeypatch.setenv(cr.TOOL_HOLD_DSN, "postgresql://world")
+    assert asyncio.run(cr._default_place_call(object())) == "report"
+    assert seen[0]() == 15.0
+    # Set for that call only.
+    assert livekit.TARGET_BUSY_UNTIL.get() is None
+    monkeypatch.delenv(cr.TOOL_HOLD_DSN)
+    asyncio.run(cr._default_place_call(object()))
+    assert seen[1] is None
