@@ -379,9 +379,9 @@ def _secret_patterns(secret_values: tuple[str, ...]) -> tuple[Any, ...]:
             patterns.extend(ordered)
             # traceai cuts the JSON text of a value, so a cut can fall inside any of its forms.
             patterns.extend(_CutSecret(form) for form in ordered)
-        # Where the text is known to be cut, any head of a value is a cut one, however short:
-        # a value of 8 characters cut to 7 is still its head, and a shorter one is no word to
-        # leave. Elsewhere the floor stays, or ordinary words would go.
+        # Where the text is known to be cut, a head of the value is a cut one even under 8
+        # characters: a value of 8 cut to 7 is still its head, and a shorter value goes by
+        # the floor _CutTail sets. Elsewhere the floor of 8 stays, or ordinary words would go.
         patterns.extend(_CutTail(form) for form in ordered)
     short = {
         value
@@ -427,7 +427,11 @@ _DIGIT_WORDS = (
 # spaces around it. Always between single digits: a group ("48.21", "4,821") is a price or a
 # count, not a PIN read out.
 _PIN_SEPARATOR = r"(?:[ ]*[,.\-][ ]*|[ ]+)"
-_PIN_BEFORE = re.compile(rf"[0-9]{_PIN_SEPARATOR}?\Z")
+# A run of digits goes on past a separator only when it is spaces, a dash, or a comma or dot
+# straight against the next digit: ". 3" and ", 3" end a sentence or a clause, so a PIN before
+# them is still a PIN, while "4.8.2.1.3" is a longer run.
+_PIN_CONTINUES = r"(?:[ ]+|[ ]*-[ ]*|[ ]*[,.])"
+_PIN_BEFORE = re.compile(rf"[0-9]{_PIN_CONTINUES}?\Z")
 
 
 class _SpokenPin:
@@ -441,7 +445,7 @@ class _SpokenPin:
 
     def __init__(self, pin: str) -> None:
         digits = _PIN_SEPARATOR.join(pin)
-        self._pattern = re.compile(rf"{digits}(?!{_PIN_SEPARATOR}?[0-9])")
+        self._pattern = re.compile(rf"{digits}(?!{_PIN_CONTINUES}?[0-9])")
 
     def sub(self, replacement: str, text: str) -> str:
         out: list[str] = []
@@ -565,17 +569,19 @@ class _CutSecret:
 
 class _CutTail:
     """A form of a declared value, as its head ends text known to be a cut (a head of at least
-    _SHORTEST_TAIL characters, or half of a value shorter than 8): text that ends where traceai or an environment limit cuts (ends), or that ends in the
-    "..." traceai adds after a cut (dotted). _CutSecret takes a head of 8 or more anywhere a cut
-    could be; this takes the shorter ones, only at the one place the cut is certain, because a
-    short head elsewhere is just a word."""
+    _SHORTEST_TAIL characters, or half of a value shorter than 8): text that ends where traceai
+    or an environment limit cuts (ends), or that ends in the "..." traceai adds after a cut
+    (dotted). _CutSecret takes a head of 8 or more anywhere a cut could be; this takes the
+    shorter ones, only at the one place the cut is certain, because a short head elsewhere is
+    just a word."""
 
     def __init__(self, value: str) -> None:
         self._value = value
         # A head of one to three characters says nothing about a long key, and 500-character
         # text ending in a letter is common. Four characters, or half of a value shorter than
-        # eight, so that a short value still goes when its head is most of it.
-        self._floor = min(_SHORTEST_TAIL, -(-len(value) // 2))
+        # eight, so that a short value still goes when its head is most of it. Never under two
+        # characters unless the head is the whole value: one letter at a cut is not a secret.
+        self._floor = min(len(value), max(2, min(_SHORTEST_TAIL, -(-len(value) // 2))))
 
     def sub(self, replacement: str, text: str, ends: bool, dotted: bool) -> str:
         value = self._value
@@ -583,7 +589,9 @@ class _CutTail:
         # The "..." goes first: the head before it, then the end of the text itself.
         for before_dots in ((True,) if dotted else ()) + ((False,) if ends else ()):
             end = len(text) - 3 if before_dots else len(text)
-            last = end - self._floor + 1
+            # A limit shorter than the floor leaves nothing to look at; a negative stop would
+            # count from the end of the text instead.
+            last = max(0, end - self._floor + 1)
             start = text.find(first, max(0, end - len(value)), last)
             while start != -1:
                 if value.startswith(text[start:end]):

@@ -1885,8 +1885,10 @@ def test_a_four_digit_value_as_people_write_it_out_is_replaced(spoken):
 @pytest.mark.parametrize(
     "text",
     [
-        "run 4, 8, 2, 1, 5 ok",
-        "run 5, 4, 8, 2, 1 ok",
+        "run 4.8.2.1.5 ok",
+        "run 5.4.8.2.1 ok",
+        "run 4 8 2 1 - 5 ok",
+        "run 3 4 8 2 1 ok",
         "run 48 215 ok",
         "run 548 21 ok",
         "run 5 - 4 - 8 - 2 - 1 ok",
@@ -1900,44 +1902,63 @@ def test_a_longer_run_than_the_pin_in_the_wider_forms_is_kept(text):
     assert out == text
 
 
+# The three kinds of known cut: traceai's "..." after a cut, a bare end at a length it cuts to,
+# and a bare end at an environment limit.
+CUT_KINDS = [
+    pytest.param(5000, "...", None, id="dots-5000"),
+    pytest.param(503, "...", None, id="dots-503"),
+    pytest.param(500, "", None, id="bare-500"),
+    pytest.param(777, "", "777", id="environment-limit"),
+]
+
+
+def _exported_at_cut(monkeypatch, value, head, kind):
+    length, ending, limit = kind
+    _with_limits(
+        monkeypatch,
+        **({"OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT": limit} if limit else {}),
+    )
+    text = _cut_head(head, length, ending)
+    out = _export_one(_readable(**{"output.value": text}), (value,)).attributes[
+        "output.value"
+    ]
+    return text, out
+
+
+@pytest.mark.parametrize("length, ending, limit", CUT_KINDS)
 @pytest.mark.parametrize(
-    "head, kept",
+    "value, head, kept",
     [
-        ("h", True),
-        ("hu", True),
-        ("hun", True),
-        ("hunt", False),
+        ("hunter12", "h", True),
+        ("hunter12", "hu", True),
+        ("hunter12", "hun", True),
+        ("hunter12", "hunt", False),
+        ("Zq7Hk", "Z", True),
+        ("Zq7Hk", "Zq", True),
+        ("Zq7Hk", "Zq7", False),
+        (CUT_SECRET, CUT_SECRET[:3], True),
+        # A value of one or two characters still needs two, unless the head is the whole value.
+        ("ab", "a", True),
+        ("ab", "ab", False),
+        ("a", "a", False),
     ],
 )
-def test_a_head_of_a_long_value_at_a_cut_is_masked_from_four_characters(head, kept):
-    text = _cut_head(head)
+def test_a_head_at_a_cut_is_masked_only_from_its_floor(
+    monkeypatch, value, head, kept, length, ending, limit
+):
+    text, out = _exported_at_cut(monkeypatch, value, head, (length, ending, limit))
 
-    out = _export_one(_readable(**{"output.value": text}), ("hunter12",)).attributes[
+    assert (out == text) is kept, out[-30:]
+
+
+def test_an_environment_limit_below_the_floor_keeps_a_head_shorter_than_it(monkeypatch):
+    _with_limits(monkeypatch, OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT="2")
+
+    out = _export_one(_readable(**{"output.value": "hu"}), ("hunter12",)).attributes[
         "output.value"
     ]
 
-    assert (out == text) is kept
-
-
-def test_a_three_character_head_of_a_long_key_at_a_cut_is_kept():
-    text = _cut_head(CUT_SECRET[:3])
-
-    out = _export_one(_readable(**{"output.value": text}), (CUT_SECRET,)).attributes[
-        "output.value"
-    ]
-
-    assert out == text
-
-
-@pytest.mark.parametrize("head, kept", [("Z", True), ("Zq", True), ("Zq7", False)])
-def test_a_head_of_a_five_character_value_needs_half_of_it(head, kept):
-    text = _cut_head(head)
-
-    out = _export_one(_readable(**{"output.value": text}), ("Zq7Hk",)).attributes[
-        "output.value"
-    ]
-
-    assert (out == text) is kept
+    assert out == "hu"
 
 
 @pytest.mark.parametrize(
@@ -1957,3 +1978,20 @@ def test_a_price_or_a_count_with_the_pins_digits_is_kept(declared, text):
     ]
 
     assert out == text
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("PIN 4 8 2 1. 3 tries left", "PIN ***. 3 tries left"),
+        ("PIN is 4, 8, 2, 1, 3 tries left", "PIN is ***, 3 tries left"),
+        ("only 3. 4 8 2 1 is the PIN", "only 3. *** is the PIN"),
+        ("four, eight, two, one. 3 tries left", "***. 3 tries left"),
+    ],
+)
+def test_a_pin_ending_a_sentence_before_a_digit_is_replaced(text, expected):
+    out = _export_one(_readable(**{"output.value": text}), ("4821",)).attributes[
+        "output.value"
+    ]
+
+    assert out == expected
