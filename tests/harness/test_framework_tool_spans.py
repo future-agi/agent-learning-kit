@@ -2593,3 +2593,110 @@ def test_a_trace_that_cannot_be_read_marks_the_trial_s_hand_offs_incomplete(tmp_
     monkeypatch.setattr(Path, "read_text", unreadable)
     [notice] = cr.hand_off_notices(runtime)
     assert notice["code"] == cr.HAND_OFFS_INCOMPLETE
+
+
+@pytest.mark.parametrize("start", ["spawn", "forkserver", "fork"])
+def test_a_voice_worker_s_job_process_records_the_hand_offs_its_agents_make(tmp_path: Path, start: str) -> None:
+    """A LiveKit worker runs each call in a job process it starts. With the voice bundle's environment and the hook
+    laid out as the sandbox lays it out for a LiveKit agent, the framework's instrumentor is turned on in the job
+    process, and the hand-off it reports is in the trace."""
+    from fi.alk.harness import livekit_tool_trace_bootstrap
+
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    _place_hook(hook)
+    (hook / "sitecustomize.py").write_bytes(Path(livekit_tool_trace_bootstrap.__file__).read_bytes())
+    site = tmp_path / "site"
+    site.mkdir()
+    # A framework whose agents hand off only through its instrumentor's spans, as the OpenAI Agents SDK's do.
+    (site / "langchain_core.py").write_text("def hand_off():\n    pass\n")
+    (site / "traceai_langchain.py").write_text(
+        textwrap.dedent(
+            """
+            from opentelemetry import trace
+
+            class LangChainInstrumentor:
+                def instrument(self):
+                    import langchain_core
+
+                    def hand_off():
+                        tracer = trace.get_tracer("traceai")
+                        def span(name, **attributes):
+                            return tracer.start_as_current_span(name, attributes=attributes)
+                        with span("Returns desk", **{"gen_ai.span.kind": "AGENT", "graph.node.id": "Returns desk"}):
+                            with span("ask_refund", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "ask_refund"}):
+                                with span("Refund worker", **{"gen_ai.span.kind": "AGENT",
+                                                              "graph.node.id": "Refund worker"}):
+                                    with span("issue_refund", **{"gen_ai.span.kind": "TOOL",
+                                                                 "gen_ai.tool.name": "issue_refund",
+                                                                 "input.value": '{"order": 7}',
+                                                                 "output.value": "issued"}):
+                                        pass
+
+                    langchain_core.hand_off = hand_off
+            """
+        )
+    )
+    (site / "job.py").write_text(
+        textwrap.dedent(
+            """
+            def run_call():
+                from opentelemetry import trace
+                from opentelemetry.sdk.trace import TracerProvider
+
+                trace.set_tracer_provider(TracerProvider())
+                import langchain_core
+
+                langchain_core.hand_off()
+                trace.get_tracer_provider().force_flush()
+                # The LiveKit worker's own line for the same tool call, as its hook writes it.
+                import json, os, time
+
+                with open(os.environ["HARNESS_TOOL_TRACE"], "a") as trace_file:
+                    trace_file.write(json.dumps({"name": "issue_refund", "arguments": {"order": 7}, "output": "issued",
+                                                 "is_error": False, "at": time.time(), "source": "livekit"}) + "\\n")
+            """
+        )
+    )
+    (tmp_path / "worker.py").write_text(
+        textwrap.dedent(
+            f"""
+            import multiprocessing, sys
+            import job
+
+            if __name__ == "__main__":
+                process = multiprocessing.get_context({start!r}).Process(target=job.run_call)
+                process.start()
+                process.join(30)
+                sys.exit(process.exitcode)
+            """
+        )
+    )
+    trace = tmp_path / "calls.jsonl"
+
+    def hand_offs(observe: str) -> list[dict]:
+        trace.unlink(missing_ok=True)
+        result = subprocess.run(
+            [sys.executable, str(tmp_path / "worker.py")],
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join([str(hook), str(site)]),
+                "HARNESS_TOOL_TRACE": str(trace),
+                "ALK_OBSERVE_FRAMEWORKS": observe,
+            },
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        assert result.returncode == 0, result.stderr
+        records = [json.loads(line) for line in trace.read_text().splitlines()] if trace.exists() else []
+        return [one for one in records if one.get("delegated_to")]
+
+    # The voice bundle's agent environment (ALK_OBSERVE_FRAMEWORKS) turns the instrumentor on in the job process.
+    # (A hand-off is written when the worker starts and again when it returns.)
+    assert {one["delegated_to"] for one in hand_offs("1")} == {"Refund worker"}
+    # The tool call the LiveKit hook and the framework's span both report is counted once, under its worker.
+    sealed = _sealed(tmp_path)
+    assert [row["name"] for row in sealed if row["name"] == "issue_refund"] == ["issue_refund"]
+    # Without it, as voice bundles were built before, the framework reports nothing: no hand-off.
+    assert hand_offs("0") == []

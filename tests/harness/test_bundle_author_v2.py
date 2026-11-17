@@ -154,11 +154,12 @@ def test_an_http_python_agent_is_observed_through_its_framework_spans(tmp_path: 
         tmp_path, _job(connector="auto"), contract_runtime=runtime,
         tool_entrypoints=[], contract_interface_kind="http", contract_modality="voice",
     )
-    # A voice agent's calls are traced by its LiveKit worker alone.
-    assert all(
-        "ALK_OBSERVE_FRAMEWORKS" not in p.environment and framework_instrumentation_command() not in p.build_commands
-        for p in voice.processes if hasattr(p, "build_commands")
-    )
+    # A voice agent's tool calls are traced by its LiveKit worker: none is bound. Its framework's spans are read for
+    # the hand-offs between its agents, and a call both report is counted once.
+    voice_control = next(p for p in voice.processes if p.name == voice.control_service)
+    assert "ALK_TOOL_TRACE_BINDINGS" not in voice_control.environment
+    assert voice_control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert voice_control.build_commands[-1] == framework_instrumentation_command()
     control = next(p for p in plan.processes if p.name == plan.control_service)
     assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
@@ -1085,8 +1086,13 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     agent = next(process for process in bundle.processes if process.name == "agent")
     assert agent.environment["LIVEKIT_AGENT_NAME"].endswith("-w{{WORLD_INDEX}}")
     assert agent.environment["HARNESS_MODE"] == "1"
+    # The LiveKit worker traces the tool calls, so none is bound; the framework's spans are read for hand-offs, in the
+    # one trace file, with the instrumentors installed at build.
     assert "ALK_TOOL_TRACE_BINDINGS" not in agent.environment
-    assert "source_tool_trace_version" not in bundle.metadata
+    assert "ALK_CREWAI_TOOL_TRACE" not in agent.environment
+    assert agent.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert any("traceai" in json.dumps(command) for command in agent.build_commands)
     assert "target_provider" in agent.secret_purposes
     assert "target_http" not in bundle.capabilities
 

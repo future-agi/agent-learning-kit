@@ -3536,10 +3536,11 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
-    # A voice agent's tool calls are traced by its LiveKit worker, never twice. A Compose agent, selected or authored,
-    # gets the framework observation too, but not import-mode tool bindings.
+    # A Compose agent, selected or authored, gets the framework observation too, but not import-mode tool bindings.
     compose = isinstance(selected, ComposeSelection) or runtime_model.execution == "compose"
-    if (runtime_model.command or compose) and str(contract_modality or "").strip().lower() != "voice":
+    voice = str(contract_modality or "").strip().lower() == "voice"
+    trace_environment: dict[str, str] = {}
+    if (runtime_model.command or compose) and not voice:
         trace_environment = _source_tool_trace_environment(
             root,
             runtime_model,
@@ -3547,23 +3548,33 @@ def resolve_environment_plan(
             if contract_interface_kind == "command" and not isinstance(selected, ComposeSelection)
             else [],
         )
-        if trace_environment:
-            processes = [
-                process.model_copy(
-                    update={
-                        "environment": {**process.environment, **trace_environment},
-                        "build_commands": [
-                            *process.build_commands,
-                            framework_instrumentation_command(
-                                uv_run_project(process.run_command)
-                            ),
-                        ],
-                    }
-                )
-                if isinstance(process, SourceProcess) and process.name == control_name
-                else process
-                for process in processes
-            ]
+    elif voice and runtime_model.language.lower() in {"", "python", "py"} and any(
+        isinstance(process, SourceProcess)
+        and process.name == control_name
+        and "HARNESS_TOOL_TRACE" in process.environment
+        for process in processes
+    ):
+        # A voice agent's tool calls are traced by its LiveKit worker, which writes the trace file; its framework's
+        # spans are read too, in every job process the worker starts, for the hand-offs between its agents. A tool call
+        # both report is counted once (`collect_seam_calls`).
+        trace_environment = {"ALK_OBSERVE_FRAMEWORKS": "1"}
+    if trace_environment:
+        processes = [
+            process.model_copy(
+                update={
+                    "environment": {**process.environment, **trace_environment},
+                    "build_commands": [
+                        *process.build_commands,
+                        framework_instrumentation_command(
+                            uv_run_project(process.run_command)
+                        ),
+                    ],
+                }
+            )
+            if isinstance(process, SourceProcess) and process.name == control_name
+            else process
+            for process in processes
+        ]
 
     return EnvironmentPlanV2(
         packaging=packaging,
