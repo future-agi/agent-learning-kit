@@ -230,7 +230,7 @@ _STANDIN_AGENTS = (
 # tracing.processors.default_exporter().set_api_key.
 _STANDIN_AGENTS_WITH_EXPORTER = (
     "import os\n"
-    "from .tracing import set_tracing_export_api_key\n"
+    "from .tracing import set_tracing_export_api_key, set_tracing_disabled\n"
     "def _note(line):\n"
     "    with open(os.environ['STANDIN_CALLS'], 'a') as handle:\n"
     "        handle.write(line + '\\n')\n"
@@ -247,13 +247,18 @@ _STANDIN_TRACING = {
         "from .processors import default_exporter\n"
         "def set_tracing_export_api_key(api_key):\n"
         "    default_exporter().set_api_key(api_key)\n"
-        # The SDK reads its switch once, on the first trace it creates.
-        "_disabled = None\n"
+        # The SDK reads its switch once, on the first trace it creates, and its manual
+        # set_tracing_disabled always takes precedence over it (0.18.3 provider.py:284-306).
+        "_env = None\n"
+        "_manual = None\n"
+        "def set_tracing_disabled(disabled):\n"
+        "    global _manual\n"
+        "    _manual = disabled\n"
         "def create_trace():\n"
-        "    global _disabled\n"
-        "    if _disabled is None:\n"
-        "        _disabled = os.environ.get('OPENAI_AGENTS_DISABLE_TRACING') == '1'\n"
-        "    return not _disabled\n"
+        "    global _env\n"
+        "    if _env is None:\n"
+        "        _env = os.environ.get('OPENAI_AGENTS_DISABLE_TRACING', 'false').lower() in ('true', '1')\n"
+        "    return not (_env if _manual is None else _manual)\n"
     ),
     "processors.py": (
         "import os\n"
@@ -266,6 +271,9 @@ _STANDIN_TRACING = {
         "    def _export_with_deadline(self, items, deadline):\n"
         "        with open(os.environ['STANDIN_CALLS'] + '.export', 'a') as handle:\n"
         "            handle.write(str(len(items)) + '\\n')\n"
+        # A version whose exporter sends through another method.
+        "if os.environ.get('STANDIN_NO_DEADLINE'):\n"
+        "    del _Exporter._export_with_deadline\n"
         "_exporter = None\n"
         "def default_exporter():\n"
         "    global _exporter\n"
@@ -542,16 +550,34 @@ _FIRST_TRACE = "import agents\nfrom agents import tracing\nprint(tracing.create_
 def test_the_hook_turns_the_sdks_tracing_back_on_once_its_export_is_local(
     tmp_path: Path,
 ) -> None:
-    # The build sets the switch; with the export local, the kit's span observation can run.
+    # With the export local, this process traces, so the kit's span observation runs. The
+    # environment keeps the switch, so a child the hook never reaches (python -I) stays off.
     result, lines = _chat_style_run(
         tmp_path,
-        _SWITCH_AFTER_IMPORT,
+        "import os, agents\nfrom agents import tracing\n"
+        "print(os.environ.get('OPENAI_AGENTS_DISABLE_TRACING'), tracing.create_trace())\n",
         agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
         exporter=True,
         extra_env={**_GATEWAY_KEY, **_KIT_SWITCH},
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "None"
+    assert result.stdout.strip() == "1 True"
+
+
+def test_an_exporter_without_both_send_methods_leaves_tracing_off(tmp_path: Path) -> None:
+    result, lines = _chat_style_run(
+        tmp_path,
+        _FIRST_TRACE,
+        agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
+        exporter=True,
+        extra_env={**_GATEWAY_KEY, **_KIT_SWITCH, "STANDIN_NO_DEADLINE": "1"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
+    assert result.stderr.splitlines() == [
+        "alk: could not keep the OpenAI Agents SDK trace export local (AttributeError), so its "
+        "tracing stays off and its spans aren't observed"
+    ]
 
 
 @pytest.mark.parametrize("mark, traced", [(True, "True"), (False, "False")])
@@ -571,17 +597,18 @@ def test_the_first_trace_runs_under_the_mark_and_not_without_it(
     assert result.stdout.strip() == traced
 
 
-def test_a_customers_own_tracing_switch_is_left_on(tmp_path: Path) -> None:
+@pytest.mark.parametrize("value", ["1", "true"])
+def test_a_customers_own_tracing_switch_is_left_on(tmp_path: Path, value: str) -> None:
     # Without the kit's marker the switch is the customer's: their tracing stays off.
     result, lines = _chat_style_run(
         tmp_path,
-        _SWITCH_AFTER_IMPORT,
-        agents_source=_STANDIN_AGENTS_WITH_EXPORTER,
+        _FIRST_TRACE,
+        agents_source=_STANDIN_AGENTS_WITH_EXPORTER + "from . import tracing\n",
         exporter=True,
-        extra_env={**_GATEWAY_KEY, "OPENAI_AGENTS_DISABLE_TRACING": "1"},
+        extra_env={**_GATEWAY_KEY, "OPENAI_AGENTS_DISABLE_TRACING": value},
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "1"
+    assert result.stdout.strip() == "False"
 
 
 def test_where_the_export_cant_be_kept_local_the_sdks_tracing_stays_off(
@@ -769,12 +796,27 @@ def test_real_openai_agents_sdk_keeps_the_gateway_key_off_its_trace_export(
             sys.executable,
             "-c",
             "import os, agents\n"
-            "from agents.tracing import processors\n"
+            "from agents.tracing import processors, TracingProcessor, add_trace_processor, trace\n"
             "exporter = processors.default_exporter()\n"
             "print(type(exporter).export.__name__, type(exporter)._export_with_deadline.__name__)\n"
             "print(os.environ.get('OPENAI_AGENTS_DISABLE_TRACING'))\n"
             "agents.set_default_openai_key('sk-FAKE-GATEWAY', use_for_tracing=True)\n"
-            "print(exporter.api_key)\n",
+            "print(exporter.api_key)\n"
+            "posts = []\n"
+            "exporter._client.post = lambda *a, **k: posts.append(a)\n"
+            "seen = []\n"
+            "class Seen(TracingProcessor):\n"
+            "    def on_trace_start(self, t): seen.append('trace')\n"
+            "    def on_trace_end(self, t): pass\n"
+            "    def on_span_start(self, s): pass\n"
+            "    def on_span_end(self, s): pass\n"
+            "    def shutdown(self): pass\n"
+            "    def force_flush(self): pass\n"
+            "add_trace_processor(Seen())\n"
+            "with trace('alk-check'):\n"
+            "    pass\n"
+            "agents.tracing.get_trace_provider().force_flush()\n"
+            "print(seen, len(posts))\n",
         ],
         text=True,
         capture_output=True,
@@ -782,10 +824,13 @@ def test_real_openai_agents_sdk_keeps_the_gateway_key_off_its_trace_export(
         check=False,
     )
     assert result.returncode == 0, result.stderr
+    # The switch stays in the environment for children; this process traces, a processor sees
+    # the trace, and nothing is posted to OpenAI.
     assert result.stdout.splitlines() == [
         "export_nothing export_nothing",
-        "None",
+        "1",
         "alk-tracing-disabled",
+        "['trace'] 0",
     ]
 
 

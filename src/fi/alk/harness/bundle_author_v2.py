@@ -3226,7 +3226,11 @@ def _sdk_tracing_off_until_the_hook(environment: dict[str, str]) -> None:
     """Turn the Agents SDK's tracing off for a gateway-routed process. The marker tells the kit's
     hook the switch is the kit's to turn back on once the SDK's export is local; a customer's own
     switch, already on, stays theirs."""
-    if environment.get("OPENAI_AGENTS_DISABLE_TRACING") != "1":
+    # The SDK reads "1" and "true" (any case) as off.
+    if str(environment.get("OPENAI_AGENTS_DISABLE_TRACING", "")).strip().lower() not in {
+        "1",
+        "true",
+    }:
         environment["ALK_SDK_TRACING_OFF_BY_KIT"] = "1"
     environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
 

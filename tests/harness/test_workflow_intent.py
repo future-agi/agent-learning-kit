@@ -362,6 +362,9 @@ def test_routed_target_model_is_briefed_to_use_the_openai_prefix(tmp_path, targe
     assert "Agent(model=...) or RunConfig(model=...)" in briefing
     assert "OpenAIChatCompletionsModel(model=...) is sent unchanged" in briefing
     assert "takes its model as a name" not in briefing
+    # A Compose project run as is gets no kit hook: the reading names the one line to add.
+    assert "write in the contract's notes" in briefing
+    assert 'set_default_openai_api("chat_completions")' in briefing
 
 
 @pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])

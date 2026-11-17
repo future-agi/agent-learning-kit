@@ -398,7 +398,13 @@ class HarnessJob(BaseModel):
                 "reroutes a name whose first segment is not openai, and it removes openai/ and "
                 "sends the rest unchanged to its configured endpoint. A name handed to a model "
                 "object such as OpenAIChatCompletionsModel(model=...) is sent unchanged, so "
-                "leave it as the requested model. Never change the model itself."
+                "leave it as the requested model. Never change the model itself. If the agent "
+                "runs as its own Docker Compose project and its code neither calls "
+                'set_default_openai_api("chat_completions") nor hands the model to a '
+                "chat-completions model object, write in the contract's notes that every turn "
+                "on this model gets the gateway's HTTP 501 until the agent's startup adds "
+                'set_default_openai_api("chat_completions"): the kit can\'t set it inside '
+                "that project."
             )
         if self.require_tool_workflow:
             instructions.append(

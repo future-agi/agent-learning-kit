@@ -264,9 +264,9 @@ def _install_worker_isolation() -> None:
 # cannot send the gateway key to OpenAI's trace endpoint.
 _TRACING_EXPORT_PLACEHOLDER = "alk-tracing-disabled"
 # The build sets the SDK's own tracing switch on every gateway-routed process, so its export is
-# off wherever this hook doesn't act. Once the hook has kept the export local, it turns the switch
-# off again, so the kit's span observation (a processor of the SDK's tracing) runs. The SDK reads
-# the switch on first use, after its import.
+# off wherever this hook doesn't act. Once the hook has kept the export local, it turns tracing
+# back on in this process (set_tracing_disabled, which takes precedence over the switch), so the
+# kit's span observation (a processor of the SDK's tracing) runs.
 _SDK_TRACING_SWITCH = "OPENAI_AGENTS_DISABLE_TRACING"
 _SDK_TRACING_BY_KIT = "ALK_SDK_TRACING_OFF_BY_KIT"
 
@@ -294,6 +294,12 @@ def _guard_tracing_export_key(module: Any) -> None:
     # On the class, so an exporter the agent builds itself sends nothing either. The batch
     # processor calls the deadline form directly when it flushes at exit.
     exporter_class = type(exporter)
+    if not all(
+        callable(getattr(exporter_class, name, None))
+        for name in ("export", "_export_with_deadline")
+    ):
+        # A version that sends through another method: the switch stays on.
+        raise AttributeError("the SDK's exporter has no export or _export_with_deadline")
     exporter_class.export = export_nothing
     exporter_class._export_with_deadline = export_nothing
     if not gateway_keys:
@@ -327,9 +333,17 @@ def _set_openai_agents_chat_style(module: Any, reason: str = "") -> None:
                 "observed\n"
             )
         else:
-            # Only the kit's own switch: a customer who turned their tracing off keeps it off.
-            if os.environ.pop(_SDK_TRACING_BY_KIT, None) == "1":
-                os.environ.pop(_SDK_TRACING_SWITCH, None)
+            # Only the kit's own switch, and for this process only: the environment keeps it, so
+            # a child the hook never reaches (python -I) still has its tracing off. A customer
+            # who turned their tracing off themselves keeps it off.
+            if os.environ.get(_SDK_TRACING_BY_KIT) == "1":
+                try:
+                    module.set_tracing_disabled(False)
+                except Exception as exc:  # noqa: BLE001 - must not stop the agent
+                    sys.stderr.write(
+                        "alk: could not turn the OpenAI Agents SDK's tracing back on "
+                        f"({type(exc).__name__}), so its spans aren't observed\n"
+                    )
         try:
             module.set_default_openai_api("chat_completions")
             return
