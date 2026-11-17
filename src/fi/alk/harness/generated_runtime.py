@@ -613,6 +613,15 @@ def python_workspace_root(source: Path, component: Path) -> Path:
     return component
 
 
+def _dependency_groups(document: dict[str, Any]) -> list[str]:
+    """The dependency groups a pyproject declares (PEP 735, and uv's older `dev-dependencies` as `dev`)."""
+    groups = document.get("dependency-groups")
+    names = [str(name) for name in groups] if isinstance(groups, dict) else []
+    if (document.get("tool", {}).get("uv", {}) or {}).get("dev-dependencies"):
+        names.append("dev")
+    return names
+
+
 def select_python_extras(
     root: Path,
     requested: list[str],
@@ -650,8 +659,21 @@ def select_python_extras(
                 owners[name].append(member)
     unknown = [name for name, projects in owners.items() if not projects]
     if unknown:
+        groups = {
+            canonicalize_name(group)
+            for project in (root, *python_workspace_members(root))
+            for group in _dependency_groups(_pyproject_document(project / "pyproject.toml"))
+        }
+        named = [name for name in unknown if name in groups]
         raise GeneratedRuntimeError(
-            "generated_runtime_extra_unknown: " + ", ".join(unknown)
+            "generated_runtime_extra_unknown: "
+            + ", ".join(unknown)
+            + (
+                f" ({', '.join(named)}: a dependency group, which the install command selects, such as "
+                "`uv sync --group <name>` or `--dev`; leave it out of runtime.extras)"
+                if named
+                else ""
+            )
         )
     ambiguous = [name for name, projects in owners.items() if len(projects) > 1]
     if ambiguous:

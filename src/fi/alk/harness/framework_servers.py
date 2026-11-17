@@ -306,23 +306,39 @@ def _langgraph_config_argument(command: list[str]) -> str | None:
     return None
 
 
+def _uv_project(command: list[str]) -> str | None:
+    """The ``--project`` a ``uv run`` names before the program it runs, or None."""
+    if not command or Path(command[0]).name != "uv":
+        return None
+    for index, token in enumerate(command):
+        if Path(token).name == "langgraph":
+            break
+        if token == "--project" and index + 1 < len(command):
+            return command[index + 1]
+        if token.startswith("--project="):
+            return token.partition("=")[2]
+    return None
+
+
 def _langgraph_config(root: Path, runtime: dict[str, Any]) -> Path | None:
     """The ``langgraph.json`` a ``langgraph dev`` app is served from: the one its command names, relative to the
-    declared workdir, else the nearest one from that workdir up to the source root; None when there is none."""
+    declared workdir or else to the ``uv run --project`` it runs in, else the nearest one from that workdir up to the
+    source root; None when there is none."""
     command = [str(item) for item in (runtime.get("command") or [])]
     configured = str(runtime.get("workdir") or "").strip()
     workdir = (root / configured) if configured not in {"", ".", "/"} else root
     named = _langgraph_config_argument(command)
+    project = _uv_project(command)
     resolved_root = root.resolve()
     candidates = (
-        [workdir / named]
+        [workdir / named, *([workdir / project / named] if project else [])]
         if named
         else [directory / "langgraph.json" for directory in (workdir, *workdir.parents)]
     )
     for candidate in candidates:
         config = candidate.resolve()
         if not config.is_relative_to(resolved_root):
-            break
+            continue
         if config.is_file():
             return config
     return None
@@ -396,7 +412,33 @@ def server_runtime(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | None
         token == "--port" or token.startswith("--port=") for token in command
     ):
         command = [*command, "--port", str(interface["port"])]
-    return {**runtime, "command": command, "interface": interface}
+    return {**runtime, "command": _config_from_start(root, runtime, command), "interface": interface}
+
+
+def _config_from_start(root: Path, runtime: dict[str, Any], command: list[str]) -> list[str]:
+    """`langgraph dev` reads `--config` from where it starts, not from a `uv run --project`: a config found only under
+    the project is named by its path from the workdir, so every world's copy starts it from the same place."""
+    named = _langgraph_config_argument(command)
+    config = _langgraph_config(root, runtime) if named and _is_langgraph_server_command(command) else None
+    configured = str(runtime.get("workdir") or "").strip()
+    workdir = ((root / configured) if configured not in {"", ".", "/"} else root).resolve()
+    if config is None or (workdir / named).resolve() == config or not config.is_relative_to(workdir):
+        return command
+    relative = config.relative_to(workdir).as_posix()
+    rewritten: list[str] = []
+    skip = False
+    for index, token in enumerate(command):
+        if skip:
+            skip = False
+            continue
+        if token == "--config" and index + 1 < len(command):
+            rewritten += ["--config", relative]
+            skip = True
+        elif token.startswith("--config="):
+            rewritten.append(f"--config={relative}")
+        else:
+            rewritten.append(token)
+    return rewritten
 
 
 def server_start_folder(root: Path, runtime: dict[str, Any], component: Path) -> Path:

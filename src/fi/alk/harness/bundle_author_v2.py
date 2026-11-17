@@ -3272,7 +3272,8 @@ def resolve_environment_plan(
             run_override=(
                 None
                 if is_callback or is_command_adapter or is_graph
-                else runtime_command
+                # A framework server runs as the sandbox needs it (`langgraph dev` without its file watcher).
+                else server_command(runtime_command)
                 or (
                     _dockerfile_run(run_folder, project=component)
                     if subfolder

@@ -4825,6 +4825,53 @@ def _langgraph_source(tmp_path: Path) -> Path:
     return source
 
 
+def test_a_langgraph_config_inside_the_uv_project_is_started_from_where_every_world_runs_it(tmp_path: Path) -> None:
+    """The deep agents repository as a live build authored it: `graphs/python/langgraph.json`, started from the
+    repository root with `uv run --project graphs/python ... --config langgraph.json`, which `langgraph dev` resolves
+    from where it starts. The build names the config by its path from there, and never runs the file watcher."""
+    source = tmp_path / "source"
+    project = source / "graphs" / "python"
+    (project / "src").mkdir(parents=True)
+    (project / "pyproject.toml").write_text("[project]\nname='deepagents-async'\nversion='1'\n", encoding="utf-8")
+    (project / "src" / "agent.py").write_text("graph = object()\n", encoding="utf-8")
+    (project / "langgraph.json").write_text(
+        json.dumps({"dependencies": ["."], "graphs": {"agent": "./src/agent.py:graph"}}), encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    command = [
+        "uv", "run", "--with", "langgraph-cli[inmem]", "--project", "graphs/python", "langgraph", "dev",
+        "--config", "langgraph.json", "--no-browser", "--host", "0.0.0.0", "--port", "2024",
+        "--n-jobs-per-worker", "10",
+    ]  # fmt: skip
+    _write_chat_contract(
+        authoring,
+        command=command,
+        workdir="",
+        interface={"kind": "http", "path": "/runs", "port": 2024, "protocol": "json_template", "health_path": "/ok"},
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    runtime = json.loads((output / "contract.json").read_text())["runtime"]
+    assert runtime["command"][runtime["command"].index("--config") + 1] == "graphs/python/langgraph.json"
+    assert runtime["interface"]["path"] == "/threads/{{langgraph_thread_id}}/runs/wait"
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    launched = " ".join(agent.run_command)
+    assert "--config graphs/python/langgraph.json" in launched
+    assert "--no-reload" in launched
+    # Every world runs its copy of the source from the source root, where the config is at that path.
+    assert agent.source_component == "."
+    assert (output / agent.working_directory / "graphs" / "python" / "langgraph.json").is_file()
+
+
 def test_langgraph_dev_is_served_through_its_threads_and_runs_api(tmp_path: Path) -> None:
     # ``langgraph dev`` has no OpenAI chat route, whatever route the written interface gives.
     source = _langgraph_source(tmp_path)
