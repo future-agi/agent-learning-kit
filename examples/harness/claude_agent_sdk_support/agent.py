@@ -8,11 +8,11 @@ import tempfile
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ClaudeSDKClient,
     ProcessError,
     ResultMessage,
     TextBlock,
     create_sdk_mcp_server,
-    query,
     tool,
 )
 
@@ -29,12 +29,17 @@ _SEED_ORDERS = {
 
 # Each conversation gets its own copy of the orders, so a return started in one scenario is
 # not there in the next. The callback names the conversation; the tools read it.
+# A conversation is the thread the kit names, one per scenario, so a scenario run twice on one
+# agent process would see its first run's returns.
 _CONVERSATION = contextvars.ContextVar("conversation", default="")
 _ORDERS_BY_CONVERSATION: dict[str, dict] = {}
 
 
 def _orders() -> dict:
-    return _ORDERS_BY_CONVERSATION.setdefault(_CONVERSATION.get(), copy.deepcopy(_SEED_ORDERS))
+    conversation = _CONVERSATION.get()
+    if conversation not in _ORDERS_BY_CONVERSATION:
+        _ORDERS_BY_CONVERSATION[conversation] = copy.deepcopy(_SEED_ORDERS)
+    return _ORDERS_BY_CONVERSATION[conversation]
 
 
 SYSTEM_PROMPT = (
@@ -225,15 +230,21 @@ async def agent_callback(agent_input):
         last_text = ""
         try:
             async with asyncio.timeout(TURN_TIMEOUT_SECONDS) as deadline:
-                async for message in query(prompt=prompt, options=options):
-                    if isinstance(message, AssistantMessage):
-                        text = "".join(
-                            b.text for b in message.content if isinstance(b, TextBlock)
-                        )
-                        if text:
-                            last_text = text
-                    elif isinstance(message, ResultMessage):
-                        result = message
+                # A client per turn rather than query(): observability instrumentors (traceAI's
+                # among them) wrap ClaudeSDKClient, so a turn made through query() makes no spans.
+                async with ClaudeSDKClient(options=options) as client:
+                    await client.query(prompt)
+                    async for message in client.receive_response():
+                        if isinstance(message, AssistantMessage):
+                            text = "".join(
+                                b.text
+                                for b in message.content
+                                if isinstance(b, TextBlock)
+                            )
+                            if text:
+                                last_text = text
+                        elif isinstance(message, ResultMessage):
+                            result = message
         except TimeoutError:
             if not deadline.expired():
                 raise
@@ -243,7 +254,9 @@ async def agent_callback(agent_input):
         except ProcessError as exc:
             # The SDK raises after an error result's frame; report it as the turn failing.
             if result is None or not (result.is_error or result.subtype != "success"):
-                raise RuntimeError(f"the Claude CLI failed: {_safe(str(exc))}") from None
+                raise RuntimeError(
+                    f"the Claude CLI failed: {_safe(str(exc))}"
+                ) from None
     finally:
         shutil.rmtree(config_dir, ignore_errors=True)
     if result is None:

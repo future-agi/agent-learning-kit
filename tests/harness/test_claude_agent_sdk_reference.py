@@ -32,6 +32,7 @@ from reference_agents import (
     assert_bindings_match,
     assert_detected,
     assert_each_conversation_has_its_own_orders,
+    assert_tool_calls_keep_each_conversations_orders,
     assert_pins,
     assert_refuses_key_without_base_url,
     build_control_service,
@@ -104,7 +105,21 @@ def test_build_runs_the_callback_bridge_with_the_generic_tool_tracer(
 # T3: the real SDK and its bundled CLI, against a local stub of the Messages API --------------
 
 
+def _pinned_sdk() -> str:
+    lines = (EXAMPLE / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    (pin,) = [line for line in lines if line.startswith("claude-agent-sdk==")]
+    return pin.partition("==")[2]
+
+
 def _bundled_cli() -> Path:
+    # The CLI ships inside the SDK, so a different SDK is a different CLI: the test means the
+    # one the example pins. CI installs it for this file alone.
+    if claude_agent_sdk.__version__ != _pinned_sdk():
+        pytest.fail(
+            f"this test runs the CLI of claude-agent-sdk {_pinned_sdk()}, which the example pins; "
+            f"{claude_agent_sdk.__version__} is installed. Run it after "
+            f"`pip install claude-agent-sdk=={_pinned_sdk()}`."
+        )
     cli = Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude"
     if not cli.is_file():
         pytest.fail(f"the Claude CLI bundled with claude-agent-sdk was not found at {cli}")
@@ -462,6 +477,46 @@ def test_the_real_cli_runs_two_turns_and_only_the_plain_tools_are_traced(
     assert prompt.endswith("User: It is too small, please start a return.")
 
 
+def test_an_instrumented_turn_makes_spans_for_the_conversation_and_its_tool(
+    example_module, monkeypatch
+) -> None:
+    # traceAI's Claude instrumentor wraps ClaudeSDKClient, as the kit's simulation mark turns
+    # it on; a turn made any other way makes no spans at all.
+    try:
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from traceai_claude_agent_sdk import ClaudeAgentInstrumentor
+    except ImportError as missing:
+        pytest.fail(f"this test needs traceai-claude-agent-sdk and the OpenTelemetry SDK: {missing}")
+    _bundled_cli()
+    _MessagesStub.requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _MessagesStub)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = ClaudeAgentInstrumentor()
+    instrumentor.instrument(tracer_provider=provider)
+    try:
+        agent = example_module(
+            ANTHROPIC_BASE_URL=f"http://127.0.0.1:{server.server_address[1]}",
+            ANTHROPIC_AUTH_TOKEN="placeholder-not-a-token",
+        )
+        for name in os.environ:
+            if name.startswith("OTEL_"):
+                monkeypatch.delenv(name)
+        reply = _run(agent, CONVERSATION[:1])
+    finally:
+        instrumentor.uninstrument()
+        server.shutdown()
+        server.server_close()
+
+    assert reply == {"content": "stub reply for turn 1"}
+    names = [span.name for span in exporter.get_finished_spans()]
+    assert any("look_up_order" in name for name in names), names
+
+
 # T4: the callback's glue --------------------------------------------------------------------
 
 NEW_MESSAGE = {"role": "user", "content": "Please start a return for A1001."}
@@ -521,6 +576,31 @@ def _assistant(text: str):
     return AssistantMessage(content=[TextBlock(text=text)], model=MODEL)
 
 
+def _patch_client(agent, monkeypatch, query) -> None:
+    """Run each turn's scripted `query(prompt=..., options=...)` through a stand-in for the
+    SDK's ClaudeSDKClient, which the example opens once per turn."""
+
+    class Client:
+        def __init__(self, options=None, **_options):
+            self.options = options
+            self.stream = None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc_info):
+            return None
+
+        async def query(self, prompt, **_options):
+            self.stream = query(prompt=prompt, options=self.options)
+
+        async def receive_response(self):
+            async for message in self.stream:
+                yield message
+
+    monkeypatch.setattr(agent, "ClaudeSDKClient", Client)
+
+
 def _fake_query(agent, monkeypatch, *messages, error: Exception | None = None) -> _Seen:
     seen = _Seen()
     script = list(messages) if messages else [_assistant("Return started."), _result()]
@@ -533,7 +613,7 @@ def _fake_query(agent, monkeypatch, *messages, error: Exception | None = None) -
         for message in script:
             yield message
 
-    monkeypatch.setattr(agent, "query", query)
+    _patch_client(agent, monkeypatch, query)
     return seen
 
 
@@ -592,7 +672,7 @@ def _failing_query(agent, monkeypatch, *messages, error: Exception) -> _Seen:
             yield message
         raise error
 
-    monkeypatch.setattr(agent, "query", query)
+    _patch_client(agent, monkeypatch, query)
     return seen
 
 
@@ -658,7 +738,7 @@ def test_a_turn_that_does_not_finish_is_stopped_and_cleaned_up(
         await asyncio.sleep(3)
         yield _result()
 
-    monkeypatch.setattr(agent, "query", query)
+    _patch_client(agent, monkeypatch, query)
 
     with pytest.raises(RuntimeError, match="did not finish within"):
         _run(agent, CONVERSATION)
@@ -868,16 +948,40 @@ def test_each_conversation_has_its_own_orders(example_module, monkeypatch) -> No
     agent = example_module()
     assert_each_conversation_has_its_own_orders(agent)
 
-    # The callback names the conversation from the turn's thread before the CLI runs.
-    seen = []
+    # The same through the callback, each call made through the SDK tool's own handler in a
+    # task of its own, as the SDK runs an in-process tool for the CLI.
+    handlers = {
+        "start_return": agent._start_return_tool.handler,
+        "look_up_order": agent._look_up_order_tool.handler,
+    }
+    call: dict = {}
+    results: list[str] = []
 
     async def query(*, prompt, options):
-        seen.append(agent._CONVERSATION.get())
+        reply = await asyncio.create_task(handlers[call["name"]](call["arguments"]))
+        results.append(reply["content"][0]["text"])
         yield _result()
 
-    monkeypatch.setattr(agent, "query", query)
-    _run(agent, CONVERSATION)
-    assert seen == [_agent_input(CONVERSATION).thread_id]
+    _patch_client(agent, monkeypatch, query)
+
+    def turn(thread_id: str, name: str, **arguments: str) -> str:
+        call.update(name=name, arguments=arguments)
+        results.clear()
+        turn_input = _agent_input(CONVERSATION).model_copy(update={"thread_id": thread_id})
+        asyncio.run(agent.agent_callback(turn_input))
+        (result,) = results
+        return result
+
+    assert_tool_calls_keep_each_conversations_orders(turn)
+
+
+def test_the_turn_bound_is_below_the_kits_own_deadline(example_module) -> None:
+    from fi.alk.harness.chat_call_runner import DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS
+
+    agent = example_module()
+
+    # Past the kit's deadline the kit gives up first, and the CLI and its folder are left behind.
+    assert agent.TURN_TIMEOUT_SECONDS < DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS
 
 
 def test_a_token_with_no_base_url_is_refused(example_module, monkeypatch) -> None:
