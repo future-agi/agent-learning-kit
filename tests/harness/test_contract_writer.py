@@ -80,6 +80,8 @@ PINNED_FREE_TEXT = (
     "ToolSpec.description",
     "ToolSpec.refuses",
     "ToolSpec.effects",
+    # What a tool hands back, by output field: prose a person or model writes, only ever shown.
+    "ToolSpec.returns",
     "ToolEntry.notes",
     "Dependency.what",
 )
@@ -128,7 +130,7 @@ def _walked(annotation: Any) -> bool:
     )
 
 
-def test_the_free_text_fields_are_the_fourteen_named() -> None:
+def test_the_free_text_fields_are_the_fifteen_named() -> None:
     assert FREE_TEXT == PINNED_FREE_TEXT
 
 
@@ -246,6 +248,10 @@ def _full_contract() -> AgentContract:
         for holder in holders:
             annotation = AgentContract.model_fields.get(field)
             is_list = annotation is not None and typing.get_origin(annotation.annotation) is list
+            if field == "returns":
+                # A mapping of output field to its description: each description is prose.
+                holder[field] = {"body": PROSE, "token": PROSE}
+                continue
             holder[field] = [PROSE, "kept as written"] if is_list else PROSE
     return AgentContract.model_validate(body)
 
@@ -291,12 +297,42 @@ def test_write_contract_cleans_every_free_text_field_and_keeps_every_other_field
         before, after = _free_values(raw, name), _free_values(saved, name)
         assert before and len(before) == len(after), name
         for given, cleaned in zip(before, after):
-            assert cleaned == _redact(given), name
+            # A mapping of prose is cleaned value by value, never by its keys.
+            expected = {k: _redact(v) for k, v in given.items()} if isinstance(given, dict) else _redact(given)
+            assert cleaned == expected, name
             assert _secret_free(cleaned), name
     # Every field outside FREE_TEXT is exactly as it was given, URL and all.
     assert _without_free_text(saved) == _without_free_text(raw)
     kept = json.dumps(_without_free_text(saved))
     assert kept.count(URL) >= len(KEPT_WITH_A_URL)
+
+
+def test_a_url_with_a_password_in_a_returns_description_is_saved_cleaned(tmp_path: Path) -> None:
+    held = AgentContract.model_validate(
+        {
+            "agent": "a",
+            "modality": "chat",
+            "tools": [
+                {
+                    "name": "hook",
+                    "returns": {"body": PROSE, "token": f"str, see {URL}", "plain": "int"},
+                }
+            ],
+        }
+    )
+
+    write_contract(held, tmp_path)
+
+    saved = json.loads((tmp_path / "contract.json").read_text(encoding="utf-8"))
+    # Each description is cleaned as text, and no output field's name changes what is kept of it.
+    assert saved["tools"][0]["returns"] == {
+        "body": CLEANED,
+        "token": f"str, see {CLEAN}",
+        "plain": "int",
+    }
+    assert _secret_free(saved)
+    # The caller's own object holds the cleaned text too.
+    assert held.tools[0].returns["body"] == CLEANED
 
 
 def test_writing_a_written_contract_again_changes_nothing(tmp_path: Path) -> None:
@@ -1353,6 +1389,10 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, _READS + " (the ingress probe record)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "probe_chat_workflow"): (
         1, _READS + " (the workflow probe record)"),
+    # Added by dev's actors (2aed5a4d): pre_run.refresh_stale rewrites a scenario's pre_run session
+    # in its scenario.json when the actor record changed; pre_run.py never names the contract.
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "refresh_stale"): (
+        1, _READS + " (rewrites stale pre-run sessions in scenario.json)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "validate_native"): (
         1, _READS + " (the native validation record)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_bytes"): (
@@ -1408,7 +1448,11 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "_reuse_certified_bundle"): (
         1, _COPIES),
     ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "compile_bundle"): (1, _COPIES),
-    ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "shutil.copy2"): (3, _COPIES),
+    # Eight: the three before dev's actors (2aed5a4d) and world door (06c8d288, 7588a371) merged, and
+    # five they added. None copies contract.json's content: the actors file, and the kit's own door
+    # modules (world_door.py twice, in_process_door.py, tool_trace_proxy.py) into the bundle's
+    # generated folders, so each is a copy of a file that is not the contract.
+    ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "shutil.copy2"): (8, _COPIES),
     ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "write_text"): (
         5, _COPIES + " (:3752 writes the parsed authoring body back as written)"),
     ("fi.alk.harness.bundle_author_v2", "reseal_scenarios", "Path.rename"): (2, _COPIES),
@@ -1462,6 +1506,9 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         "(generated_runtime._copy_sanitized_context)"),
     ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "resolve_environment_plan"): (
         1, _TEMP_COMPOSE),
+    # Added by dev's actors (2aed5a4d): written only when the authoring folder has an actors file.
+    ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "write_actor_rules"): (
+        1, "writes actor_rules.json into the bundle (actors.write_actor_rules), not the contract"),
     ("fi.alk.harness.bundle_author_v2", "reseal_scenarios", "_reseeded"): (
         1, "_carried_world writes the world seed (world.sqlite, world-ir.json)"),
     ("fi.alk.harness.chat_call_runner", "HostedChatCallRunner.run", "_drive_conversation"): (

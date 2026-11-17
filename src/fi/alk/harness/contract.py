@@ -1502,6 +1502,10 @@ FREE_TEXT = (
     "ToolSpec.description",
     "ToolSpec.refuses",
     "ToolSpec.effects",
+    # What a tool hands back, by output field: each value is a description a person or model
+    # writes, and the contract only ever shows it (the build, the world and the checks never match
+    # it), so the values are cleaned. The field names are kept.
+    "ToolSpec.returns",
     "ToolEntry.notes",
     "Dependency.what",
 )
@@ -1539,10 +1543,17 @@ KEPT_AS_WRITTEN = (
     "ToolSpec.name",
     "ToolSpec.args",
     "ToolSpec.arg_types",
+    # A unit or format each field is written in ("milliseconds"): the actor and the world read it
+    # as written, and its keys are checked against `args`.
+    "ToolSpec.arg_units",
     # The world answers with these as written.
     "ToolSpec.arg_values",
     "ToolSpec.requires",
     "ToolSpec.inputs_from",
+    # Names of the world's tables, matched against the tables a proof run changed
+    # (tool_certification) and against the world's schema.
+    "ToolSpec.tables_read",
+    "ToolSpec.tables_changed",
     "ToolEntry.tool",
     "ToolEntry.mode",
     "ToolEntry.module",
@@ -1553,6 +1564,12 @@ KEPT_AS_WRITTEN = (
     # The tool proxy calls it as written.
     "ToolEntry.endpoint",
     "ToolEntry.method",
+    # A flag, `read` or `write`, compared as written (the tool proxy, the world's door and the
+    # read-only check), so it is never prose even though it sits beside `notes`.
+    "ToolEntry.effect",
+    # Set by the seal from the kit's own constant text, not written by a reader; the platform
+    # tests it for emptiness and quotes it as set.
+    "ToolEntry.door_unreached",
     "Dependency.name",
     "Dependency.kind",
     "Dependency.used_by",
@@ -1575,6 +1592,11 @@ KEPT_AS_WRITTEN = (
     "LocalHttpAuth",
     "RuntimeHttpFailureRule",
     "RuntimeHttpSetupRequest",
+    # The live SSE endpoint's rules (fi.simulate): a JSON path, a mode and the values a frame is
+    # matched against, all compared with the frames as written.
+    "HTTPStreamSpec",
+    "HTTPStreamText",
+    "HTTPStreamMatch",
 )
 CONTRACT_FILE = "contract.json"
 # What a reading was made from, saved beside its contract and outside the model: a build handed
@@ -1714,6 +1736,14 @@ def write_contract(
         for saved, held in _holders(contract, body, model):
             if isinstance(saved, dict) and isinstance(saved.get(field), (str, list)):
                 places.append((saved, held, saved[field], field))
+            elif isinstance(saved, dict) and isinstance(saved.get(field), dict):
+                # A mapping of prose (a tool's `returns`): each value is cleaned as a text of its
+                # own, never by its key, so an output field named `token` keeps its description.
+                kept = held.get(field) if isinstance(held, dict) else getattr(held, field, None)
+                if isinstance(kept, dict):
+                    for key, value in saved[field].items():
+                        if isinstance(value, str):
+                            places.append((saved[field], kept, value, key))
     # One call for the whole save, over a list with no keys: only the URL rule applies, and a
     # refused URL is logged once per save rather than once per string.
     values = [value for _, _, value, _ in places]
