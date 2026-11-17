@@ -2457,3 +2457,236 @@ def test_a_symlink_to_a_folder_of_the_job_is_not_a_docker_socket_mount(tmp_path)
         },
         source=tmp_path,
     )
+
+
+def _build(tmp_path, build, secrets=None):
+    config = _svc(build=build)
+    if secrets is not None:
+        config["secrets"] = secrets
+    return config
+
+
+@pytest.mark.parametrize(
+    ("build", "secrets", "expected"),
+    [
+        ({"context": "/"}, None, "agent: build.context"),
+        ({"context": "/etc"}, None, "agent: build.context"),
+        ({"context": ".."}, None, "agent: build.context"),
+        ({"context": "../other"}, None, "agent: build.context"),
+        ({"context": "{tmp}/../other"}, None, "agent: build.context"),
+        ({"context": "{tmp}-sibling"}, None, "agent: build.context"),
+        ({"context": "{tmp}/escape"}, None, "agent: build.context"),
+        ({"context": "https://example.com/x.git"}, None, "agent: build.context"),
+        ({"context": "git@example.com:x/y.git"}, None, "agent: build.context"),
+        ({"context": "."}, None, None),
+        (
+            {"context": ".", "additional_contexts": {"h": "/"}},
+            None,
+            "agent: build.additional_contexts",
+        ),
+        (
+            {"context": ".", "additional_contexts": {"h": "../x"}},
+            None,
+            "agent: build.additional_contexts",
+        ),
+        (
+            {"context": ".", "additional_contexts": ["h=/etc"]},
+            None,
+            "agent: build.additional_contexts",
+        ),
+        (
+            {"context": ".", "additional_contexts": {"h": "https://example.com/x"}},
+            None,
+            "agent: build.additional_contexts",
+        ),
+        (
+            {"context": ".", "secrets": ["s"]},
+            {"s": {"file": "/etc/hosts"}},
+            "agent: build.secrets",
+        ),
+        (
+            {"context": ".", "secrets": [{"source": "s", "target": "t"}]},
+            {"s": {"file": "/etc/hosts"}},
+            "agent: build.secrets",
+        ),
+        (
+            {"context": ".", "secrets": ["s"]},
+            {"s": {"file": "../hosts"}},
+            "agent: build.secrets",
+        ),
+        (
+            {"context": ".", "secrets": ["s"]},
+            {"s": {"environment": "HOME"}},
+            "agent: build.secrets",
+        ),
+        (
+            {"context": ".", "secrets": ["missing"]},
+            {},
+            "agent: build.secrets",
+        ),
+        ({"context": ".", "ssh": ["default"]}, None, "agent: build.ssh"),
+        ({"context": ".", "ssh": {"default": None}}, None, "agent: build.ssh"),
+        (
+            {"context": ".", "cache_to": ["type=local,dest=/tmp/cache"]},
+            None,
+            "agent: build.cache_to",
+        ),
+        (
+            {"context": ".", "cache_to": ["type=local,dest=../cache"]},
+            None,
+            "agent: build.cache_to",
+        ),
+        (
+            {"context": ".", "cache_from": ["type=local,src=/etc"]},
+            None,
+            "agent: build.cache_from",
+        ),
+        (
+            {"context": ".", "cache_from": ["mode=max,type=local,src=/etc"]},
+            None,
+            "agent: build.cache_from",
+        ),
+        (
+            {"context": ".", "isolation": "hyperv"},
+            None,
+            "agent: build field isolation is not allowed",
+        ),
+        (
+            {"context": ".", "some_future_field": "x"},
+            None,
+            "agent: build field some_future_field is not allowed",
+        ),
+    ],
+)
+def test_build_reach_outside_the_source_is_rejected(tmp_path, build, secrets, expected):
+    (tmp_path / "escape").symlink_to("/etc")
+    build = {
+        key: (
+            value.replace("{tmp}", str(tmp_path)) if isinstance(value, str) else value
+        )
+        for key, value in build.items()
+    }
+    config = _build(tmp_path, build, secrets)
+    if expected is None:
+        _validate_compose_security(config, source=tmp_path)
+        return
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(config, source=tmp_path)
+    assert expected in str(error.value)
+
+
+def test_build_with_no_source_given_refuses_an_absolute_context():
+    with pytest.raises(ProvisionError, match="agent: build.context"):
+        _validate_compose_security(_svc(build={"context": "/srv/app"}))
+
+
+@pytest.mark.parametrize(
+    ("build", "secrets"),
+    [
+        ("{tmp}", None),
+        ({"context": "{tmp}", "dockerfile": "Dockerfile"}, None),
+        ({"context": "{tmp}/sub", "dockerfile_inline": "FROM busybox\n"}, None),
+        (
+            {"context": ".", "target": "prod", "args": {"A": "b"}, "network": "none"},
+            None,
+        ),
+        (
+            {
+                "context": ".",
+                "labels": {"a": "b"},
+                "platforms": ["linux/amd64"],
+                "tags": ["x:1"],
+                "pull": True,
+                "no_cache": True,
+                "shm_size": "1g",
+                "ulimits": {"nofile": 1024},
+                "extra_hosts": {"a": "1.2.3.4"},
+                "provenance": False,
+                "sbom": False,
+                "x-anything": 1,
+            },
+            None,
+        ),
+        (
+            {
+                "context": ".",
+                "additional_contexts": {
+                    "a": "{tmp}/sub",
+                    "b": "./sub",
+                    "c": "docker-image://alpine:3",
+                    "d": "service:db",
+                },
+            },
+            None,
+        ),
+        (
+            {"context": ".", "secrets": ["s", {"source": "t"}]},
+            {"s": {"file": "{tmp}/s.txt"}, "t": {"file": "./t.txt"}},
+        ),
+        (
+            {
+                "context": ".",
+                "cache_from": ["alpine:3", "type=registry,ref=x/y:cache"],
+                "cache_to": ["type=inline", "type=local,dest={tmp}/cache"],
+            },
+            None,
+        ),
+        ({"context": ".", "ssh": [], "secrets": [], "additional_contexts": {}}, None),
+    ],
+)
+def test_build_inside_the_source_is_accepted(tmp_path, build, secrets):
+    def fill(value):
+        if isinstance(value, str):
+            return value.replace("{tmp}", str(tmp_path))
+        if isinstance(value, list):
+            return [fill(item) for item in value]
+        if isinstance(value, dict):
+            return {key: fill(item) for key, item in value.items()}
+        return value
+
+    _validate_compose_security(
+        _build(tmp_path, fill(build), fill(secrets)), source=tmp_path
+    )
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        {"context": "/CANARY-7f3a"},
+        {"context": ".", "additional_contexts": {"h": "/CANARY-7f3a"}},
+        {"context": ".", "secrets": ["CANARY-7f3a"]},
+        {"context": ".", "ssh": ["CANARY-7f3a"]},
+        {"context": ".", "cache_to": ["type=local,dest=/CANARY-7f3a"]},
+        {"context": ".", "cache_from": ["type=local,src=/CANARY-7f3a"]},
+    ],
+)
+def test_a_build_refusal_never_contains_a_value(tmp_path, build):
+    with pytest.raises(ProvisionError) as error:
+        _validate_compose_security(_build(tmp_path, build, {}), source=tmp_path)
+    assert "CANARY" not in str(error.value)
+    assert "7f3a" not in str(error.value)
+
+
+@pytest.mark.parametrize("dockerfile", ["/etc/passwd", "../../outside/Dockerfile"])
+def test_a_dockerfile_outside_the_source_is_rejected(tmp_path, dockerfile):
+    with pytest.raises(ProvisionError, match="agent: build.dockerfile"):
+        _validate_compose_security(
+            _svc(build={"context": ".", "dockerfile": dockerfile}), source=tmp_path
+        )
+
+
+def test_a_dockerfile_beside_the_context_inside_the_source_is_accepted(tmp_path):
+    _validate_compose_security(
+        _svc(build={"context": "sub", "dockerfile": "../Dockerfile.prod"}),
+        source=tmp_path,
+    )
+
+
+def test_a_build_context_beside_the_compose_file_is_inside_the_job(tmp_path):
+    source, session = tmp_path / "source", tmp_path / "session"
+    source.mkdir()
+    session.mkdir()
+    config = _svc(build={"context": str(session / "generated-runtime-context")})
+    _validate_compose_security(config, source=(source, session))
+    with pytest.raises(ProvisionError, match="agent: build.context"):
+        _validate_compose_security(config, source=source)
