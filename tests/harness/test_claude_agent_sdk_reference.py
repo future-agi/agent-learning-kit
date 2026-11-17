@@ -31,6 +31,7 @@ from reference_agents import (
     TRACE_HOOK,
     assert_bindings_match,
     assert_detected,
+    assert_each_conversation_has_its_own_orders,
     assert_pins,
     assert_refuses_key_without_base_url,
     build_control_service,
@@ -861,6 +862,22 @@ def test_the_env_passed_to_the_cli_is_exactly_this(
     assert "ANTHROPIC_BASE_URL" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
     assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in env
+
+
+def test_each_conversation_has_its_own_orders(example_module, monkeypatch) -> None:
+    agent = example_module()
+    assert_each_conversation_has_its_own_orders(agent)
+
+    # The callback names the conversation from the turn's thread before the CLI runs.
+    seen = []
+
+    async def query(*, prompt, options):
+        seen.append(agent._CONVERSATION.get())
+        yield _result()
+
+    monkeypatch.setattr(agent, "query", query)
+    _run(agent, CONVERSATION)
+    assert seen == [_agent_input(CONVERSATION).thread_id]
 
 
 def test_a_token_with_no_base_url_is_refused(example_module, monkeypatch) -> None:

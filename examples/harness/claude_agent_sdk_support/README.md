@@ -48,8 +48,6 @@ secret, also reaches the agent; the job supplies the other variables.
   made the CLI retry for about 3 minutes (11 requests) before the turn failed.
 - An error from the CLI or the model comes back as a short message (at most 500 characters),
   with the token and key values removed.
-- The orders are module state, shared by every conversation the agent process serves, so a
-  return started in one scenario shows in the next (as in the other reference agents).
 - A killed agent leaves the CLI process running until it ends.
 
 Install with `pip install -r requirements.txt` on Python 3.12.
