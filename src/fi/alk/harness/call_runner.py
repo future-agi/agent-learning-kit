@@ -1922,9 +1922,9 @@ def read_worker_stops(runtime: EnvironmentRuntime) -> list[dict[str, Any]]:
     database = _find_postgres_endpoint(runtime)
     if database is None:
         return []
-    import psycopg
-
     try:
+        import psycopg
+
         with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
             connection.execute(f"SET lock_timeout = '{_SEAL_LOCK_TIMEOUT}'")
             try:
@@ -1946,9 +1946,10 @@ def read_worker_runs(runtime: EnvironmentRuntime) -> set[str] | None:
     database = _find_postgres_endpoint(runtime)
     if database is None:
         return None
-    import psycopg
 
     def read() -> set[str]:
+        import psycopg
+
         with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
             return {str(one) for (one,) in connection.execute("SELECT worker FROM _alk_worker_runs").fetchall()}
 
@@ -1963,10 +1964,10 @@ def _clear_worker_stops(runtime: EnvironmentRuntime) -> None:
     database = _find_postgres_endpoint(runtime) if runtime is not None else None
     if database is None:
         return
-    import psycopg
-
     try:
         def clear() -> None:
+            import psycopg
+
             with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
                 connection.execute("DELETE FROM _alk_worker_stops")
                 connection.execute("DELETE FROM _alk_worker_runs")

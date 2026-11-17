@@ -4125,6 +4125,8 @@ def test_the_voice_call_worker_gets_the_stop_and_hangs_up_at_the_next_turn(tmp_p
     output = tmp_path / "report.json"
     monkeypatch.setattr(call_worker.sys, "argv", ["call_worker", str(output)])
     monkeypatch.setattr(call_worker.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(b"{}")))
+    # The worker reconfigures the root logger for its own process; keep that out of later tests.
+    monkeypatch.setattr(call_worker.logging, "basicConfig", lambda **_kwargs: None)
     with pytest.raises(AttributeError):
         # The stand-in report is no model; only the hand-off of `stop_when` matters here.
         asyncio.run(call_worker.main())

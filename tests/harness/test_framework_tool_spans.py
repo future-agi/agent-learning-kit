@@ -1282,7 +1282,9 @@ def test_two_hundred_identical_calls_pair_in_well_under_a_second() -> None:
     ]
     started = time.perf_counter()
     merged = call_runner._merge_span_calls(natives, spans)
-    assert time.perf_counter() - started < 0.5
+    # About 0.3 s on a laptop and up to three times that on a shared CI runner; a pairing that grew a power would take
+    # far longer than this bound.
+    assert time.perf_counter() - started < 2.0
     assert len(merged) == 200
     assert {c.runtime_ids["event_id"] for c in merged} == {f"e{i}" for i in range(200)}
 
