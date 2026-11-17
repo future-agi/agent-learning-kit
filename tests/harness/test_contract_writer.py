@@ -80,6 +80,8 @@ PINNED_FREE_TEXT = (
     "ToolSpec.description",
     "ToolSpec.refuses",
     "ToolSpec.effects",
+    # What a tool hands back, by output field: prose a person or model writes, only ever shown.
+    "ToolSpec.returns",
     "ToolEntry.notes",
     "Dependency.what",
 )
@@ -128,7 +130,7 @@ def _walked(annotation: Any) -> bool:
     )
 
 
-def test_the_free_text_fields_are_the_fourteen_named() -> None:
+def test_the_free_text_fields_are_the_fifteen_named() -> None:
     assert FREE_TEXT == PINNED_FREE_TEXT
 
 
@@ -246,6 +248,10 @@ def _full_contract() -> AgentContract:
         for holder in holders:
             annotation = AgentContract.model_fields.get(field)
             is_list = annotation is not None and typing.get_origin(annotation.annotation) is list
+            if field == "returns":
+                # A mapping of output field to its description: each description is prose.
+                holder[field] = {"body": PROSE, "token": PROSE}
+                continue
             holder[field] = [PROSE, "kept as written"] if is_list else PROSE
     return AgentContract.model_validate(body)
 
@@ -291,12 +297,42 @@ def test_write_contract_cleans_every_free_text_field_and_keeps_every_other_field
         before, after = _free_values(raw, name), _free_values(saved, name)
         assert before and len(before) == len(after), name
         for given, cleaned in zip(before, after):
-            assert cleaned == _redact(given), name
+            # A mapping of prose is cleaned value by value, never by its keys.
+            expected = {k: _redact(v) for k, v in given.items()} if isinstance(given, dict) else _redact(given)
+            assert cleaned == expected, name
             assert _secret_free(cleaned), name
     # Every field outside FREE_TEXT is exactly as it was given, URL and all.
     assert _without_free_text(saved) == _without_free_text(raw)
     kept = json.dumps(_without_free_text(saved))
     assert kept.count(URL) >= len(KEPT_WITH_A_URL)
+
+
+def test_a_url_with_a_password_in_a_returns_description_is_saved_cleaned(tmp_path: Path) -> None:
+    held = AgentContract.model_validate(
+        {
+            "agent": "a",
+            "modality": "chat",
+            "tools": [
+                {
+                    "name": "hook",
+                    "returns": {"body": PROSE, "token": f"str, see {URL}", "plain": "int"},
+                }
+            ],
+        }
+    )
+
+    write_contract(held, tmp_path)
+
+    saved = json.loads((tmp_path / "contract.json").read_text(encoding="utf-8"))
+    # Each description is cleaned as text, and no output field's name changes what is kept of it.
+    assert saved["tools"][0]["returns"] == {
+        "body": CLEANED,
+        "token": f"str, see {CLEAN}",
+        "plain": "int",
+    }
+    assert _secret_free(saved)
+    # The caller's own object holds the cleaned text too.
+    assert held.tools[0].returns["body"] == CLEANED
 
 
 def test_writing_a_written_contract_again_changes_nothing(tmp_path: Path) -> None:
