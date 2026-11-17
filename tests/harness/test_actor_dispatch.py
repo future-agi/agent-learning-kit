@@ -719,3 +719,27 @@ def test_a_live_actor_sees_a_call_where_it_can_act_by_the_full_action_never_its_
     assert dispatcher._sees(actor, deal)
     # A row from before actions were logged in full is read by its name.
     assert dispatcher._sees(actor, {"actor_id": "agent", "name": "update", "arguments": {}})
+
+
+def test_an_action_on_the_agent_s_second_call_never_counts_a_door_mark_or_a_stopped_request_as_a_call():
+    from fi.alk.harness.world_door import EGRESS_BLOCKED, EVIDENCE_INCOMPLETE
+
+    log: list[dict] = []
+    action = {
+        "action": "records.approve",
+        "trigger": {"kind": "on_tool", "tool": "request_approval", "on_call": 2},
+    }
+    dispatcher, sent = _dispatcher([{"id": "reviewer", "actions": [action]}], log)
+
+    async def scenario():
+        log.append({"name": "request_approval", "actor_id": "agent", "action_id": "a1"})
+        log.append({"name": "request_approval", "actor_id": "agent", "action_id": "m1",
+                    "refusal_code": EVIDENCE_INCOMPLETE})
+        log.append({"name": "request_approval", "actor_id": "agent", "action_id": "e1", "refusal_code": EGRESS_BLOCKED})
+        await dispatcher.tick()
+        assert sent == []
+        log.append({"name": "request_approval", "actor_id": "agent", "action_id": "a2"})
+        await dispatcher.tick()
+
+    asyncio.run(scenario())
+    assert len(sent) == 1 and sent[0][1]["X-ALK-Parent-Event"] == "a2"

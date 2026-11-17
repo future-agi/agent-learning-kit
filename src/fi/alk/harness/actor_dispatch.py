@@ -29,7 +29,7 @@ from .actors import (
     ScheduledAction,
     is_pre_run,
 )
-from .world_door import calls_tool, logged_as, same_action
+from .world_door import calls_tool, is_attempt, logged_as, same_action
 
 logger = logging.getLogger(__name__)
 
@@ -246,12 +246,14 @@ class ActorDispatcher:
 
     @staticmethod
     def _agent_rows(log: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """The agent's own actions in the log, without anything written before the run."""
+        """The agent's own actions in the log, without anything written before the run, a request stopped on its way
+        out of the world, or a mark that a call ran unrecorded (its call has, or never had, its own row)."""
         return [
             row
             for row in log
             if (row.get("actor_id") or AGENT) == AGENT
             and not is_pre_run(row.get("idempotency_key"))
+            and is_attempt(row)
         ]
 
     def _moment(

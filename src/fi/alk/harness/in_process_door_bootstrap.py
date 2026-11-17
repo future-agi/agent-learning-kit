@@ -36,6 +36,11 @@ class ToolFailed(RuntimeError):
     """What the agent's tool raises when the scenario's fault answers with an error status."""
 
 
+class ToolRefused(PermissionError):
+    """What the agent's tool raises when the world refuses the call on purpose, such as an approval not given, with
+    the world's reason."""
+
+
 def _post(path: str, body: dict[str, Any]) -> dict[str, Any] | None:
     try:
         outgoing = request.Request(
@@ -81,11 +86,15 @@ def _arguments(function: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> 
 def _held(decision: dict[str, Any]) -> BaseException:
     mode = str(decision.get("mode") or "")
     detail = str(decision.get("detail") or "")
+    # The scenario's timeout is what the agent sees, even for a call the world refused behind it.
+    if mode.startswith("timeout"):
+        return ToolTimedOut("the request timed out")
+    if decision.get("outcome") == "refused":
+        return ToolRefused(f"refused ({decision.get('status')}): {detail}")
     if mode == "unavailable":
         return ToolUnavailable("the service is unavailable (503)")
-    if mode == "error":
-        return ToolFailed(f"error {decision.get('status')}: {detail}")
-    return ToolTimedOut("the request timed out")
+    # An error fault, or a call held for a reason the door could not settle (an approval it could not read).
+    return ToolFailed(f"error {decision.get('status')}: {detail}")
 
 
 def _delay(answer: dict[str, Any]) -> float:

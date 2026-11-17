@@ -559,3 +559,71 @@ def test_a_mark_from_an_earlier_seal_is_cleared_when_the_door_reaches_the_tool()
 
     contract = {"tool_entrypoints": [{"tool": "issue_refund", "mode": "import", "door_unreached": "old"}]}
     assert "door_unreached" not in with_door_unreached(contract, {})["tool_entrypoints"][0]
+
+
+def test_a_tool_whose_approval_was_never_given_raises_the_world_s_refusal_not_a_timeout(monkeypatch):
+    """The decorated tool, held by the door for an approval never given, tells the agent it was refused and why, so
+    it does not read a timeout and retry."""
+    door, _ = _door([{"action": "issue_refund", "mode": "approval_required", "approval": "approvals.change"}])
+    monkeypatch.setattr(bootstrap, "_post", lambda path, body: door.begin(body["name"], body["arguments"]))
+    ran = []
+
+    held = bootstrap.door("issue_refund")(lambda order: ran.append(order))
+
+    with pytest.raises(bootstrap.ToolRefused) as refused:
+        held(7)
+    assert not isinstance(refused.value, TimeoutError)
+    assert "403" in str(refused.value) and "approv" in str(refused.value).lower()
+    assert ran == []
+
+
+def test_a_tool_whose_approval_cannot_be_read_fails_with_the_door_s_reason_not_a_timeout(monkeypatch):
+    door, _ = _door([{"action": "issue_refund", "mode": "approval_required", "approval": "approvals.change"}])
+
+    def unreadable(fault):
+        raise RuntimeError("approvals table down")
+
+    monkeypatch.setattr(door.door, "_approved", unreadable)
+    monkeypatch.setattr(bootstrap, "_post", lambda path, body: door.begin(body["name"], body["arguments"]))
+
+    with pytest.raises(bootstrap.ToolFailed):
+        bootstrap.door("issue_refund")(lambda order: order)(7)
+
+
+def test_a_timeout_fault_on_a_call_the_world_refused_still_reaches_the_agent_as_a_timeout(monkeypatch):
+    """A timeout_after_commit whose run the world refused keeps the refused outcome in the log, but the agent's tool
+    still raises the scenario's timeout, never a refusal."""
+    decision = {"run": False, "mode": "timeout_after_commit", "outcome": "refused", "status": 504, "detail": "no",
+                "delay_seconds": 0}
+    monkeypatch.setattr(bootstrap, "_post", lambda path, body: decision)
+
+    with pytest.raises(bootstrap.ToolTimedOut):
+        bootstrap.door("issue_refund")(lambda order: order)(7)
+
+
+@pytest.mark.parametrize(
+    ("raised", "faults"),
+    [("UndefinedTable", []), ("OperationalError", None)],
+    ids=["no faults table: no faults", "database down: unknown"],
+)
+def test_the_trial_s_faults_read_as_none_only_when_none_were_ever_set(monkeypatch, raised, faults):
+    """No faults table means no faults were ever set; a database that cannot be read says nothing, so the door is told
+    it cannot read them rather than that there are none."""
+    import types
+
+    from fi.alk.harness import tool_trace_proxy as proxy
+
+    error = type(raised, (Exception,), {})
+
+    def connect(*_args, **_kwargs):
+        raise error("no")
+
+    monkeypatch.setitem(sys.modules, "psycopg", types.SimpleNamespace(connect=connect))
+    monkeypatch.setattr(proxy, "DATABASE_URL", "postgresql://world")
+    monkeypatch.setattr(proxy, "_FAULTS_CONNECTION", None)
+
+    if faults is not None:
+        assert proxy._trial_faults() == faults
+    else:
+        with pytest.raises(error):
+            proxy._trial_faults()

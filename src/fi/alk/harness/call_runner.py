@@ -36,6 +36,7 @@ import dataclasses
 import gc
 import json
 import random
+import re
 import logging
 import os
 import stat
@@ -1290,18 +1291,25 @@ def _fixed_fields(solution: Sequence[Any], action: str) -> set[str]:
     return fields
 
 
-def _record_key(field: str) -> bool:
-    """Whether an argument names a record (`id`, `order_id`, `idempotency_key`): its value says which record is
-    written, so it is compared whatever its type, never read as the agent's own words."""
-    name = field.lower()
-    return name == "id" or name.endswith(("_id", "_key"))
+# The last word of an argument that holds the agent's own words (`note`, `customer_note`, `reasonText`), never which
+# record is written. Any other argument, `order`, `orderId`, `reference`, `account`, says which record it is.
+_FREE_TEXT_WORDS = frozenset(
+    {"note", "notes", "reason", "message", "comment", "comments", "description", "text", "body", "summary", "content",
+     "subject", "details", "memo", "explanation", "remarks"}
+)
+
+
+def _free_text(field: str) -> bool:
+    """Whether an argument is the agent's own words, by its last word: `customer_note`, `reasonText`."""
+    words = [one for one in re.split(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])", field) if one]
+    return bool(words) and words[-1].lower() in _FREE_TEXT_WORDS
 
 
 def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[str]) -> bool:
     """Whether two committed writes of one action are the same write: equal arguments, or equal on every fixed
-    argument either carries, on every argument that names a record, and on every other argument that is not text.
-    Text the solution does not fix is the agent's own words, so a retry that rewords it is still the same write; a
-    different record (order-A, order-B, or 7, 8) is not."""
+    argument either carries and on every other argument but the agent's own words. Free text the solution does not fix
+    is the agent's own words, so a retry that rewords it is still the same write; any other argument may name the
+    record, so a different value (order-A, order-B, or 7, 8) is another write."""
     one, two = _arguments(first.get("arguments")), _arguments(later.get("arguments"))
     if one == two:
         return True
@@ -1314,9 +1322,7 @@ def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[s
     return all(one.get(field) == two.get(field) for field in carried) and all(
         one.get(field) == two.get(field)
         for field in others
-        if _record_key(field)
-        or not isinstance(one.get(field), str)
-        or not isinstance(two.get(field), str)
+        if not (_free_text(field) and isinstance(one.get(field), str) and isinstance(two.get(field), str))
     )
 
 
@@ -1542,7 +1548,13 @@ def _agent_marks(
         log = _read_action_log(database.address)
     except Exception:  # noqa: BLE001 - the calls are sealed as before
         return []
-    rows = iter(row for row in log if (row.get("actor_id") or AGENT) == AGENT)
+    # The agent's attempts in the run: never a row written before it, a request stopped on its way out, or a mark
+    # that a call ran unrecorded, any of which would shift every later call onto another call's row.
+    rows = iter(
+        row
+        for row in log
+        if (row.get("actor_id") or AGENT) == AGENT and not is_pre_run(row.get("idempotency_key")) and is_attempt(row)
+    )
     marks = []
     for call in calls:
         # In order; a row the agent's own trace does not count as a call (a lookup at start) is skipped.
@@ -1626,8 +1638,11 @@ def fault_notices(
                 continue
         agent_rows = [row for row in log or [] if (row.get("actor_id") or AGENT) == AGENT]
         rows = [row for row in agent_rows if same_action(row, action)]
-        # An approval hold is in force on every call the door saw, refused or let through after the approval.
-        if any(_fault_applied(row) for row in rows) or (mode == APPROVAL_REQUIRED and rows):
+        # The door numbers an action's calls by its rows, so the fault is on the row of its own call: another
+        # fault's row, or a world failure on another call, is not this one applied. An approval hold is in force on
+        # every call the door saw, refused or let through after the approval.
+        own = rows[on_call - 1] if 0 < on_call <= len(rows) else None
+        if (own is not None and _fault_applied(own)) or (mode == APPROVAL_REQUIRED and rows):
             continue
         # A call the door logged as another action with the same last part is that action's.
         others = sum(
@@ -3483,10 +3498,20 @@ class CallRunnerImpl:
         trial_notices = [] if found is not None else [dict(DUPLICATES_UNREADABLE)]
         action_log: list[dict[str, Any]] | None = None
         if world_database is not None and door_seen:
-            with contextlib.suppress(Exception):
+            try:
                 action_log = await asyncio.to_thread(_read_action_log, world_database.address)
+            except Exception:  # noqa: BLE001 - a log that cannot be read is missing evidence, never an empty log
+                action_log = None
+            if action_log is None:
+                if found is not None:
+                    trial_notices.append(dict(DUPLICATES_UNREADABLE))
+            else:
                 calls = tuple(one_call_per_lost_answer(calls, action_log))
-                trial_notices += evidence_notices(action_log)
+                # The agent's calls of each tool the door holds in its own process are counted against the log, so a
+                # door down for the rest of the trial is seen, as on a chat trial.
+                trial_notices += evidence_notices(
+                    action_log, calls, in_process_tools(_bundle_contract(self._context.bundle_dir))
+                )
         trial_notices += repeated_untimed_notices(calls)
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)

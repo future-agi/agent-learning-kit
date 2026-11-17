@@ -28,6 +28,7 @@ APPROVAL_REQUIRED = "approval_required"
 APPROVAL_MISSING = "approval_missing"
 # Held because whether the approval exists could not be read: the door's decision to hold, never a door failure.
 APPROVAL_UNKNOWN = "approval_unknown"
+FAULTS_UNKNOWN = "faults_unknown"
 LOG_WRITE_SECONDS = 2.0
 # A record change an actor may be permitted beside the world's tools: `<collection>.change` or `<collection>.put`.
 logger = logging.getLogger(__name__)
@@ -374,8 +375,11 @@ class WorldDoor:
                     # Committed, even when a fault then lost the answer: a retry with this key is answered from it.
                     self._keyed[slot] = ("committed", call.action, call.arguments, outcome.result)
                     self._settle(key, call.actor, "committed", logged)
-                elif outcome.outcome == "faulted" and (
-                    outcome.fault is None or outcome.fault.get("mode") == "timeout_after_commit"
+                elif (
+                    outcome.outcome == "faulted"
+                    # An approval that could not be read held the call before the world saw it.
+                    and outcome.refusal_code not in (APPROVAL_UNKNOWN, FAULTS_UNKNOWN)
+                    and (outcome.fault is None or outcome.fault.get("mode") == "timeout_after_commit")
                 ):
                     # The world failed mid-action, or the call ran and its answer was lost: whether it applied it is
                     # unknown, so the key is never run again.
@@ -422,7 +426,21 @@ class WorldDoor:
     def _attempt(self, call: ToolCall, key: str | None, on_behalf_of: str | None) -> Outcome:
         """Run a call the rules let through: the agent's call takes the scenario's fault when one is set on it."""
         if call.actor == AGENT:
-            named = self._named_faults(call)
+            try:
+                named = self._named_faults(call)
+            except Exception as exc:  # noqa: BLE001 - the trial's faults are unknown: a hold may be among them
+                if call_effect(call) != "write":
+                    named = []
+                else:
+                    logger.warning("trial faults unreadable, %s held: %s", call.action, type(exc).__name__)
+                    outcome = Outcome(
+                        "faulted",
+                        503,
+                        reason="this trial's test conditions could not be read",
+                        refusal_code=FAULTS_UNKNOWN,
+                    )
+                    self._write(call, outcome, key=key)
+                    return outcome
             held = [one for one in named if one.get("mode") == APPROVAL_REQUIRED]
             if held and call_effect(call) == "write":
                 try:
@@ -479,12 +497,9 @@ class WorldDoor:
         return outcome
 
     def _named_faults(self, call: ToolCall) -> list[dict[str, Any]]:
-        """The faults this trial sets on this action of the agent's, whichever call of it they name."""
-        try:
-            faults = [one for one in self.faults() or [] if isinstance(one, dict)]
-        except Exception as exc:  # noqa: BLE001 - unreadable faults cannot be applied; the runner says so in notices
-            logger.warning("trial faults unreadable, none applied to %s: %s", call.action, type(exc).__name__)
-            return []
+        """The faults this trial sets on this action of the agent's, whichever call of it they name; raises when the
+        trial's faults cannot be read."""
+        faults = [one for one in self.faults() or [] if isinstance(one, dict)]
         names = (call.action, call.name) if self.faults_by_tool else (call.action,)
         return [one for one in faults if one.get("action") in names]
 

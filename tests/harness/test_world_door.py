@@ -955,3 +955,47 @@ def test_a_fault_on_one_action_is_never_used_up_by_another_with_the_same_last_na
     only_ticket.enter(ToolCall(action="ticket.update", name="update", arguments={"id": 1}))
     [notice] = fault_notices(faults, only_ticket.events(), [Call(name="update", arguments={})])
     assert notice["code"] == "fault_not_triggered" and "made 0 calls" in notice["message"]
+
+
+def test_a_keyed_retry_after_an_approval_that_could_not_be_read_runs_since_nothing_took_effect(monkeypatch):
+    executor = _Executor()
+    door = _door(
+        executor,
+        faults=[{"action": "orders.refund", "mode": "approval_required", "approval": "crm.approve"}],
+    )
+    answers = iter([RuntimeError("approvals table down"), True])
+
+    def approved(fault):
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(door, "_approved", approved)
+    held = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+    retry = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+
+    assert (held.outcome, held.refusal_code) == ("faulted", "approval_unknown")
+    assert retry.outcome == "committed" and len(executor.ran) == 1
+
+
+def test_a_write_is_held_while_the_trial_s_faults_cannot_be_read_and_a_read_still_runs():
+    """A hold may be among faults the door cannot read, so the agent's write never commits past it; a read changes
+    nothing and runs. Nothing ran, so the key stays free for a retry once the faults read again."""
+    executor = _Executor()
+    readable = iter([False, False, True])
+
+    def faults():
+        if not next(readable):
+            raise RuntimeError("world database down")
+        return []
+
+    door = WorldDoor(executor, MemoryLog(), DictRoster({}), faults=faults)
+    held = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+    read = door.enter(ToolCall(action="orders.find", name="find", arguments={"order": 7}, effect="read"))
+    retry = door.enter(ToolCall(action="orders.refund", name="refund", arguments={"order": 7}, key="k-1"))
+
+    assert (held.outcome, held.refusal_code) == ("faulted", "faults_unknown")
+    assert read.outcome == "committed"
+    assert retry.outcome == "committed"
+    assert [call.action for call in executor.ran] == ["orders.find", "orders.refund"]

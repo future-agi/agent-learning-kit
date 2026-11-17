@@ -161,3 +161,24 @@ def test_faults_that_cannot_be_read_back_are_reported_unreadable(monkeypatch):
     )
     assert notice["code"] == "fault_unreadable" and "unreadable" in notice["message"]
     assert cr.unmeasured_reasons([notice])
+
+
+def test_a_fault_is_applied_only_on_its_own_call_never_by_another_fault_s_row():
+    """An error on call 1 and a timeout on call 3: the agent made two calls, so the door applied the first and never
+    reached the second, which is said not to have taken effect."""
+    from fi.alk.harness.world_door import DictRoster, Executed, MemoryLog, ToolCall, WorldDoor
+
+    class _Ok:
+        def run(self, call):
+            return Executed(200, {"applied": True})
+
+    first = {**FAULT, "mode": "error", "on_call": 1, "status": 500}
+    third = {**FAULT, "mode": "timeout_after_commit", "on_call": 3, "delay_seconds": 0}
+    log = MemoryLog()
+    door = WorldDoor(_Ok(), log, DictRoster({}), faults=lambda: [first, third])
+    for pct in (10, 11):
+        door.enter(ToolCall(action="crm.apply_discount", name="apply_discount", arguments={"pct": pct}))
+
+    notices = fault_notices([first, third], log.rows(), [_call("apply_discount"), _call("apply_discount")])
+
+    assert [(one["on_call"], one["code"]) for one in notices] == [(3, "fault_not_triggered")]

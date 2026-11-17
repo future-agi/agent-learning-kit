@@ -54,7 +54,8 @@ _FAULTS_TRIAL = None
 
 def _trial_faults() -> list[dict]:
     """This trial's faults on the agent's calls, written by the runner into the world's database; never from a request.
-    No row or an unreadable table is no faults."""
+    No row, or no table (no faults were ever set), is no faults; a database that cannot be read raises, since a hold
+    may be among the faults it holds."""
     global _FAULTS_CONNECTION, _FAULTS_TRIAL
     if not DATABASE_URL:
         return []
@@ -67,8 +68,10 @@ def _trial_faults() -> list[dict]:
             row = _FAULTS_CONNECTION.execute(
                 "SELECT faults, xmin::text FROM _alk_trial_faults WHERE id = 1"
             ).fetchone()
-        except Exception:  # noqa: BLE001 - no table (no faults were ever set), or no database: no faults this trial
-            return []
+        except Exception as exc:
+            if type(exc).__name__ == "UndefinedTable":
+                return []
+            raise
     _FAULTS_TRIAL = row[1] if row and len(row) > 1 else None
     faults = row[0] if row else []
     return [one for one in faults if isinstance(one, dict)] if isinstance(faults, list) else []

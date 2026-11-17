@@ -3526,3 +3526,79 @@ def test_a_voice_trial_on_a_seal_without_a_world_door_says_its_world_actions_wer
     assert cr.sealed_without_door({**sealed_without, "tool_proxy": object()}, calls, []) is False
     assert cr.sealed_without_door(sealed_without, calls, None) is False
     assert cr.SEALED_WITHOUT_DOOR == {"recorded": False, "why": "sealed_without_door"}
+
+
+@pytest.mark.parametrize("field", ["order", "orderId", "reference", "account"])
+def test_writes_to_two_records_are_not_a_duplicate_whatever_the_field_naming_the_record_is_called(field):
+    """Any argument that is not the agent's own words may name the record, so another value is another write;
+    a reworded note on the same record is still one write."""
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    solution = [{"tool": "issue_refund", "arguments": {"amount": 500}, "fixed": {"amount": "the person"}}]
+    two_records = [
+        _logged("issue_refund", {field: "order-A", "amount": 500}, error="response_lost"),
+        _logged("issue_refund", {field: "order-B", "amount": 500}),
+    ]
+    reworded = [
+        _logged("issue_refund", {field: "order-A", "amount": 500, "customerNote": "first try"}, error="response_lost"),
+        _logged("issue_refund", {field: "order-A", "amount": 500, "customerNote": "retrying"}),
+    ]
+
+    assert duplicate_commits(two_records, solution) == []
+    assert len(duplicate_commits(reworded, solution)) == 1
+
+
+def test_a_voice_trial_whose_in_process_tool_ran_past_a_door_that_went_down_misses_its_call_evidence(tmp_path, monkeypatch) -> None:
+    """The agent's own record holds two refunds and the door logged one: the second ran with nothing recording what
+    it did to the world, so the voice trial's evidence of its calls is missing, as a chat trial's is."""
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    (context.bundle_dir / "contract.json").write_text(
+        json.dumps({"tool_entrypoints": [{"tool": "issue_refund", "mode": "import", "module": "tools"}]})
+    )
+    trace = tmp_path / "trace.jsonl"
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    rows = [("issue_refund", {"order": 7}, None, True, "", 2.0, "a1", "agent", "committed")]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        # The agent records both of its refunds during the call.
+        trace.write_text(
+            "".join(json.dumps({"name": "issue_refund", "arguments": {"order": n}, "output": "ok"}) + "\n" for n in (7, 8)),
+            encoding="utf-8",
+        )
+        return _report()
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    outcome = _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(
+            endpoints={"database": _postgres_endpoint()},
+            metadata={"livekit_agent_name": "agent-w0", "tool_trace_path": str(trace)},
+        ),
+    )
+    assert "1 of the agent's calls ran without the world's door recording them" in outcome.missing_evidence["tool_calls"]
+
+
+def test_each_call_is_paired_with_its_own_row_past_a_door_mark_and_a_row_from_before_the_run(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.world_door import EVIDENCE_INCOMPLETE
+
+    log = [
+        {"name": "issue_refund", "actor_id": "agent", "action_id": "seed", "idempotency_key": "t:agent:h0",
+         "outcome": "committed"},
+        {"name": "issue_refund", "actor_id": "agent", "action_id": "mark", "refusal_code": EVIDENCE_INCOMPLETE,
+         "outcome": "unrecorded"},
+        {"name": "issue_refund", "actor_id": "agent", "action_id": "a1", "outcome": "committed"},
+        {"name": "issue_refund", "actor_id": "agent", "action_id": "a2", "outcome": "refused"},
+    ]
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda runtime: SimpleNamespace(address="dsn"))
+    monkeypatch.setattr(cr, "_read_action_log", lambda dsn, **_: log)
+    calls = [Call(name="issue_refund", arguments={}, ok=True), Call(name="issue_refund", arguments={}, ok=False)]
+
+    marks = cr._agent_marks(object(), Path("."), calls)
+
+    assert [(one["action_id"], one["outcome"]) for one in marks] == [("a1", "committed"), ("a2", "refused")]
