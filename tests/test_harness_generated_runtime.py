@@ -3,6 +3,7 @@ import logging
 import os
 import stat
 import subprocess
+import tempfile
 import time
 import types
 from pathlib import Path
@@ -1921,3 +1922,14 @@ def test_bare_cli_shell_name_that_is_also_an_override_is_removed_from_the_proces
     assert _seen(call)["TOOLS_API_URL"] == "http://tools-api:8080"
     assert _seen(call)["PORT_NAME"] == "7"
     assert _seen(call)["SETTING"] == "shell-setting"
+
+
+def test_env_file_text_escapes_dollar_quote_backslash_and_newline_exactly() -> None:
+    fd, path = tempfile.mkstemp()
+    try:
+        provisioning._write_env_file(fd, {"A": 'x$y"z\\w\nv', "B": "${HOME}"})
+        assert Path(path).read_text(encoding="utf-8") == (
+            'A="x\\$y\\"z\\\\w\\nv"\n' 'B="\\${HOME}"\n'
+        )
+    finally:
+        os.unlink(path)
