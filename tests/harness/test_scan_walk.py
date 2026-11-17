@@ -827,7 +827,7 @@ def test_describe_entry_stops_at_its_deadline_with_partial(
     assert (capped.partial, capped.env_names) == (True, ("FIRST",))
 
 
-# The 43 SDK setting names, typed here rather than taken from `_SDK_SETTINGS`, so a change to
+# The 47 SDK setting names, typed here rather than taken from `_SDK_SETTINGS`, so a change to
 # either fails `test_the_sdk_names`: the only names a template adds to a row.
 SDK_NAMES = frozenset(
     {
@@ -842,6 +842,9 @@ SDK_NAMES = frozenset(
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_GENAI_USE_ENTERPRISE",
+        "GOOGLE_GEMINI_BASE_URL",
+        "GOOGLE_VERTEX_BASE_URL",
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_CLOUD_LOCATION",
         "LIVEKIT_URL",
@@ -874,6 +877,7 @@ SDK_NAMES = frozenset(
         "AWS_SESSION_TOKEN",
         "AWS_REGION",
         "AWS_DEFAULT_REGION",
+        "TAVILY_API_KEY",
     }
 )
 # Every value line below carries "FAKE", so any name holding it is a piece of a value.
@@ -2002,7 +2006,7 @@ def test_a_rows_setting_names_are_its_first_fifty(tmp_path: Path, names: int) ->
     assert row.env_names == expected
     assert described is not None and described.env_names == expected
     if names == 0:
-        # With no code names, a template fills at most the 43 SDK names, sorted.
+        # With no code names, a template fills at most the 47 SDK names, sorted.
         assert row.env_names == tuple(sorted(SDK_NAMES))
     if names == 49:
         # One SDK name fills the 50th place.
@@ -2606,7 +2610,7 @@ def test_a_shared_module_does_not_vouch_for_a_template_name(tmp_path: Path) -> N
 
 
 def test_the_sdk_names() -> None:
-    assert len(SDK_NAMES) == 43
+    assert len(SDK_NAMES) == 47
     assert scan_walk._SDK_SETTINGS == SDK_NAMES
 
 
@@ -2648,6 +2652,50 @@ def test_a_tracing_template_lists_no_platform_account_name(tmp_path: Path) -> No
 
     [agent] = _walk(source).agents
     assert agent.env_names == ("FI_PROJECT_NAME", "OPENAI_API_KEY")
+
+
+def test_a_vertex_template_lists_the_enterprise_flag_and_base_urls(tmp_path: Path) -> None:
+    # google-genai reads these for itself; without the flag the client runs in API-key mode.
+    source = tmp_path / "repo"
+    _write(
+        source,
+        {
+            "agent.py": "from google import genai\ngenai.Client()\n",
+            ".env.example": (
+                "GOOGLE_GENAI_USE_ENTERPRISE=true\nGOOGLE_CLOUD_PROJECT=\nGOOGLE_CLOUD_LOCATION=\n"
+                "GOOGLE_GEMINI_BASE_URL=\nGOOGLE_VERTEX_BASE_URL=\n"
+            ),
+        },
+    )
+
+    [agent] = _walk(source).agents
+    assert set(agent.env_names) == {
+        "GOOGLE_GENAI_USE_ENTERPRISE",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_GEMINI_BASE_URL",
+        "GOOGLE_VERTEX_BASE_URL",
+    }
+
+
+def test_a_tavily_tool_template_lists_its_key(tmp_path: Path) -> None:
+    # TavilySearch() reads its key for itself, so the code never names it.
+    source = tmp_path / "repo"
+    _write(
+        source,
+        {
+            "agent.py": (
+                "from langgraph.prebuilt import create_react_agent\n"
+                "from langchain_anthropic import ChatAnthropic\n"
+                "from langchain_tavily import TavilySearch\n"
+                "graph = create_react_agent(ChatAnthropic(model='m'), [TavilySearch()])\n"
+            ),
+            ".env.example": "ANTHROPIC_API_KEY=\nTAVILY_API_KEY=\n",
+        },
+    )
+
+    [agent] = _walk(source).agents
+    assert set(agent.env_names) == {"ANTHROPIC_API_KEY", "TAVILY_API_KEY"}
 
 
 def test_each_folder_is_charged_once_across_the_two_passes(tmp_path: Path) -> None:

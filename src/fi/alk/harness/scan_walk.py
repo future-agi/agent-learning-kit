@@ -123,10 +123,14 @@ _SDK_SETTINGS: frozenset[str] = frozenset(
         "AZURE_OPENAI_API_KEY",
         "AZURE_OPENAI_ENDPOINT",
         "AZURE_OPENAI_AD_TOKEN",
-        # Google GenAI and Google auth: installed, grepped.
+        # Google GenAI (`google-genai` 2.25.0) and Google auth: installed, grepped.
+        # `GOOGLE_GENAI_USE_ENTERPRISE` is the name google-adk prefers to `..._USE_VERTEXAI`.
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_GENAI_USE_ENTERPRISE",
+        "GOOGLE_GEMINI_BASE_URL",
+        "GOOGLE_VERTEX_BASE_URL",
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_CLOUD_LOCATION",
         # LiveKit's ElevenLabs plugin reads `ELEVEN_API_KEY`, where `credentials.py` names
@@ -165,6 +169,9 @@ _SDK_SETTINGS: frozenset[str] = frozenset(
         "AWS_SESSION_TOKEN",
         "AWS_REGION",
         "AWS_DEFAULT_REGION",
+        # Tavily's search tool, as LangChain's agents use it: `TavilySearch()` reads its key
+        # for itself (`langchain_community` 0.3.31's `TavilySearchAPIWrapper` reads the same).
+        "TAVILY_API_KEY",
     }
     | frozenset(_CONNECTOR_REQUIREMENTS["livekit"])
     | frozenset(name for names in _LIVEKIT_PROVIDER_CREDENTIALS.values() for name in names)
