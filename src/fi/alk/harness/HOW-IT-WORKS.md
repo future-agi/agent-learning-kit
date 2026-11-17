@@ -96,6 +96,15 @@ agent and what came from us:
 
 Each demands a `why`. A contract that can be rewritten invisibly is no longer evidence.
 
+**Where the save's file checks run** (`save_checker.py`). Every `contract_tools(...)` call that
+has a `source_root` or a `scan_root` reads the customer's files in a child process, started
+through a fork server, so a hostile tree can be cut at the save's deadline and its memory
+capped. That child imports the parent's `__main__` module before it serves. A script that calls
+the kit at top level, without an `if __name__ == "__main__":` guard, is therefore run a second
+time inside the child (model calls included), and the child's own nested start fails and falls
+back. Put the kit's calls under the guard. A script that cannot take the guard sets
+`ALK_SAVE_CHECKS=thread`, which runs the checks in the parent's own process, as before.
+
 ---
 
 ## 3. Build — the world its tools run against
