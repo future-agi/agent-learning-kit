@@ -917,3 +917,31 @@ def test_a_call_whose_flag_is_true_is_never_taken_for_the_lost_answer_of_a_call_
     [kept] = one_call_per_lost_answer([other], log)
 
     assert not kept.answer_lost
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_a_tool_behind_the_door_keeps_hints_a_framework_can_read_from_a_copy_of_it(
+    tmp_path, monkeypatch, asynchronous
+) -> None:
+    """An ADK tool (travel concierge's `memorize`) annotates `tool_context: ToolContext` under postponed annotations.
+    ADK describes a tool by copying it with the wrapper's globals and reading its hints: before, a sub-agent holding
+    such a tool failed every turn (`NameError: name 'ToolContext' is not defined`) once control passed to it, so its
+    hand-off never ran."""
+    import types
+    import typing
+
+    module = tmp_path / "concierge_tools.py"
+    module.write_text(
+        "from __future__ import annotations\n"
+        "class ToolContext:\n    pass\n"
+        + ("async " if asynchronous else "")
+        + "def memorize(key: str, value: str, tool_context: ToolContext) -> dict:\n    return {'status': 'stored'}\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    import concierge_tools
+
+    held = bootstrap.door("memorize")(concierge_tools.memorize)
+    copy = types.FunctionType(held.__code__, held.__globals__, held.__name__, held.__defaults__, held.__closure__)
+    copy.__annotations__ = held.__annotations__
+    assert typing.get_type_hints(copy)["tool_context"] is concierge_tools.ToolContext
+    assert typing.get_type_hints(held)["key"] is str

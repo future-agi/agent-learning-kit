@@ -20,6 +20,7 @@ import os
 import sys
 import threading
 import time
+import typing
 from typing import Any
 from urllib import request
 
@@ -120,6 +121,16 @@ def _report_in_background(call_id: str, exc: BaseException) -> None:
     ).start()
 
 
+def _resolved_annotations(function: Any) -> dict[str, Any]:
+    """The tool's annotations as objects, read where the tool is defined. A framework that copies the tool to describe
+    it (ADK copies it with the wrapper's own globals) then never evaluates a string annotation, such as a
+    `ToolContext` the tool's module imports, against this module, where the name is unknown."""
+    try:
+        return typing.get_type_hints(function, include_extras=True)
+    except Exception:  # noqa: BLE001 - unresolvable hints stay as written, as before
+        return dict(getattr(function, "__annotations__", None) or {})
+
+
 def door(tool: str) -> Any:
     """The decorator that puts the world's door in front of one tool."""
 
@@ -157,6 +168,7 @@ def door(tool: str) -> Any:
                         raise ToolTimedOut("the request timed out")
                 return result
 
+            held_async.__annotations__ = _resolved_annotations(function)
             held_async.__alk_world_door__ = True  # type: ignore[attr-defined]
             return held_async
 
@@ -181,6 +193,7 @@ def door(tool: str) -> Any:
                     raise ToolTimedOut("the request timed out")
             return result
 
+        held.__annotations__ = _resolved_annotations(function)
         held.__alk_world_door__ = True  # type: ignore[attr-defined]
         return held
 
