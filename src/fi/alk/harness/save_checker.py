@@ -104,7 +104,7 @@ class ChildKeepsEnding(SaveChecksFailed):
     def __init__(self, deaths: int) -> None:
         Exception.__init__(
             self,
-            f"The save's checks ended the checker's child {deaths} times in a row. "
+            f"The save-checks child kept ending {deaths} times in a row. "
             "Nothing was saved, and this reading can't save a contract.",
         )
         self.error, self.message = "ChildKeepsEnding", f"the child ended {deaths} times in a row"

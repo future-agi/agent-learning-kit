@@ -511,7 +511,7 @@ def test_deaths_in_a_row_never_move_the_checks_into_this_process(
     # The third death in a row ends the stage, and it stays ended for this checker.
     for failed in (third, fourth):
         assert isinstance(failed, SaveChecksFailed)
-        assert "checks ended the checker's child 3 times in a row" in str(failed)
+        assert "The save-checks child kept ending 3 times in a row" in str(failed)
     assert checker._deaths == 3
     assert checker._thread_reason is None
     # Never run here, and no fourth child was started for the fourth save.
@@ -1216,6 +1216,14 @@ def test_three_deaths_in_the_session_job_end_the_scan_too(
     assert len(_pids(folder)) == 3
     assert checker._thread_reason is None
     assert thread_checks == []
+
+
+def test_the_message_for_a_child_that_keeps_ending_does_not_blame_the_saves_checks() -> None:
+    # Idle deaths, a replacement that never comes up and session-job deaths count too.
+    message = str(ChildKeepsEnding(3))
+
+    assert "The save-checks child kept ending 3 times in a row." in message
+    assert "save's checks" not in message
 
 
 def test_a_call_waiting_when_the_checker_closes_runs_in_this_process(
