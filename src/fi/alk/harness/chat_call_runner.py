@@ -1110,7 +1110,7 @@ class HostedChatCallRunner:
         from .call_runner import (
             NOT_RECORDED,
             SEALED_WITHOUT_DOOR,
-            calls_passed_no_door,
+            sealed_without_door,
             duplicate_commits,
             missing_evidence,
             one_call_per_lost_answer,
@@ -1133,7 +1133,7 @@ class HostedChatCallRunner:
         duplicates = duplicate_commits(trial_log or [], getattr(scenario, "solution", None) or ())
         if duplicates:
             world_record = {**(world_record or {}), "duplicates": duplicates}
-        if door_sees_tools and not proxied and calls_passed_no_door(transcript.calls, trial_log):
+        if door_sees_tools and sealed_without_door(runtime.endpoints, transcript.calls, trial_log):
             # Sealed with no world door, the agent ran the tools it was offered itself: its calls are in its own trace
             # and none reached the world here, so what it changed is unknown, never "no change".
             world_record = dict(SEALED_WITHOUT_DOOR)

@@ -3489,3 +3489,19 @@ def test_a_voice_trial_reads_its_start_before_its_pre_run_sessions_write(tmp_pat
         _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
     )
     assert order == ["start", "replay", "rebase", "call"]
+
+
+def test_a_voice_trial_on_a_seal_without_a_world_door_says_its_world_actions_were_not_seen() -> None:
+    """The voice runner reads the same rule as chat: no door and no proxy in the seal, the agent's 8 calls in its own
+    trace and none of them in the action log. Unknown, never "0 attempted"."""
+    from fi.alk.harness.world.runtime import Call
+
+    calls = [Call(name="find_items", arguments={"query": "kayak"}, ok=True)] * 8
+    sealed_without = {"target_http": object(), "mcp_toolbox": object(), "world_db": object()}
+
+    assert cr.sealed_without_door(sealed_without, calls, []) is True
+    # A seal with a door or a tool proxy saw the agent's calls, or would have: its counts stand.
+    assert cr.sealed_without_door({**sealed_without, "world_door": object()}, calls, []) is False
+    assert cr.sealed_without_door({**sealed_without, "tool_proxy": object()}, calls, []) is False
+    assert cr.sealed_without_door(sealed_without, calls, None) is False
+    assert cr.SEALED_WITHOUT_DOOR == {"recorded": False, "why": "sealed_without_door"}

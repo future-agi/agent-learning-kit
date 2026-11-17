@@ -2760,6 +2760,18 @@ NOT_RECORDED = {"recorded": False, "why": "in_process_tools"}
 SEALED_WITHOUT_DOOR = {"recorded": False, "why": "sealed_without_door"}
 
 
+def sealed_without_door(
+    endpoints: Mapping[str, Any], calls: Sequence[Call], log: Sequence[Mapping[str, Any]] | None
+) -> bool:
+    """Whether a trial ran on a seal with no world door and no tool proxy while the agent's calls passed no door: what
+    it changed in the world is unknown."""
+    return (
+        endpoints.get("world_door") is None
+        and endpoints.get("tool_proxy") is None
+        and calls_passed_no_door(calls, log)
+    )
+
+
 def calls_passed_no_door(calls: Sequence[Call], log: Sequence[Mapping[str, Any]] | None) -> bool:
     """Whether the agent's own trace holds calls the trial graded while the world's action log, read, holds none of
     the agent's attempts: its tools ran where no door stood."""
@@ -3455,6 +3467,7 @@ class CallRunnerImpl:
         duplicates = found or []
         # Whether the trial can be graded at all: its faults applied and its evidence read and complete.
         trial_notices = [] if found is not None else [dict(DUPLICATES_UNREADABLE)]
+        action_log: list[dict[str, Any]] | None = None
         if world_database is not None and door_seen:
             with contextlib.suppress(Exception):
                 action_log = await asyncio.to_thread(_read_action_log, world_database.address)
@@ -3500,7 +3513,10 @@ class CallRunnerImpl:
                         "summary": summary,
                         "events": took_part.get("call_actor_events") or [],
                     }
-                if door_seen:
+                if door_seen and sealed_without_door(runtime.endpoints, calls, action_log):
+                    # Sealed with no world door, the agent's calls reached none: what it changed is unknown.
+                    transcript_document["world_actors"] = dict(SEALED_WITHOUT_DOOR)
+                elif door_seen:
                     # Kept out of the tool trace, whose every line is one of the agent's own calls.
                     transcript_document["world_actors"] = {
                         "actions": acted,
