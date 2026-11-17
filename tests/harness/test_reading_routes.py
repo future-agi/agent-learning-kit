@@ -591,3 +591,39 @@ def test_m1_a_function_and_a_same_named_method_give_one_record(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert [(r["name"], r["arguments"]) for r in records] == [("look_up_order", {"order_id": "A1"})]
+
+
+# --- Round 2, M5: an include or a uv group may install the CLI, so today's route is kept ------
+
+@pytest.mark.parametrize(
+    "line",
+    ["-r base.txt", "--requirement base.txt", "--requirement=base.txt", "-c pins.txt",
+     "--constraint pins.txt", "-rbase.txt"],
+)
+def test_m5_a_requirements_include_or_constraint_keeps_todays_route(tmp_path, line):
+    body = deep_reading()
+    source = deep_source(
+        tmp_path,
+        requirements=DEEP_REQUIREMENTS + line + "\n",
+        extra={f"{DEEP}/base.txt": "langgraph-cli\n", f"{DEEP}/pins.txt": "langgraph-cli\n"},
+    )
+    manifest, output = bundled(tmp_path, source, DEEP, contract=body)
+    todays_route(manifest, output, body)
+
+
+@pytest.mark.parametrize(
+    "pyproject",
+    [
+        "[dependency-groups]\ndev = ['pytest']\ncli = ['langgraph-cli']\n",
+        "[tool.uv]\ndefault-groups = ['cli']\n",
+    ],
+    ids=["dependency-groups", "uv-default-groups"],
+)
+def test_m5_a_uv_group_keeps_todays_route(tmp_path, pyproject):
+    body = deep_reading()
+    source = deep_source(
+        tmp_path,
+        extra={f"{DEEP}/pyproject.toml": "[project]\nname='x'\nversion='1'\ndependencies=['langgraph']\n" + pyproject},
+    )
+    manifest, output = bundled(tmp_path, source, DEEP, contract=body)
+    todays_route(manifest, output, body)

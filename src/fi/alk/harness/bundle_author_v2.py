@@ -1915,6 +1915,7 @@ def _runtime_component(root: Path, configured_workdir: str) -> Path:
 
 
 _LANGGRAPH_JSON_LARGEST = 64 * 1024
+_REQUIREMENT_INCLUDE = re.compile(r"^(?:-r|--requirement|-c|--constraint)(?:\s|=|[^\s-]|$)")
 _LANGGRAPH_CLI = re.compile(r"^langgraph[-_.]cli(?:\s|\[|[<>=!~@;]|$)", re.IGNORECASE)
 
 
@@ -1928,7 +1929,9 @@ def _langgraph_command_cannot_run(
     no ``agent_callback``; the command is exactly ``langgraph dev`` or ``langgraph up``; no
     requirement or project dependency names ``langgraph-cli``; ``langgraph.json`` is at most
     64 KB, has no ``http`` or ``auth`` key (custom routes or auth make the app more than its
-    graph), and declares one graph; and no Compose selection: a Compose service builds its own
+    graph), and declares one graph; no requirements line is an include (``-r``, ``-c``) and no
+    uv dependency group is declared, since either may install the CLI unseen; and no Compose
+    selection: a Compose service builds its own
     image, which this can't see, and a ``callable`` interface is refused on a Compose selection.
     """
     if runtime.get("execution") == "compose" or runtime.get("compose_file") or runtime.get("service"):
@@ -1944,12 +1947,23 @@ def _langgraph_command_cannot_run(
     try:
         if _discover_callback_entrypoint(run_folder) is not None:
             return False
-        requirements = _declared_requirements(source_root, Runtime.model_validate(runtime))
+        parsed = Runtime.model_validate(runtime)
+        requirements = _declared_requirements(source_root, parsed)
         if any(
             _LANGGRAPH_CLI.match(requirement.strip())
+            or _REQUIREMENT_INCLUDE.match(requirement.strip())
             for requirement in requirements
             if isinstance(requirement, str)
         ):
+            # An include or a constraint file is not followed, so the CLI may be in it.
+            return False
+        pyproject = _pyproject_document(
+            _runtime_component(source_root, parsed.workdir) / "pyproject.toml"
+        )
+        if "dependency-groups" in pyproject or "default-groups" in (
+            pyproject.get("tool", {}).get("uv", {}) or {}
+        ):
+            # `uv sync` installs the default groups, which are not read here.
             return False
         path = run_folder / "langgraph.json"
         if not path.is_file() or path.stat().st_size > _LANGGRAPH_JSON_LARGEST:
