@@ -232,6 +232,28 @@ def test_the_cap_holds_for_the_session_that_saves_too(tmp_path):
         assert "2 of 2 written" in said["content"][0]["text"]
 
 
+def test_the_cap_counts_the_scenarios_already_on_disk(tmp_path):
+    """A session that starts from what is saved counts it towards the cap."""
+    import asyncio
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import scenario_tools, write_scenarios
+
+    contract = AgentContract(agent="cart", real_use_cases=["add an item", "remove an item"])
+    (tmp_path / "manifest.json").write_text("{}")
+    write_scenarios(
+        [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(2)], tmp_path
+    )
+
+    server, kept = scenario_tools(contract, tmp_path, tmp_path, wanted=2)
+    submit = next(spec for spec in server.tools if spec.name == "submit_scenario")
+    said = asyncio.run(submit.handler({"name": "one_more", "instruction": "three"}))
+
+    assert len(kept) == 2
+    assert said.get("is_error")
+    assert "2 of 2 written" in said["content"][0]["text"]
+
+
 def test_only_chat_can_grow_a_finished_suite(tmp_path):
     """Chat reopens a finished suite with its size as the target, and "add N" goes through aim_for.
 

@@ -72,6 +72,9 @@ jobs:
           tests/test_harness_credentials.py
           tests/test_harness_secrets.py
           tests/test_live_mcp_worker_errors.py
+          tests/harness/test_grade.py
+          tests/harness/test_vertex_gemini_backend.py
+          tests/harness/test_claude_workers.py
           tests/test_harness.py
           --deselect tests/test_harness.py::test_the_system_prompt_stays_within_budget
           tests/harness/test_contract_model.py

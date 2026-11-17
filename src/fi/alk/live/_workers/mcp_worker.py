@@ -45,10 +45,15 @@ def _read_boot() -> dict[str, Any]:
     return boot
 
 
+def _server_info(init: object) -> object:
+    """The server's own name and version: `serverInfo` before mcp 2, `server_info` after."""
+    return getattr(init, "server_info", getattr(init, "serverInfo", None))
+
 
 def _is_error(result: object) -> bool:
     """Whether an MCP tool result reports an error: `isError` before mcp 2, `is_error` after."""
     return bool(getattr(result, "is_error", getattr(result, "isError", False)))
+
 
 def _result_text(result: Any) -> str:
     texts: list[str] = []
@@ -112,7 +117,7 @@ async def _run(boot: dict[str, Any]) -> None:
                     "package_paths": [os.path.dirname(mcp_pkg.__file__)],
                 },
             )
-            server_info = getattr(init, "serverInfo", None)
+            server_info = _server_info(init)
             _emit(
                 "lane",
                 "server_snapshot",
