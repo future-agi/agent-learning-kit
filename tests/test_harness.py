@@ -435,6 +435,16 @@ def test_source_environment_is_reused_instead_of_rebuilt(tmp_path, monkeypatch):
     assert calls == [
         ("ps", "--status", "running", "--quiet"),
         ("--profile", "*", "config", "--format", "json"),
+        # The second render, without env_file resolution, is for the host-access check.
+        (
+            "--profile",
+            "*",
+            "config",
+            "--no-env-resolution",
+            "--no-interpolate",
+            "--format",
+            "json",
+        ),
     ]
 
 

@@ -1097,9 +1097,10 @@ def test_start_runtime_runs_the_config_it_validated(
             if "-" in command:
                 stdout = kwargs.get("input") or ""
             else:
-                # start_runtime reads the file twice before it runs; the file is swapped after.
+                # start_runtime renders twice before it runs, and each render reads the file twice
+                # (resolved, then without env_file resolution); the file is swapped after.
                 file_reads += 1
-                stdout = json.dumps(clean if file_reads <= 2 else swapped)
+                stdout = json.dumps(clean if file_reads <= 4 else swapped)
         elif "run" in command:
             run_calls.append((list(command), kwargs.get("input")))
         return subprocess.CompletedProcess(command, 0, stdout, "")

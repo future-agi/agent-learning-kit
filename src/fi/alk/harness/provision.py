@@ -406,6 +406,11 @@ def _command_failure_output(output: str, *, limit: int = 16_000) -> str:
     return f"{head}\n... {omitted} characters omitted ...\n{tail}"
 
 
+# Added by ``_config`` to the render it returns: the ``env_file`` paths of each service, read
+# from a render that does not resolve them. Not a Compose key; it never reaches ``compose run``.
+_ENV_FILES_KEY = "x-alk-env-files"
+
+
 def _config(
     environment: ProvisionedEnvironment,
     process_overrides: dict[str, str] | None = None,
@@ -431,7 +436,53 @@ def _config(
         ) from exc
     if not isinstance(value, dict) or not isinstance(value.get("services"), dict):
         raise ProvisionError("Docker Compose configuration has no services")
+    # The render above reads every ``env_file`` into ``environment`` and drops the key, so the
+    # check could not see which file was read. Render once more with the files left as paths and
+    # keep only those. ``--no-env-resolution`` alone does not do this on Compose v2.40 (the files
+    # are still read), but together with ``--no-interpolate`` the key survives, merged across
+    # ``include`` and ``extends`` and made absolute. Without interpolation a path with a variable
+    # stays literal, so the check refuses it. The resolved render stays the one that runs, so
+    # the job's own files still reach its container; this key is replaced here, never taken from
+    # the submitted file.
+    unresolved = _run(
+        environment,
+        "--profile",
+        "*",
+        "config",
+        "--no-env-resolution",
+        "--no-interpolate",
+        "--format",
+        "json",
+        timeout=60,
+        process_overrides=process_overrides,
+    )
+    try:
+        paths = json.loads(unresolved)
+    except json.JSONDecodeError as exc:
+        raise ProvisionError(
+            f"Docker Compose returned invalid configuration: {exc}"
+        ) from exc
+    if not isinstance(paths, dict) or not isinstance(paths.get("services"), dict):
+        raise ProvisionError("Docker Compose configuration has no services")
+    value[_ENV_FILES_KEY] = {
+        str(name): listed
+        for name, service in paths["services"].items()
+        if isinstance(service, dict)
+        and (listed := _env_file_paths(service.get("env_file")))
+    }
     return value
+
+
+def _env_file_paths(entries: Any) -> list[str]:
+    """The paths of an ``env_file`` value: a string, or a list of strings and ``path`` entries."""
+    if not entries:
+        return []
+    if not isinstance(entries, list):
+        entries = [entries]
+    return [
+        str(entry.get("path") if isinstance(entry, dict) else entry)
+        for entry in entries
+    ]
 
 
 def _started_services(
@@ -787,6 +838,14 @@ def _validate_compose_security(
         violations.extend(_build_violations(name, build, config, roots))
         if service.get("devices"):
             violations.append(f"{name}: host devices")
+        # A dotenv file is read into the container's environment: only the job's own are its to read.
+        env_files = _env_file_paths(service.get("env_file")) + _env_file_paths(
+            (config.get(_ENV_FILES_KEY) or {}).get(name)
+        )
+        if any("$" in path for path in env_files):
+            violations.append(f"{name}: env_file path with a variable")
+        elif any(not _inside_source(path, roots) for path in env_files):
+            violations.append(f"{name}: env_file outside the project")
         # A lifecycle hook is an exec in the service's container. ``privileged`` gives it every
         # capability with no seccomp or AppArmor profile, which the service's own flag refuses.
         # ``user`` and ``environment`` stay inside the container and are accepted as on the service.
@@ -2881,7 +2940,10 @@ def start_runtime(
         *arguments,
         timeout=900,
         process_overrides=injected,
-        config_text=json.dumps(validated),
+        # The env_file paths were for the check only; the job runs the resolved render as it was.
+        config_text=json.dumps(
+            {key: item for key, item in validated.items() if key != _ENV_FILES_KEY}
+        ),
     )
     deadline = time.monotonic() + 60
     # LiveKit workers commonly stay alive while warming VAD/STT/TTS processes and only register

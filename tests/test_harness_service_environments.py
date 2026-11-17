@@ -19,6 +19,7 @@ from fi.alk.harness.contract import (
     Runtime,
     ToolSpec,
 )
+from fi.alk.harness import provision as provisioning
 from fi.alk.harness.bundle import export_session_bundle
 from fi.alk.harness.environment_plan import load_environment_plan
 from fi.alk.harness.provision import (
@@ -2690,3 +2691,148 @@ def test_a_build_context_beside_the_compose_file_is_inside_the_job(tmp_path):
     _validate_compose_security(config, source=(source, session))
     with pytest.raises(ProvisionError, match="agent: build.context"):
         _validate_compose_security(config, source=source)
+
+
+def _env_files(entries):
+    config = _svc()
+    config["x-alk-env-files"] = {"agent": entries}
+    return config
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"path": "/etc/hosts", "required": True},
+        {"path": "../outside.env", "required": False},
+        {"path": "{tmp}/../outside.env", "required": True},
+        {"path": "{tmp}/link.env", "required": True},
+        "/etc/hosts",
+        "../outside.env",
+    ],
+)
+def test_an_env_file_outside_the_source_is_rejected(tmp_path, entry):
+    (tmp_path / "link.env").symlink_to("/etc/hosts")
+    if isinstance(entry, dict):
+        entry = {**entry, "path": entry["path"].replace("{tmp}", str(tmp_path))}
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(_env_files([entry]), source=tmp_path)
+    assert "agent: env_file outside the project" in str(error.value)
+    assert "/etc" not in str(error.value)
+    assert "outside.env" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "path", ["{tmp}/${ENVF:-./b.env}", "${HOME}/x.env", "{tmp}/$ENVF", "{tmp}/a$$.env"]
+)
+def test_an_env_file_path_with_a_variable_is_rejected(tmp_path, path):
+    # The check reads a render made without interpolation, so a variable could name any file.
+    entry = {"path": path.replace("{tmp}", str(tmp_path)), "required": True}
+    with pytest.raises(ProvisionError, match="agent: env_file path with a variable"):
+        _validate_compose_security(_env_files([entry]), source=tmp_path)
+
+
+def test_an_env_file_still_in_the_service_is_checked_too(tmp_path):
+    with pytest.raises(ProvisionError, match="agent: env_file outside the project"):
+        _validate_compose_security(
+            _svc(env_file=[{"path": "/etc/hosts"}]), source=tmp_path
+        )
+    with pytest.raises(ProvisionError, match="agent: env_file outside the project"):
+        _validate_compose_security(_svc(env_file="../x.env"), source=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [],
+        ["a.env"],
+        ["./a.env", "sub/b.env"],
+        [{"path": "{tmp}/a.env", "required": True}],
+        [{"path": "{tmp}/sub/missing.env", "required": False}],
+    ],
+)
+def test_an_env_file_inside_the_source_is_accepted(tmp_path, entries):
+    entries = [
+        {**item, "path": item["path"].replace("{tmp}", str(tmp_path))}
+        if isinstance(item, dict)
+        else item
+        for item in entries
+    ]
+    _validate_compose_security(_env_files(entries), source=tmp_path)
+    _validate_compose_security(_svc(env_file=entries), source=tmp_path)
+
+
+def _env_environment(tmp_path):
+    return ProvisionedEnvironment(
+        source=str(tmp_path), compose_file=str(tmp_path / "c.yml"), project="job"
+    )
+
+
+def test_the_config_render_keeps_resolved_files_and_checks_unresolved_ones(
+    tmp_path, monkeypatch
+):
+    import json
+
+    seen = []
+    resolved = {"services": {"agent": {"environment": {"FROM_FILE": "kept"}}}}
+    unresolved = {
+        "services": {
+            "agent": {
+                "env_file": [{"path": str(tmp_path / "a.env"), "required": True}],
+                "environment": {},
+            },
+            "db": {},
+        }
+    }
+
+    def fake_run(_environment, *arguments, **kwargs):
+        seen.append((arguments, kwargs.get("process_overrides")))
+        return json.dumps(
+            unresolved if "--no-env-resolution" in arguments else resolved
+        )
+
+    monkeypatch.setattr(provisioning, "_run", fake_run)
+    config = provisioning._config(
+        _env_environment(tmp_path), process_overrides={"A": "b"}
+    )
+
+    # The file that runs is the resolved one: the job's own env_file values still reach it.
+    assert config["services"]["agent"]["environment"] == {"FROM_FILE": "kept"}
+    assert "env_file" not in config["services"]["agent"]
+    # The check sees the unresolved render's paths.
+    assert config["x-alk-env-files"] == {"agent": [str(tmp_path / "a.env")]}
+    plain = [a for a, _ in seen if "--no-env-resolution" not in a]
+    flagged = [a for a, _ in seen if "--no-env-resolution" in a]
+    assert len(seen) == len(plain) + len(flagged) == 2
+    assert len(plain) == len(flagged) == 1
+    for arguments in (plain[0], flagged[0]):
+        assert arguments[:2] == ("--profile", "*")
+        assert "config" in arguments
+    # On Compose v2.40 the env files stay as paths only with both flags.
+    assert {"--no-env-resolution", "--no-interpolate"} <= set(flagged[0])
+    assert "--no-interpolate" not in plain[0]
+    assert all(overrides == {"A": "b"} for _, overrides in seen)
+    _validate_compose_security(config, source=tmp_path)
+
+
+def test_an_env_file_outside_the_source_is_refused_after_the_config_render(
+    tmp_path, monkeypatch
+):
+    import json
+
+    unresolved = {"services": {"agent": {"env_file": [{"path": "/etc/hosts"}]}}}
+    resolved = {
+        "services": {"agent": {"environment": {"A": "b"}}},
+        # A key from the submitted file never survives: the render's own map replaces it.
+        "x-alk-env-files": {"agent": ["./safe.env"]},
+    }
+    monkeypatch.setattr(
+        provisioning,
+        "_run",
+        lambda _e, *arguments, **_k: json.dumps(
+            unresolved if "--no-env-resolution" in arguments else resolved
+        ),
+    )
+    config = provisioning._config(_env_environment(tmp_path))
+    assert config["x-alk-env-files"] == {"agent": ["/etc/hosts"]}
+    with pytest.raises(ProvisionError, match="agent: env_file outside the project"):
+        _validate_compose_security(config, source=tmp_path)
