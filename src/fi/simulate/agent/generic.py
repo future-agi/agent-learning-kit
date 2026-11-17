@@ -7734,6 +7734,41 @@ def _is_sync_stream(value: Any) -> bool:
     return inspect.isgenerator(value) or hasattr(value, "__next__")
 
 
+_NON_TEXT_EVENT_KINDS = frozenset(
+    {
+        "message_start", "message_delta", "message_stop", "content_block_start",
+        "content_block_stop", "ping", "thinking", "redacted_thinking", "reasoning",
+        "reasoning_content", "tool_use", "server_tool_use", "tool_result", "image",
+    }
+)
+
+
+def _stream_event_text(chunk: Any) -> Optional[str]:
+    """Answer text of a provider stream event; None when ``chunk`` is not one.
+
+    Anthropic raw events and OpenAI Responses events carry thinking, signatures, tool input
+    and bookkeeping next to the answer. Only ``text_delta`` and
+    ``response.output_text.delta`` give text; every other event of those families gives "".
+    """
+    get = chunk.get if isinstance(chunk, Mapping) else lambda name: getattr(chunk, name, None)
+    kind = get("type")
+    if not isinstance(kind, str):
+        return None
+    if kind == "content_block_delta":
+        delta = get("delta")
+        return _stream_event_text(delta) or ""
+    if kind in ("text_delta", "response.output_text.delta"):
+        value = get("text") if kind == "text_delta" else get("delta")
+        return value if isinstance(value, str) else ""
+    if (
+        kind in _NON_TEXT_EVENT_KINDS
+        or kind.startswith("response.")
+        or kind.endswith("_delta")
+    ):
+        return ""
+    return None
+
+
 def _stream_chunk_text(chunk: Any) -> str:
     if chunk is None:
         return ""
@@ -7741,6 +7776,9 @@ def _stream_chunk_text(chunk: Any) -> str:
         return chunk
     if isinstance(chunk, bytes):
         return chunk.decode("utf-8", errors="replace")
+    event_text = _stream_event_text(chunk)
+    if event_text is not None:
+        return event_text
     if isinstance(chunk, dict):
         for key in (
             "content",

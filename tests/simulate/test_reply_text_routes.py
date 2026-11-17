@@ -118,3 +118,86 @@ def test_a_streamed_reply_keeps_only_the_text(chunks, expected):
     text = _stream_reply(chunks)
     assert text == expected
     assert "sig-abc" not in text and "plan the reply" not in text
+
+
+def _anthropic(delta):
+    return {"type": "content_block_delta", "index": 0, "delta": delta}
+
+
+_ANTHROPIC_THINKING_STREAM = [
+    {"type": "message_start", "message": {"id": "m", "role": "assistant", "content": []}},
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+    },
+    _anthropic({"type": "thinking_delta", "thinking": "plan the reply"}),
+    _anthropic({"type": "signature_delta", "signature": "sig-abc"}),
+    {"type": "content_block_stop", "index": 0},
+    {
+        "type": "content_block_start",
+        "index": 1,
+        "content_block": {"type": "text", "text": ""},
+    },
+    _anthropic({"type": "text_delta", "text": "Hi"}),
+    _anthropic({"type": "text_delta", "text": " there"}),
+    {"type": "message_stop"},
+]
+
+_OPENAI_REASONING_STREAM = [
+    {"type": "response.created", "response": {"id": "r"}},
+    {"type": "response.reasoning_summary_text.delta", "delta": "plan the reply"},
+    {"type": "response.reasoning_text.delta", "delta": "plan the reply"},
+    {"type": "response.output_text.delta", "delta": "Hi"},
+    {"type": "response.output_text.delta", "delta": " there"},
+    {"type": "response.completed", "response": {"id": "r", "output": []}},
+]
+
+
+def _as_objects(chunks):
+    def convert(value):
+        if isinstance(value, dict):
+            return NS(**{key: convert(item) for key, item in value.items()})
+        return value
+
+    return [convert(chunk) for chunk in chunks]
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        _ANTHROPIC_THINKING_STREAM,
+        _OPENAI_REASONING_STREAM,
+        _as_objects(_ANTHROPIC_THINKING_STREAM),
+        _as_objects(_OPENAI_REASONING_STREAM),
+    ],
+    ids=["anthropic-events", "openai-responses-events", "anthropic-objects", "openai-objects"],
+)
+def test_a_stream_of_provider_events_keeps_only_the_answer_text(chunks):
+    assert _stream_reply(chunks) == "Hi there"
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        {
+            "type": "content_block_start",
+            "content_block": {"type": "tool_use", "id": "t", "name": "f", "input": {}},
+        },
+        {"type": "response.completed", "response": {"id": "r"}},
+        {"type": "message_start", "message": {"id": "m", "content": []}},
+        {"type": "thinking", "thinking": "plan the reply", "signature": "sig-abc"},
+        {"type": "tool_use", "id": "t", "name": "f", "input": {}},
+        {"type": "input_json_delta", "partial_json": '{"a"'},
+    ],
+    ids=[
+        "tool-use-block-start",
+        "response-completed",
+        "message-start",
+        "thinking-block",
+        "tool-use-block",
+        "input-json-delta",
+    ],
+)
+def test_a_stream_event_with_a_non_text_type_gives_nothing(chunk):
+    assert _stream_reply([chunk]) == ""
