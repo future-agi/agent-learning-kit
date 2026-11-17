@@ -5353,6 +5353,19 @@ def test_a_job_malformed_otherwise_too_still_exits_crashed():
     assert harness.transport.terminal_events() == []
 
 
+def test_a_local_job_with_a_folder_on_another_source_still_exits_crashed():
+    # load_job's own check, that the job is hosted, sits outside the model: a job failing it
+    # is malformed otherwise too, so the folder isn't reported.
+    harness = _build_harness(scenarios=[])
+    body = json.loads(_job().model_dump_json())
+    body["source"] = {"kind": "archive", "archive_artifact_id": "art-1", "subfolder": "agents/a"}
+    body["execution"] = "local"
+    harness.job_path.write_text(json.dumps(body), encoding="utf-8")
+
+    assert _run(harness) == he.EXIT_CRASHED
+    assert harness.transport.terminal_events() == []
+
+
 def _harness_with_a_packaged_agent(
     packaged_main: bytes = b"from crewai import Crew\nCrew()\n",
     source_origin: str = "bundle",

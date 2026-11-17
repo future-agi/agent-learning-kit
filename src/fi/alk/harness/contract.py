@@ -865,8 +865,9 @@ class Runtime(BaseModel):
     @field_validator("source_subfolder")
     @classmethod
     def _folder_inside_the_source(cls, folder: str) -> str:
-        # Checked at the save, and again when a bundle's contract is loaded: the run puts this
-        # folder on the import path, so it never leads out of the source root.
+        # Checked at the save, and again by its spelling when a bundle's contract is loaded: the
+        # run puts this folder on the import path, so it is never absolute or climbs with `..`.
+        # A folder that is a link out of the source is caught at the save (`agent_folder`).
         if folder and (
             folder.startswith("/") or any(part in ("", ".", "..") for part in folder.split("/"))
         ):

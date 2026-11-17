@@ -398,6 +398,7 @@ def test_the_non_github_folder_code_is_read_by_the_platform_with_the_kit_s_messa
     written = failure.model_dump(mode="json")
 
     assert platform_failure_problems(written) == []
+    assert written["code"] == "subfolder_requires_github_source"
     assert written["message"].strip() == written["message"]
     assert written["message"].startswith("A folder can be built only from a GitHub source")
 

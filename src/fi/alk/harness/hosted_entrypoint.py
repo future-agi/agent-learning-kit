@@ -262,6 +262,9 @@ def _read_raw_job_failure(job_path: Path, error: ValidationError) -> HarnessFail
         raw = json.loads(job_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    # load_job's own check, outside the model: a job that isn't hosted is malformed otherwise too.
+    if not isinstance(raw, dict) or raw.get("execution") != ExecutionMode.HOSTED.value:
+        return None
     return non_github_folder_failure(error, raw)
 
 
