@@ -1351,8 +1351,16 @@ def _cut_through(length, secret=CUT_SECRET):
     return lead, (lead + secret)[:length]
 
 
-@pytest.mark.parametrize("length", [100, 500, 1000, 2000, 5000])
-@pytest.mark.parametrize("ending", ["...", "...]", ""])
+# A bare end of text counts only at a length traceai cuts to, and its cut at 100 always has "...".
+@pytest.mark.parametrize(
+    "length, ending",
+    [
+        (length, ending)
+        for length in (100, 500, 1000, 2000, 5000)
+        for ending in ("...", "...]", "")
+        if not (length == 100 and ending == "")
+    ],
+)
 def test_a_declared_secret_cut_through_by_traceai_is_replaced(length, ending):
     lead, cut = _cut_through(length)
     assert cut.endswith(CUT_SECRET[:-1])
@@ -1393,6 +1401,158 @@ def test_a_cut_prefix_that_reaches_a_dot_of_the_secret_is_still_found():
 
 
 # -- What the spoken-PIN patterns cost on text that has no PIN ---------------------------------
+
+
+# -- The same cut, in the JSON-escaped form of a secret ----------------------------------------
+
+SECRET_WITH_QUOTE = 'Zq7"Hk2mVx9pLr4\\Tn8!wBc'
+PEM_LINES = [
+    f"{chr(65 + n)}b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ{n}" for n in range(10)
+]
+PEM = (
+    "-----BEGIN PRIVATE KEY-----\n"
+    + "\n".join(PEM_LINES)
+    + "\n-----END PRIVATE KEY-----"
+)
+SECRET_NON_ASCII = "Geheimnis-Schl\u00fcssel-\u00e49Kd2xQ"
+
+
+def _dumped_cut_inside(secret, ensure_ascii, keep, mid):
+    """json.dumps of {"pad": ..., "k": secret}, padded so a cut at `keep` characters lands `mid`
+    characters into the secret's escaped form. Returns the dumped text and that form."""
+    escaped = json.dumps(secret, ensure_ascii=ensure_ascii)[1:-1]
+    head = json.dumps({"pad": "", "k": secret}, ensure_ascii=ensure_ascii)
+    pad = keep - mid - head.index(escaped)
+    assert pad > 0
+    text = json.dumps({"pad": "x" * pad, "k": secret}, ensure_ascii=ensure_ascii)
+    assert text[keep - mid : keep] == escaped[:mid]
+    return text, escaped
+
+
+def test_a_secret_with_a_quote_cut_through_in_traceais_json_dump_is_replaced():
+    # traceai: json.dumps(tool_response, ensure_ascii=False)[:4997] + "...".
+    text, escaped = _dumped_cut_inside(SECRET_WITH_QUOTE, False, 4997, 15)
+    cut = text[:4997] + "..."
+    assert len(cut) == 5000
+
+    out = _export_one(
+        _readable(**{"output.value": cut}), (SECRET_WITH_QUOTE,)
+    ).attributes["output.value"]
+
+    assert escaped[:8] not in out
+    assert out.endswith('"k": "***...')
+
+
+def test_a_private_key_cut_through_in_traceais_json_dump_is_replaced():
+    text, escaped = _dumped_cut_inside(PEM, False, 4997, 400)
+    out = _export_one(
+        _readable(**{"output.value": text[:4997] + "..."}), (PEM,)
+    ).attributes["output.value"]
+
+    assert PEM_LINES[3] not in out and PEM_LINES[5] not in out
+    assert out.endswith('"k": "***...')
+
+
+def test_a_non_ascii_secret_cut_through_in_a_json_dumped_system_prompt_is_replaced():
+    # traceai: json.dumps(system_prompt)[:1000], which escapes non-ASCII.
+    text, escaped = _dumped_cut_inside(
+        SECRET_NON_ASCII, True, 1000, len(SECRET_NON_ASCII) + 5
+    )
+    out = _export_one(
+        _readable(**{"input.value": text[:1000]}), (SECRET_NON_ASCII,)
+    ).attributes["input.value"]
+
+    assert escaped[:10] not in out
+    assert out.endswith('"k": "***')
+
+
+def test_a_cut_in_the_twice_escaped_form_is_replaced():
+    once = json.dumps(SECRET_WITH_QUOTE)[1:-1]
+    twice = json.dumps(once)[1:-1]
+    text = "y" * 50 + twice[:-4] + "..."
+
+    out = _export_one(
+        _readable(**{"output.value": text}), (SECRET_WITH_QUOTE,)
+    ).attributes["output.value"]
+
+    assert out == "y" * 50 + "***..."
+
+
+# -- Where two declared values overlap, and honest text ----------------------------------------
+
+
+def test_a_value_inside_a_longer_one_does_not_break_the_longer_ones_cut():
+    inner = "C3d4E5f6G7"
+    text = f"KEY={CUT_SECRET[:24]}... and {CUT_SECRET[:20]}..."
+
+    out = _export_one(
+        _readable(**{"output.value": text}), (inner, CUT_SECRET)
+    ).attributes["output.value"]
+
+    assert out == "KEY=***... and ***..."
+
+
+def test_a_value_holding_three_dots_is_replaced_whole_not_cut_at_them():
+    value = "token-abc...xyz123456"
+
+    out = _export_one(
+        _readable(**{"output.value": f"k={value} and k={value[:14]}..."}), (value,)
+    ).attributes["output.value"]
+
+    assert out == "k=*** and k=***..."
+
+
+def test_a_head_that_is_not_a_cut_does_not_hide_a_cut_later_in_the_text():
+    text = f"OLD=sk-live-ZZZZ9999 NEW={CUT_SECRET[:20]}..."
+
+    out = _export_one(_readable(**{"output.value": text}), (CUT_SECRET,)).attributes[
+        "output.value"
+    ]
+
+    assert out == "OLD=sk-live-ZZZZ9999 NEW=***..."
+
+
+def test_a_prefix_ending_a_json_string_or_an_attribute_is_not_a_cut():
+    dsn = "prod-database-password-Zq7Hk2"
+    tree = json.dumps({"engine": "prod-database", "path": "prod-database-pass"})
+
+    span = _readable(**{"input.value": tree, "db.system": "prod-database"})
+    copy = _export_one(span, (dsn,))
+
+    assert json.loads(copy.attributes["input.value"]) == json.loads(tree)
+    assert copy.attributes["db.system"] == "prod-database"
+
+
+def test_a_prefix_ending_text_that_is_not_a_cut_length_is_kept():
+    dsn = "prod-database-password-Zq7Hk2"
+
+    out = _export_one(
+        _readable(**{"output.value": "Connected to prod-database-pass"}), (dsn,)
+    ).attributes["output.value"]
+
+    assert out == "Connected to prod-database-pass"
+
+
+# -- What the cut rule costs on text built to be slow ------------------------------------------
+
+
+def test_the_cut_rule_costs_a_small_multiple_of_a_plain_replace_on_repeating_text():
+    # A value that repeats itself, and 30 keys sharing a head, on text dense with that head:
+    # character-by-character extension at every hit once took seconds per 1,280 strings.
+    # Measured against str.replace on the same strings, so a slow runner slows both alike.
+    repeating = "0" * 64
+    shared = tuple(f"sk-ant-api03-{n:02d}" + "Ab9" * 12 for n in range(30))
+    families = [
+        ((repeating,), [(("0" * 63 + "x") * 80)[:4997] + "..."] * 1280),
+        ((repeating,), ["... " + ("0" * 63 + "x") * 80] * 1280),
+        (shared, [("sk-ant-api03-00 " * 320)[:4997] + "..."] * 1280),
+    ]
+
+    for values, texts in families:
+        patterns = observability._secret_patterns(values)
+        plain = _best_of(2, lambda: [t.replace(values[0], "***") for t in texts])
+        ours = _best_of(2, lambda: [observability._mask(t, patterns) for t in texts])
+        assert ours < 60 * plain + 0.3, (values[0][:16], plain, ours)
 
 
 def _best_of(runs, work):

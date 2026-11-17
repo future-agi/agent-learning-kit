@@ -208,7 +208,9 @@ class _CleaningExporter(SpanExporter):
                 if plan is None:
                     continue
                 try:
-                    copies.append(_rebuild(span, plan, cleaned, self._resource(span.resource)))
+                    copies.append(
+                        _rebuild(span, plan, cleaned, self._resource(span.resource))
+                    )
                 except Exception as dropped:
                     error = error or dropped
             if not copies:
@@ -240,7 +242,8 @@ class _CleaningExporter(SpanExporter):
         }
         cleaned = agent._redact(flat)
         copy = Resource(
-            {key: _give(where, cleaned) for key, where in plan.items()}, resource.schema_url
+            {key: _give(where, cleaned) for key, where in plan.items()},
+            resource.schema_url,
         )
         self._resources[id(resource)] = (resource, copy)
         return copy
@@ -313,14 +316,25 @@ def _secret_patterns(secret_values: tuple[str, ...]) -> tuple[Any, ...]:
     values such as a 4-digit PIN, matched only between non-digits so it can't hit inside a longer
     number. Other short values would hit ordinary words, so they are left."""
     long = {value for value in secret_values if len(value) >= _SHORTEST_SECRET}
-    forms = set(long)
-    for value in long:
+    patterns: list[Any] = []
+    seen: set[str] = set()
+    # Longest value first, and for each value its whole forms before its cut rules: a declared
+    # value inside a longer one must not break the longer one's cut, and the cut rule of a value
+    # that holds "..." must not run before its whole form has been replaced.
+    for value in sorted(long, key=lambda v: (-len(v), v)):
+        forms = {value}
         for ascii_only in (True, False):
             once = json.dumps(value, ensure_ascii=ascii_only)[1:-1]
             forms.add(once)
             # JSON text inside JSON text, left unparsed (too deep, or cut short), is escaped twice.
             for ascii_twice in (True, False):
                 forms.add(json.dumps(once, ensure_ascii=ascii_twice)[1:-1])
+        forms -= seen
+        seen |= forms
+        ordered = sorted(forms, key=lambda form: (-len(form), form))
+        patterns.extend(ordered)
+        # traceai cuts the JSON text of a value, so a cut can fall inside any of its forms.
+        patterns.extend(_CutSecret(form) for form in ordered)
     short = {
         value
         for value in secret_values
@@ -328,15 +342,16 @@ def _secret_patterns(secret_values: tuple[str, ...]) -> tuple[Any, ...]:
         and value.isascii()
         and value.isdigit()
     }
-    patterns: list[Any] = sorted(forms, key=len, reverse=True)
-    # After the whole values, so a complete secret is never left to the cut rule.
-    patterns.extend(_CutSecret(value) for value in sorted(long))
     if short:
-        alternatives = "|".join(re.escape(value) for value in sorted(short, key=len, reverse=True))
+        alternatives = "|".join(
+            re.escape(value) for value in sorted(short, key=len, reverse=True)
+        )
         # The regex runs only on text that holds one of the values: most text holds none, and a
         # substring test is far cheaper than trying the pattern at every position.
         patterns.append(
-            _Guarded(re.compile(rf"(?<![0-9])(?:{alternatives})(?![0-9])"), tuple(short))
+            _Guarded(
+                re.compile(rf"(?<![0-9])(?:{alternatives})(?![0-9])"), tuple(short)
+            )
         )
     # A PIN is spoken on calls, so a 4-digit value also goes when its digits are spaced out or
     # said as words. A longer run of digits around the spaced form is not the PIN.
@@ -388,52 +403,86 @@ class _Guarded:
 
 
 class _CutSecret:
-    """A declared secret that traceai's cut ran through: its first characters, at least
-    _SHORTEST_SECRET of them, followed by "..." or by the end of the text.
+    """A form of a declared secret that traceai's cut ran through: its first characters, at least
+    _SHORTEST_SECRET of them, followed by "..." or, where the text may end in a cut, by its end.
 
-    One search finds where the first _SHORTEST_SECRET characters occur; the match is then extended
-    by comparing characters, so the cost doesn't grow with the number of prefixes. A prefix
-    followed by anything else is ordinary text that happens to begin like the secret, and stays.
+    One search finds where the first _SHORTEST_SECRET characters occur; how far the text goes on
+    like the value is found by binary search, so the cost doesn't grow with the number of
+    prefixes or with the value's length. A prefix followed by anything else is ordinary text that
+    happens to begin like the secret, and stays.
     """
 
     def __init__(self, value: str) -> None:
         self._value = value
         self._head = value[:_SHORTEST_SECRET]
 
-    def sub(self, replacement: str, text: str) -> str:
-        value, head = self._value, self._head
+    def sub(self, replacement: str, text: str, dots: bool, ends: bool) -> str:
+        value, head, size = self._value, self._head, len(self._value)
+        length = len(text)
+        # Without "..." only an end-of-text cut is possible, and it starts within size of the end.
+        at = text.find(head, 0 if dots else max(0, length - size))
         out: list[str] = []
         done = 0
-        at = text.find(head)
         while at != -1:
-            reach = _SHORTEST_SECRET
-            limit = min(len(value), len(text) - at)
-            while reach < limit and text[at + reach] == value[reach]:
-                reach += 1
-            # The longest prefix that ends where a cut would: the value itself is already gone,
-            # so a full-length match means only that more of the text follows it.
-            while reach >= _SHORTEST_SECRET:
-                end = at + reach
-                if end == len(text) or text.startswith("...", end):
+            room = min(size, length - at)
+            # The prefix ends at a "..." or at the end of the text; look before the work of
+            # finding how far the text matches.
+            near_dots = (
+                dots and text.find("...", at + _SHORTEST_SECRET, at + room + 3) != -1
+            )
+            if not near_dots and not (ends and room == length - at):
+                # Nothing here can be cut: go to where the next cut could start, which is within
+                # the value's length of the next "..." or of the end of the text.
+                later = text.find("...", at + _SHORTEST_SECRET) if dots else -1
+                if later != -1:
+                    start = later - size
+                elif ends:
+                    start = length - size
+                else:
                     break
-                reach -= 1
-            if reach >= _SHORTEST_SECRET:
-                out.append(text[done:at])
-                out.append(replacement)
-                done = at + reach
-                at = text.find(head, done)
+                at = text.find(head, max(at + 1, start))
+                continue
+            low, high = _SHORTEST_SECRET, room
+            while low < high:
+                mid = (low + high + 1) // 2
+                if text.startswith(value[:mid], at):
+                    low = mid
+                else:
+                    high = mid - 1
+            reach = low
+            if ends and at + reach == length:
+                end = length
             else:
+                dot = (
+                    text.rfind("...", at + _SHORTEST_SECRET, at + reach + 3)
+                    if dots
+                    else -1
+                )
+                end = dot if dot != -1 else -1
+            if end == -1:
                 at = text.find(head, at + 1)
+                continue
+            out.append(text[done:at])
+            out.append(replacement)
+            done = end
+            at = text.find(head, done)
         if not out:
             return text
         out.append(text[done:])
         return "".join(out)
 
 
-def _mask(text: str, secrets: tuple[Any, ...]) -> str:
+def _mask(text: str, secrets: tuple[Any, ...], ends: bool = False) -> str:
+    """Replace the declared values in text. ends says the text may be a value traceai cut to a
+    length it cuts to, so that a secret's first characters ending it are a cut one; in JSON, or
+    in a value of any other length, only "..." marks a cut."""
+    dots = "..." in text
     for secret in secrets:
         if isinstance(secret, str):
             text = text.replace(secret, "***")
+        elif isinstance(secret, _CutSecret):
+            if dots or ends:
+                text = secret.sub("***", text, dots, ends)
         else:
             text = secret.sub("***", text)
     return text
@@ -444,7 +493,9 @@ def _named_secret(key: str) -> bool:
     from fi.alk.providers.agent import _REDACTION_MARKERS
 
     lowered = key.lower()
-    return lowered == "headers" or any(marker in lowered for marker in _REDACTION_MARKERS)
+    return lowered == "headers" or any(
+        marker in lowered for marker in _REDACTION_MARKERS
+    )
 
 
 def _take(value: Any, flat: list[str], key: str, secrets: tuple[Any, ...]) -> Any:
@@ -476,7 +527,8 @@ def _take_text(value: str, flat: list[str], key: str, secrets: tuple[Any, ...]) 
             return ("json", _take_json(tree, flat, key, secrets))
     # The cut is decided on the value as recorded, but made on the masked text: cutting first can
     # take a secret's tail with the address and leave its head, which no longer matches.
-    flat.append(_cut_address(_mask(value, secrets)) if cut != value else _mask(value, secrets))
+    masked = _mask(value, secrets, len(value) in _CUTS)
+    flat.append(_cut_address(masked) if cut != value else masked)
     return ("text", len(flat) - 1)
 
 
@@ -579,7 +631,8 @@ def _give_json(where: Any, cleaned: list[Any]) -> Any:
 def _gather(span: Any, flat: list[str], secrets: tuple[Any, ...]) -> Any:
     def mapping(attributes: Any) -> Any:
         return {
-            key: _take(value, flat, key, secrets) for key, value in (attributes or {}).items()
+            key: _take(value, flat, key, secrets)
+            for key, value in (attributes or {}).items()
         }
 
     description = span.status.description
@@ -648,7 +701,9 @@ def _rebuild(span: Any, plan: Any, cleaned: list[Any], resource: Any) -> Any:
     )
 
 
-def stage_event(event_type: str, name: str, payload: Mapping[str, Any] | None = None) -> None:
+def stage_event(
+    event_type: str, name: str, payload: Mapping[str, Any] | None = None
+) -> None:
     """Drive stage spans from the harness's own stage announcements."""
     if _tracer is None:
         return
@@ -658,7 +713,9 @@ def stage_event(event_type: str, name: str, payload: Mapping[str, Any] | None = 
         elif event_type.endswith((".completed", ".failed")) and _stage_span is not None:
             record(
                 _stage_span,
-                stage_outcome="failed" if event_type.endswith(".failed") else "completed",
+                stage_outcome="failed"
+                if event_type.endswith(".failed")
+                else "completed",
                 stage_status=(payload or {}).get("status"),
             )
             _end_stage()
