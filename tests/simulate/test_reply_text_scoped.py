@@ -46,12 +46,16 @@ def _content(role, *parts):
         ),
         ({"output": _content("model", _thought())}, ""),
         (
-            [_content("user", NS(text="q", thought=None)),
-             _content("model", _thought(), _answer())],
+            [
+                _content("user", NS(text="q", thought=None)),
+                _content("model", _thought(), _answer()),
+            ],
             ANSWER,
         ),
-        ({"data": {"parts": [{"name": "bolt"}, {"name": "nut"}]}},
-         '{"parts": [{"name": "bolt"}, {"name": "nut"}]}'),
+        (
+            {"data": {"parts": [{"name": "bolt"}, {"name": "nut"}]}},
+            '{"parts": [{"name": "bolt"}, {"name": "nut"}]}',
+        ),
     ],
     ids=[
         "content-object-under-output",
@@ -67,9 +71,7 @@ def test_a_gemini_content_keeps_only_its_answer(reply, expected):
 
 
 BEDROCK_REASONING = {
-    "reasoningContent": {
-        "reasoningText": {"text": PLAN, "signature": "sig-abc"}
-    }
+    "reasoningContent": {"reasoningText": {"text": PLAN, "signature": "sig-abc"}}
 }
 
 
@@ -102,7 +104,11 @@ BEDROCK_REASONING = {
             '{"message": "hello", "code": 200}',
         ),
     ],
-    ids=["raw-converse-response", "raw-converse-reasoning-only", "control-status-message"],
+    ids=[
+        "raw-converse-response",
+        "raw-converse-reasoning-only",
+        "control-status-message",
+    ],
 )
 def test_a_raw_bedrock_converse_response_keeps_only_its_answer(reply, expected):
     _check(reply, expected)
@@ -173,7 +179,12 @@ def test_a_record_under_a_reply_key_stays_json(reply, expected):
         ([{"type": "tool_result", "content": "result text"}], ""),
         ([{"text": "a"}, {"text": PLAN, "thought": True}, {"text": "b"}], "a b"),
     ],
-    ids=["search-hits", "untyped-parts", "tool-result-only-is-not-text", "thought-part"],
+    ids=[
+        "search-hits",
+        "untyped-parts",
+        "tool-result-only-is-not-text",
+        "thought-part",
+    ],
 )
 def test_untyped_text_items_of_a_bare_list_join_with_a_space(reply, expected):
     _check(reply, expected)
