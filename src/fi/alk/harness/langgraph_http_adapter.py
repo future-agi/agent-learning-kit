@@ -12,8 +12,9 @@ loop costs little, but:
   request in flight until it returns;
 - synchronous nodes share the loop's default thread pool, and ``threading.local`` state in
   async node code is shared between requests (context variables stay per request);
-- a graph that runs past ``ALK_LANGGRAPH_TIMEOUT_SECONDS`` answers 504, and its work is
-  cancelled; a request answered so never starts its graph later;
+- a graph that runs past ``ALK_LANGGRAPH_TIMEOUT_SECONDS`` answers 500 ``RequestTimeout``,
+  as the subprocess adapter does: a slow graph is the agent's failure, not one to retry. Its
+  work is cancelled, and a request answered so never starts its graph later;
 - ``close()`` is for tests: it ends the loop for good, because clients built at import may
   be bound to it.
 """
@@ -217,8 +218,6 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise TypeError("chat request must be a JSON object")
             self._respond(200, _invoke(payload))
-        except RequestTimeout as exc:
-            self._respond(504, {"error": f"RequestTimeout: {exc}", "content": ""})
         except Exception as exc:  # noqa: BLE001 - source errors cross the transport boundary
             self._respond(500, {"error": f"{type(exc).__name__}: {exc}", "content": ""})
 

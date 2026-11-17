@@ -228,7 +228,7 @@ def _serve(adapter):
     return server, f"http://127.0.0.1:{server.server_address[1]}/invoke"
 
 
-def test_inner_timeout_answers_504(load, monkeypatch) -> None:
+def test_inner_timeout_answers_500(load, monkeypatch) -> None:
     monkeypatch.setenv("ALK_LANGGRAPH_TIMEOUT_SECONDS", "0.2")
     adapter = load(SLOW_GRAPH % "plain", "slow_graph")
     server, url = _serve(adapter)
@@ -238,11 +238,11 @@ def test_inner_timeout_answers_504(load, monkeypatch) -> None:
         server.shutdown()
         server.server_close()
 
-    assert status == 504
+    assert status == 500
     assert body["content"] == ""
 
 
-def test_node_that_ignores_cancellation_still_answers_504(load, monkeypatch) -> None:
+def test_node_that_ignores_cancellation_still_answers_500(load, monkeypatch) -> None:
     monkeypatch.setenv("ALK_LANGGRAPH_TIMEOUT_SECONDS", "0.2")
     adapter = load(SLOW_GRAPH % "swallow", "stubborn_graph")
     monkeypatch.setattr(adapter, "_WAIT_MARGIN_SECONDS", 0.3)
@@ -254,7 +254,7 @@ def test_node_that_ignores_cancellation_still_answers_504(load, monkeypatch) -> 
         server.shutdown()
         server.server_close()
 
-    assert status == 504
+    assert status == 500
 
 
 def test_close_stops_and_joins_the_loop_thread_for_good(load) -> None:
@@ -313,7 +313,7 @@ def test_the_deadline_fires_without_waiting_for_the_margin(load, monkeypatch) ->
         server.shutdown()
         server.server_close()
 
-    assert status == 504
+    assert status == 500
     assert "RequestTimeout" in body["error"]
     assert time.monotonic() - started < 5
 
@@ -465,3 +465,76 @@ def test_a_graph_that_raises_system_exit_answers_500_and_the_loop_lives_on(
 
     assert time.monotonic() - started < 2
     assert _turn(adapter) == "ok"
+
+
+def _runner_code_for(tmp_path: Path, monkeypatch, status: int) -> str:
+    """The failure code the hosted chat runner gives an HTTP failure with `status`."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from test_chat_call_runner import _Adapter, _context, _ToolWorld
+
+    from fi.alk.harness import chat_call_runner as chat
+    from fi.alk.harness.hosted_scheduler import CallAborted
+    from fi.alk.harness.process_runtime import (
+        EnvironmentRuntime,
+        RuntimeEndpoint,
+        RuntimeState,
+    )
+    from fi.simulate.agent.wrappers.http import HTTPCallFailure
+
+    async def failed(*_args, **_kwargs):
+        raise HTTPCallFailure({"success": False, "status_code": status, "failure_stage": "http"})
+
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", failed)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http", protocol="http", address="http://localhost:18080"
+            )
+        },
+    )
+    with pytest.raises(CallAborted) as caught:
+        asyncio.run(
+            chat.HostedChatCallRunner(_Adapter(), _context(tmp_path)).run(
+                SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+            )
+        )
+    return caught.value.code
+
+
+@pytest.mark.parametrize("graph", ["slow", "own_timeout"])
+def test_a_slow_graph_is_the_agents_failure_and_is_not_retried(
+    load, monkeypatch, tmp_path: Path, graph: str
+) -> None:
+    from fi.alk.harness import hosted_scheduler
+    from fi.alk.harness.hosted_scheduler import FailureDomain
+
+    monkeypatch.setenv("ALK_LANGGRAPH_TIMEOUT_SECONDS", "0.2")
+    source = (
+        SLOW_GRAPH % "plain"
+        if graph == "slow"
+        else "class Graph:\n"
+        "    async def ainvoke(self, state):\n"
+        "        raise TimeoutError('upstream tool timed out')\n"
+        "graph = Graph()\n"
+    )
+    adapter = load(source, f"classified_{graph}_graph")
+    server, url = _serve(adapter)
+    try:
+        status, _ = _post(url)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    # Followed through the runner's status mapping to the scheduler's class: a 504 would be
+    # `call_failed`, an infrastructure fault retried once on a fresh world.
+    code = _runner_code_for(tmp_path / "runner", monkeypatch, status)
+    assert code == "target_agent_failed"
+    assert hosted_scheduler._domain_for(code) is FailureDomain.AGENT
+    assert not hosted_scheduler._is_retryable(code)
