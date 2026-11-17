@@ -35,7 +35,9 @@ from claude_agent_sdk import (
 from fi import agentcc
 
 from .base import (
+    ASK_TOOL,
     DELEGATE_TOOL,
+    KNOWN_BUILTINS,
     MOST_WORKERS_AT_ONCE,
     Call,
     ModelReply,
@@ -467,7 +469,17 @@ class ClaudeBackend:
         wire_model = gateway_wire_model(spec.model)
         gateway_compatible = behind_gateway(spec.model)
         # A worker's calls are made inside this session, so the gate covers its tools too.
-        allowed = [name for name in spec.granted_anywhere() if name != DELEGATE_TOOL]
+        # Not AskUserQuestion: an `allowed_tools` entry is approved before the permission
+        # callback runs, so the operator's `ask` would never be asked. The gate permits it.
+        allowed = [
+            name for name in spec.granted_anywhere() if name not in (DELEGATE_TOOL, ASK_TOOL)
+        ]
+        # The CLI's own tools are only the ones granted; left unset, it offers all of them.
+        builtins = [
+            name
+            for name in spec.granted_anywhere()
+            if name in KNOWN_BUILTINS and name != DELEGATE_TOOL
+        ]
         # Union per server name; each agent is still restricted by its own `tools` allowlist.
         servers: dict[str, ToolServer] = {}
         for source in (spec.servers, *(worker.servers for worker in spec.workers.values())):
@@ -495,8 +507,10 @@ class ClaudeBackend:
             # A backgrounded worker lets the stage end before the worker reports.
             environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
             allowed.extend(DELEGATION_TOOLS)
+            builtins.extend(DELEGATION_TOOLS)
         _can_reach_its_workers(spec, allowed)
         options = ClaudeAgentOptions(
+            tools=builtins,
             system_prompt=_prompt_for(spec.system_prompt),
             allowed_tools=allowed,
             mcp_servers={
