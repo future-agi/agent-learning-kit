@@ -144,6 +144,9 @@ _STANDIN_AGENTS = (
     "_note('module-ran')\n"
     "def set_default_openai_api(api):\n"
     "    _note(api)\n"
+    "def set_tracing_export_api_key(key):\n"
+    "    with open(os.environ['STANDIN_CALLS'] + '.key', 'a') as handle:\n"
+    "        handle.write(key + '\\n')\n"
 )
 
 
@@ -259,12 +262,43 @@ def test_openai_agents_chat_style_failure_is_one_stderr_line_and_the_import_succ
     result, lines = _chat_style_run(
         tmp_path,
         "import agents\nprint('imported')\n",
-        agents_source="x = 1\n",
+        agents_source="def set_tracing_export_api_key(key):\n    pass\n",
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "imported"
     assert result.stderr.splitlines() == [
         "alk: could not set the OpenAI Agents SDK to chat completions: AttributeError"
+    ]
+
+
+def test_openai_agents_trace_export_key_is_a_fixed_placeholder(tmp_path: Path) -> None:
+    result, lines = _chat_style_run(tmp_path, "import agents\n")
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    keys = (tmp_path / "calls.txt.key").read_text().splitlines()
+    assert keys == ["alk-tracing-disabled"]
+
+
+def test_openai_agents_trace_export_key_is_left_alone_without_the_mark(
+    tmp_path: Path,
+) -> None:
+    result, lines = _chat_style_run(tmp_path, "import agents\n", mark=False)
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "calls.txt.key").exists()
+
+
+def test_openai_agents_without_the_trace_key_setter_is_one_stderr_line_and_the_agent_runs(
+    tmp_path: Path,
+) -> None:
+    source = _STANDIN_AGENTS.split("def set_tracing_export_api_key")[0]
+    result, lines = _chat_style_run(
+        tmp_path, "import agents\nprint('imported')\n", agents_source=source
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "imported"
+    assert lines == ["module-ran", "chat_completions"]
+    assert result.stderr.splitlines() == [
+        "alk: could not set the OpenAI Agents SDK trace export key: AttributeError"
     ]
 
 

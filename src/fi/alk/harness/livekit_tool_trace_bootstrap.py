@@ -21,8 +21,9 @@ operator reading worker logs should know that report is suppressed by design, no
 
 from __future__ import annotations
 
-# The mark hook sits beside this file only for a run that exports, so its absence is normal and
-# silent; any other failure is reported, and must never cost tool tracing or worker isolation.
+# The kit writes the mark module beside this file on every run, and its install() hands on to the
+# next sitecustomize; its absence (a hand-copied hook) is silent. Any other failure is reported, and
+# must never cost tool tracing or worker isolation.
 try:
     import simulation_mark_bootstrap
 
@@ -234,13 +235,26 @@ def _install_worker_isolation() -> None:
         return
 
 
+# A fixed value that is not a secret: with it set, a customer's own set_tracing_disabled(False)
+# cannot send the gateway key to OpenAI's trace endpoint.
+_TRACING_EXPORT_PLACEHOLDER = "alk-tracing-disabled"
+
+
 def _set_openai_agents_chat_style(module: Any, reason: str = "") -> None:
     if not reason:
         try:
             module.set_default_openai_api("chat_completions")
-            return
         except Exception as exc:  # noqa: BLE001 - a setting we could not make must not stop the agent
             reason = type(exc).__name__
+        else:
+            try:
+                module.set_tracing_export_api_key(_TRACING_EXPORT_PLACEHOLDER)
+            except Exception as exc:  # noqa: BLE001 - a setting we could not make must not stop the agent
+                sys.stderr.write(
+                    "alk: could not set the OpenAI Agents SDK trace export key: "
+                    f"{type(exc).__name__}\n"
+                )
+            return
     sys.stderr.write(
         f"alk: could not set the OpenAI Agents SDK to chat completions: {reason}\n"
     )
@@ -464,11 +478,3 @@ except Exception:  # noqa: BLE001 - optional observation must not affect custome
 
 if not _crewai_observer_installed:
     _install_declared_python_tools()
-
-# The chain normally ran inside the mark module's install(); this covers an install() that returned
-# before reaching it, and does nothing once the guard is set.
-if not getattr(sys, "_alk_sitecustomize_chained", False):
-    try:
-        simulation_mark_bootstrap._chain()
-    except (NameError, AttributeError):  # the module is absent or broken: already reported
-        pass

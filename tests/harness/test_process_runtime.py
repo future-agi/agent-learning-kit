@@ -10490,6 +10490,12 @@ _CHAIN_AGAIN = (
     "m._chain()\n"
 )
 
+_INSTALLED_STATE = (
+    "import json, sys\n"
+    "print(json.dumps([type(f).__name__ for f in sys.meta_path]))\n"
+    "print(json.dumps(m._PATCHES, default=repr))\n"
+)
+
 
 @pytest.mark.parametrize(
     ("environment", "customer"),
@@ -10509,10 +10515,15 @@ def test_a_repository_sitecustomize_runs_exactly_once(
     )
     assert (captured["world_dir"] / "simulation_mark_bootstrap.py").is_file()
     repo, marker = _repository_marker_hook(tmp_path)
-    result = _start(captured, repo, marker, _CHAIN_AGAIN)
+    result = _start(captured, repo, marker, _CHAIN_AGAIN + _INSTALLED_STATE)
     assert result.returncode == 0, result.stderr
     assert marker.read_text().splitlines() == ["ran"]
     assert result.stderr == ""
+    if customer is None:
+        # Without an export, install() does nothing but chain.
+        finders, patches = result.stdout.splitlines()
+        assert "_MarkFinder" not in json.loads(finders)
+        assert json.loads(patches) == {}
 
 
 def test_a_failing_repository_hook_is_reported_and_the_kit_hook_still_traces(
@@ -10563,25 +10574,43 @@ def test_without_a_repository_hook_nothing_is_said_or_run(tmp_path: Path) -> Non
     assert not (tmp_path / "never.log").exists()
 
 
-def test_the_kit_hook_chains_at_its_end_when_install_did_not(tmp_path: Path) -> None:
+def test_a_pythons_own_sitecustomize_runs_once_after_the_kit_hook(tmp_path: Path) -> None:
     captured = _spawn(
         tmp_path / "w", _source_process(environment=dict(_GATEWAY_MARK))
     )
-    world = captured["world_dir"]
-    world.chmod(0o755)
-    stand_in = world / "simulation_mark_bootstrap.py"
-    stand_in.chmod(0o644)
-    stand_in.write_text(
-        "import os\n"
-        "def install():\n    pass\n"
-        "def _chain():\n"
-        "    with open(os.environ['REPO_HOOK_LOG'], 'a') as log:\n"
-        "        log.write('chain\\n')\n"
+    directory = tmp_path / "own-venv"
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(directory)
+    python = directory / "bin" / "python"
+    site_dir = Path(
+        subprocess.run(
+            [str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={"PATH": os.environ.get("PATH", ""), **_library_path_env()},
+        ).stdout.strip()
     )
-    repo, marker = _repository_marker_hook(tmp_path)
-    result = _start(captured, repo, marker)
+    (site_dir / "sitecustomize.py").write_text(
+        "import os, sys\n"
+        "with open(os.environ['REPO_HOOK_LOG'], 'a') as log:\n"
+        "    log.write('own after-kit=%s\\n' % getattr(sys, '_alk_sitecustomize_chained', False))\n"
+    )
+    marker = tmp_path / "own-hook.log"
+    env = {
+        key: value
+        for key, value in captured["env"].items()
+        if not key.startswith(("OTEL_EXPORTER", "PYTHONVERBOSE"))
+    }
+    env["PYTHONPATH"] = str(captured["world_dir"])
+    env["REPO_HOOK_LOG"] = str(marker)
+    env.update(_library_path_env())
+    result = subprocess.run(
+        [str(python), "-c", "pass"], env=env, capture_output=True, text=True, timeout=60
+    )
     assert result.returncode == 0, result.stderr
-    assert marker.read_text().splitlines() == ["chain"]
+    assert result.stderr == ""
+    # The kit's hook came first (it had already set its flag), and the venv's own ran once.
+    assert marker.read_text().splitlines() == ["own after-kit=True"]
 
 
 def test_the_mark_module_is_written_only_beside_a_hook(tmp_path: Path) -> None:

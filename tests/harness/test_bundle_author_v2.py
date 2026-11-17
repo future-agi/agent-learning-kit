@@ -6627,6 +6627,41 @@ def test_routed_declared_tracing_value_is_overridden(tmp_path: Path) -> None:
     assert environment[_TRACING_OFF] == "1"
 
 
+@pytest.mark.parametrize("customer_value", [None, "0"], ids=["unset", "customer_zero"])
+def test_routed_compose_runtime_control_service_has_tracing_off(
+    tmp_path: Path, customer_value: str | None
+) -> None:
+    from fi.alk.harness.contract import Runtime
+
+    # The compose runtime path builds the control service from the compose file's source services.
+    environment_block = (
+        f"    environment:\n      {_TRACING_OFF}: '{customer_value}'\n"
+        if customer_value is not None
+        else ""
+    )
+    (tmp_path / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n    command: [python, agent.py]\n"
+        + environment_block,
+        encoding="utf-8",
+    )
+    runtime = Runtime(
+        language="python", execution="compose", compose_file="compose.yaml", service="agent"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime.model_dump(),
+    )
+    environment = next(
+        p for p in plan.processes if p.name == plan.control_service
+    ).environment
+    assert environment[_GATEWAY_MARK] == "1"
+    assert environment[_TRACING_OFF] == "1"
+
+
 @pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
 @pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])
 def test_unrouted_target_model_leaves_the_agent_process_unmarked(
