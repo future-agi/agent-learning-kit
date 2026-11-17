@@ -3517,8 +3517,10 @@ class CallRunnerImpl:
                     # Sealed with no world door, the agent's calls reached none: what it changed is unknown.
                     transcript_document["world_actors"] = dict(SEALED_WITHOUT_DOOR)
                 elif door_seen:
-                    # Kept out of the tool trace, whose every line is one of the agent's own calls.
+                    # Kept out of the tool trace, whose every line is one of the agent's own calls. `door` says a
+                    # door stood for these counts, so a reader never takes a record from before it for one.
                     transcript_document["world_actors"] = {
+                        "door": True,
                         "actions": acted,
                         "decisions": list(actor_decisions),
                         "state_changes": changes or [],

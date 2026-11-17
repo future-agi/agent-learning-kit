@@ -3431,6 +3431,8 @@ def test_voice_trial_without_actors_seals_world_changes(tmp_path, monkeypatch) -
     world = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]
     assert world["actions"] == [] and world["state_changes"][0]["committed_actions"] == ["issue_refund"]
     assert "records" in world and "start" in world
+    # Counts a door stood for say so, so a reader never takes a record from before the door for one.
+    assert world["door"] is True
 
 
 def test_a_voice_trial_whose_tools_the_door_cannot_see_says_world_changes_were_not_recorded(tmp_path) -> None:
