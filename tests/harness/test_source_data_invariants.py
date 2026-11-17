@@ -60,6 +60,26 @@ class ReadWorld:
         return [dict(row) for row in self.db.execute(sql).fetchall()]
 
 
+def test_data_free_review_reads_every_harness_table_as_the_harness_own(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("class Assistant: pass\n")
+    out = tmp_path / "authoring"
+    out.mkdir()
+    (out / "contract.json").write_text(
+        json.dumps({"agent": "starter", "tools": [], "real_use_cases": ["Chat"]})
+    )
+    world = SimpleNamespace(
+        state=lambda: {
+            "harness_seed_sentinel": [{"id": "ready"}],
+            "_alk_tool_trace": [],
+            "_alk_actors": [],
+        }
+    )
+    assert asyncio.run(subject.author_invariants(source, out, world)) == []
+    assert json.loads((out / subject.ARTIFACT).read_text())["status"] == "not_applicable"
+
+
 def test_data_free_review_is_explicit_and_bound_to_source_and_contract(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
@@ -118,7 +138,15 @@ def test_non_relational_state_does_not_require_sql_invariants(tmp_path, monkeypa
             }
         )
     )
-    world = SimpleNamespace(state=lambda: {"harness_seed_sentinel": []})
+    world = SimpleNamespace(
+        state=lambda: {
+            "harness_seed_sentinel": [],
+            "_alk_tool_trace": [],
+            "_alk_actors": [],
+            "_alk_action_keys": [{"actor_id": "manager"}],
+            "_alk_trial_faults": [{"id": 1}],
+        }
+    )
 
     assert asyncio.run(subject.author_invariants(source, out, world)) == []
     review = json.loads((out / subject.ARTIFACT).read_text())

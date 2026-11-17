@@ -18,10 +18,12 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from .backends import SessionSpec, tool, tool_server
+from .backends.files import secret_text
 from .config import chosen_model
 from .contract import AgentContract, is_data_free_conversation
 from .session import Stage
 from .source_folder import agent_scope, in_agent_scope, saved_folder
+from .source_model import is_harness_table
 
 ARTIFACT = "source-data-invariants.json"
 BATCHES = "generic-harness/source-data-review-batches.json"
@@ -43,6 +45,8 @@ def source_files(root: Path, folder: str = "") -> dict[str, Path]:
             for part in path.relative_to(root).parts
         )
         and path.resolve().is_relative_to(root)
+        # A link named like code can lead to a credential file; judged where it resolves (TH-9042).
+        and not secret_text(path.resolve().relative_to(root).as_posix())
         and (
             scope is None
             or in_agent_scope(PurePosixPath(path.relative_to(root).as_posix()), scope)
@@ -340,10 +344,7 @@ async def author_invariants(
         non_relational_store = store_kind in {"in_process", "none", "filesystem"}
         if is_data_free_conversation(contract) or non_relational_store:
             state = await asyncio.to_thread(world.state)
-            business_tables = set(state) - {
-                "harness_seed_sentinel",
-                "_alk_tool_trace",
-            }
+            business_tables = {name for name in state if not is_harness_table(name)}
             if not business_tables:
                 evidence = {
                     "status": "not_applicable",

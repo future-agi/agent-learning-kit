@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -679,6 +680,15 @@ def test_a_cut_browser_claim_drops_nothing_found(tmp_path, then, outcome):
         assert _refused_with(output) == _READ_MESSAGE
 
 
+def _scan_records(caplog):
+    # Only the scan's own cut line: the decoder logs its own warning when its total runs out.
+    return [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == agent_type_check.__name__
+    ]
+
+
 @pytest.mark.parametrize(
     "files, totals, said",
     [
@@ -702,9 +712,7 @@ def test_a_cut_browser_claim_drops_nothing_found(tmp_path, then, outcome):
         pytest.param(
             {f"m{at}.py": b"# coding: utf-7\nimport playwright\n" for at in range(2)},
             {(python_source, "LARGEST_ESCAPED_TOTAL"): 0},
-            # Said once by the decode budget itself, in counts; the scan's own line leaves it out.
-            "browser scan: decoding Python as Python does stopped at its total of 0 bytes, after 0 "
-            "decodes; a name the rest spell in their codec can be missed",
+            "agent type scan cut by decode_total 1",
             id="decode_total",
         ),
         pytest.param({"agent.py": "import playwright\n"}, {}, None, id="uncut"),
@@ -718,11 +726,11 @@ def test_the_cut_is_logged_once(tmp_path, monkeypatch, caplog, files, totals, sa
         browser_scan(tmp_path)
         browser_scan(tmp_path)
         browser_tools_found(tmp_path)
-        first = [(record.levelno, record.getMessage()) for record in caplog.records]
+        first = _scan_records(caplog)
         caplog.clear()
         agent_type_check._scan.cache_clear()
         browser_scan(tmp_path)
-        again = [(record.levelno, record.getMessage()) for record in caplog.records]
+        again = _scan_records(caplog)
     assert first == again == ([] if said is None else [(logging.WARNING, said)])
 
 
@@ -814,7 +822,6 @@ def test_a_large_honest_repository_gets_a_look(tmp_path, monkeypatch):
     assert _text(answer) == _look(_CUT_CHAT.format(claimed="chat"))
 
 
-
 def test_a_large_honest_repository_gets_a_look_from_the_childs_scan(tmp_path):
     import inspect
 
@@ -836,14 +843,70 @@ def test_a_large_honest_repository_gets_a_look_from_the_childs_scan(tmp_path):
     assert _text(answer) == _look(_CUT_CHAT.format(claimed="chat"))
     assert inspect.getclosurevars(handler).nonlocals["checker"].ran_in_child == 0
 
-def test_the_walks_stop_is_no_cut(tmp_path, caplog):
-    # Over the walk's 512 KB parse total in modules that import, none of them naming a tool.
-    module = "import os\n" + "x = 1\n" * (100 * 1024 // 6)
+
+_PADDING = "import os\n" + "x = 1\n" * (100 * 1024 // 6)
+
+
+def _padded(root: Path, **more: str) -> Path:
+    # Six modules that import, over the walk's 512 KB parse total, are read before z_main.py.
+    return _tree(
+        root,
+        {
+            **{f"agents/a/m_{at}.py": _PADDING for at in range(6)},
+            "agents/a/z_main.py": "import common.util\n",
+            "common/__init__.py": "",
+            **more,
+        },
+    )
+
+
+def test_a_file_the_parse_total_skipped_is_line_searched_and_no_cut(tmp_path, caplog):
+    # z_main.py is never parsed, so common.util used to go unfollowed.
+    repo = _padded(tmp_path / "source", **{"common/util.py": "import playwright\n"})
+    with caplog.at_level(logging.WARNING, logger=agent_type_check.__name__):
+        assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
+    assert any("stopped at its limits" in record.getMessage() for record in caplog.records)
+
+
+def test_a_name_in_a_file_only_the_line_search_reached_is_found_and_no_cut(tmp_path):
+    # common/deep.py is reached only through util.py's import line, and util.py only through
+    # z_main.py's: neither was parsed.
+    repo = _padded(
+        tmp_path / "source",
+        **{"common/util.py": "import common.deep\n", "common/deep.py": "import playwright\n"},
+    )
+    assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
+
+
+def test_a_line_search_with_no_room_left_is_a_cut(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", 8)
+    repo = _padded(tmp_path / "source", **{"common/util.py": "import playwright\n"})
+    assert browser_scan(repo, "agents/a") == ([], frozenset({"import_walk"}))
+    # The patched limit lives in this process, so the save's checks run here too.
+    answer = _submitter(tmp_path / "out", repo, "agents/a", save_checks="thread")(_reading("chat"))
+    assert _text(answer) == _look(_CUT_CHAT.format(claimed="chat"))
+    assert decide("chat", [], looked_again=False, cut=frozenset({"import_walk"})) == "second_look"
+
+
+def test_a_name_dropped_for_its_depth_alone_is_no_cut(tmp_path, caplog):
+    deep = ".".join(f"p{at}" for at in range(80))
+    repo = _tree(tmp_path / "source", {"agents/a/agent.py": f"import {deep}\nx = 1\n"})
+    with caplog.at_level(logging.WARNING, logger=agent_type_check.__name__):
+        assert browser_scan(repo, "agents/a") == ([], frozenset())
+    # The walk still logs that it left a name unread.
+    assert any(
+        "stopped at its limits" in record.getMessage() for record in caplog.records
+    )
+    answer = _submitter(tmp_path / "out", repo, "agents/a")(_reading("chat"))
+    assert not answer.get("is_error"), answer
+
+
+def test_a_file_python_refuses_alone_is_no_cut(tmp_path, caplog):
     repo = _tree(
         tmp_path / "source",
         {
-            **{f"agents/a/m_{at}.py": module for at in range(6)},
-            "agents/a/z_main.py": "import common.util\n",
+            "agents/a/agent.py": "import common.util\n",
+            "agents/a/broken.py": "import os\ndef (:\n",
             "common/__init__.py": "",
             "common/util.py": "x = 1\n",
         },
@@ -853,10 +916,294 @@ def test_the_walks_stop_is_no_cut(tmp_path, caplog):
     assert any(
         "stopped at its limits" in record.getMessage() for record in caplog.records
     )
-    output = tmp_path / "out"
-    answer = _submitter(output, repo, "agents/a")(_reading("chat"))
+    answer = _submitter(tmp_path / "out", repo, "agents/a")(_reading("chat"))
     assert not answer.get("is_error"), answer
-    assert load(output).modality == "chat"
+
+
+def test_targets_left_in_the_queue_by_the_import_limit_are_a_cut(tmp_path, monkeypatch):
+    # Two imports are the walk's whole allowance, so the two modules they reach are queued, not
+    # read: common/m2.py may import anything.
+    monkeypatch.setattr(agent_type_check, "_WALKED_IMPORTS", 2)
+    repo = _tree(
+        tmp_path / "source",
+        {
+            "agents/a/agent.py": "import common.m1\nimport common.m2\n",
+            "common/__init__.py": "",
+            "common/m1.py": "x = 1\n",
+            "common/m2.py": "import common.m3\n",
+            "common/m3.py": "import playwright\n",
+        },
+    )
+    assert browser_scan(repo, "agents/a") == ([], frozenset({"import_walk"}))
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["x = 1; import common.util", "if True: import common.util", "x = 1;import common.util"],
+)
+def test_an_import_after_a_semicolon_or_a_colon_is_line_searched_and_no_cut(tmp_path, line):
+    # The padding keeps z_main.py from being parsed; its import isn't at the line's start.
+    repo = _padded(
+        tmp_path / "source",
+        **{"agents/a/z_main.py": f"{line}\n", "common/util.py": "import playwright\n"},
+    )
+    assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
+
+
+def test_an_import_after_a_header_that_spans_lines_is_line_searched_and_no_cut(tmp_path):
+    # The line that closes the header's brackets doesn't start with `if`, so its colon was
+    # never tried as the start of a body.
+    repo = _padded(
+        tmp_path / "source",
+        **{
+            "agents/a/z_main.py": "if (True and\n        True): import common.util\n",
+            "common/util.py": "import playwright\n",
+        },
+    )
+    assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
+
+
+def test_an_import_past_the_colon_cap_is_a_cut(tmp_path):
+    # The line search tries a compound statement's first 8 colons outside brackets; one with more before its
+    # import isn't followed, so the walk left code unread and the reading is cut, not silent.
+    line = "if a: " * 9 + "import common.util"
+    repo = _padded(
+        tmp_path / "source",
+        **{"agents/a/z_main.py": f"{line}\n", "common/util.py": "import playwright\n"},
+    )
+    assert browser_scan(repo, "agents/a") == ([], frozenset({"import_walk"}))
+
+
+def test_a_line_past_the_colon_cap_with_no_import_after_is_no_cut(tmp_path):
+    line = "if a[1:2:3:4:5:6:7:8:9]: x = 1"
+    repo = _padded(tmp_path / "source", **{"agents/a/z_main.py": f"{line}\nimport os\n"})
+    assert browser_scan(repo, "agents/a") == ([], frozenset())
+
+
+def test_a_file_over_the_search_cap_is_not_opened_and_is_a_cut(tmp_path, monkeypatch):
+    # Ten sparse 5 MiB files in the agent's folder: each is over the 4 MiB a file is searched at,
+    # so none is opened (the bytes used to be read, then dropped uncharged).
+    repo = _tree(tmp_path / "source", {"agents/a/agent.py": "x = 1\n"})
+    for at in range(10):
+        with (repo / f"agents/a/big_{at}.py").open("wb") as handle:
+            handle.truncate(5 * 1024 * 1024)
+    read = [0]
+    real_open = Path.open
+
+    def counting_open(self, mode="r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if not self.name.startswith("big_"):
+            return handle
+        real_read = handle.read
+
+        def read_counted(size=-1):
+            data = real_read(size)
+            read[0] += len(data)
+            return data
+
+        handle.read = read_counted
+        return handle
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    names, cut = browser_scan(repo, "agents/a")
+    assert names == [] and "import_walk" in cut
+    assert read[0] <= agent_type_check._LARGEST_UNREAD_SEARCHED
+
+
+# A code module over the 1,000,000 bytes a file is read at, made of nothing that imports.
+_BIG_DATA = "WORDS = [\n" + '    "abcdefghijklmnopqrstuvwxyz",\n' * 55_000 + "]\n"
+
+
+def test_an_imported_code_file_over_the_read_cap_is_line_searched_and_no_cut(tmp_path):
+    assert 1_800_000 < len(_BIG_DATA) < 1_900_000
+    repo = _tree(
+        tmp_path / "source",
+        {
+            "agents/a/main.py": "import openai\nimport common.data\n",
+            "common/__init__.py": "",
+            "common/data.py": _BIG_DATA,
+        },
+    )
+    assert browser_scan(repo, "agents/a") == ([], frozenset())
+    answer = _submitter(tmp_path / "out", repo, "agents/a")(_reading("chat"))
+    assert not answer.get("is_error"), answer
+
+
+def test_a_big_module_that_imports_is_followed_through_its_import_lines(tmp_path):
+    repo = _tree(
+        tmp_path / "source",
+        {
+            "agents/a/main.py": "import common.big\n",
+            "common/__init__.py": "",
+            "common/big.py": "import common.deep\n" + _BIG_DATA,
+            "common/deep.py": "import playwright\n",
+        },
+    )
+    assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
+
+
+def test_an_imported_code_file_over_the_search_cap_is_still_a_cut(tmp_path):
+    big = "# padding\n".ljust(agent_type_check._LARGEST_UNREAD_SEARCHED + 1, "#")
+    repo = _tree(
+        tmp_path / "source",
+        {
+            "agents/a/main.py": "import common.data\n",
+            "common/__init__.py": "",
+            "common/data.py": big,
+        },
+    )
+    assert "import_walk" in browser_scan(repo, "agents/a")[1]
+
+
+def test_an_imported_code_file_over_the_read_cap_costs_the_search_total(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", len(_BIG_DATA) - 1)
+    repo = _tree(
+        tmp_path / "source",
+        {
+            "agents/a/main.py": "import common.data\n",
+            "common/__init__.py": "",
+            "common/data.py": "import playwright\n" + _BIG_DATA,
+        },
+    )
+    assert "import_walk" in browser_scan(repo, "agents/a")[1]
+
+
+@pytest.mark.parametrize(
+    "line, more",
+    [
+        pytest.param("import os, \\\ncommon.util\n", {}, id="list-continued"),
+        pytest.param("from common import \\\nutil\n", {}, id="from-continued"),
+        pytest.param(
+            "from..import pkg\n",
+            {"agents/pkg/__init__.py": "import playwright\n"},
+            id="no-space-around-import",
+        ),
+        pytest.param(
+            "from..sibling import util\n",
+            {"agents/sibling/__init__.py": "", "agents/sibling/util.py": "import playwright\n"},
+            id="no-space-after-from",
+        ),
+        pytest.param('x = "#"; import common.util\n', {}, id="hash-in-string"),
+        pytest.param("x = 1\rimport common.util\r", {}, id="cr-line-ends"),
+        pytest.param("import\tcommon.util\n", {}, id="tab"),
+        pytest.param("import os as o, common.util as u\n", {}, id="as-list"),
+        pytest.param("from common import (os as o,\n util)\n", {}, id="paren-list"),
+        pytest.param(
+            "'''\nfrom x import (\n'''\nimport common.util\n", {}, id="open-paren-in-docstring"
+        ),
+    ],
+)
+def test_a_legal_import_form_is_line_searched_and_no_cut(tmp_path, line, more):
+    repo = _padded(
+        tmp_path / "source",
+        **{"agents/a/z_main.py": line, "common/util.py": "import playwright\n", **more},
+    )
+    assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("from x import (\nimport common.util\n", id="unclosed-paren-list"),
+        pytest.param(
+            "import common.util\nfrom x import (\n  a,\n", id="paren-list-open-at-the-end"
+        ),
+        pytest.param("import common.util\n'''\nimport os\n", id="unclosed-triple-quote"),
+        pytest.param("x = 'it\nimport common.util\n", id="unclosed-quote"),
+    ],
+)
+def test_a_line_search_that_cant_be_sure_is_a_cut(tmp_path, text):
+    repo = _padded(
+        tmp_path / "source",
+        **{"agents/a/z_main.py": text, "common/util.py": "import playwright\n"},
+    )
+    assert browser_scan(repo, "agents/a")[1] == frozenset({"import_walk"})
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["from" + " " * 100_000 + "x", " " * 100_000, "from ." + " " * 100_000 + "x", "()" * 50_000],
+    ids=["from-spaces", "spaces", "from-dot-spaces", "parens"],
+)
+def test_a_100_kb_line_in_an_unparsed_file_doesnt_hold_the_search_up(tmp_path, line):
+    repo = _padded(
+        tmp_path / "source",
+        **{
+            "agents/a/z_main.py": f"{line}\nimport common.util\n",
+            "common/util.py": "import playwright\n",
+        },
+    )
+    started = time.perf_counter()
+    assert browser_scan(repo, "agents/a") == (["playwright"], frozenset())
+    assert time.perf_counter() - started < 5
+
+
+def test_a_py_file_of_a_color_name_is_no_cut(tmp_path):
+    # "steel" is a browser package; "steelblue" isn't it.
+    colors = "BLUE = 'steelblue'\n" * ((LARGEST_PARSED_MODULE // 18) + 100)
+    assert len(colors) > LARGEST_PARSED_MODULE
+    repo = _tree(tmp_path / "a", {"main.py": "import openai\n", "colors.py": colors})
+    assert browser_scan(repo) == ([], frozenset())
+
+
+@pytest.mark.parametrize(
+    "name", ["import steel\n", "x = steel.Client()\n", "'steel'\n", "import playwright\n"]
+)
+def test_a_py_file_over_the_read_size_that_names_a_package_whole_is_a_cut(tmp_path, name):
+    big = name + "# x\n" * (LARGEST_PARSED_MODULE // 4 + 100)
+    assert len(big) > LARGEST_PARSED_MODULE
+    repo = _tree(tmp_path / "a", {"main.py": "import openai\n", "big.py": big})
+    assert browser_scan(repo)[1] == frozenset({"file_size"})
+
+
+def test_a_script_over_the_read_size_that_names_no_marker_is_no_cut(tmp_path):
+    widget = "window._selenium = window.playwright || 1;\n" * 30_000
+    assert len(widget) > agent_type_check._LARGEST_CODE_FILE
+    repo = _tree(tmp_path / "a", {"main.py": "import openai\n", "widget.js": widget})
+    assert browser_scan(repo) == ([], frozenset())
+
+
+@pytest.mark.parametrize("marker", ["@playwright/mcp", "computer_use_preview", "ComputerUse"])
+def test_a_script_over_the_read_size_that_holds_a_tool_marker_is_a_cut(tmp_path, marker):
+    widget = f"const tool = '{marker}';\n" + "var a = 1;\n" * 100_000
+    assert len(widget) > agent_type_check._LARGEST_CODE_FILE
+    repo = _tree(tmp_path / "a", {"main.py": "import openai\n", "widget.js": widget})
+    assert browser_scan(repo)[1] == frozenset({"file_size"})
+
+
+def _cut_lines(caplog) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("agent type scan cut by")
+    ]
+
+
+def test_a_reading_whose_only_cut_is_the_walk_logs_a_cut_line(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", 8)
+    repo = _padded(tmp_path / "source", **{"common/util.py": "import playwright\n"})
+    with caplog.at_level(logging.WARNING, logger=agent_type_check.__name__):
+        assert browser_scan(repo, "agents/a") == ([], frozenset({"import_walk"}))
+    assert _cut_lines(caplog) == ["agent type scan cut by import_walk 1"]
+
+
+def test_the_walk_cut_joins_the_scans_own_in_one_cut_line(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", 8)
+    repo = _padded(
+        tmp_path / "source",
+        **{"common/util.py": "import playwright\n", "agents/a/big.py": _OVERSIZED},
+    )
+    with caplog.at_level(logging.WARNING, logger=agent_type_check.__name__):
+        _, cut = browser_scan(repo, "agents/a")
+    assert cut == frozenset({"file_size", "import_walk"})
+    assert _cut_lines(caplog) == ["agent type scan cut by file_size 1, import_walk 1"]
+
+
+def test_a_walk_with_no_cut_logs_no_cut_line(tmp_path, caplog):
+    repo = _padded(tmp_path / "source", **{"common/util.py": "x = 1\n"})
+    with caplog.at_level(logging.WARNING, logger=agent_type_check.__name__):
+        assert browser_scan(repo, "agents/a") == ([], frozenset())
+    assert _cut_lines(caplog) == []
 
 
 def test_ci_runs_this_file():
