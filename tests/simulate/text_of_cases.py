@@ -74,17 +74,17 @@ CASES = [
     ),
     ("empty-strings-add-no-space", ["a", "", "b"], "a b"),
     (
-        "messages-joined-by-a-space",
+        "history-gives-only-the-last-assistant-message",
         [
             NS(type="human", content="q"),
             NS(type="ai", content="Let me check."),
             NS(type="tool", content="found"),
             NS(type="ai", content="It shipped today."),
         ],
-        "Let me check. It shipped today.",
+        "It shipped today.",
     ),
     (
-        "blocks-of-one-message-joined-by-nothing-messages-by-a-space",
+        "blocks-of-one-message-joined-by-nothing-only-the-last-message-counts",
         [
             {
                 "role": "assistant",
@@ -95,7 +95,7 @@ CASES = [
             },
             {"role": "assistant", "content": [{"type": "text", "text": "c"}]},
         ],
-        "ab c",
+        "c",
     ),
     ("output-text-block", [{"type": "output_text", "text": "out"}], "out"),
     ("output-text-object", [NS(type="output_text", text="out")], "out"),
@@ -192,5 +192,31 @@ CASES += [
         "untyped-empty-part-keeps-the-adjacent-join",
         [{"text": "a"}, {"text": ""}, {"text": "b"}],
         "ab",
+    ),
+]
+
+CASES += [
+    (
+        "blocks-of-the-last-message-are-still-joined",
+        [
+            {"role": "assistant", "content": "old answer"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "a"},
+                    THINKING,
+                    {"type": "text", "text": "b"},
+                ],
+            },
+        ],
+        "a b",
+    ),
+    (
+        "history-ending-in-a-user-message-gives-the-last-assistant-reply",
+        [
+            {"role": "assistant", "content": "A"},
+            {"role": "user", "content": "q"},
+        ],
+        "A",
     ),
 ]

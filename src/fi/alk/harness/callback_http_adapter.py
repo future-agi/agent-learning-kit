@@ -72,9 +72,10 @@ def _text_of(content: Any, depth: int = 0) -> str:
 
     Extended-thinking models return a list of blocks (``thinking``, ``text``, ...). Answer
     blocks are kept in order and joined with ``""`` only when they sit next to each other,
-    because one answer can be split across several text blocks. Plain strings and whole
-    messages (``AIMessage``, ``{"role", "content"}``, which give the text of their content)
-    are joined with ``" "``. Any other block (thinking, redacted_thinking, tool_use,
+    because one answer can be split across several text blocks. Plain strings are joined with
+    ``" "``. A list holding assistant messages is a history: only its last assistant message
+    counts (``AIMessage``, ``{"role": "assistant", "content"}``), and its content is joined as
+    above. Any other block (thinking, redacted_thinking, tool_use,
     tool_result, image, unknown) gives ``""``, never its repr.
     A message inside a message is read down to ``_MOST_DEPTH`` levels; anything nested deeper
     gives ``""``.
@@ -86,10 +87,13 @@ def _text_of(content: Any, depth: int = 0) -> str:
     if content is None:
         return ""
     if isinstance(content, (list, tuple)):
+        for item in reversed(content):
+            if _is_message(item):
+                return _block_text(item, depth)
         text = ""
         after_block = False
         for item in content:
-            is_block = not isinstance(item, str) and not _is_message(item)
+            is_block = not isinstance(item, str)
             piece = item if isinstance(item, str) else _block_text(item, depth)
             if not piece:
                 if not isinstance(item, str) and not _is_text_block(item):

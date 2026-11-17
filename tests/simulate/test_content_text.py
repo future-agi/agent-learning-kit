@@ -314,7 +314,7 @@ def _generic_reply(reply):
                     SimpleNamespace(type="ai", content="It shipped today."),
                 ]
             },
-            "Let me check. It shipped today.",
+            "It shipped today.",
         ),
         (
             {
@@ -323,7 +323,7 @@ def _generic_reply(reply):
                     {"role": "assistant", "content": "Done."},
                 ]
             },
-            "Let me check. Done.",
+            "Done.",
         ),
     ],
     ids=[
