@@ -25,3 +25,11 @@ def adapter(tmp_path, monkeypatch):
 def test_a_graph_state_with_no_messages_is_an_empty_answer(adapter):
     body = adapter._json_body({"messages": [], "status": "done"})
     assert body == {"status": "done", "content": ""}
+
+
+def test_a_callback_message_sends_only_its_text(adapter):
+    message = {
+        "role": "assistant",
+        "content": [THINKING, {"type": "text", "text": "Done."}],
+    }
+    assert adapter._json_body({"message": message}) == {"content": "Done."}

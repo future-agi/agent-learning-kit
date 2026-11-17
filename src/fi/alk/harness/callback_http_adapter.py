@@ -170,6 +170,8 @@ def _json_body(value: Any) -> dict[str, Any]:
         raise TypeError("callback response must serialize to a JSON object")
     if "content" in body and not isinstance(body["content"], str):
         body["content"] = _text_of(body["content"])
+    if "content" not in body and "message" in body:
+        body["content"] = _text_of(body.pop("message"))
     body.setdefault("content", "")
     return body
 
