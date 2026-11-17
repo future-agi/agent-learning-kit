@@ -2092,3 +2092,45 @@ def test_stop_removes_the_job_directories_a_killed_worker_left_for_its_project_o
     assert not leftover.exists()
     assert (other / "job").exists()
     assert longer.exists()
+
+
+def test_repository_env_that_is_a_symlink_or_resolves_outside_the_source_is_not_passed(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "")
+    caplog.set_level(logging.DEBUG, logger=_COMPOSE_LOGGER)
+    environment = _compose_environment(tmp_path)
+    source = Path(environment.source)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "target.env").write_text("OUTSIDE_NAME=outside-canary\n")
+    (outside / ".env").write_text("OUTSIDE_NAME=outside-canary\n")
+    calls = _record_compose(monkeypatch)
+
+    # A ``.env`` that is a link to a file outside the source.
+    (source / ".env").symlink_to(outside / "target.env")
+    provisioning._run(environment, "config")
+    # A ``.env`` that is a link to a file inside the source.
+    (source / ".env").unlink()
+    (source / "real.env").write_text("INSIDE_NAME=inside-canary\n")
+    (source / ".env").symlink_to(source / "real.env")
+    provisioning._run(environment, "config")
+    # A regular ``.env`` in a compose directory that is itself a link out of the source.
+    (source / ".env").unlink()
+    (source / "linked").symlink_to(outside, target_is_directory=True)
+    linked = _compose_environment(tmp_path, compose_file=str(source / "linked" / "compose.yaml"))
+    provisioning._run(linked, "config")
+
+    for call in calls:
+        assert call.env_files == [str(call.job.path)]
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert str(source / ".env") in logged
+    assert str(source / "linked" / ".env") in logged
+    for canary in ("outside-canary", "inside-canary", "OUTSIDE_NAME", "INSIDE_NAME"):
+        assert canary not in logged
+
+    # A regular ``.env`` inside the source is still passed first.
+    (source / "linked").unlink()
+    (source / ".env").write_text("FROM_DOTENV=1\n")
+    provisioning._run(environment, "config")
+    assert calls[-1].env_files == [str(source / ".env"), str(calls[-1].job.path)]

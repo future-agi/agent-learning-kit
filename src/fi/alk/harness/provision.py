@@ -365,6 +365,27 @@ def _remove_leftover_job_directories(project: str) -> None:
         shutil.rmtree(leftover, ignore_errors=True)
 
 
+def _repository_env_file_usable(dotenv: Path, environment: ProvisionedEnvironment) -> bool:
+    """True for a regular ``.env`` that is not a link and resolves inside the source.
+
+    A link (or a compose directory that is one) could hand Compose any file on the host, and
+    Compose repeats the offending line in its error text. Only the path is ever logged.
+    """
+    if not os.path.lexists(dotenv) or dotenv.is_dir():
+        return False
+    try:
+        inside = dotenv.resolve().is_relative_to(Path(environment.source).resolve())
+    except (OSError, RuntimeError):
+        inside = False
+    if dotenv.is_file() and not dotenv.is_symlink() and inside:
+        return True
+    logger.warning(
+        "compose: skipped repository env file that is not a regular file inside the source: %s",
+        dotenv,
+    )
+    return False
+
+
 def _write_env_file(fd: int, values: dict[str, str]) -> None:
     """Write ``NAME="value"`` lines through ``fd`` (from ``mkstemp``: 0600, created exclusively)."""
     with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape") as handle:
@@ -440,7 +461,7 @@ def _run(
             # itself, so that file goes first (as today, now explicit) and the job file, which
             # wins, after it. A ``.env`` directory would break an explicit --env-file.
             dotenv = (Path(environment.source) / environment.compose_file).parent / ".env"
-            env_files = [str(dotenv)] if dotenv.is_file() else []
+            env_files = [str(dotenv)] if _repository_env_file_usable(dotenv, environment) else []
             env_files.append(job_file)
             command = [
                 "docker",
