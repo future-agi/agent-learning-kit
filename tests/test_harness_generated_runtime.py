@@ -1933,3 +1933,18 @@ def test_env_file_text_escapes_dollar_quote_backslash_and_newline_exactly() -> N
         )
     finally:
         os.unlink(path)
+
+
+def test_env_file_skips_and_logs_an_invalid_name_by_name_only(caplog) -> None:
+    caplog.set_level(logging.WARNING, logger="fi.alk.harness.provision")
+    fd, path = tempfile.mkstemp()
+    try:
+        provisioning._write_env_file(
+            fd, {"BAD-NAME": "v1", "1LEAD": "v2", "A B": "v3", "GOOD": "g"}
+        )
+        assert Path(path).read_text(encoding="utf-8") == 'GOOD="g"\n'
+    finally:
+        os.unlink(path)
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "BAD-NAME" in logged and "1LEAD" in logged
+    assert "v1" not in logged and "v2" not in logged
