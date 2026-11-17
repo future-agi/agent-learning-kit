@@ -10,6 +10,25 @@ import time
 
 import pytest
 
+# Every case below runs once per tracing mechanism: `sys.monitoring` (Python 3.12+) and the
+# profile function that stays as the fallback. `ALK_TOOL_TRACE_MECHANISM` is an internal knob
+# that only the profile value acts on; anything else lets the bootstrap choose.
+MECHANISMS = [
+    pytest.param(
+        "monitoring",
+        marks=pytest.mark.skipif(
+            sys.version_info < (3, 12), reason="sys.monitoring needs Python 3.12"
+        ),
+    ),
+    "profile",
+]
+
+
+@pytest.fixture(autouse=True, params=MECHANISMS)
+def mechanism(request, monkeypatch) -> str:
+    monkeypatch.setenv("ALK_TOOL_TRACE_MECHANISM", request.param)
+    return request.param
+
 
 def _trace_environment(tmp_path: Path, bindings: list[dict[str, str]]):
     bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
@@ -262,13 +281,22 @@ def test_a_sync_tool_is_still_recorded_once(tmp_path: Path) -> None:
     assert [(r["name"], r["output"]) for r in _records(trace)] == [("look_up", "A1")]
 
 
-def _run_agent(tmp_path: Path, source: str, names: list[str], driver: str) -> list[dict]:
+def _run_bindings(
+    tmp_path: Path, source: str, bindings: list[dict[str, str]], driver: str
+) -> list[dict]:
     (tmp_path / "agent.py").write_text(source)
-    trace, env = _trace_environment(
-        tmp_path, [{"name": n, "module": "agent", "callable": n} for n in names]
-    )
+    trace, env = _trace_environment(tmp_path, bindings)
     subprocess.run([sys.executable, "-c", driver], check=True, env=env, cwd=tmp_path)
     return _records(trace) if trace.exists() else []
+
+
+def _run_agent(tmp_path: Path, source: str, names: list[str], driver: str) -> list[dict]:
+    return _run_bindings(
+        tmp_path,
+        source,
+        [{"name": n, "module": "agent", "callable": n} for n in names],
+        driver,
+    )
 
 
 def test_a_generator_tool_is_recorded_once_per_call(tmp_path: Path) -> None:
@@ -621,3 +649,149 @@ def test_m2_a_caught_recursion_error_does_not_turn_tracing_off(tmp_path: Path) -
         "agent.t('second')\n",
     )
     assert [r["arguments"] for r in records] == [{"x": "first"}, {"x": "second"}]
+
+
+def test_the_mechanism_in_use_is_the_one_asked_for(tmp_path: Path, mechanism: str) -> None:
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "t", "module": "agent", "callable": "t"}]
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", "import sitecustomize\nprint(sitecustomize._TOOL_TRACE_MECHANISM)\n"],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert result.stdout.strip() == mechanism
+
+
+def test_a_taken_tool_id_falls_back_to_the_profile_path(
+    tmp_path: Path, mechanism: str
+) -> None:
+    if mechanism != "monitoring":
+        pytest.skip("the id is only claimed on the monitoring path")
+    (tmp_path / "agent.py").write_text("def t(x):\n    return x\n")
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "t", "module": "agent", "callable": "t"}]
+    )
+    # The tracer under another module name, behind a sitecustomize that takes ids 5 and 4 first.
+    (tmp_path / "tracer_under_test.py").write_text(
+        (tmp_path / "sitecustomize.py").read_text()
+    )
+    (tmp_path / "sitecustomize.py").write_text(
+        "import sys\n"
+        "sys.monitoring.use_tool_id(5, 'other-a')\n"
+        "sys.monitoring.use_tool_id(4, 'other-b')\n"
+        "import tracer_under_test\n"
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import tracer_under_test, agent\n"
+            "agent.t('A')\nprint(tracer_under_test._TOOL_TRACE_MECHANISM)\n",
+        ],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert result.stdout.strip() == "profile"
+    assert [(r["name"], r["arguments"], r["output"]) for r in _records(trace)] == [
+        ("t", {"x": "A"}, "A")
+    ]
+
+
+def test_a_tool_called_on_a_thread_is_recorded(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def t(x):\n    return x\n",
+        ["t"],
+        "import threading, agent\n"
+        "th = threading.Thread(target=agent.t, args=('on-thread',))\n"
+        "th.start()\nth.join()\n",
+    )
+    assert [(r["arguments"], r["is_error"]) for r in records] == [
+        ({"x": "on-thread"}, False)
+    ]
+
+
+def test_a_hot_function_that_is_not_a_tool_is_not_recorded(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def t(x):\n    return x\ndef busy(i):\n    return i + 1\n",
+        ["t"],
+        "import agent\n"
+        "n = 0\nfor _ in range(2000):\n    n = agent.busy(n)\n"
+        "agent.t(n)\n",
+    )
+    assert [(r["name"], r["arguments"]) for r in records] == [("t", {"x": 2000})]
+
+
+def test_m1_a_tool_defined_inside_a_function_is_matched_by_its_own_name(
+    tmp_path: Path,
+) -> None:
+    records = _run_bindings(
+        tmp_path,
+        "def make():\n    def lookup(q):\n        return q.upper()\n    return lookup\n"
+        "def lookup(q):\n    return 'module level'\n",
+        [{"name": "lookup", "module": "agent", "callable": "lookup", "qualname": "lookup"}],
+        "import agent\nagent.make()('a')\n",
+    )
+    assert [(r["arguments"], r["output"]) for r in records] == [({"q": "a"}, "A")]
+
+
+def test_a_method_is_matched_by_its_qualname_not_by_its_name_alone(tmp_path: Path) -> None:
+    records = _run_bindings(
+        tmp_path,
+        "class Tools:\n    def lookup(self, q):\n        return q\n"
+        "class Other:\n    def lookup(self, q):\n        return 'other'\n",
+        [{"name": "lookup", "module": "agent", "callable": "lookup", "qualname": "Tools.lookup"}],
+        "import agent\nagent.Other().lookup('x')\nagent.Tools().lookup('y')\n",
+    )
+    assert [(r["arguments"], r["output"]) for r in records] == [({"q": "y"}, "y")]
+
+
+def test_l4_a_method_inherited_from_a_base_is_matched_by_the_receivers_class(
+    tmp_path: Path,
+) -> None:
+    records = _run_bindings(
+        tmp_path,
+        "class Base:\n    def lookup(self, q):\n        return q\n"
+        "class Child(Base):\n    pass\n"
+        "class Sibling(Base):\n    pass\n"
+        "class Maker:\n    @classmethod\n    def build(cls, q):\n        return q\n"
+        "class Made(Maker):\n    pass\n",
+        [
+            {"name": "lookup", "module": "agent", "callable": "lookup", "qualname": "Child.lookup"},
+            {"name": "build", "module": "agent", "callable": "build", "qualname": "Made.build"},
+        ],
+        "import agent\n"
+        "agent.Sibling().lookup('s')\nagent.Child().lookup('c')\n"
+        "agent.Maker.build('m')\nagent.Made.build('d')\n",
+    )
+    assert [(r["name"], r["arguments"]) for r in records] == [
+        ("lookup", {"q": "c"}),
+        ("build", {"q": "d"}),
+    ]
+
+
+LATE_ERROR_AFTER_CANCEL = (
+    "import asyncio\n"
+    "async def catches(q):\n"
+    "    try:\n        await asyncio.sleep(10)\n"
+    "    except asyncio.CancelledError:\n        pass\n"
+    "    try:\n        await asyncio.sleep(0)\n        raise ValueError('own')\n"
+    "    finally:\n        pass\n"
+)
+
+
+def test_l3_a_coroutine_that_catches_the_cancel_and_later_ends_on_its_own_error(
+    tmp_path: Path, mechanism: str
+) -> None:
+    records = _run_agent(
+        tmp_path, LATE_ERROR_AFTER_CANCEL, ["catches"], CANCEL_DRIVER.format(n="catches")
+    )
+    ((name, is_error, output),) = [(r["name"], r["is_error"], r["output"]) for r in records]
+    assert name == "catches"
+    if mechanism == "monitoring":
+        # The unwinding exception is known, so an error of its own is an error.
+        assert (is_error, output) == (True, RAISED)
+    else:
+        # The profile path cannot see which exception ended the frame: it reads the re-raise
+        # after a cancel as the cancel. Pinned as known behaviour of the fallback.
+        assert (is_error, "cancel" in output) == (False, True)
