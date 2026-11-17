@@ -11,6 +11,11 @@ import time
 import pytest
 
 
+# The tracer is standard library only, so the tool-tracing cases can run under another interpreter
+# (ALK_TEST_PYTHON=/path/to/python3.13) to check how it reads that version's frames.
+_TRACED_PYTHON = os.environ.get("ALK_TEST_PYTHON") or sys.executable
+
+
 def _trace_environment(tmp_path: Path, bindings: list[dict[str, str]]):
     bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
     shutil.copy2(bootstrap, tmp_path / "sitecustomize.py")
@@ -39,7 +44,7 @@ def test_declared_python_tool_is_traced_without_changing_result(tmp_path: Path) 
     started = time.time()
     result = subprocess.run(
         [
-            sys.executable,
+            _TRACED_PYTHON,
             "-c",
             "import asyncio\n"
             "from agent import get_forecast, get_weather\n"
@@ -85,7 +90,7 @@ def test_a_large_tool_result_is_cut_without_breaking_the_trace_line(
     )
 
     subprocess.run(
-        [sys.executable, "-c", "from agent import search\nsearch('q' * 30000)\n"],
+        [_TRACED_PYTHON, "-c", "from agent import search\nsearch('q' * 30000)\n"],
         check=True,
         env=env,
     )
@@ -109,7 +114,7 @@ def test_a_cut_keeps_the_type_of_every_value_that_fits(tmp_path: Path) -> None:
 
     subprocess.run(
         [
-            sys.executable,
+            _TRACED_PYTHON,
             "-c",
             "from agent import list_slots\nlist_slots(5, ['mon', 'tue'])\n",
         ],
@@ -136,7 +141,7 @@ def test_a_record_of_many_small_values_stays_bounded(tmp_path: Path) -> None:
     )
 
     subprocess.run(
-        [sys.executable, "-c", "from agent import export\nexport(7)\n"],
+        [_TRACED_PYTHON, "-c", "from agent import export\nexport(7)\n"],
         check=True,
         env=env,
     )
@@ -166,7 +171,7 @@ def test_declared_python_tool_does_not_match_same_named_functions_in_other_modul
 
     subprocess.run(
         [
-            sys.executable,
+            _TRACED_PYTHON,
             "-c",
             "from agent import lookup as declared\n"
             "from my_agent import lookup as look_alike\n"
@@ -195,7 +200,7 @@ def test_declared_python_tool_is_traced_when_module_runs_as_script(
     )
 
     result = subprocess.run(
-        [sys.executable, "agent.py"],
+        [_TRACED_PYTHON, "agent.py"],
         check=True,
         cwd=tmp_path,
         text=True,
@@ -231,7 +236,7 @@ def test_an_async_tool_with_two_awaits_records_one_call_with_its_real_result(
 
     subprocess.run(
         [
-            sys.executable,
+            _TRACED_PYTHON,
             "-c",
             "import asyncio\nfrom agent import start_return\n"
             "asyncio.run(start_return('A1001', 'too small'))\n",
@@ -254,7 +259,7 @@ def test_a_sync_tool_is_still_recorded_once(tmp_path: Path) -> None:
     )
 
     subprocess.run(
-        [sys.executable, "-c", "from agent import look_up\nlook_up('A1')\n"],
+        [_TRACED_PYTHON, "-c", "from agent import look_up\nlook_up('A1')\n"],
         check=True,
         env=env,
     )
@@ -267,7 +272,7 @@ def _run_agent(tmp_path: Path, source: str, names: list[str], driver: str) -> li
     trace, env = _trace_environment(
         tmp_path, [{"name": n, "module": "agent", "callable": n} for n in names]
     )
-    subprocess.run([sys.executable, "-c", driver], check=True, env=env, cwd=tmp_path)
+    subprocess.run([_TRACED_PYTHON, "-c", driver], check=True, env=env, cwd=tmp_path)
     return _records(trace) if trace.exists() else []
 
 
@@ -341,7 +346,7 @@ def test_a_binding_with_an_odd_module_never_raises_into_the_agents_call(
     )
     # A frame of the main script carries the callable's name, so the path match is reached.
     result = subprocess.run(
-        [sys.executable, "-c", "def look_up(x):\n    return x\nprint(look_up(7))\n"],
+        [_TRACED_PYTHON, "-c", "def look_up(x):\n    return x\nprint(look_up(7))\n"],
         text=True, capture_output=True, env=env, cwd=tmp_path,
     )
     assert result.returncode == 0, result.stderr

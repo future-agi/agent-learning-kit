@@ -556,6 +556,17 @@ def _install_declared_python_tools() -> None:
             opname = dis.opname[code.co_code[frame.f_lasti]]
         except (IndexError, TypeError):
             opname = "RETURN_VALUE"
+        # Python 3.13 reports a suspension on the RESUME after the yield (a non-zero oparg), where
+        # 3.12 and 3.14 report the YIELD_VALUE itself; on 3.14 a closed generator also ends on
+        # that RESUME, so the rule is 3.13's alone.
+        try:
+            resumes_after_yield = (
+                sys.version_info[:2] == (3, 13)
+                and opname == "RESUME"
+                and code.co_code[frame.f_lasti + 1] != 0
+            )
+        except IndexError:
+            resumes_after_yield = False
         ended_by = None
         mark = thrown.get(id(frame))
         if mark is not None:
@@ -578,7 +589,10 @@ def _install_declared_python_tools() -> None:
                 ended_by = kind
         if ended_by is None and (
             opname == "RETURN_GENERATOR"
-            or (code.co_flags & suspendable and opname.startswith("YIELD"))
+            or (
+                code.co_flags & suspendable
+                and (opname.startswith("YIELD") or resumes_after_yield)
+            )
         ):
             return
         thrown.pop(id(frame), None)
