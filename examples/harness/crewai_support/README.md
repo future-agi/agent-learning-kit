@@ -25,8 +25,11 @@ The endpoint must speak chat completions. The model is built as `LLM(..., custom
 which keeps CrewAI's OpenAI client on chat completions with the name unchanged, and stops
 CrewAI switching to the Responses API after a "responses-only" error from the endpoint. A plain
 `openai/<a known OpenAI model>` string with a base URL can make that switch, and an `openai/`
-string whose URL comes only from the environment goes to LiteLLM instead, which this example
-doesn't install.
+name CrewAI doesn't know, passed with no base URL, goes to LiteLLM instead, which this example
+doesn't install. The
+default model needs `custom_openai=True` for a simpler reason: `vertex_ai/gemini-3.7-flash` has
+no `openai/` prefix and `vertex_ai` isn't a provider CrewAI recognises, so CrewAI would send it
+to LiteLLM whatever the base URL.
 
 ## Known limits
 

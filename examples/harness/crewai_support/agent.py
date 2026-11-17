@@ -50,9 +50,10 @@ async def agent_callback(agent_input):
     # bound to the loop they were first used in, so the model and the agent live for one
     # call. `tool()` wraps here, not at import, so the module's functions stay the plain
     # ones the kit's tool tracer is bound to.
-    # `custom_openai` keeps the name unchanged and stops CrewAI switching to the Responses
-    # API when the endpoint answers a "responses-only" error; the gateway serves chat
-    # completions only.
+    # `custom_openai` is needed because the default `vertex_ai/...` name has no `openai/`
+    # prefix and `vertex_ai` isn't a CrewAI provider alias, so without it the name goes to
+    # LiteLLM whatever `base_url` says, and LiteLLM isn't installed here. It also stops CrewAI
+    # switching to the Responses API on a "responses-only" error; the gateway serves chat only.
     llm = LLM(
         model=MODEL,
         custom_openai=True,
