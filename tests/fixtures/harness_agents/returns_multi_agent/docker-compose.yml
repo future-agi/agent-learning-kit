@@ -1,0 +1,12 @@
+# The returns desk and the ledger its workers call, as two services.
+services:
+  agent:
+    build: .
+    command: ["python", "agent.py"]
+    environment:
+      PORT: "8080"
+    depends_on:
+      - tools-api
+  tools-api:
+    build: .
+    command: ["python", "ledger.py", "--port", "8080"]
