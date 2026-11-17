@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import importlib.util
-import inspect
 import json
 import os
 import shutil
@@ -24,6 +22,7 @@ from reference_agents import (
     REPO,
     TOOLS,
     TRACE_HOOK,
+    assert_bindings_match,
     assert_detected,
     assert_pins,
     build_control_service,
@@ -193,25 +192,9 @@ def test_example_is_detected_as_pydantic_ai(tmp_path: Path, where: str) -> None:
 # T2: the build ------------------------------------------------------------------------------
 
 
-def _example_module_for_bindings(tmp_path: Path):
-    # The example's own `agent.py`, loaded by path on a stand-in library, so the names the
-    # build binds are checked against the code that runs.
-    stand_in = write_stand_ins(tmp_path / "bindings-stand-in", STAND_IN_FILES)
-    sys.path.insert(0, str(stand_in))
-    saved = dict(sys.modules)
-    try:
-        spec = importlib.util.spec_from_file_location("example_agent", EXAMPLE / "agent.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        sys.path.remove(str(stand_in))
-        for name in list(sys.modules):
-            if name not in saved:
-                del sys.modules[name]
-
-
-def test_build_runs_the_callback_bridge_and_binds_the_tool_tracer(tmp_path: Path) -> None:
+def test_build_runs_the_callback_bridge_and_binds_the_tool_tracer(
+    tmp_path: Path, example_module
+) -> None:
     agent = build_control_service(
         tmp_path, write_callable_contract, "agent", subfolder=SUBFOLDER, example=EXAMPLE
     )
@@ -222,15 +205,7 @@ def test_build_runs_the_callback_bridge_and_binds_the_tool_tracer(tmp_path: Path
     assert "requirements.txt" in json.dumps(agent.build_commands)
     assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     bindings = json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])
-    module = _example_module_for_bindings(tmp_path)
-    assert len(bindings) == len(TOOLS)
-    for binding in bindings:
-        assert binding["module"] == "agent"
-        function = getattr(module, binding["callable"], None)
-        assert inspect.isfunction(function), binding
-        assert not inspect.iscoroutinefunction(function), binding
-        assert function.__name__ == binding["name"]
-    assert sorted(binding["name"] for binding in bindings) == sorted(TOOLS)
+    assert_bindings_match(bindings, example_module(), "agent")
 
 
 # T3: the tracer and a library-shaped call ---------------------------------------------------
