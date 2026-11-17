@@ -569,6 +569,18 @@ def test_l1_an_argument_whose_text_exits_never_ends_the_agent(tmp_path: Path, ba
     assert any(r["arguments"] == {"x": f"<unprintable {bad}>"} for r in records)
 
 
+def test_l2_an_unprintable_argument_is_recorded_as_a_placeholder(tmp_path: Path) -> None:
+    source = (
+        "class Bad:\n    def __str__(self):\n        raise RuntimeError('lazy load')\n"
+        "    __repr__ = __str__\n"
+        "def t(x):\n    return 'ok'\n"
+    )
+    records = _run_agent(
+        tmp_path, source, ["t"], "import agent\nagent.t(agent.Bad())\nagent.t('second')\n"
+    )
+    assert [r["arguments"] for r in records] == [{"x": "<unprintable Bad>"}, {"x": "second"}]
+
+
 @pytest.mark.parametrize(
     "first_call",
     [
