@@ -2063,9 +2063,22 @@ def create_app(root: Path | None = None) -> FastAPI:
         dependencies=[Depends(_authorize)],
     )
     async def environment_sources(request: Request) -> JSONResponse:
-        from fi.alk.studio.environment_sources import execute_request
+        from fi.alk.studio.environment_sources import (
+            MAX_REQUEST_BYTES,
+            execute_request,
+            request_too_large_response,
+        )
 
-        result = execute_request(await request.body())
+        content_length = request.headers.get("content-length")
+        if content_length and content_length.isdecimal():
+            if int(content_length) > MAX_REQUEST_BYTES:
+                return JSONResponse(request_too_large_response())
+        payload = bytearray()
+        async for chunk in request.stream():
+            if len(payload) + len(chunk) > MAX_REQUEST_BYTES:
+                return JSONResponse(request_too_large_response())
+            payload.extend(chunk)
+        result = await asyncio.to_thread(execute_request, bytes(payload))
         return JSONResponse(result)
 
     @app.post(

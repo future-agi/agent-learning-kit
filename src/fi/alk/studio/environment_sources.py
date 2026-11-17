@@ -33,13 +33,15 @@ from fi.alk.studio._environment_input_types import (
     _canonical_json,
     _canonical_value,
 )
-from fi.alk.studio._environment_inputs import (
+from fi.alk.studio._environment_input_snapshots import (
     MAX_SNAPSHOT_BYTES,
-    compile_environment_inputs,
     deserialize_environment_snapshot,
+    serialize_environment_snapshot,
+)
+from fi.alk.studio._environment_inputs import (
+    compile_environment_inputs,
     prepare_environment_inputs,
     review_environment_inputs,
-    serialize_environment_snapshot,
 )
 
 REQUEST_VERSION = "environment-sources.request.v1"
@@ -162,6 +164,16 @@ def execute_request(payload: bytes) -> dict[str, Any]:
             "The source request is invalid",
             (),
         )
+    return _error_response(code, message, diagnostics)
+
+
+def request_too_large_response() -> dict[str, Any]:
+    return _error_response("source_too_large", "Request exceeds the size limit", ())
+
+
+def _error_response(
+    code: str, message: str, diagnostics: tuple[Any, ...]
+) -> dict[str, Any]:
     return {
         "version": RESPONSE_VERSION,
         "ok": False,

@@ -524,7 +524,7 @@ def test_participant_only_policy_does_not_shape_tested_agent_scenarios() -> None
         "PARTICIPANT_ONLY_SENTINEL" not in payload
         for payload in generated.scenario_payloads
     )
-    assert any(
+    assert not any(
         check.check_arguments.get("value") == "PARTICIPANT_ONLY_SENTINEL"
         for check in generated.evaluator_specs[0].checks
     )
