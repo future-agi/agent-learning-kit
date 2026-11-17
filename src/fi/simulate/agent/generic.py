@@ -7736,9 +7736,20 @@ def _is_sync_stream(value: Any) -> bool:
 
 _NON_TEXT_EVENT_KINDS = frozenset(
     {
-        "message_start", "message_delta", "message_stop", "content_block_start",
-        "content_block_stop", "ping", "thinking", "redacted_thinking", "reasoning",
-        "reasoning_content", "tool_use", "server_tool_use", "tool_result", "image",
+        "message_start",
+        "message_delta",
+        "message_stop",
+        "content_block_start",
+        "content_block_stop",
+        "ping",
+        "thinking",
+        "redacted_thinking",
+        "reasoning",
+        "reasoning_content",
+        "tool_use",
+        "server_tool_use",
+        "tool_result",
+        "image",
     }
 )
 
@@ -7750,7 +7761,11 @@ def _stream_event_text(chunk: Any) -> Optional[str]:
     and bookkeeping next to the answer. Only ``text_delta`` and
     ``response.output_text.delta`` give text; every other event of those families gives "".
     """
-    get = chunk.get if isinstance(chunk, Mapping) else lambda name: getattr(chunk, name, None)
+    get = (
+        chunk.get
+        if isinstance(chunk, Mapping)
+        else lambda name: getattr(chunk, name, None)
+    )
     kind = get("type")
     if not isinstance(kind, str):
         return None

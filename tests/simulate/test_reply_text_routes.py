@@ -125,7 +125,10 @@ def _anthropic(delta):
 
 
 _ANTHROPIC_THINKING_STREAM = [
-    {"type": "message_start", "message": {"id": "m", "role": "assistant", "content": []}},
+    {
+        "type": "message_start",
+        "message": {"id": "m", "role": "assistant", "content": []},
+    },
     {
         "type": "content_block_start",
         "index": 0,
@@ -171,7 +174,12 @@ def _as_objects(chunks):
         _as_objects(_ANTHROPIC_THINKING_STREAM),
         _as_objects(_OPENAI_REASONING_STREAM),
     ],
-    ids=["anthropic-events", "openai-responses-events", "anthropic-objects", "openai-objects"],
+    ids=[
+        "anthropic-events",
+        "openai-responses-events",
+        "anthropic-objects",
+        "openai-objects",
+    ],
 )
 def test_a_stream_of_provider_events_keeps_only_the_answer_text(chunks):
     assert _stream_reply(chunks) == "Hi there"
