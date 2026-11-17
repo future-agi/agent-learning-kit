@@ -1331,11 +1331,32 @@ def test_elevenlabs_options_dict_is_not_ready_without_the_plugins_name(tmp_path)
         ("TTS(api_key=settings.elevenlabs_api_key)", ""),
     ],
 )
-def test_an_unreadable_elevenlabs_api_key_asks_for_both_names(tmp_path, call, pre):
+def test_an_unreadable_elevenlabs_api_key_takes_either_name(tmp_path, call, pre):
+    # The plugin's own code reads either name, so one of them is enough.
     _plugin_agent(tmp_path, "elevenlabs", call, pre=pre)
+    assert _missing(tmp_path, "ELEVEN_API_KEY") == set()
+    assert _missing(tmp_path, "ELEVENLABS_API_KEY") == set()
+    assert _lk(tmp_path, "ELEVEN_API_KEY")[0].ready
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].ready
+    manifest, _ = _lk(tmp_path)
+    assert not manifest.ready
+    assert {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"} <= _missing(tmp_path)
+    assert [choice.options for choice in manifest.credential_choices] == [
+        [["ELEVEN_API_KEY"], ["ELEVENLABS_API_KEY"]]
+    ]
+
+
+def test_an_unreadable_elevenlabs_api_key_beside_a_strict_read_keeps_that_name(tmp_path):
+    # The code itself needs ELEVENLABS_API_KEY, so it is required whatever the plugin takes.
+    _plugin_agent(
+        tmp_path,
+        "elevenlabs",
+        "TTS(api_key=settings.elevenlabs_api_key)",
+        pre='strict = os.environ["ELEVENLABS_API_KEY"]',
+    )
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].ready
     assert "ELEVENLABS_API_KEY" in _missing(tmp_path, "ELEVEN_API_KEY")
-    assert not _lk(tmp_path, "ELEVEN_API_KEY")[0].ready
-    assert _lk(tmp_path, "ELEVEN_API_KEY", "ELEVENLABS_API_KEY")[0].ready
+    assert _lk(tmp_path)[0].credential_choices == []
 
 
 def test_code_reading_the_eleven_names_is_labelled_elevenlabs(tmp_path):
