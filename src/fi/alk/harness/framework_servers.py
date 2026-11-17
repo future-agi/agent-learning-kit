@@ -373,3 +373,11 @@ def _langgraph_server_interface(
         },
         "response_path": "messages.-1.content",
     }
+
+
+def server_command(command: list[str]) -> list[str]:
+    """A framework server's argv as the sandbox runs it: `langgraph dev` without its file watcher, which restarts the
+    server on the files it writes beside the app (`.langgraph_api/*.pckl`) mid-call. Any other argv is kept as it is."""
+    if _is_langgraph_server_command(command) and "--no-reload" not in command:
+        return [*command, "--no-reload"]
+    return command

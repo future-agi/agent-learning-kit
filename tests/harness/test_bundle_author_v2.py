@@ -8180,3 +8180,11 @@ def test_the_tool_proxy_learns_the_declared_read_actions_and_a_plan_without_any_
     # The worker channels survive beside the read declarations.
     assert "WORKER_CHANNELS_FILE" in _tool_proxy_process(["POST orders.get"]).environment
     assert "READ_ACTIONS" not in _tool_proxy_process(declared_read_actions(entries[1:])).environment
+
+
+def test_langgraph_dev_runs_without_its_file_watcher_and_other_commands_are_kept():
+    from fi.alk.harness.framework_servers import server_command
+
+    assert server_command(["langgraph", "dev", "--port", "8000"]) == ["langgraph", "dev", "--port", "8000", "--no-reload"]
+    assert server_command([".venv/bin/langgraph", "dev", "--no-reload"]) == [".venv/bin/langgraph", "dev", "--no-reload"]
+    assert server_command(["python", "agent.py"]) == ["python", "agent.py"]

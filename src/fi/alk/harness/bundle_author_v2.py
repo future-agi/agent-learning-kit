@@ -68,6 +68,7 @@ from .bundle_v2 import (
 )
 from .contract import _CHANNEL_WORKER_ID, AgentContract, DataStore, Runtime, ToolEntry, runtime_public_environment
 from .framework_servers import (  # noqa: F401 - the framework launch adapter
+    server_command,
     _adk_server_arguments,
     _ADK_SERVER_FLAGS,
     _both_separators,
@@ -1990,7 +1991,7 @@ def _submitted_command(process: SourceProcess, command: list[str]) -> list[str]:
 
     if not command:
         return list(process.run_command)
-    normalized = [str(item) for item in command]
+    normalized = server_command([str(item) for item in command])
     if normalized[0] in {"python", "python3", "python3.11", "python3.12", "python3.13"}:
         if process.run_command[:3] == ["uv", "run", "--no-sync"]:
             return [*process.run_command[:4], *normalized[1:]]
