@@ -233,6 +233,7 @@ def _generic_reply(reply):
         ({"messages": [{"role": "assistant", "content": _blocks()}]}, ANSWER),
         ({"messages": [{"role": "assistant", "content": [THINKING]}]}, ""),
         ({"choices": [{"message": {"content": _blocks()}}]}, ANSWER),
+        ({"role": "assistant", "content": [{"text": "Your order shipped today."}]}, "Your order shipped today."),
     ],
     ids=[
         "output-key",
@@ -244,6 +245,7 @@ def _generic_reply(reply):
         "state-last-message",
         "state-last-message-only-thinking",
         "choices-message",
+        "untyped-text-block",
     ],
 )
 def test_generic_agent_wrapper_keeps_only_the_text(reply, expected):

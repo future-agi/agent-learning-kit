@@ -23,7 +23,9 @@ def _field(value: Any, name: str) -> Any:
 def _block_text(block: Any) -> str:
     """Answer text of one content block; "" for any block that is not answer text."""
     kind = _field(block, "type")
-    if kind in _TEXT_KINDS:
+    if kind in _TEXT_KINDS or (
+        kind is None and isinstance(_field(block, "text"), str)
+    ):
         text = _field(block, "text")
         if isinstance(text, dict):
             text = text.get("value")
