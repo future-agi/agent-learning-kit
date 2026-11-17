@@ -3212,6 +3212,10 @@ def _pair_tool(
         if _recorded_differently(span, call):
             return None
         mine, theirs = values[id(span)], values[id(call)]
+        if mine is None and theirs and span.delegated_to and _loose(span.delegated_to) in theirs.values():
+            # A hand-off's span may keep no arguments (ADK's own transfer span does not): a call whose arguments name
+            # the agent it handed to is the strongest claim it has.
+            return True, call.ok == span.ok
         shared = (
             mine.keys() & theirs.keys()
             if mine is not None and theirs is not None

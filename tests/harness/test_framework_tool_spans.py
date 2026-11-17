@@ -2720,3 +2720,122 @@ def test_a_voice_worker_s_job_process_records_the_hand_offs_its_agents_make(tmp_
     assert [row["name"] for row in sealed if row["name"] == "issue_refund"] == ["issue_refund"]
     # Without it, as voice bundles were built before, the framework reports nothing: no hand-off.
     assert hand_offs("0") == []
+
+
+_ADK_TRAVEL_APP = '''
+import asyncio
+from google.adk.agents import LlmAgent
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_response import LlmResponse
+from google.adk.runners import InMemoryRunner
+from google.adk.tools.agent_tool import AgentTool
+from google.genai import types
+
+
+class Scripted(BaseLlm):
+    script: list = []
+    step: int = 0
+
+    async def generate_content_async(self, llm_request, stream=False):
+        kind, value = self.script[min(self.step, len(self.script) - 1)]
+        self.step += 1
+        part = (
+            types.Part(function_call=types.FunctionCall(name=value[0], args=value[1]))
+            if kind == "call"
+            else types.Part(text=value)
+        )
+        yield LlmResponse(content=types.Content(role="model", parts=[part]))
+
+
+def memorize(key: str, value: str) -> dict:
+    return {"status": "stored"}
+
+
+poi = LlmAgent(name="poi_agent", model=Scripted(model="poi", script=[("say", "Trams.")]), instruction="poi")
+booking = LlmAgent(name="booking_agent", model=Scripted(model="book", script=[("say", "Booked.")]), instruction="b")
+planning = LlmAgent(
+    name="planning_agent",
+    model=Scripted(model="plan", script=[
+        ("call", ("memorize", {"key": "origin", "value": "San Francisco"})),
+        ("call", ("transfer_to_agent", {"agent_name": "booking_agent"})),
+    ]),
+    instruction="plan",
+    tools=[memorize],
+)
+root = LlmAgent(
+    name="root_agent",
+    model=Scripted(model="root", script=[
+        ("call", ("poi_agent", {"request": "ideas"})),
+        ("call", ("transfer_to_agent", {"agent_name": "planning_agent"})),
+    ]),
+    instruction="root",
+    tools=[AgentTool(agent=poi)],
+    sub_agents=[planning, booking],
+)
+
+
+async def main():
+    from opentelemetry import trace
+
+    runner = InMemoryRunner(agent=root, app_name="travel")
+    session = await runner.session_service.create_session(app_name="travel", user_id="u")
+    message = types.Content(role="user", parts=[types.Part(text="plan a trip")])
+    async for _ in runner.run_async(user_id="u", session_id=session.id, new_message=message):
+        pass
+    provider = trace.get_tracer_provider()
+    if hasattr(provider, "force_flush"):
+        provider.force_flush()
+
+
+asyncio.run(main())
+'''
+
+
+def test_adk_s_transfers_and_agent_tool_calls_are_read_as_hand_offs_beside_the_calls_the_chat_reports(
+    tmp_path: Path,
+) -> None:
+    """A real ADK 2.7.1 app, as the travel concierge runs: a root agent asks an AgentTool, then transfers control, and
+    the agent it handed to transfers again. ADK's own transfer spans keep no arguments, while the chat reports each
+    `transfer_to_agent` with the agent it named: every transfer keeps the agent it handed control to."""
+    pytest.importorskip("google.adk")
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    _place_hook(hook)
+    (hook / "sitecustomize.py").write_text("import simulation_mark_bootstrap\nsimulation_mark_bootstrap.install()\n")
+    (tmp_path / "app.py").write_text(_ADK_TRAVEL_APP)
+    result = subprocess.run(
+        [sys.executable, str(tmp_path / "app.py")],
+        env={
+            **os.environ,
+            "PYTHONPATH": str(hook),
+            "HARNESS_TOOL_TRACE": str(tmp_path / "calls.jsonl"),
+            "ALK_OBSERVE_FRAMEWORKS": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    runtime = EnvironmentRuntime(
+        runtime_id="rt-1",
+        world_index=0,
+        bundle_digest="sha256:" + "0" * 64,
+        state=RuntimeState.READY,
+        endpoints={},
+        metadata={"tool_trace_path": str(tmp_path / "calls.jsonl")},
+    )
+    # What the chat itself reported: each transfer with the agent it named, and no span of its own.
+    reported = [
+        Call(name="transfer_to_agent", arguments={"agent_name": name}, result={"result": None}, at=at)
+        for at, name in ((1.0, "planning_agent"), (2.0, "booking_agent"))
+    ]
+    sealed = [trace_row(call) for call in call_runner.collect_seam_calls(runtime, None, observed=reported)]
+    transfers = {row["arguments"]["agent_name"]: row for row in sealed if row["name"] == "transfer_to_agent"}
+    assert set(transfers) == {"planning_agent", "booking_agent"}
+    assert {name: (row.get("delegated_to"), row.get("agent")) for name, row in transfers.items()} == {
+        "planning_agent": ("planning_agent", "root_agent"),
+        "booking_agent": ("booking_agent", "planning_agent"),
+    }
+    # The AgentTool call is still a hand-off that returns, and a worker's own call keeps its worker.
+    assert any(row["name"] == "poi_agent" for row in sealed)
+    assert next(row for row in sealed if row["name"] == "memorize")["agent"] == "planning_agent"
