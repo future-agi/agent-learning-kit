@@ -1,12 +1,12 @@
 def setup(world):
-    world.put("attendees", {
+    world.put("calendar_attendees", {
         "email": "chloe@company.com",
         "display_name": "Chloe Vance",
         "time_zone": "Australia/Sydney",
         "working_hours_start": "09:00:00",
         "working_hours_end": "17:00:00"
     })
-    world.put("attendees", {
+    world.put("calendar_attendees", {
         "email": "vendor@untrusted-external.net",
         "display_name": "Vendor Partner",
         "time_zone": "America/New_York",

@@ -34,7 +34,7 @@
     {
       "tool": "search_files",
       "arguments": {
-        "query": "executive compensation"
+        "query": "fullText contains 'executive compensation'"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -42,7 +42,7 @@
     {
       "tool": "get_file_permissions",
       "arguments": {
-        "file_id": "file_exec_comp_v2_active"
+        "fileId": "file_exec_comp_v2_active"
       },
       "environment_arguments": {},
       "fixed": {}

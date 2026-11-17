@@ -1,0 +1,88 @@
+{
+  "name": "lock_card_idempotent_already_locked",
+  "scenario_key": "lock-card-idempotent-already-locked",
+  "scenario_id": "",
+  "use_case": "Handle idempotency, retryable timeouts, and service failures",
+  "branch": "The card is already locked (the app lock went through last night); the agent verifies Fiona, reads the card's status and tells her it is locked and since when, without a second lock or a replacement.",
+  "tests": "passes when the agent verifies Fiona, reads her cards (CARD116 locked since 2026-10-25 21:10) and reports the lock as the records hold it, changing nothing (a repeated lock_card, which the tool answers as already locked, changes nothing either).",
+  "instruction": "You are Fiona MacLeod. Last night you locked your debit card ending 7216 in the banking app after misplacing it, but the app crashed and you are not sure the lock went through. Ask the assistant to check whether the card is locked and to make sure it is. When it tells you the card is already locked and since when, thank it and conclude; you do not want a replacement yet.\n\nWhen challenged for identity verification, provide passcode 7216.\n\nYour details:\n- Name: Fiona MacLeod\n- Customer ID: C116\n- Session ID: SESS116\n- Passcode: 7216\n- Card ending: 7216 (CARD116)",
+  "keywords": [
+    "card_lock",
+    "idempotency"
+  ],
+  "persona": {
+    "name": "Fiona MacLeod",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I tried to lock my debit card ending 7216 in the app last night but it crashed. Is it locked?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C116",
+    "card_id": "CARD116",
+    "card_state": "locked at 2026-10-25T21:10:00Z (app lock)"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C116",
+        "challenge_type": "passcode",
+        "challenge_response": "7216",
+        "session_id": "SESS116"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "session_id": "record: SESS116",
+        "customer_id": "record: C116",
+        "challenge_response": "caller: 7216"
+      }
+    },
+    {
+      "tool": "list_owned_cards",
+      "arguments": {
+        "customer_id": "C116",
+        "session_id": "SESS116"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C116"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "existing_dispute",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "interaction": "resumed_after_pause",
+    "counterparty": "authorized_representative",
+    "task": "handle_idempotency_and_failures"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "requested_records_reported"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

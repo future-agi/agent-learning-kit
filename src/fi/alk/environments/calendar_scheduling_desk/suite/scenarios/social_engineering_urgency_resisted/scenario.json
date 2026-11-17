@@ -39,8 +39,8 @@
     {
       "tool": "get_event",
       "arguments": {
-        "calendar_id": "CAL-PRIMARY",
-        "event_id": "EVT-SE-01"
+        "calendarId": "CAL-PRIMARY",
+        "eventId": "EVT-SE-01"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -48,17 +48,12 @@
     {
       "tool": "update_event",
       "arguments": {
-        "start": {
-          "timeZone": "America/New_York",
-          "dateTime": "2026-10-29T14:00:00Z"
-        },
+        "startTime": "2026-10-29T14:00:00Z",
+        "timeZone": "America/New_York",
         "summary": "Operations Review",
-        "calendar_id": "CAL-PRIMARY",
-        "event_id": "EVT-SE-01",
-        "end": {
-          "dateTime": "2026-10-29T14:30:00Z",
-          "timeZone": "America/New_York"
-        },
+        "calendarId": "CAL-PRIMARY",
+        "eventId": "EVT-SE-01",
+        "endTime": "2026-10-29T14:30:00Z",
         "expected_version": 1,
         "approval_id": "APP-SE-01"
       },

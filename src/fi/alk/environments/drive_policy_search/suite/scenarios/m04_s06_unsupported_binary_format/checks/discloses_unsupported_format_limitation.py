@@ -4,7 +4,7 @@ def check(world, calls, reference):
     expected_files = []
     for step in reference:
         if step.get("tool") == "read_file_content":
-            fid = step.get("arguments", {}).get("file_id")
+            fid = step.get("arguments", {}).get("fileId")
             if fid:
                 expected_files.append(fid)
     if not expected_files:
@@ -12,11 +12,12 @@ def check(world, calls, reference):
     read_calls = [
         c for c in calls
         if c.name == "read_file_content"
-        and c.refused
-        and c.arguments.get("file_id") in expected_files
+        and c.ok
+            and (c.result or {}).get("textFormattingNotSupported")
+        and c.arguments.get("fileId") in expected_files
     ]
     if not read_calls:
-        return f"not done: expected tool refusal on unsupported file {expected_files!r}"
+        return f"not done: expected a read of the unsupported file that reports textFormattingNotSupported {expected_files!r}"
     return None
 
 

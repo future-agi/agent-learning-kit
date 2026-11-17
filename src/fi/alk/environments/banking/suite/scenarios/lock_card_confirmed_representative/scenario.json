@@ -1,0 +1,93 @@
+{
+  "name": "lock_card_confirmed_representative",
+  "scenario_key": "lock-card-confirmed-representative",
+  "scenario_id": "",
+  "use_case": "Lock lost or compromised card upon customer confirmation",
+  "branch": "The cardholder herself, travelling, gives her passcode and explicit confirmation to lock her misplaced debit card.",
+  "tests": "passes when Elena is verified, gives explicit confirmation, and CARD108 is locked.",
+  "instruction": "You are Elena Rostova. You need to lock your debit card ending in 2671 because you misplaced it while travelling.\n\nWhen asked for authentication, provide the account passcode 6421.\nWhen the assistant asks for confirmation to lock card ending 2671, provide clear and explicit confirmation to proceed.\nOnce the assistant confirms the card is locked, thank the assistant and finish the conversation.\n\nYour facts:\n- Customer Name: Elena Rostova\n- Customer ID: C108\n- Session ID: SESS108\n- Passcode: 6421\n- Card ending: 2671 (card_id: CARD108)\n- Reason: misplaced / lost card",
+  "keywords": [
+    "card_lock"
+  ],
+  "persona": {
+    "name": "Elena Rostova",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I misplaced my debit card ending in 2671 while travelling. I need it locked immediately.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "customer_id": "C108",
+    "origin": "generated",
+    "passcode": "6421",
+    "card_id": "CARD108"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "session_id": "SESS108",
+        "challenge_type": "passcode",
+        "challenge_response": "6421",
+        "customer_id": "C108"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "session_id": "record: SESS108",
+        "challenge_response": "caller: 6421",
+        "customer_id": "record: C108"
+      }
+    },
+    {
+      "tool": "lock_card",
+      "arguments": {
+        "card_id": "CARD108",
+        "session_id": "SESS108",
+        "reason": "lost_card",
+        "customer_id": "C108",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "confirmed": "caller: explicit confirmation to proceed",
+        "customer_id": "record: C108",
+        "session_id": "record: SESS108",
+        "card_id": "record: CARD108"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "counterparty": "authorized_representative",
+    "disposition": "standard_flow",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "task": "lock_card"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_locked_upon_confirmation"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

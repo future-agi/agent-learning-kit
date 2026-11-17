@@ -42,7 +42,7 @@
     {
       "tool": "get_thread",
       "arguments": {
-        "thread_id": "T-15"
+        "threadId": "T-15"
       },
       "environment_arguments": {},
       "fixed": {}

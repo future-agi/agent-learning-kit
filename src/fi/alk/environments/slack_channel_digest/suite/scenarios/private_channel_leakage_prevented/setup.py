@@ -1,5 +1,6 @@
 def setup(world):
-    world.put("messages", {
+    world.change("current_actor", "default", {"user_id": "U04"}, by="id")
+    world.put("slack_messages", {
         "message_id": "M401",
         "channel_id": "C04",
         "user_id": "U01",

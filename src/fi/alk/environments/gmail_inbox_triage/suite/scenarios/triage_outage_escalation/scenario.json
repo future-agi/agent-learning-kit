@@ -36,7 +36,18 @@
     {
       "tool": "search_threads",
       "arguments": {
-        "q": "label:URGENT"
+        "query": "label:URGENT"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "unlabel_thread",
+      "arguments": {
+        "threadId": "T-07",
+        "labelIds": [
+          "UNREAD"
+        ]
       },
       "environment_arguments": {},
       "fixed": {}
@@ -44,17 +55,14 @@
     {
       "tool": "label_thread",
       "arguments": {
-        "thread_id": "T-07",
-        "add_label_ids": [
+        "threadId": "T-07",
+        "labelIds": [
           "TRIAGED"
-        ],
-        "remove_label_ids": [
-          "UNREAD"
         ]
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Target thread: T-07"
+        "threadId": "caller: Target thread: T-07"
       }
     }
   ],

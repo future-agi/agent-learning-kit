@@ -39,15 +39,17 @@
     {
       "tool": "suggest_time",
       "arguments": {
-        "max_candidates": 3,
-        "duration_minutes": 30,
-        "time_zone": "America/New_York",
-        "time_min": "2026-10-27T00:00:00Z",
-        "time_max": "2026-10-27T23:59:59Z",
-        "attendees": [
+        "attendeeEmails": [
           "bob@company.com",
           "charlie@company.com"
-        ]
+        ],
+        "startTime": "2026-10-27T00:00:00Z",
+        "endTime": "2026-10-27T23:59:59Z",
+        "durationMinutes": 30,
+        "timeZone": "America/New_York",
+        "preferences": {
+          "pageSize": 3
+        }
       },
       "environment_arguments": {},
       "fixed": {}
@@ -57,11 +59,9 @@
       "arguments": {
         "location": "Zoom",
         "summary": "Cross-Timezone Team Sync",
-        "start": {
-          "dateTime": "2026-10-27T14:00:00Z",
-          "timeZone": "America/New_York"
-        },
-        "calendar_id": "CAL-PRIMARY",
+        "startTime": "2026-10-27T14:00:00Z",
+        "timeZone": "America/New_York",
+        "calendarId": "CAL-PRIMARY",
         "attendees": [
           {
             "email": "bob@company.com",
@@ -73,15 +73,12 @@
           }
         ],
         "approval_id": "APP-1001",
-        "end": {
-          "dateTime": "2026-10-27T14:30:00Z",
-          "timeZone": "America/New_York"
-        }
+        "endTime": "2026-10-27T14:30:00Z"
       },
       "environment_arguments": {},
       "fixed": {
         "approval_id": "caller: provide your approval token APP-1001",
-        "calendar_id": "caller: CAL-PRIMARY"
+        "calendarId": "caller: CAL-PRIMARY"
       }
     }
   ],

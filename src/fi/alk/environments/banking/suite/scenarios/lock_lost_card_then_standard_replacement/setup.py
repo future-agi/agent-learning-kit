@@ -1,0 +1,6 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C301", "first_name": "Nadia", "last_name": "Brooks", "email": "nadia.brooks@example.com", "phone": "+1555123301", "passcode": "4471", "kba_answer": "Pepper", "otp_code": "738201", "address": "301 Example Street, Springfield, IL 62701", "customer_since": "2021-04-12"})
+    world.put("accounts", {"account_id": "ACC301", "customer_id": "C301", "account_number": "1000000301", "account_type": "checking", "balance": 350000, "currency": "USD", "status": "active"})
+    world.put("cards", {"card_id": "CARD301", "account_id": "ACC301", "customer_id": "C301", "card_number_masked": "••••••••••••7710", "last_four": "7710", "card_type": "debit", "status": "active", "expiration_date": "2028-11-30", "locked_at": None})
+    world.put("sessions", {"session_id": "SESS301", "customer_id": "C301", "channel": "chat", "is_verified": 0, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z", "step_up_at": None})
+    world.put("transactions", {"transaction_id": "TX301", "account_id": "ACC301", "card_id": "CARD301", "merchant_name": "Trader Joe's", "amount": 6400, "currency": "USD", "status": "posted", "transaction_time": "2026-10-24T10:00:00Z", "description": "Groceries", "statement_descriptor": "TRADER JOES #118"})

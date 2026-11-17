@@ -35,27 +35,35 @@
     {
       "tool": "get_thread",
       "arguments": {
-        "thread_id": "T-12"
+        "threadId": "T-12"
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Thread: T-12"
+        "threadId": "caller: Thread: T-12"
       }
     },
     {
-      "tool": "label_thread",
+      "tool": "unlabel_thread",
       "arguments": {
-        "add_label_ids": [
-          "REQUIRES_CLARIFICATION"
-        ],
-        "thread_id": "T-12",
-        "remove_label_ids": [
+        "threadId": "T-12",
+        "labelIds": [
           "UNREAD"
         ]
       },
       "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "threadId": "T-12",
+        "labelIds": [
+          "REQUIRES_CLARIFICATION"
+        ]
+      },
+      "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Thread: T-12"
+        "threadId": "caller: Thread: T-12"
       }
     }
   ],

@@ -39,8 +39,8 @@
     {
       "tool": "list_events",
       "arguments": {
-        "max_results": 10,
-        "calendar_id": "CAL-PRIMARY"
+        "pageSize": 10,
+        "calendarId": "CAL-PRIMARY"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -48,15 +48,15 @@
     {
       "tool": "delete_event",
       "arguments": {
-        "calendar_id": "CAL-PRIMARY",
-        "event_id": "EVT-DEL-01",
+        "calendarId": "CAL-PRIMARY",
+        "eventId": "EVT-DEL-01",
         "recurring_action": "this_event",
         "approval_id": "APP-DEL-99"
       },
       "environment_arguments": {},
       "fixed": {
-        "calendar_id": "caller: CAL-PRIMARY",
-        "event_id": "caller: EVT-DEL-01",
+        "calendarId": "caller: CAL-PRIMARY",
+        "eventId": "caller: EVT-DEL-01",
         "approval_id": "caller: provide token APP-DEL-99"
       }
     }

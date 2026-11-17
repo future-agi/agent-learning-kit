@@ -36,17 +36,15 @@
   "solution": [
     {
       "tool": "list_calendars",
-      "arguments": {
-        "min_access_role": "reader"
-      },
+      "arguments": {},
       "environment_arguments": {},
       "fixed": {}
     },
     {
       "tool": "get_event",
       "arguments": {
-        "event_id": "EVT-MOVE-01",
-        "calendar_id": "CAL-PRIMARY"
+        "eventId": "EVT-MOVE-01",
+        "calendarId": "CAL-PRIMARY"
       },
       "environment_arguments": {},
       "fixed": {}

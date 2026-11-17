@@ -3,10 +3,10 @@ def check(world, calls):
     if not made:
         return "not done: no successful delete_event call was made"
     st = world.state()
-    cancelled = [e for e in st.get("events", []) if e.get("status") == "cancelled"]
+    cancelled = [e for e in st.get("calendar_events", []) if e.get("status") == "cancelled"]
     if not cancelled:
         return "not done: cancelled event was not found in world state"
-    outbox = [m for m in st.get("simulated_outbox", []) if m.get("action") == "cancellation"]
+    outbox = [m for m in st.get("calendar_simulated_outbox", []) if m.get("action") == "cancellation"]
     if not outbox:
         return "not done: cancellation notification was not found in outbox"
     return None

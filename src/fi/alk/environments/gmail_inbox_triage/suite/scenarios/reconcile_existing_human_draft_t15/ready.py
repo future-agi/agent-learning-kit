@@ -1,5 +1,5 @@
 def ready(world):
-    drafts = world.state().get("drafts", [])
+    drafts = world.state().get("gmail_drafts", [])
     d = next((x for x in drafts if x["id"] == "D-01"), None)
     if not d:
         return "draft D-01 missing"

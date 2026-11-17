@@ -36,25 +36,27 @@
     {
       "tool": "get_thread",
       "arguments": {
-        "thread_id": "T-02"
+        "threadId": "T-02"
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Corrected thread: T-02"
+        "threadId": "caller: Corrected thread: T-02"
       }
     },
     {
       "tool": "create_draft",
       "arguments": {
-        "recipient": "bob@beta.io",
+        "replyToMessageId": "M-02",
+        "to": [
+          "bob@beta.io"
+        ],
         "subject": "Re: Password reset issue",
-        "thread_id": "T-02",
         "body": "Hi Bob, please follow the recovery link to reset your account credentials."
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Corrected thread: T-02",
-        "recipient": "caller: Recipient: bob@beta.io"
+        "replyToMessageId": "caller: Corrected thread: T-02",
+        "to": "caller: Recipient: bob@beta.io"
       }
     }
   ],

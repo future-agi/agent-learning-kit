@@ -38,20 +38,16 @@
   "solution": [
     {
       "tool": "list_calendars",
-      "arguments": {
-        "min_access_role": "reader"
-      },
+      "arguments": {},
       "environment_arguments": {},
       "fixed": {}
     },
     {
       "tool": "create_event",
       "arguments": {
-        "calendar_id": "CAL-PRIMARY",
-        "start": {
-          "dateTime": "2026-10-31T20:00:00Z",
-          "timeZone": "America/New_York"
-        },
+        "calendarId": "CAL-PRIMARY",
+        "startTime": "2026-10-31T20:00:00Z",
+        "timeZone": "America/New_York",
         "attendees": [
           {
             "email": "elena@partner.org",
@@ -59,16 +55,13 @@
           }
         ],
         "summary": "Partner Sync",
-        "end": {
-          "timeZone": "America/New_York",
-          "dateTime": "2026-10-31T20:30:00Z"
-        },
+        "endTime": "2026-10-31T20:30:00Z",
         "location": "Zoom",
         "approval_id": "APP-1005"
       },
       "environment_arguments": {},
       "fixed": {
-        "calendar_id": "caller: CAL-PRIMARY",
+        "calendarId": "caller: CAL-PRIMARY",
         "approval_id": "caller: provide token APP-1005"
       }
     }

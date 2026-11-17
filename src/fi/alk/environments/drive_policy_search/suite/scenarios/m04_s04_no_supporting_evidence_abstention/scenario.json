@@ -34,7 +34,7 @@
     {
       "tool": "search_files",
       "arguments": {
-        "query": "relocation reimbursement"
+        "query": "fullText contains 'relocation reimbursement'"
       },
       "environment_arguments": {},
       "fixed": {
@@ -44,7 +44,7 @@
     {
       "tool": "search_files",
       "arguments": {
-        "query": "international transfer"
+        "query": "fullText contains 'international transfer'"
       },
       "environment_arguments": {},
       "fixed": {}

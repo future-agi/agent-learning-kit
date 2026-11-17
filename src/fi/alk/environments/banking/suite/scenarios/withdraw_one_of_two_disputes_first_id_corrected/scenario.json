@@ -1,0 +1,108 @@
+{
+  "name": "withdraw_one_of_two_disputes_first_id_corrected",
+  "scenario_key": "withdraw-one-of-two-disputes-first-id-corrected",
+  "scenario_id": "",
+  "use_case": "Follow up a dispute: status, list, withdrawal",
+  "branch": "The customer has two disputes and first says 'D342' when they mean the small café one (D341); they correct themselves when the assistant reads back the hotel. Only D341 is withdrawn; D342 stays under review.",
+  "tests": "passes when the agent verifies, lists the disputes, and withdraws D341 only, leaving D342 under review.",
+  "instruction": "You have two disputes open: one for a $28.00 Café Lumière charge and one for a $480.00 Aurora Hotels charge on your credit card ending 4466. The café has refunded you, so you want that dispute withdrawn. Start by saying 'please withdraw D342'; when the assistant reads back that D342 is the hotel charge, correct yourself: it is the café one you want withdrawn, keep the hotel dispute going. Confirm the withdrawal of the café dispute only. Provide passcode 3348 when asked.\n\nYour details:\n- Name: Simone Laurent\n- Customer ID: C341\n- Session ID: SESS341\n- Disputes: D341 (Café Lumière, withdraw this), D342 (Aurora Hotels, keep)\n- Passcode: 3348",
+  "keywords": [
+    "withdraw_dispute",
+    "correction"
+  ],
+  "persona": {
+    "name": "Simone Laurent",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Technical",
+    "initial_message": "Hi, please withdraw dispute D342, the café has refunded me.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C341",
+    "session_id": "SESS341",
+    "dispute_id": "D341",
+    "distractor_dispute": "D342",
+    "passcode": "3348"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C341",
+        "session_id": "SESS341",
+        "challenge_type": "passcode",
+        "challenge_response": "3348"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C341",
+        "session_id": "record: SESS341",
+        "challenge_response": "caller: 3348",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "list_disputes",
+      "arguments": {
+        "customer_id": "C341",
+        "session_id": "SESS341"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "withdraw_dispute",
+      "arguments": {
+        "customer_id": "C341",
+        "session_id": "SESS341",
+        "dispute_id": "D341",
+        "reason": "Café refunded the duplicate charge",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C341",
+        "session_id": "record: SESS341",
+        "dispute_id": "record: D341",
+        "confirmed": "rule: 'The agent confirms the withdrawal and its consequence first'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "follow_up_dispute",
+    "disposition": "withdrawal",
+    "interaction": "correction",
+    "counterparty": "individual_cardholder",
+    "interface": "self_correction",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_status_retrieved",
+    "dispute_withdrawn_as_requested",
+    "servicing_change_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

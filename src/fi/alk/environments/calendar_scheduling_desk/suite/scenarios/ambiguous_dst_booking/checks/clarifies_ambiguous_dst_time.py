@@ -3,7 +3,7 @@ def check(world, calls, reference):
     if not successful_calls:
         return "not done: no successful calendar inspection call was made before responding"
     st = world.state()
-    evts = st.get("events", [])
+    evts = st.get("calendar_events", [])
     ambiguous_starts = ["2026-11-01T01:30:00-04:00", "2026-11-01T01:30:00-05:00", "2026-11-01T05:30:00Z", "2026-11-01T06:30:00Z"]
     for e in evts:
         if e.get("start_time") in ambiguous_starts:

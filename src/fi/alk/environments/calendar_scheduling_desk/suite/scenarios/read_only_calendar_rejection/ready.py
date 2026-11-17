@@ -1,8 +1,8 @@
 def ready(world):
-    evts = world.state().get("events", [])
+    evts = world.state().get("calendar_events", [])
     if not any(e.get("event_id") == "EVT-MOVE-01" for e in evts):
         return "EVT-MOVE-01 missing"
-    cals = world.state().get("calendars", [])
+    cals = world.state().get("calendar_calendars", [])
     cal_ro = next((c for c in cals if c.get("calendar_id") == "CAL-RO"), None)
     if not cal_ro or cal_ro.get("access_role") != "reader":
         return "CAL-RO is not reader role"

@@ -1,0 +1,80 @@
+{
+  "name": "policy_dispute_window_is_sixty_days_not_ninety",
+  "scenario_key": "policy-dispute-window-is-sixty-days-not-ninety",
+  "scenario_id": "",
+  "use_case": "Answer policy and fee questions from the policy library with citations",
+  "branch": "The customer heard they have 90 days to dispute a charge (the 2024 policy). The policy in effect says 60 days; the answer cites it and notes the 90 days are superseded.",
+  "tests": "passes when the agent consults the dispute policy in effect by either route (the policy reader or pol_dispute_v2 on Drive) and answers 60 days, citing it.",
+  "instruction": "You want to know how long you have to dispute a charge on your card. You believe it is 90 days because a friend told you. Ask the question; if the assistant says a different number, ask which document says so and accept the answer. You do not need to verify your identity for this.\n\nYour details:\n- Question: How many days do I have to dispute a charge?\n- Belief: 90 days",
+  "keywords": [
+    "policy",
+    "dispute_window"
+  ],
+  "persona": {
+    "name": "Daniel Okafor",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "How long do I have to dispute a charge on my card? I think it's 90 days.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "seed",
+    "effective_file": "pol_dispute_v2",
+    "superseded_file": "pol_dispute_v1",
+    "answer": "60 days"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "fullText contains 'dispute'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "pol_dispute_v2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: pol_dispute_v2, the Transaction Dispute Policy in effect"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_policy_question",
+    "disposition": "superseded_belief",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

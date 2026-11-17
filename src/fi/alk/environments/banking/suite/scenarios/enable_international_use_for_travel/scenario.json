@@ -1,0 +1,98 @@
+{
+  "name": "enable_international_use_for_travel",
+  "scenario_key": "enable-international-use-for-travel",
+  "scenario_id": "",
+  "use_case": "Service a lost, stolen or damaged card: lock, controls, replacement",
+  "branch": "The customer travels abroad next week and wants the card ending 6063 to work outside the country; international use is off today. Only that control changes.",
+  "tests": "passes when the agent verifies and sets international_enabled to true on CARD308, leaving the other controls as they were.",
+  "instruction": "You travel to Portugal next week and want to be sure your debit card ending 6063 will work there. You believe international use is switched off. Ask the assistant to enable international use on that card; leave everything else as it is. Confirm when summarised. Provide passcode 3356 when asked.\n\nYour details:\n- Name: Arjun Mehta\n- Customer ID: C308\n- Session ID: SESS308\n- Card: CARD308 (ending 6063)\n- Passcode: 3356",
+  "keywords": [
+    "card_controls",
+    "travel"
+  ],
+  "persona": {
+    "name": "Arjun Mehta",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hi, I'm travelling abroad next week. Please enable international use on my card ending 6063.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C308",
+    "session_id": "SESS308",
+    "card_id": "CARD308",
+    "passcode": "3356"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C308",
+        "session_id": "SESS308",
+        "challenge_type": "passcode",
+        "challenge_response": "3356"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C308",
+        "session_id": "record: SESS308",
+        "challenge_response": "caller: 3356",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "update_card_controls",
+      "arguments": {
+        "customer_id": "C308",
+        "session_id": "SESS308",
+        "card_id": "CARD308",
+        "confirmed": true,
+        "international_enabled": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C308",
+        "session_id": "record: SESS308",
+        "card_id": "record: CARD308",
+        "confirmed": "rule: 'The agent confirms the exact changes before changing card controls'",
+        "international_enabled": "caller: True"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "service_card",
+    "disposition": "travel",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_controls_updated_as_requested",
+    "servicing_change_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

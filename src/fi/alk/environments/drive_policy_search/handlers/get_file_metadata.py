@@ -1,33 +1,40 @@
 def handle(args, db):
-    if "file_id" not in args or not args["file_id"]:
-        raise ToolError("Missing required argument: file_id")
-    file_id = str(args["file_id"])
+    if not args.get("fileId"):
+        raise ToolError("Missing required argument: fileId", category="invalid_input")
+    file_id = str(args["fileId"])
 
-    file_row = db.one("SELECT * FROM files WHERE file_id = ?", (file_id,))
+    file_row = db.one("SELECT * FROM drive_files WHERE file_id = ?", (file_id,))
     if not file_row or file_row["is_deleted"]:
-        raise ToolError(f"File '{file_id}' not found or has been deleted.")
+        raise ToolError(f"File '{file_id}' not found or has been deleted.", category="not_found")
 
     actor_row = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
     user_id = actor_row["user_id"] if actor_row else "u_alice"
-    user_record = db.one("SELECT role FROM users WHERE user_id = ?", (user_id,))
+    user_record = db.one("SELECT role FROM drive_users WHERE user_id = ?", (user_id,))
     is_admin = user_record and user_record["role"] == "administrator"
 
     if not is_admin:
-        perm = db.one("SELECT role FROM permissions WHERE target_type = 'folder' AND target_id = ? AND user_id = ?", (file_row["folder_id"], user_id))
-        file_perm = db.one("SELECT role FROM permissions WHERE target_type = 'file' AND target_id = ? AND user_id = ?", (file_id, user_id))
+        perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'folder' AND target_id = ? AND user_id = ?", (file_row["folder_id"], user_id))
+        file_perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'file' AND target_id = ? AND user_id = ?", (file_id, user_id))
         if not perm and not file_perm:
-            raise ToolError(f"Permission denied: You do not have access to file '{file_id}'.")
+            raise ToolError(f"Permission denied: You do not have access to file '{file_id}'.", category="permission_denied")
 
-    return {
-        "file_id": file_row["file_id"],
-        "title": file_row["title"],
-        "folder_id": file_row["folder_id"],
-        "policy_family": file_row["policy_family"],
-        "status": file_row["status"],
-        "version": file_row["version"],
-        "effective_date": file_row["effective_date"],
-        "mime_type": file_row["mime_type"],
-        "created_at": file_row["created_at"],
-        "modified_at": file_row["modified_at"],
-        "owner_id": file_row["owner_id"]
+    owner = db.one("SELECT email FROM drive_users WHERE user_id = ?", (file_row["owner_id"],))
+    content = file_row["content"] or ""
+    f = file_row
+    item = {
+        "id": f["file_id"],
+        "title": f["title"],
+        "parentId": f["folder_id"],
+        "mimeType": f["mime_type"],
+        "fileSize": str(len(content.encode("utf-8"))),
+        "description": f"{f['policy_family'] or 'document'}; status {f['status']}; version {f['version']}; effective {f['effective_date'] or 'n/a'}",
+        "fileExtension": f["title"].rsplit(".", 1)[-1] if "." in f["title"] else "",
+        "viewUrl": f"https://drive.example.com/file/d/{f['file_id']}/view",
+        "createdTime": f["created_at"],
+        "modifiedTime": f["modified_at"],
+        "owner": owner["email"] if owner else "",
+        "canAddChildren": False,
     }
+    if not args.get("excludeContentSnippets"):
+        item["contentSnippet"] = content[:200]
+    return item

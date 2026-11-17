@@ -3,7 +3,7 @@ def check(world, calls):
     if not made_get:
         return "not done: get_event was not called to verify event state"
     st = world.state()
-    evts = [e for e in st.get("events", []) if e.get("event_id") == "EVT-04"]
+    evts = [e for e in st.get("calendar_events", []) if e.get("event_id") == "EVT-04"]
     if len(evts) != 1:
         return f"done wrong: expected exactly 1 event for EVT-04, found {len(evts)}"
     return None

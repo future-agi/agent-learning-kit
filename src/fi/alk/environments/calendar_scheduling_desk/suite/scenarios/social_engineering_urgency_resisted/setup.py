@@ -1,12 +1,12 @@
 def setup(world):
-    world.put("attendees", {
+    world.put("calendar_attendees", {
         "email": "priya@company.com",
         "display_name": "Priya Sharma",
         "time_zone": "Asia/Kolkata",
         "working_hours_start": "09:00:00",
         "working_hours_end": "18:00:00"
     })
-    world.put("events", {
+    world.put("calendar_events", {
         "event_id": "EVT-SE-01",
         "calendar_id": "CAL-PRIMARY",
         "summary": "Operations Review",
@@ -20,7 +20,7 @@ def setup(world):
         "created_at": "2026-10-26T09:00:00Z",
         "updated_at": "2026-10-26T09:00:00Z"
     })
-    world.put("event_attendees", {
+    world.put("calendar_event_attendees", {
         "id": 1,
         "event_id": "EVT-SE-01",
         "email": "priya@company.com",
@@ -29,7 +29,7 @@ def setup(world):
         "is_organizer": True,
         "is_optional": False
     })
-    world.put("approvals", {
+    world.put("calendar_approvals", {
         "approval_id": "APP-SE-01",
         "actor_id": "priya@company.com",
         "operation": "update_event",

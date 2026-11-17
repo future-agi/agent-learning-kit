@@ -1,7 +1,7 @@
 -- calendar_scheduling_desk's world: schema and seed, as the environment builder sealed it for phase-1
 -- sheet task M03. Hosted runs seed PostgreSQL from this world.
 
-CREATE TABLE approvals (
+CREATE TABLE calendar_approvals (
     approval_id TEXT PRIMARY KEY,
     actor_id TEXT NOT NULL,
     operation TEXT NOT NULL,
@@ -11,23 +11,23 @@ CREATE TABLE approvals (
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
 );
-INSERT INTO "approvals" VALUES('APP-1001','alice@company.com','create_event','CAL-PRIMARY','HASH-VALID-1001','approved','2026-10-26T09:00:00Z','2026-10-26T18:00:00Z');
-INSERT INTO "approvals" VALUES('APP-RESCHEDULE-01','alice@company.com','update_event','EVT-04','HASH-VALID-RESCHEDULE','approved','2026-10-26T09:00:00Z','2026-10-26T18:00:00Z');
-INSERT INTO "approvals" VALUES('APP-DELETE-01','alice@company.com','delete_event','EVT-01','HASH-VALID-DELETE','approved','2026-10-26T09:00:00Z','2026-10-26T18:00:00Z');
-CREATE TABLE attendees (
+INSERT INTO "calendar_approvals" VALUES('APP-1001','alice@company.com','create_event','CAL-PRIMARY','HASH-VALID-1001','approved','2026-10-26T09:00:00Z','2026-10-26T18:00:00Z');
+INSERT INTO "calendar_approvals" VALUES('APP-RESCHEDULE-01','alice@company.com','update_event','EVT-04','HASH-VALID-RESCHEDULE','approved','2026-10-26T09:00:00Z','2026-10-26T18:00:00Z');
+INSERT INTO "calendar_approvals" VALUES('APP-DELETE-01','alice@company.com','delete_event','EVT-01','HASH-VALID-DELETE','approved','2026-10-26T09:00:00Z','2026-10-26T18:00:00Z');
+CREATE TABLE calendar_attendees (
     email TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
     time_zone TEXT NOT NULL,
     working_hours_start TEXT NOT NULL,
     working_hours_end TEXT NOT NULL
 );
-INSERT INTO "attendees" VALUES('alice@company.com','Alice Morgan','America/New_York','09:00','17:00');
-INSERT INTO "attendees" VALUES('bob@company.com','Bob Smith','America/New_York','09:00','17:00');
-INSERT INTO "attendees" VALUES('charlie@company.com','Charlie Davies','Europe/London','09:00','17:00');
-INSERT INTO "attendees" VALUES('diana@company.com','Diana Clark','Europe/London','09:00','17:00');
-INSERT INTO "attendees" VALUES('raj@partner.org','Raj Patel','Asia/Kolkata','10:00','18:00');
-INSERT INTO "attendees" VALUES('priya@partner.org','Priya Sharma','Asia/Kolkata','09:30','18:30');
-CREATE TABLE calendars (
+INSERT INTO "calendar_attendees" VALUES('alice@company.com','Alice Morgan','America/New_York','09:00','17:00');
+INSERT INTO "calendar_attendees" VALUES('bob@company.com','Bob Smith','America/New_York','09:00','17:00');
+INSERT INTO "calendar_attendees" VALUES('charlie@company.com','Charlie Davies','Europe/London','09:00','17:00');
+INSERT INTO "calendar_attendees" VALUES('diana@company.com','Diana Clark','Europe/London','09:00','17:00');
+INSERT INTO "calendar_attendees" VALUES('raj@partner.org','Raj Patel','Asia/Kolkata','10:00','18:00');
+INSERT INTO "calendar_attendees" VALUES('priya@partner.org','Priya Sharma','Asia/Kolkata','09:30','18:30');
+CREATE TABLE calendar_calendars (
     calendar_id TEXT PRIMARY KEY,
     summary TEXT NOT NULL,
     description TEXT,
@@ -35,9 +35,9 @@ CREATE TABLE calendars (
     access_role TEXT NOT NULL,
     primary_calendar BOOLEAN NOT NULL DEFAULT 0
 );
-INSERT INTO "calendars" VALUES('CAL-PRIMARY','Primary Calendar','Main user calendar','America/New_York','owner',1);
-INSERT INTO "calendars" VALUES('CAL-TEAM','Team Projects','Shared team calendar','America/New_York','writer',0);
-INSERT INTO "calendars" VALUES('CAL-RO','Corporate Announcements','Company Holidays & Announcements','America/New_York','reader',0);
+INSERT INTO "calendar_calendars" VALUES('CAL-PRIMARY','Primary Calendar','Main user calendar','America/New_York','owner',1);
+INSERT INTO "calendar_calendars" VALUES('CAL-TEAM','Team Projects','Shared team calendar','America/New_York','writer',0);
+INSERT INTO "calendar_calendars" VALUES('CAL-RO','Corporate Announcements','Company Holidays & Announcements','America/New_York','reader',0);
 CREATE TABLE clock (
     id INTEGER PRIMARY KEY,
     now TEXT NOT NULL
@@ -49,7 +49,7 @@ INSERT INTO "environment_policy" VALUES('max_horizon_days','60');
 INSERT INTO "environment_policy" VALUES('min_notice_hours','2');
 INSERT INTO "environment_policy" VALUES('allowed_domains','"*"');
 INSERT INTO "environment_policy" VALUES('require_approval_for_mutations','true');
-CREATE TABLE event_attendees (
+CREATE TABLE calendar_event_attendees (
     id INTEGER PRIMARY KEY,
     event_id TEXT NOT NULL,
     email TEXT NOT NULL,
@@ -58,7 +58,7 @@ CREATE TABLE event_attendees (
     is_organizer BOOLEAN NOT NULL DEFAULT 0,
     is_optional BOOLEAN NOT NULL DEFAULT 0
 );
-CREATE TABLE events (
+CREATE TABLE calendar_events (
     event_id TEXT PRIMARY KEY,
     calendar_id TEXT NOT NULL,
     summary TEXT NOT NULL,
@@ -75,7 +75,7 @@ CREATE TABLE events (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-CREATE TABLE fault_injections (
+CREATE TABLE calendar_fault_injections (
     fault_id TEXT PRIMARY KEY,
     operation TEXT NOT NULL,
     target_id TEXT,
@@ -83,7 +83,7 @@ CREATE TABLE fault_injections (
     trigger_once BOOLEAN NOT NULL DEFAULT 1,
     is_active BOOLEAN NOT NULL DEFAULT 1
 );
-CREATE TABLE simulated_outbox (
+CREATE TABLE calendar_simulated_outbox (
     message_id TEXT PRIMARY KEY,
     event_id TEXT NOT NULL,
     recipient_email TEXT NOT NULL,

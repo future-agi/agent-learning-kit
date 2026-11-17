@@ -1,0 +1,108 @@
+{
+  "name": "dispute_incorrect_amount_receipt_differs",
+  "scenario_key": "dispute-incorrect-amount-receipt-differs",
+  "scenario_id": "",
+  "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
+  "branch": "The customer's receipt shows $84.50 but the Harbor Grill charge posted as $184.50. One dispute with reason incorrect_amount for TX322.",
+  "tests": "passes when the agent verifies, reads the transaction, and files exactly one dispute with reason incorrect_amount for TX322.",
+  "instruction": "You had dinner at Harbor Grill on October 20 and your receipt says $84.50, but your credit card ending 6160 was charged $184.50. You want the charge disputed for the wrong amount; you do recognise the merchant. Provide passcode 7708 when asked.\n\nYour details:\n- Name: Aisha Rahman\n- Customer ID: C322\n- Session ID: SESS322\n- Card: CARD322 (ending 6160)\n- Transaction: TX322 (Harbor Grill, charged $184.50, receipt $84.50)\n- Passcode: 7708",
+  "keywords": [
+    "dispute_filing",
+    "incorrect_amount"
+  ],
+  "persona": {
+    "name": "Aisha Rahman",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, Harbor Grill charged my card ending 6160 $184.50 but my receipt says $84.50.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C322",
+    "session_id": "SESS322",
+    "transaction_id": "TX322",
+    "passcode": "7708",
+    "dispute_reason": "incorrect_amount"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C322",
+        "session_id": "SESS322",
+        "challenge_type": "passcode",
+        "challenge_response": "7708"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C322",
+        "session_id": "record: SESS322",
+        "challenge_response": "caller: 7708",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_transaction",
+      "arguments": {
+        "customer_id": "C322",
+        "session_id": "SESS322",
+        "transaction_id": "TX322"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_id": "C322",
+        "session_id": "SESS322",
+        "transaction_id": "TX322",
+        "dispute_reason": "incorrect_amount",
+        "request_key": "REQ-C322-TX322",
+        "customer_notes": "Receipt shows $84.50, charged $184.50"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C322",
+        "session_id": "record: SESS322",
+        "transaction_id": "record: TX322",
+        "dispute_reason": "rule: one of the allowed dispute reasons in the Transaction Dispute Policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "file_or_track_dispute",
+    "disposition": "incorrect_amount",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_filed_and_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

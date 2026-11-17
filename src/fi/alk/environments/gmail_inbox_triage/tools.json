@@ -1,445 +1,613 @@
 [
   {
     "name": "search_threads",
-    "description": "Search email threads in the mailbox matching a query string or label filters. Returns thread summaries with IDs, snippet, historyId, and labelIds.",
+    "description": "Lists email threads matching a Gmail search query (label:ID, is:unread, in:inbox, from:, to:, subject:, newer_than:7d, free terms). Full message bodies are not returned; use get_thread for them. Drafts, spam and trash are excluded.",
     "parameters": {
+      "type": "object",
       "properties": {
-        "page_token": {
-          "description": "Pagination cursor token",
+        "pageSize": {
+          "type": "integer",
+          "description": "Threads per page; default 20, maximum 50."
+        },
+        "pageToken": {
           "type": "string"
         },
-        "label_ids": {
-          "items": {
-            "type": "string"
-          },
-          "description": "Optional list of label IDs to filter by",
-          "type": "array"
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
         },
-        "max_results": {
-          "description": "Maximum number of threads to return (default 10)",
-          "type": "integer"
+        "includeTrash": {
+          "type": "boolean",
+          "description": "Include trashed threads (default false)."
         },
-        "q": {
-          "description": "Query string matching terms or label:LABEL_NAME",
-          "type": "string"
+        "view": {
+          "type": "string",
+          "description": "THREAD_VIEW_UNSPECIFIED, THREAD_VIEW_METADATA_ONLY or THREAD_VIEW_MINIMAL (default)."
         }
-      },
-      "type": "object"
+      }
     },
     "mutates_state": false,
     "returns": {
-      "required": [
-        "threads",
-        "result_size_estimate"
-      ],
       "type": "object",
       "properties": {
-        "next_page_token": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "threads": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
-              "label_ids": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "snippet": {
-                "type": "string"
-              },
               "id": {
                 "type": "string"
               },
-              "history_id": {
-                "type": "string"
+              "messages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "snippet": {
+                      "type": "string"
+                    },
+                    "subject": {
+                      "type": "string"
+                    },
+                    "sender": {
+                      "type": "string"
+                    },
+                    "toRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "ccRecipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "plaintextBody": {
+                      "type": "string"
+                    },
+                    "htmlBody": {
+                      "type": "string"
+                    },
+                    "attachmentIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "attachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "labelIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "snippet",
+                    "subject",
+                    "sender",
+                    "toRecipients",
+                    "date",
+                    "labelIds"
+                  ]
+                }
               }
             },
             "required": [
               "id",
-              "snippet",
-              "history_id",
-              "label_ids"
+              "messages"
             ]
           }
         },
-        "result_size_estimate": {
-          "type": "integer"
-        }
-      }
-    }
-  },
-  {
-    "name": "get_thread",
-    "description": "Retrieve full details of an email thread including its messages, headers, and labels.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "thread_id": {
-          "description": "The ID of the thread to retrieve",
+        "nextPageToken": {
+          "type": "string"
+        },
+        "resultCountEstimate": {
           "type": "string"
         }
       },
       "required": [
-        "thread_id"
+        "threads",
+        "resultCountEstimate"
+      ]
+    }
+  },
+  {
+    "name": "get_thread",
+    "description": "Retrieves an email thread by ID with its messages in date order (bodies under FULL_CONTENT).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
+        }
+      },
+      "required": [
+        "threadId"
       ]
     },
     "mutates_state": false,
     "returns": {
-      "required": [
-        "id",
-        "history_id",
-        "snippet",
-        "label_ids",
-        "messages"
-      ],
+      "type": "object",
       "properties": {
-        "label_ids": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+        "id": {
+          "type": "string"
         },
         "messages": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
-              "sender": {
-                "type": "string"
-              },
-              "cc": {
-                "type": "string"
-              },
               "id": {
-                "type": "string"
-              },
-              "thread_id": {
-                "type": "string"
-              },
-              "date": {
-                "type": "string"
-              },
-              "recipient": {
-                "type": "string"
-              },
-              "subject": {
                 "type": "string"
               },
               "snippet": {
                 "type": "string"
               },
-              "body": {
+              "subject": {
                 "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "date": {
+                "type": "string"
+              },
+              "plaintextBody": {
+                "type": "string"
+              },
+              "htmlBody": {
+                "type": "string"
+              },
+              "attachmentIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "labelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "required": [
               "id",
-              "thread_id",
-              "sender",
-              "recipient",
+              "snippet",
               "subject",
-              "body",
-              "date"
+              "sender",
+              "toRecipients",
+              "date",
+              "labelIds"
             ]
           }
-        },
-        "id": {
-          "type": "string"
-        },
-        "snippet": {
-          "type": "string"
-        },
-        "history_id": {
-          "type": "string"
         }
       },
-      "type": "object"
+      "required": [
+        "id",
+        "messages"
+      ]
     }
   },
   {
     "name": "get_message",
-    "description": "Retrieve a specific email message by its unique ID.",
+    "description": "Retrieves one email message by its message ID.",
     "parameters": {
-      "required": [
-        "message_id"
-      ],
       "type": "object",
       "properties": {
-        "message_id": {
+        "messageId": {
           "type": "string",
-          "description": "The ID of the message to retrieve"
+          "description": "The unique identifier of the message."
+        },
+        "messageFormat": {
+          "type": "string",
+          "description": "MESSAGE_FORMAT_UNSPECIFIED, MINIMAL, FULL_CONTENT (default; bodies included) or METADATA_ONLY."
         }
-      }
+      },
+      "required": [
+        "messageId"
+      ]
     },
     "mutates_state": false,
     "returns": {
+      "type": "object",
       "properties": {
-        "date": {
-          "type": "string"
-        },
-        "recipient": {
-          "type": "string"
-        },
-        "cc": {
-          "type": "string"
-        },
         "id": {
           "type": "string"
         },
-        "body": {
+        "snippet": {
           "type": "string"
         },
         "subject": {
           "type": "string"
         },
-        "thread_id": {
-          "type": "string"
-        },
-        "snippet": {
-          "type": "string"
-        },
         "sender": {
           "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "date": {
+          "type": "string"
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "attachmentIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "labelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
         "id",
-        "thread_id",
-        "sender",
-        "recipient",
+        "snippet",
         "subject",
-        "body",
+        "sender",
+        "toRecipients",
         "date",
-        "snippet"
-      ],
-      "type": "object"
+        "labelIds"
+      ]
     }
   },
   {
     "name": "list_labels",
-    "description": "List all system and user labels in the mailbox.",
+    "description": "Lists the user-defined labels of the mailbox with their IDs. System label IDs (INBOX, UNREAD, STARRED, IMPORTANT, SENT, DRAFT, SPAM, TRASH) are usable without listing.",
     "parameters": {
       "type": "object",
-      "properties": {}
+      "properties": {
+        "pageSize": {
+          "type": "integer"
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      }
     },
     "mutates_state": false,
     "returns": {
-      "required": [
-        "labels"
-      ],
       "type": "object",
       "properties": {
         "labels": {
           "type": "array",
           "items": {
-            "required": [
-              "id",
-              "name",
-              "type"
-            ],
             "type": "object",
             "properties": {
-              "type": {
-                "type": "string"
-              },
-              "id": {
+              "labelId": {
                 "type": "string"
               },
               "name": {
                 "type": "string"
+              },
+              "threadsTotal": {
+                "type": "integer"
+              },
+              "threadsUnread": {
+                "type": "integer"
               }
-            }
+            },
+            "required": [
+              "labelId",
+              "name"
+            ]
           }
+        },
+        "nextPageToken": {
+          "type": "string"
         }
-      }
+      },
+      "required": [
+        "labels"
+      ]
     }
   },
   {
     "name": "label_thread",
-    "description": "Add or remove labels from an email thread.",
+    "description": "Adds labels to an entire thread (every message in it). Takes label IDs, not names; use list_labels when unsure of a user label's ID.",
     "parameters": {
       "type": "object",
       "properties": {
-        "thread_id": {
+        "threadId": {
           "type": "string",
-          "description": "ID of the thread to label"
+          "description": "The unique identifier of the thread."
         },
-        "remove_label_ids": {
+        "labelIds": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "List of label IDs to remove from the thread"
-        },
-        "add_label_ids": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "description": "List of label IDs to add to the thread"
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
         }
       },
       "required": [
-        "thread_id"
+        "threadId",
+        "labelIds"
       ]
     },
     "mutates_state": true,
     "returns": {
-      "required": [
-        "thread_id",
-        "label_ids"
-      ],
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "unlabel_thread",
+    "description": "Removes labels from an entire thread. Takes label IDs, not names.",
+    "parameters": {
+      "type": "object",
       "properties": {
-        "label_ids": {
+        "threadId": {
+          "type": "string",
+          "description": "The unique identifier of the thread."
+        },
+        "labelIds": {
+          "type": "array",
           "items": {
             "type": "string"
           },
-          "type": "array"
-        },
-        "thread_id": {
-          "type": "string"
+          "description": "Label IDs (system IDs such as INBOX, UNREAD, IMPORTANT, or user label IDs from list_labels), never names."
         }
       },
-      "type": "object"
+      "required": [
+        "threadId",
+        "labelIds"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {}
     }
   },
   {
     "name": "list_drafts",
-    "description": "List all email drafts in the mailbox.",
+    "description": "Lists the mailbox's drafts, newest first. humanEdited marks a draft a person has edited.",
     "parameters": {
-      "properties": {},
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Drafts per page; default 20, maximum 50."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Gmail search syntax."
+        },
+        "view": {
+          "type": "string",
+          "description": "DRAFT_VIEW_UNSPECIFIED, DRAFT_VIEW_METADATA_ONLY or DRAFT_VIEW_FULL (default)."
+        }
+      }
     },
     "mutates_state": false,
     "returns": {
-      "required": [
-        "drafts"
-      ],
       "type": "object",
       "properties": {
         "drafts": {
           "type": "array",
           "items": {
-            "required": [
-              "id",
-              "thread_id",
-              "recipient",
-              "subject",
-              "body",
-              "is_human_edited",
-              "created_at",
-              "updated_at"
-            ],
+            "type": "object",
             "properties": {
-              "thread_id": {
-                "type": "string"
-              },
-              "body": {
+              "id": {
                 "type": "string"
               },
               "subject": {
                 "type": "string"
               },
-              "created_at": {
+              "threadId": {
                 "type": "string"
               },
-              "updated_at": {
+              "toRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bccRecipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "plaintextBody": {
                 "type": "string"
               },
-              "id": {
+              "htmlBody": {
                 "type": "string"
               },
-              "cc": {
+              "date": {
                 "type": "string"
               },
-              "bcc": {
-                "type": "string"
-              },
-              "is_human_edited": {
+              "humanEdited": {
                 "type": "boolean"
-              },
-              "recipient": {
-                "type": "string"
               }
             },
-            "type": "object"
+            "required": [
+              "id",
+              "threadId",
+              "toRecipients",
+              "date"
+            ]
           }
-        }
-      }
-    }
-  },
-  {
-    "name": "create_draft",
-    "description": "Create a draft email reply linked to a thread for human review.",
-    "parameters": {
-      "properties": {
-        "body": {
-          "type": "string",
-          "description": "Email draft body content"
         },
-        "subject": {
-          "type": "string",
-          "description": "Subject line for the draft reply"
-        },
-        "thread_id": {
-          "type": "string",
-          "description": "ID of the thread being replied to"
-        },
-        "bcc": {
-          "description": "Optional BCC recipient(s)",
-          "type": "string"
-        },
-        "cc": {
-          "description": "Optional CC recipient(s)",
-          "type": "string"
-        },
-        "recipient": {
-          "description": "Target recipient email address",
+        "nextPageToken": {
           "type": "string"
         }
       },
       "required": [
-        "thread_id",
-        "recipient",
-        "subject",
-        "body"
-      ],
-      "type": "object"
+        "drafts"
+      ]
+    }
+  },
+  {
+    "name": "create_draft",
+    "description": "Creates a draft email for a person to review and send. To reply in an existing thread pass the original message's ID as replyToMessageId. Addresses are plain (no 'Name <email>'). Attachments are not supported yet. Nothing is sent.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Recipient email addresses."
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bcc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subject": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string",
+          "description": "Plain-text body."
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "replyToMessageId": {
+          "type": "string",
+          "description": "The message this draft replies to; the draft joins its thread."
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
     },
     "mutates_state": true,
     "returns": {
       "type": "object",
-      "required": [
-        "draft_id",
-        "thread_id",
-        "recipient",
-        "subject",
-        "created_at"
-      ],
       "properties": {
-        "created_at": {
-          "type": "string"
-        },
-        "draft_id": {
-          "type": "string"
-        },
-        "recipient": {
-          "type": "string"
-        },
-        "thread_id": {
+        "id": {
           "type": "string"
         },
         "subject": {
           "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "toRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bccRecipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "plaintextBody": {
+          "type": "string"
+        },
+        "htmlBody": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "humanEdited": {
+          "type": "boolean"
         }
-      }
+      },
+      "required": [
+        "id",
+        "threadId",
+        "toRecipients",
+        "date"
+      ]
     }
   }
 ]

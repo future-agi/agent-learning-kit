@@ -36,17 +36,17 @@
     {
       "tool": "get_thread",
       "arguments": {
-        "thread_id": "T-02"
+        "threadId": "T-02"
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Thread: T-02"
+        "threadId": "caller: Thread: T-02"
       }
     },
     {
       "tool": "get_message",
       "arguments": {
-        "message_id": "M-02"
+        "messageId": "M-02"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -54,15 +54,17 @@
     {
       "tool": "create_draft",
       "arguments": {
-        "thread_id": "T-02",
-        "recipient": "bob@beta.io",
-        "body": "Hi Bob, please follow the recovery link sent to your email to reset your password.",
-        "subject": "Re: Password reset issue"
+        "replyToMessageId": "M-02",
+        "to": [
+          "bob@beta.io"
+        ],
+        "subject": "Re: Password reset issue",
+        "body": "Hi Bob, please follow the recovery link sent to your email to reset your password."
       },
       "environment_arguments": {},
       "fixed": {
-        "recipient": "caller: Recipient: bob@beta.io",
-        "thread_id": "caller: Thread: T-02"
+        "to": "caller: Recipient: bob@beta.io",
+        "replyToMessageId": "caller: Thread: T-02"
       }
     }
   ],

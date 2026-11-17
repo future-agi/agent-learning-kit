@@ -36,18 +36,16 @@
   "solution": [
     {
       "tool": "list_calendars",
-      "arguments": {
-        "min_access_role": "writer"
-      },
+      "arguments": {},
       "environment_arguments": {},
       "fixed": {}
     },
     {
       "tool": "list_events",
       "arguments": {
-        "time_min": "2026-11-01T00:00:00Z",
-        "calendar_id": "CAL-PRIMARY",
-        "time_max": "2026-11-01T23:59:59Z"
+        "startTime": "2026-11-01T00:00:00Z",
+        "calendarId": "CAL-PRIMARY",
+        "endTime": "2026-11-01T23:59:59Z"
       },
       "environment_arguments": {},
       "fixed": {}

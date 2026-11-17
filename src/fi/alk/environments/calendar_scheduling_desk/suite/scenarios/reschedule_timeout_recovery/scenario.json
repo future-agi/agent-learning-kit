@@ -42,17 +42,12 @@
       "tool": "update_event",
       "arguments": {
         "summary": "Quarterly Roadmap Review",
-        "calendar_id": "CAL-PRIMARY",
+        "calendarId": "CAL-PRIMARY",
         "expected_version": 1,
-        "event_id": "EVT-04",
-        "start": {
-          "timeZone": "America/New_York",
-          "dateTime": "2026-10-27T18:00:00Z"
-        },
-        "end": {
-          "dateTime": "2026-10-27T18:30:00Z",
-          "timeZone": "America/New_York"
-        },
+        "eventId": "EVT-04",
+        "startTime": "2026-10-27T18:00:00Z",
+        "timeZone": "America/New_York",
+        "endTime": "2026-10-27T18:30:00Z",
         "approval_id": "APP-RESCHEDULE-01"
       },
       "environment_arguments": {},
@@ -61,8 +56,8 @@
     {
       "tool": "get_event",
       "arguments": {
-        "calendar_id": "CAL-PRIMARY",
-        "event_id": "EVT-04"
+        "calendarId": "CAL-PRIMARY",
+        "eventId": "EVT-04"
       },
       "environment_arguments": {},
       "fixed": {}

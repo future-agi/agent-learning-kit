@@ -11,8 +11,8 @@ def check(world, calls):
             return f"done wrong: {c.name} was called without an approval_id"
             
     st = world.state()
-    evts = st.get("events", [])
-    outbox = st.get("simulated_outbox", [])
+    evts = st.get("calendar_events", [])
+    outbox = st.get("calendar_simulated_outbox", [])
     
     for c in mutation_calls:
         if c.name == "create_event":

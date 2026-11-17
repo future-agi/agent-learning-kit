@@ -1,0 +1,80 @@
+{
+  "server": "Google Gmail MCP server (Developer Preview)",
+  "endpoint": "https://gmailmcp.googleapis.com/mcp/v1",
+  "transport": "streamable_http",
+  "recorded": "2026-11-04",
+  "sources": [
+    "https://developers.google.com/workspace/gmail/api/reference/mcp",
+    "https://developers.google.com/workspace/gmail/api/reference/mcp/tools_list/search_threads",
+    "https://developers.google.com/workspace/gmail/api/reference/mcp/tools_list/get_thread",
+    "https://developers.google.com/workspace/gmail/api/reference/mcp/tools_list/get_message",
+    "https://developers.google.com/workspace/gmail/api/reference/mcp/tools_list/list_labels",
+    "https://developers.google.com/workspace/gmail/api/reference/mcp/tools_list/label_thread",
+    "https://developers.google.com/workspace/gmail/api/reference/mcp/tools_list/unlabel_thread",
+    "https://developers.google.com/workspace/gmail/api/reference/mcp/tools_list/list_drafts",
+    "https://developers.google.com/workspace/gmail/api/reference/mcp/tools_list/create_draft"
+  ],
+  "notes": [
+    "The server publishes no MCP protocol version; the tool pages carry a Developer Preview warning.",
+    "No send tool exists (workbook M02: draft-only). label_thread and unlabel_thread are separate tools; label_thread answers nothing on success.",
+    "Labels are held per thread in this world and reported on every message of the thread (Gmail holds them per message).",
+    "A draft's date is the day it was created (official Draft.date is YYYY-MM-DD)."
+  ],
+  "objects": {
+    "Message": ["id", "snippet", "subject", "sender", "toRecipients", "ccRecipients", "date", "plaintextBody", "attachmentIds", "htmlBody", "attachments", "labelIds"],
+    "Thread": ["id", "messages"],
+    "Draft": ["id", "subject", "threadId", "toRecipients", "ccRecipients", "bccRecipients", "plaintextBody", "date", "htmlBody"],
+    "Label": ["labelId", "name", "color", "threadsTotal", "threadsUnread"]
+  },
+  "tools": {
+    "search_threads": {
+      "input": {"properties": {"pageSize": {"type": "integer", "default": 20, "maximum": 50}, "pageToken": {"type": "string"}, "query": {"type": "string"}, "includeTrash": {"type": "boolean", "default": false}, "view": {"type": "string", "enum": ["THREAD_VIEW_UNSPECIFIED", "THREAD_VIEW_METADATA_ONLY", "THREAD_VIEW_MINIMAL"]}}, "required": []},
+      "output": {"properties": {"threads": "Thread[]", "nextPageToken": "string", "resultCountEstimate": "string"}, "required": ["threads"]},
+      "annotations": {"readOnlyHint": true, "idempotentHint": true, "destructiveHint": false}
+    },
+    "get_thread": {
+      "input": {"properties": {"threadId": {"type": "string"}, "messageFormat": {"type": "string", "enum": ["MESSAGE_FORMAT_UNSPECIFIED", "MINIMAL", "FULL_CONTENT", "METADATA_ONLY"]}}, "required": ["threadId"]},
+      "output": {"properties": {"id": "string", "messages": "Message[]"}, "required": ["id", "messages"]},
+      "annotations": {"readOnlyHint": true, "idempotentHint": true, "destructiveHint": false}
+    },
+    "get_message": {
+      "input": {"properties": {"messageId": {"type": "string"}, "messageFormat": {"type": "string", "enum": ["MESSAGE_FORMAT_UNSPECIFIED", "MINIMAL", "FULL_CONTENT", "METADATA_ONLY"]}}, "required": ["messageId"]},
+      "output": {"properties": {"id": "string", "snippet": "string", "subject": "string", "sender": "string", "toRecipients": "string[]", "ccRecipients": "string[]", "date": "string", "plaintextBody": "string", "attachmentIds": "string[]", "htmlBody": "string", "attachments": "object[]", "labelIds": "string[]"}, "required": ["id"]},
+      "annotations": {"readOnlyHint": true, "idempotentHint": true, "destructiveHint": false}
+    },
+    "list_labels": {
+      "input": {"properties": {"pageSize": {"type": "integer"}, "pageToken": {"type": "string"}}, "required": []},
+      "output": {"properties": {"labels": "Label[]", "nextPageToken": "string"}, "required": ["labels"]},
+      "annotations": {"readOnlyHint": true, "idempotentHint": true, "destructiveHint": false}
+    },
+    "label_thread": {
+      "input": {"properties": {"threadId": {"type": "string"}, "labelIds": {"type": "array", "items": {"type": "string"}}}, "required": ["threadId", "labelIds"]},
+      "output": {"properties": {}, "required": []},
+      "annotations": {"readOnlyHint": false, "idempotentHint": true, "destructiveHint": false}
+    },
+    "unlabel_thread": {
+      "input": {"properties": {"threadId": {"type": "string"}, "labelIds": {"type": "array", "items": {"type": "string"}}}, "required": ["threadId", "labelIds"]},
+      "output": {"properties": {}, "required": []},
+      "annotations": {"readOnlyHint": false, "idempotentHint": true, "destructiveHint": true}
+    },
+    "list_drafts": {
+      "input": {"properties": {"pageSize": {"type": "integer", "default": 20, "maximum": 50}, "pageToken": {"type": "string"}, "query": {"type": "string"}, "view": {"type": "string", "enum": ["DRAFT_VIEW_UNSPECIFIED", "DRAFT_VIEW_METADATA_ONLY", "DRAFT_VIEW_FULL"]}}, "required": []},
+      "output": {"properties": {"drafts": "Draft[]", "nextPageToken": "string"}, "required": ["drafts"]},
+      "annotations": {"readOnlyHint": true, "idempotentHint": false, "destructiveHint": false}
+    },
+    "create_draft": {
+      "input": {"properties": {"to": {"type": "array", "items": {"type": "string"}}, "cc": {"type": "array", "items": {"type": "string"}}, "bcc": {"type": "array", "items": {"type": "string"}}, "subject": {"type": "string"}, "body": {"type": "string"}, "htmlBody": {"type": "string"}, "replyToMessageId": {"type": "string"}, "attachments": {"type": "array", "items": {"type": "object"}}}, "required": []},
+      "output": {"properties": {"id": "string", "subject": "string", "threadId": "string", "toRecipients": "string[]", "ccRecipients": "string[]", "bccRecipients": "string[]", "plaintextBody": "string", "date": "string", "htmlBody": "string"}, "required": ["id"]},
+      "annotations": {"readOnlyHint": false, "idempotentHint": false, "destructiveHint": false}
+    }
+  },
+  "not_attached": {
+    "label_message": "the M02 cases label threads; messages share the thread's labels in this world",
+    "unlabel_message": "as label_message"
+  },
+  "local": {
+    "result_fields": {
+      "list_drafts": {"humanEdited": "M02-S05: a draft a person edited must not be overwritten; the official Draft has no such marker"}
+    }
+  }
+}

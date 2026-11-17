@@ -1,6 +1,6 @@
 def check(world, calls, reference):
     active_files = ["file_travel_v2_active", "file_remote_v2_active", "file_conduct_v2_active"]
-    has_active_call = any(c.name in ("read_file_content", "get_file_metadata") and c.ok and c.arguments.get("file_id") in active_files for c in calls)
+    has_active_call = any(c.name in ("read_file_content", "get_file_metadata") and c.ok and c.arguments.get("fileId") in active_files for c in calls)
     if not has_active_call:
         return "not done: expected active approved policy to be consulted"
     return None

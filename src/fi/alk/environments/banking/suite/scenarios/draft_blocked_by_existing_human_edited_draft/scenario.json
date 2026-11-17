@@ -1,0 +1,75 @@
+{
+  "name": "draft_blocked_by_existing_human_edited_draft",
+  "scenario_key": "draft-blocked-by-existing-human-edited-draft",
+  "scenario_id": "",
+  "use_case": "Draft a reply on a customer's email thread for a person to review",
+  "branch": "A human-edited draft already exists on Charlie's Best Buy thread. The assistant finds it when listing drafts and reports the conflict instead of creating a second draft.",
+  "tests": "passes when the agent reads th_c03_draft_needed, lists the drafts, and no second draft is created on the thread (the human draft stands).",
+  "instruction": "You are a support colleague. Ask the assistant to draft a reply to Charlie Johnson's Best Buy question on thread th_c03_draft_needed. If it tells you a colleague has already written a draft on that thread, say thanks and leave the existing draft as it is; do not ask it to overwrite or duplicate it.\n\nYour details:\n- Thread: th_c03_draft_needed\n- Recipient: charlie.j@example.com",
+  "keywords": [
+    "draft_reply",
+    "conflict"
+  ],
+  "persona": {
+    "name": "Ruth Adeyemi",
+    "gender": "male",
+    "age_group": "18-25",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Talkative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Please draft a reply to Charlie Johnson's Best Buy question on thread th_c03_draft_needed.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "mixed",
+    "thread_id": "th_c03_draft_needed",
+    "human_draft_id": "D-0901",
+    "recipient": "charlie.j@example.com"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c03_draft_needed"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_drafts",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "draft_email_reply",
+    "disposition": "human_draft_exists",
+    "interaction": "single_request",
+    "counterparty": "authorized_representative",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "human_draft_preserved_banking"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
