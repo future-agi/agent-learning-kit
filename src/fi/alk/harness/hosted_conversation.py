@@ -17,6 +17,7 @@ from urllib.parse import urlencode, urlparse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..providers.agent import _redact, redact_strings
+from ..providers.secret_shapes import credential_in
 from .outbound import RequestsTransport, Transport, TransportError
 
 CONVERSATION_SCHEMA_VERSION = "futureagi.harness-conversation.v1"
@@ -742,6 +743,21 @@ def _add_bytes(archive: tarfile.TarFile, name: str, body: bytes, source: Path) -
     archive.addfile(info, io.BytesIO(body))
 
 
+# Written as they are and replayed as they are, and refused at their writers. A workspace an older
+# kit wrote can still hold a credential in one; that file is left out, not cleaned.
+_REPLAYED_FILES = frozenset({"actors.json", "simulator_prompt.md"})
+
+
+def _holds_a_credential(path: Path) -> bool:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if credential_in(text):
+        return True
+    try:
+        return credential_in(json.loads(text))
+    except ValueError:
+        return False
+
+
 def _pack(workspace: Path) -> bytes:
     root = workspace.resolve()
     with tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024) as file:
@@ -764,6 +780,12 @@ def _pack(workspace: Path) -> bytes:
                 try:
                     if relative.as_posix() == PENDING_QUESTION and path.is_file():
                         _add_bytes(archive, PENDING_QUESTION, _cleaned_pending_question_file(path), path)
+                    elif relative.as_posix() in _REPLAYED_FILES and path.is_file() and _holds_a_credential(path):
+                        logger.warning(
+                            "%s was left out of the workspace checkpoint, because it holds a "
+                            "credential; rewrite it with a placeholder",
+                            relative.as_posix(),
+                        )
                     elif relative.as_posix() == ADK_DATABASE and path.is_file():
                         body = _cleaned_adk_database(path)
                         if body is not None:

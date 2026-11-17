@@ -1606,3 +1606,36 @@ def test_a_damaged_session_database_is_a_warning_with_its_traceback(tmp_path, ca
     expected = [one for one in caplog.records if "session database" in one.getMessage()]
     assert len(expected) == 1 and expected[0].levelname == "WARNING"
     assert expected[0].exc_info and issubclass(expected[0].exc_info[0], ValueError)
+
+
+def test_a_workspace_written_by_an_older_kit_packs_without_the_actor_file_or_prompt_that_hold_a_key(
+    tmp_path, caplog
+):
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+
+    key = "AKIA" + "IOSFODNN7EXAMPLE"
+    (tmp_path / "actors.json").write_text(json.dumps({"actors": [{"id": "it_desk", "prompt": f"You hold {key}"}]}))
+    (tmp_path / "simulator_prompt.md").write_text(f"The caller reads out {key}")
+    (tmp_path / "contract.json").write_text("{}")
+
+    with caplog.at_level("WARNING"):
+        members = _members(_workspace_archive(tmp_path))
+
+    assert sorted(members) == ["contract.json"]
+    assert not [name for name, content in members.items() if key.encode() in content]
+    said = [one.getMessage() for one in caplog.records if one.levelname == "WARNING"]
+    assert any("actors.json" in one for one in said) and any("simulator_prompt.md" in one for one in said)
+    assert not any(key in one for one in said)
+
+
+def test_an_honest_actor_file_and_simulator_prompt_pack_unchanged(tmp_path):
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+
+    actors = json.dumps({"actors": [{"id": "it_desk", "prompt": "You hold the shared key $AWS_KEY_ID"}]})
+    prompt = "You are a caller with persona {{ persona }}. Follow {{ instruction }}."
+    (tmp_path / "actors.json").write_text(actors)
+    (tmp_path / "simulator_prompt.md").write_text(prompt)
+
+    members = _members(_workspace_archive(tmp_path))
+
+    assert members["actors.json"] == actors.encode() and members["simulator_prompt.md"] == prompt.encode()
