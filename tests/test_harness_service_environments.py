@@ -2399,3 +2399,61 @@ def test_a_lifecycle_hook_without_privilege_is_accepted(hook):
             }
         )
     )
+
+
+def _link(tmp_path, target, name="sock"):
+    link = tmp_path / name
+    link.symlink_to(target)
+    return str(link)
+
+
+@pytest.mark.parametrize("target", ["/var/run", "/var/run/docker.sock", "/", "/run"])
+@pytest.mark.parametrize("form", ["long", "short"])
+def test_a_symlink_to_the_docker_socket_or_a_parent_is_rejected(tmp_path, target, form):
+    source = _link(tmp_path, target)
+    volume = (
+        {"type": "bind", "source": source, "target": "/h"}
+        if form == "long"
+        else f"{source}:/h:ro"
+    )
+    with pytest.raises(ProvisionError, match="agent: Docker socket mount"):
+        _validate_compose_security(
+            {"services": {"agent": {"volumes": [volume]}}}, source=tmp_path
+        )
+
+
+def test_a_relative_symlink_and_a_chain_of_links_are_resolved(tmp_path):
+    _link(tmp_path, "/var/run", name="first")
+    _link(tmp_path, tmp_path / "first", name="second")
+    for source in ("./first", "./second", str(tmp_path / "second")):
+        with pytest.raises(ProvisionError, match="agent: Docker socket mount"):
+            _validate_compose_security(
+                {
+                    "services": {
+                        "agent": {
+                            "volumes": [
+                                {"type": "bind", "source": source, "target": "/h"}
+                            ]
+                        }
+                    }
+                },
+                source=tmp_path,
+            )
+
+
+def test_a_symlink_to_a_folder_of_the_job_is_not_a_docker_socket_mount(tmp_path):
+    (tmp_path / "data").mkdir()
+    link = _link(tmp_path, tmp_path / "data", name="link")
+    _validate_compose_security(
+        {
+            "services": {
+                "agent": {
+                    "volumes": [
+                        {"type": "bind", "source": link, "target": "/h"},
+                        f"{link}:/g",
+                    ]
+                }
+            }
+        },
+        source=tmp_path,
+    )

@@ -533,8 +533,20 @@ _DOCKER_SOCKET_AND_PARENTS = frozenset(
 )
 
 
-def _mounts_docker_socket(volume: Any) -> bool:
-    """True for a bind (long or short form) whose resolved source is the socket or a parent."""
+def _docker_socket_paths() -> frozenset[str]:
+    """The literal set and what each entry resolves to on this host (``/var/run`` is a link)."""
+    return _DOCKER_SOCKET_AND_PARENTS | {
+        os.path.realpath(path) for path in _DOCKER_SOCKET_AND_PARENTS
+    }
+
+
+def _mounts_docker_socket(volume: Any, root: str | None = None) -> bool:
+    """True for a bind (long or short form) whose source, once resolved, is the socket or a parent.
+
+    The runner resolves the source on the host before Docker mounts it, so a link in the job's
+    own folder that points at the socket mounts the socket: compare the real path as well.
+    ``root`` is the job's source; a relative source is read from there.
+    """
     if isinstance(volume, dict):
         if str(volume.get("type") or "bind") != "bind":
             return False
@@ -545,9 +557,14 @@ def _mounts_docker_socket(volume: Any) -> bool:
             return True
         source = text.split(":", 1)[0]
     if not source.startswith("/"):
-        return False
-    resolved = posixpath.normpath(re.sub(r"/{2,}", "/", source))
-    return resolved in _DOCKER_SOCKET_AND_PARENTS
+        if root is None or not source:
+            return False
+        source = posixpath.join(root, source)
+    resolved = {
+        posixpath.normpath(re.sub(r"/{2,}", "/", path))
+        for path in (source, os.path.realpath(source))
+    }
+    return bool(resolved & _docker_socket_paths())
 
 
 # Deny by default: a service field this list does not name is refused, so a field added to
@@ -589,7 +606,9 @@ def _volume_options_are_private(options: Any) -> bool:
     )
 
 
-def _validate_compose_security(config: dict[str, Any]) -> None:
+def _validate_compose_security(
+    config: dict[str, Any], source: str | os.PathLike[str] | None = None
+) -> None:
     """Reject host-escape primitives before any submitted container is created.
 
     Messages carry a category and the file's own service/network keys, never a rendered value:
@@ -598,6 +617,9 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
     violations: list[str] = []
     network_rule_failed = False
     services = config["services"]
+    # The job's own folder, for the rules that compare a path with it. Without it only an
+    # absolute path can be judged, and a rule that needs the folder treats that as outside.
+    root = os.fspath(source) if source is not None else None
     for name, service in services.items():
         if service.get("privileged"):
             violations.append(f"{name}: privileged")
@@ -672,7 +694,7 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
                 continue  # already reported above
             violations.append(f"{name}: field {key} is not allowed")
         for volume in service.get("volumes") or []:
-            if _mounts_docker_socket(volume):
+            if _mounts_docker_socket(volume, root):
                 violations.append(f"{name}: Docker socket mount")
             # ``image`` mounts another image's root filesystem; ``npipe`` and ``cluster`` are
             # not Linux mounts. Compose's own default for a long entry is ``volume`` or ``bind``.
@@ -849,11 +871,11 @@ def _refresh_compose_ports(
     environment.compose_override_file = None
     _write_initial_env_file_override(destination, environment)
     config = _config(environment)
-    _validate_compose_security(config)
+    _validate_compose_security(config, source=environment.source)
     _write_port_override(destination, environment, config)
     if environment.compose_override_file:
         config = _config(environment)
-        _validate_compose_security(config)
+        _validate_compose_security(config, source=environment.source)
     return config
 
 
@@ -2153,7 +2175,7 @@ def provision(
             existing, "ps", "--status", "running", "--quiet", check=False, timeout=30
         ):
             config = _config(existing)
-            _validate_compose_security(config)
+            _validate_compose_security(config, source=existing.source)
             existing.runtime_services = _runtime_services(config, contract)
             existing.services = _started_services(config, existing.runtime_services)
             existing.service_endpoints = _service_endpoints(existing, config)
@@ -2194,11 +2216,11 @@ def provision(
     )
     _write_initial_env_file_override(destination, environment)
     config = _config(environment)
-    _validate_compose_security(config)
+    _validate_compose_security(config, source=environment.source)
     _write_port_override(destination, environment, config)
     if environment.compose_override_file:
         config = _config(environment)
-        _validate_compose_security(config)
+        _validate_compose_security(config, source=environment.source)
     environment.runtime_services = _runtime_services(config, contract)
     environment.services = _started_services(config, environment.runtime_services)
     if not environment.services and len(environment.runtime_services) != 1:
@@ -2318,7 +2340,7 @@ def reset(destination: str | Path) -> ProvisionedEnvironment:
     # After ``down`` no job container is alive, so nothing can change the files between this
     # check and the ``up`` below. Validate before starting anything.
     config = _config(environment)
-    _validate_compose_security(config)
+    _validate_compose_security(config, source=environment.source)
     if environment.services:
         _start_managed_services(environment, environment.services, build=False)
     recorded_runtime = [
@@ -2739,7 +2761,7 @@ def start_runtime(
     # change meaning now; validate the file as ``compose run`` will render it, then run that
     # same rendering instead of letting Compose read the files a second time.
     validated = _config(environment, process_overrides=injected)
-    _validate_compose_security(validated)
+    _validate_compose_security(validated, source=environment.source)
     _run(
         environment,
         *arguments,
