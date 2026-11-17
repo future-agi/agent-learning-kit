@@ -66,6 +66,48 @@ def test_a_gemini_content_keeps_only_its_answer(reply, expected):
     _check(reply, expected)
 
 
+BEDROCK_REASONING = {
+    "reasoningContent": {
+        "reasoningText": {"text": PLAN, "signature": "sig-abc"}
+    }
+}
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (
+            {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [BEDROCK_REASONING, {"text": ANSWER}],
+                    }
+                },
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 3, "outputTokens": 4},
+            },
+            ANSWER,
+        ),
+        (
+            {
+                "output": {
+                    "message": {"role": "assistant", "content": [BEDROCK_REASONING]}
+                }
+            },
+            "",
+        ),
+        (
+            {"result": {"message": "hello", "code": 200}},
+            '{"message": "hello", "code": 200}',
+        ),
+    ],
+    ids=["raw-converse-response", "raw-converse-reasoning-only", "control-status-message"],
+)
+def test_a_raw_bedrock_converse_response_keeps_only_its_answer(reply, expected):
+    _check(reply, expected)
+
+
 @pytest.mark.parametrize(
     "reply, expected",
     [

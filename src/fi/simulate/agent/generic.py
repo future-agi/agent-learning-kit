@@ -1323,6 +1323,9 @@ def _reply_text(value: Any) -> str:
     parts = _field_of(value, "parts")
     if isinstance(parts, (list, tuple)) and _looks_like_parts(value, parts):
         return text_of(parts)
+    message = _field_of(value, "message")
+    if message is not None and _is_block_or_message(message):
+        return _message_content(message)
     if _is_block_or_message(value) or (
         isinstance(value, (list, tuple))
         and any(_is_block_or_message(item) for item in value)
