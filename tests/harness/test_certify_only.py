@@ -219,6 +219,7 @@ def _hosted(tmp_path: Path, monkeypatch, argv: list[str]) -> int:
     monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", tmp_path / "none.json")
     monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
     monkeypatch.setattr(entrypoint, "_TARGET_SECRETS_PATH", tmp_path / "target.json")
+    monkeypatch.setattr(entrypoint, "_FAILURE_CAUSE_PATH", tmp_path / "cause.json")
     return entrypoint.main(argv)
 
 
@@ -1031,6 +1032,53 @@ def test_certify_only_runs_the_real_runtime_gate_without_a_model(
     assert load_bundle_v2(bundle).digest == frozen.digest
     assert (bundle.parent / "runtime-validation.json").is_file()
     assert json.loads((authoring / ARTIFACT).read_text())["status"] == "not_applicable"
+
+
+@pytest.mark.parametrize(
+    "failure,cause",
+    [("agent_crashed", "agent_exited_before_ready"), ("chat_timed_out", "chat_target_timeout")],
+)
+def test_certify_only_rejection_records_the_closed_cause_and_no_guest_text(
+    tmp_path, monkeypatch, failure, cause
+) -> None:
+    """Through the real runtime gate and repair loop: the cause survives, the text stays out."""
+    from fi.alk.harness import chat_readiness, process_runtime
+    from fi.alk.harness.job import FailureCause, FailureDomain
+
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    _forbid_models(monkeypatch)
+    _real_runtime(tmp_path, monkeypatch, state={}, authoring=authoring)
+    guest_text = "RuntimeError: HELD-BACK CASE"
+    if failure == "agent_crashed":
+
+        async def provision(self, *args, **kwargs):
+            raise process_runtime.ProcessRuntimeError(
+                "depends_on",
+                "spawn_failed",
+                f"agent: exited before started_check passed\n{guest_text}",
+                process="agent",
+                domain=FailureDomain.AGENT,
+                cause=FailureCause.AGENT_EXITED_BEFORE_READY,
+            )
+
+        monkeypatch.setattr(process_runtime.ProcessRuntimeProvider, "provision", provision)
+    else:
+
+        async def ingress(**_kwargs):
+            raise RuntimeValidationError(
+                "environment", guest_text, cause=FailureCause.CHAT_TARGET_TIMEOUT
+            )
+
+        monkeypatch.setattr(chat_readiness, "probe_chat_ingress", ingress)
+
+    assert (
+        _hosted(tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle"))
+        == 78
+    )
+
+    recorded = (tmp_path / "cause.json").read_text()
+    assert json.loads(recorded) == {"cause": cause}
+    assert "HELD-BACK" not in recorded
 
 
 def test_certify_only_refuses_to_author_invariants_for_a_live_world_with_data(
