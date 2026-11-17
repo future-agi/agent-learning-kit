@@ -39,6 +39,22 @@ def resolved_compose_images(monkeypatch):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def _no_controller_mark_left_behind():
+    # Hosted authoring's main() marks its own process as a sandbox controller and loads a .env into
+    # the runtime namespace. A test that runs it in-process must not leave either behind for later
+    # tests in the session, which would then take the controller's .env path, not the local one.
+    marks = ("ALK_RUNTIME_CONFIGURATION_NAMES", "ALK_TARGET_PROVIDER_ALIASES")
+    marked = {name for name in marks if name in os.environ}
+    runtime = {name for name in os.environ if name.startswith("ALK_RUNTIME_VALUE_")}
+    yield
+    for name in marks:
+        if name not in marked:
+            os.environ.pop(name, None)
+    for name in [n for n in os.environ if n.startswith("ALK_RUNTIME_VALUE_") and n not in runtime]:
+        del os.environ[name]
+
+
 @pytest.fixture
 def chown_path():
     """Where a fake ``chown`` call lands; ``user_files.own_tree`` passes a name in a descriptor."""
