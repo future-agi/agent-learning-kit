@@ -13,6 +13,7 @@ import json
 import os
 import re
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from .contract import Runtime
@@ -460,7 +461,7 @@ def _launch_from_config(root: Path, runtime: dict[str, Any], command: list[str])
     project_dir = (base / project).resolve() if project else (base if directory else None)
     if project_dir is None or not (project_dir / "pyproject.toml").is_file():
         # The project the app's own dependencies are installed in: one the config lists among its dependencies.
-        project_dir = _dependency_project(config) or project_dir
+        project_dir = _dependency_project(config, root) or project_dir
     kept: list[str] = []
     skip = False
     for index, token in enumerate(command):
@@ -489,15 +490,16 @@ def _launch_from_config(root: Path, runtime: dict[str, Any], command: list[str])
     return ["sh", "-c", 'cd "$1" && shift && exec "$@"', "alk-langgraph", folder, *kept]
 
 
-def _dependency_project(config: Path) -> Path | None:
-    """The first folder a LangGraph config lists among its `dependencies` that is a Python project."""
+def _dependency_project(config: Path, root: Path) -> Path | None:
+    """The first folder a LangGraph config lists among its `dependencies` that is a Python project inside the source."""
     try:
         dependencies = json.loads(config.read_text(encoding="utf-8")).get("dependencies") or []
     except (OSError, ValueError, AttributeError):
         return None
+    inside = root.resolve()
     for dependency in dependencies if isinstance(dependencies, list) else []:
         folder = (config.parent / str(dependency)).resolve()
-        if folder.is_relative_to(config.parent.resolve().anchor) and (folder / "pyproject.toml").is_file():
+        if folder.is_relative_to(inside) and (folder / "pyproject.toml").is_file():
             return folder
     return None
 
@@ -567,3 +569,27 @@ _LANGGRAPH_START_SECONDS = 600.0
 def server_start_seconds(command: list[str], default: float) -> float:
     """How long a server may take to answer its first readiness check: longer for `langgraph dev`, else `default`."""
     return max(default, _LANGGRAPH_START_SECONDS) if _is_langgraph_server_command(command) else default
+
+
+# Tools a framework's own middleware adds to an agent while it runs: no module-level callable exists for them, so a
+# contract records them with no seam. Known by the package that injects them and the names it gives them.
+FRAMEWORK_INJECTED_TOOLS: dict[str, frozenset[str]] = {
+    "deepagents": frozenset(
+        {
+            "launch_async_subagent",
+            "check_async_subagent",
+            "update_async_subagent",
+            "cancel_async_subagent",
+            "list_async_subagent_jobs",
+        }
+    ),
+}
+
+
+def framework_injected(tool: str, notes: str, imports: Callable[[str], bool]) -> str | None:
+    """The framework that injects ``tool`` as the agent runs, when the source shows it (it imports the package, or the
+    contract's note names it); None for any tool no known framework injects."""
+    for package, names in FRAMEWORK_INJECTED_TOOLS.items():
+        if tool in names and (package in notes or imports(package)):
+            return package
+    return None

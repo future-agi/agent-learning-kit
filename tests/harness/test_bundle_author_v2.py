@@ -8350,3 +8350,22 @@ def test_langgraph_dev_runs_without_its_file_watcher_and_other_commands_are_kept
     assert server_command(["langgraph", "dev", "--port", "8000"]) == ["langgraph", "dev", "--port", "8000", "--no-reload"]
     assert server_command([".venv/bin/langgraph", "dev", "--no-reload"]) == [".venv/bin/langgraph", "dev", "--no-reload"]
     assert server_command(["python", "agent.py"]) == ["python", "agent.py"]
+
+
+def test_a_langgraph_dependency_outside_the_source_is_never_its_project(tmp_path: Path) -> None:
+    from fi.alk.harness.framework_servers import _dependency_project
+
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "pyproject.toml").write_text("[project]\nname='x'\nversion='1'\n", encoding="utf-8")
+    source = tmp_path / "repo" / "app"
+    source.mkdir(parents=True)
+    inside = source / "graphs"
+    inside.mkdir()
+    (inside / "pyproject.toml").write_text("[project]\nname='g'\nversion='1'\n", encoding="utf-8")
+    config = source / "langgraph.json"
+    config.write_text(json.dumps({"dependencies": ["../../elsewhere", "./graphs"], "graphs": {"a": "./a.py:g"}}))
+
+    assert _dependency_project(config, source) == inside.resolve()
+    config.write_text(json.dumps({"dependencies": ["../../elsewhere"], "graphs": {"a": "./a.py:g"}}))
+    assert _dependency_project(config, source) is None

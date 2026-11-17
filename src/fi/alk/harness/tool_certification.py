@@ -108,7 +108,10 @@ def framework_coordination(tool: Any, entry: Any, contract: AgentContract, sourc
     if not contract.workers or tool.tables_read or tool.tables_changed:
         return False
     if entry.mode in {"", "unreachable"}:
-        return not _source_defines(source, tool.name)
+        # Only on positive evidence: a known framework injects this tool, and the source uses that framework.
+        from .framework_servers import framework_injected
+
+        return framework_injected(tool.name, entry.notes, lambda package: _source_imports(source, package)) is not None
     if entry.mode not in {"import", "construct"}:
         return False
     package = entry.module.strip().split(".")[0]
@@ -120,9 +123,9 @@ def framework_coordination(tool: Any, entry: Any, contract: AgentContract, sourc
     return not found or _library_the_app_depends_on(source, package, found)
 
 
-def _source_defines(source: Path, name: str) -> bool:
-    """Whether the submitted source's own Python code defines `name` (a function, class or assignment)."""
-    pattern = re.compile(rf"^\s*(?:async\s+def|def|class)\s+{re.escape(name)}\b|^\s*{re.escape(name)}\s*=", re.M)
+def _source_imports(source: Path, package: str) -> bool:
+    """Whether the submitted source's own Python code imports `package`."""
+    pattern = re.compile(rf"^\s*(?:from\s+{re.escape(package)}(?:\.|\s)|import\s+{re.escape(package)}\b)", re.M)
     for path in source.rglob("*.py"):
         if any(
             part.startswith(".") or part in {"site-packages", "node_modules"}

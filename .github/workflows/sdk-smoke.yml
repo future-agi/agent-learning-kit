@@ -139,6 +139,8 @@ jobs:
           tests/harness/test_in_process_door.py
           tests/harness/test_framework_tool_spans.py
           tests/harness/test_python_extras.py
+          tests/harness/test_tool_certification.py
+          tests/harness/test_contract.py
           tests/harness/test_python_tool_trace_bootstrap.py
           tests/harness/test_workflow_intent.py
           tests/harness/test_simulation_mark_bootstrap.py

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from fi.alk.harness.contract import AgentContract
 from fi.alk.harness.tool_certification import (
     ToolAvailability,
@@ -347,13 +349,48 @@ def test_job_tools_a_framework_middleware_injects_are_the_framework_s_even_with_
 
     by_tool = {item.tool: item.availability for item in report.tools}
     assert all(by_tool[name] is ToolAvailability.RUNTIME_ONLY for name in _ASYNC_JOB_TOOLS)
-    # The app defines this one itself: no seam is still a rejection, as before.
+    # No known framework injects this one: no seam is still a rejection, as before.
     assert by_tool["analyze_topic"] is ToolAvailability.REJECTED
     # Without workers it is no worker coordination: rejected, as before.
     alone = certify_tool_inventory(
         contract.model_copy(update={"workers": []}), tmp_path, external_provider=False, source=source
     )
     assert all(item.availability is ToolAvailability.REJECTED for item in alone.tools)
+
+
+@pytest.mark.parametrize(
+    ("tool", "notes", "uses_framework"),
+    [
+        # A factory-made customer tool (Tool(name="refund"), StructuredTool.from_function): same shape, no injector.
+        ("refund", "built with StructuredTool.from_function", True),
+        ("issue_refund", "registered through an MCP server", False),
+        # A framework's tool name in an app that never uses that framework, with nothing saying it injects it.
+        ("launch_async_subagent", "", False),
+    ],
+)
+def test_a_tool_with_no_seam_that_no_known_framework_injects_stays_rejected(
+    tmp_path: Path, tool: str, notes: str, uses_framework: bool
+) -> None:
+    source = tmp_path / "source"
+    (source / "app").mkdir(parents=True)
+    (source / "app" / "agent.py").write_text(
+        ("from deepagents import AsyncSubAgent\n" if uses_framework else "")
+        + "from langchain_core.tools import StructuredTool\n",
+        encoding="utf-8",
+    )
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refunds"],
+            "tools": [{"name": tool, "args": ["order_id"]}],
+            "tool_entrypoints": [{"tool": tool, "mode": "unreachable", "notes": notes}],
+            "workers": [{"id": "refund", "name": "refund"}],
+        }
+    )
+
+    report = certify_tool_inventory(contract, tmp_path, external_provider=False, source=source)
+
+    assert [item.availability for item in report.tools] == [ToolAvailability.REJECTED]
 
 
 def test_the_build_check_lets_the_framework_s_injected_job_tools_through(tmp_path: Path) -> None:
@@ -370,8 +407,16 @@ def test_the_build_check_lets_the_framework_s_injected_job_tools_through(tmp_pat
         }
     )
     assert not [one for one in blockers(contract, str(source)) if "launch_async_subagent" in one]
-    # A tool the app itself defines with no seam still blocks the build.
-    (source / "graphs" / "python" / "src" / "agent.py").write_text(
-        "def launch_async_subagent(description):\n    return description\n", encoding="utf-8"
+    # A factory-made tool of the same shape still blocks the build.
+    factory = contract.model_copy(
+        update={
+            "tools": [*contract.tools, *AgentContract.model_validate({"tools": [{"name": "refund"}]}).tools],
+            "tool_entrypoints": [
+                *contract.tool_entrypoints,
+                *AgentContract.model_validate({"tool_entrypoints": [{"tool": "refund", "mode": "unreachable"}]}).tool_entrypoints,
+            ],
+        }
     )
-    assert [one for one in blockers(contract, str(source)) if "launch_async_subagent" in one]
+    blocked = blockers(factory, str(source))
+    assert [one for one in blocked if one.startswith("refund")]
+    assert not [one for one in blocked if "launch_async_subagent" in one]
