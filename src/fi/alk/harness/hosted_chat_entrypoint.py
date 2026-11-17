@@ -52,6 +52,10 @@ _PENDING_QUESTION = ".futureagi-pending-question.json"
 _BUILD_FINISHED = ".futureagi-build-finished.json"
 _PROVIDER_PROFILE = "provider-import-profile.json"
 _JOURNAL = ".futureagi-conversation.json"
+# Each turn's ending as it was reported, usage included: kept before the turn's final
+# checkpoint, so a restart after a failed delivery replays the same ending.
+_TURN_ENDINGS = ".futureagi-turn-endings.json"
+_ENDING_OUTCOMES = frozenset({"success", "failed", "interrupted"})
 _PROVIDER_SESSIONS = ".futureagi-provider-sessions.json"
 _AUTHORING_BASIS = ".futureagi-authoring-basis.json"
 _PUBLISHED = ".futureagi-published.json"
@@ -328,9 +332,15 @@ class HostedChatRuntime:
         # One confirmation open at a time: the platform takes an answer to the latest only.
         self._confirming = asyncio.Lock()
         self._restart_after_turn = False
-        # The rebuild command this sandbox runs, and the spend when its turn began.
+        # Endings the coordinator state already holds, as stored: each control-only checkpoint
+        # adds only new or changed endings, not the whole history of them.
+        self._stored_endings: dict[str, str] = {}
+        self._skipped_endings: set[str] = set()
+        # The rebuild command this sandbox runs.
         self._nudge: dict[str, Any] | None = None
-        self._nudge_spent: dict[str, Any] = {}
+        # The spend when the running turn began: every turn reports what it spent with its
+        # ending, so the platform can meter a turn no build ledger covers.
+        self._turn_spent: dict[str, Any] = {}
         # The last report_update's arguments, and whether a write came after it.
         self._nudge_reported: dict[str, Any] = {}
         self._nudge_dirty = False
@@ -1285,9 +1295,6 @@ class HostedChatRuntime:
             await self._handle_command(command)
             return
         # A rebuild turn ends this sandbox: the platform starts chat again once it lands.
-        from . import spend
-
-        self._nudge_spent = spend.snapshot()
         await self.conversation.close()
         self._nudge = dict(command.get("payload") or {})
         try:
@@ -1296,12 +1303,54 @@ class HostedChatRuntime:
             self.stopping.set()
 
     def _turn_usage(self) -> dict[str, Any]:
-        if self._nudge is None:
-            return {}
         from . import spend
         from .nudge import usage_delta
 
-        return {"usage": usage_delta(self._nudge_spent, spend.snapshot())}
+        return {"usage": usage_delta(self._turn_spent, spend.snapshot())}
+
+    def _end_turn(self, message_id: str, outcome: str) -> dict[str, Any]:
+        """The turn's ending, usage included, kept before its final checkpoint: if its
+        delivery fails, the restart replays this same ending."""
+        ending = {"command_message_id": message_id, "outcome": outcome, **self._turn_usage()}
+        endings = self._read_turn_endings()
+        endings[message_id] = ending
+        path = self.workspace / _TURN_ENDINGS
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(endings, sort_keys=True, separators=(",", ":")), encoding="utf-8"
+        )
+        temporary.replace(path)
+        return ending
+
+    def _turn_ending(self, message_id: str, **bare: Any) -> dict[str, Any]:
+        """The ending a turn kept, or a bare one for a turn that ended before endings were
+        kept."""
+        return self._read_turn_endings().get(message_id) or {
+            "command_message_id": message_id,
+            **bare,
+        }
+
+    def _read_turn_endings(self) -> dict[str, dict[str, Any]]:
+        try:
+            body = json.loads((self.workspace / _TURN_ENDINGS).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(body, dict):
+            return {}
+        endings: dict[str, dict[str, Any]] = {}
+        for key, value in body.items():
+            key = str(key)
+            if (
+                isinstance(value, dict)
+                and value.get("command_message_id") == key
+                and value.get("outcome") in _ENDING_OUTCOMES
+                and isinstance(value.get("usage", {}), dict)
+            ):
+                endings[key] = value
+            elif key not in self._skipped_endings:
+                self._skipped_endings.add(key)
+                print(f"hosted conversation skipped a malformed turn ending: {key}", flush=True)
+        return endings
 
     def _nudge_note(self) -> str:
         if self._nudge is None:
@@ -1392,7 +1441,7 @@ class HostedChatRuntime:
             await self.client.emit(
                 "turn_completed",
                 stage=self.conversation.stage_name,
-                payload={"command_message_id": message_id, "replayed": True},
+                payload={**self._turn_ending(message_id), "replayed": True},
                 acknowledge_through=sequence,
             )
             return
@@ -1401,7 +1450,7 @@ class HostedChatRuntime:
             await self.client.emit(
                 "turn_completed",
                 stage=self.conversation.stage_name,
-                payload={"command_message_id": message_id, "outcome": "failed"},
+                payload=self._turn_ending(message_id, outcome="failed"),
                 acknowledge_through=sequence,
             )
             return
@@ -1465,6 +1514,9 @@ class HostedChatRuntime:
         self._turn_acknowledged_through = sequence
         self._tool_names.clear()
         self._turn_message_id = message_id
+        from . import spend
+
+        self._turn_spent = spend.snapshot()
         await self.client.emit(
             "turn_started",
             stage=self.conversation.stage_name,
@@ -1558,6 +1610,7 @@ class HostedChatRuntime:
                     ),
                 },
             )
+            ending = self._end_turn(message_id, "interrupted")
             self._journal_unsuccessful(journal, message_id)
             checkpoint = await self._checkpoint()
             await self.client.emit(
@@ -1570,11 +1623,7 @@ class HostedChatRuntime:
                 "turn_completed",
                 stage=self.conversation.stage_name,
                 invocation_id=invocation_id,
-                payload={
-                    "command_message_id": message_id,
-                    "outcome": "interrupted",
-                    **self._turn_usage(),
-                },
+                payload=ending,
                 acknowledge_through=self._turn_acknowledged_through,
             )
             return
@@ -1623,6 +1672,7 @@ class HostedChatRuntime:
                 invocation_id=invocation_id,
                 payload={"text": final_text},
             )
+        ending = self._end_turn(message_id, "success")
         journal[message_id] = "completed"
         self._write_journal(journal)
         checkpoint = await self._checkpoint()
@@ -1636,11 +1686,7 @@ class HostedChatRuntime:
             "turn_completed",
             stage=self.conversation.stage_name,
             invocation_id=invocation_id,
-            payload={
-                "command_message_id": message_id,
-                "outcome": "success",
-                **self._turn_usage(),
-            },
+            payload=ending,
             acknowledge_through=self._turn_acknowledged_through,
         )
         if self._restart_after_turn:
@@ -1663,17 +1709,14 @@ class HostedChatRuntime:
             invocation_id=invocation_id,
             payload={"text": text, "error": error},
         )
+        ending = self._end_turn(message_id, "failed")
         self._journal_unsuccessful(journal, message_id)
         await self._checkpoint()
         await self.client.emit(
             "turn_completed",
             stage=self.conversation.stage_name,
             invocation_id=invocation_id,
-            payload={
-                "command_message_id": message_id,
-                "outcome": "failed",
-                **self._turn_usage(),
-            },
+            payload=ending,
             acknowledge_through=self._turn_acknowledged_through,
         )
 
@@ -2009,6 +2052,13 @@ class HostedChatRuntime:
                 path = self.workspace / name
                 if path.is_file():
                     files[name] = json.loads(path.read_text(encoding="utf-8"))
+            new_endings = {
+                key: value
+                for key, value in self._read_turn_endings().items()
+                if self._stored_endings.get(key) != json.dumps(value, sort_keys=True)
+            }
+            if new_endings:
+                files[_TURN_ENDINGS] = new_endings
             await self.client.append_session(
                 self._coordinator_state_key(),
                 [
@@ -2018,6 +2068,9 @@ class HostedChatRuntime:
                         "files": files,
                     }
                 ],
+            )
+            self._stored_endings.update(
+                {key: json.dumps(value, sort_keys=True) for key, value in new_endings.items()}
             )
             return {"control_only": True, "stored": True}
         async with self._checkpoint_lock:
@@ -2044,6 +2097,22 @@ class HostedChatRuntime:
                 temporary.replace(path)
             else:
                 path.unlink(missing_ok=True)
+        # Each entry holds only the endings added since the one before it.
+        endings: dict[str, Any] = {}
+        for entry in entries:
+            added = (entry.get("files") or {}).get(_TURN_ENDINGS)
+            if isinstance(added, dict):
+                endings.update(added)
+        path = self.workspace / _TURN_ENDINGS
+        if endings:
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(endings), encoding="utf-8")
+            temporary.replace(path)
+        else:
+            path.unlink(missing_ok=True)
+        self._stored_endings = {
+            key: json.dumps(value, sort_keys=True) for key, value in endings.items()
+        }
         self.conversation = self._conversation()
 
     def _provider_sessions(self) -> dict[str, str]:
