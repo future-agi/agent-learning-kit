@@ -2202,20 +2202,32 @@ class HostedChatRuntime:
             ]
         }
 
+    def _ask_reply(self, text: str, *, is_error: bool | None, from_the_cli: bool) -> Any:
+        """A reply to a question in the form its caller takes.
+
+        When the Claude CLI asks with its own question tool, this is its permission callback,
+        which must return a permission result: a deny carries the words back to the model. The
+        kit's own confirmations and other backends take a tool result."""
+        if from_the_cli and self.backend_name == "claude":
+            from claude_agent_sdk.types import PermissionResultDeny
+
+            return PermissionResultDeny(message=text)
+        reply: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
+        if is_error is not None:
+            reply["is_error"] = is_error
+        return reply
+
     async def _ask(
         self, _tool_name: str, payload: dict[str, Any], _context: Any
     ) -> Any:
-        if self._from_platform:
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Nobody answers during the build or its check. Decide it yourself from "
-                        "the agent and the contract, and say what you decided in your summary.",
-                    }
-                ]
-            }
         asked = [one for one in payload.get("questions") or [] if isinstance(one, dict)]
+        if self._from_platform:
+            return self._ask_reply(
+                "Nobody answers during the build or its check. Decide it yourself from "
+                "the agent and the contract, and say what you decided in your summary.",
+                is_error=None,
+                from_the_cli=bool(asked),
+            )
         question = str(
             payload.get("question")
             or "\n".join(str(one.get("question") or "") for one in asked if one.get("question"))
@@ -2302,15 +2314,11 @@ class HostedChatRuntime:
                             },
                         }
                     )
-                return {
-                    "content": [{"type": "text", "text": answer}],
-                    "is_error": not bool(answer),
-                }
+                return self._ask_reply(answer, is_error=not bool(answer), from_the_cli=False)
             await asyncio.sleep(0.5)
-        return {
-            "content": [{"type": "text", "text": "The conversation was stopped."}],
-            "is_error": True,
-        }
+        return self._ask_reply(
+            "The conversation was stopped.", is_error=True, from_the_cli=bool(asked)
+        )
 
     def _provider_sessions_key(self) -> dict[str, str]:
         return {
