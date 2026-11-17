@@ -1259,7 +1259,7 @@ _REPLY_ITEM_KINDS = frozenset(
         "AIMessageChunk",
     }
 )
-_CHAT_ROLES = frozenset({"assistant", "user", "system", "tool", "developer"})
+_CHAT_ROLES = frozenset({"assistant", "user", "system", "tool", "developer", "model"})
 
 
 def _is_block_or_message(item: Any) -> bool:
@@ -1302,8 +1302,27 @@ def _is_untyped_text(item: Any) -> bool:
     return get("type") is None and isinstance(get("text"), str)
 
 
+def _field_of(item: Any, name: str) -> Any:
+    if isinstance(item, Mapping):
+        return item.get(name)
+    return getattr(item, name, None)
+
+
+def _looks_like_parts(value: Any, parts: Any) -> bool:
+    """True for a Gemini ``Content`` (a role and its parts), not a record with a ``parts`` field."""
+    if _field_of(value, "role") in _CHAT_ROLES:
+        return True
+    return any(
+        isinstance(part, str) or _is_block_or_message(part) or _is_untyped_text(part)
+        for part in parts
+    )
+
+
 def _reply_text(value: Any) -> str:
     """Answer text for a message, a block, or a list of them, else the stringified value."""
+    parts = _field_of(value, "parts")
+    if isinstance(parts, (list, tuple)) and _looks_like_parts(value, parts):
+        return text_of(parts)
     if _is_block_or_message(value) or (
         isinstance(value, (list, tuple))
         and any(_is_block_or_message(item) for item in value)
@@ -8304,6 +8323,9 @@ def _message_content(message: Any) -> str:
             value = getattr(message, attr)
             if value is not None:
                 return _reply_text(value)
+    parts = getattr(message, "parts", None)
+    if isinstance(parts, (list, tuple)):
+        return text_of(parts)
     return str(message)
 
 

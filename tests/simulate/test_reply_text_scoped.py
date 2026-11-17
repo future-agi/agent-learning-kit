@@ -30,6 +30,45 @@ def _content(role, *parts):
 @pytest.mark.parametrize(
     "reply, expected",
     [
+        ({"output": _content("model", _thought(), _answer())}, ANSWER),
+        (NS(response=_content("model", _thought(), _answer())), ANSWER),
+        (
+            {
+                "result": {
+                    "role": "model",
+                    "parts": [
+                        {"text": PLAN, "thought": True, "thought_signature": "sig-abc"},
+                        {"text": ANSWER},
+                    ],
+                }
+            },
+            ANSWER,
+        ),
+        ({"output": _content("model", _thought())}, ""),
+        (
+            [_content("user", NS(text="q", thought=None)),
+             _content("model", _thought(), _answer())],
+            ANSWER,
+        ),
+        ({"data": {"parts": [{"name": "bolt"}, {"name": "nut"}]}},
+         '{"parts": [{"name": "bolt"}, {"name": "nut"}]}'),
+    ],
+    ids=[
+        "content-object-under-output",
+        "content-object-as-attribute",
+        "content-dict-under-result",
+        "content-thought-only",
+        "history-of-content-objects",
+        "control-records-with-parts-stay-json",
+    ],
+)
+def test_a_gemini_content_keeps_only_its_answer(reply, expected):
+    _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
         ({"output": NS(type="AIMessageChunk", content=_blocks())}, ANSWER),
         ({"output": {"type": "AIMessageChunk", "content": _blocks()}}, ANSWER),
         ({"output": NS(type="AIMessageChunk", content=[THINKING])}, ""),
