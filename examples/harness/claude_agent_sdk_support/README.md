@@ -48,6 +48,8 @@ secret, also reaches the agent; the job supplies the other variables.
   made the CLI retry for about 3 minutes (11 requests) before the turn failed.
 - An error from the CLI or the model comes back as a short message (at most 500 characters),
   with the token and key values removed.
-- A killed agent leaves the CLI process running until it ends.
+- Stopping the agent stops its CLI too: the SDK starts the CLI in the agent's own process
+  group, and the kit stops an agent by signalling that whole group. Killing only the agent's
+  own process, not its group, would leave the CLI running until it ends.
 
 Install with `pip install -r requirements.txt` on Python 3.12.
