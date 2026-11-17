@@ -559,6 +559,9 @@ _UNCLOSED_ON_ONE_LINE = {
         + "y " * (8 * k)
         + "\n"
     ),
+    "lists-after-colons": lambda k: (
+        "x = 1" + ";if 1: from m import (" * k + "\n" + "y " * (8 * k) + "\n"
+    ),
 }
 
 
@@ -578,3 +581,17 @@ def test_unclosed_lists_on_one_line_cost_in_proportion(name, lists):
     # took over ten, and four times as long for each doubling. The bound leaves a slow runner
     # room many times over.
     assert elapsed < 5.0
+
+
+@pytest.mark.parametrize("name", list(_UNCLOSED_ON_ONE_LINE))
+def test_unclosed_lists_on_one_line_read_the_next_line_once(name, monkeypatch):
+    # Counted by the lines read, not by time: a second list left open on a line is a cut.
+    from fi.alk.harness import import_lines as search
+
+    read, real = [], search._is_list_of_names
+    monkeypatch.setattr(
+        search, "_is_list_of_names", lambda t: read.append(t) or real(t)
+    )
+    capped = [False]
+    search.import_lines(_UNCLOSED_ON_ONE_LINE[name](4_000), capped)
+    assert capped[0] and len(read) <= 4
