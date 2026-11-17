@@ -562,16 +562,19 @@ _UNCLOSED_ON_ONE_LINE = {
 }
 
 
+@pytest.mark.parametrize("lists", [4_000, 8_000, 16_000], ids=["128k", "256k", "512k"])
 @pytest.mark.parametrize("name", list(_UNCLOSED_ON_ONE_LINE))
-def test_unclosed_lists_on_one_line_cost_in_proportion(name):
+def test_unclosed_lists_on_one_line_cost_in_proportion(name, lists):
     # Only a line's last statement can go on past it, so a second list that does isn't Python:
     # the search says it can't be sure, and doesn't read the next line again for each list.
-    source = _UNCLOSED_ON_ONE_LINE[name](16_000)
-    assert len(source) > 500_000
+    source = _UNCLOSED_ON_ONE_LINE[name](lists)
+    assert len(source) > 31 * lists
     capped = [False]
     started = time.perf_counter()
     import_lines(source, capped)
     elapsed = time.perf_counter() - started
     assert capped[0]
-    # Read once, this takes a few hundredths of a second; read again per list, it took over ten.
+    # Read once, the 512k file takes a few hundredths of a second here; read again per list it
+    # took over ten, and four times as long for each doubling. The bound leaves a slow runner
+    # room many times over.
     assert elapsed < 5.0
