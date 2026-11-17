@@ -277,6 +277,17 @@ def suite_server(
                 "args": {"type": "array", "items": {"type": "string"}},
                 "arg_types": {"type": "object"},
                 "arg_values": {"type": "object"},
+                "arg_units": {
+                    "type": "object",
+                    "description": "The unit or format of a field whose name does not say it: "
+                    "<an amount field> -> <its minor unit and currency>; timeout -> milliseconds; "
+                    "due -> ISO 8601 date.",
+                },
+                "returns": {
+                    "type": "object",
+                    "description": "Each field the tool hands back, with its type and unit: "
+                    "<an id field> -> string; <an amount field> -> integer, <its minor unit and currency>.",
+                },
                 "evidence_file": str,
                 "evidence_quote": str,
                 "why": str,
@@ -286,6 +297,7 @@ def suite_server(
     )
     async def declare_tool(args: dict[str, Any]) -> dict[str, Any]:
         from .amend import _persist
+        from .backends.files import secret_text
         from .contract import ToolSpec, validate_contract
         from .source_folder import agent_scope, in_agent_scope
 
@@ -297,7 +309,16 @@ def suite_server(
         quote = str(args.get("evidence_quote") or "").strip()
         root = source_root or Path("/nonexistent")
         target = (root / str(args.get("evidence_file") or "")).resolve()
-        if source_root is None or root.resolve() not in target.parents or not target.is_file():
+        if source_root is None or root.resolve() not in target.parents:
+            return _err("evidence_file must be a file inside the agent's source")
+        if secret_text(target.relative_to(root.resolve()).as_posix()):
+            # Judged where it resolves, before the file is opened: a listed file, a link to one
+            # and one that is missing get this same answer, and a guess is never checked.
+            return _err(
+                f"{args.get('evidence_file')} is kept out of this session because it holds "
+                "credentials; name a file in the agent's code or configuration"
+            )
+        if not target.is_file():
             return _err("evidence_file must be a file inside the agent's source")
         folder = contract_folder(contract)
         scope = agent_scope(root, folder)
@@ -319,6 +340,8 @@ def suite_server(
                 "args": list(args.get("args") or []),
                 "arg_types": dict(args.get("arg_types") or {}),
                 "arg_values": dict(args.get("arg_values") or {}),
+                "arg_units": {str(k): str(v) for k, v in dict(args.get("arg_units") or {}).items()},
+                "returns": {str(k): str(v) for k, v in dict(args.get("returns") or {}).items()},
             }
         )
         contract.tools.append(spec)

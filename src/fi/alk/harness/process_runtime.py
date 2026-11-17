@@ -67,6 +67,8 @@ from .bundle_v2 import (
     StoreEntry,
 )
 from .diagnostics import DiagnosticLocation, HarnessDiagnostic
+from .egress_proxy import EgressProxy
+from .world_door import PostgresLog
 from .job import FailureCause, FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
@@ -2349,6 +2351,7 @@ def spawn_source_process(
     require_declared_user: bool = False,
     chown: user_files.Chown = user_files.chown_no_follow,
     customer_code_environment: dict[str, str] | None = None,
+    egress_environment: dict[str, str] | None = None,
 ) -> SpawnedWorldProcess:
     """§2b: `run_command` "exec'd once per world with cwd `/work/build/<name>/`" — the build tree
     is read-only by convention at run time; `world_dir` (`{{WORLD_DIR}}`) is this process's own
@@ -2381,6 +2384,8 @@ def spawn_source_process(
         livekit_hook_due = (
             "HARNESS_TOOL_TRACE" in process.environment
             or "FI_WORKER_HEALTH_PORT" in process.environment
+            or "ALK_OPENAI_AGENTS_CHAT_COMPLETIONS" in process.environment
+            or "ALK_WORLD_DOOR_URL" in process.environment
         )
         mark_hook_due = "FI_SIMULATION_EXPORT" in customer_code_environment
         if livekit_hook_due or mark_hook_due:
@@ -2403,8 +2408,13 @@ def spawn_source_process(
                         _SIMULATION_MARK_SITECUSTOMIZE, encoding="utf-8"
                     )
                 sitecustomize_hook.chmod(0o444)
-        if mark_hook_due or process.environment.get("ALK_OBSERVE_FRAMEWORKS") == "1":
+        if (
+            sitecustomize_hook is not None
+            or process.environment.get("ALK_OBSERVE_FRAMEWORKS") == "1"
+        ):
             # The customer's interpreter has no `fi.alk`, so the modules sit beside the hook.
+            # The mark module carries the one copy of the hand-on to the next `sitecustomize`,
+            # so every process that gets the hook gets it.
             for module_name in (
                 "simulation_mark_bootstrap.py",
                 "simulation_worker_events.py",
@@ -2416,6 +2426,14 @@ def spawn_source_process(
                         Path(__file__).with_name(module_name).read_bytes()
                     )
                     mark_module.chmod(0o444)
+        if "ALK_WORLD_DOOR_URL" in process.environment:
+            # The world's door for tools the agent runs in its own process, imported by the hook above.
+            door_hook = world_dir / "in_process_door_bootstrap.py"
+            if not door_hook.exists():
+                door_hook.write_bytes(
+                    Path(__file__).with_name("in_process_door_bootstrap.py").read_bytes()
+                )
+                door_hook.chmod(0o444)
         if process.environment.get("ALK_CREWAI_TOOL_TRACE") == "1":
             observer = world_dir / "crewai_runtime_observer_bootstrap.py"
             if not observer.exists():
@@ -2602,6 +2620,7 @@ def spawn_source_process(
             )
         env[process.local_auth.server_environment] = token
     env = target_provider_environment(env)
+    env.update(egress_environment or {})
     if resolved_user is not None:
         env["HOME"] = _declared_home(resolved_user, process)
     command = list(process.run_command)
@@ -3762,8 +3781,10 @@ def _compose_seed_source_model(source, seed_file: Path, artifact_root: Path | No
             raise ValueError("seed_source_model_symlink")
         if path.is_file():
             try:
+                # The harness's own tables come from the build's record, whatever this harness adds.
                 return compose_source_models(
-                    GenericHarnessArtifactStore(root).read_source_model(), source
+                    GenericHarnessArtifactStore(root).read_source_model(),
+                    source.without_harness_tables(),
                 )
             except ValueError as error:
                 # Code facts recorded for other source than the schema running here.
@@ -4275,6 +4296,9 @@ class SpawnContext:
     # The platform's per-run decision for customer code (job.json `metadata`), applied to every
     # customer process's environment as is.
     customer_code_environment: dict[str, str] = field(default_factory=dict)
+    # The hosts a controlled run allows (job.json `metadata`); None when egress is not controlled.
+    egress_allowed_hosts: tuple[str, ...] | None = None
+    egress_proxies: dict[int, EgressProxy] = field(default_factory=dict, repr=False)
     runner: ProcessRunner = default_process_runner
     # Shared by `build_process_trees`' `build_commands` steps and `spawn_managed_process`'s
     # postgres `initdb` bootstrap — both are "run one synchronous step, check its exit code."
@@ -4407,6 +4431,11 @@ def spawn_world(
                     require_declared_user=context.require_declared_user,
                     chown=context.chown,
                     customer_code_environment=context.customer_code_environment,
+                    egress_environment=_egress_environment(
+                        context, world_index, endpoints, configuration_addresses
+                    )
+                    if process.user == ProcessUser.SVC_AGENT
+                    else None,
                 )
             handles[name] = handle
             if isinstance(process, SourceProcess) and process.started_check is not None:
@@ -4603,6 +4632,27 @@ def _datadir_copy_baseline_path(work_directory: Path, process_name: str) -> Path
         process_name=process_name,
         stage="baseline",
     )
+
+
+def sealed_seed_digest(*, host: str, port: int, credentials: EngineCredentials, dbname: str) -> dict[str, str]:
+    """The seed's records as one hash per table, read before its template is sealed; empty when they cannot be read,
+    and then trials are compared with the first trial's start instead. An install without the database driver
+    cannot read them either."""
+    try:
+        from psycopg.conninfo import make_conninfo
+
+        from .world_snapshot import digest, snapshot
+
+        return digest(
+            snapshot(
+                make_conninfo(
+                    host=host, port=port, user=credentials.username, password=credentials.password, dbname=dbname
+                )
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - only the type: a database error can carry the password
+        logger.warning("seed digest not taken: %s", type(exc).__name__)
+        return {}
 
 
 def _measure_postgres_row_counts(
@@ -4806,6 +4856,9 @@ class StoreBaselineRecord:
     inputs_digest: str
     baseline_reference: str
     row_counts: dict[str, int]
+    # The sealed seed's records as one hash per table (`world_snapshot.digest`), taken before a template closes to
+    # connections: what each trial's start is compared against. Empty when it could not be read.
+    seed_digest: dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, JsonValue]:
         return {
@@ -4816,6 +4869,7 @@ class StoreBaselineRecord:
             "inputs_digest": self.inputs_digest,
             "baseline_reference": self.baseline_reference,
             "row_counts": dict(self.row_counts),
+            "seed_digest": dict(self.seed_digest),
         }
 
 
@@ -5050,6 +5104,7 @@ def _freeze_one_store(
             )
 
         row_counts: dict[str, int] = {}
+        seed_digest: dict[str, str] = {}
         baseline_reference = ""
         result_handle: SpawnedWorldProcess | None = None
         if strategy is BaselineStrategy.TEMPLATE_DATABASE:
@@ -5061,6 +5116,10 @@ def _freeze_one_store(
                     dbname=baseline_dbname,
                     sql_runner=context.sql_runner,
                     process_name=process.name,
+                )
+                # Read now: once sealed, the template takes no connections.
+                seed_digest = sealed_seed_digest(
+                    host="localhost", port=port, credentials=credentials, dbname=baseline_dbname
                 )
             if (
                 process.engine is ManagedEngine.POSTGRES
@@ -5158,6 +5217,7 @@ def _freeze_one_store(
             inputs_digest=store.baseline.inputs_digest,
             baseline_reference=baseline_reference,
             row_counts=row_counts,
+            seed_digest=seed_digest,
         )
         return record, result_handle
     except BaseException:
@@ -6038,6 +6098,81 @@ def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
     return dict(typed.customer_code_environment)
 
 
+def _read_egress_allowed_hosts(work_directory: Path) -> tuple[str, ...] | None:
+    """The hosts a controlled run allows the agent, from `/work/job.json` `metadata.egress_allowed_hosts`; None when
+    the platform sent none (egress not controlled, or a local run). A `job.json` that cannot say, or a value that is
+    not a list of host names, fails the spawn: a controlled run never starts with its egress uncontrolled."""
+    try:
+        raw = json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise _egress_unknown(f"job.json cannot be read as JSON ({exc})") from exc
+    metadata = raw.get("metadata", {}) if isinstance(raw, dict) else None
+    if not isinstance(metadata, dict):
+        raise _egress_unknown(f"job.json {'metadata' if isinstance(raw, dict) else 'top level'} is not an object")
+    if "egress_allowed_hosts" not in metadata:
+        return None
+    try:
+        typed = HarnessJobMetadata.model_validate({"egress_allowed_hosts": metadata["egress_allowed_hosts"]})
+    except ValidationError as exc:
+        reasons = "; ".join(f"{'.'.join(map(str, one['loc']))}: {one['msg']}" for one in exc.errors())
+        reason = f"job.json metadata.egress_allowed_hosts is not a list of host names ({reasons})"
+        raise _egress_unknown(reason) from exc
+    return None if typed.egress_allowed_hosts is None else tuple(typed.egress_allowed_hosts)
+
+
+def _egress_unknown(reason: str) -> ProcessRuntimeError:
+    """The spawn failure for a run whose allowed hosts cannot be told."""
+    return ProcessRuntimeError("egress", "spawn_failed", reason, domain=FailureDomain.INFRASTRUCTURE)
+
+
+def _egress_tools_by_host(bundle_dir: Path | None) -> dict[str, str]:
+    """The contract's tools by the host of the dependency they reach, so a blocked call can name its tool."""
+    try:
+        contract = json.loads((Path(bundle_dir) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return {}
+    found: dict[str, str] = {}
+    for dependency in contract.get("dependencies") or [] if isinstance(contract, dict) else []:
+        if not isinstance(dependency, dict):
+            continue
+        host = str((dependency.get("reached") or {}).get("host") or "").strip().lower()
+        tools = [str(one) for one in dependency.get("used_by") or []]
+        if host and tools:
+            found[host] = ", ".join(tools)
+    return found
+
+
+def _egress_environment(
+    context: SpawnContext,
+    world_index: int,
+    endpoints: dict[str, RuntimeEndpoint],
+    configuration_addresses: dict[str, str],
+) -> dict[str, str] | None:
+    """The agent's proxy variables in a controlled run: this world's refusing proxy, started once per world and
+    logging to the world's action log, with every host of the environment's own processes left off it and let through
+    by it, for a client that ignores `NO_PROXY`."""
+    if context.egress_allowed_hosts is None:
+        return None
+    hosts = {urlsplit(address).hostname or "" for address in configuration_addresses.values() if "://" in address}
+    proxy = context.egress_proxies.get(world_index)
+    if proxy is None:
+        database = next((one for one in endpoints.values() if one.protocol == "postgres"), None)
+        if database is None and not context.egress_proxies:
+            logger.warning(
+                "egress: the world has no postgres endpoint to hold its action log; calls outside the test world "
+                "are refused but not recorded"
+            )
+        proxy = EgressProxy(
+            (*context.egress_allowed_hosts, *sorted(one for one in hosts if one)),
+            PostgresLog(database.address) if database is not None else None,
+            _egress_tools_by_host(context.bundle_dir),
+        )
+        context.egress_proxies[world_index] = proxy
+    return proxy.environment(sorted(hosts))
+
+
 def _read_job_secret_purposes(work_directory: Path) -> dict[str, str]:
     """§0.2/§4.1: `/work/job.json` is the provisioner's own configuration source — `agent.
     secret_refs` (§1: `{alias: {manager, key, version, purpose}}`) is where each alias's REAL
@@ -6747,6 +6882,7 @@ class ProcessRuntimeProvider:
                 customer_code_environment=_read_customer_code_environment(
                     work_directory
                 ),
+                egress_allowed_hosts=_read_egress_allowed_hosts(work_directory),
                 runner=self._runner,
                 sync_run=self._sync_run,
                 prober=self._prober,
@@ -7378,13 +7514,13 @@ class ProcessRuntimeProvider:
             self._context.work_directory, world_index, control
         )
 
-        def _fill(value: str) -> str:
+        def _fill(value: str, directory: Path = world_dir) -> str:
             return (
                 value.replace(
                     "{{JOB_ID}}", self._context.dispatch_id or self._context.job_id
                 )
                 .replace("{{WORLD_INDEX}}", str(world_index))
-                .replace("{{WORLD_DIR}}", str(world_dir))
+                .replace("{{WORLD_DIR}}", str(directory))
             )
 
         agent_name = env.get("LIVEKIT_AGENT_NAME")
@@ -7400,6 +7536,21 @@ class ProcessRuntimeProvider:
         trace = env.get("HARNESS_TOOL_TRACE")
         if trace:
             metadata["tool_trace_path"] = _fill(trace)
+        else:
+            # An older bundle traces the calls in its tools service, not its control service: read them there.
+            tracer = next(
+                (
+                    one
+                    for one in self._manifest.processes
+                    if (getattr(one, "environment", None) or {}).get("HARNESS_TOOL_TRACE")
+                ),
+                None,
+            )
+            if tracer is not None:
+                metadata["tool_trace_path"] = _fill(
+                    tracer.environment["HARNESS_TOOL_TRACE"],
+                    world_scratch_dir(self._context.work_directory, world_index, tracer.name),
+                )
         return metadata
 
     def _drop_world_shared_databases(self, world_index: int) -> None:
@@ -7745,6 +7896,9 @@ class ProcessRuntimeProvider:
         if self._context:
             self._context.local_auth_values.clear()
             self._context.local_auth_redactions.clear()
+            for proxy in self._context.egress_proxies.values():
+                proxy.close()
+            self._context.egress_proxies.clear()
         for runtime in self._runtimes.values():
             runtime._local_auth_values.clear()
         self._job_shared_handles = {}
