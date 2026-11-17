@@ -1,3 +1,5 @@
+import contextvars
+import copy
 import os
 
 from google.adk.agents import Agent
@@ -32,11 +34,28 @@ def _refuse_key_without_base_url(callback_context, llm_request):
     return None
 
 
-_ORDERS = {
+_SEED_ORDERS = {
     "A1001": {"item": "trail running shoes", "status": "delivered", "return": None},
     "A1002": {"item": "rain jacket", "status": "shipped", "return": None},
     "A1003": {"item": "water bottle", "status": "delivered", "return": None},
 }
+
+# Each conversation gets its own copy of the orders, so a return started in one scenario is
+# not there in the next. ADK runs the agent on its own server, so the conversation is named
+# just before each tool call, from ADK's session; the tools read it.
+_CONVERSATION = contextvars.ContextVar("conversation", default="")
+_ORDERS_BY_CONVERSATION: dict[str, dict] = {}
+
+
+def _orders() -> dict:
+    return _ORDERS_BY_CONVERSATION.setdefault(_CONVERSATION.get(), copy.deepcopy(_SEED_ORDERS))
+
+
+def _name_the_conversation(tool, args, tool_context):
+    # ADK copies this context into the thread that runs a plain tool.
+    _CONVERSATION.set(tool_context.session.id)
+    return None
+
 
 
 # ADK builds each tool's schema from the signature and the docstring, so the parameters stay
@@ -44,7 +63,7 @@ _ORDERS = {
 # calls them directly on its event loop, which is where the kit's tool tracer sees them.
 def look_up_order(order_id: str) -> str:
     """Look up an order by its id and report its item, status and any return."""
-    order = _ORDERS.get(order_id)
+    order = _orders().get(order_id)
     if order is None:
         return f"No order {order_id} exists."
     returned = order["return"] or "none"
@@ -53,7 +72,7 @@ def look_up_order(order_id: str) -> str:
 
 def start_return(order_id: str, reason: str) -> str:
     """Start a return for a delivered order, giving the customer's reason."""
-    order = _ORDERS.get(order_id)
+    order = _orders().get(order_id)
     if order is None:
         return f"No order {order_id} exists."
     if order["status"] != "delivered":
@@ -87,4 +106,5 @@ root_agent = Agent(
     ),
     tools=[look_up_order, start_return, return_policy],
     before_model_callback=_refuse_key_without_base_url,
+    before_tool_callback=_name_the_conversation,
 )
