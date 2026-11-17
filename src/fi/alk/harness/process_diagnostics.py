@@ -23,7 +23,9 @@ _MAX_MASKED_FILE_BYTES = 64 * 1024  # a credential file is small; a state file i
 _MAX_MASKED_TOTAL_BYTES = 1024 * 1024  # all listed files together
 _MAX_WALKED_ENTRIES = 50_000  # directory entries visited, so a huge tree cannot stall a run
 _ENV_LINE = re.compile(
-    r"^\s*(?:export\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_.-]*)\s*[=:]\s*(?P<value>.*?)\s*$"
+    # The value runs to the end of the line and is stripped in code: a lazy value followed by
+    # \s*$ backtracks quadratically on a long run of spaces.
+    r"^\s*(?:export\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_.-]*)\s*[=:]\s*(?P<value>.*)$"
 )
 _PLACEHOLDER = "<redacted>"
 # Committed placeholders, not secrets: no masks are built from them.
@@ -82,7 +84,7 @@ def _line_values(line: str, *, only_secrets: bool = False) -> set[str]:
     match = _ENV_LINE.match(line)
     if not match:
         return set()
-    raw = match.group("value")
+    raw = match.group("value").strip()
     values = {raw}
     if raw[:1] in {'"', "'"}:
         quote = raw[0]
@@ -98,7 +100,9 @@ def _line_values(line: str, *, only_secrets: bool = False) -> set[str]:
         if raw.find(quote, 1) > 0:
             values.add(raw[1 : raw.find(quote, 1)])  # a backslash before a closing quote
     else:
-        values.add(re.sub(r"\s+#.*$", "", raw).strip())
+        # A trailing comment starts at the first space or tab before a #; found in one pass.
+        comment = re.search(r"[ \t]#", raw)
+        values.add((raw[: comment.start()] if comment else raw).strip())
     values = {value.strip() for value in values}
     if only_secrets and not (
         _secret_name(match.group("name"))

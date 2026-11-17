@@ -550,3 +550,16 @@ def test_a_line_of_an_env_file_that_is_not_a_setting_is_masked_like_a_line(tmp_p
     )
     text = _evidence(tmp_path, source, "line CANARYPEMLINE0105abcdefghijklmnop and AAAAB3NzaC1yc2EAAAADAQABAA==\n")
     assert "CANARYPEMLINE" not in text and "AAAAB3NzaC1yc2E" not in text
+
+
+def test_a_long_line_of_spaces_builds_the_masks_quickly(tmp_path):
+    # One .env line just under the 64 KiB bound, mostly spaces: the masks are built on every
+    # failed repair attempt, so building them must stay linear in the line's length.
+    import time
+
+    (tmp_path / ".env").write_text("A=x" + " " * 65000 + "y\nAPI_KEY=canary-key-QWERTY-12345\n")
+    started = time.perf_counter()
+    masks = source_secret_masks(tmp_path)
+    took = time.perf_counter() - started
+    assert "canary-key-QWERTY-12345" in masks
+    assert took < 1.0, took
