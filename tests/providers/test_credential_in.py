@@ -12,6 +12,25 @@ from fi.alk.providers import agent, secret_shapes
 
 # ------------------------------------------------------------------------------ credential_in
 _REFUSED = {
+    "a bare lower-case variable": "postgres://svc:$ecret@db/app",
+    "a bare lower-case variable, underscored": "postgres://svc:$db_password@db/app",
+    "a bare lower-case variable, no scheme": "svc:$db_password@db.internal/app",
+    "a reference with a literal default": "postgres://svc:${A:-hunter2}@db/app",
+    "a reference with a short literal default": "postgres://svc:${DB_PASSWORD:-x}@db/app",
+    "a reference with a literal default, colon-less": "postgres://svc:${A-hunter2}@db/app",
+    "port-shaped password run, then a slash": "postgres://svc:$ecret/P4ss@db/app",
+    "port-shaped password run, then a space": "postgres://svc:$ecret P4ss@db/app",
+    "port-shaped password run, a long one": "postgres://svc:$Zq9fakePw/x@db/app",
+    "port-shaped password in angle brackets": "postgres://svc:<Zq9>/fakePw@db/app",
+    "port-shaped password in braces": "postgres://svc:{Zq9}/fakePw@db/app",
+    "port-shaped password, dotted host": "postgres://svc:$ecret/P4ss@db.example.com/app",
+    "password in single braces": "postgres://svc:{Zq9fakePw}@db/app",
+    "password in single braces, no scheme": "svc:{Zq9fakePw}@db.internal/app",
+    "reference followed by text": "postgres://svc:${A}tail@db/app",
+    "lower-case name with a digit and a mark": "postgres://svc:$a9x!@db/app",
+    "percent-encoded start of a literal": "postgres://svc:%24ecret@db/app",
+    "angle reference followed by text": "postgres://svc:<a>b@db/app",
+    "template followed by text": "postgres://svc:{{a}}b@db/app",
     "path query key": "/v1/search?key=AbCdEf123456",
     "path query sig": "/c?sv=2020&sig=abcDEF123%2F",
     "path query pwd": "/v1/items?pwd=hunter2",
@@ -76,6 +95,17 @@ def test_credential_in_refuses_a_password_holding_a_url_break(
 
 
 _KEPT = {
+    "a port template then a path with an at": "http://svc:$PORT/path@x",
+    "a braced port template then a path with an at": "http://svc:${PORT}/path@x",
+    "a numeric port then a path with an at": "http://db:8080/pkg@1.2",
+    "a lower-case port placeholder then a path with an at": "http://svc:<port>/path@x",
+    "a reference with an error message": "postgres://svc:${DB_PASSWORD:?missing}@db/app",
+    "a percent-encoded braced reference": "postgres://svc:%24%7BDB_PASSWORD%7D@db/app",
+    "two shell references": "postgres://svc:${A}${B}@db/app",
+    "two angle references": "postgres://svc:<a><b>@db/app",
+    "two templates": "postgres://svc:{{a}}{{b}}@db/app",
+    "a reference with an empty default": "postgres://svc:${A:-}@db/app",
+    "a reference with a reference as its default": "postgres://svc:${A:-$B}@db/app",
     "a prose query": "https://shop.example.com/search?q=red+running+shoes+size",
     "an encoded path in a query": "/login?next=%2Faccount%2Fsettings%2Fbilling",
     "userinfo password, a full shell reference": "postgres://svc:${DB_PASSWORD}@db/app",
@@ -181,6 +211,8 @@ _RUNS = {
     "dots and dashes": ".-",
     "a digit-led scheme": "9a://",
     "a digit-led scheme and a colon": "1a:",
+    "a port-shaped run then a space": "x://a:b ",
+    "a port-shaped run then a slash": "x://a:$b/",
 }
 
 

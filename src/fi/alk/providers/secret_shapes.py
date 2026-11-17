@@ -11,7 +11,7 @@ package, so only the drift test reads it, to tie the prefix patterns here to it.
 """
 
 import re
-from urllib.parse import unquote_plus
+from urllib.parse import unquote, unquote_plus
 from bisect import bisect_left
 
 REDACTED = "[redacted]"
@@ -936,6 +936,27 @@ _SCHEMELESS_USERINFO = re.compile(
 _LEADING_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://")
 _URL_BREAKS = str.maketrans("", "", "\t\r\n")
 _WHITESPACE = re.compile(r"\s")
+# What a URL password may be made of and still be only references: ${NAME}, $NAME in capitals,
+# ${NAME:-default} when the default is empty or itself a reference, ${NAME:?message}, <...> and
+# {{...}}, one after another. A lower-case $name is a literal that starts with a $, and a
+# single-brace {x} is a plain password; neither counts.
+_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
+_SIMPLE_REFERENCE = (
+    rf"\$\{{{_NAME}\}}|\$[A-Z_][A-Z0-9_]*|<[^<>]*>|\{{\{{[^{{}}]*\}}\}}"
+)
+_PASSWORD_REFERENCE = (
+    rf"\$\{{{_NAME}(?::?-(?:{_SIMPLE_REFERENCE})?|:?\?[^{{}}]*)\}}|{_SIMPLE_REFERENCE}"
+)
+_REFERENCES_ONLY = re.compile(rf"(?:{_PASSWORD_REFERENCE})+")
+# A password-like run before a / or a space that the cleaner reads as a port: digits, or a
+# template naming one ($PORT, ${PORT}, <port>, {{PORT}}). Anything else there is a password.
+_PORT_NAME = r"(?:[A-Z_][A-Z0-9_]*|[Pp][Oo][Rr][Tt])"
+_PORT_TEMPLATE = re.compile(
+    rf"\d+|\$\{{?{_PORT_NAME}\}}?|<{_PORT_NAME}>|\{{\{{?{_PORT_NAME}\}}\}}?"
+)
+_PORTISH_PASSWORD = re.compile(
+    _SCHEME + r"[^\s/?#@:]*:(?P<password>(?P<run>[^\s/?#@:]+)[/ ][^\s@]{1,64})@"
+)
 # A value that is only a reference: ${API_KEY}, $API_KEY, <API_KEY>, {{api_key}}, {API_KEY}.
 _REF = re.compile(r"\$\{?[A-Z_][A-Z0-9_]*\}?|<[^>]*>|\{\{?[^{}]*\}\}?")
 # A query value that reads as words (q=red+running+shoes) or as a path (next=%2Faccount%2Fbilling)
@@ -949,6 +970,16 @@ _UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 _LITERAL_ASSIGNMENT = re.compile(
     r"""(?<![A-Za-z0-9_\-])([A-Za-z_][A-Za-z0-9_\-]*)["']?\]?\s*(?::|=(?!=))\s*[rbfRBF]{0,2}(["'])([^"'\n]+)\2"""
 )
+
+
+def _password_is_reference(password: str) -> bool:
+    """Whether a URL password is made only of references, so it holds no secret."""
+    if _REFERENCES_ONLY.fullmatch(password):
+        return True
+    if "%" in password:
+        decoded = unquote(password)
+        return decoded != password and bool(_REFERENCES_ONLY.fullmatch(decoded))
+    return False
 
 
 def _is_reference(value: object) -> bool:
@@ -1021,20 +1052,28 @@ def credential_in(value: object) -> bool:
             return True
     # A URL password the cleaner removes whole: one broken by /, ?, # or a space. A password
     # that is only a reference (<db password>) is no secret.
+    # A password that starts like a port ($ecret) and holds a / or a space is not read as one by
+    # the cleaner's rule 1, so it is looked for here.
     if any(
-        not _REF.fullmatch(value[start : end - 1].split(":", 1)[-1])
+        not _PORT_TEMPLATE.fullmatch(match.group("run"))
+        and not _password_is_reference(match.group("password"))
+        for match in _PORTISH_PASSWORD.finditer(value)
+    ):
+        return True
+    if any(
+        not _password_is_reference(value[start : end - 1].split(":", 1)[-1])
         for start, end in rule1(value)
     ):
         return True
-    # A reference is no secret in the password position ($PASS, ${DB_PASSWORD}, <...>, {{...}}),
+    # A password made only of references is no secret ($PASS, ${DB_PASSWORD}, <...>, {{...}}),
     # but only the whole password being one is: $ecretP4ss starts like one and is a password.
     if any(
-        not _REF.fullmatch(match.group("password"))
+        not _password_is_reference(match.group("password"))
         for match in _USERINFO_PASSWORD.finditer(value)
     ):
         return True
     if any(
-        not _REF.fullmatch(match.group("password"))
+        not _password_is_reference(match.group("password"))
         for match in _SCHEMELESS_USERINFO.finditer(value)
     ):
         return True
