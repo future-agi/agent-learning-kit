@@ -18,7 +18,16 @@ from typing import Any
 
 # --- begin text_of (kept identical in agent/content.py and the hosted adapters) ---
 _TEXT_KINDS = ("text", "output_text")
-_ENVELOPE_KINDS = ("ai", "human", "tool", "system", "user", "assistant", "message")
+_ENVELOPE_KINDS = (
+    "ai",
+    "AIMessageChunk",
+    "human",
+    "tool",
+    "system",
+    "user",
+    "assistant",
+    "message",
+)
 _MISSING = object()
 _MOST_DEPTH = 32
 
@@ -57,7 +66,7 @@ def _block_text(block: Any, depth: int = 0) -> str:
 def _is_message(item: Any) -> bool:
     """An assistant message: an ``ai`` message, or a ``role: assistant`` one that is no typed block."""
     kind = _field(item, "type")
-    if kind == "ai":
+    if kind in ("ai", "AIMessageChunk"):
         return True
     return _field(item, "role") == "assistant" and kind in (None, "message")
 

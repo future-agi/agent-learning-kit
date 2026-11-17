@@ -1256,6 +1256,7 @@ _REPLY_ITEM_KINDS = frozenset(
         "text", "output_text", "refusal", "thinking", "redacted_thinking", "reasoning",
         "tool_use", "server_tool_use", "tool_result", "image", "message",
         "ai", "human", "tool", "system", "assistant", "user", "reasoning_content",
+        "AIMessageChunk",
     }
 )
 _CHAT_ROLES = frozenset({"assistant", "user", "system", "tool", "developer"})
@@ -1272,7 +1273,7 @@ def _is_block_or_message(item: Any) -> bool:
 
 
 _HISTORY_KINDS = frozenset(
-    {"message", "ai", "human", "tool", "system", "assistant", "user"}
+    {"message", "ai", "AIMessageChunk", "human", "tool", "system", "assistant", "user"}
 )
 
 

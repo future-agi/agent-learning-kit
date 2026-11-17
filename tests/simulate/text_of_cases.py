@@ -259,3 +259,18 @@ CASES += [
         "ok",
     ),
 ]
+
+CASES += [
+    ("message-chunk-object", NS(type="AIMessageChunk", content=_blocks()), ANSWER),
+    ("message-chunk-dict", {"type": "AIMessageChunk", "content": _blocks()}, ANSWER),
+    (
+        "history-ending-in-a-message-chunk",
+        [NS(type="human", content="q"), NS(type="AIMessageChunk", content=_blocks())],
+        ANSWER,
+    ),
+    (
+        "message-chunk-in-a-block-list",
+        [NS(type="AIMessageChunk", content=_blocks()), {"type": "text", "text": "x"}],
+        ANSWER,
+    ),
+]
