@@ -1928,8 +1928,11 @@ def _langgraph_command_cannot_run(
     no ``agent_callback``; the command is exactly ``langgraph dev`` or ``langgraph up``; no
     requirement or project dependency names ``langgraph-cli``; ``langgraph.json`` is at most
     64 KB, has no ``http`` or ``auth`` key (custom routes or auth make the app more than its
-    graph), and declares one graph.
+    graph), and declares one graph; and no Compose selection: a Compose service builds its own
+    image, which this can't see, and a ``callable`` interface is refused on a Compose selection.
     """
+    if runtime.get("execution") == "compose" or runtime.get("compose_file") or runtime.get("service"):
+        return False
     command = runtime.get("command")
     if (
         not isinstance(command, list)

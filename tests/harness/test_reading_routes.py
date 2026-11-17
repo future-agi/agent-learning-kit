@@ -477,3 +477,55 @@ def test_h3_the_name_kept_is_the_one_the_tracer_needs(tmp_path):
     )
     assert rewritten.returncode == 0, rewritten.stderr
     assert records == []
+
+
+# --- Round 2, H3: a Compose selection keeps its command and its HTTP interface ---------------
+
+def test_h3_a_compose_selection_bundles_as_it_does_on_the_old_kit(tmp_path, monkeypatch):
+    """The service's Dockerfile installs langgraph-cli, which requirements.txt can't show. The
+    graph route's `callable` interface is refused on Compose (compose_native_http_chat_required)."""
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/nonexistent/broker.sock")
+    compose = (
+        "services:\n  agent:\n    build: .\n"
+        "    command: [langgraph, dev, --host, 0.0.0.0, --port, '2024']\n    ports: ['2024:2024']\n"
+    )
+    docker = "FROM python:3.12\nWORKDIR /app\nCOPY . .\nRUN pip install -r requirements.txt 'langgraph-cli[inmem]'\n"
+    source = deep_source(
+        tmp_path, extra={f"{DEEP}/docker-compose.yml": compose, f"{DEEP}/Dockerfile": docker}
+    )
+    body = deep_reading()
+    body["runtime"].update(
+        execution="compose", compose_file=f"{DEEP}/docker-compose.yml", service="agent"
+    )
+    manifest, output = bundled(tmp_path, source, DEEP, contract=body)
+    sealed = _sealed(output)["runtime"]
+    assert sealed["interface"]["kind"] == "http"
+    assert sealed["interface"]["path"] == "/runs/wait"
+    assert sealed["command"] == body["runtime"]["command"]
+
+
+def _scoped(source: Path, **selection):
+    """What `_langgraph_command_cannot_run` is handed: the reading's runtime bound to its folder."""
+    root = source.resolve()
+    runtime, _, run_folder = bundle_author_v2._agent_scope(
+        root, DEEP, {**deep_reading()["runtime"], **selection}
+    )
+    return root, run_folder, runtime
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        {"execution": "compose", "compose_file": "docker-compose.yml", "service": "agent"},
+        {"execution": "auto", "compose_file": "docker-compose.yml", "service": "agent"},
+    ],
+    ids=["compose", "auto-with-a-compose-file"],
+)
+def test_h3_a_compose_selection_keeps_the_command(tmp_path, selection):
+    root, run_folder, runtime = _scoped(deep_source(tmp_path), **selection)
+    assert not bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
+
+
+def test_h3_the_same_reading_with_no_compose_still_takes_the_graph_route(tmp_path):
+    root, run_folder, runtime = _scoped(deep_source(tmp_path))
+    assert bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
