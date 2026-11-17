@@ -682,8 +682,8 @@ def test_a_bind_of_the_docker_socket_or_a_parent_is_rejected(source, form):
         {"type": "bind", "source": "/var/run/other", "target": "/h"},
         {"type": "bind", "source": "/srv/data", "target": "/h"},
         {"type": "bind", "source": "./data", "target": "/h"},
-        {"type": "bind", "source": "/run/user", "target": "/h"},
         {"type": "volume", "source": "data", "target": "/h"},
+        {"type": "bind", "source": "/run/userdata", "target": "/h"},
         "/srv/data:/h",
         "./data:/h",
         "data:/h",
@@ -2836,3 +2836,135 @@ def test_an_env_file_outside_the_source_is_refused_after_the_config_render(
     assert config["x-alk-env-files"] == {"agent": ["/etc/hosts"]}
     with pytest.raises(ProvisionError, match="agent: env_file outside the project"):
         _validate_compose_security(config, source=tmp_path)
+
+
+_HOME = str(Path.home())
+_OTHER_DAEMON_SOCKETS = [
+    "/run/user",
+    "/run/user/1000",
+    "/run/user/1000/docker.sock",
+    "/run/user/1000/",
+    "/var/run/user/1000/docker.sock",
+    "/run/containerd",
+    "/run/containerd/containerd.sock",
+    "/var/run/containerd/containerd.sock",
+    "/run/./containerd/",
+    f"{_HOME}/.docker/run",
+    f"{_HOME}/.docker/run/docker.sock",
+]
+
+
+@pytest.mark.parametrize("source", _OTHER_DAEMON_SOCKETS)
+@pytest.mark.parametrize("form", ["long", "short"])
+def test_a_bind_of_another_daemon_socket_or_its_folder_is_rejected(source, form):
+    volume = (
+        {"type": "bind", "source": source, "target": "/h"}
+        if form == "long"
+        else f"{source}:/h:ro"
+    )
+    with pytest.raises(ProvisionError, match="agent: Docker socket mount"):
+        _validate_compose_security({"services": {"agent": {"volumes": [volume]}}})
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["/run/userdata", "/run/user/1000/app.sock", "/run/containerdata", "/run/user-x"],
+)
+def test_a_bind_beside_another_daemon_socket_is_accepted(source):
+    _validate_compose_security(
+        {
+            "services": {
+                "agent": {
+                    "volumes": [{"type": "bind", "source": source, "target": "/h"}]
+                }
+            }
+        }
+    )
+
+
+_GPU = {"driver": "nvidia", "capabilities": ["gpu"], "count": "all"}
+
+
+@pytest.mark.parametrize(
+    ("deploy", "expected"),
+    [
+        ({"resources": {"reservations": {"devices": [_GPU]}}}, "agent: host devices"),
+        (
+            {"resources": {"reservations": {"cpus": "1", "devices": [_GPU]}}},
+            "agent: host devices",
+        ),
+        ({"bogus": 1}, "agent: deploy field bogus is not allowed"),
+        (
+            {"resources": {"bogus": 1}},
+            "agent: deploy.resources field bogus is not allowed",
+        ),
+        (
+            {"resources": {"limits": {"bogus": 1}}},
+            "agent: deploy.resources.limits field bogus is not allowed",
+        ),
+        (
+            {"resources": {"reservations": {"generic_resources": [{"x": 1}]}}},
+            "agent: deploy.resources.reservations field generic_resources is not allowed",
+        ),
+    ],
+)
+def test_deploy_that_reaches_the_host_is_rejected(deploy, expected):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(_svc(deploy=deploy))
+    assert expected in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "deploy",
+    [
+        {"resources": {"limits": {"cpus": "1"}}},
+        {"replicas": 1, "mode": "replicated"},
+        {"resources": {"limits": {"cpus": "1", "memory": "1g", "pids": 100}}},
+        {"resources": {"reservations": {"cpus": "1", "memory": "1g"}}},
+        {"resources": {"reservations": {"devices": []}}},
+        {
+            "restart_policy": {"condition": "on-failure"},
+            "placement": {"constraints": []},
+            "update_config": {},
+            "rollback_config": {},
+            "labels": {"a": "b"},
+            "endpoint_mode": "vip",
+        },
+    ],
+)
+def test_deploy_without_host_reach_is_accepted(deploy):
+    _validate_compose_security(_svc(deploy=deploy))
+
+
+@pytest.mark.parametrize(
+    "logging",
+    [
+        {"driver": "syslog", "options": {"syslog-address": "tcp://127.0.0.1:5432"}},
+        {"driver": "fluentd", "options": {"fluentd-address": "10.0.0.5:24224"}},
+        {"driver": "awslogs", "options": {"awslogs-group": "g"}},
+        {"driver": "gelf"},
+        {"driver": "journald"},
+        {"driver": "JSON-FILE"},
+        {"driver": "CANARY-7f3a"},
+    ],
+)
+def test_a_logging_driver_that_dials_out_is_rejected(logging):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(_svc(logging=logging))
+    assert "agent: logging driver" in str(error.value)
+    assert "CANARY" not in str(error.value)
+    assert "127.0.0.1" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "logging",
+    [
+        {"driver": "json-file", "options": {"max-size": "10m", "max-file": "3"}},
+        {"driver": "local"},
+        {"driver": "none"},
+        {"options": {"max-size": "10m"}},
+        {},
+    ],
+)
+def test_a_local_logging_driver_is_accepted(logging):
+    _validate_compose_security(_svc(logging=logging))

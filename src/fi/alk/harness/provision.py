@@ -578,18 +578,44 @@ _NETWORK_HINT = (
 )
 
 
-# The Docker socket and every directory that holds it: a bind of any of them hands the container
-# the daemon, which undoes every rule below.
+# The Docker socket, the containerd socket and every directory that holds one: a bind of any of
+# them hands the container a daemon, which undoes every rule below. A rootless daemon's socket
+# is ``/run/user/<uid>/docker.sock`` and Docker Desktop's is under ``~/.docker/run``.
 _DOCKER_SOCKET_AND_PARENTS = frozenset(
-    {"/", "/run", "/var", "/var/run", "/var/run/docker.sock", "/run/docker.sock"}
+    {
+        "/",
+        "/run",
+        "/var",
+        "/var/run",
+        "/var/run/docker.sock",
+        "/run/docker.sock",
+        "/run/user",
+        "/run/containerd",
+        "/run/containerd/containerd.sock",
+    }
 )
+_ROOTLESS_SOCKET = re.compile(r"^/run/user(/[^/]+(/docker\.sock)?)?$")
 
 
 def _docker_socket_paths() -> frozenset[str]:
-    """The literal set and what each entry resolves to on this host (``/var/run`` is a link)."""
-    return _DOCKER_SOCKET_AND_PARENTS | {
-        os.path.realpath(path) for path in _DOCKER_SOCKET_AND_PARENTS
+    """The literal set, the user's Desktop socket folder, and what each resolves to on this host
+    (``/var/run`` is a link)."""
+    home = os.path.expanduser("~")
+    named = _DOCKER_SOCKET_AND_PARENTS | {
+        posixpath.join(home, ".docker/run"),
+        posixpath.join(home, ".docker/run/docker.sock"),
     }
+    return named | {os.path.realpath(path) for path in named}
+
+
+def _is_daemon_socket_path(path: str) -> bool:
+    # ``/var/run`` is ``/run`` on a Linux host, so read both spellings of the same place.
+    lexical = re.sub(r"^/var/run(?=/|$)", "/run", path)
+    return (
+        path in _docker_socket_paths()
+        or lexical in _docker_socket_paths()
+        or bool(_ROOTLESS_SOCKET.match(lexical))
+    )
 
 
 def _mounts_docker_socket(volume: Any, root: str | None = None) -> bool:
@@ -612,11 +638,10 @@ def _mounts_docker_socket(volume: Any, root: str | None = None) -> bool:
         if root is None or not source:
             return False
         source = posixpath.join(root, source)
-    resolved = {
-        posixpath.normpath(re.sub(r"/{2,}", "/", path))
+    return any(
+        _is_daemon_socket_path(posixpath.normpath(re.sub(r"/{2,}", "/", path)))
         for path in (source, os.path.realpath(source))
-    }
-    return bool(resolved & _docker_socket_paths())
+    )
 
 
 # Deny by default: a service field this list does not name is refused, so a field added to
@@ -738,6 +763,46 @@ def _build_violations(
     return found
 
 
+_ALLOWED_DEPLOY_FIELDS = frozenset(
+    {
+        "mode", "replicas", "labels", "update_config", "rollback_config", "restart_policy",
+        "placement", "endpoint_mode", "resources",
+    }
+)  # fmt: skip
+_LOCAL_LOGGING_DRIVERS = frozenset({"", "json-file", "local", "none"})
+
+
+def _deploy_violations(name: str, deploy: Any) -> list[str]:
+    """Check ``deploy`` as nested keys. ``resources.reservations.devices`` is how a service asks
+    for a GPU (a host device), so it is refused as ``devices`` is."""
+    if not isinstance(deploy, dict):
+        return []
+    found = [
+        f"{name}: deploy field {field} is not allowed"
+        for field in sorted(str(key) for key in deploy)
+        if field not in _ALLOWED_DEPLOY_FIELDS and not field.startswith("x-")
+    ]
+    resources = deploy.get("resources") or {}
+    if not isinstance(resources, dict):
+        return found
+    allowed = {"limits": {"cpus", "memory", "pids"}, "reservations": {"cpus", "memory"}}
+    for key in sorted(str(key) for key in resources):
+        if key not in allowed:
+            found.append(f"{name}: deploy.resources field {key} is not allowed")
+            continue
+        section = resources[key] or {}
+        if not isinstance(section, dict):
+            continue
+        if key == "reservations" and section.get("devices"):
+            found.append(f"{name}: host devices")
+        found.extend(
+            f"{name}: deploy.resources.{key} field {field} is not allowed"
+            for field in sorted(str(item) for item in section)
+            if field not in allowed[key] | {"devices"} and not field.startswith("x-")
+        )
+    return found
+
+
 _ALLOWED_HOOK_FIELDS = frozenset(
     {"command", "user", "working_dir", "environment", "privileged"}
 )
@@ -838,6 +903,14 @@ def _validate_compose_security(
         violations.extend(_build_violations(name, build, config, roots))
         if service.get("devices"):
             violations.append(f"{name}: host devices")
+        violations.extend(_deploy_violations(name, service.get("deploy")))
+        # Any other logging driver makes the daemon dial out from the host's network namespace
+        # (syslog, fluentd, gelf) or send with the daemon's own credentials (awslogs).
+        logging = service.get("logging")
+        if isinstance(logging, dict) and str(logging.get("driver") or "") not in (
+            _LOCAL_LOGGING_DRIVERS
+        ):
+            violations.append(f"{name}: logging driver")
         # A dotenv file is read into the container's environment: only the job's own are its to read.
         env_files = _env_file_paths(service.get("env_file")) + _env_file_paths(
             (config.get(_ENV_FILES_KEY) or {}).get(name)
