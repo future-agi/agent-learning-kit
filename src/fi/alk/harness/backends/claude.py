@@ -35,7 +35,9 @@ from claude_agent_sdk import (
 from fi import agentcc
 
 from .base import (
+    ASK_TOOL,
     DELEGATE_TOOL,
+    KNOWN_BUILTINS,
     MOST_WORKERS_AT_ONCE,
     Call,
     ModelReply,
@@ -469,6 +471,22 @@ class ClaudeBackend:
         gateway_compatible = behind_gateway(spec.model)
         # A worker's calls are made inside this session, so the gate covers its tools too.
         allowed = [name for name in spec.granted_anywhere() if name != DELEGATE_TOOL]
+        # What the session itself may call, and each worker: the gate holds each to its own.
+        own = [name for name in spec.granted() if name != DELEGATE_TOOL]
+        per_worker = {
+            name: [tool for tool in worker.granted(spec) if tool != DELEGATE_TOOL]
+            for name, worker in spec.workers.items()
+        }
+        # The CLI's own tools are only the ones the session or a worker was granted; left unset,
+        # the CLI offers every one it has.
+        asked_for = [
+            *spec.builtins,
+            *(name for worker in spec.workers.values() for name in (worker.builtins or ())),
+        ]
+        unknown = sorted({name for name in asked_for if name not in KNOWN_BUILTINS})
+        if unknown:
+            raise ValueError(f"no host tool of these names to grant: {', '.join(unknown)}")
+        builtins = list(dict.fromkeys(name for name in asked_for if name != DELEGATE_TOOL))
         # Union per server name; each agent is still restricted by its own `tools` allowlist.
         servers: dict[str, ToolServer] = {}
         for source in (spec.servers, *(worker.servers for worker in spec.workers.values())):
@@ -496,10 +514,15 @@ class ClaudeBackend:
             # A backgrounded worker lets the stage end before the worker reports.
             environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
             allowed.extend(DELEGATION_TOOLS)
+            own.extend(DELEGATION_TOOLS)
+            builtins.extend(DELEGATION_TOOLS)
         _can_reach_its_workers(spec, allowed)
         options = ClaudeAgentOptions(
+            tools=builtins,
             system_prompt=_prompt_for(spec.system_prompt),
-            allowed_tools=allowed,
+            # Not the question tool: an allow rule could approve it before the permission
+            # callback, and so before the stage's ask, is consulted.
+            allowed_tools=[name for name in allowed if name != ASK_TOOL],
             mcp_servers={
                 server_name: _sdk_server(
                     server, gateway_compatible=gateway_compatible
@@ -534,15 +557,16 @@ class ClaudeBackend:
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose
             # whole job is to validate that change.
             options.permission_mode = "default"
-            options.hooks = gate_hooks(allowed)
+            options.hooks = gate_hooks(own, per_worker)
             options.can_use_tool = spec.permission_override or permission_gate(
-                spec.ask, allowed
+                spec.ask, allowed, own
             )
         # Every session, gated or not, carries the secret list as Read deny rules: Claude Code's own
         # Grep and Glob turn them into exclusions, which the gate (it sees only a call's
         # arguments) can't do for a search that starts above a credential file.
         options.disallowed_tools = [
-            *([name for name in UNWANTED if name not in spec.builtins] if spec.gated else []),
+            # A worker's granted built-ins are the session's too, so none of them is disallowed.
+            *([name for name in UNWANTED if name not in builtins] if spec.gated else []),
             *secret_read_rules(),
         ]
         if spec.thinking:

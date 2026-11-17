@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import gc
 import json
 import os
 import re
@@ -3698,7 +3697,10 @@ def test_script_type_imports_are_dropped_as_before():
     assert _script_imports(code) == ["./c", "./far"]
 
 
-def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
+def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path, monkeypatch):
+    import threading
+
+    from fi.alk.harness import credentials
     from fi.alk.harness.tools import contract_tools
 
     # Each keyword cost the old pattern a 1,000-character rescan: 0.6 s for this file, on the loop.
@@ -3707,7 +3709,10 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
     files["agents/a/r.ts"] = _quote_left_open(1_000_000)
     repo = _tree(tmp_path / "repo", {**files, "agents/a/agent.py": "x = 1\n"})
     destination = tmp_path / "out"
-    server = contract_tools(destination, source_root=repo, scan_root=repo, subfolder="agents/a")
+    # The patched scan lives in this process, so the save's checks run here, off the loop.
+    server = contract_tools(
+        destination, source_root=repo, scan_root=repo, subfolder="agents/a", save_checks="thread"
+    )
     reading = {
         "agent": "a",
         "modality": "chat",
@@ -3717,45 +3722,61 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
         "runtime": {"language": "python"},
         "tools": [{"name": "add", "args": ["i"]}],
     }
+    beat = threading.Event()
+    seen: dict = {"threads": set()}
+    scan = credentials._script_imports
+
+    def scan_that_waits_for_the_loop(content):
+        # Off the loop, the loop keeps beating while this waits; on it, no beat could come.
+        seen["threads"].add(threading.get_ident())
+        if "loop_beat_meanwhile" not in seen:
+            beat.clear()
+            seen["loop_beat_meanwhile"] = beat.wait(10)
+        return scan(content)
+
+    monkeypatch.setattr(credentials, "_script_imports", scan_that_waits_for_the_loop)
 
     async def save():
-        worst = [0.0]
+        seen["loop"] = threading.get_ident()
         done = asyncio.Event()
 
-        async def beat():
-            last = time.perf_counter()
+        async def beating():
             while not done.is_set():
+                beat.set()
                 await asyncio.sleep(0.01)
-                now = time.perf_counter()
-                worst[0], last = max(worst[0], now - last), now
 
-        beating = asyncio.create_task(beat())
+        task = asyncio.create_task(beating())
         # A save made while the session's checks still run answers "not checked in time" (on a
         # loaded host they can outlast the deadline), and the model writes again: so does this.
-        waited = 0.0
         for _ in range(60):
-            started = time.perf_counter()
             result = await server.tools[0].handler(reading)
-            waited = max(waited, time.perf_counter() - started)
             if not _text(result).startswith("not checked in time"):
                 break
             await asyncio.sleep(0.5)
         done.set()
-        await beating
-        return result, worst[0], waited
+        await task
+        return result
 
-    # The heap the tests before this one built is frozen, so a full collection of it can't land
-    # inside the save. The save's own collections still count.
-    gc.collect()
-    gc.freeze()
-    try:
-        result, worst, waited = asyncio.run(save())
-    finally:
-        gc.unfreeze()
+    result = asyncio.run(save())
 
     assert not result.get("is_error"), result
-    assert worst < 0.25
-    assert waited < 2
+    assert seen["threads"] and seen["loop"] not in seen["threads"]
+    assert seen["loop_beat_meanwhile"] is True
+
+
+def test_the_script_import_scan_grows_with_the_file_not_its_square():
+    from fi.alk.harness.credentials import _script_imports
+
+    def work(text: str) -> float:
+        # This thread's own CPU time: other processes and waits on the GIL don't count.
+        started = time.thread_time()
+        _script_imports(text)
+        return time.thread_time() - started
+
+    for crafted in (_type_keywords, lambda size: _quote_left_open(size)):
+        small, large = work(crafted(250_000)), work(crafted(1_000_000))
+        # Four times the file is about four times the work; a rescan per keyword is sixteen.
+        assert large < 8 * max(small, 0.005), (crafted, small, large)
 
 
 def _quote_left_open(size: int) -> str:
