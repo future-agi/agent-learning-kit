@@ -1052,10 +1052,14 @@ def _write_port_override(
     if not services and not reset_env_files:
         return
     lines = ["services:"]
-    for name in reset_env_files:
-        lines.extend((f"  {json.dumps(name)}:", "    env_file: !reset []"))
-    for name, ports, fixed_container_name in services:
+    # One entry per service: a service with both a missing env file and published ports would
+    # otherwise appear twice, which is not a valid mapping.
+    by_name = {name: (ports, fixed) for name, ports, fixed in services}
+    for name in sorted({*reset_env_files, *by_name}):
+        ports, fixed_container_name = by_name.get(name, ([], False))
         lines.append(f"  {json.dumps(name)}:")
+        if name in reset_env_files:
+            lines.append("    env_file: !reset []")
         if fixed_container_name:
             # A submitted container_name bypasses Compose project scoping and collides across
             # concurrent jobs. Compose's reset tag restores its normal project-owned name.

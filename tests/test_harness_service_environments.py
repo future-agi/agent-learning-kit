@@ -3057,3 +3057,50 @@ def test_a_failed_compose_command_still_reports_its_stderr(tmp_path, monkeypatch
     )
     with pytest.raises(ProvisionError, match="invalid compose file"):
         provisioning._config(_env_environment(tmp_path))
+
+
+def test_a_service_with_a_missing_env_file_and_ports_gets_one_override_entry(tmp_path):
+    import yaml
+
+    compose = tmp_path / "compose.yml"
+    compose.write_text(
+        "services:\n  crawl:\n    image: x\n    env_file: .llm.env\n"
+        "    ports: ['11235:11235']\n  other:\n    image: y\n    env_file: .gone.env\n"
+    )
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path), compose_file=str(compose), project="isolated"
+    )
+    _write_port_override(
+        tmp_path / "session",
+        environment,
+        {
+            "services": {
+                "crawl": {"ports": [{"target": 11235, "published": "11235"}]},
+                "other": {},
+            }
+        },
+    )
+    generated = Path(environment.compose_override_file).read_text()
+
+    class Loader(yaml.SafeLoader):
+        pass
+
+    # Compose's own tags are not YAML core; keep each tagged node's value.
+    Loader.add_multi_constructor(
+        "!",
+        lambda loader, _tag, node: (
+            loader.construct_scalar(node)
+            if isinstance(node, yaml.ScalarNode)
+            else loader.construct_sequence(node, deep=True)
+            if isinstance(node, yaml.SequenceNode)
+            else loader.construct_mapping(node, deep=True)
+        ),
+    )
+    document = yaml.load(
+        generated, Loader=Loader
+    )  # a duplicate key does not parse here
+    assert generated.count('"crawl":') == 1
+    assert "env_file: !reset []" in generated
+    assert "ports: !override" in generated
+    assert document["services"]["crawl"]["ports"][0]["target"] == 11235
+    assert document["services"]["other"]["env_file"] == []
