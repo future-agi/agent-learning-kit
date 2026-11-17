@@ -230,7 +230,8 @@ jobs:
           --extra livekit --extra harness-ui --extra harness-stores --extra hosted-tracing
           --output-file "$RUNNER_TEMP/alk-requirements.txt"
           && python -m pip install -r "$RUNNER_TEMP/alk-requirements.txt"
-          && python -m pip install --no-deps . pytest pytest-asyncio
+          && python -m pip install --no-deps .
+          && python -m pip install pytest pytest-asyncio
       - name: Check the SDK is the locked one, and find its CLI
         run: |
           python - <<'PY'
