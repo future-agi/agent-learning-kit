@@ -312,7 +312,7 @@ def test_import_without_a_key_succeeds_with_a_placeholder(example_module) -> Non
 
 @pytest.mark.parametrize("key", ["", "   "], ids=["empty", "blank"])
 def test_an_empty_or_blank_key_also_gets_the_placeholder(example_module, key) -> None:
-    example_module(OPENAI_API_KEY=key)
+    example_module(OPENAI_API_KEY=key, OPENAI_BASE_URL=key)
     import langchain_openai
 
     (model,) = langchain_openai.INSTANCES
@@ -330,6 +330,15 @@ def test_a_key_with_no_base_url_is_refused_at_import(example_module, base_url) -
         example_module(**environment)
 
     assert "secret-canary-key" not in str(refused.value)
+    # Nor in the example's own frame, which a traceback that prints variables would show.
+    frames = []
+    trace = refused.tb
+    while trace is not None:
+        frames.append(trace.tb_frame)
+        trace = trace.tb_next
+    example_frames = [frame for frame in frames if frame.f_code.co_filename.endswith("agent.py")]
+    assert example_frames
+    assert not any("secret-canary-key" in repr(frame.f_locals) for frame in example_frames)
     import langchain_openai
 
     # Refused before any client exists, so nothing could have been sent.
@@ -396,12 +405,8 @@ def test_example_folder_holds_exactly_its_files() -> None:
 def test_example_has_plain_tools_and_the_literal_default_model() -> None:
     module = ast.parse((EXAMPLE / "agent.py").read_text(encoding="utf-8"))
     assert not [node for node in ast.walk(module) if isinstance(node, ast.AsyncFunctionDef)]
-    plain = {
-        node.name
-        for node in module.body
-        if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
-    }
-    assert plain == set(TOOLS)
+    plain = {node.name for node in module.body if isinstance(node, ast.FunctionDef)}
+    assert plain == set(TOOLS) | {"_setting"}
     (assignment,) = [
         node
         for node in module.body
