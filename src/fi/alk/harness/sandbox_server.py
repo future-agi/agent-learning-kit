@@ -774,6 +774,11 @@ class LocalSandbox:
             raise HTTPException(
                 status_code=409, detail="harness job is already running"
             )
+        task = self._tasks.get(job_id)
+        if task is not None and not task.done():
+            # A cancel answered before its cleanup ended: the job's state is terminal, but its
+            # worker and environment are still being stopped.
+            raise HTTPException(status_code=409, detail="harness job is still stopping")
         output = self.artifacts_root / response.job.run_id
         required = (
             output / "contract.json",
@@ -1082,10 +1087,7 @@ class LocalSandbox:
                 _write_json(state_path, state)
             finally:
                 log_handle.close()
-                self._tasks.pop(job.job_id, None)
-                self._ephemeral_secrets.pop(job.job_id, None)
-                self._ephemeral_secret_file_names.pop(job.job_id, None)
-                self._delete_job_secret_files(job.job_id)
+                self._release_job(job.job_id)
                 shutil.rmtree(replay_root, ignore_errors=True)
 
     def preflight(self, request: SandboxPreflightRequest) -> SandboxPreflightResponse:
@@ -1456,10 +1458,7 @@ class LocalSandbox:
                 _write_json(state_path, state)
             finally:
                 log_handle.close()
-                self._tasks.pop(job.job_id, None)
-                self._ephemeral_secrets.pop(job.job_id, None)
-                self._ephemeral_secret_file_names.pop(job.job_id, None)
-                self._delete_job_secret_files(job.job_id)
+                self._release_job(job.job_id)
 
     def get(self, job_id: str) -> SandboxJobResponse:
         directory = self.jobs_root / job_id
@@ -1606,9 +1605,21 @@ class LocalSandbox:
             task.cancel()
             await asyncio.wait({task}, timeout=_CANCEL_RESPONSE_SECONDS)
             if not task.done():
-                # Answer now; the secrets go once the task's cleanup has ended.
-                task.add_done_callback(lambda _task: self._forget_job_secrets(job_id))
-                return self.get(job_id)
+                # Answer now; the secrets go once the task's cleanup has ended, unless a new run
+                # of the job holds them by then.
+                task.add_done_callback(
+                    lambda done: self._forget_job_secrets(job_id)
+                    if self._tasks.get(job_id) in (None, done)
+                    else None
+                )
+                answer = self.get(job_id)
+                return answer.model_copy(
+                    update={
+                        "status": answer.status.model_copy(
+                            update={"detail": "canceled; environment cleanup still running"}
+                        )
+                    }
+                )
         else:
             # Not started, or already ended: nothing else will bring its environment down.
             output = self.artifacts_root / response.job.run_id
@@ -1622,6 +1633,15 @@ class LocalSandbox:
                 _write_json(state_path, state)
         self._forget_job_secrets(job_id)
         return self.get(job_id)
+
+    def _release_job(self, job_id: str) -> None:
+        """A job's task, ending: its entry and secrets go, unless a new run of the job (a rerun
+        after a cancel answered early) already holds them."""
+        holder = self._tasks.get(job_id)
+        if holder is not None and holder is not asyncio.current_task():
+            return
+        self._tasks.pop(job_id, None)
+        self._forget_job_secrets(job_id)
 
     def _forget_job_secrets(self, job_id: str) -> None:
         self._ephemeral_secrets.pop(job_id, None)

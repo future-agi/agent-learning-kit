@@ -2858,6 +2858,64 @@ def test_cancel_answers_before_the_platforms_timeout_while_cleanup_runs_on(
     assert job_id not in sandbox._ephemeral_secrets
 
 
+def _cancel_answered_early(tmp_path, monkeypatch, fake_worker):
+    import threading
+
+    monkeypatch.setattr(sandbox_server, "_CANCEL_RESPONSE_SECONDS", 0.3)
+    released = threading.Event()
+    monkeypatch.setattr(sandbox_server, "stop", lambda _output: released.wait(10))
+    source = _local_source(tmp_path, monkeypatch)
+    sandbox = LocalSandbox(tmp_path / "state")
+    fake_worker.sleeping()
+    return sandbox, source, released
+
+
+def test_a_rerun_waits_until_the_cancelled_jobs_cleanup_ends(tmp_path, monkeypatch, fake_worker):
+    from fastapi import HTTPException
+
+    sandbox, source, released = _cancel_answered_early(tmp_path, monkeypatch, fake_worker)
+
+    async def scenario():
+        job_id = sandbox.submit(LocalSandboxRequest(source_path=str(source))).job.job_id
+        old = sandbox._tasks[job_id]
+        await _until(lambda: _running(fake_worker))
+        answer = await sandbox.cancel(job_id)
+        with pytest.raises(HTTPException) as refused:
+            sandbox.rerun(job_id, SandboxRerunRequest())
+        released.set()
+        await asyncio.wait({old}, timeout=10)
+        return answer, refused.value
+
+    answer, refused = asyncio.run(scenario())
+
+    assert answer.status.detail == "canceled; environment cleanup still running"
+    assert refused.status_code == 409
+    assert refused.detail == "harness job is still stopping"
+
+
+def test_the_old_cleanup_leaves_a_new_runs_secrets_alone(tmp_path, monkeypatch, fake_worker):
+    sandbox, source, released = _cancel_answered_early(tmp_path, monkeypatch, fake_worker)
+
+    async def scenario():
+        job_id = sandbox.submit(LocalSandboxRequest(source_path=str(source))).job.job_id
+        old = sandbox._tasks[job_id]
+        await _until(lambda: _running(fake_worker))
+        await sandbox.cancel(job_id)
+        # A new run of the job holds the job's id by the time the old task's callback runs.
+        new = asyncio.get_running_loop().create_future()
+        sandbox._tasks[job_id] = new
+        sandbox._ephemeral_secrets[job_id] = {"NEW_RUN_KEY": "kept"}
+        released.set()
+        await asyncio.wait({old}, timeout=10)
+        await asyncio.sleep(0)
+        new.set_result(None)
+        return job_id
+
+    job_id = asyncio.run(scenario())
+
+    assert sandbox._ephemeral_secrets[job_id] == {"NEW_RUN_KEY": "kept"}
+
+
 def test_a_service_stop_starts_the_environment_cleanup_inside_the_workers_grace(
     tmp_path, monkeypatch, fake_worker
 ):
