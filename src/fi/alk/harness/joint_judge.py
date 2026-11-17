@@ -73,10 +73,11 @@ async def judge_sub_goals_jointly(
     scenario: Any = None,
     agent_instructions: str = "",
     recording: str | None = None,
+    actors: dict[str, Any] | None = None,
 ) -> dict[str, tuple[bool | None, str]]:
     """{name: (held, explanation)} for a call's judged sub-goals, plus `OFF_SCRIPT`; never raises."""
     names = [str(getattr(goal, "name", "")) for goal in goals]
-    evidence = CallEvidence(world, messages, recording, ", ".join(names))
+    evidence = CallEvidence(world, messages, recording, ", ".join(names), actors)
     verdict: dict[str, tuple[bool | None, str]] = {}
 
     @tool(
@@ -137,7 +138,7 @@ async def judge_sub_goals_jointly(
             f"=== End of {name} ===\n\n"
             for index, (name, goal) in enumerate(zip(names, goals), start=1)
         )
-        + describe_call(agent_instructions, scenario, calls, recording)
+        + describe_call(agent_instructions, scenario, calls, recording, messages)
         + "Look as needed, then call decide once for each sub-goal."
     )
     conversation = await run_judge_conversation(

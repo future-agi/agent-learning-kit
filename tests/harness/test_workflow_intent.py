@@ -326,3 +326,54 @@ def test_generic_job_briefs_authoring_on_its_execution_limit(tmp_path):
     assert "A standalone Dockerfile cannot be built or run" in briefing
     assert "does not prohibit source-owned Compose deployment when enabled" in briefing
     assert "Do not invent a replacement agent" in briefing
+
+
+@pytest.mark.parametrize(
+    ("target_model", "routed"),
+    [
+        ("vertex_ai/gemini-3.7-flash", True),
+        ("litellm/x", True),
+        ("OpenAI/gpt-4o", True),
+        ("/x", True),
+        ("gpt-4o", False),
+        ("openai/gpt-4o", False),
+        ("openai/vertex_ai/x", False),
+        (None, False),
+        (42, False),
+    ],
+)
+def test_routed_through_gateway_reads_the_first_segment_case_sensitively(
+    target_model, routed
+):
+    from fi.alk.harness.job import routed_through_gateway
+
+    assert routed_through_gateway(target_model) is routed
+
+
+@pytest.mark.parametrize(
+    "target_model", ["vertex_ai/gemini-3.7-flash", "litellm/x", "OpenAI/gpt-4o"]
+)
+def test_routed_target_model_is_briefed_to_use_the_openai_prefix(tmp_path, target_model):
+    job = _job(tmp_path)
+    job.agent.config["target_model"] = target_model
+    briefing = "\n".join(job.authoring_guidance())
+    assert f"openai/{target_model}" in briefing
+    assert briefing.count("OpenAI Agents SDK") == 1
+    assert "Agent(model=...) or RunConfig(model=...)" in briefing
+    assert "OpenAIChatCompletionsModel(model=...) is sent unchanged" in briefing
+    assert "takes its model as a name" not in briefing
+    # A Compose project run as is gets no kit hook: the reading names the one line to add.
+    assert "write in the contract's notes" in briefing
+    assert 'set_default_openai_api("chat_completions")' in briefing
+    # Whether a Compose project runs as is depends on the deployment, not the source.
+    assert "when the kit runs this Compose project as is" in briefing
+
+
+@pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])
+def test_unrouted_target_model_gets_no_openai_prefix_briefing(tmp_path, target_model):
+    job = _job(tmp_path)
+    if target_model is None:
+        del job.agent.config["target_model"]
+    else:
+        job.agent.config["target_model"] = target_model
+    assert "OpenAI Agents SDK" not in "\n".join(job.authoring_guidance())
