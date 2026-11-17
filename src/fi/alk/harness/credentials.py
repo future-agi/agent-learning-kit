@@ -26,6 +26,13 @@ import yaml
 
 from fi.simulate.runtime.spec import SecretRef
 
+from .import_lines import (
+    LARGEST_SEARCHED,
+    SEARCH_TOTAL,
+    SCRIPT_COMMENT_OR_STRING,
+    import_lines,
+    script_kept,
+)
 from .python_source import EscapeBudget, ParseBudget, decoded_first, parsed, utf8_size
 from .secrets import process_secret_environment_names
 from .source_folder import SubfolderNotFound, agent_folder, agent_scope, in_agent_scope, is_within
@@ -161,6 +168,16 @@ _LARGEST_PACKAGE_JSON = 64 * 1024
 # largest): an honest manifest is under 2 KB, so a repository reaches this only when crafted, and
 # a dense 64 KB one takes about 2 ms to parse, so this holds what they cost to a fraction of a second.
 _PACKAGE_JSONS_READ = 1024 * 1024
+# The folders a package's build writes to and doesn't commit: an entry there is looked for under
+# src/, where it is built from.
+_BUILD_FOLDERS = frozenset({"dist", "build", "out"})
+# What a build writes: an entry with one of these suffixes is looked for with every script
+# suffix of the same stem, so `.mjs` and `.cjs` are found from `.ts` as `.js` is.
+_BUILT_SUFFIXES = frozenset({".js", ".mjs", ".cjs", ".jsx"})
+# The flavour a bundler adds to a built name (`index.esm.js`, `index.umd.min.js` from
+# `src/index.ts`). Only these are dropped to find a source, as many as are stacked, and only after
+# the exact name: `app.module.js` is never `app.ts`.
+_BUILD_FLAVOURS = frozenset({".esm", ".es", ".cjs", ".umd", ".min", ".modern", ".bundle"})
 _SCRIPT_IMPORT = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
 )
@@ -270,7 +287,7 @@ _PROVIDERS: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (("LIVEKIT_", "ACCEPTANCE_LIVEKIT_"), "livekit", "connect to the voice room"),
     (("DEEPGRAM_",), "deepgram", "speech-to-text"),
     (("CARTESIA_",), "cartesia", "text-to-speech"),
-    (("ELEVENLABS_",), "elevenlabs", "text-to-speech"),
+    (("ELEVENLABS_", "ELEVEN_"), "elevenlabs", "text-to-speech"),
     (("OPENAI_",), "openai", "language or realtime model"),
     (("ANTHROPIC_",), "anthropic", "language model"),
     (("GOOGLE_", "VERTEX_", "CLOUD_ML_"), "google_cloud", "model or cloud runtime"),
@@ -304,9 +321,70 @@ _CONNECTOR_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 _LIVEKIT_PROVIDER_CREDENTIALS = {
     "deepgram": ("DEEPGRAM_API_KEY",),
     "cartesia": ("CARTESIA_API_KEY",),
-    "elevenlabs": ("ELEVENLABS_API_KEY",),
+    "elevenlabs": ("ELEVEN_API_KEY",),
     "openai": ("OPENAI_API_KEY",),
 }
+
+
+# When a constructor's ``api_key=`` can't be read, the code behind it may read either name.
+_LIVEKIT_UNREADABLE_KEY_EXTRA = {"elevenlabs": ("ELEVENLABS_API_KEY",)}
+# The origin suffix of a plugin key that any one of its names satisfies.
+_EITHER_NAME = ":either"
+_CODE_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{2,}")
+
+
+def _plugin_key_names(node: ast.Call, provider: str) -> tuple[str, ...]:
+    """Names a LiveKit plugin constructor needs, judged by the ``api_key=`` it passes.
+
+    Only errs towards asking: anything that can't be read keeps the plugin's own row.
+    """
+    own = _LIVEKIT_PROVIDER_CREDENTIALS[provider]
+    fallback = own + _LIVEKIT_UNREADABLE_KEY_EXTRA.get(provider, ())
+    keys = [keyword for keyword in node.keywords if keyword.arg == "api_key"]
+    if not keys:
+        return fallback if any(k.arg is None for k in node.keywords) else own
+    value = keys[0].value
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return () if value.value.strip() else fallback
+    if (
+        isinstance(value, ast.Subscript)
+        and _dotted_name(value.value) == "os.environ"
+        and isinstance(value.slice, ast.Constant)
+        and isinstance(value.slice.value, str)
+        and _CODE_ENV_NAME.fullmatch(value.slice.value)
+    ):
+        return ()
+    if (
+        isinstance(value, ast.Call)
+        and _dotted_name(value.func) in {"os.getenv", "os.environ.get"}
+        and value.args
+        and not any(isinstance(arg, ast.Starred) for arg in value.args)
+        and not any(k.arg is None for k in value.keywords)
+        and len(value.args) <= 2
+        and isinstance(value.args[0], ast.Constant)
+        and isinstance(value.args[0].value, str)
+        and _CODE_ENV_NAME.fullmatch(value.args[0].value)
+    ):
+        name = value.args[0].value
+        if name in _NON_USER_CONFIGURATION or name.startswith("ALK_"):
+            # A name the customer can never supply. Some plugins then fall back to their own
+            # variable (``api_key or os.environ.get(...)``: Cartesia, Deepgram TTS, OpenAI
+            # realtime); others refuse an explicit None. Ask for the plugin's own name.
+            return fallback
+        default = value.args[1] if len(value.args) > 1 else None
+        for keyword in value.keywords:
+            if keyword.arg == "default" and default is None:
+                default = keyword.value
+        if default is None or (
+            isinstance(default, ast.Constant) and default.value is None
+        ):
+            return (name,)
+        if isinstance(default, ast.Constant) and isinstance(default.value, str):
+            text = default.value.strip()
+            if not text or _PLACEHOLDER_VALUE.fullmatch(text):
+                return (name,)
+            return ()
+    return fallback
 
 
 def _dotted_name(node: ast.AST) -> str:
@@ -399,8 +477,17 @@ def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
             "TTS",
             "RealtimeModel",
         }:
-            for name in _LIVEKIT_PROVIDER_CREDENTIALS[provider]:
-                found.add((name, f"sdk:livekit.plugins.{provider}"))
+            names = _plugin_key_names(node, provider)
+            # The code behind an unreadable api_key= may read either name: one is enough. With
+            # no api_key= at all (**opts), the plugin reads only its own name.
+            either = _LIVEKIT_UNREADABLE_KEY_EXTRA.get(provider, ())
+            fallback = _LIVEKIT_PROVIDER_CREDENTIALS[provider] + either
+            passes_key = any(keyword.arg == "api_key" for keyword in node.keywords)
+            suffix = (
+                _EITHER_NAME if either and passes_key and tuple(names) == fallback else ""
+            )
+            for name in names:
+                found.add((name, f"sdk:livekit.plugins.{provider}{suffix}"))
         if provider == "google" and constructor in {"LLM", "STT", "TTS"}:
             vertex = next(
                 (
@@ -607,7 +694,11 @@ def discover_credentials(
             record(match.group(1), required=True)
         if path.suffix.lower() == ".py":
             for name, origin in _python_sdk_requirements(content):
-                record(name, required=True)
+                if origin.endswith(_EITHER_NAME) and not agents_own:
+                    # Another agent's constructor: it makes no choice this agent has to meet.
+                    origin = origin[: -len(_EITHER_NAME)]
+                # A name any one of which will do is made required through its choice.
+                record(name, required=not origin.endswith(_EITHER_NAME))
                 detected = findings[name]["detected_from"]
                 assert isinstance(detected, set)
                 detected.add(origin)
@@ -631,7 +722,11 @@ def discover_credentials(
     for name, finding in sorted(findings.items()):
         kind = _kind(name)
         required = bool(finding["required"])
-        if kind is RequirementKind.CONFIGURATION and finding["declared_default"]:
+        if (
+            kind is RequirementKind.CONFIGURATION
+            and finding["declared_default"]
+            and not any(str(o).startswith("sdk:") for o in finding["detected_from"])
+        ):
             required = False
         if kind is RequirementKind.HARNESS_INFRASTRUCTURE:
             status = RequirementStatus.HARNESS_PROVIDED
@@ -658,7 +753,7 @@ def discover_credentials(
             )
         )
 
-    choices = _credential_choices(requirements)
+    choices = _credential_choices(requirements) + _either_name_choices(requirements)
     manifest_core = {
         "files": digest.hexdigest(),
         "connectors": sorted(connector_hits),
@@ -683,20 +778,27 @@ def _file_inside(
     deepest: int,
     left: list[float] | None = None,
     unread: list[bool] | None = None,
+    too_big: list[bool] | None = None,
+    largest: int | None = None,
 ) -> Path | None:
     """``candidate`` resolved, if it's a plain file in ``root`` at most ``deepest`` parts long.
 
     ``left`` is the lookups on disk still allowed: one for the file, then one for each part of
     its path, which resolving it looks up in turn. Given ``unread``, its one item is set when a
     candidate is refused for its depth, or as a code file too big to read or a link to one: code
-    may be there that the walk doesn't follow.
+    may be there that the walk doesn't follow. ``largest`` is the size of file it returns, the
+    read cap when not given: a walk that line-searches code over the read cap gives its own.
     """
     if len(candidate.parts) > deepest:
         _mark(unread)
         return None
     if left is not None:
         left[0] -= 1
-    if not _plain_file(candidate, unread):
+    if not (
+        _plain_file(candidate, unread, too_big)
+        if largest is None
+        else _plain_file(candidate, unread, too_big, largest)
+    ):
         return None
     if left is not None:
         left[0] -= len(candidate.parts)
@@ -1303,17 +1405,29 @@ def _read_in_place(real: Path, folder: Path) -> bool:
     )
 
 
-def _plain_file(path: Path, unread: list[bool] | None = None) -> bool:
+def _plain_file(
+    path: Path,
+    unread: list[bool] | None = None,
+    too_big: list[bool] | None = None,
+    largest: int = _MAX_FILE_BYTES,
+) -> bool:
     """A regular file small enough to read: a committed link can point at anything, so it isn't
     followed. Given ``unread``, its one item is set when a code file is refused for its size or
     for being a link, since Python and Node run what one holds or points at. A dangling link is
-    marked too: telling it apart would follow its chain uncharged."""
+    marked too: telling it apart would follow its chain uncharged. Given ``too_big``, its one item
+    is set for a regular code file over the size cap, which is a limit, where a link is not."""
     try:
         details = path.lstat()
     except (OSError, ValueError):
         return False
-    if stat.S_ISREG(details.st_mode) and details.st_size <= _MAX_FILE_BYTES:
+    if stat.S_ISREG(details.st_mode) and details.st_size <= largest:
         return True
+    if (
+        too_big is not None
+        and stat.S_ISREG(details.st_mode)
+        and (path.suffix == ".py" or path.suffix in _SCRIPT_SUFFIXES)
+    ):
+        too_big[0] = True
     if (stat.S_ISREG(details.st_mode) or stat.S_ISLNK(details.st_mode)) and (
         path.suffix == ".py" or path.suffix in _SCRIPT_SUFFIXES
     ):
@@ -1346,10 +1460,7 @@ def _python_imports(
 
 
 def _script_imports(content: str) -> list[str]:
-    # Here because agent_type_check imports this module.
-    from .agent_type_check import _SCRIPT_COMMENT_OR_STRING, _script_kept
-
-    code = _without_type_imports(_SCRIPT_COMMENT_OR_STRING.sub(_script_kept, content))
+    code = _without_type_imports(SCRIPT_COMMENT_OR_STRING.sub(script_kept, content))
     return [hit.group(1) for hit in _SCRIPT_IMPORT_OR_STRING.finditer(code) if hit.group(1)]
 
 
@@ -1412,6 +1523,9 @@ def imported_by_agent(
     import_limit: int | None = None,
     lookup_limit: int | None = None,
     stopped: list[bool] | None = None,
+    limit_cut: list[bool] | None = None,
+    search_total: int | None = None,
+    search_file_limit: int | None = None,
 ) -> frozenset[Path]:
     """The files the agent's folder imports, followed as far as they go.
 
@@ -1429,7 +1543,34 @@ def imported_by_agent(
     or a link. A reached ``.py`` holding ``import`` that the parser doesn't read in the reading
     Python runs counts too, whatever the reason: a syntax error, newer syntax, or a template, since
     its imports can't be known.
+
+    A file the parse total or the parse size keeps from being parsed, and a script the script
+    budget refuses, aren't left unknown: their import lines are searched instead (``import_lines``,
+    ``_script_imports``), and what they name is followed under every other limit. That search has
+    one total for the walk, ``search_total`` bytes, and ``search_file_limit`` for a file (the
+    caller's caps; ``SEARCH_TOTAL`` and ``LARGEST_SEARCHED`` when not given). A walk that
+    searches also reaches a regular code file over the read cap, up to that file limit, and
+    searches it; a larger one is a cut.
+
+    Given ``limit_cut``, its one item says the narrower thing: a limit left code the walk reached
+    unread, and the line search didn't cover it. That is targets still queued when the loop ended
+    (the file, byte, import or lookup limit), a file or script that search had no room for, a
+    code file over the size cap, names cut by the import limit, or the lookups spent with a name
+    untried. A file the parse total skipped but the search covered, a name dropped for its length
+    or depth, a link, a file the parser refuses (syntax error) and a codec refusal are not.
     """
+    search_left = [SEARCH_TOTAL if search_total is None else search_total]
+    search_largest = LARGEST_SEARCHED if search_file_limit is None else search_file_limit
+    # Bundling, given no search total, keeps its read cap: only the save's walk searches past it.
+    searches = search_total is not None
+
+    def search_room(size: int) -> bool:
+        """Charge ``size`` bytes to the line search's total, if it and the file's cap allow."""
+        if size > search_largest or size > search_left[0]:
+            return False
+        search_left[0] -= size
+        return True
+
     root = Path(root).resolve()
     try:
         folder = agent_folder(root, subfolder)
@@ -1469,6 +1610,8 @@ def imported_by_agent(
     # Whether the walk left code it reached unfollowed: a limit, a name dropped for its length or
     # depth, or a file it couldn't read or parse.
     unread = [members_cut]
+    # The narrower question: whether a limit, not the code's own shape, left code unread.
+    limited = [False]
 
     def found_at(candidates: Iterable[Path]) -> Path | None:
         for candidate in candidates:
@@ -1476,7 +1619,7 @@ def imported_by_agent(
                 hit = looked_up[candidate]
             elif lookups_left[0] <= 0:
                 # A name left untried: the walk didn't reach all it could.
-                unread[0] = True
+                unread[0] = limited[0] = True
                 return None
             else:
                 place = candidate
@@ -1494,7 +1637,15 @@ def imported_by_agent(
                     lookups_left[0] -= 1
                     hit = None
                 else:
-                    hit = _file_inside(place, root, deepest, lookups_left, unread)
+                    hit = _file_inside(
+                        place,
+                        root,
+                        deepest,
+                        lookups_left,
+                        unread,
+                        limited,
+                        *((search_largest,) if searches else ()),
+                    )
                 if hit is not None or candidate.name == "__init__.py":
                     looked_up[candidate] = hit
             if hit is not None:
@@ -1515,7 +1666,7 @@ def imported_by_agent(
         for start in starts:
             if lookups_left[0] <= 0:
                 # Spent: each place left would be refused uncharged.
-                unread[0] = True
+                unread[0] = limited[0] = True
                 return []
             if len(start.parts) + len(module) > deepest:
                 # Past the depth cut wherever it's looked for: not built at all.
@@ -1613,8 +1764,53 @@ def imported_by_agent(
                 unread[0] = True
             elif is_within(target, root):  # Never read when it leads out of the repository.
                 hit = found_at((*script_candidates(target), *script_index(target)))
+                if hit is None:
+                    hit = built_from_source(manifest.parent, target)
         entry_hits[(manifest, which)] = hit
         return hit
+
+    def built_from_source(package: Path, target: Path) -> Path | None:
+        """An entry in a build folder that isn't committed (`dist/worker.js`), found where it is
+        built from: its own path under `src/` (or the package, for `dist/src/...`), with each
+        source suffix the build compiles to that name. A dual build's output folder
+        (`dist/cjs/worker.js`) is also tried without it (`src/worker.*`), and a bundler's flavour
+        (`index.esm.js`) is dropped only after the exact name has no source. A folder entry
+        (`dist`, `dist/sub`) is entered through its index there. Never another module:
+        `src/index.*` stands in only for an entry that is itself an index. Looked up through the
+        walk's charged lookups like any other candidate."""
+        try:
+            inside = target.relative_to(package).parts
+        except ValueError:
+            return None
+        if not inside or inside[0] not in _BUILD_FOLDERS:
+            return None
+        rest = inside[1:]
+        source = package / "src"
+        if not rest:
+            return found_at(script_index(source))
+        # A dual build (`tsc --outDir dist/cjs`) writes src/index.ts to dist/cjs/index.js.
+        layouts = (rest, rest[1:]) if len(rest) > 1 else (rest,)
+        bases: list[Path] = []
+        for parts in layouts:
+            bases.append(source.joinpath(*parts))
+            # `tsc` with the package as its root writes src/worker.ts to dist/src/worker.js.
+            if parts[0] == "src":
+                bases.append(package.joinpath(*parts))
+        candidates: list[Path] = []
+        flavoured: list[Path] = []
+        for built in bases:
+            if built.suffix in _BUILT_SUFFIXES:
+                # One suffix off, as `script_candidates` joins them: app.module.js is app.module.ts.
+                stem = built.parent / built.stem
+                candidates += [Path(f"{stem}{suffix}") for suffix in _SCRIPT_SUFFIXES]
+                plain = stem
+                while plain.suffix in _BUILD_FLAVOURS:
+                    plain = plain.parent / plain.stem
+                if plain != stem:
+                    flavoured += [Path(f"{plain}{suffix}") for suffix in _SCRIPT_SUFFIXES]
+            else:
+                candidates += [*script_candidates(built), *script_index(built)]
+        return found_at(dict.fromkeys([*candidates, *flavoured]))
 
     def script_module(path: Path, name: str) -> Path | None:
         if len(name) > _LONGEST_NAME:
@@ -1659,18 +1855,35 @@ def imported_by_agent(
         if len(path.parts) > deepest:
             unread[0] = True
             continue
-        if not _plain_file(path, unread):
-            continue
+        over_cap = [False]
+        link_or_big = [False]
+        if not _plain_file(path, link_or_big, over_cap):
+            if not (over_cap[0] and searches):
+                unread[0] |= link_or_big[0]
+                limited[0] |= over_cap[0]
+                continue
+            # A regular code file over the read cap, in a walk that searches: its import lines are
+            # searched, up to the cap for an unread file, where a parse would refuse it.
+        largest = search_largest if over_cap[0] else _MAX_FILE_BYTES
+        if over_cap[0]:
+            # Over the search's cap for a file: not opened, a limit cut as an unread file is.
+            try:
+                too_big = path.lstat().st_size > largest
+            except (OSError, ValueError):
+                continue
+            if too_big:
+                unread[0] = limited[0] = True
+                continue
         read += 1
         try:
             with path.open("rb") as handle:
-                raw = handle.read(_MAX_FILE_BYTES + 1)
+                raw = handle.read(largest + 1)
         except OSError:
             continue
-        if len(raw) > _MAX_FILE_BYTES:
-            unread[0] = True
-            continue  # Grew since it was looked at.
         bytes_read += len(raw)
+        if len(raw) > largest:
+            unread[0] = limited[0] = True
+            continue  # Grew since it was looked at.
         # A .py in a codec that can spell a name in other bytes is read as Python reads it while
         # the walk's total lasts: decoded after its line ends, so hz's `~` before a CRLF joins.
         also: list[str] = []
@@ -1716,14 +1929,39 @@ def imported_by_agent(
             readings += others
             # Each reading is charged as it's parsed: a file parsed twice and charged once let a
             # crafted pair cost the walk twice its total.
-            results = [_python_imports(reading, parse_limit, parse_budget) for reading in readings]
+            budget = parse_budget
+            results = []
+            refused = []  # Whether the parse total or the parse size kept a reading from parsing.
+            for reading in readings:
+                size = utf8_size(reading)
+                refused.append(size > parse_limit or (budget is not None and budget.left < size))
+                results.append(_python_imports(reading, parse_limit, budget))
             # The decoded reading is the one Python runs: refused, the walk left code unfollowed,
             # whatever the other reading gives. A refusal of the other alone says nothing.
             unread[0] |= results[0] is None
-            unread[0] |= parse_budget is not None and parse_budget.left < 0
+            unread[0] |= budget is not None and budget.left < 0
+            if any(refused):
+                # Not parsed for a limit, a syntax error being no limit: its import lines are
+                # searched instead (in a walk that searches), which is a cut only when the
+                # search has no room.
+                if searches and search_room(len(raw)):
+                    capped = [False]
+                    results = [
+                        import_lines(reading, capped, limit=max(import_limit - imports_tried, 0))
+                        if skipped
+                        else result
+                        for reading, result, skipped in zip(readings, results, refused)
+                    ]
+                    # An import the search can't be sure of, or past the names the walk may try,
+                    # isn't followed: a cut, never silent.
+                    limited[0] |= capped[0]
+                    unread[0] |= capped[0]
+                else:
+                    limited[0] = True
             names = list(dict.fromkeys(name for found in results if found for name in found))
             # One file can hold more names than the walk may try; the rest aren't tried.
             unread[0] |= len(names) > import_limit - imports_tried
+            limited[0] |= len(names) > import_limit - imports_tried
             names = names[: import_limit - imports_tried]
             imports_tried += len(names)
             for level, name in names:
@@ -1731,12 +1969,17 @@ def imported_by_agent(
                     hits.extend(python_modules(path, level, name))
                 except (IndexError, ValueError, OSError):
                     continue  # An import that can't be a path in this repository.
-        elif script_budget is not None and not script_budget.spend(content):
-            unread[0] = True
-            continue
         else:
+            if script_budget is not None and not script_budget.spend(content):
+                # Past the script total: the same search the parsed files get, charged to the
+                # search total, since this is all that bounds it.
+                unread[0] = True
+                if not search_room(len(raw)):
+                    limited[0] = True
+                    continue
             names = list(dict.fromkeys(_script_imports(content)))
             unread[0] |= len(names) > import_limit - imports_tried
+            limited[0] |= len(names) > import_limit - imports_tried
             names = names[: import_limit - imports_tried]
             imports_tried += len(names)
             for name in names:
@@ -1751,6 +1994,9 @@ def imported_by_agent(
                     pending.append(hit)
     # A file in a codec decoded first, read without decoding once the total ran out.
     unread[0] |= escapes.left < 0
+    if limit_cut is not None:
+        # The loop ends with files left only when a limit ended it.
+        limit_cut[:] = [limited[0] or bool(pending)]
     if stopped is not None:
         # The loop ends with files left only when a limit ended it.
         stopped[:] = [unread[0] or bool(pending)]
@@ -1875,6 +2121,47 @@ def _credential_choices(
             satisfied=satisfied,
         )
     ]
+
+
+def _either_name_choices(
+    requirements: list[CredentialRequirement],
+) -> list[CredentialChoice]:
+    """One choice per plugin whose unreadable ``api_key=`` leaves the agent's code reading any
+    one of several names. A name the agent's code needs by itself stays its own requirement, so
+    no choice is made then.
+
+    Changes the requirements in place: while no option is configured, every member is marked
+    required and MISSING, so the form asks for one."""
+    by_provider: dict[str, list[CredentialRequirement]] = {}
+    prefix = "sdk:livekit.plugins."
+    for item in requirements:
+        for origin in item.detected_from:
+            if origin.startswith(prefix) and origin.endswith(_EITHER_NAME):
+                provider = origin[len(prefix) : -len(_EITHER_NAME)]
+                by_provider.setdefault(provider, []).append(item)
+    configured = {RequirementStatus.CONFIGURED, RequirementStatus.HARNESS_PROVIDED}
+    choices = []
+    for provider, members in sorted(by_provider.items()):
+        if len(members) < 2 or any(member.required for member in members):
+            continue
+        order = _LIVEKIT_PROVIDER_CREDENTIALS[provider] + _LIVEKIT_UNREADABLE_KEY_EXTRA.get(
+            provider, ()
+        )
+        members.sort(key=lambda member: order.index(member.environment_name))
+        satisfied = any(member.status in configured for member in members)
+        if not satisfied:
+            for member in members:
+                member.required = True
+                member.status = RequirementStatus.MISSING
+        choices.append(
+            CredentialChoice(
+                id=f"{provider}_api_key",
+                purpose=f"authenticate the {provider} plugin",
+                options=[[member.environment_name] for member in members],
+                satisfied=satisfied,
+            )
+        )
+    return choices
 
 
 def _identifier(value: str) -> str:

@@ -3435,3 +3435,36 @@ def test_the_storage_repair_masks_the_contract_it_adds(tmp_path, monkeypatch):
         asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
     assert seen
     assert all("canary-contract-secret-77" not in text for text in seen)
+
+
+@pytest.mark.parametrize("readiness_only", [False, True])
+def test_stale_pre_run_sessions_are_written_again_before_the_bundle_is_compiled(tmp_path, monkeypatch, readiness_only):
+    from fi.alk.harness import bundle_author_v2, pre_run
+
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text("{}")
+    order = []
+
+    async def refresh(root, write=None):
+        order.append(("refresh", root))
+        return []
+
+    def compile_bundle(**kwargs):
+        order.append(("compile", None))
+        raise ValueError("stop after the compile")
+
+    monkeypatch.setattr(pre_run, "refresh_stale", refresh)
+    monkeypatch.setattr(bundle_author_v2, "author_bundle_v2", compile_bundle)
+    job = SimpleNamespace(agent=SimpleNamespace(secret_refs={}))
+    with pytest.raises(RuntimeValidationError):
+        asyncio.run(
+            validate_once(job, tmp_path, authoring, secrets_path=secrets, local_runtime=True,
+                          readiness_only=readiness_only)
+        )
+    # A readiness probe seals nothing to keep, so nothing is written for it.
+    if readiness_only:
+        assert not any(step == "refresh" for step, _ in order)
+    else:
+        assert order == [("refresh", authoring), ("compile", None)]

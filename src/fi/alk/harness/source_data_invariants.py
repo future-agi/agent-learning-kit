@@ -23,6 +23,7 @@ from .config import chosen_model
 from .contract import AgentContract, is_data_free_conversation
 from .session import Stage
 from .source_folder import agent_scope, in_agent_scope, saved_folder
+from .source_model import is_harness_table
 
 ARTIFACT = "source-data-invariants.json"
 BATCHES = "generic-harness/source-data-review-batches.json"
@@ -343,10 +344,7 @@ async def author_invariants(
         non_relational_store = store_kind in {"in_process", "none", "filesystem"}
         if is_data_free_conversation(contract) or non_relational_store:
             state = await asyncio.to_thread(world.state)
-            business_tables = set(state) - {
-                "harness_seed_sentinel",
-                "_alk_tool_trace",
-            }
+            business_tables = {name for name in state if not is_harness_table(name)}
             if not business_tables:
                 evidence = {
                     "status": "not_applicable",

@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+# The helper module is not a test file, so its asserts are rewritten only if registered first.
+pytest.register_assert_rewrite("reference_agents")
+
 
 @pytest.fixture
 def resolved_compose_images(monkeypatch):
