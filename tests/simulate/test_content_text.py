@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -281,3 +282,21 @@ def test_generic_agent_wrapper_keeps_only_the_text(reply, expected):
 def test_langchain_wrapper_returns_only_the_text_of_a_bare_block_list():
     assert _langchain_reply(_blocks()) == ANSWER
     assert _langchain_reply([THINKING]) == ""
+
+
+def test_the_frameworks_probe_reports_only_the_text_of_a_block_reply():
+    from fi.simulate.agent.frameworks import _run_probe_case
+
+    result = asyncio.run(
+        _run_probe_case(
+            _BlockAgent(_blocks()),
+            "generic",
+            {"id": "blocks", "input": "hi"},
+            index=1,
+            trace_runtime=False,
+            contract={},
+        )
+    )
+    assert result["response"]["content"] == ANSWER
+    payload = json.dumps(result, default=str)
+    assert "sig-abc" not in payload and "plan the reply" not in payload
