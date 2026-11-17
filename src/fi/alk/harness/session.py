@@ -327,23 +327,37 @@ class Stage:
         # emits nothing until that call returns, and killing it then throws away everything the
         # delegates proved.
         idle_bound = self._spec.idle_timeout_seconds or STAGE_IDLE_TIMEOUT_SECONDS
-        waiting: asyncio.Future[Any] | None = None
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
         while True:
-            # The next reply is awaited without cancelling it, so a bound that passes while a person is asked waits on.
-            waiting = waiting or asyncio.ensure_future(replies.__anext__())
-            done, _ = await asyncio.wait({waiting}, timeout=idle_bound)
-            if not done:
+            # The next reply is awaited in this task, so the model's own context stays one context. A watcher stops it
+            # once the bound passes with nobody asked; while a person is asked, it waits on.
+            expired = False
+
+            def expire() -> None:
+                nonlocal watcher, expired
                 if _ASKING:
-                    continue
-                waiting.cancel()
-                raise StageIdleTimeout(
-                    f"{self.name or 'model'} produced no event for {idle_bound:g}s"
-                )
-            arrived, waiting = waiting, None
+                    watcher = loop.call_later(idle_bound, expire)
+                    return
+                expired = True
+                if task is not None:
+                    task.cancel()
+
+            watcher = loop.call_later(idle_bound, expire)
             try:
-                received = arrived.result()
+                received = await replies.__anext__()
             except StopAsyncIteration:
                 break
+            except asyncio.CancelledError as exc:
+                if not expired:
+                    raise
+                if task is not None and hasattr(task, "uncancel"):
+                    task.uncancel()
+                raise StageIdleTimeout(
+                    f"{self.name or 'model'} produced no event for {idle_bound:g}s"
+                ) from exc
+            finally:
+                watcher.cancel()
             for event in self._events(received, turn):
                 # Which stage this came from, stamped once here rather than by every caller,
                 # so a front end showing several stages can tell them apart.
