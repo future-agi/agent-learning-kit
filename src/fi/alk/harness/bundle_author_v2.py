@@ -3574,9 +3574,13 @@ def _source_tool_trace_bindings(
         # calls, and a second binding there could record one call twice.)
         modes = {"import", "unreachable"} if watch_unreachable else {"import"}
         if entry.mode in modes and entry.module and entry.callable:
-            bindings.append(
-                {"name": entry.tool, "module": entry.module, "callable": entry.callable}
-            )
+            binding = {"name": entry.tool, "module": entry.module, "callable": entry.callable}
+            if entry.mode == "unreachable":
+                # Nothing checks an `unreachable` entry, so the tracer matches the whole
+                # callable: two methods called `_run` are two tools, and a function that calls
+                # a same-named method is one call.
+                binding["qualname"] = entry.callable
+            bindings.append(binding)
     return bindings
 
 

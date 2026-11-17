@@ -278,6 +278,8 @@ def _install_declared_python_tools() -> None:
     if not isinstance(bindings, list):
         return
     declared: dict[tuple[str, str], str] = {}
+    # A binding that carries its full callable (`qualname`) matches only that callable.
+    qualified: dict[tuple[str, str, str], str] = {}
     for item in bindings:
         if not isinstance(item, dict):
             continue
@@ -290,10 +292,17 @@ def _install_declared_python_tools() -> None:
             isinstance(value, str) and value for value in (name, module, callable_name)
         ):
             continue
-        declared[(module, callable_name.rsplit(".", 1)[-1])] = name
-    if not declared:
+        leaf = callable_name.rsplit(".", 1)[-1]
+        full_name = item.get("qualname")
+        if isinstance(full_name, str) and full_name:
+            qualified[(module, leaf, full_name)] = name
+        else:
+            declared[(module, leaf)] = name
+    if not declared and not qualified:
         return
-    function_names = {function for _, function in declared}
+    function_names = {function for _, function in declared} | {
+        function for _, function, _ in qualified
+    }
     active = threading.local()
     import dis
     import inspect
@@ -350,6 +359,19 @@ def _install_declared_python_tools() -> None:
             ),
             None,
         )
+        if key is None:
+            # co_qualname exists from Python 3.11; before it, the last name alone decides.
+            frame_qualname = getattr(frame.f_code, "co_qualname", None)
+            key = next(
+                (
+                    name
+                    for (module, function, full_name), name in qualified.items()
+                    if frame.f_code.co_name == function
+                    and (frame_qualname is None or frame_qualname == full_name)
+                    and matches_module(frame, module)
+                ),
+                None,
+            )
         if key is None:
             return
         active.busy = True

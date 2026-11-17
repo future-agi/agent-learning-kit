@@ -102,7 +102,10 @@ def one(mode="unreachable", module="agent", callable="look_up_order"):
 
 
 def test_an_unreachable_entry_with_module_and_callable_is_bound():
-    assert bound([one()]) == [{"name": "look_up_order", "module": "agent", "callable": "look_up_order"}]
+    assert bound([one()]) == [
+        {"name": "look_up_order", "module": "agent", "callable": "look_up_order",
+         "qualname": "look_up_order"}
+    ]
 
 
 @pytest.mark.parametrize("missing", ["module", "callable"])
@@ -131,7 +134,7 @@ def test_the_12_nov_agents_sdk_reading_binds_its_three_tools(tmp_path):
     manifest, output = bundled(tmp_path, sdk_source(tmp_path), SDK, contract=saved_sdk())
     environment = control_environment(manifest)
     assert json.loads(environment["ALK_TOOL_TRACE_BINDINGS"]) == [
-        {"name": name, "module": "agent", "callable": name} for name in TOOLS
+        {"name": name, "module": "agent", "callable": name, "qualname": name} for name in TOOLS
     ]
     assert environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     assert not list((output / "handlers").glob("*")) if (output / "handlers").exists() else True
@@ -188,7 +191,10 @@ def test_a_module_that_raises_on_import_still_bundles(tmp_path):
     body["tool_entrypoints"][0]["module"] = "broken"
     manifest, _ = bundled(tmp_path, source, SDK, contract=body)
     bindings = json.loads(control_environment(manifest)["ALK_TOOL_TRACE_BINDINGS"])
-    assert {"name": "look_up_order", "module": "broken", "callable": "look_up_order"} in bindings
+    assert {
+        "name": "look_up_order", "module": "broken", "callable": "look_up_order",
+        "qualname": "look_up_order",
+    } in bindings
 
 
 def _traced_run(tmp_path: Path, bindings: list[dict], code: str):
@@ -529,3 +535,59 @@ def test_h3_a_compose_selection_keeps_the_command(tmp_path, selection):
 def test_h3_the_same_reading_with_no_compose_still_takes_the_graph_route(tmp_path):
     root, run_folder, runtime = _scoped(deep_source(tmp_path))
     assert bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
+
+
+# --- Round 2, M1: a call is matched on the full callable, not its last name ----------------
+
+TWO_TOOLS = (
+    "class SearchRooms:\n"
+    "    def _run(self, city):\n        return 'rooms in ' + city\n"
+    "class BookRoom:\n"
+    "    def _run(self, room):\n        return 'booked ' + room\n"
+)
+
+
+def _unreachable_binding(name, callable):
+    (binding,) = bound([one(callable=callable) | {"tool": name}])
+    return binding
+
+
+def test_m1_unreachable_bindings_carry_the_full_callable():
+    assert _unreachable_binding("search_rooms", "SearchRooms._run")["qualname"] == "SearchRooms._run"
+
+
+def test_m1_an_import_binding_carries_no_qualname():
+    (binding,) = bound([one("import", callable="SearchRooms._run")])
+    assert "qualname" not in binding
+
+
+def test_m1_two_methods_with_one_last_name_are_each_their_own_tool(tmp_path):
+    (tmp_path / "agent.py").write_text(TWO_TOOLS)
+    bindings = [
+        _unreachable_binding("search_rooms", "SearchRooms._run"),
+        _unreachable_binding("book_room", "BookRoom._run"),
+    ]
+    result, records = _traced_run(
+        tmp_path, bindings,
+        "import agent\nagent.SearchRooms()._run('Oslo')\nagent.BookRoom()._run('r1')\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert [(r["name"], r["output"]) for r in records] == [
+        ("search_rooms", "rooms in Oslo"),
+        ("book_room", "booked r1"),
+    ]
+
+
+def test_m1_a_function_and_a_same_named_method_give_one_record(tmp_path):
+    (tmp_path / "agent.py").write_text(
+        "class Orders:\n"
+        "    def look_up_order(self, order_id):\n        return {'id': order_id}\n"
+        "orders = Orders()\n"
+        "def look_up_order(order_id):\n    return orders.look_up_order(order_id)\n"
+    )
+    result, records = _traced_run(
+        tmp_path, [_unreachable_binding("look_up_order", "look_up_order")],
+        "import agent\nagent.look_up_order('A1')\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert [(r["name"], r["arguments"]) for r in records] == [("look_up_order", {"order_id": "A1"})]
