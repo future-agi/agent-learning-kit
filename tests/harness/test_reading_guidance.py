@@ -68,6 +68,8 @@ def test_skill_tells_a_langgraph_app_without_the_cli_to_leave_the_command_empty(
     assert "`langgraph.json`" in text
     assert re.search(r"no `langgraph-cli`.*leave `runtime.command` empty", text)
     assert "`execution` to `auto`" in text
+    # Round 3, L5: a Compose file or a Dockerfile may install the CLI where the kit can't see it.
+    assert "and no Compose file or Dockerfile of the app installs it" in " ".join(text.split())
     # The save refuses a chat contract with no interface (missing-chat-interface); a reading on
     # 17 Nov told to write none was refused nine times and never saved.
     assert "declare the interface as `callable` with protocol `fi.alk`" in text

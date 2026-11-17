@@ -261,7 +261,8 @@ Find, in roughly this order:
 
    **A LangGraph app comes first.** Before choosing a command or an HTTP interface, look for a
    `langgraph.json` that names a graph. When the requirements the app installs have no
-   `langgraph-cli`, `langgraph dev` and `langgraph up` can't run there: leave `runtime.command`
+   `langgraph-cli` (and no Compose file or Dockerfile of the app installs it), `langgraph dev` and
+   `langgraph up` can't run there: leave `runtime.command`
    empty, set `execution` to `auto`, and declare the interface as `callable` with protocol
    `fi.alk`; the kit serves the graph itself through it.
    In that no-CLI shape, don't map the LangGraph server's `/runs/wait` with a JSON template.
