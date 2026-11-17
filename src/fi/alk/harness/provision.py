@@ -570,6 +570,11 @@ _ALLOWED_SERVICE_FIELDS = frozenset(
 )  # fmt: skip
 
 
+_ALLOWED_HOOK_FIELDS = frozenset(
+    {"command", "user", "working_dir", "environment", "privileged"}
+)
+
+
 def _volume_options_are_private(options: Any) -> bool:
     """True for no options, or a tmpfs volume: the only ``local`` options that stay in memory."""
     if not options:
@@ -646,6 +651,20 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
                 violations.append(f"{name}: build.entitlements")
         if service.get("devices"):
             violations.append(f"{name}: host devices")
+        # A lifecycle hook is an exec in the service's container. ``privileged`` gives it every
+        # capability with no seccomp or AppArmor profile, which the service's own flag refuses.
+        # ``user`` and ``environment`` stay inside the container and are accepted as on the service.
+        for hook_key in ("post_start", "pre_stop"):
+            for hook in service.get(hook_key) or []:
+                if not isinstance(hook, dict):
+                    continue
+                if hook.get("privileged"):
+                    violations.append(f"{name}: {hook_key} privileged")
+                violations.extend(
+                    f"{name}: {hook_key} field {field} is not allowed"
+                    for field in sorted(str(key) for key in hook)
+                    if field not in _ALLOWED_HOOK_FIELDS and not field.startswith("x-")
+                )
         for key in sorted(str(key) for key in service):
             if key in _ALLOWED_SERVICE_FIELDS or key.startswith("x-"):
                 continue

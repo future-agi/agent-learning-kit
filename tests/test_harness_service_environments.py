@@ -2359,3 +2359,43 @@ def test_a_volume_refusal_never_contains_a_value(config):
         _validate_compose_security(config)
     assert "CANARY" not in str(error.value)
     assert "7f3a" not in str(error.value)
+
+
+@pytest.mark.parametrize("hook", ["post_start", "pre_stop"])
+def test_a_privileged_lifecycle_hook_is_rejected(hook):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(
+            _svc(**{hook: [{"command": ["id"], "privileged": True, "user": "root"}]})
+        )
+    assert f"agent: {hook} privileged" in str(error.value)
+    assert "db:" not in str(error.value)
+
+
+@pytest.mark.parametrize("hook", ["post_start", "pre_stop"])
+def test_a_lifecycle_hook_field_outside_the_allowlist_is_rejected(hook):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(
+            _svc(**{hook: [{"command": ["id"], "bogus": "CANARY-7f3a"}]})
+        )
+    assert f"agent: {hook} field bogus is not allowed" in str(error.value)
+    assert "CANARY" not in str(error.value)
+
+
+@pytest.mark.parametrize("hook", ["post_start", "pre_stop"])
+def test_a_lifecycle_hook_without_privilege_is_accepted(hook):
+    _validate_compose_security(
+        _svc(
+            **{
+                hook: [
+                    {"command": ["id"]},
+                    {
+                        "command": ["id"],
+                        "user": "1000",
+                        "working_dir": "/app",
+                        "environment": {"A": "b"},
+                        "privileged": False,
+                    },
+                ]
+            }
+        )
+    )
