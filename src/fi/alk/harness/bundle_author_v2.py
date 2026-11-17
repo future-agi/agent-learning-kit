@@ -73,6 +73,7 @@ from .framework_servers import (
     server_interface_rewritten,
     server_runtime,
     server_start_folder,
+    server_start_seconds,
     serves_port_option,
 )
 from .generated_runtime import (
@@ -3313,6 +3314,18 @@ def resolve_environment_plan(
                     "started_check": StartedCheck(port=True, timeout_seconds=180),
                 }
             )
+        if process.started_check is not None and server_start_seconds(runtime_command, 0) > 0:
+            process = process.model_copy(
+                update={
+                    "started_check": process.started_check.model_copy(
+                        update={
+                            "timeout_seconds": server_start_seconds(
+                                runtime_command, process.started_check.timeout_seconds
+                            )
+                        }
+                    )
+                }
+            )
         if is_http_runtime and serves_port_option(runtime_command):
             # A framework server's ``--port`` seam is wired to the world's allocated port so a multi-world chat run
             # does not collapse to serial execution or collide on 8080.
@@ -3412,7 +3425,7 @@ def resolve_environment_plan(
                         if is_command_adapter or is_callback
                         else interface_health_path
                     ),
-                    timeout_seconds=180,
+                    timeout_seconds=server_start_seconds(runtime_command, 180),
                 )
             )
         packaging = (

@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import functools
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -306,41 +307,68 @@ def _langgraph_config_argument(command: list[str]) -> str | None:
     return None
 
 
-def _uv_project(command: list[str]) -> str | None:
-    """The ``--project`` a ``uv run`` names before the program it runs, or None."""
+def _uv_option(command: list[str], option: str) -> str | None:
+    """The value a ``uv run`` gives ``option`` (``--project``, ``--directory``) before the program it runs, or None."""
     if not command or Path(command[0]).name != "uv":
         return None
     for index, token in enumerate(command):
         if Path(token).name == "langgraph":
             break
-        if token == "--project" and index + 1 < len(command):
+        if token == option and index + 1 < len(command):
             return command[index + 1]
-        if token.startswith("--project="):
+        if token.startswith(option + "="):
             return token.partition("=")[2]
     return None
 
 
-def _langgraph_config(root: Path, runtime: dict[str, Any]) -> Path | None:
-    """The ``langgraph.json`` a ``langgraph dev`` app is served from: the one its command names, relative to the
-    declared workdir or else to the ``uv run --project`` it runs in, else the nearest one from that workdir up to the
-    source root; None when there is none."""
-    command = [str(item) for item in (runtime.get("command") or [])]
+def _workdir(root: Path, runtime: dict[str, Any]) -> Path:
     configured = str(runtime.get("workdir") or "").strip()
-    workdir = (root / configured) if configured not in {"", ".", "/"} else root
+    return (root / configured) if configured not in {"", ".", "/"} else root
+
+
+def _langgraph_config(root: Path, runtime: dict[str, Any]) -> Path | None:
+    """The ``langgraph.json`` a ``langgraph dev`` app is served from: the one its command names, relative to where it
+    starts (the workdir, or the ``uv run --directory`` it changes to) or to the ``uv run --project`` it runs in, else
+    the nearest one from that workdir up to the source root; None when there is none."""
+    command = [str(item) for item in (runtime.get("command") or [])]
+    workdir = _workdir(root, runtime)
     named = _langgraph_config_argument(command)
-    project = _uv_project(command)
+    directory = _uv_option(command, "--directory")
+    started = workdir / directory if directory else workdir
+    project = _uv_option(command, "--project")
     resolved_root = root.resolve()
     candidates = (
-        [workdir / named, *([workdir / project / named] if project else [])]
+        [started / named, workdir / named, *([started / project / named] if project else [])]
         if named
-        else [directory / "langgraph.json" for directory in (workdir, *workdir.parents)]
+        else [directory / "langgraph.json" for directory in (started, *started.parents)]
     )
     for candidate in candidates:
         config = candidate.resolve()
         if not config.is_relative_to(resolved_root):
             continue
-        if config.is_file():
+        if config.is_file() and config.suffix == ".json":
             return config
+    return None
+
+
+def langgraph_config_problem(root: Path, runtime: dict[str, Any]) -> str | None:
+    """Why a ``langgraph dev`` command's ``--config`` cannot be the app's LangGraph config, or None: it must be a JSON
+    file that declares graphs. Any other command has none."""
+    command = [str(item) for item in (runtime.get("command") or [])]
+    named = _langgraph_config_argument(command)
+    if not named or not _is_langgraph_server_command(command):
+        return None
+    if not named.endswith(".json"):
+        return f"--config {named} is not a langgraph.json; name the app's LangGraph config file"
+    config = _langgraph_config(root, runtime)
+    if config is None:
+        return f"--config {named} names no file the app's source holds"
+    try:
+        graphs = json.loads(config.read_text(encoding="utf-8")).get("graphs")
+    except (OSError, ValueError, AttributeError):
+        graphs = None
+    if not isinstance(graphs, dict) or not graphs:
+        return f"--config {named} declares no graphs"
     return None
 
 
@@ -412,33 +440,70 @@ def server_runtime(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | None
         token == "--port" or token.startswith("--port=") for token in command
     ):
         command = [*command, "--port", str(interface["port"])]
-    return {**runtime, "command": _config_from_start(root, runtime, command), "interface": interface}
+    return {**runtime, "command": _launch_from_config(root, runtime, command), "interface": interface}
 
 
-def _config_from_start(root: Path, runtime: dict[str, Any], command: list[str]) -> list[str]:
-    """`langgraph dev` reads `--config` from where it starts, not from a `uv run --project`: a config found only under
-    the project is named by its path from the workdir, so every world's copy starts it from the same place."""
-    named = _langgraph_config_argument(command)
-    config = _langgraph_config(root, runtime) if named and _is_langgraph_server_command(command) else None
-    configured = str(runtime.get("workdir") or "").strip()
-    workdir = ((root / configured) if configured not in {"", ".", "/"} else root).resolve()
-    if config is None or (workdir / named).resolve() == config or not config.is_relative_to(workdir):
+def _launch_from_config(root: Path, runtime: dict[str, Any], command: list[str]) -> list[str]:
+    """`langgraph dev` resolves its config, the graphs it names and their dependencies from where it starts, so it
+    starts in the folder that holds its config and names it there. A ``uv run`` keeps the project it ran in
+    (``--project``, rebased) and changes to that folder (``--directory``); any other command changes to it first."""
+    config = _langgraph_config(root, runtime) if _is_langgraph_server_command(command) else None
+    if config is None or not _langgraph_config_argument(command):
         return command
-    relative = config.relative_to(workdir).as_posix()
-    rewritten: list[str] = []
+    workdir = _workdir(root, runtime).resolve()
+    # The process starts in the workdir, or in the config's folder when the workdir is inside it (`server_start_folder`).
+    start = config.parent if workdir.is_relative_to(config.parent) else workdir
+    uv = Path(command[0]).name == "uv" and "run" in command[:2]
+    directory = _uv_option(command, "--directory")
+    project = _uv_option(command, "--project")
+    base = (start / directory).resolve() if directory else start
+    project_dir = (base / project).resolve() if project else (base if directory else None)
+    if project_dir is None or not (project_dir / "pyproject.toml").is_file():
+        # The project the app's own dependencies are installed in: one the config lists among its dependencies.
+        project_dir = _dependency_project(config) or project_dir
+    kept: list[str] = []
     skip = False
     for index, token in enumerate(command):
         if skip:
             skip = False
             continue
-        if token == "--config" and index + 1 < len(command):
-            rewritten += ["--config", relative]
-            skip = True
-        elif token.startswith("--config="):
-            rewritten.append(f"--config={relative}")
-        else:
-            rewritten.append(token)
-    return rewritten
+        option = token.partition("=")[0]
+        if option == "--config":
+            # Named where it starts, in its own place.
+            kept += ["--config", config.name]
+            skip = "=" not in token and index + 1 < len(command)
+            continue
+        if uv and option in {"--directory", "--project"} and index < _program_index(command):
+            skip = "=" not in token and index + 1 < len(command)
+            continue
+        kept.append(token)
+    folder = os.path.relpath(config.parent, start)
+    if uv:
+        options = [*(["--directory", folder] if folder != "." else [])]
+        if project_dir is not None:
+            options += ["--project", os.path.relpath(project_dir, config.parent)]
+        at = kept.index("run") + 1
+        return [*kept[:at], *options, *kept[at:]]
+    if folder == ".":
+        return kept
+    return ["sh", "-c", 'cd "$1" && shift && exec "$@"', "alk-langgraph", folder, *kept]
+
+
+def _dependency_project(config: Path) -> Path | None:
+    """The first folder a LangGraph config lists among its `dependencies` that is a Python project."""
+    try:
+        dependencies = json.loads(config.read_text(encoding="utf-8")).get("dependencies") or []
+    except (OSError, ValueError, AttributeError):
+        return None
+    for dependency in dependencies if isinstance(dependencies, list) else []:
+        folder = (config.parent / str(dependency)).resolve()
+        if folder.is_relative_to(config.parent.resolve().anchor) and (folder / "pyproject.toml").is_file():
+            return folder
+    return None
+
+
+def _program_index(command: list[str]) -> int:
+    return next((index for index, token in enumerate(command) if Path(token).name == "langgraph"), len(command))
 
 
 def server_start_folder(root: Path, runtime: dict[str, Any], component: Path) -> Path:
@@ -492,3 +557,13 @@ def server_interface_rewritten(sealed: dict[str, Any], metadata: dict[str, Any])
 
 def _sealed_interface(runtime: dict[str, Any]) -> Any:
     return Runtime.model_validate(runtime).model_dump(mode="json")["interface"]
+
+
+# `langgraph dev` installs its CLI (`uv run --with langgraph-cli[inmem]`) and imports every graph before it answers;
+# deep agents graphs can take minutes. Other servers keep the default wait.
+_LANGGRAPH_START_SECONDS = 600.0
+
+
+def server_start_seconds(command: list[str], default: float) -> float:
+    """How long a server may take to answer its first readiness check: longer for `langgraph dev`, else `default`."""
+    return max(default, _LANGGRAPH_START_SECONDS) if _is_langgraph_server_command(command) else default

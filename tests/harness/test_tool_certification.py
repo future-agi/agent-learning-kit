@@ -280,3 +280,98 @@ def test_a_world_tool_whose_code_is_missing_is_still_rejected_beside_them(tmp_pa
     assert by_tool["save_report"] is ToolAvailability.REJECTED
     assert by_tool["store_row"] is ToolAvailability.REJECTED
     assert all(by_tool[name] is ToolAvailability.RUNTIME_ONLY for name in _ASYNC_JOB_TOOLS)
+
+
+def test_job_tools_from_the_framework_s_own_library_in_its_monorepo_need_no_world_code(tmp_path: Path) -> None:
+    """The deep agents repository as a live build met it: the `deepagents` library ships in the same repository as the
+    async example that depends on it. Its job tools are still the framework's, not the app's world tools."""
+    source = _async_source(tmp_path)
+    library = source / "libs" / "deepagents"
+    (library / "deepagents").mkdir(parents=True)
+    (library / "deepagents" / "__init__.py").write_text("", encoding="utf-8")
+    (library / "pyproject.toml").write_text("[project]\nname='deepagents'\nversion='1'\n", encoding="utf-8")
+    (source / "graphs" / "python" / "pyproject.toml").write_text(
+        "[project]\nname='async-subagents'\nversion='1'\ndependencies=['deepagents>=0.1', 'langgraph']\n",
+        encoding="utf-8",
+    )
+
+    report = certify_tool_inventory(_async_deep_agents(), tmp_path, external_provider=False, source=source)
+
+    assert {item.tool: item.availability for item in report.tools} == {
+        name: ToolAvailability.RUNTIME_ONLY for name in _ASYNC_JOB_TOOLS
+    }
+
+
+def test_the_app_s_own_package_is_never_read_as_the_framework_s(tmp_path: Path) -> None:
+    """A package the source holds as the app itself (no other project depends on it) keeps its tools world tools."""
+    source = _async_source(tmp_path)
+    app = source / "travel_concierge"
+    (app / "deepagents").mkdir(parents=True)
+    (app / "deepagents" / "__init__.py").write_text("", encoding="utf-8")
+    (source / "pyproject.toml").write_text("[project]\nname='deepagents'\nversion='1'\n", encoding="utf-8")
+
+    report = certify_tool_inventory(_async_deep_agents(), tmp_path, external_provider=False, source=source)
+
+    assert all(item.availability is not ToolAvailability.RUNTIME_ONLY for item in report.tools)
+
+
+def test_job_tools_a_framework_middleware_injects_are_the_framework_s_even_with_no_importable_seam(tmp_path: Path) -> None:
+    """As the live deep agents build recorded them: `unreachable`, injected by deepagents.AsyncSubAgentMiddleware while
+    the agent runs. Defined nowhere in the app's source, they are the framework's, not world tools to certify; the
+    app's own tools beside them keep their checks."""
+    source = _async_source(tmp_path)
+    (source / "graphs" / "python" / "src" / "researcher.py").write_text(
+        "def analyze_topic(topic):\n    return topic\n", encoding="utf-8"
+    )
+    contract = AgentContract.model_validate(
+        {
+            "agent": "supervisor",
+            "real_use_cases": ["research and code in the background"],
+            "tools": [
+                *({"name": name, "args": ["description"]} for name in _ASYNC_JOB_TOOLS),
+                {"name": "analyze_topic", "args": ["topic"]},
+            ],
+            "tool_entrypoints": [
+                *(
+                    {"tool": name, "mode": "unreachable", "callable": name,
+                     "notes": "Injected dynamically by deepagents.AsyncSubAgentMiddleware"}
+                    for name in _ASYNC_JOB_TOOLS
+                ),
+                {"tool": "analyze_topic", "mode": "unreachable", "callable": "analyze_topic"},
+            ],
+            "workers": [{"id": "researcher", "name": "researcher"}, {"id": "coder", "name": "coder"}],
+        }
+    )
+
+    report = certify_tool_inventory(contract, tmp_path, external_provider=False, source=source)
+
+    by_tool = {item.tool: item.availability for item in report.tools}
+    assert all(by_tool[name] is ToolAvailability.RUNTIME_ONLY for name in _ASYNC_JOB_TOOLS)
+    # The app defines this one itself: no seam is still a rejection, as before.
+    assert by_tool["analyze_topic"] is ToolAvailability.REJECTED
+    # Without workers it is no worker coordination: rejected, as before.
+    alone = certify_tool_inventory(
+        contract.model_copy(update={"workers": []}), tmp_path, external_provider=False, source=source
+    )
+    assert all(item.availability is ToolAvailability.REJECTED for item in alone.tools)
+
+
+def test_the_build_check_lets_the_framework_s_injected_job_tools_through(tmp_path: Path) -> None:
+    from fi.alk.harness.build import blockers
+
+    source = _async_source(tmp_path)
+    contract = AgentContract.model_validate(
+        {
+            "agent": "supervisor",
+            "real_use_cases": ["research in the background"],
+            "tools": [{"name": "launch_async_subagent", "args": ["description"]}],
+            "tool_entrypoints": [{"tool": "launch_async_subagent", "mode": "unreachable"}],
+            "workers": [{"id": "researcher", "name": "researcher"}],
+        }
+    )
+    assert not [one for one in blockers(contract, str(source)) if "launch_async_subagent" in one]
+    # A tool the app itself defines with no seam still blocks the build.
+    (source / "graphs" / "python" / "src" / "agent.py").write_text(
+        "def launch_async_subagent(description):\n    return description\n", encoding="utf-8"
+    )
+    assert [one for one in blockers(contract, str(source)) if "launch_async_subagent" in one]

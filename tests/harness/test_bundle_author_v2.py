@@ -4825,24 +4825,8 @@ def _langgraph_source(tmp_path: Path) -> Path:
     return source
 
 
-def test_a_langgraph_config_inside_the_uv_project_is_started_from_where_every_world_runs_it(tmp_path: Path) -> None:
-    """The deep agents repository as a live build authored it: `graphs/python/langgraph.json`, started from the
-    repository root with `uv run --project graphs/python ... --config langgraph.json`, which `langgraph dev` resolves
-    from where it starts. The build names the config by its path from there, and never runs the file watcher."""
-    source = tmp_path / "source"
-    project = source / "graphs" / "python"
-    (project / "src").mkdir(parents=True)
-    (project / "pyproject.toml").write_text("[project]\nname='deepagents-async'\nversion='1'\n", encoding="utf-8")
-    (project / "src" / "agent.py").write_text("graph = object()\n", encoding="utf-8")
-    (project / "langgraph.json").write_text(
-        json.dumps({"dependencies": ["."], "graphs": {"agent": "./src/agent.py:graph"}}), encoding="utf-8"
-    )
+def _langgraph_launch(tmp_path: Path, source: Path, command: list[str]):
     authoring = _authoring(tmp_path)
-    command = [
-        "uv", "run", "--with", "langgraph-cli[inmem]", "--project", "graphs/python", "langgraph", "dev",
-        "--config", "langgraph.json", "--no-browser", "--host", "0.0.0.0", "--port", "2024",
-        "--n-jobs-per-worker", "10",
-    ]  # fmt: skip
     _write_chat_contract(
         authoring,
         command=command,
@@ -4851,7 +4835,6 @@ def test_a_langgraph_config_inside_the_uv_project_is_started_from_where_every_wo
     )
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
-
     output = tmp_path / "bundle"
     manifest = author_bundle_v2(
         source=source,
@@ -4859,17 +4842,103 @@ def test_a_langgraph_config_inside_the_uv_project_is_started_from_where_every_wo
         authoring=authoring,
         output=output,
     )
-
     runtime = json.loads((output / "contract.json").read_text())["runtime"]
-    assert runtime["command"][runtime["command"].index("--config") + 1] == "graphs/python/langgraph.json"
-    assert runtime["interface"]["path"] == "/threads/{{langgraph_thread_id}}/runs/wait"
     agent = next(process for process in manifest.processes if process.name == "agent")
+    return runtime, agent, output
+
+
+def _where_it_starts(command: list[str], started: Path) -> tuple[Path, Path | None]:
+    """The folder `langgraph dev` starts in and the uv project it runs in, as `uv run` reads them."""
+    head = command[: command.index("langgraph")]
+
+    def option(name: str) -> str | None:
+        return head[head.index(name) + 1] if name in head else None
+
+    folder = started / (option("--directory") or ".")
+    project = option("--project")
+    return folder.resolve(), (folder / project).resolve() if project else None
+
+
+@pytest.mark.parametrize(
+    ("layout", "authored"),
+    [
+        # The config inside the uv project, started from the repository root with `--project`.
+        ("in_project", ["uv", "run", "--with", "langgraph-cli[inmem]", "--project", "graphs/python"]),
+        # The deep agents repository: the config at the root, started inside the project with `--directory`.
+        ("at_root", ["uv", "run", "--directory", "graphs/python", "--with", "langgraph-cli[inmem]"]),
+        # The same repository started from its root with no project named: the config's dependency is the project.
+        ("at_root_bare", ["uv", "run", "--with", "langgraph-cli[inmem]"]),
+    ],
+)
+def test_langgraph_dev_starts_where_its_config_is_and_keeps_its_uv_project(
+    tmp_path: Path, layout: str, authored: list[str]
+) -> None:
+    """`langgraph dev` reads its config, the graphs it names and their dependencies from where it starts. Both layouts
+    a live build authored start in the config's folder, name it there and keep the uv project the app installs into;
+    the file watcher never runs."""
+    source = tmp_path / "source"
+    project = source / "graphs" / "python"
+    (project / "src").mkdir(parents=True)
+    (project / "pyproject.toml").write_text("[project]\nname='deepagents-async'\nversion='1'\n", encoding="utf-8")
+    (project / "src" / "agent.py").write_text("graph = object()\n", encoding="utf-8")
+    config_folder = project if layout == "in_project" else source
+    graph = "./src/agent.py:graph" if layout == "in_project" else "./graphs/python/src/agent.py:graph"
+    dependency = "." if layout == "in_project" else "./graphs/python"
+    (config_folder / "langgraph.json").write_text(
+        json.dumps({"dependencies": [dependency], "graphs": {"agent": graph}}), encoding="utf-8"
+    )
+    command = [
+        *authored, "langgraph", "dev", "--config", "langgraph.json", "--no-browser", "--host", "0.0.0.0",
+        "--port", "2024",
+    ]  # fmt: skip
+
+    runtime, agent, output = _langgraph_launch(tmp_path, source, command)
+
+    sealed = runtime["command"]
+    assert sealed[sealed.index("--config") + 1] == "langgraph.json"
+    assert runtime["interface"]["path"] == "/threads/{{langgraph_thread_id}}/runs/wait"
+    folder, uv_project = _where_it_starts(sealed, source)
+    # It starts where its config is, and the graph and dependency paths in it resolve from there.
+    assert folder == config_folder.resolve()
+    assert (folder / "langgraph.json").is_file()
+    assert (folder / graph.split(":")[0]).is_file() and (folder / dependency).is_dir()
+    # The uv project it installs into is the one it ran in.
+    assert uv_project == project.resolve()
     launched = " ".join(agent.run_command)
-    assert "--config graphs/python/langgraph.json" in launched
-    assert "--no-reload" in launched
-    # Every world runs its copy of the source from the source root, where the config is at that path.
-    assert agent.source_component == "."
-    assert (output / agent.working_directory / "graphs" / "python" / "langgraph.json").is_file()
+    assert "--no-reload" in launched and "--config langgraph.json" in launched
+    # It installs its CLI and imports every graph before it answers: a longer start wait, for langgraph dev alone.
+    assert agent.started_check is not None and agent.started_check.timeout_seconds == 600
+
+
+def test_only_a_langgraph_server_gets_the_longer_start_wait(tmp_path: Path) -> None:
+    """Every other server keeps the wait it had."""
+    from fi.alk.harness.framework_servers import server_start_seconds
+
+    assert server_start_seconds(["uv", "run", "langgraph", "dev", "--config", "langgraph.json"], 180) == 600
+    for command in (["adk", "api_server", "app"], ["python", "server.py"], ["uvicorn", "app:app"], []):
+        assert server_start_seconds(command, 180) == 180
+        assert server_start_seconds(command, 30) == 30
+
+
+def test_a_repair_that_names_a_file_other_than_a_langgraph_config_is_refused(tmp_path: Path) -> None:
+    """As a live repair tried it: `--config pyproject.toml` for a `langgraph dev` server."""
+    from fi.alk.harness.framework_servers import langgraph_config_problem
+
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='a'\nversion='1'\n", encoding="utf-8")
+    (tmp_path / "langgraph.json").write_text(json.dumps({"graphs": {"agent": "./a.py:graph"}}), encoding="utf-8")
+    (tmp_path / "empty.json").write_text("{}", encoding="utf-8")
+
+    def problem(config: str) -> str | None:
+        return langgraph_config_problem(
+            tmp_path, {"command": ["uv", "run", "langgraph", "dev", "--config", config]}
+        )
+
+    assert "is not a langgraph.json" in problem("pyproject.toml")
+    assert "declares no graphs" in problem("empty.json")
+    assert "names no file" in problem("missing.json")
+    assert problem("langgraph.json") is None
+    # Any other server is not a LangGraph app's to judge.
+    assert langgraph_config_problem(tmp_path, {"command": ["adk", "api_server", "--config", "pyproject.toml"]}) is None
 
 
 def test_langgraph_dev_is_served_through_its_threads_and_runs_api(tmp_path: Path) -> None:
