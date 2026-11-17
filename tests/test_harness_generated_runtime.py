@@ -2336,3 +2336,42 @@ def test_a_worker_killed_during_its_first_provision_leaves_a_stoppable_project(
 
     assert not leftover.exists()
     assert any("down" in arguments for arguments in calls)
+
+
+_ENV_FILE_PARSE_ERRORS = [
+    # Compose v2.40.3
+    'failed to read /s/inc/.env: line 1: unexpected character "{" in variable name '
+    '"{\\"k\\": \\"parse-canary\\"}"',
+    # Compose v2.33.0
+    'failed to read /w/sym/srcj/inc/.env: line 1: unexpected character "{" in variable '
+    'name "{\\"k\\": \\"parse-canary\\"}"',
+]
+
+
+@pytest.mark.parametrize("message", _ENV_FILE_PARSE_ERRORS)
+def test_an_env_file_compose_cannot_parse_is_named_by_category_under_the_sandbox(
+    tmp_path: Path, monkeypatch, message: str
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "")
+    environment = _compose_environment(tmp_path)
+    _record_compose(monkeypatch, returncode=1, output=message)
+
+    with pytest.raises(provisioning.ProvisionError) as raised:
+        provisioning._run(environment, "config")
+
+    text = str(raised.value)
+    assert "env file" in text and "could not be read" in text
+    assert "parse-canary" not in text
+
+
+def test_an_env_file_parse_error_is_still_shown_off_the_sandbox(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, None)
+    environment = _compose_environment(tmp_path)
+    _record_compose(monkeypatch, returncode=1, output=_ENV_FILE_PARSE_ERRORS[0])
+
+    with pytest.raises(provisioning.ProvisionError) as raised:
+        provisioning._run(environment, "config")
+
+    assert "parse-canary" in str(raised.value)

@@ -271,6 +271,9 @@ _REMOTE_INCLUDES_OFF = {
 }
 # Both supported Compose versions say this when a remote git include is switched off.
 _GIT_REMOTE_DISABLED = "git remote resource is disabled"
+# Both supported Compose versions word an env file they cannot parse this way, and put the
+# offending line, which can be a host file's content, after it.
+_ENV_FILE_PARSE_ERROR = ("unexpected character", "in variable name")
 _ENV_FILE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
@@ -522,6 +525,10 @@ def _run(
                 raise ProvisionError(
                     "the compose file uses a git include, which is not allowed in a hosted run"
                 )
+            if _under_sandbox() and all(part in output for part in _ENV_FILE_PARSE_ERROR):
+                # An included project's own env file is read by Compose whatever is passed, and
+                # Compose echoes the line it cannot parse, so show no output at all.
+                raise ProvisionError("an env file in the project could not be read by Compose")
             shown = _command_failure_output(output)
             raise ProvisionError(
                 f"{' '.join(command)} failed ({completed.returncode}): {shown}"
