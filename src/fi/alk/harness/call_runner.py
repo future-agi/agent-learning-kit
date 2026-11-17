@@ -2048,6 +2048,9 @@ def _read_file_tool_calls(
         ended = record.get("ended_at")
         call.ended_at = float(ended) if isinstance(ended, (int, float)) else 0.0
         if record.get("source") == _SPAN_SOURCE:
+            if _framework_message(call.result):
+                # Only the framework's message object around the answer: nothing to hold against the call's own.
+                call.output_omitted = True
             from_spans.append(call)
             continue
         if record.get("source") != _LIVEKIT_HOOK_SOURCE:
@@ -2610,6 +2613,18 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                 )
             )
     return tuple(calls)
+
+
+def _framework_message(result: Any) -> bool:
+    """Whether a span recorded a tool's answer only as the framework's message object (LangChain's
+    `{"output": "content='...' name=... tool_call_id=..."}`): that text is not the result the agent's own report
+    gives, so comparing them would part one call into two."""
+    return (
+        isinstance(result, dict)
+        and set(result) == {"output"}
+        and isinstance(result["output"], str)
+        and result["output"].startswith("content=")
+    )
 
 
 def _structured(value: Any) -> Any:

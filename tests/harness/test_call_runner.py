@@ -3634,3 +3634,46 @@ def test_a_voice_trial_writes_a_fault_named_by_its_tool_as_that_tool_s_route_act
     _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
 
     assert written and written[0] == [{"action": "orders.refund", "mode": "unavailable"}]
+
+
+def test_a_langchain_span_whose_input_is_the_arguments_text_pairs_with_the_agent_s_own_call():
+    """A LangGraph agent reports its calls, and the framework's spans record the same calls each as one `input`
+    holding the arguments' repr and its answer as the framework's message object, ended before the agent's report
+    is timed: each call is counted once, so a door
+    that recorded every call leaves no notice. Timings and shapes are a real chat trial's."""
+    import tempfile
+
+    from fi.alk.harness.call_runner import _with_span_calls, evidence_notices
+
+    lookup, cancel = {"order_id": "BK-2002"}, {"order_id": "BK-2002", "reason": "bought twice"}
+
+    def span(name, arguments, at, ended, event):
+        # LangChain's tool span: the arguments' repr as one input, the answer as its ToolMessage object.
+        message = f"content='{json.dumps(answers[name])}' name='{name}' tool_call_id='call_{event}'"
+        return {"name": name, "arguments": {"input": repr(arguments)}, "output": repr({"output": message}),
+                "is_error": False, "source": "otel", "at": at, "ended_at": ended, "event_id": event}
+
+    answers = {"get_order_status": {"found": True, "order_id": "BK-2002"}, "cancel_order": {"cancelled": True}}
+
+    spans = [
+        span("get_order_status", lookup, 349.100, 349.243, "c7e48f222416d22c"),
+        span("get_order_status", lookup, 355.054, 355.071, "9eb48efbaf238416"),
+        span("cancel_order", cancel, 356.852, 356.868, "a77e326651cc93e4"),
+    ]
+    reported = [
+        Call(name="get_order_status", arguments=dict(lookup), ok=True, at=350.748, result=answers["get_order_status"]),
+        Call(name="get_order_status", arguments=dict(lookup), ok=True, at=358.97095,
+             result=answers["get_order_status"]),
+        Call(name="cancel_order", arguments=dict(cancel), ok=True, at=358.97097, result=answers["cancel_order"]),
+    ]
+    with tempfile.TemporaryDirectory() as folder:
+        trace = Path(folder) / "agent-tool-calls.jsonl"
+        trace.write_text("".join(json.dumps(one) + "\n" for one in spans))
+        calls = _with_span_calls(reported, _runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert sorted(call.name for call in calls) == ["cancel_order", "get_order_status", "get_order_status"]
+    # Each keeps the answer the agent's own report gave, never the framework's message text.
+    assert all(call.result == answers[call.name] for call in calls)
+    log = [{"name": one, "actor_id": "agent", "outcome": "committed"}
+           for one in ("get_order_status", "get_order_status", "cancel_order")]
+    assert evidence_notices(log, calls, {"get_order_status", "cancel_order"}) == []
