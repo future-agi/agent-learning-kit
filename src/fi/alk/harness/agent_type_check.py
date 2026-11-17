@@ -124,7 +124,7 @@ _TOOLKIT = "PlayWrightBrowserToolkit"
 _WHOLE_NAMES = {
     name: re.compile(
         # The name looked for first, so only the places it starts at are tried: eight lookbehinds
-        # at every byte held the save 2.8 s (round 3 reviewer A).
+        # at every byte held the save 2.8 s.
         rf"(?={re.escape(name)})(?:(?<!\w)|(?<=\\[abfnrtv])|(?<=\\x[0-9A-Fa-f]{{2}})|(?<=\\[0-7])|(?<=\\[0-7]{{2}})"
         rf"|(?<=\\[0-7]{{3}})|(?<=\\u[0-9A-Fa-f]{{4}})|(?<=\\U[0-9A-Fa-f]{{8}})){re.escape(name)}(?!\w)",
         re.ASCII,
@@ -643,13 +643,13 @@ def _tools_in(
                     found |= _markers(raw)
                 imported |= named
         except Exception as error:
-            # A skipped file may be the agent's main one, and the reading then finds nothing. The
-            # type only at WARNING, once a scan: a trace can quote a line of the customer's code,
-            # and a path can name their business.
+            # A skipped file may be the agent's main one, and the reading then finds nothing. No
+            # trace at any level, since a trace can quote a line of the customer's code; the type
+            # only at WARNING, once a scan, since a path can name their business.
             skipped += 1
             if skipped == 1:
                 logger.warning("agent type scan skipped a file: %s", type(error).__name__)
-            logger.debug("agent type scan skipped %s", path, exc_info=True)
+            logger.debug("agent type scan skipped %s: %s", path, type(error).__name__)
             continue
     if skipped > 1:
         logger.warning("agent type scan skipped %d files", skipped)
@@ -789,7 +789,7 @@ def browser_tools_in_agent(
         local = set()
     if reached is not None:
         # Everything the walk followed, as the credential scan reads it: a test-named package the
-        # agent imports still runs (Dileep's third review). The files above stay filtered: a root
+        # agent imports still runs. The files above stay filtered: a root
         # conftest.py isn't the agent's code.
         reached[:] = [*above, *walked]
     # A shared script's dependencies are declared in its package, at or above it.

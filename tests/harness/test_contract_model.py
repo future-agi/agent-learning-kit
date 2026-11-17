@@ -9,6 +9,7 @@ model is saved exactly as before.
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import json
 import os
@@ -24,7 +25,28 @@ from fi.alk.harness.model_citation import model_problems, named_on
 from fi.alk.harness.tools import accept_contract, contract_tools
 
 MIB = 1024 * 1024
+# How long a check this file holds to "quick" may take: it takes well under a tenth of a second
+# alone, and the bound leaves room for a shared CI runner under load. A check under tracemalloc,
+# which slows Python down several times over, gets its own.
+QUICK_SECONDS = 1.0
+QUICK_SECONDS_TRACED = 5.0
+# The block-comment scans, at a quarter of what the file limit allows: the slowest takes about
+# 0.06 s on a laptop, 0.65-0.87 s was read on CI, and a closer looked for once per opener takes
+# minutes. CI has run up to about 14 times slower than a laptop, so the bound leaves that room.
+BLOCK_SCAN_SECONDS = 5.0
 FIXTURES = Path(__file__).resolve().parents[1] / "providers" / "fixtures" / "authored"
+
+
+@pytest.fixture(autouse=True)
+def _earlier_heap_frozen():
+    """Keep a full collection of the heap the tests before this one built out of this file's
+    timings: one such pass took 0.3 s inside a timed save on CI. The test's own collections still
+    count."""
+    gc.freeze()
+    try:
+        yield
+    finally:
+        gc.unfreeze()
 
 EMPTY_NAME = (
     "model: name is empty; give the model's name as written in the source, or leave model out"
@@ -143,15 +165,16 @@ def test_a_contract_without_a_model_saves_and_builds_as_before(tmp_path):
 
     assert not result.get("is_error"), result
     raw = (tmp_path / "out" / "contract.json").read_bytes()
+    # The bytes and hash dev writes for this contract, `workers` included since #226.
     assert hashlib.sha256(raw).hexdigest() == (
-        "7a61d8e863f75541c6d32c287fea02fb7a605d3b440a91f4c1b4212a3e1832b6"
+        "5705f539a00886a4bc8bacb34fcf50b35e22d145e36391de98b192ad73050c1d"
     )
     assert "model" not in json.loads(raw)
     document = build_authored_agent(
         AgentContract.model_validate(json.loads(raw)).model_dump(mode="json")
     )
     assert document["setup_hash"] == (
-        "sh1:3854d6ecb87a1ee2890c5c16f25e854e20be84c109dc80311ad292e6f656d622"
+        "sh1:7aedd9f36dd3ed3fd5a1c7fd67d8a2ec6abe34ed09d616b7dccccf49e8cb1aa3"
     )
     assert document["model"] is None
 
@@ -290,7 +313,7 @@ def test_model_path_outside_the_source_is_refused(root, cited):
     problems, _, took = checked(root, {"name": "gpt-4o", "path": path, "line": 2})
 
     assert problems == [not_a_file(path)]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # The save's one budget
@@ -311,7 +334,7 @@ def test_model_path_spending_the_save_budget_is_refused(tmp_path, root):
     assert result.get("is_error")
     assert text_of(result) == REFUSED + str(PathLookupsSpent())
     assert not (destination / "contract.json").exists()
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 @pytest.mark.parametrize("links", [pytest.param(11, id="lookup-budget-real")])
@@ -410,7 +433,7 @@ def test_model_file_that_cannot_be_read_is_refused(root, cited):
     problems, _, took = answer[0]
 
     assert problems == [unreadable(path)]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # The cited line must be in the file
@@ -612,7 +635,7 @@ def test_a_crafted_model_file_does_not_hold_up_the_save(root, written, line, nam
     problems, _, took = checked(root, {"name": name, "path": "crafted.py", "line": line})
 
     assert problems == ([not_named(name, line, "crafted.py")] if refused else [])
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # Asking once for the prompt's lines
@@ -845,7 +868,7 @@ def prose(path: str) -> str:
 
 def lines_alone(named: str, quote: str, *, short: bool = False) -> str:
     outcome = (
-        "the lines are copied as the prompt and recorded as unconfirmed, since that quote is too "
+        "the lines are recorded as unconfirmed and no prompt is saved, since that quote is too "
         "short to stand for it"
         if short
         else "the quote is kept and the lines are recorded as unconfirmed"
@@ -1012,7 +1035,7 @@ def test_a_crafted_configuration_line_does_not_hold_up_the_check(root):
     problems, _, took = checked(root, {"name": "a", "path": "crafted.yaml", "line": 1})
 
     assert problems == [not_named("a", 1, "crafted.yaml")]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # Names a setting goes by are not models, written in any case
@@ -1428,8 +1451,8 @@ def test_lines_refused_twice_leave_the_quote(tmp_path, root):
         REFUSED
         + not_the_quote("prompt.py 1-2")
         + "\n  - system_prompt_from: lines named later are checked against this quote until you "
-        "give another; a later mismatch records the lines as unconfirmed and keeps the quote, or the "
-        "lines if the quote has fewer than 16 letters"
+        "give another; a later mismatch records the lines as unconfirmed and keeps the quote, "
+        "or saves no prompt if the quote has fewer than 16 letters"
     )
     second = submit(wrong)
     assert not second.get("is_error"), second
@@ -1612,7 +1635,7 @@ def test_a_quote_of_many_pieces_does_not_hold_up_the_check(root):
     took = time.perf_counter() - started
 
     assert answer is not None
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # A prompt written with Python string prefixes holds its quote
@@ -1740,7 +1763,7 @@ def test_a_crafted_file_of_triple_quotes_does_not_hold_up_the_check(root, writte
 
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
 
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 def test_leaving_the_quote_out_is_not_asked_about(tmp_path, root):
@@ -1841,6 +1864,329 @@ def test_a_value_in_a_block_comment_is_not_the_model(root, file, written, name):
     problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
 
     assert problems == [not_named(name, 2, file)]
+
+
+@pytest.mark.parametrize(
+    "file, written, line",
+    [
+        pytest.param("a.js", '/*\nmodel: "gpt-4o"\n*/\n', 2, id="a-block-over-lines"),
+        pytest.param(
+            "a.js",
+            'const a = 1; /* was\nnotes\nconst model = "gpt-4o";\n*/\n',
+            3,
+            id="opened-after-code",
+        ),
+        pytest.param(
+            "a.js", '/* was\nconst model = "gpt-4o"; */\n', 2, id="before-the-closer"
+        ),
+        pytest.param(
+            "a.ts",
+            '/** Settings.\n  @default "gpt-4o"\n */\n',
+            2,
+            id="a-doc-comment-without-stars",
+        ),
+        pytest.param(
+            "page.html",
+            '<!--\nmodel: "gpt-4o"\n-->\n',
+            2,
+            id="a-markup-block-over-lines",
+        ),
+        pytest.param(
+            "page.xml",
+            '<!-- was\n<model>"gpt-4o"</model> -->\n',
+            2,
+            id="a-markup-block-before-its-closer",
+        ),
+        pytest.param(
+            "page.vue",
+            '<template>\n<!--\n<x model="gpt-4o"/>\n-->\n</template>\n',
+            3,
+            id="a-markup-block-in-a-component",
+        ),
+        pytest.param(
+            "a.js",
+            '/* was\nconst model = "gpt-4o";\nmore\n*/\n',
+            2,
+            id="a-closer-after-the-cited-line",
+        ),
+        pytest.param(
+            "a.js",
+            '/* a */\nx\n/* real\nconst model = "gpt-4o";\n*/\n',
+            4,
+            id="a-comment-after-an-earlier-closed-one",
+        ),
+        # <!-- runs on over lines in every file but code and configuration: XML under any
+        # suffix, and templates that mix markup with code.
+        pytest.param(
+            "App.config",
+            '<!--\n<add key="model" value="gpt-4o"/>\n-->\n',
+            2,
+            id="a-markup-block-in-dotnet-config",
+        ),
+        pytest.param(
+            "a.csproj",
+            '<!-- was\n<Model>"gpt-4o"</Model>\n-->\n',
+            2,
+            id="a-markup-block-in-a-project-file",
+        ),
+        pytest.param(
+            "page.php",
+            '<!--\n<?php $model = "gpt-4o"; ?>\n-->\n',
+            2,
+            id="a-markup-block-in-php",
+        ),
+        pytest.param(
+            "env.xml",
+            '<!--\n<model>"gpt-4o"</model>\n-->\n',
+            2,
+            id="a-markup-block-in-markup-named-like-configuration",
+        ),
+    ],
+)
+def test_a_value_inside_a_block_comment_over_lines_is_not_the_model(
+    root, file, written, line
+):
+    (root / file).write_text(written, encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": file, "line": line})
+
+    assert problems == [not_named("gpt-4o", line, file)]
+
+
+@pytest.mark.parametrize(
+    "file, written, line",
+    [
+        pytest.param(
+            "a.js",
+            '/*\nold\n*/\nconst model = "gpt-4o";\n',
+            4,
+            id="after-the-closing-line",
+        ),
+        pytest.param(
+            "a.js",
+            '/*\nold */ const model = "gpt-4o";\n',
+            2,
+            id="after-the-closer-on-its-line",
+        ),
+        pytest.param(
+            "a.js",
+            '/* old */\nconst model = "gpt-4o";\n',
+            2,
+            id="closed-on-an-earlier-line",
+        ),
+        pytest.param(
+            "a.js",
+            '/* old */ const model = "gpt-4o";\n',
+            1,
+            id="closed-on-the-same-line",
+        ),
+        pytest.param(
+            "page.html",
+            '<!--\nold\n-->\n<script>const model = "gpt-4o";</script>\n',
+            4,
+            id="after-a-markup-block",
+        ),
+        pytest.param(
+            "a.js",
+            'const open = "/*";\nconst model = "gpt-4o";\n',
+            2,
+            id="an-opener-in-a-string",
+        ),
+        pytest.param(
+            "a.js",
+            "const open = '<!--';\nconst model = \"gpt-4o\";\n",
+            2,
+            id="a-markup-opener-in-a-string",
+        ),
+        pytest.param(
+            "a.js",
+            'const s = `/*\n`;\nconst model = "gpt-4o";\n',
+            3,
+            id="an-opener-in-a-template",
+        ),
+        pytest.param(
+            "a.js",
+            '// see /* and <!--\nconst model = "gpt-4o";\n',
+            2,
+            id="openers-in-a-line-comment",
+        ),
+        pytest.param(
+            "a.ts", 'const files = data/*\nconst model = "gpt-4o";\n', 2, id="a-glob"
+        ),
+        pytest.param(
+            "Dockerfile",
+            "COPY data/* /app/\nENV MODEL=gpt-4o\n",
+            2,
+            id="a-glob-in-configuration",
+        ),
+        pytest.param(
+            "llm.py", '# see /* below\nMODEL = "gpt-4o"\n', 2, id="python-hash-comment"
+        ),
+        pytest.param(
+            "llm.py",
+            'X = a /*b\nMODEL = "gpt-4o"\n',
+            2,
+            id="python-has-no-block-comments",
+        ),
+        pytest.param(
+            "llm.py",
+            '# <!-- a note\nMODEL = "gpt-4o"\n',
+            2,
+            id="python-hash-comment-markup",
+        ),
+        pytest.param(
+            "llm.yaml",
+            "# <!-- a note\nmodel: gpt-4o\n",
+            2,
+            id="yaml-hash-comment-markup",
+        ),
+        pytest.param(
+            "q.sql",
+            "-- see /* below\nSET model = 'gpt-4o';\n",
+            2,
+            id="sql-dash-comment",
+        ),
+        pytest.param(
+            "llm.ini", "; <!-- a note\nmodel = gpt-4o\n", 2, id="ini-semicolon-comment"
+        ),
+        pytest.param(
+            "a.kt",
+            '"""\n/*\n"""\nval model = "gpt-4o"\n',
+            4,
+            id="an-opener-inside-a-triple-quote",
+        ),
+        pytest.param(
+            "a.kt",
+            '/*\n"""\n*/\nval model = "gpt-4o"\n',
+            4,
+            id="a-triple-quote-inside-a-comment",
+        ),
+        # An opener whose closer is on no later line is text, not a comment over the rest of
+        # the file. And <!-- runs on over lines only outside code and configuration.
+        pytest.param(
+            "a.js",
+            'const isComment = /<!--/.test(s);\nconst model = "gpt-4o";\n',
+            2,
+            id="a-markup-opener-in-a-regex",
+        ),
+        pytest.param(
+            "a.js",
+            'const re = /\\/*/g;\nconst model = "gpt-4o";\n',
+            2,
+            id="a-block-opener-in-a-regex",
+        ),
+        pytest.param(
+            "c.yaml", "banner: <!-- top\nmodel: gpt-4o\n", 2, id="a-markup-opener-in-yaml"
+        ),
+        pytest.param(".env", "BANNER=<!--\nMODEL=gpt-4o\n", 2, id="a-markup-opener-in-env"),
+        pytest.param(
+            "a.sh",
+            'cat <<EOF\n<!-- header\nEOF\nMODEL="gpt-4o"\n',
+            4,
+            id="a-markup-opener-in-a-heredoc",
+        ),
+        pytest.param(
+            "a.ts",
+            'const t = `\n/* todo\n`;\nconst model = "gpt-4o";\n',
+            4,
+            id="a-block-opener-in-a-template",
+        ),
+        pytest.param(
+            "a.js",
+            'const a = /<!--/;\nconst model = "gpt-4o";\nconst b = /-->/;\n',
+            2,
+            id="a-markup-opener-outside-markup-with-a-closer-later",
+        ),
+        pytest.param(
+            "c.yaml",
+            "banner: <!-- top\nmodel: gpt-4o\nfooter: -->\n",
+            2,
+            id="a-markup-opener-in-configuration-with-a-closer-later",
+        ),
+        pytest.param(
+            ".env",
+            "BANNER=<!--\nMODEL=gpt-4o\nFOOTER=-->\n",
+            2,
+            id="a-markup-opener-in-configuration-by-name-with-a-closer-later",
+        ),
+    ],
+)
+def test_a_value_outside_a_block_comment_is_the_model(root, file, written, line):
+    (root / file).write_text(written, encoding="utf-8")
+
+    problems, contract, _ = checked(
+        root, {"name": "gpt-4o", "path": file, "line": line}
+    )
+
+    assert problems == []
+    assert contract.model is not None and contract.model.name == "gpt-4o"
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param(
+            "/*\n" * (MIB // 12 - 20) + 'const model = "gpt-4o";\n',
+            id="a-file-of-openers",
+        ),
+        pytest.param(
+            "*/ /*\n" * (MIB // 24 - 20) + 'const model = "gpt-4o";\n',
+            id="a-file-of-closers-and-openers",
+        ),
+        pytest.param(
+            "<!--\n" * (MIB // 20 - 20) + 'const model = "gpt-4o";\n',
+            id="a-file-of-markup-openers",
+        ),
+    ],
+)
+def test_a_crafted_file_of_block_comments_does_not_hold_up_the_check(root, written):
+    (root / "crafted.js").write_text(written, encoding="utf-8")
+    line = written.count("\n")
+
+    _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.js", "line": line})
+
+    assert took < BLOCK_SCAN_SECONDS
+
+
+def test_a_line_of_closed_blocks_takes_time_in_step_with_its_length(root):
+    # At a size a slow runner can afford, a bound on the time alone can't tell a scan that copies
+    # the rest of the line for each closer from one that doesn't (0.10 s against 0.05 s): how the
+    # time grows does. Four times the line takes about four times as long, a quadratic scan about
+    # sixteen. The runs alternate, and the fastest of each is kept, so load reaches both alike.
+    def took(blocks: int) -> float:
+        (root / "crafted.js").write_text("/* */ " * blocks + '"gpt-4o"\n', encoding="utf-8")
+        return checked(root, {"name": "gpt-4o", "path": "crafted.js", "line": 1})[2]
+
+    short: list[float] = []
+    long: list[float] = []
+    for _ in range(3):
+        short.append(took(MIB // 24 - 20))
+        long.append(took(MIB // 6 - 20))
+
+    assert min(long) < BLOCK_SCAN_SECONDS
+    assert min(long) < 8 * min(short)
+
+
+def test_lines_inside_a_block_comment_without_its_closer_are_not_scanned(
+    root, monkeypatch
+):
+    from fi.alk.harness import model_citation
+
+    written = "/*\n" + "x\n" * 499 + "*/\n" + "y\n" * 499 + 'const model = "gpt-4o";\n'
+    (root / "a.js").write_text(written, encoding="utf-8")
+    scanned: list[str] = []
+    real_scan = model_citation._line_scan
+    monkeypatch.setattr(
+        model_citation,
+        "_line_scan",
+        lambda line, *a, **k: scanned.append(line) or real_scan(line, *a, **k),
+    )
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "a.js", "line": 1001})
+
+    assert problems == []
+    # The block's opening and closing lines, and the cited line: nothing between.
+    assert scanned == ["/*", "*/", 'const model = "gpt-4o";']
 
 
 def test_a_prompt_with_escaped_characters_holds_the_quote(tmp_path, root):
@@ -2047,7 +2393,7 @@ def test_a_quote_that_grows_when_normalised_costs_little(root):
     finally:
         tracemalloc.stop()
 
-    assert took < 0.5
+    assert took < QUICK_SECONDS_TRACED
     assert peak < 32 * MIB
 
 
@@ -2122,7 +2468,7 @@ def test_a_crafted_line_of_generic_calls_does_not_hold_up_the_check(root):
 
     _, _, took = checked(root, {"name": "a", "path": "crafted.ts", "line": 1})
 
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 def test_a_crafted_line_of_apostrophes_does_not_hold_up_the_check(root):
@@ -2133,7 +2479,7 @@ def test_a_crafted_line_of_apostrophes_does_not_hold_up_the_check(root):
     problems, _, took = checked(root, {"name": "a", "path": "crafted.py", "line": 1})
 
     assert problems == [not_named("a", 1, "crafted.py")]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # Lines sent alone after a refusal are asked about once more before either side is given up
@@ -2207,7 +2553,7 @@ def test_a_quote_whose_start_matches_everywhere_does_not_hold_up_the_check(root)
     took = time.perf_counter() - started
 
     assert answer is not None
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 def test_a_first_word_found_early_is_tried_again(tmp_path, root):
@@ -2344,15 +2690,25 @@ def test_an_elided_quote_of_a_long_prompt_holds(tmp_path, root):
     assert answer is None
 
 
-def test_a_crafted_long_word_costs_little(root):
-    from fi.alk.harness.model_citation import quote_problem
+def test_a_crafted_long_word_costs_little():
+    from fi.alk.harness.model_citation import _holds, _letters, quote_pieces
 
-    started = time.perf_counter()
-    answer = quote_problem("a " + "a" * MIB + "b", "a" * MIB, "agent.py 1-1")
-    took = time.perf_counter() - started
+    # Each false start at the first word is charged the second word it failed on: without that
+    # charge the search makes a try at every one of a million places. Counted by the searches made,
+    # not by seconds, which a loaded runner moves more than the missing charge does.
+    class Counting(str):
+        searches = 0
 
-    assert answer is not None
-    assert took < 0.25
+        def find(self, *args):
+            Counting.searches += 1
+            return super().find(*args)
+
+    pieces = quote_pieces("a " + "a" * MIB + "b")
+
+    held = _holds(Counting(_letters("a" * MIB)), pieces)
+
+    assert held is False
+    assert Counting.searches < 1_000
 
 
 # Scripts written without spaces: each character is a word
@@ -2473,18 +2829,30 @@ def test_more_comments_and_docstrings_are_not_the_model(root, file, written, lin
     assert problems == [not_named(name, line, file)]
 
 
-def test_a_crafted_file_of_one_byte_lines_and_triple_quotes_costs_little(root):
+def test_a_crafted_file_of_one_byte_lines_and_triple_quotes_costs_little(root, monkeypatch):
+    from fi.alk.harness import model_citation
+
     # Lines with no triple quote, and lines inside a block without its closing quote, are passed
-    # over without a scan.
-    (root / "crafted.py").write_text(
-        '"""\n' + "x\n" * (MIB // 4) + '"""\n' + "y\n" * (MIB // 4) + 'MODEL = "gpt-4o"\n',
-        encoding="utf-8",
-    )
-    line = 2 * (MIB // 4) + 3
+    # over without a scan. The file fits under the size limit, so it is read, not refused unread.
+    half = MIB // 4 - 20
+    written = '"""\n' + "x\n" * half + '"""\n' + "y\n" * half + 'MODEL = "gpt-4o"\n'
+    assert len(written.encode()) <= model_citation.LARGEST_MODEL_FILE
+    (root / "crafted.py").write_text(written, encoding="utf-8")
+    line = 2 * half + 3
+    scanned = []
+    real = model_citation._line_scan
 
-    _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
+    def counting(*args, **kwargs):
+        scanned.append(1)
+        return real(*args, **kwargs)
 
-    assert took < 0.25
+    monkeypatch.setattr(model_citation, "_line_scan", counting)
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
+
+    assert problems == []
+    # The two triple-quote lines and the cited one, not the million between.
+    assert len(scanned) < 20
 
 
 @pytest.mark.parametrize(
@@ -2626,7 +2994,7 @@ def test_a_long_first_word_is_charged_on_every_try(root):
     took = time.perf_counter() - started
 
     assert answer is not None
-    assert took < 0.25
+    assert took < QUICK_SECONDS
 
 
 def test_a_short_unspaced_quote_is_still_searched_with_gaps(tmp_path, root):
@@ -2687,7 +3055,7 @@ def test_lines_without_a_triple_quote_are_not_scanned(root, monkeypatch):
     assert scanned == ['"""', '"""', 'MODEL = "gpt-4o"']
 
 
-# Round 3: a short or list quote is held like any other
+# A short or list quote is held like any other
 
 
 def test_a_short_quote_is_held_and_its_lines_asked_about(tmp_path, root):
@@ -2704,14 +3072,17 @@ def test_a_short_quote_is_held_and_its_lines_asked_about(tmp_path, root):
     assert text_of(second) == REFUSED + lines_alone("agent.py 1-4", "Be warm and brief.", short=True)
     third = submit(payload(hard_constraints=["Be polite."], system_prompt_from=imports))
 
-    # A quote this short can't stand for the prompt: the lines go out, on record as unconfirmed,
-    # and the reply says so.
+    # A quote this short can't stand for the prompt, and lines that twice didn't hold it would be
+    # shown as it: no prompt is saved, the lines are on record as unconfirmed, and the reply says
+    # so.
     assert not third.get("is_error"), third
     assert text_of(third).endswith(
         "\nsystem_prompt_from: the lines named (agent.py 1-4) are recorded as unconfirmed, since "
-        "they don't hold the quote; the lines are the prompt."
+        "they don't hold the quote; no prompt is saved, since the quote is too short to stand "
+        "for it."
     )
-    assert saved(destination)["system_prompt_from"] == imports
+    assert saved(destination)["system_prompt_excerpt"] == ""
+    assert saved(destination)["system_prompt_from"] == []
     assert saved(destination)["unconfirmed_prompt_from"] == imports
 
 
@@ -2753,7 +3124,7 @@ def test_a_list_quote_that_passes_replaces_the_held_one(tmp_path, root):
     assert "unconfirmed_prompt_from" not in saved(destination)
 
 
-def test_a_placeholder_with_the_right_lines_keeps_the_lines(tmp_path, root):
+def test_a_placeholder_with_the_right_lines_saves_no_prompt(tmp_path, root):
     (root / "agent.py").write_text(_BOOKING, encoding="utf-8")
     destination = tmp_path / "out"
     submit = submitter(destination, root)
@@ -2763,8 +3134,10 @@ def test_a_placeholder_with_the_right_lines_keeps_the_lines(tmp_path, root):
     assert submit(again).get("is_error")
     second = submit(again)
 
+    # Lines that don't hold even a placeholder are unconfirmed, however right they are.
     assert not second.get("is_error"), second
-    assert saved(destination)["system_prompt_excerpt"] == "\n".join(_BOOKING.splitlines()[5:12])
+    assert saved(destination)["system_prompt_excerpt"] == ""
+    assert saved(destination)["system_prompt_from"] == []
     assert saved(destination)["unconfirmed_prompt_from"] == prompt
 
 
@@ -2845,7 +3218,7 @@ def test_lines_set_aside_in_a_call_refused_for_something_else_are_said(tmp_path,
     ) in text_of(second)
 
 
-# Round 3: pins for the line scan
+# Pins for the line scan
 
 
 @pytest.mark.parametrize("quote", ['x = "' + '\\"' * 40_000, "x = `" + "\\`" * 40_000])
@@ -2854,7 +3227,7 @@ def test_an_unclosed_string_of_escapes_costs_one_pass(root, quote):
 
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.ts", "line": 1})
 
-    assert took < 0.25
+    assert took < QUICK_SECONDS
 
 
 @pytest.mark.parametrize(
@@ -2941,7 +3314,7 @@ def test_more_wrong_values_after_round_3_probes(root, file, written, name):
     assert problems == [not_named(name, 2, file)]
 
 
-# The settled round: pins for rules the plants found unpinned
+# Pins for rules the plants found unpinned
 
 
 @pytest.mark.parametrize(
@@ -3000,7 +3373,7 @@ def test_a_quote_alone_after_lines_alone_were_refused_is_not_asked_for_lines(tmp
     assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
 
 
-# The settled round: lines numbered as the reading numbers them, and the reviewers' pins
+# Lines numbered as the reading numbers them
 
 
 @pytest.mark.parametrize(
@@ -3190,7 +3563,7 @@ def test_a_type_projection_does_not_hide_a_triple_quote(root):
     assert problems == [not_named("gpt-4o", 2, "agent.scala")]
 
 
-# The settled round: the flows
+# The flows
 
 
 _SHORT_PROMPT = 'import os\n\nINSTRUCTIONS = "Be warm and brief."\n'
@@ -3314,8 +3687,9 @@ def test_short_lines_set_aside_in_a_call_refused_for_something_else_are_said(tmp
 
     assert "model: the name gpt-4o is not the value written on line 1" in text_of(second)
     assert (
-        "system_prompt_from: the lines named (agent.py 1-4) are copied unconfirmed, since they "
-        "don't hold the short quote"
+        "system_prompt_from: the lines named (agent.py 1-4) are recorded as unconfirmed and no "
+        "prompt is saved, since they don't hold the quote and it is too short to stand for the "
+        "prompt"
     ) in text_of(second)
 
 
@@ -3353,7 +3727,7 @@ def test_a_saved_call_that_kept_the_quote_says_so(tmp_path, root):
     )
 
 
-# The settled round 2: a short quote on its own lines, and its limits
+# A short quote on its own lines, and its limits
 
 
 @pytest.mark.parametrize(

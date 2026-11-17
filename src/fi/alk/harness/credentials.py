@@ -875,7 +875,7 @@ class _Requirements:
     indexed once: its dependencies and, for the agent's own project, its default groups other than
     ``dev`` (``plain``), and each extra's requirements by its name (``by_extra``). Reading it again
     for more extras reads only theirs: a member reached again with one more extra each time would
-    otherwise read its whole list each time (round 4 reviewer A)."""
+    otherwise read its whole list each time."""
 
     def __init__(self, table: dict, own: bool) -> None:
         project = table.get("project") if isinstance(table.get("project"), dict) else {}
@@ -909,7 +909,7 @@ class _Requirements:
                 continue
             wanted = asked.setdefault(_normal_name(named.group(1)), set())
             # Matched once, where the name ends: a search tried every "[" in turn, the square of
-            # the requirement's length (150 KB held the save 51 s; round 5 reviewer A).
+            # the requirement's length (150 KB held the save 51 s).
             if listed := _REQUESTED_EXTRAS.match(value, named.end()):
                 wanted |= {
                     extra for part in listed.group(1).split(",") if (extra := _project_name(part))
@@ -935,6 +935,13 @@ def _sources(table: dict) -> dict[str, list[dict]]:
     return found
 
 
+def _member_name(table: dict) -> str | None:
+    """The project name a pyproject.toml declares; None when it declares none, or not as a
+    table."""
+    project = table.get("project")
+    return _project_name(project.get("name")) if isinstance(project, dict) else None
+
+
 def _workspace_of(table: dict) -> dict | None:
     workspace = _uv_table(table).get("workspace")
     return workspace if isinstance(workspace, dict) else None
@@ -953,6 +960,7 @@ def _workspace_dependencies(
     ``path`` inside the repository is that folder, and what each of those asks for is followed
     in turn. Another member, a sibling agent among them, isn't installed, so it isn't looked in.
     A ``**`` member pattern isn't expanded, and past the limits the rest isn't read: both say so.
+    A member past ``_WORKSPACE_MEMBERS`` is still read when a requirement names its folder.
     """
     reader = _Workspace(root, left, known)
     project: tuple[Path, dict] | None = None
@@ -972,6 +980,8 @@ def _workspace_dependencies(
     tables: dict[Path, dict] = {project[0]: project[1]}
     by_name: dict[str, Path] = {}
     shared: dict[str, list[dict]] = {}
+    # The members past the cut, by their folder's name: one a requirement names is read then.
+    late: dict[str, list[Path]] = {}
     if workspace is not None:
         home, top = workspace
         shape = _workspace_of(top) or {}
@@ -980,23 +990,47 @@ def _workspace_dependencies(
             member for member in dict.fromkeys(reader.expand(home, shape.get("members", [])))
             if member not in excluded
         ]
+        listed = set(members)
         if len(members) > _WORKSPACE_MEMBERS:
+            for member in members[_WORKSPACE_MEMBERS:]:
+                if name := _project_name(member.name):
+                    late.setdefault(name, []).append(member)
             members, reader.cut = members[:_WORKSPACE_MEMBERS], True
         # The project must be the workspace's root or one of its members: uv runs any other alone.
-        if project[0] == home or project[0] in members:
+        if project[0] == home or project[0] in listed:
             tables[home] = top
             shared = _sources(top)
             for member in (home, *members):
                 if member not in tables and (table := reader.table(member)) is not None:
                     tables[member] = table
-                name = _project_name((tables.get(member, {}).get("project") or {}).get("name"))
-                if name:
+                if name := _member_name(tables.get(member, {})):
                     by_name.setdefault(name, member)
 
     # Each place's sources, worked out once, each with the folder that declares it: a requirement
     # list and a sources table of thousands each would otherwise cost their product.
     merged: dict[Path, dict[str, tuple[Path, list[dict]]]] = {}
     members_by_place = set(by_name.values())
+
+    late_read = [0]
+
+    def member_named(name: str) -> Path | None:
+        """The member called ``name``: one already read, or one past the cut whose folder has
+        that name, read until one is found. A member whose folder is named otherwise stays
+        unread, as the cut says, and so does any past ``_WORKSPACE_DEPENDENCIES`` such reads."""
+        if name in by_name:
+            return by_name[name]
+        for member in late.pop(name, []):
+            if late_read[0] == _WORKSPACE_DEPENDENCIES:
+                reader.cut = True
+                break
+            late_read[0] += 1
+            if member not in tables and (table := reader.table(member)) is not None:
+                tables[member] = table
+            if _member_name(tables.get(member, {})) == name:
+                by_name[name] = member
+                members_by_place.add(member)
+                break
+        return by_name.get(name)
 
     def installed(place: Path, table: dict, name: str) -> Path | None:
         """The folder of the local package ``name``, as ``place``'s project gets it, or None."""
@@ -1012,7 +1046,7 @@ def _workspace_dependencies(
         declared, items = sources.get(name, (place, []))
         for source in items:
             if source.get("workspace") is True:
-                return by_name.get(name)
+                return member_named(name)
             if isinstance(source.get("path"), str):
                 target = declared / source["path"]
                 found = _real_folder(target, root, known, left)
@@ -1216,6 +1250,10 @@ def _followed(
     return real
 
 
+# The folder links in the agent's folder resolved to see where they lead, at most.
+_FOLDER_LINKS_RESOLVED = 32
+
+
 def _code_in(
     folder: Path, root: Path | None = None, unread: list[bool] | None = None
 ) -> Iterator[Path]:
@@ -1224,15 +1262,25 @@ def _code_in(
     Those folders aren't entered, and each file costs its name: building a parent for each part,
     as 3.12 does to make a path relative, cost a crafted folder of 31,000 nested packages 2.8 s.
     A folder link isn't entered either; given ``root`` and ``unread``, one that leads inside
-    ``root`` sets ``unread``, since code the agent runs may be there.
+    ``root`` sets ``unread``, since code the agent runs may be there, unless it leads back into
+    ``folder`` where this walk reads its target by its own path. Each link resolved costs its
+    chain uncharged, so past ``_FOLDER_LINKS_RESOLVED`` of them ``unread`` is set without looking.
     """
     suffixes = {".py", *_SCRIPT_SUFFIXES}
+    resolved = 0
     for directory, subdirectories, files in os.walk(folder):
         subdirectories[:] = [name for name in subdirectories if name not in _IGNORED_PARTS]
         if unread is not None and root is not None and not unread[0]:
             for name in subdirectories:
                 place = os.path.join(directory, name)
-                if os.path.islink(place) and is_within(Path(os.path.realpath(place)), root):
+                if not os.path.islink(place):
+                    continue
+                resolved += 1
+                if resolved > _FOLDER_LINKS_RESOLVED:
+                    unread[0] = True
+                    break
+                real = Path(os.path.realpath(place))
+                if is_within(real, root) and not _read_in_place(real, folder):
                     unread[0] = True
                     break
         for name in files:
@@ -1240,10 +1288,20 @@ def _code_in(
                 yield Path(directory, name)
 
 
+def _read_in_place(real: Path, folder: Path) -> bool:
+    """Whether ``_code_in`` reads ``real`` by its own path: inside ``folder``, with no part
+    below it that the walk skips. Parts are compared case-folded: on a case-insensitive disk a
+    link can spell a skipped folder in other letters."""
+    return is_within(real, folder) and not any(
+        part.casefold() in _IGNORED_PARTS for part in real.parts[len(folder.parts) :]
+    )
+
+
 def _plain_file(path: Path, unread: list[bool] | None = None) -> bool:
     """A regular file small enough to read: a committed link can point at anything, so it isn't
     followed. Given ``unread``, its one item is set when a code file is refused for its size or
-    for being a link, since Python and Node run what one holds or points at."""
+    for being a link, since Python and Node run what one holds or points at. A dangling link is
+    marked too: telling it apart would follow its chain uncharged."""
     try:
         details = path.lstat()
     except (OSError, ValueError):
@@ -1362,7 +1420,9 @@ def imported_by_agent(
     ``_DEEPEST_FOLLOWED`` folders below the repository is followed. Given ``stopped``, its one
     item says whether the walk left code it reached unfollowed: a limit stopped it with files or
     names left, a name was dropped for its length or depth, or a code file was too big to read,
-    a link, or not parsed in the reading Python runs.
+    or a link. A reached ``.py`` holding ``import`` that the parser doesn't read in the reading
+    Python runs counts too, whatever the reason: a syntax error, newer syntax, or a template, since
+    its imports can't be known.
     """
     root = Path(root).resolve()
     try:

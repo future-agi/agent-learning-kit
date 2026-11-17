@@ -345,7 +345,7 @@ def _first_lines(raw: bytes) -> bytes:
 _COOKIE_SPACE = re.compile(rb"[ \t]*")
 _COOKIE_NAME = re.compile(rb"[-\w.]+", re.ASCII)
 # The places on a line that look like a cookie's start but aren't one, at most, before the cookie:
-# each is tried in turn, and 3,000 files of 16,000 held the save 2.4 s (round 4 reviewer A). An
+# each is tried in turn, and 3,000 files of 16,000 held the save 2.4 s. An
 # honest file has none. What follows a cookie isn't counted: Python reads the file in its codec.
 _COOKIE_WORDS = 64
 
@@ -354,7 +354,7 @@ def _cookie_part(line: bytes) -> bytes | None:
     """``line`` as short as says the same to detect_encoding: a comment line becomes "#" and its
     cookie, any other line "x", a blank line nothing; None past ``_COOKIE_WORDS`` failed places.
     detect_encoding's own pattern, ``#.*?coding``, would try each place up to the cookie on the
-    whole line, 0.75 ms on a 128 KB line, on every file (round 3 reviewer A)."""
+    whole line, 0.75 ms on a 128 KB line, on every file."""
     mark = line.find(b"#")
     if mark == -1:
         return b"x" if line.strip(b" \t\f") else b""

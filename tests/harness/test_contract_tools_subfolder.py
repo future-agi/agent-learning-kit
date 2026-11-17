@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import sys
 from pathlib import Path
@@ -551,12 +552,30 @@ def test_loading_refuses_flow_nesting_past_16(repo):
 
 
 @pytest.mark.parametrize("name", ["docker-compose.yml", "alk.yaml"])
-def test_deep_flow_nesting_does_not_hold_up_the_save(tmp_path, repo, name):
-    import time
+def test_deep_flow_nesting_does_not_hold_up_the_save(tmp_path, repo, name, monkeypatch):
+    from fi.alk.harness import runtime_selection
 
-    # About 4 s to read before the limit.
+    # About 4 s to read before the limit. The bound is shown by the loader's work, not the runner's
+    # clock: the scanner stops at the sixteenth open group, a handful of tokens in, however long
+    # the file is. Without the limit, a sixth of this file takes about 19,000 token fetches.
     (repo / "agents" / "a" / name).write_text(_deep_groups(400, 120_000))
-    started = time.monotonic()
+    loader = runtime_selection._BoundedLoader
+    fetch, opening = loader.fetch_more_tokens, loader.fetch_flow_collection_start
+    fetched, refused = [0], []
+
+    def counted(self):
+        fetched[0] += 1
+        return fetch(self)
+
+    def opened(self, token_class):
+        try:
+            return opening(self, token_class)
+        except runtime_selection.YamlTooLarge:
+            refused.append(self.flow_level)
+            raise
+
+    monkeypatch.setattr(loader, "fetch_more_tokens", counted)
+    monkeypatch.setattr(loader, "fetch_flow_collection_start", opened)
 
     result = accept_contract(
         payload(runtime={"language": "python"}),
@@ -565,8 +584,9 @@ def test_deep_flow_nesting_does_not_hold_up_the_save(tmp_path, repo, name):
         subfolder="agents/a",
     )
 
-    assert time.monotonic() - started < 1
     assert not result.get("is_error"), result
+    assert refused == [16]
+    assert fetched[0] < 100
 
 
 def test_loading_refuses_a_long_tag_prefix():
@@ -611,7 +631,14 @@ def test_the_check_runs_off_the_loop_and_a_refusal_meanwhile_wins(tmp_path, repo
         await beating
         return result, worst[0]
 
-    result, worst = asyncio.run(save(slow))
+    # The heap the tests before this one built is frozen, so a full collection of it can't land
+    # inside the save. The save's own collections still count.
+    gc.collect()
+    gc.freeze()
+    try:
+        result, worst = asyncio.run(save(slow))
+    finally:
+        gc.unfreeze()
     assert (destination / "contract.json").exists(), result
     assert worst < 0.25
 
@@ -1048,7 +1075,14 @@ def test_a_crafted_python_file_does_not_hold_up_the_conversation(tmp_path, repo)
         await beating
         return result, worst[0]
 
-    result, worst = asyncio.run(save())
+    # The heap the tests before this one built is frozen, so a full collection of it can't land
+    # inside the save (one took 0.3 s inside a parse on CI). The save's own collections still count.
+    gc.collect()
+    gc.freeze()
+    try:
+        result, worst = asyncio.run(save())
+    finally:
+        gc.unfreeze()
 
     assert not result.get("is_error"), result
     assert _saved(destination)["instrumentation"] == "traceai"
@@ -1926,8 +1960,8 @@ def test_the_folders_instrumentation_counts_the_shared_code_it_imports(tmp_path,
 
 @pytest.mark.parametrize("package", ["testing_utils", "tests_shared", "e2e"])
 def test_the_folders_instrumentation_counts_a_test_named_package_it_imports(tmp_path, repo, package):
-    # The walk follows it and the credential scan reads it, so instrumentation does too (Dileep's
-    # third review): the root build says traceai.
+    # The walk follows it and the credential scan reads it, so instrumentation does too: the root
+    # build says traceai.
     (repo / "agents" / "a" / "agent.py").write_text(f"from {package} import tracing\n")
     (repo / package).mkdir()
     (repo / package / "__init__.py").write_text("")
@@ -1971,7 +2005,7 @@ def test_the_folders_instrumentation_counts_another_workspace_members_code(tmp_p
 
 def test_the_save_follows_a_committed_folder_link_to_the_shared_code(tmp_path, repo):
     # common -> libs/common: bundling follows it, so the save does too, and instrumentation and the
-    # browser check read what's behind it (Dileep's third review).
+    # browser check read what's behind it.
     (repo / "agents" / "a" / "agent.py").write_text("from common import tracing, browse\n")
     shared = repo / "libs" / "common"
     shared.mkdir(parents=True)
