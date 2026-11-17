@@ -21,13 +21,14 @@ import pytest
 from claude_agent_sdk import ResultMessage
 
 from fi.alk.harness import spend
-from fi.alk.harness.backends import ConversationSession, SessionSpec
+from fi.alk.harness.backends import ConversationSession, SessionSpec, StageDone
 from fi.alk.harness.backends import vertex_gemini
 from fi.alk.harness.backends.claude import ClaudeBackend, ClaudeSession
 from fi.alk.harness.backends.vertex_gemini import priced
 from fi.alk.harness.session import Stage, Turn
 
 M = "gemini-3.7-flash"
+W = "gemini-3.6-flash"
 
 
 @pytest.fixture(autouse=True)
@@ -588,13 +589,10 @@ def test_the_cli_customer_lines_bill_their_true_tokens(cli):
 # -- #225's tripwire ------------------------------------------------------------------------------
 
 
-def test_a_claude_reading_adds_per_turn_figures_as_they_come(tmp_path, monkeypatch):
-    """Skipped until #225's reading lands. It subtracts Claude's running totals itself, which on
-    per-turn figures would record the first turn and nothing after it."""
-    agent_reading = pytest.importorskip("fi.alk.harness.agent_reading")
-
-    from fi.alk.harness import reading_entry, session
-    from fi.alk.harness.backends import StageDone
+def _read_with(tmp_path, monkeypatch, live):
+    """Run the build's reading over a Claude backend whose session is `live`: the opening and the
+    reminder to submit, two turns. Returns the cost record the reading writes."""
+    from fi.alk.harness import agent_reading, reading_entry, session
 
     class _LoudExit:
         """A reading's hard limit ending this process is a failure, not a silent exit."""
@@ -607,31 +605,12 @@ def test_a_claude_reading_adds_per_turn_figures_as_they_come(tmp_path, monkeypat
             os.write(2, b"a reading's hard limit ended the test process\n")
             os._exit(97)
 
-    class _Live:
-        async def start(self):
-            pass
-
-        async def stop(self):
-            pass
-
-        async def send(self, message):
-            pass
-
-        async def interrupt(self):
-            return True
-
-        async def replies(self):
-            # What this backend now reports: each turn's own cost, not the running total.
-            yield StageDone(
-                outcome="success", turns=1, cost_usd=0.07875, tokens_in=100_000
-            )
-
     class _Claude:
         name = "claude"
         default_model = vertex_gemini.DEFAULT_MODEL
 
         def create(self, spec):
-            return _Live()
+            return live
 
         def can_drive(self, model):
             return True
@@ -665,7 +644,6 @@ def test_a_claude_reading_adds_per_turn_figures_as_they_come(tmp_path, monkeypat
     )
     output = tmp_path / "reading"
 
-    # The opening and the reminder to submit: two turns, each with its own figures.
     reading_entry.run_reading_mode(
         agent_reading._read_agent(interrupt_wait=1.0),
         job_path=job,
@@ -673,8 +651,89 @@ def test_a_claude_reading_adds_per_turn_figures_as_they_come(tmp_path, monkeypat
         output=output,
     )
 
-    cost = json.loads((output / "cost.json").read_text(encoding="utf-8"))
+    return json.loads((output / "cost.json").read_text(encoding="utf-8"))
+
+
+class _PerTurn:
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    async def send(self, message):
+        pass
+
+    async def interrupt(self):
+        return True
+
+    async def replies(self):
+        # What this backend now reports: each turn's own cost, not the running total.
+        yield StageDone(outcome="success", turns=1, cost_usd=0.07875, tokens_in=100_000)
+
+
+def test_a_claude_reading_adds_per_turn_figures_as_they_come(tmp_path, monkeypatch):
+    """The Claude backend reports each turn's own figures, so the reading adds them once and never
+    takes a difference of its own: two equal turns record twice one turn, not one."""
+    cost = _read_with(tmp_path, monkeypatch, _PerTurn())
+
     assert cost["total_usd"] == pytest.approx(0.1575)
+
+
+class _CliTotals:
+    """What the Claude CLI sends over one connection: each result carries the running totals, which
+    the real `ClaudeSession` turns into each turn's own figures."""
+
+    def __init__(self, turns):
+        self._real = _session()
+        self._results = []
+        running = [0] * 5
+        for turn in turns:
+            running = [total + own for total, own in zip(running, turn)]
+            fresh, out, cached, worker_fresh, worker_out = running
+            usage = {M: _usage(fresh, out, cached)}
+            if worker_fresh:
+                usage[W] = _usage(worker_fresh, worker_out)
+            self._results.append(_result(usage, usage=_usage(*turn[:3])))
+        self._next = 0
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    async def send(self, message):
+        pass
+
+    async def interrupt(self):
+        return True
+
+    async def replies(self):
+        message = self._results[self._next]
+        self._next += 1
+        for done in self._real._translate(message):
+            yield done
+
+
+def test_a_claude_reading_records_each_turn_the_cli_reports_in_running_totals(
+    tmp_path, monkeypatch
+):
+    """The real backend and the reading together, with cache reads and a worker model: the cost
+    file holds each turn's own tokens at the table's price, however the CLI accumulates them."""
+    # (main fresh, main out, main cached, worker fresh, worker out) per turn.
+    turns = [(60_000, 1_000, 40_000, 30_000, 300), (20_000, 500, 50_000, 0, 0)]
+
+    cost = _read_with(tmp_path, monkeypatch, _CliTotals(turns))
+
+    expected = sum(
+        priced(M, fresh + cached, out, cached) + priced(M, worker_fresh, worker_out)
+        for fresh, out, cached, worker_fresh, worker_out in turns
+    )
+    assert cost["total_usd"] == pytest.approx(round(expected, 6))
+    assert cost["stages"][0]["tokens_in"] == sum(
+        fresh + cached + worker_fresh for fresh, _, cached, worker_fresh, _ in turns
+    )
 
 
 def test_ci_runs_these_tests():
@@ -699,9 +758,8 @@ def test_ci_reruns_these_tests_on_the_locked_sdk():
     path = (
         Path(__file__).resolve().parents[2] / ".github" / "workflows" / "sdk-smoke.yml"
     )
-    steps = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]["clean-install"][
-        "steps"
-    ]
+    job = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]["clean-install"]
+    steps = job["steps"]
     main = next(
         index
         for index, step in enumerate(steps)
@@ -709,12 +767,16 @@ def test_ci_reruns_these_tests_on_the_locked_sdk():
         and "tests/harness/test_spend.py" in step["run"]
     )
     reruns = [
-        step["run"]
+        step
         for step in steps[main + 1 :]
         if "uv.lock" in step.get("run", "") and "claude-agent-sdk==" in step["run"]
     ]
     assert len(reruns) == 1
-    run = reruns[0]
+    # A failed install or test must fail the job: nothing makes the step non-blocking, conditional
+    # or run without bash's -e, which would let a failed install fall through to the newest SDK.
+    assert not {"continue-on-error", "if", "shell"} & set(reruns[0])
+    assert not {"continue-on-error", "if"} & set(job)
+    run = reruns[0]["run"]
     read = run.index("uv.lock")
     install = run.index("pip install")
     assert run.index("claude-agent-sdk==") > install

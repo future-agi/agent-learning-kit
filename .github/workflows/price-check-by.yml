@@ -1,6 +1,5 @@
 name: Price check-by
 
-# Schedules run on the default branch only, so this checks main's table.
 permissions:
   contents: read
 
@@ -32,7 +31,6 @@ jobs:
           python -m pytest -q -rs "tests/harness/test_spend.py::test_the_price_table_is_re_checked_before_its_check_by_date" | tee pytest.out
           grep -q "1 passed" pytest.out
 
-  # Separate, so the issues token never reaches the job that installs packages.
   notify:
     needs: check-by
     if: failure() && github.event_name == 'schedule'

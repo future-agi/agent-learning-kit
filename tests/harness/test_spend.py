@@ -298,10 +298,11 @@ def test_the_weekly_workflow_runs_the_check_by_test():
     assert notify["needs"] == "check-by"
     assert notify["if"] == "failure() && github.event_name == 'schedule'"
     assert notify["permissions"] == {"issues": "write"}
+    assert all(set(step) <= {"name", "env", "run"} for step in notify["steps"])
     assert not any(
-        step.get("uses", "").startswith("actions/setup-python")
-        or any(word in step.get("run", "") for word in ("pip install", "uv ", "npm "))
+        word in step.get("run", "")
         for step in notify["steps"]
+        for word in ("pip", "uv ", "npm ", "curl")
     )
 
     marks = test_the_price_table_is_re_checked_before_its_check_by_date.pytestmark
@@ -482,7 +483,7 @@ def test_the_price_table_agrees_with_the_platform_model_table():
     """Prices are copied from the platform's litellm table, so drift is a silent mis-bill.
 
     From 2027-01-01 this is red for the three Flash models until the gateway's table carries
-    their 2027 rows too (TH-9508): both tables must change together."""
+    their 2027 rows too: both tables must change together."""
     import json
     from pathlib import Path
 
@@ -504,7 +505,7 @@ def test_the_price_table_agrees_with_the_platform_model_table():
         pytest.skip("platform checkout not beside this repo")
 
     models = json.loads(table.read_text(encoding="utf-8"))
-    # Today's rates only: the gateway's table holds no schedule (TH-9508 adds the 2027 change).
+    # Today's rates only: the gateway's table holds no schedule yet.
     for name in PRICES_PER_MILLION:
         rates = current_rates(name)
         assert rates, f"{name} has no price for today"

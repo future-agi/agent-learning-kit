@@ -1316,12 +1316,22 @@ def _gemini_calls(name: str, args: dict, n: int):
 
 
 def _gemini_priced(calls: int) -> float:
-    # The fake's 1,000 tokens in and 10 out per call, at the table's own rates, kept to the
-    # six places the spend record keeps.
-    from fi.alk.harness.backends.vertex_gemini import current_rates
+    # The fake's 1,000 tokens in and 10 out per call, at the table's own price on the day, kept to
+    # the six places the spend record keeps. `priced` still answers past the table's check-by date.
+    from fi.alk.harness.backends.vertex_gemini import priced
 
-    rate_in, rate_out = current_rates(_PRICED_GEMINI)
-    return round(calls * (1000 * rate_in + 10 * rate_out) / 1_000_000, 6)
+    return round(priced(_PRICED_GEMINI, calls * 1000, calls * 10), 6)
+
+
+def test_the_gemini_price_helper_works_past_the_check_by_date(monkeypatch):
+    from datetime import date
+
+    from fi.alk.harness.backends import vertex_gemini
+
+    monkeypatch.setattr(vertex_gemini, "_today", lambda: date(2027, 5, 1))
+
+    # Past CHECK_BY a model keeps its latest row's price (1.50 in, 7.50 out per million).
+    assert _gemini_priced(3) == 0.004725
 
 
 def test_a_gemini_call_limit_is_incomplete_with_no_reminder(tmp_path, model, monkeypatch):
