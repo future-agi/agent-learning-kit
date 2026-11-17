@@ -420,3 +420,25 @@ def test_the_other_12_nov_readings_take_no_graph_route(tmp_path):
     manifest, output = bundled(tmp_path, source, "examples/harness/google_adk_support", contract=body)
     assert "ALK_LANGGRAPH_ENTRYPOINT" not in _agent_of(manifest).environment
     assert _sealed(output)["runtime"]["interface"]["path"] == "/run_sse"
+
+
+def test_h3_the_name_kept_is_the_one_the_tracer_needs(tmp_path):
+    """Round 1, H3, through the real tracer: a callback process with no subfolder starts at the
+    repository root, where the frame carries the root-relative name. That name records the call;
+    the name a rewrite would have written (`agent`) records nothing."""
+    folder = tmp_path / "examples" / "harness" / "support"
+    folder.mkdir(parents=True)
+    (folder / "agent.py").write_text(DEFS)
+    code = "from examples.harness.support import agent\nagent.look_up_order('x')\n"
+    rooted = "examples.harness.support.agent"
+    kept, records = _traced_run(
+        tmp_path, [{"name": "look_up_order", "module": rooted, "callable": "look_up_order"}], code
+    )
+    assert kept.returncode == 0, kept.stderr
+    assert [r["name"] for r in records] == ["look_up_order"]
+    (tmp_path / "calls.jsonl").unlink()
+    rewritten, records = _traced_run(
+        tmp_path, [{"name": "look_up_order", "module": "agent", "callable": "look_up_order"}], code
+    )
+    assert rewritten.returncode == 0, rewritten.stderr
+    assert records == []
