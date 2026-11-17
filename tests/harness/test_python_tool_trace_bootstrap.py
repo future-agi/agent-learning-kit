@@ -451,3 +451,36 @@ def test_the_semantic_reader_grades_a_raised_tool_as_a_refused_call(tmp_path: Pa
     )
     (call,) = _semantic_calls(tmp_path / "calls.jsonl")
     assert (call.ok, call.refused, call.error) == (False, True, RAISED)
+
+
+@pytest.mark.parametrize(
+    "first_call",
+    [
+        pytest.param("agent.t(agent.Bad())", id="unprintable-argument"),
+        pytest.param("agent.t(2000)", id="deeply-nested-return"),
+    ],
+)
+def test_a_value_that_cannot_be_printed_never_reaches_the_agents_call(
+    tmp_path: Path, first_call: str
+) -> None:
+    """Observation never changes a tool's outcome, and tracing stays on after a failed record."""
+    source = (
+        "class Bad:\n"
+        "    def __str__(self):\n        raise RuntimeError('lazy load')\n"
+        "    __repr__ = __str__\n"
+        "def t(x):\n"
+        "    if x == 2000:\n"
+        "        deep = {}\n"
+        "        for _ in range(x):\n            deep = {'k': deep}\n"
+        "        return deep\n"
+        "    return 'ok'\n"
+    )
+    records = _run_agent(
+        tmp_path,
+        source,
+        ["t"],
+        f"import agent\n{first_call}\nassert agent.t('second') == 'ok'\n",
+    )
+    assert [r["arguments"] for r in records if r["arguments"] == {"x": "second"}] == [
+        {"x": "second"}
+    ]

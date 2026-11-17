@@ -54,13 +54,21 @@ _MAX_RECORD_CHARS = 10000
 _MAX_VALUE_CHARS = 2000
 
 
+def _text(value: Any) -> str:
+    """A value's text for a trace line; one that cannot be printed gets a placeholder."""
+    try:
+        return str(value)
+    except Exception:  # noqa: BLE001 - observation must never reach the agent's call
+        return f"<unprintable {type(value).__name__}>"
+
+
 def _cut_text(value: Any) -> Any:
     """The value unchanged when its JSON fits a value's share, otherwise its text cut, with a
     note giving the full length so that a reader knows the cut happened."""
     text = (
         value
         if isinstance(value, str)
-        else json.dumps(value, default=str, sort_keys=True)
+        else json.dumps(value, default=_text, sort_keys=True)
     )
     if len(text) <= _MAX_VALUE_CHARS:
         return value
@@ -107,7 +115,7 @@ def _record(event: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as trace:
             for record in records:
-                trace.write(json.dumps(record, default=str, sort_keys=True) + "\n")
+                trace.write(json.dumps(record, default=_text, sort_keys=True) + "\n")
     except OSError:
         return
 
@@ -398,7 +406,7 @@ def _install_declared_python_tools() -> None:
                 "is_error": raised,
                 "at": started,
             }
-            line = json.dumps(record, default=str, sort_keys=True)
+            line = json.dumps(record, default=_text, sort_keys=True)
             if len(line) > _MAX_RECORD_CHARS:
                 # Cut the values, never the line: a cut line is not JSON, so the call would read
                 # as no evidence at all. Only an oversize value is cut, so the rest keep their
@@ -406,17 +414,17 @@ def _install_declared_python_tools() -> None:
                 record["arguments"] = _bounded(arguments)
                 record["output"] = _bounded(value)
                 record["truncated"] = True
-                line = json.dumps(record, default=str, sort_keys=True)
+                line = json.dumps(record, default=_text, sort_keys=True)
             if len(line) > _MAX_RECORD_CHARS:
                 # Many values that each fit: bound the record at the cost of their types.
                 record["arguments"] = {
                     name: _cut_text(item) for name, item in arguments.items()
                 }
                 record["output"] = _cut_text(value)
-                line = json.dumps(record, default=str, sort_keys=True)
+                line = json.dumps(record, default=_text, sort_keys=True)
             with path.open("a", encoding="utf-8") as trace:
                 trace.write(line + "\n")
-        except (OSError, KeyError, TypeError, ValueError):
+        except Exception:  # noqa: BLE001 - observation must never reach the agent's call
             pass
         finally:
             active.busy = False
