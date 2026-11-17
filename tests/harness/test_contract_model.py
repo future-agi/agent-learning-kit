@@ -2134,9 +2134,6 @@ def test_a_value_outside_a_block_comment_is_the_model(root, file, written, line)
             id="a-file-of-closers-and-openers",
         ),
         pytest.param(
-            "/* */ " * (MIB // 24 - 20) + '"gpt-4o"\n', id="a-line-of-closed-blocks"
-        ),
-        pytest.param(
             "<!--\n" * (MIB // 20 - 20) + 'const model = "gpt-4o";\n',
             id="a-file-of-markup-openers",
         ),
@@ -2149,6 +2146,25 @@ def test_a_crafted_file_of_block_comments_does_not_hold_up_the_check(root, writt
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.js", "line": line})
 
     assert took < BLOCK_SCAN_SECONDS
+
+
+def test_a_line_of_closed_blocks_takes_time_in_step_with_its_length(root):
+    # At a size a slow runner can afford, a bound on the time alone can't tell a scan that copies
+    # the rest of the line for each closer from one that doesn't (0.10 s against 0.05 s): how the
+    # time grows does. Four times the line takes about four times as long, a quadratic scan about
+    # sixteen. The runs alternate, and the fastest of each is kept, so load reaches both alike.
+    def took(blocks: int) -> float:
+        (root / "crafted.js").write_text("/* */ " * blocks + '"gpt-4o"\n', encoding="utf-8")
+        return checked(root, {"name": "gpt-4o", "path": "crafted.js", "line": 1})[2]
+
+    short: list[float] = []
+    long: list[float] = []
+    for _ in range(3):
+        short.append(took(MIB // 24 - 20))
+        long.append(took(MIB // 6 - 20))
+
+    assert min(long) < BLOCK_SCAN_SECONDS
+    assert min(long) < 8 * min(short)
 
 
 def test_lines_inside_a_block_comment_without_its_closer_are_not_scanned(

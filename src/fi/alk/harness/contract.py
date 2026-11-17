@@ -862,6 +862,17 @@ class Runtime(BaseModel):
     # the dump when empty.
     source_subfolder: SkipJsonSchema[str] = ""
 
+    @field_validator("source_subfolder")
+    @classmethod
+    def _folder_inside_the_source(cls, folder: str) -> str:
+        # Checked at the save, and again when a bundle's contract is loaded: the run puts this
+        # folder on the import path, so it never leads out of the source root.
+        if folder and (
+            folder.startswith("/") or any(part in ("", ".", "..") for part in folder.split("/"))
+        ):
+            raise ValueError("runtime_source_subfolder_invalid")
+        return folder
+
     @model_serializer(mode="wrap")
     def _omit_empty_subfolder(self, handler: Any) -> dict[str, Any]:
         data = handler(self)

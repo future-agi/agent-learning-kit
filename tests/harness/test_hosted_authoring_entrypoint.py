@@ -422,7 +422,7 @@ def test_subfolder_on_a_non_github_source_writes_failure_and_exits_refused(tmp_p
     assert failure == {
         "domain": "agent",
         "stage": "acquiring_source",
-        "code": "subfolder_not_found",
+        "code": "subfolder_requires_github_source",
         "message": failure["message"],
         "retryable": False,
         "details": {"subfolder": "agents/a"},
@@ -449,3 +449,23 @@ def test_other_invalid_job_still_raises_in_authoring(tmp_path, monkeypatch):
             ]
         )
     assert not (tmp_path / "authoring" / "failure.json").exists()
+
+
+def test_a_job_malformed_otherwise_too_still_raises_in_authoring(tmp_path, monkeypatch):
+    # The folder on a non-GitHub source is reported only when it's the job's one fault.
+    import pydantic
+
+    authoring, calls = _watch_authoring(monkeypatch)
+    source = tmp_path / "source"
+    source.mkdir()
+    job = _write_non_github_folder_job(tmp_path, subfolder="agents/a")
+    body = json.loads(job.read_text())
+    body.pop("job_id")
+    job.write_text(json.dumps(body), encoding="utf-8")
+
+    with pytest.raises(pydantic.ValidationError):
+        authoring.main(
+            [str(job), "--source", str(source), "--output", str(tmp_path / "authoring")]
+        )
+    assert not (tmp_path / "authoring" / "failure.json").exists()
+    assert calls == []

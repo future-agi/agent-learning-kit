@@ -6512,6 +6512,72 @@ def test_a_package_entry_longer_than_the_longest_name_says_stopped(tmp_path):
     assert (repo / "packages" / "shared" / "index.js") in found
 
 
+def _counted_lookups(monkeypatch) -> list[Path]:
+    """Every file the walk looks up on disk, in order."""
+    from fi.alk.harness import credentials
+
+    looked: list[Path] = []
+    real = credentials._file_inside
+
+    def counting(candidate, *args, **kwargs):
+        looked.append(candidate)
+        return real(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(credentials, "_file_inside", counting)
+    return looked
+
+
+def _bundle_walk(repo: Path, subfolder: str = "agents/a"):
+    """The walk with bundling's limits: the files reached, and stopped."""
+    from fi.alk.harness.credentials import imported_by_agent
+
+    stopped: list[bool] = []
+    found = imported_by_agent(repo, subfolder, stopped=stopped)
+    return found, stopped[0]
+
+
+@pytest.mark.parametrize("walk", [_save_walk, _bundle_walk], ids=["save", "bundle"])
+def test_a_package_entry_deeper_than_the_walk_follows_says_stopped_and_is_not_looked_up(
+    tmp_path, monkeypatch, walk
+):
+    from fi.alk.harness import credentials
+
+    # Short enough to pass the name's length, but past the depth any lookup follows.
+    deep_entry = "a/" * (credentials._DEEPEST_FOLLOWED + 6) + "x.js"
+    repo = _package_repo(tmp_path, json.dumps({"main": deep_entry, "exports": deep_entry}).encode())
+    looked = _counted_lookups(monkeypatch)
+
+    found, stopped = walk(repo)
+
+    assert stopped
+    assert (repo / "packages" / "shared" / "index.js") in found
+    # Its candidates were never built, so none was looked up and refused for its depth.
+    assert not [path for path in looked if "a/a/a/a" in str(path)]
+
+
+@pytest.mark.parametrize("walk", [_save_walk, _bundle_walk], ids=["save", "bundle"])
+def test_a_package_entry_is_resolved_once_for_all_the_paths_that_reach_it(
+    tmp_path, monkeypatch, walk
+):
+    def entry_lookups(links: int) -> int:
+        names = [f"l{n}" for n in range(links)]
+        repo = _package_repo(
+            tmp_path / str(links),
+            b'{"main": "lib/missing.js", "exports": "./lib/gone.js"}',
+            {"agents/a/index.js": "".join(f'require("../../{name}");\n' for name in names)},
+        )
+        for name in names:
+            os.symlink("packages/shared", repo / name)
+        looked = _counted_lookups(monkeypatch)
+        found, _ = walk(repo)
+        assert (repo / "packages" / "shared" / "index.js") in found
+        return len([path for path in looked if path.name.startswith(("missing", "gone"))])
+
+    # A crafted repository reaches one package.json by thousands of paths: what its entries
+    # resolve to is looked up once, not again for each path.
+    assert entry_lookups(40) == entry_lookups(1) > 0
+
+
 @pytest.mark.parametrize("where", ["own-link", "imported-link"])
 def test_a_file_link_to_code_says_the_walk_stopped(tmp_path, where):
     repo = _tree(

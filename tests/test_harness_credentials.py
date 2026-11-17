@@ -731,7 +731,7 @@ def test_a_script_import_reaches_an_index_and_a_compiled_name(tmp_path):
         {"exports": {".": "./lib/llm.js"}},
         # require() of a folder reads main alone: it comes first, though exports is set.
         {"exports": "./lib/other.js", "main": "lib/llm.js"},
-        # Without a main that resolves, exports is tried.
+        # Without a main or an index that resolves, exports is tried.
         {"exports": "./lib/llm.js", "main": "missing.js"},
         {"exports": "./lib/llm.js", "main": 3},
     ],
@@ -801,6 +801,27 @@ def test_a_package_entry_that_does_not_resolve_falls_back_to_the_index(tmp_path)
     )
 
     assert _required(discover_credentials(root, agent_subfolder="agents/a"))["INDEX_API_KEY"] is True
+
+
+@pytest.mark.parametrize("sub", [None, "agents/a"], ids=["whole-repo", "folder"])
+def test_a_package_main_that_does_not_resolve_falls_back_to_the_index_before_exports(tmp_path, sub):
+    # Node's require() of a folder by path loads its index when main is missing, and never reads
+    # exports: the whole-repo build and the folder build agree.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/package.json": json.dumps({"main": "missing.js", "exports": "./lib/llm.js"}),
+            "packages/shared/index.js": "export const key = process.env.INDEX_API_KEY;\n",
+            "packages/shared/lib/llm.js": "export const key = process.env.SHARED_API_KEY;\n",
+            "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder=sub))
+
+    assert required["INDEX_API_KEY"] is True
+    if sub:
+        assert required["SHARED_API_KEY"] is False
 
 
 @pytest.mark.parametrize("make", ["link", "fifo"])

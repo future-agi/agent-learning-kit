@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import pytest
 
@@ -349,6 +350,76 @@ def test_the_platform_guard_names_what_the_platform_refuses() -> None:
     assert platform_failure_problems({**whole, "code": "Bad-Code"})
     assert platform_failure_problems({**whole, "code": "c" * 129})
     assert platform_failure_problems({**whole, "message": "m" * 2001})
+    # DRF trims spaces first, so spaces alone are blank.
+    assert platform_failure_problems({**whole, "message": "   "})
+    assert platform_failure_problems({**whole, "stage": " "})
     assert platform_failure_problems({**whole, "retryable": "no"})
     assert platform_failure_problems({**whole, "details": ["x"]})
     assert platform_failure_problems("failure")
+
+
+def _non_github_folder_job(**extra: Any) -> dict[str, Any]:
+    return {
+        "job_id": "job-1",
+        "run_id": "run-1",
+        "execution": "hosted",
+        "source": {"kind": "archive", "archive_artifact_id": "art-1", "subfolder": "agents/a"},
+        "agent": {"connector": "http"},
+        "scenario_count": 1,
+        "runtime": {"isolation": "dedicated_vm"},
+        **extra,
+    }
+
+
+def _refused(raw: dict[str, Any]):
+    import pydantic
+
+    from fi.alk.harness.job import HarnessJob
+    from fi.alk.harness.source_folder import non_github_folder_failure
+
+    with pytest.raises(pydantic.ValidationError) as caught:
+        HarnessJob.model_validate(raw)
+    return non_github_folder_failure(caught.value, raw)
+
+
+def test_a_folder_on_a_non_github_source_is_the_failure_when_it_is_the_job_s_one_fault() -> None:
+    failure = _refused(_non_github_folder_job())
+
+    assert failure is not None and failure.code == "subfolder_requires_github_source"
+
+
+def test_the_non_github_folder_code_is_read_by_the_platform_with_the_kit_s_message() -> None:
+    # #3661 holds no list of codes: HarnessFailureSerializer takes any code of 1..128 characters,
+    # run_results_v3 keeps one matching [a-z][a-z0-9_]{0,63}, and a page with no text of its own
+    # for the code shows the failure's message (versionLabels.js failureText, the build page's
+    # status.failure.message). So the kit's message reaches the user unchanged.
+    failure = _refused(_non_github_folder_job())
+    assert failure is not None
+    written = failure.model_dump(mode="json")
+
+    assert platform_failure_problems(written) == []
+    assert written["message"].strip() == written["message"]
+    assert written["message"].startswith("A folder can be built only from a GitHub source")
+
+
+def test_a_fault_only_the_job_s_own_checks_find_still_makes_it_a_crash() -> None:
+    # The job's own checks never run while its source is refused, so pydantic reports the
+    # source alone: the job is checked again without the folder before the folder is blamed.
+    assert _refused(_non_github_folder_job(schema_version="99")) is None
+
+
+@pytest.mark.parametrize("folder", ["../x", "agents/../../x", "/etc", "./agents/a", "agents//a", "a/.."])
+def test_a_contract_s_folder_that_leads_out_of_the_source_is_refused_when_loaded(folder: str) -> None:
+    import pydantic
+
+    from fi.alk.harness.contract import Runtime
+
+    with pytest.raises(pydantic.ValidationError, match="runtime_source_subfolder_invalid"):
+        Runtime.model_validate({"language": "python", "source_subfolder": folder})
+
+
+@pytest.mark.parametrize("folder", ["", "agents/a", "apps/my agent", "a.b/c-d_e"])
+def test_a_contract_s_folder_inside_the_source_loads(folder: str) -> None:
+    from fi.alk.harness.contract import Runtime
+
+    assert Runtime.model_validate({"language": "python", "source_subfolder": folder}).source_subfolder == folder

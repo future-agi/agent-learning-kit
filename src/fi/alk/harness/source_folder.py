@@ -14,9 +14,10 @@ from typing import Any
 from pydantic import ValidationError
 
 from .failure_file import write_failure_file
-from .job import FailureDomain, HarnessFailure, HarnessStage
+from .job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage
 
 SUBFOLDER_NOT_FOUND = "subfolder_not_found"
+SUBFOLDER_REQUIRES_GITHUB_SOURCE = "subfolder_requires_github_source"
 
 # A link loop or an over-long name is a fault in the path the customer named, not in our disk.
 _PATH_ERRNOS = {errno.ELOOP, errno.ENAMETOOLONG}
@@ -126,7 +127,7 @@ def subfolder_not_found(
     )
 
 
-_NOT_GITHUB_REASON = "subfolder_requires_github_source"
+_NOT_GITHUB_REASON = SUBFOLDER_REQUIRES_GITHUB_SOURCE
 
 
 def non_github_folder_failure(error: ValidationError, raw_job: Any) -> HarnessFailure | None:
@@ -144,11 +145,25 @@ def non_github_folder_failure(error: ValidationError, raw_job: Any) -> HarnessFa
     ):
         return None
     source = raw_job.get("source") if isinstance(raw_job, dict) else None
-    named = source.get("subfolder") if isinstance(source, dict) else None
-    return subfolder_not_found(
+    if not isinstance(source, dict):
+        return None
+    # The job's own checks never run while its source is refused, so pydantic names the source
+    # alone: the job is checked again without the folder, and a fault found then is a crash too.
+    try:
+        HarnessJob.model_validate(
+            {**raw_job, "source": {k: v for k, v in source.items() if k != "subfolder"}}
+        )
+    except (ValidationError, ValueError):
+        return None
+    named = source.get("subfolder")
+    failure = subfolder_not_found(
         named if isinstance(named, str) else "",
         message="A folder can be built only from a GitHub source; this job names a folder on another kind of source.",
     )
+    # A code of its own: the platform shows its own text for subfolder_not_found ("The folder
+    # named isn't in the repository."), which is wrong here; for a code it has no text for, it
+    # shows this message.
+    return failure.model_copy(update={"code": SUBFOLDER_REQUIRES_GITHUB_SOURCE})
 
 
 def _named(folder: str) -> str:

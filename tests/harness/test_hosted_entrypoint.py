@@ -5324,7 +5324,7 @@ def test_subfolder_on_a_non_github_source_fails_terminal_not_crashed(monkeypatch
     failure = terminal["payload"]["failure"]
     assert failure["domain"] == "agent"
     assert failure["stage"] == "acquiring_source"
-    assert failure["code"] == "subfolder_not_found"
+    assert failure["code"] == "subfolder_requires_github_source"
     assert "GitHub" in failure["message"]
     assert failure["retryable"] is False
     assert failure["details"] == {"subfolder": "agents/a"}
