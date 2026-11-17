@@ -4,6 +4,16 @@ from deepagents import create_deep_agent
 from langchain_openai import ChatOpenAI
 
 MODEL = os.getenv("OPENAI_MODEL", "vertex_ai/gemini-3.7-flash")
+# Blank values count as unset.
+API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip()
+
+# With no base URL ChatOpenAI falls back to api.openai.com and would send the key there.
+if API_KEY and not BASE_URL:
+    raise RuntimeError(
+        "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
+        "endpoint the key belongs to."
+    )
 
 _ORDERS = {
     "A1001": {"item": "trail running shoes", "status": "delivered", "return": None},
@@ -47,8 +57,8 @@ def return_policy() -> str:
 graph = create_deep_agent(
     model=ChatOpenAI(
         model=MODEL,
-        base_url=os.getenv("OPENAI_BASE_URL"),
-        api_key=os.getenv("OPENAI_API_KEY") or "unset",
+        base_url=BASE_URL or None,
+        api_key=API_KEY or "unset",
         use_responses_api=False,
     ),
     tools=[look_up_order, start_return, return_policy],

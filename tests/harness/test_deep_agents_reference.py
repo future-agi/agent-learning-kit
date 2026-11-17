@@ -11,27 +11,29 @@ import ast
 import json
 import os
 import shutil
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
-from test_bundle_author_v2 import (
-    _authoring,
-    _github_job,
-    _write_chat_contract,
+from reference_agents import (
+    DETECTION_CASES,
+    REPO,
+    TOOLS,
+    TRACE_HOOK,
+    assert_bindings_match,
+    assert_detected,
+    assert_pins,
+    build_control_service,
+    fresh_import,
+    run_tracer,
+    write_chat_contract,
+    write_stand_ins,
 )
 
-from fi.alk.harness.bundle_author_v2 import author_bundle_v2
-from fi.alk.harness.framework_detection import detect_framework, folder_findings
-
-REPO = Path(__file__).resolve().parents[2]
 SUBFOLDER = "examples/harness/deep_agents_support"
 EXAMPLE = REPO / SUBFOLDER
-BOOTSTRAP = REPO / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
-
-TOOLS = ("look_up_order", "start_return", "return_policy")
+ENVIRONMENT = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL")
 DEFAULT_MODEL = "vertex_ai/gemini-3.7-flash"
 
 # `Tool.ainvoke` follows langchain-core 1.8.0 (tools/structured.py:174-185, tools/base.py:933,
@@ -116,141 +118,51 @@ STAND_IN_FILES = {
 }
 
 
-def _copy_example(destination: Path) -> Path:
-    shutil.copytree(EXAMPLE, destination, ignore=shutil.ignore_patterns("__pycache__"))
-    return destination
-
-
-def _write_stand_in(root: Path) -> Path:
-    for relative, source in STAND_IN_FILES.items():
-        path = root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source, encoding="utf-8")
-    return root
-
-
 @pytest.fixture
 def example_module(tmp_path, monkeypatch):
     """A fresh import of the example's `agent.py` on the stand-in libraries, no env set."""
-    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"):
-        monkeypatch.delenv(name, raising=False)
-    stand_in = _write_stand_in(tmp_path / "stand-in")
-    run = tmp_path / "run"
-    run.mkdir()
-    shutil.copy2(EXAMPLE / "agent.py", run / "agent.py")
-    saved = dict(sys.modules)
-    monkeypatch.syspath_prepend(str(run))
-    monkeypatch.syspath_prepend(str(stand_in))
-
-    def load():
-        # Cleared on every load, so one test can import twice under different environments.
-        for name in list(sys.modules):
-            if name.split(".")[0] in {"deepagents", "langchain_openai", "agent"}:
-                del sys.modules[name]
-        import agent
-
-        return agent
-
-    yield load
-    for name in list(sys.modules):
-        if name not in saved:
-            del sys.modules[name]
-    sys.modules.update(saved)
+    with fresh_import(
+        tmp_path,
+        monkeypatch,
+        EXAMPLE,
+        stand_in=STAND_IN_FILES,
+        clear_env=ENVIRONMENT,
+        purge=("deepagents", "langchain_openai"),
+    ) as load:
+        yield load
 
 
 # T1: detection ------------------------------------------------------------------------------
 
 
-def test_example_is_found_as_the_run_folder(tmp_path: Path) -> None:
-    run = _copy_example(tmp_path / "run")
-
-    assert detect_framework(run) == {"name": "deepagents", "version": None}
-    assert folder_findings(run).blockers == frozenset()
-
-
-def test_example_is_found_as_a_subfolder_of_a_bigger_tree(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    _copy_example(repo / SUBFOLDER)
-    # A package of the same name deep in the tree must not make the library import look
-    # like the customer's own module.
-    nested = repo / "src/pkg/deepagents"
-    nested.mkdir(parents=True)
-    (nested / "__init__.py").write_text("", encoding="utf-8")
-    (nested / "score.py").write_text("def score():\n    return 1\n", encoding="utf-8")
-    (repo / "main.py").write_text("print('hello')\n", encoding="utf-8")
-
-    found = folder_findings(repo / SUBFOLDER, repo_root=repo)
-
-    assert detect_framework(repo / SUBFOLDER, repo_root=repo) == {
-        "name": "deepagents",
-        "version": None,
-    }
-    assert found.blockers == frozenset()
-
-
-def test_example_in_place_is_not_shadowed_by_the_repository() -> None:
+@pytest.mark.parametrize("where", DETECTION_CASES)
+def test_example_is_detected_as_deep_agents(tmp_path: Path, where: str) -> None:
     # Nothing named `deepagents` or `langgraph` may sit on the example's path or inside it:
     # the folder is first on the path when it runs, so it would replace the library.
-    shadows = {"deepagents", "deepagents.py", "langgraph", "langgraph.py"}
-    assert not shadows & set(EXAMPLE.relative_to(REPO).parts)
-    assert not [
-        path
-        for path in EXAMPLE.rglob("*")
-        if path.name in shadows and "__pycache__" not in path.parts
-    ]
-    assert detect_framework(EXAMPLE, repo_root=REPO) == {
-        "name": "deepagents",
-        "version": None,
-    }
-    assert folder_findings(EXAMPLE, repo_root=REPO).blockers == frozenset()
-
-
-def test_a_module_named_for_the_library_in_the_folder_changes_what_is_found(
-    tmp_path: Path,
-) -> None:
-    # The guard behind the in-place test: such a file really does stop the folder being
-    # found as Deep Agents, so the test above is not vacuous.
-    run = _copy_example(tmp_path / "run")
-    (run / "deepagents.py").write_text("def create_deep_agent():\n    return 1\n", encoding="utf-8")
-
-    assert detect_framework(run)["name"] != "deepagents"
+    assert_detected(
+        EXAMPLE,
+        "deepagents",
+        ("deepagents", "langgraph"),
+        where=where,
+        tmp_path=tmp_path,
+        subfolder=SUBFOLDER,
+    )
 
 
 # T2: the build ------------------------------------------------------------------------------
 
 
-def _build(tmp_path: Path, source: Path):
-    authoring = _authoring(tmp_path)
-    _write_chat_contract(authoring, command=[])
-    contract_path = authoring / "contract.json"
-    contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    contract["tool_entrypoints"] = [
-        {"tool": name, "mode": "import", "module": "agent", "callable": name}
-        for name in TOOLS
-    ]
-    contract_path.write_text(json.dumps(contract), encoding="utf-8")
-    return author_bundle_v2(
-        source=source,
-        job=_github_job(
-            SUBFOLDER,
-            with_secrets=True,
-            secret_aliases=("OPENAI_API_KEY", "OPENAI_BASE_URL"),
-        ),
-        authoring=authoring,
-        output=tmp_path / "bundle",
+def test_build_runs_the_graph_with_the_langgraph_adapter_and_binds_the_tool_tracer(
+    tmp_path: Path, example_module
+) -> None:
+    agent = build_control_service(
+        tmp_path,
+        lambda authoring: write_chat_contract(authoring, command=[]),
+        "agent",
+        subfolder=SUBFOLDER,
+        example=EXAMPLE,
     )
 
-
-def test_build_runs_the_graph_with_the_langgraph_adapter_and_binds_the_tool_tracer(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "source"
-    _copy_example(source / SUBFOLDER)
-    (source / "README.md").write_text("many examples\n", encoding="utf-8")
-
-    bundle = _build(tmp_path, source)
-
-    agent = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
     command = json.dumps(agent.run_command)
     assert "ThreadingHTTPServer" in command
     # The adapter's own loader, and not the callback adapter's.
@@ -261,10 +173,7 @@ def test_build_runs_the_graph_with_the_langgraph_adapter_and_binds_the_tool_trac
     assert "requirements.txt" in json.dumps(agent.build_commands)
     assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     bindings = json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])
-    assert sorted(bindings, key=lambda item: item["name"]) == sorted(
-        ({"name": name, "module": "agent", "callable": name} for name in TOOLS),
-        key=lambda item: item["name"],
-    )
+    assert_bindings_match(bindings, example_module(), "agent")
 
 
 # T3: the tracer and a library-shaped call ---------------------------------------------------
@@ -318,23 +227,23 @@ def test_tools_called_the_way_the_library_calls_them_are_traced(tmp_path: Path) 
     (run / "agent_extra.py").write_text(
         "def look_up_order(order_id):\n    return 'not declared'\n", encoding="utf-8"
     )
-    shutil.copy2(BOOTSTRAP, run / "sitecustomize.py")
-    stand_in = _write_stand_in(tmp_path / "stand-in")
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    shutil.copy2(TRACE_HOOK, hook / "sitecustomize.py")
+    stand_in = write_stand_ins(tmp_path / "stand-in", STAND_IN_FILES)
     trace = tmp_path / "calls.jsonl"
     bindings = [{"name": name, "module": "agent", "callable": name} for name in TOOLS]
 
-    completed = subprocess.run(
+    completed = run_tracer(
         [sys.executable, "-c", DRIVER],
-        check=True,
-        capture_output=True,
-        text=True,
-        cwd=run,
-        env={
-            **os.environ,
+        hook,
+        run,
+        {
             "PYTHONPATH": os.pathsep.join([str(stand_in), str(run)]),
             "HARNESS_TOOL_TRACE": str(trace),
             "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
             "OPENAI_API_KEY": "test-key",
+            "OPENAI_BASE_URL": "http://gateway.test/v1",
         },
     )
 
@@ -382,9 +291,7 @@ def test_graph_is_built_once_with_the_three_tools_in_order(example_module) -> No
     assert [tool.name for tool in agent.graph.tools] == list(TOOLS)
     assert isinstance(call.system_prompt, str) and call.system_prompt.strip()
     assert agent.MODEL == DEFAULT_MODEL
-    # Built at import, the way a graph named in langgraph.json is loaded: reaching the
-    # graph again builds nothing.
-    assert agent.graph is agent.graph
+    # Built at import, the way a graph named in langgraph.json is loaded: once.
     assert len(deepagents.STATE["calls"]) == 1
 
 
@@ -403,33 +310,48 @@ def test_import_without_a_key_succeeds_with_a_placeholder(example_module) -> Non
     assert model.use_responses_api is False
 
 
-def test_an_empty_key_also_gets_the_placeholder(example_module, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "")
-    example_module()
+@pytest.mark.parametrize("key", ["", "   "])
+def test_an_empty_or_blank_key_also_gets_the_placeholder(example_module, key) -> None:
+    example_module(OPENAI_API_KEY=key)
     import langchain_openai
 
     (model,) = langchain_openai.INSTANCES
     assert model.api_key == "unset"
+    assert model.base_url is None
 
 
-def test_importing_twice_under_different_environments(example_module, monkeypatch) -> None:
+@pytest.mark.parametrize("base_url", [None, "", "   "])
+def test_a_key_with_no_base_url_is_refused_at_import(example_module, base_url) -> None:
+    environment = {"OPENAI_API_KEY": "secret-canary-key"}
+    if base_url is not None:
+        environment["OPENAI_BASE_URL"] = base_url
+
+    with pytest.raises(RuntimeError, match="OPENAI_BASE_URL") as refused:
+        example_module(**environment)
+
+    assert "secret-canary-key" not in str(refused.value)
+    import langchain_openai
+
+    # Refused before any client exists, so nothing could have been sent.
+    assert langchain_openai.INSTANCES == []
+
+
+def test_importing_twice_under_different_environments(example_module) -> None:
     example_module()
-    monkeypatch.setenv("OPENAI_API_KEY", "second-key")
-    example_module()
+    example_module(OPENAI_API_KEY="second-key", OPENAI_BASE_URL="http://two.test/v1")
     import langchain_openai
 
     # The second import is a fresh module on a fresh stand-in, so it sees only its own.
     (model,) = langchain_openai.INSTANCES
     assert model.api_key == "second-key"
+    assert model.base_url == "http://two.test/v1"
 
 
 # T5: the files ------------------------------------------------------------------------------
 
 
 def test_requirements_and_python_version_are_pinned() -> None:
-    lines = (EXAMPLE / "requirements.txt").read_text(encoding="utf-8").splitlines()
-    assert lines == ["deepagents==0.7.32", "langchain-openai==1.7.3"]
-    assert (EXAMPLE / ".python-version").read_text(encoding="utf-8").strip() == "3.12"
+    assert_pins(EXAMPLE, ["deepagents==0.7.32", "langchain-openai==1.7.3"])
 
 
 def test_langgraph_json_declares_exactly_one_graph() -> None:
@@ -454,7 +376,11 @@ def test_example_folder_holds_exactly_its_files() -> None:
 def test_example_has_plain_tools_and_the_literal_default_model() -> None:
     module = ast.parse((EXAMPLE / "agent.py").read_text(encoding="utf-8"))
     assert not [node for node in ast.walk(module) if isinstance(node, ast.AsyncFunctionDef)]
-    plain = {node.name for node in module.body if isinstance(node, ast.FunctionDef)}
+    plain = {
+        node.name
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
+    }
     assert plain == set(TOOLS)
     (assignment,) = [
         node
