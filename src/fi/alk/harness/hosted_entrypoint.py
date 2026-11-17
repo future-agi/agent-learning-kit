@@ -38,6 +38,8 @@ from typing import Any, Callable, Protocol, Sequence
 
 from . import observability
 from . import outbound as ob
+from . import user_files
+from .actors import ACTOR_RULES_FILE, ACTORS_FILE
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
 from .compose_broker import BrokerError, ComposeBrokerClient
@@ -64,7 +66,7 @@ from .job import (
     HarnessJob,
     HarnessStage,
 )
-from .privilege import IsolationUnavailable, establish_isolation
+from .privilege import IsolationMode, IsolationUnavailable, establish_isolation, isolation_mode
 from .process_preflight import PreflightError, preflight_bundle
 from .process_runtime import (
     SECTION_2F_DOMAIN,
@@ -473,6 +475,19 @@ class DefaultBundleSource:
                 _bundle_unavailable_code(exc.args[0]), str(exc)
             ) from exc
         return manifest, bundle_dir
+
+
+def close_actor_files(bundle_dir: Path, *, chown: user_files.Chown = user_files.chown_no_follow) -> None:
+    """Under per-user isolation, the bundle's actor files become the harness's own, mode 0600: actors act in the
+    harness's process, which still reads them, and no customer process can. Without it nothing changes."""
+    if isolation_mode() is not IsolationMode.PER_USER:
+        return
+    for name in (ACTORS_FILE, ACTOR_RULES_FILE):
+        path = bundle_dir / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        chown(path, os.geteuid(), os.getegid())
+        path.chmod(0o600)
 
 
 # =================================================================================================
@@ -1084,6 +1099,7 @@ _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]]
             ob.ArtifactKind.TRACE,
             ob.ArtifactKind.TOOL_TRACE,
             ob.ArtifactKind.TRANSCRIPT,
+            ob.ArtifactKind.WORLD_STATE,
             ob.ArtifactKind.OTHER,
         }
     ),
@@ -1596,14 +1612,12 @@ class OutboundAdapter:
             scenario_attempt=receipt.scenario_attempt,
             world_index=receipt.world_index,
             status=receipt.status,
-            sub_goals=[
-                {"name": g.name, "held": g.held, "reason": g.reason, "judged": g.judged}
-                for g in receipt.sub_goals
-            ],
+            sub_goals=[sub_goal_wire(g) for g in receipt.sub_goals],
             evaluations=[_evaluation_wire(e) for e in receipt.evaluations],
             call=call,
             failure=failure,
             extra_secret_values=self._extra_secret_values,
+            reason=receipt.reason,
         )
         self._persist_offline_json(Path("receipts") / f"{wire['digest']}.json", wire)
         push_result = await asyncio.to_thread(
@@ -1898,6 +1912,19 @@ class OutboundAdapter:
                 break
         await self.push_manifest(complete=complete, deadline=deadline)
         return self.is_fenced
+
+
+def sub_goal_wire(goal: Any) -> dict[str, Any]:
+    """One sub-goal as the receipt carries it. `verdict` is always given when there is one (`unmeasured`,
+    `inconclusive`, `not_applicable`, `pass`, `fail`), so the platform never reads it from the reason's wording."""
+    return {
+        "name": goal.name,
+        "held": goal.held,
+        "reason": goal.reason,
+        "judged": goal.judged,
+        **({"verdict": goal.verdict} if goal.verdict else {}),
+        **({"evidence": list(goal.evidence)} if getattr(goal, "evidence", ()) else {}),
+    }
 
 
 def _evaluation_wire(evaluation: Any) -> dict[str, Any]:
@@ -2508,6 +2535,7 @@ async def run_job(
                 code=exc.code,
                 message=exc.message,
             )
+        close_actor_files(bundle_dir)
 
         if (manifest.metadata or {}).get("generic_harness") == "v1":
             from .certification import (
