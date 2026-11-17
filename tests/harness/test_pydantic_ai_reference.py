@@ -15,6 +15,7 @@ import shutil
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from reference_agents import (
@@ -24,6 +25,7 @@ from reference_agents import (
     TRACE_HOOK,
     assert_bindings_match,
     assert_detected,
+    assert_each_conversation_has_its_own_orders,
     assert_pins,
     assert_refuses_key_without_base_url,
     build_control_service,
@@ -383,6 +385,24 @@ def test_each_call_builds_and_closes_its_own_client(example_module, monkeypatch)
     assert len(pydantic_ai.STATE["agents"]) == 1
 
 
+def test_each_conversation_has_its_own_orders(example_module, monkeypatch) -> None:
+    agent = example_module()
+    assert_each_conversation_has_its_own_orders(agent)
+
+    # The callback names the conversation from the turn's thread before the run.
+    seen = []
+
+    async def run(*args, **kwargs):
+        seen.append(agent._CONVERSATION.get())
+        return SimpleNamespace(output="ok")
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(agent.agent, "run", run)
+    asyncio.run(agent.agent_callback(_agent_input(CONVERSATION)))
+    assert seen == ["scenario-one"]
+
+
 def test_a_key_with_no_base_url_is_refused_before_a_client_is_built(
     example_module, monkeypatch
 ) -> None:
@@ -448,7 +468,7 @@ def test_example_has_one_async_callback_and_plain_tools() -> None:
     ]
     assert async_names == ["agent_callback"]
     plain = {node.name for node in module.body if isinstance(node, ast.FunctionDef)}
-    assert plain == set(TOOLS) | {"_setting"}
+    assert plain == set(TOOLS) | {"_setting", "_orders"}
 
 
 # T5: requirements ---------------------------------------------------------------------------

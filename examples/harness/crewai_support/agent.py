@@ -1,3 +1,5 @@
+import contextvars
+import copy
 import os
 
 # CrewAI starts its telemetry exporter and first-run trace collection when it is imported, so
@@ -11,16 +13,25 @@ from crewai.tools import tool  # noqa: E402
 
 MODEL = os.getenv("OPENAI_MODEL", "vertex_ai/gemini-3.7-flash")
 
-_ORDERS = {
+_SEED_ORDERS = {
     "A1001": {"item": "trail running shoes", "status": "delivered", "return": None},
     "A1002": {"item": "rain jacket", "status": "shipped", "return": None},
     "A1003": {"item": "water bottle", "status": "delivered", "return": None},
 }
 
+# Each conversation gets its own copy of the orders, so a return started in one scenario is
+# not there in the next. The callback names the conversation; the tools read it.
+_CONVERSATION = contextvars.ContextVar("conversation", default="")
+_ORDERS_BY_CONVERSATION: dict[str, dict] = {}
+
+
+def _orders() -> dict:
+    return _ORDERS_BY_CONVERSATION.setdefault(_CONVERSATION.get(), copy.deepcopy(_SEED_ORDERS))
+
 
 def look_up_order(order_id: str) -> str:
     """Look up an order by its id and report its item, status and any return."""
-    order = _ORDERS.get(order_id)
+    order = _orders().get(order_id)
     if order is None:
         return f"No order {order_id} exists."
     returned = order["return"] or "none"
@@ -29,7 +40,7 @@ def look_up_order(order_id: str) -> str:
 
 def start_return(order_id: str, reason: str) -> str:
     """Start a return for a delivered order, giving the customer's reason."""
-    order = _ORDERS.get(order_id)
+    order = _orders().get(order_id)
     if order is None:
         return f"No order {order_id} exists."
     if order["status"] != "delivered":
@@ -51,6 +62,7 @@ def _setting(name: str) -> str:
     return os.getenv(name, "").strip()
 
 async def agent_callback(agent_input):
+    _CONVERSATION.set(str(getattr(agent_input, "thread_id", "") or ""))
     # Each request runs in its own event loop on its own thread, and CrewAI's clients are
     # bound to the loop they were first used in, so the model and the agent live for one
     # call. `tool()` wraps here, not at import, so the module's functions stay the plain

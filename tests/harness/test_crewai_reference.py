@@ -14,6 +14,7 @@ import shutil
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from reference_agents import (
@@ -23,6 +24,7 @@ from reference_agents import (
     TRACE_HOOK,
     assert_bindings_match,
     assert_detected,
+    assert_each_conversation_has_its_own_orders,
     assert_pins,
     assert_refuses_key_without_base_url,
     build_control_service,
@@ -419,6 +421,24 @@ def test_import_needs_no_key_and_no_base_url(example_module) -> None:
     assert agent.MODEL == "vertex_ai/gemini-3.7-flash"
 
 
+def test_each_conversation_has_its_own_orders(example_module, monkeypatch) -> None:
+    agent = example_module()
+    assert_each_conversation_has_its_own_orders(agent)
+
+    # The callback names the conversation from the turn's thread before the run.
+    seen = []
+
+    async def kickoff_async(messages):
+        seen.append(agent._CONVERSATION.get())
+        return SimpleNamespace(raw="ok")
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(agent, "Agent", lambda **options: SimpleNamespace(kickoff_async=kickoff_async))
+    asyncio.run(agent.agent_callback(_agent_input(CONVERSATION)))
+    assert seen == ["scenario-one"]
+
+
 def test_a_key_with_no_base_url_is_refused_before_a_model_is_built(
     example_module, monkeypatch
 ) -> None:
@@ -504,7 +524,7 @@ def test_example_has_one_async_callback_and_three_plain_tools() -> None:
     ]
     assert async_names == ["agent_callback"]
     plain = [node.name for node in module.body if isinstance(node, ast.FunctionDef)]
-    assert plain == [*TOOLS, "_setting"]
+    assert plain == ["_orders", *TOOLS, "_setting"]
     # CrewAI refuses a tool with no docstring.
     assert all(
         ast.get_docstring(node)
