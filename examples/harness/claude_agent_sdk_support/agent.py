@@ -1,3 +1,4 @@
+import asyncio
 import os
 import shutil
 import tempfile
@@ -5,6 +6,7 @@ import tempfile
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ProcessError,
     ResultMessage,
     TextBlock,
     create_sdk_mcp_server,
@@ -13,6 +15,9 @@ from claude_agent_sdk import (
 )
 
 MODEL = os.getenv("ANTHROPIC_MODEL", "vertex_ai/gemini-3.7-flash")
+# Below the kit's 300 s per-turn deadline, so a hung CLI is stopped and its folder removed.
+TURN_TIMEOUT_SECONDS = 280.0
+_MESSAGE_LIMIT = 500
 
 _ORDERS = {
     "A1001": {"item": "trail running shoes", "status": "delivered", "return": None},
@@ -128,6 +133,15 @@ def _setting(name: str) -> str:
     return os.environ.get(name, "").strip()
 
 
+def _safe(text: str) -> str:
+    # Error text can echo a request; keep credentials out of it, and keep it short.
+    for name in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
+        secret = _setting(name)
+        if len(secret) >= 8:
+            text = text.replace(secret, "[redacted]")
+    return text if len(text) <= _MESSAGE_LIMIT else text[:_MESSAGE_LIMIT] + "..."
+
+
 def _env(config_dir: str) -> dict:
     # `ClaudeAgentOptions.env` is merged over the process's own, so the base URL and the
     # token the job supplies are inherited rather than copied here.
@@ -161,6 +175,11 @@ def _env(config_dir: str) -> dict:
                 "CLAUDE_CODE_USE_VERTEX": "",
                 "CLAUDE_CODE_USE_BEDROCK": "",
                 "CLAUDE_CODE_USE_FOUNDRY": "",
+                "CLAUDE_CODE_USE_ANTHROPIC_AWS": "",
+                "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD": "",
+                "CLAUDE_CODE_USE_MANTLE": "",
+                "CLAUDE_CODE_USE_GATEWAY": "",
+                "ANTHROPIC_UNIX_SOCKET": "",
                 "ANTHROPIC_API_KEY": "",
                 "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
                 "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
@@ -191,20 +210,35 @@ async def agent_callback(agent_input):
         )
         result = None
         last_text = ""
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, AssistantMessage):
-                text = "".join(b.text for b in message.content if isinstance(b, TextBlock))
-                if text:
-                    last_text = text
-            elif isinstance(message, ResultMessage):
-                result = message
+        try:
+            async with asyncio.timeout(TURN_TIMEOUT_SECONDS) as deadline:
+                async for message in query(prompt=prompt, options=options):
+                    if isinstance(message, AssistantMessage):
+                        text = "".join(
+                            b.text for b in message.content if isinstance(b, TextBlock)
+                        )
+                        if text:
+                            last_text = text
+                    elif isinstance(message, ResultMessage):
+                        result = message
+        except TimeoutError:
+            if not deadline.expired():
+                raise
+            raise RuntimeError(
+                f"the Claude Agent SDK turn did not finish within {TURN_TIMEOUT_SECONDS:g}s"
+            ) from None
+        except ProcessError as exc:
+            # The SDK raises after an error result's frame; report it as the turn failing.
+            if result is None or not (result.is_error or result.subtype != "success"):
+                raise RuntimeError(f"the Claude CLI failed: {_safe(str(exc))}") from None
     finally:
         shutil.rmtree(config_dir, ignore_errors=True)
     if result is None:
         raise RuntimeError("the Claude Agent SDK returned no result")
     if result.is_error or result.subtype != "success":
         raise RuntimeError(
-            f"the Claude Agent SDK turn failed ({result.subtype}): {result.result or last_text}"
+            f"the Claude Agent SDK turn failed ({result.subtype}): "
+            + _safe(str(result.result or last_text))
         )
     # Content only: tool calls in the reply would be run again by the caller.
     return {"content": result.result or last_text}

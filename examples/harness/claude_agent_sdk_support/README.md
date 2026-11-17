@@ -24,13 +24,18 @@ after each turn.
 
 - `ANTHROPIC_MODEL`: the model name, default `vertex_ai/gemini-3.7-flash` (a gateway name).
 - `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`: the gateway origin (without `/v1`) and the
-  Bearer token. When the token is set, the agent also switches off the Vertex, Bedrock and
-  Foundry flags and blanks `ANTHROPIC_API_KEY`, so the token is the only credential. A token
+  Bearer token. When the token is set, the agent also switches off the CLI's other provider
+  routes (Vertex, Bedrock, Foundry, Anthropic on AWS and Google Cloud, Mantle, Gateway, and a
+  Unix socket) and blanks `ANTHROPIC_API_KEY`, so the token is the only credential and the base
+  URL the only place it goes. A token
   needs a base URL: with a token and no `ANTHROPIC_BASE_URL`, each turn is refused before the
   CLI starts, naming the missing setting. A blank value counts as unset.
-- `ANTHROPIC_API_KEY`: instead of the two above, the customer's own key (no token set). Set `ANTHROPIC_MODEL` to a Claude model with it; the default `vertex_ai/...` name only works through the gateway.
+- `ANTHROPIC_API_KEY`: instead of the two above, the customer's own Anthropic key (no token
+  set). Set `ANTHROPIC_MODEL` to a Claude model with it; the default `vertex_ai/...` name only
+  works through the gateway.
 
-On the gateway route the platform passes the customer's own key to the agent; the job supplies the rest.
+On the platform's gateway route, a customer's own `ANTHROPIC_API_KEY`, saved as a provider
+secret, also reaches the agent; the job supplies the other variables.
 
 ## Known limits
 
@@ -38,7 +43,13 @@ On the gateway route the platform passes the customer's own key to the agent; th
   wheel), so each build downloads that much.
 - The gateway answers the CLI's `count_tokens` call with 501 for non-Anthropic models;
   whether the CLI tolerates that is checked by a real run.
-- No timeout wraps the CLI, and its API retries can hold a turn for minutes: a bad token makes the CLI retry for about 3 minutes (11 requests) before the turn fails.
+- A turn is stopped after 280 s, below the kit's 300 s per-turn deadline, and its CLI and
+  config folder are cleaned up. Until then the CLI's own API retries can hold it: a bad token
+  made the CLI retry for about 3 minutes (11 requests) before the turn failed.
+- An error from the CLI or the model comes back as a short message (at most 500 characters),
+  with the token and key values removed.
+- The orders are module state, shared by every conversation the agent process serves, so a
+  return started in one scenario shows in the next (as in the other reference agents).
 - A killed agent leaves the CLI process running until it ends.
 
 Install with `pip install -r requirements.txt` on Python 3.12.
