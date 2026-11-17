@@ -295,6 +295,20 @@ def test_import_needs_no_environment_and_keeps_the_default_gateway_model(
     assert [tool.__name__ for tool in agent.root_agent.tools] == list(TOOLS)
 
 
+@pytest.mark.parametrize("base_url", [None, ""])
+def test_a_key_with_no_base_url_is_refused_before_a_model_is_built(
+    load_example, base_url
+) -> None:
+    environment = {"OPENAI_API_KEY": "secret-canary-key"}
+    if base_url is not None:
+        environment["OPENAI_BASE_URL"] = base_url
+
+    with pytest.raises(RuntimeError, match="OPENAI_BASE_URL") as refused:
+        load_example(**environment)
+
+    assert "secret-canary-key" not in str(refused.value)
+
+
 def test_a_second_import_sees_its_own_environment(load_example) -> None:
     first = load_example(OPENAI_BASE_URL="http://one.test/v1", OPENAI_API_KEY="one")
     assert first.root_agent.model._additional_args["api_base"] == "http://one.test/v1"

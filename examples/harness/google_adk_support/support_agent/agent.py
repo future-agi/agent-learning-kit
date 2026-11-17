@@ -4,6 +4,15 @@ from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
 
 MODEL = os.getenv("OPENAI_MODEL", "vertex_ai/gemini-3.7-flash")
+API_KEY = os.getenv("OPENAI_API_KEY")
+BASE_URL = os.getenv("OPENAI_BASE_URL")
+
+# With no base URL LiteLLM's openai/ provider falls back to api.openai.com and would send the key there.
+if API_KEY and not BASE_URL:
+    raise RuntimeError(
+        "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
+        "endpoint the key belongs to."
+    )
 
 _ORDERS = {
     "A1001": {"item": "trail running shoes", "status": "delivered", "return": None},
@@ -45,14 +54,13 @@ def return_policy() -> str:
 # LiteLLM picks the provider from the name's prefix. `openai/` sends the rest of the name
 # unchanged to `api_base` on chat completions, which is how the model gateway is reached; a
 # bare `vertex_ai/...` name would call Vertex directly and skip the gateway. The URL and key
-# may be unset at import (LiteLLM then reads its own environment when a call is made), so
-# building the model never fails or touches the network.
+# may both be unset at import, so building the model never touches the network.
 root_agent = Agent(
     name="support_agent",
     model=LiteLlm(
         model="openai/" + MODEL,
-        api_base=os.getenv("OPENAI_BASE_URL"),
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_base=BASE_URL,
+        api_key=API_KEY,
     ),
     # No braces in the text: ADK fills `{name}` from session state and fails on a missing key.
     instruction=(
