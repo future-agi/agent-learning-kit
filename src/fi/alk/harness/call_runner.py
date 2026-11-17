@@ -321,6 +321,7 @@ def _check_config(
     job: HarnessJob,
     target_provider_secret_values: Mapping[str, str],
     simulator_values: Mapping[str, str] | None = None,
+    call_environment: Mapping[str, str] | None = None,
 ) -> _MissingVoiceConfig | None:
     simulator_values = simulator_values or {}
 
@@ -332,6 +333,13 @@ def _check_config(
             if job.execution is ExecutionMode.LOCAL
             else None
         )
+
+    def google_project() -> str | None:
+        # A local job's call runs on its environment, where the 1b gate has already dropped the
+        # job's project if the host's credentials file is in effect; count only what the call has.
+        if call_environment is not None and job.execution is ExecutionMode.LOCAL:
+            return call_environment.get(GOOGLE_CLOUD_PROJECT_ALIAS)
+        return simulator_value(GOOGLE_CLOUD_PROJECT_ALIAS)
 
     config = job.agent.config
     llm_provider = str(
@@ -391,7 +399,7 @@ def _check_config(
                 simulator_value(GOOGLE_APPLICATION_CREDENTIALS_ALIAS)
                 or simulator_value(GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS)
             )
-            and simulator_value(GOOGLE_CLOUD_PROJECT_ALIAS)
+            and google_project()
         )
         if not has_api_key and not has_vertex_adc:
             missing_aliases.append(
@@ -1546,10 +1554,9 @@ class CallRunnerImpl:
                             job_google_credentials = True
             # The job's Google settings go with the job's own credentials file, not before.
             for alias in _JOB_GOOGLE_SETTING_ALIASES:
-                if alias not in simulator_secret_values:
-                    value = context.target_provider_secret_values.get(alias)
-                    if value:
-                        job_google_settings[alias] = value
+                value = context.target_provider_secret_values.get(alias)
+                if value:
+                    job_google_settings[alias] = value
         # Provider libraries read ambient credentials. Supply a private snapshot to
         # each call subprocess, never export credentials into the parent process.
         ambient = os.environ if environ is None else environ
@@ -1585,12 +1592,13 @@ class CallRunnerImpl:
         # The job's own credentials file is in effect only if it is the one copied from the job's
         # target values and no GOOGLE_APPLICATION_CREDENTIALS is set (_materialize_vertex_adc
         # writes the file only then). Then the job's project, location and Vertex switch replace
-        # the host's, which would otherwise win. Otherwise they are dropped.
+        # the host's and the platform's, which would otherwise win. Otherwise they are dropped.
         if job_google_credentials and not target_environ.get(
             GOOGLE_APPLICATION_CREDENTIALS_ALIAS
         ):
             for alias in _JOB_GOOGLE_SETTING_ALIASES:
                 target_environ.pop(alias, None)
+                simulator_secret_values.pop(alias, None)
             target_environ.update(job_google_settings)
         for alias in (
             LIVEKIT_URL_ALIAS,
@@ -1643,6 +1651,7 @@ class CallRunnerImpl:
             context.job,
             context.target_provider_secret_values,
             simulator_secret_values,
+            target_environ,
         )
         self._scenario_room_counts: dict[str, int] = {}
         self._closed = False

@@ -2570,3 +2570,90 @@ def test_the_jobs_google_settings_are_dropped_when_the_file_in_effect_is_the_pla
     assert Path(call_environment["GOOGLE_APPLICATION_CREDENTIALS"]).read_text() == platform_adc
     for name in _GOOGLE_SETTINGS:
         assert name not in call_environment
+
+
+def test_the_hosts_google_settings_are_removed_when_the_jobs_own_file_is_in_effect_and_it_sends_none(
+    tmp_path,
+):
+    # The job sends its credentials JSON and no project, location or switch; the host has all
+    # three. The host's must not join the job's file.
+    secrets = {"GOOGLE_APPLICATION_CREDENTIALS_JSON": _JOB_ADC}
+
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=secrets,
+        environ={
+            "GOOGLE_CLOUD_PROJECT": "host-project",
+            "GOOGLE_CLOUD_LOCATION": "host-location",
+            "GOOGLE_GENAI_USE_VERTEXAI": "host-switch",
+        },
+    )
+
+    call_environment = runner._environ
+    assert runner._adc_path is not None
+    assert Path(call_environment["GOOGLE_APPLICATION_CREDENTIALS"]).read_text() == _JOB_ADC
+    for name in _GOOGLE_SETTINGS:
+        assert name not in call_environment
+    assert not {"host-project", "host-location", "host-switch"} & set(call_environment.values())
+
+
+_VERTEX_ONLY_JOB = {
+    "LIVEKIT_API_KEY": "lk-key",
+    "LIVEKIT_API_SECRET": "lk-secret",
+    "DEEPGRAM_API_KEY": "dg-key",
+    "GOOGLE_APPLICATION_CREDENTIALS_JSON": _JOB_ADC,
+    "GOOGLE_CLOUD_PROJECT": "job-project",
+}
+
+
+def test_the_config_check_does_not_count_the_jobs_project_the_gate_drops(tmp_path):
+    # The host has a credentials file and no project, so the gate drops the job's project and
+    # the call runs with none. The check must say Vertex is not ready, not pass.
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=dict(_VERTEX_ONLY_JOB),
+        environ={"GOOGLE_APPLICATION_CREDENTIALS": "/host/google.json"},
+    )
+
+    assert "GOOGLE_CLOUD_PROJECT" not in runner._environ
+    assert runner._missing_config is not None
+    assert any("VERTEX_ADC" in alias for alias in runner._missing_config.aliases)
+
+
+def test_the_config_check_counts_the_jobs_project_when_the_gate_keeps_it(tmp_path):
+    runner = _local_call_environment(
+        tmp_path, secrets=dict(_VERTEX_ONLY_JOB), environ={}
+    )
+
+    assert runner._environ["GOOGLE_CLOUD_PROJECT"] == "job-project"
+    assert runner._missing_config is None
+
+
+def test_the_platforms_google_settings_do_not_pair_with_the_jobs_own_file(tmp_path):
+    # The platform holds a project but no credentials file, so the job's file is the one in
+    # effect: its project goes with it, and the platform's never sits beside it.
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=dict(_VERTEX_ONLY_JOB),
+        environ={},
+        simulator_secrets={"GOOGLE_CLOUD_PROJECT": "platform-project"},
+    )
+
+    assert runner._environ["GOOGLE_CLOUD_PROJECT"] == "job-project"
+    assert "platform-project" not in runner._environ.values()
+
+
+def test_the_platforms_google_settings_are_dropped_when_the_jobs_own_file_sends_none(tmp_path):
+    secrets = dict(_VERTEX_ONLY_JOB)
+    del secrets["GOOGLE_CLOUD_PROJECT"]
+    runner = _local_call_environment(
+        tmp_path,
+        secrets=secrets,
+        environ={},
+        simulator_secrets={
+            "GOOGLE_CLOUD_PROJECT": "platform-project",
+            "GOOGLE_CLOUD_LOCATION": "platform-location",
+        },
+    )
+
+    assert not {"platform-project", "platform-location"} & set(runner._environ.values())
