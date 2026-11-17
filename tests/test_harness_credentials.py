@@ -851,6 +851,14 @@ def _ts_monorepo(tmp_path, main):
         # Dileep, #225 (4598392979): the dual build, `tsc --outDir dist/cjs` from src/index.ts.
         "dist/cjs/index.js",
         "dist/esm/index.js",
+        # Check of 35d83711 (L1, L2): every flavour folder, tshy's `commonjs` included.
+        *(
+            f"dist/{folder}/index.js"
+            for folder in (
+                "mjs", "es", "umd", "browser", "node",
+                "commonjs", "module", "esnext", "es6", "es2015", "esm5",
+            )
+        ),
         # Rollup's flavoured name for the same src/index.ts.
         "dist/index.esm.js",
         # Check of e94c4640 (L1, L2): other bundlers' flavours, and flavours stacked.
@@ -885,6 +893,12 @@ def test_a_package_main_in_an_uncommitted_build_folder_is_found_in_src(tmp_path,
         ("dist/esm/worker.mjs", "src/worker.ts"),
         # Dileep, #225 (4598392989): one suffix is dropped, not two.
         ("dist/app.module.js", "src/app.module.ts"),
+        # Dileep, #225 (4599009866): tsc with rootDir `.` writes server/index.ts to
+        # dist/server/index.js; src/index.ts is another module.
+        ("dist/server/index.js", "server/index.ts"),
+        ("dist/lib/worker.js", "lib/worker.ts"),
+        # Check of 35d83711 (L2): the package's own path after a flavour folder is dropped.
+        ("dist/cjs/server/index.js", "server/index.ts"),
     ],
 )
 def test_a_build_entry_that_is_not_the_index_finds_its_own_source(tmp_path, main, source):
@@ -903,6 +917,26 @@ def test_a_build_entry_that_is_not_the_index_finds_its_own_source(tmp_path, main
 
     assert required["WORKER_API_KEY"] is True
     assert required["INDEX_API_KEY"] is False
+
+
+@pytest.mark.parametrize("main", ["dist/server/index.js", "dist/utils/worker.js"])
+def test_a_nested_build_entry_takes_no_source_from_another_folder(tmp_path, main):
+    # Dileep, #225 (4599009866): only a build flavour's folder (dist/cjs, dist/esm, ...) is
+    # dropped; dist/server/index.js never stands for src/index.ts.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": main}),
+            "packages/shared/src/index.ts": "export const i = process.env.INDEX_API_KEY;\n",
+            "packages/shared/src/worker.ts": "export const w = process.env.WORKER_API_KEY;\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["INDEX_API_KEY"] is False
+    assert required["WORKER_API_KEY"] is False
 
 
 def test_a_build_entry_with_no_source_of_its_own_takes_no_other_file(tmp_path):
@@ -959,6 +993,8 @@ def test_a_dotted_build_entry_with_no_source_of_its_own_takes_no_shorter_name(tm
         ("dist/cjs/worker.js", "src/cjs/worker.ts", "src/worker.ts"),
         # ...and the exact name before a flavour dropped.
         ("dist/index.esm.js", "src/index.esm.ts", "src/index.ts"),
+        # Check of 35d83711 (L2): src/ before the package's own path.
+        ("dist/server/index.js", "src/server/index.ts", "server/index.ts"),
     ],
 )
 def test_a_build_entry_takes_its_exact_source_before_a_fallback(tmp_path, main, own, other):

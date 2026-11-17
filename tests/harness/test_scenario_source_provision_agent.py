@@ -262,11 +262,12 @@ def test_no_subfolder_setup_hash_is_pinned(tmp_path: Path) -> None:
 
     payload = _provision(tmp_path, SourceKind.GITHUB)
 
-    # The value dev's build gives this contract (with `workers`, since #226): a build without a
-    # folder sends the same document as before the field existed.
+    # The value dev's build gives this contract (with `workers`, since #226, and each tool's
+    # empty `arg_units`, `returns`, `tables_read` and `tables_changed` since 01d752bc, 0f11648c and
+    # e1287f3c): a build without a folder sends the same document as dev's, with no `source` in it.
     assert (
         payload["agent"]["agent"]["setup_hash"]
-        == "sh1:51187c1b71bad636be07e5b06b120fc415fbed364ea7be63171d74269cbf3394"
+        == "sh1:bcdc593f335df95cc744c79a7225dc336263aabddd1a3a11c672be456333dad4"
     )
 
 

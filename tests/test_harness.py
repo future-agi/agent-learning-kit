@@ -1337,6 +1337,22 @@ def test_github_source_reads_like_a_repository(tmp_path):
     assert "https://github.com/acme/agent" in source.briefing()
 
 
+def test_the_briefing_file_list_leaves_out_credential_files(tmp_path):
+    listed = (
+        ".env.production", ".aws/credentials", "deploy/gcp-sa.json", ".kube/config",
+        "infra/prod.tfvars", ".netrc.bak",
+    )  # fmt: skip
+    for name in (*listed, "agent.py", "deploy/app.yaml"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("canary\n")
+
+    briefing = RepoSource(name="a", root=tmp_path).briefing()
+
+    assert "- agent.py" in briefing and "- deploy/app.yaml" in briefing
+    for name in listed:
+        assert f"- {name}" not in briefing, name
+
+
 def test_spec_source_gets_no_file_tools_because_there_is_nothing_to_read():
     source = SpecSource(
         name="a", system_prompt="you are a bot", tool_schema=[{"name": "t"}]
