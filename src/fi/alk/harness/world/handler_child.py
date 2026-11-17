@@ -11,6 +11,7 @@ The codec is also what the parent imports, so both sides encode values the same 
 
 from __future__ import annotations
 
+import re
 import base64
 import contextlib
 import datetime
@@ -125,6 +126,21 @@ class AuthoredOutcome:
     broken: bool = False
 
 
+_ID_NOISE = re.compile(r"[\s\-_.:/#]")
+
+
+def same_id(first: Any, second: Any) -> bool:
+    """Whether two identifiers name the same record however they were typed or spoken.
+
+    Only separators and case are ignored, so a different number is still different. Defined here,
+    beside the code that runs checks, so the isolated child has it without importing the harness."""
+    if first is None or second is None:
+        return False
+    mine, theirs = _ID_NOISE.sub("", str(first)).casefold(), _ID_NOISE.sub("", str(second)).casefold()
+    # An empty id names no record, so it never matches, not even another empty one.
+    return bool(mine) and mine == theirs
+
+
 def takes_reference(checker: object) -> bool:
     """Whether a check, or its source, is written `check(world, calls, reference)`."""
     import ast
@@ -164,7 +180,9 @@ def evaluate_authored(
     if kind in {"setup", "ready"} and not source.strip():
         return AuthoredOutcome(True)
 
-    namespace: dict[str, Any] = {}
+    # The names every check is given wherever it runs (`checks.check_namespace`), so a check that
+    # proves while authoring never fails here on a helper such as `same_id`.
+    namespace: dict[str, Any] = {"same_id": same_id}
     filename = (
         f"<check:{name}>"
         if kind == "check"

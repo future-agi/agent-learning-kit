@@ -26,6 +26,7 @@ from .call_runner import (
 )
 from .chat_call_runner import (
     _HostedChatTarget,
+    _check_text_usage,
     _conversation_scenario,
     _drive_conversation,
     _duration_ms,
@@ -329,6 +330,7 @@ class RetellChatCallRunner:
             self._contract,
             runtime,
             self._context.source_directory,
+            self._context.handler_channel,
         )
         target = _HostedChatTarget(
             wrapper=wrapper,
@@ -338,6 +340,7 @@ class RetellChatCallRunner:
             scenario_id=scenario.scenario_id,
         )
         funding = simulator_funding()
+        await _check_text_usage(self._context.usage_reporter, funding)
         started = datetime.now(timezone.utc)
         transcript: Transcript | None = None
         failure: CallAborted | None = None

@@ -13,7 +13,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .backends import (
@@ -25,9 +25,10 @@ from .backends import (
     tool,
     tool_server,
 )
+from .catalogue import Catalogue
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
 from .contract import AgentContract
-from .scenario import voicemail_enabled
+from .scenario import Scenario, voicemail_enabled
 from .scenario_tools import (
     SCENARIO_SERVER,
     attached_tools,
@@ -35,6 +36,7 @@ from .scenario_tools import (
     scenario_tools,
     world_summary,
 )
+from .source_folder import contract_folder
 from .scenarios import writer_worker
 from .session import Stage
 from .tools import schema
@@ -175,6 +177,7 @@ def suite_server(
     """Whole-suite operations the single-scenario tools would take one call per scenario to do.
     ``postgres_proof`` proves the scenarios that call attached servers' tools, as submitting does."""
     from .catalogue import load_catalogue
+    from .proofs import record_proof
     from .prove import prove
     from .scenario_tools import write_scenarios
 
@@ -217,6 +220,7 @@ def suite_server(
                 lines.append(f"{name}: not in the suite")
                 continue
             proof = prove(scenario, catalogue, out, postgres_only=attached_tools(out))
+            record_proof(out, scenario.scenario_key, proof)
             if proof.postgres_only and proof.holds:
                 said = (
                     await asyncio.to_thread(postgres_proof, scenario, catalogue)
@@ -272,7 +276,14 @@ def suite_server(
         schema({"sql": str}, ["sql"]),
     )
     async def change_world(args: dict[str, Any]) -> dict[str, Any]:
-        return _ok(world_change(out, str(args.get("sql") or ""))) if (out / "world.sqlite").is_file() else _err(
+        return _ok(
+            world_change(
+                out,
+                str(args.get("sql") or ""),
+                source_root=source_root,
+                contract=contract,
+            )
+        ) if (out / "world.sqlite").is_file() else _err(
             "This environment keeps no world data the chat can change: its agent's data lives "
             "where the agent runs, or its world is described in a form only a new build changes."
         )
@@ -290,6 +301,17 @@ def suite_server(
                 "args": {"type": "array", "items": {"type": "string"}},
                 "arg_types": {"type": "object"},
                 "arg_values": {"type": "object"},
+                "arg_units": {
+                    "type": "object",
+                    "description": "The unit or format of a field whose name does not say it: "
+                    "<an amount field> -> <its minor unit and currency>; timeout -> milliseconds; "
+                    "due -> ISO 8601 date.",
+                },
+                "returns": {
+                    "type": "object",
+                    "description": "Each field the tool hands back, with its type and unit: "
+                    "<an id field> -> string; <an amount field> -> integer, <its minor unit and currency>.",
+                },
                 "evidence_file": str,
                 "evidence_quote": str,
                 "why": str,
@@ -299,7 +321,9 @@ def suite_server(
     )
     async def declare_tool(args: dict[str, Any]) -> dict[str, Any]:
         from .amend import _persist
+        from .backends.files import secret_text
         from .contract import ToolSpec, validate_contract
+        from .source_folder import agent_scope, in_agent_scope
 
         if contract is None:
             return _err("there is no contract loaded to add a tool to")
@@ -309,8 +333,26 @@ def suite_server(
         quote = str(args.get("evidence_quote") or "").strip()
         root = source_root or Path("/nonexistent")
         target = (root / str(args.get("evidence_file") or "")).resolve()
-        if source_root is None or root.resolve() not in target.parents or not target.is_file():
+        if source_root is None or root.resolve() not in target.parents:
             return _err("evidence_file must be a file inside the agent's source")
+        if secret_text(target.relative_to(root.resolve()).as_posix()):
+            # Judged where it resolves, before the file is opened: a listed file, a link to one
+            # and one that is missing get this same answer, and a guess is never checked.
+            return _err(
+                f"{args.get('evidence_file')} is kept out of this session because it holds "
+                "credentials; name a file in the agent's code or configuration"
+            )
+        if not target.is_file():
+            return _err("evidence_file must be a file inside the agent's source")
+        folder = contract_folder(contract)
+        scope = agent_scope(root, folder)
+        if scope is not None and not in_agent_scope(
+            PurePosixPath(target.relative_to(root.resolve()).as_posix()), scope
+        ):
+            return _err(
+                f"evidence_file must be in the agent's folder {folder} or in a folder above it, "
+                "not in another agent's"
+            )
         if not quote or quote not in target.read_text(encoding="utf-8", errors="replace"):
             return _err(f"the quoted line is not in {args.get('evidence_file')}; quote it exactly")
         if not str(args.get("why") or "").strip():
@@ -322,6 +364,8 @@ def suite_server(
                 "args": list(args.get("args") or []),
                 "arg_types": dict(args.get("arg_types") or {}),
                 "arg_values": dict(args.get("arg_values") or {}),
+                "arg_units": {str(k): str(v) for k, v in dict(args.get("arg_units") or {}).items()},
+                "returns": {str(k): str(v) for k, v in dict(args.get("returns") or {}).items()},
             }
         )
         contract.tools.append(spec)
@@ -340,18 +384,44 @@ def suite_server(
     )
 
 
-def world_change(out: Path, statement: str) -> str:
-    """Apply one data statement to the authoring world, all or nothing, foreign keys enforced."""
+def world_change(
+    out: Path,
+    statement: str,
+    *,
+    source_root: Path | None = None,
+    contract: AgentContract | None = None,
+) -> str:
+    """Apply one data statement to the authoring world, all or nothing, foreign keys enforced,
+    refusing a value the seed import would refuse in a column the agent's schema types JSON."""
     import sqlite3
 
     verb = statement.strip().split(None, 1)[0].upper() if statement.strip() else ""
     if verb not in ("INSERT", "UPDATE", "DELETE") or ";" in statement.strip().rstrip(";"):
         return "Not changed: give exactly one INSERT, UPDATE or DELETE statement."
+    from collections import Counter
+
+    from .bundle_author_v2 import declared_json_columns
+    from .world_import.sqlite import unreadable_json_values
+
+    json_columns = declared_json_columns(
+        source_root, contract=contract.model_dump() if contract is not None else None
+    )
     connection = sqlite3.connect(out / "world.sqlite")
     try:
         connection.execute("PRAGMA foreign_keys = ON")
+        before = unreadable_json_values(connection, json_columns)
         with connection:
             changed = connection.execute(statement).rowcount
+            # Checked before the commit, so a refused value never reaches the world. A column
+            # breaks when some refused value is held by more cells than before: a world that
+            # already held one can be repaired a cell at a time, but never given another.
+            broke = [
+                column
+                for column, refused in unreadable_json_values(connection, json_columns).items()
+                if refused - before.get(column, Counter())
+            ]
+            if broke:
+                raise _NotJson(broke)
         tables = [row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         )]
@@ -359,11 +429,26 @@ def world_change(out: Path, statement: str) -> str:
             "{}: {}".format(name, connection.execute('SELECT COUNT(*) FROM "%s"' % name).fetchone()[0])
             for name in tables
         )
+    except _NotJson as refused:
+        return (
+            "Not changed: these JSON columns would hold values that are not JSON: "
+            + ", ".join(refused.columns)
+            + ". A JSON column holds JSON text: an object such as '{\"a\": 1}', a list such "
+            "as '[]', or a string in quotes such as '\"2026-06-03\"'."
+        )
     except sqlite3.Error as failed:
         return f"Not changed, the world refused it: {failed}"
     finally:
         connection.close()
     return f"{changed} rows changed. The world now holds {counts}. Re-prove what depends on it, then save_changes."
+
+
+class _NotJson(Exception):
+    """A change that would leave a JSON column holding what the seed import refuses."""
+
+    def __init__(self, columns: list[str]) -> None:
+        super().__init__(", ".join(columns))
+        self.columns = columns
 
 
 def contract_of(out: Path) -> AgentContract | None:
@@ -413,6 +498,22 @@ def dependents(out: Path, kept: list, name: str) -> str:
     )
 
 
+def scenario_problems(scenario: Scenario, defined: set[str], tools: set[str]) -> list[str]:
+    """What one scenario names that the catalogue or the contract lacks."""
+    problems: list[str] = []
+    missing = [goal for goal in scenario.sub_goals if goal not in defined]
+    if missing:
+        problems.append(f"names sub-goals the catalogue lacks: {', '.join(missing)}")
+    unknown = sorted(
+        {step.tool for step in scenario.solution if tools and step.tool not in tools}
+    )
+    if unknown:
+        problems.append(
+            f"its solution calls tools the contract lacks: {', '.join(unknown)}"
+        )
+    return problems
+
+
 def suite_health(
     contract: AgentContract | None,
     out: Path,
@@ -430,12 +531,10 @@ def suite_health(
     attached = attached_tools(out)
     tools = (contract.tool_names() | attached) if contract is not None else set()
     for scenario in kept:
-        missing = [goal for goal in scenario.sub_goals if goal not in defined]
-        if missing:
-            problems.append(f"{scenario.name}: names sub-goals the catalogue lacks: {', '.join(missing)}")
-        unknown = sorted({step.tool for step in scenario.solution if tools and step.tool not in tools})
-        if unknown:
-            problems.append(f"{scenario.name}: its solution calls tools the contract lacks: {', '.join(unknown)}")
+        problems.extend(
+            f"{scenario.name}: {one}"
+            for one in scenario_problems(scenario, defined, tools)
+        )
     folders = {path.name for path in (out / "scenarios").iterdir() if path.is_dir()} if (out / "scenarios").is_dir() else set()
     names = {scenario.name for scenario in kept}
     if folders != names:
@@ -705,12 +804,14 @@ def open_builder(
     without: frozenset[str] = frozenset(),
     skill: str = BUILDER,
     postgres_proof: Callable[[Any, Any], str] | None = None,
+    catalogue: Catalogue | None = None,
 ) -> Stage:
     """The one session that owns an environment once it has a world: every tool, every skill.
     ``sealed`` is False while the environment is still being built and has no sealed bundle yet.
     ``without`` names tools this session must not have; ``files_note`` replaces the file listing;
     ``skill`` is the session's own method (a design's, in place of the builder's);
-    ``postgres_proof`` proves scenarios that call attached servers' tools."""
+    ``postgres_proof`` proves scenarios that call attached servers' tools; ``catalogue`` is shared
+    with the caller's servers; the stage's ``kept`` is the suite list."""
     existing = load_scenarios(out)
     server, kept = scenario_tools(
         contract,
@@ -720,6 +821,7 @@ def open_builder(
         can_grow=True,
         scenario_problem=scenario_problem,
         postgres_proof=postgres_proof,
+        catalogue=catalogue,
     )
     servers: dict[str, ToolServer] = {
         SCENARIO_SERVER: server,
@@ -746,10 +848,17 @@ def open_builder(
             "tell the person what you found and fixed:\n- " + "\n- ".join(health[:40])
         )
     )
+    folder = contract_folder(contract)
     where = files_note or (
         f"\n\nThe environment's files are in {out}: contract.json, sub_goals.json, coverage.json, "
         "simulator_prompt.md, scenarios/ and the sealed environment-bundle/."
         + (f" The agent's own source is in {source_root}." if source_root else "")
+        + (
+            f" The agent lives in its folder {folder}; other folders there belong to other "
+            "agents."
+            if source_root and folder
+            else ""
+        )
     )
     spec = SessionSpec(
         system_prompt=(
@@ -775,4 +884,5 @@ def open_builder(
     )
     stage = Stage(spec, name=BUILDER)
     stage.health_at_open = health
+    stage.kept = kept
     return stage

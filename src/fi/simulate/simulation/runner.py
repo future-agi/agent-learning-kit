@@ -8,7 +8,6 @@ from fi.simulate.agent.definition import (
 )
 from fi.simulate.simulation.models import Scenario, TestReport
 from fi.simulate.simulation.engines import (
-    LiveKitEngine,
     BaseEngine,
     CloudEngine,
     LocalTextEngine,
@@ -123,6 +122,8 @@ class TestRunner:
 
         elif agent_definition is not None:
             # Local mode - use LiveKit engine
+            from fi.simulate.simulation.engines import LiveKitEngine
+
             if LiveKitEngine is None:
                 raise ImportError(
                     "LiveKit mode requires the LiveKit dependency, but it is not available in this environment. "

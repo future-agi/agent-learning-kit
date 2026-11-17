@@ -11,16 +11,34 @@ rather than a bad contract reaching disk.
 
 from __future__ import annotations
 
+import collections.abc
 import json
+import logging
+import os
 import re
 import shlex
-from typing import Any
+import threading
+import typing
+from pathlib import Path
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
+from pydantic.json_schema import SkipJsonSchema
+
+from fi.simulate.agent.wrappers.http_events import (
+    CompletedToolEvents,
+    CompletedToolRows,
+)
+from fi.simulate.agent.wrappers.http_stream import HTTPStreamSpec
+
+from ..providers.agent import _redact
+from .observations import HttpObservation
 
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
+
+
 def known_modalities() -> tuple[str, ...]:
     """The modalities a contract may declare: these, plus whatever a kind file adds."""
     from .config import declared_modalities
@@ -28,6 +46,8 @@ def known_modalities() -> tuple[str, ...]:
     known = list(MODALITIES)
     known.extend(one for one in declared_modalities() if one not in known)
     return tuple(known)
+
+
 _RUNTIME_TEMPLATE_INPUTS = frozenset(
     {
         "thread_id",
@@ -115,6 +135,12 @@ class ToolSpec(BaseModel):
     def _normalize_args(cls, payload: Any) -> Any:
         if not isinstance(payload, dict):
             return payload
+        if isinstance(payload.get("returns"), list):
+            payload["returns"] = {str(one): "" for one in payload["returns"]}
+        if isinstance(payload.get("returns"), dict):
+            payload["returns"] = {str(k): str(v) for k, v in payload["returns"].items()}
+        elif "returns" in payload:
+            payload.pop("returns")
         if not payload.get("args"):
             for alias in ("parameters", "arguments", "params", "arg_names"):
                 value = payload.get(alias)
@@ -146,6 +172,14 @@ class ToolSpec(BaseModel):
     args: list[str] = Field(default_factory=list)
     arg_types: dict[str, str] = Field(default_factory=dict)
     arg_values: dict[str, Any] = Field(default_factory=dict)
+    # The unit or format a field is written in, where the name alone does not say: `timeout` -> "milliseconds".
+    arg_units: dict[str, str] = Field(default_factory=dict)
+    # What the tool hands back, by output field: its type and, where the name does not say it, its unit or format.
+    returns: dict[str, str] = Field(default_factory=dict)
+    # The world's tables the tool reads, and the ones it adds to, changes or deletes from, declared from its code.
+    # Empty means not recorded.
+    tables_read: list[str] = Field(default_factory=list)
+    tables_changed: list[str] = Field(default_factory=list)
     description: str = ""
     # Tools that must have run before this one stops refusing, and only for state the agent builds
     # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
@@ -184,7 +218,26 @@ class ToolEntry(BaseModel):
     service: str = ""
     endpoint: str = ""
     method: str = "POST"
+    # `read` when the tool only reads (a lookup, a search, a list), `write` when it changes anything. Empty reads the
+    # HTTP method: GET, HEAD and OPTIONS read, everything else counts as a write.
+    effect: str = ""
+    # Set at seal time when the world's door is bound to this tool but cannot stand in front of it (why, in words);
+    # empty when it can. The platform reads it so a fault or acting actor on the tool is held back, not run.
+    door_unreached: str = ""
     notes: str = ""
+
+
+class DeclaredWorker(BaseModel):
+    """An agent the app hands work to, as its source declares it.
+
+    Declared is not observed: a run shows whether the worker actually took part, from the spans the app exports.
+    ``name`` is the name the app gives the agent, because that is the name its spans carry.
+    """
+
+    id: str
+    name: str = ""
+    # The contract tools this worker holds, by name.
+    tools: list[str] = Field(default_factory=list)
 
 
 class PromptSource(BaseModel):
@@ -193,6 +246,21 @@ class PromptSource(BaseModel):
     path: str
     start_line: int
     end_line: int
+
+
+class ModelSource(BaseModel):
+    """The model the agent talks to the person with, and the line its name is written on."""
+
+    provider: str = ""
+    name: str = ""
+    path: str = ""
+    line: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bare_name(cls, value: Any) -> Any:
+        # A bare string is the name alone; the save then asks for path and line.
+        return {"name": value} if isinstance(value, str) else value
 
 
 class DataStore(BaseModel):
@@ -239,6 +307,8 @@ class DataStore(BaseModel):
     schema_from: str = ""
     loaded_by: str = ""
     loader_module: str = ""
+    # When the loader runs: "start" (once, as the agent starts) or "each_call"; empty when unknown.
+    loads: str = ""
 
     def has_seam(self) -> bool:
         """Whether there is any way to point this agent at our store.
@@ -281,13 +351,61 @@ class Reached(BaseModel):
         )
 
 
+class RuntimeHttpFailureRule(BaseModel):
+    status_path: str = Field(min_length=1, max_length=512)
+    failure_values: list[str | int | float | bool | None] | None = Field(
+        default=None, min_length=1, max_length=32
+    )
+    success_values: list[str | int | float | bool | None] | None = Field(
+        default=None, min_length=1, max_length=32
+    )
+    message_path: str = Field(default="", max_length=512)
+
+    @field_validator("status_path", "message_path")
+    @classmethod
+    def _path(cls, value: str) -> str:
+        if value and not re.fullmatch(r"(?:\$\.)?[^.\s]+(?:\.[^.\s]+)*", value):
+            raise ValueError("runtime_http_failure_path_invalid")
+        return value
+
+    @field_validator("failure_values", "success_values", mode="before")
+    @classmethod
+    def _scalars(cls, values):
+        import math
+
+        if values is None:
+            return values
+        if not isinstance(values, list) or any(
+            type(value) not in (str, int, float, bool, type(None))
+            or (isinstance(value, float) and not math.isfinite(value))
+            for value in values
+        ):
+            raise ValueError("runtime_http_failure_values_must_be_finite_scalars")
+        return values
+
+    @model_validator(mode="after")
+    def _one_predicate(self):
+        if (self.failure_values is None) == (self.success_values is None):
+            raise ValueError("runtime_http_failure_requires_one_predicate")
+        return self
+
+
 class RuntimeHttpSetupRequest(BaseModel):
     """One source-evidenced request required before conversational turns begin."""
 
     method: str = "POST"
     path: str
     body_template: Any = Field(default_factory=dict)
+    encoding: Literal["json", "form"] = "json"
+    headers_template: dict[str, str] = Field(
+        default_factory=dict,
+        description="Headers for this setup request only. Chat headers_template is not applied "
+        "during setup. If this route requires local_auth, bind its template_variable here too. "
+        "Earlier setup captures are available; later captures are not.",
+    )
+    capture_headers: dict[str, str] = Field(default_factory=dict)
     accepted_statuses: list[int] = Field(default_factory=lambda: [200, 201, 204, 409])
+    failure_rule: RuntimeHttpFailureRule | None = None
     # Captured response values become placeholders for later setup requests and turns. This
     # models generic create-then-use APIs without teaching the harness about a framework.
     capture: dict[str, str] = Field(default_factory=dict)
@@ -320,6 +438,25 @@ class RuntimeHttpSetupRequest(BaseModel):
             raise ValueError("runtime_http_setup_statuses_invalid")
         return normalized
 
+    @field_validator("headers_template")
+    @classmethod
+    def _safe_headers(cls, values):
+        from fi.simulate.agent.wrappers.http import validate_http_headers
+
+        return validate_http_headers(values)
+
+    @field_validator("capture_headers")
+    @classmethod
+    def _safe_header_captures(cls, values):
+        values = cls._safe_captures(values)
+        if any(
+            not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}", value)
+            or value.lower() == "set-cookie"
+            for value in values.values()
+        ):
+            raise ValueError("runtime_http_capture_header_invalid")
+        return values
+
     @field_validator("capture")
     @classmethod
     def _safe_captures(cls, values: dict[str, str]) -> dict[str, str]:
@@ -337,6 +474,18 @@ class RuntimeHttpSetupRequest(BaseModel):
         return normalized
 
 
+class LocalHttpAuth(BaseModel):
+    """Names for a source-owned server credential generated privately per world."""
+
+    model_config = {"extra": "forbid"}
+    server_environment: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+    template_variable: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+
+    def reject_collisions(self, names) -> None:
+        if {self.server_environment, self.template_variable} & set(names):
+            raise ValueError("runtime_local_auth_name_collision")
+
+
 class RuntimeInterface(BaseModel):
     """The submitted runtime's existing conversational ingress.
 
@@ -345,8 +494,25 @@ class RuntimeInterface(BaseModel):
     endpoint the repository does not already implement.
     """
 
-    kind: str = ""
-    protocol: str = "fi.alk"
+    kind: str = Field(
+        default="",
+        description="Generated chat supports http, callable, or command. Use callable only "
+        "for a source-exported agent_callback. Use command only for a noninteractive "
+        "entrypoint consuming JSON stdin, ALK_USER_MESSAGE, or ALK_MESSAGES_JSON and "
+        "returning the chat response on stdout. Interactive CLIs, startup commands, ACP, "
+        "and WebSocket are not supported generated chat ingress.",
+    )
+    protocol: str = Field(
+        default="fi.alk",
+        description="HTTP supports fi.alk, openai_chat, or json_template. Callable and "
+        "command bridges require fi.alk; they do not translate arbitrary stdin protocols. "
+        "Use json_template only for a source-owned HTTP JSON API, not ACP or WebSocket.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Source-owned model or profile identifier accepted by the OpenAI-compatible "
+        "endpoint. Preserve its exact value; it need not be the backing provider model.",
+    )
     port: int | None = Field(default=None, ge=1, le=65535)
     path: str = ""
     health_path: str = ""
@@ -356,10 +522,58 @@ class RuntimeInterface(BaseModel):
     # of ``{{name}}`` preserves the canonical value's JSON type; embedded placeholders render as
     # strings. Dotted/list response paths select the assistant content from arbitrary JSON/SSE.
     request_template: Any = None
-    response_path: str = ""
+    response_path: str = Field(
+        default="",
+        description="For json_template only: optional dot-separated object keys and numeric "
+        "list-index segments selecting assistant text. Negative indexes are supported, "
+        "e.g. output.-1.content.0.text. Bracket indexing and JSONPath expressions are not supported.",
+    )
+    sse: HTTPStreamSpec | None = Field(
+        default=None,
+        description="Live JSON server-sent events for this source endpoint. Declare explicit "
+        "completion and optional failure predicates; EOF alone never completes a turn. Paths "
+        "select from {event, data, id}, and text rules assemble delta, cumulative, or final text.",
+    )
+    headers_template: dict[str, str] = Field(
+        default_factory=dict,
+        description="Chat headers rendered after setup completes, using setup captures or local "
+        "auth. These are not inherited by setup_requests; declare required auth headers on each "
+        "protected setup request. Session cookies are preserved in an isolated cookie jar.",
+    )
+    completed_tool_events: CompletedToolEvents | None = None
+    completed_tools: CompletedToolRows | None = None
+    local_auth: LocalHttpAuth | None = Field(
+        default=None,
+        description="Native HTTP only: source-declared local server credential environment name "
+        "and private template variable. ALK generates a per-world value for direct headers or a "
+        "source-owned login setup request. Never use for external account/API credentials; never "
+        "provide credential values.",
+    )
+    setup_secrets: dict[str, str] = Field(default_factory=dict)
+    failure_rule: RuntimeHttpFailureRule | None = None
     setup_requests: list[RuntimeHttpSetupRequest] = Field(
         default_factory=list, max_length=8
     )
+
+    @field_validator("headers_template")
+    @classmethod
+    def _safe_headers(cls, values):
+        from fi.simulate.agent.wrappers.http import validate_http_headers
+
+        return validate_http_headers(values)
+
+    @field_validator("setup_secrets")
+    @classmethod
+    def _setup_secret_aliases(cls, values):
+        if len(values) > 16 or any(
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)
+            for pair in values.items()
+            for value in pair
+        ):
+            raise ValueError("runtime_http_setup_secret_invalid")
+        if set(values) & _RUNTIME_TEMPLATE_INPUTS:
+            raise ValueError("runtime_http_setup_secret_shadows_input")
+        return values
 
     @field_validator("kind")
     @classmethod
@@ -390,11 +604,61 @@ class RuntimeInterface(BaseModel):
 
     @model_validator(mode="after")
     def _complete(self) -> "RuntimeInterface":
+        if self.local_auth:
+            if len(self.setup_secrets) >= 16:
+                raise ValueError("runtime_local_auth_setup_secret_limit")
+            if self.kind != "http":
+                raise ValueError("runtime_local_auth_requires_http")
+            self.local_auth.reject_collisions(
+                _RUNTIME_TEMPLATE_INPUTS
+                | set(self.setup_secrets)
+                | set(self.setup_secrets.values())
+            )
+            forbidden_templates = [self.path, self.request_template]
+            forbidden_templates.extend(setup.path for setup in self.setup_requests)
+            if self.local_auth.template_variable in _runtime_template_names(
+                forbidden_templates
+            ):
+                raise ValueError("runtime_local_auth_url_or_chat_body_forbidden")
+            auth_templates = [self.headers_template]
+            for setup in self.setup_requests:
+                auth_templates.extend([setup.headers_template, setup.body_template])
+            if self.local_auth.template_variable not in _runtime_template_names(
+                auth_templates
+            ):
+                raise ValueError("runtime_local_auth_binding_required")
         if self.kind in {"http", "websocket"}:
             if self.port is None:
                 raise ValueError(f"runtime_{self.kind}_interface_requires_port")
             if not self.path:
                 raise ValueError(f"runtime_{self.kind}_interface_requires_path")
+        if self.completed_tools and (
+            self.completed_tool_events
+            or self.kind != "http"
+            or self.protocol != "json_template"
+        ):
+            raise ValueError(
+                "completed tool rows require an exclusive JSON template interface"
+            )
+        if (
+            self.completed_tools
+            and not self.completed_tools.error_path
+            and not self.completed_tools.result_error_path
+            and not (self.failure_rule and self.failure_rule.success_values is not None)
+        ):
+            raise ValueError(
+                "completed tool rows without an error flag require a success predicate"
+            )
+        if (
+            self.completed_tool_events
+            and self.completed_tool_events.source == "response"
+            and self.protocol != "json_template"
+        ):
+            raise ValueError("response tool events require a JSON template interface")
+        if self.setup_secrets and self.kind != "http":
+            raise ValueError("runtime_http_setup_secrets_require_http")
+        if self.completed_tool_events is not None and self.kind != "http":
+            raise ValueError("completed tool events require an HTTP interface")
         if self.kind == "http":
             if self.protocol not in {"fi.alk", "openai_chat", "json_template"}:
                 raise ValueError(
@@ -403,34 +667,159 @@ class RuntimeInterface(BaseModel):
                 )
             if self.protocol == "json_template" and self.request_template is None:
                 raise ValueError("runtime_json_template_requires_request_template")
+            if self.sse is not None and self.protocol != "json_template":
+                raise ValueError("runtime_sse_requires_json_template")
+            available = set(_RUNTIME_TEMPLATE_INPUTS)
+            if self.local_auth:
+                available.add(self.local_auth.template_variable)
+            for setup in self.setup_requests:
+                unknown = _runtime_template_names(setup.path) - available
+                unknown |= (
+                    _runtime_template_names(setup.headers_template)
+                    | _runtime_template_names(setup.body_template)
+                ) - (available | set(self.setup_secrets))
+                if unknown:
+                    raise ValueError(
+                        "runtime_http_setup_unknown_placeholders: "
+                        + ", ".join(sorted(unknown))
+                    )
+                captures = set(setup.capture) | set(setup.capture_headers)
+                duplicate = (captures & (available | set(self.setup_secrets))) | (
+                    set(setup.capture) & set(setup.capture_headers)
+                )
+                if duplicate:
+                    raise ValueError(
+                        "runtime_http_setup_capture_shadows_input: "
+                        + ", ".join(sorted(duplicate))
+                    )
+                available.update(captures)
             if self.protocol == "json_template":
-                available = set(_RUNTIME_TEMPLATE_INPUTS)
-                for setup in self.setup_requests:
-                    unknown = (
-                        _runtime_template_names(setup.path)
-                        | _runtime_template_names(setup.body_template)
-                    ) - available
-                    if unknown:
-                        raise ValueError(
-                            "runtime_http_setup_unknown_placeholders: "
-                            + ", ".join(sorted(unknown))
-                        )
-                    duplicate = set(setup.capture) & available
-                    if duplicate:
-                        raise ValueError(
-                            "runtime_http_setup_capture_shadows_input: "
-                            + ", ".join(sorted(duplicate))
-                        )
-                    available.update(setup.capture)
                 unknown = _runtime_template_names(self.request_template) - available
                 if unknown:
                     raise ValueError(
                         "runtime_http_request_unknown_placeholders: "
                         + ", ".join(sorted(unknown))
                     )
+            unknown = _runtime_template_names(self.path) - available
+            unknown |= _runtime_template_names(self.headers_template) - (
+                available | set(self.setup_secrets)
+            )
+            if unknown:
+                raise ValueError(
+                    "runtime_http_request_unknown_placeholders: "
+                    + ", ".join(sorted(unknown))
+                )
         if self.kind == "websocket" and self.protocol != "fi.alk":
             raise ValueError("runtime_websocket_protocol_unsupported: expected fi.alk")
+        if self.sse is not None and self.kind != "http":
+            raise ValueError("runtime_sse_requires_http")
         return self
+
+
+class RuntimeSecretFile(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    alias: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    destination: str
+    environment_variable: str | None = Field(
+        default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$"
+    )
+
+    @model_validator(mode="after")
+    def _contained_destination(self):
+        from pathlib import PurePosixPath
+
+        path = PurePosixPath(self.destination)
+        forbidden = (
+            "/proc",
+            "/sys",
+            "/dev",
+            "/etc",
+            "/bin",
+            "/sbin",
+            "/usr",
+            "/lib",
+            "/lib64",
+            "/var/run",
+            "/run/docker",
+            "/run/containerd",
+        )
+        if (
+            not path.is_absolute()
+            or str(path) != self.destination
+            or len(path.parts) < 3
+            or ".." in path.parts
+            or "$" in self.destination
+            or any(
+                path == PurePosixPath(root) or path.is_relative_to(root)
+                for root in forbidden
+            )
+            or self.environment_variable
+            in {"PATH", "HOME", "LD_PRELOAD", "LD_LIBRARY_PATH"}
+            or (self.environment_variable or "").startswith(
+                ("DOCKER_", "COMPOSE_", "BUILDKIT_", "BUILDX_")
+            )
+        ):
+            raise ValueError("runtime_secret_file_destination_invalid")
+        return self
+
+
+class RuntimeConfigFile(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    format: Literal["dotenv"] = "dotenv"
+    values: dict[str, str] = Field(default_factory=dict)
+    secret_aliases: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _bounded_values(self):
+        if (set(self.values) & set(self.secret_aliases)
+            or len(self.values) + len(self.secret_aliases) > 256
+            or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key)
+                   for key in [*self.values, *self.secret_aliases, *self.secret_aliases.values()])
+            or sum(len(value.encode()) for value in self.values.values()) > 65536
+            or any("\x00" in value or "\n" in value or "\r" in value for value in self.values.values())):
+            raise ValueError("runtime_config_file_invalid")
+        return self
+
+
+def runtime_public_environment(runtime: dict) -> dict[str, str]:
+    result = {}
+    confidential = set()
+    for raw in runtime.get("config_files", {}).values():
+        resource = RuntimeConfigFile.model_validate(raw)
+        confidential.update(resource.secret_aliases.values())
+        for key, value in resource.values.items():
+            if key in result and result[key] != value:
+                raise ValueError("compose_config_public_value_conflict")
+            result[key] = value
+    if confidential & result.keys():
+        raise ValueError("compose_config_public_secret_alias_conflict")
+    return result
+
+
+def validate_runtime_resource_paths(config_files, directories):
+    from pathlib import PurePosixPath
+
+    if (not isinstance(config_files, dict) or not isinstance(directories, list)
+        or any(not isinstance(value, str) for value in [*config_files, *directories])
+        or len(config_files) > 32 or len(directories) > 64 or len(set(directories)) != len(directories)):
+        raise ValueError("runtime_resources_limit")
+    paths = [*config_files, *directories]
+    for value in paths:
+        path = PurePosixPath(value)
+        if (not value or path.is_absolute() or str(path) != value or value == "."
+            or ".." in path.parts or any(char in value for char in "$\\\x00")
+            or any(part in {".git", ".aws", ".ssh"} for part in path.parts)):
+            raise ValueError("runtime_resource_path_invalid")
+    for value in config_files:
+        path = PurePosixPath(value)
+        if not (path.name == ".env" or path.suffix in {".env", ".dotenv"}):
+            raise ValueError("runtime_config_file_extension_invalid")
+    for index, value in enumerate(paths):
+        if any(PurePosixPath(value).is_relative_to(old) or PurePosixPath(old).is_relative_to(value)
+               for old in paths[:index]):
+            raise ValueError("runtime_resources_overlap")
 
 
 class Runtime(BaseModel):
@@ -438,15 +827,52 @@ class Runtime(BaseModel):
 
     # Empty means detect from the submitted dependency manifest. Defaulting this to Python makes
     # an otherwise unambiguous Node repository fail the generated-runtime admission path.
-    language: str = ""
+    language: str = Field(
+        default="",
+        description="Source language. Native process supports Python or Bun with a "
+        "source-declared exact packageManager version and one root bun.lock or bun.lockb. "
+        "Bun requires a matching image toolchain and HTTP command.",
+    )
     version: str = ""
-    install: str = ""
+    install: str = Field(
+        default="",
+        description="Source install command recorded as evidence only; never executed. Required source-declared optional groups must also appear in extras.",
+    )
     # Optional dependency groups declared by the repository itself (for example ``voice`` in
     # pyproject.toml). Generated packaging validates these names against the manifest.
-    extras: list[str] = Field(default_factory=list)
+    extras: list[str] = Field(
+        default_factory=list,
+        description="Executable selection of source-declared optional dependency groups required by this runtime. Include groups required by install evidence; never invent undeclared groups.",
+    )
+    requirements_files: list[str] = Field(
+        default_factory=list,
+        description="Additional source-declared Python requirements files relative to the selected installable project root, which may be an ancestor of workdir, installed alongside project dependencies and extras. Select files required by install evidence; never invent dependencies.",
+    )
+    observations: dict[str, HttpObservation] = Field(
+        default_factory=dict,
+        max_length=32,
+        description="Source-reviewed fixed HTTP read operations with bounded scalar parameters. Server read-only semantics require source evidence.",
+    )
+    workspaces: dict[str, str] = Field(
+        default_factory=dict,
+        description="Named task workspace roots relative to the agent process working directory. Trace the actual file-tool directory in source/configuration; uploaded source is not automatically the task workspace. These bindings enable private scenario file setup and readback.",
+    )
     workdir: str = ""
     # Select one submitted Compose file when a repository contains multiple runnable stacks.
+    execution: Literal["auto", "native", "compose"] = "auto"
     compose_file: str = ""
+    compose_overrides: list[str] = Field(default_factory=list, max_length=8)
+    compose_image_services: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        description="Selected Compose services that use their source-declared image instead of build. Requires explicit compose_file and service. Never invent image references; retain source deployment evidence.",
+    )
+    service: str = ""
+    additional_services: list[str] = Field(default_factory=list, max_length=32)
+    required_environment: dict[str, list[str]] = Field(default_factory=dict)
+    secret_files: dict[str, list[RuntimeSecretFile]] = Field(default_factory=dict)
+    config_files: dict[str, RuntimeConfigFile] = Field(default_factory=dict)
+    directories: list[str] = Field(default_factory=list)
     dockerfile: str = ""
     # For repositories without container metadata, this is an argv vector for the submitted
     # process. It is optional when one conventional entrypoint can be proven from source.
@@ -465,6 +891,145 @@ class Runtime(BaseModel):
     # repository.
     interface: RuntimeInterface | None = None
 
+    # The folder of the repository this agent lives in. The harness records it when the
+    # contract is saved, so it is kept out of the schema the model writes against and out of
+    # the dump when empty.
+    source_subfolder: SkipJsonSchema[str] = ""
+
+    @field_validator("source_subfolder")
+    @classmethod
+    def _folder_inside_the_source(cls, folder: str) -> str:
+        # Checked at the save, and again by its spelling when a bundle's contract is loaded: the
+        # run puts this folder on the import path, so it is never absolute or climbs with `..`.
+        # A folder that is a link out of the source is caught at the save (`agent_folder`).
+        if folder and (
+            folder.startswith("/") or any(part in ("", ".", "..") for part in folder.split("/"))
+        ):
+            raise ValueError("runtime_source_subfolder_invalid")
+        return folder
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_subfolder(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if not data.get("source_subfolder"):
+            data.pop("source_subfolder", None)
+        return data
+
+    @model_validator(mode="after")
+    def _validate_selection(self) -> "Runtime":
+        from .world.files import validate_bindings
+
+        if any(
+            not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", name)
+            for name in self.observations
+        ):
+            raise ValueError("runtime_observation_name_invalid")
+        validate_bindings(self.workspaces)
+        validate_runtime_resource_paths(self.config_files, self.directories)
+        if self.interface and self.interface.local_auth:
+            if self.execution == "compose" or self.compose_file:
+                raise ValueError("runtime_local_auth_requires_native_process")
+            for resource in self.config_files.values():
+                self.interface.local_auth.reject_collisions(
+                    set(resource.values)
+                    | set(resource.secret_aliases)
+                    | set(resource.secret_aliases.values())
+                )
+        if self.compose_overrides:
+            if self.execution == "native" or not (self.compose_file and self.service):
+                raise ValueError("runtime_compose_overrides_require_compose_selection")
+            if (
+                len(set([self.compose_file, *self.compose_overrides]))
+                != len(self.compose_overrides) + 1
+            ):
+                raise ValueError("runtime_compose_overrides_duplicate")
+            if any(
+                not path
+                or len(path) > 1024
+                or "\\" in path
+                or "$" in path
+                or any(ord(c) < 32 for c in path)
+                for path in self.compose_overrides
+            ):
+                raise ValueError("runtime_compose_overrides_path_invalid")
+        if self.compose_image_services:
+            if self.execution == "native" or not (self.compose_file and self.service):
+                raise ValueError("runtime_compose_images_require_compose_selection")
+            if (
+                len(set(self.compose_image_services)) != len(self.compose_image_services)
+                or any(
+                    not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name)
+                    for name in self.compose_image_services
+                )
+            ):
+                raise ValueError("runtime_compose_image_services_invalid")
+        if self.additional_services:
+            if self.execution == "native" or not (self.compose_file and self.service):
+                raise ValueError(
+                    "runtime_additional_services_require_compose_selection"
+                )
+            if (
+                len(set(self.additional_services)) != len(self.additional_services)
+                or self.service in self.additional_services
+                or any(
+                    len(name) > 128
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name)
+                    for name in self.additional_services
+                )
+            ):
+                raise ValueError("runtime_additional_services_invalid")
+        if self.interface and self.interface.kind == "command" and any(
+            re.search(r"\{\{\s*(?:messages|new_message(?:_content)?)\s*\}\}", argument)
+            for argument in self.command
+        ):
+            raise ValueError(
+                "runtime_command_message_template_unsupported: command argv is literal. "
+                "Use a source-owned HTTP interface or a noninteractive command that reads "
+                "JSON stdin, ALK_USER_MESSAGE, or ALK_MESSAGES_JSON."
+            )
+        if self.execution == "native" and (self.compose_file or self.service):
+            raise ValueError("runtime_selection_conflict: native cannot select Compose")
+        if self.execution == "native" and not self.command:
+            raise ValueError(
+                "runtime_native_command_missing: explicit native selection needs command"
+            )
+        if self.execution == "compose" and not (self.compose_file and self.service):
+            raise ValueError(
+                "runtime_selection_incomplete: Compose needs compose_file and service"
+            )
+        if self.service and not self.compose_file:
+            raise ValueError("runtime_selection_incomplete: service needs compose_file")
+        for path in (self.compose_file, self.dockerfile, *self.compose_overrides):
+            if path and (path.startswith("/") or ".." in path.split("/")):
+                raise ValueError(
+                    "runtime_selection_path_invalid: use a repository-relative path"
+                )
+        for process, names in self.required_environment.items():
+            if (
+                not process
+                or len(names) != len(set(names))
+                or any(
+                    not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in names
+                )
+            ):
+                raise ValueError("runtime_required_environment_invalid")
+        if len(self.context_excludes) != len(set(self.context_excludes)):
+            raise ValueError("runtime_context_excludes_duplicate")
+        for path in self.context_excludes:
+            relative = Path(path)
+            if (
+                not relative.parts
+                or relative.is_absolute()
+                or ".." in relative.parts
+                or "\\" in path
+                or "$" in path
+                or any(ord(char) < 32 for char in path)
+            ):
+                raise ValueError("runtime_context_exclude_invalid")
+            if any(char in path for char in "?[]"):
+                raise ValueError("runtime_context_excludes_pattern_unsupported")
+        return self
+
     @field_validator("command", mode="before")
     @classmethod
     def _normalize_command(cls, value: Any) -> Any:
@@ -478,6 +1043,30 @@ class Runtime(BaseModel):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+
+def generated_chat_interface_problem(runtime: Runtime | None) -> str | None:
+    interface = runtime.interface if runtime else None
+    if interface and (
+        interface.kind == "http"
+        and interface.protocol in {"fi.alk", "openai_chat", "json_template"}
+        or interface.kind in {"callable", "command"} and interface.protocol == "fi.alk"
+    ):
+        return None
+    code = (
+        "missing-chat-interface"
+        if interface is None or not interface.kind
+        else "unsupported-chat-interface"
+    )
+    return (
+        f"{code}: inspect the source and declare runtime.interface.kind. Generated chat "
+        "supports http with fi.alk, openai_chat, or json_template, and callable or command "
+        "with fi.alk. Callable requires a source-exported agent_callback. Declare command "
+        "only for a proven noninteractive entrypoint consuming JSON stdin, ALK_USER_MESSAGE, "
+        "or ALK_MESSAGES_JSON and returning the chat response on stdout. An interactive CLI, "
+        "startup command, ACP, or WebSocket is not supported generated chat ingress. "
+        "The declared interface must still pass a real chat readiness check."
+    )
 
 
 class Dependency(BaseModel):
@@ -559,6 +1148,20 @@ def _reached(one: Dependency) -> str:
     return "; ".join(said)
 
 
+def prompt_quote(payload: Any) -> str:
+    """The quote of the prompt as AgentContract reads it from a payload: under its own name or
+    the first alias that has one, a list joined by lines. The save holds it before validating."""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("system_prompt_excerpt", *_ALIASES["system_prompt_excerpt"]):
+        value = payload.get(key)
+        if value:
+            if isinstance(value, list):
+                return "\n".join(str(item) for item in value)
+            return value if isinstance(value, str) else str(value)
+    return ""
+
+
 class AgentContract(BaseModel):
     """What the agent verifiably is. Nothing downstream may contradict this."""
 
@@ -617,8 +1220,16 @@ class AgentContract(BaseModel):
     system_prompt_excerpt: str = ""
     # When given, the excerpt is replaced by these lines copied from the source as written.
     system_prompt_from: list[PromptSource] = Field(default_factory=list)
+    # Set by the save, never by the reading: lines named for the prompt that twice didn't hold
+    # the quote given for it. The quote went out instead, or, when the quote was too short to
+    # stand for the prompt, the lines did, unconfirmed. Empty for nearly every contract.
+    unconfirmed_prompt_from: list[PromptSource] = Field(default_factory=list)
+    # None is unknown. Kept only when its name was found on the line cited in the source.
+    model: ModelSource | None = None
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
+    # Empty for an agent that hands no work to other agents.
+    workers: list[DeclaredWorker] = Field(default_factory=list)
     data_schema: dict[str, Any] = Field(default_factory=dict)
     base_environment: dict[str, Any] = Field(default_factory=dict)
     # What the environment stage has to build before any tool can be answered.
@@ -650,6 +1261,33 @@ class AgentContract(BaseModel):
     # than blended in, and whoever reads it later can tell the two apart.
     amendments: list[str] = Field(default_factory=list)
     instrumentation: str = "none"
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_model(self, handler: Any) -> dict[str, Any]:
+        # A contract with no model writes the same bytes as before the field existed, so its
+        # setup fingerprint is unchanged.
+        data = handler(self)
+        if data.get("model") is None:
+            data.pop("model", None)
+        # The same for the record of unconfirmed prompt lines, kept only when there are some.
+        if not data.get("unconfirmed_prompt_from"):
+            data.pop("unconfirmed_prompt_from", None)
+        return data
+
+    @model_validator(mode="after")
+    def _resolvable_workers(self) -> AgentContract:
+        # A worker holds only tools the contract has; its id is checked by `validate_contract`.
+        self.workers = [
+            worker.model_copy(
+                update={
+                    "tools": [
+                        tool for tool in worker.tools if tool in self.tool_names()
+                    ]
+                }
+            )
+            for worker in self.workers
+        ]
+        return self
 
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}
@@ -685,6 +1323,10 @@ class AgentContract(BaseModel):
                         ("refuses", tool.refuses),
                         ("effects", tool.effects),
                         ("arguments from", ", ".join(f"{arg} <- {source}" for arg, source in tool.inputs_from.items())),
+                        ("units", ", ".join(f"{arg} in {unit}" for arg, unit in sorted(tool.arg_units.items()))),
+                        ("returns", ", ".join(f"{field}: {kind}" for field, kind in tool.returns.items())),
+                        ("reads tables (declared)", ", ".join(tool.tables_read)),
+                        ("changes tables (declared)", ", ".join(tool.tables_changed)),
                     )
                     if text
                 )
@@ -750,6 +1392,14 @@ class AgentContract(BaseModel):
                     for one in self.dependencies
                 )
                 + "\nThe agent's code is never edited; the environment must match its existing seam."
+            )
+        if self.workers:
+            parts.append(
+                "WORKERS (agents this one hands work to, and the tools each holds):\n  - "
+                + "\n  - ".join(
+                    f"{one.id} ({one.name or one.id}): {', '.join(one.tools) or 'no tools'}"
+                    for one in self.workers
+                )
             )
         if self.real_use_cases:
             # Every one of them. A scenario writer covers what it is shown, so a truncated
@@ -835,6 +1485,328 @@ class AgentContract(BaseModel):
         return bool(found and found.mode in ("import", "construct", "service"))
 
 
+# Which parts of the contract are prose, written by the reader in its own words, and which are
+# read as written by the build, the world or the runtime. Prose is cleaned of URL credentials
+# (userinfo, query and fragment) whenever the contract is saved; the rest is never changed.
+# A test walks every model the contract reaches and fails on a field in neither tuple.
+FREE_TEXT = (
+    "AgentContract.one_liner",
+    "AgentContract.system_prompt_excerpt",
+    "AgentContract.hard_constraints",
+    "AgentContract.implementation",
+    "AgentContract.real_use_cases",
+    "AgentContract.caller_identity",
+    "AgentContract.notes",
+    "AgentContract.open_questions",
+    "AgentContract.amendments",
+    "ToolSpec.description",
+    "ToolSpec.refuses",
+    "ToolSpec.effects",
+    # What a tool hands back, by output field: each value is a description a person or model
+    # writes, and the contract only ever shows it (the build, the world and the checks never match
+    # it), so the values are cleaned. The field names are kept.
+    "ToolSpec.returns",
+    "ToolEntry.notes",
+    "Dependency.what",
+)
+# A field that holds models is kept for itself, and its models' fields are classified in their
+# own right. A name without a dot is a whole technical model, every field of it kept.
+KEPT_AS_WRITTEN = (
+    "AgentContract.agent",
+    "AgentContract.modality",
+    "AgentContract.call_direction",
+    "AgentContract.agent_languages",
+    "AgentContract.conversational",
+    "AgentContract.system_prompt_from",
+    "AgentContract.unconfirmed_prompt_from",
+    # The model name the code cites, with its file and line: read as written, like the prompt lines.
+    "AgentContract.model",
+    "AgentContract.tools",
+    "AgentContract.data_schema",
+    "AgentContract.base_environment",
+    "AgentContract.dependencies",
+    "AgentContract.runtime_dependencies",
+    "AgentContract.tool_entrypoints",
+    # world/runtime.py matches its quoted markers against tool results, so cleaning it would
+    # change what counts as a refusal.
+    "AgentContract.refusal_signature",
+    "AgentContract.data_store",
+    "AgentContract.runtime",
+    "AgentContract.chosen_evals",
+    "AgentContract.instrumentation",
+    # Names: a worker's id and name are matched against the spans the app exports, and its tools
+    # against the contract's tool names, so they are read as written.
+    "AgentContract.workers",
+    "DeclaredWorker.id",
+    "DeclaredWorker.name",
+    "DeclaredWorker.tools",
+    "ToolSpec.name",
+    "ToolSpec.args",
+    "ToolSpec.arg_types",
+    # A unit or format each field is written in ("milliseconds"): the actor and the world read it
+    # as written, and its keys are checked against `args`.
+    "ToolSpec.arg_units",
+    # The world answers with these as written.
+    "ToolSpec.arg_values",
+    "ToolSpec.requires",
+    "ToolSpec.inputs_from",
+    # Names of the world's tables, matched against the tables a proof run changed
+    # (tool_certification) and against the world's schema.
+    "ToolSpec.tables_read",
+    "ToolSpec.tables_changed",
+    "ToolEntry.tool",
+    "ToolEntry.mode",
+    "ToolEntry.module",
+    "ToolEntry.callable",
+    "ToolEntry.factory",
+    "ToolEntry.first_arg",
+    "ToolEntry.service",
+    # The tool proxy calls it as written.
+    "ToolEntry.endpoint",
+    "ToolEntry.method",
+    # A flag, `read` or `write`, compared as written (the tool proxy, the world's door and the
+    # read-only check), so it is never prose even though it sits beside `notes`.
+    "ToolEntry.effect",
+    # Set by the seal from the kit's own constant text, not written by a reader; the platform
+    # tests it for emptiness and quotes it as set.
+    "ToolEntry.door_unreached",
+    "Dependency.name",
+    "Dependency.kind",
+    "Dependency.used_by",
+    "Dependency.engine",
+    "Dependency.version",
+    "Dependency.reached",
+    "PromptSource",
+    "ModelSource",
+    "Reached",
+    "DataStore",
+    "Runtime",
+    "HttpObservation",
+    "ObservationParameter",
+    "RuntimeSecretFile",
+    "RuntimeConfigFile",
+    "RuntimeInterface",
+    "CompletedToolEvents",
+    "CompletedToolFailureEvent",
+    "CompletedToolRows",
+    "LocalHttpAuth",
+    "RuntimeHttpFailureRule",
+    "RuntimeHttpSetupRequest",
+    # The live SSE endpoint's rules (fi.simulate): a JSON path, a mode and the values a frame is
+    # matched against, all compared with the frames as written.
+    "HTTPStreamSpec",
+    "HTTPStreamText",
+    "HTTPStreamMatch",
+)
+CONTRACT_FILE = "contract.json"
+# What a reading was made from, saved beside its contract and outside the model: a build handed
+# that reading is told apart from one that read the agent itself by this key alone, so every
+# later save of the contract keeps it.
+READING_RECORD = "reading_inputs"
+_SEQUENCES = (
+    list,
+    tuple,
+    set,
+    frozenset,
+    collections.abc.Sequence,
+    collections.abc.MutableSequence,
+)
+_MAPPINGS = (dict, collections.abc.Mapping, collections.abc.MutableMapping)
+
+
+def _walks_as_sequence(origin: Any) -> bool:
+    """Whether _holders walks a field of this origin as a sequence: any subclass of those above
+    (an abc registration counts), but never text."""
+    return (
+        isinstance(origin, type)
+        and issubclass(origin, _SEQUENCES)
+        and not issubclass(origin, (str, bytes, bytearray))
+    )
+
+
+def _walks_as_mapping(origin: Any) -> bool:
+    """Whether _holders walks a field of this origin as a mapping: any subclass of those above,
+    such as an OrderedDict."""
+    return isinstance(origin, type) and issubclass(origin, _MAPPINGS)
+
+
+def _holders(contract: AgentContract, body: dict[str, Any], model: str) -> list[tuple[Any, Any]]:
+    """Each (saved form, held object) of one free-text model, wherever the contract holds it.
+
+    The walk follows each field's type, so a model is found in a field of any shape: a list, a
+    tuple or a Sequence, a dict's or a Mapping's values (a subclass of each, such as an
+    OrderedDict, too), an Optional or a Union, or inside another model, and an empty one is
+    passed over. A model kept whole is not looked inside. The contract itself is
+    ``AgentContract``.
+    """
+    if model == "AgentContract":
+        return [(body, contract)]
+    pairs: list[tuple[Any, Any]] = []
+    seen: set[int] = set()
+
+    def walk(annotation: Any, saved: Any, held: Any) -> None:
+        if saved is None or held is None:
+            return
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            if isinstance(held, BaseModel):
+                if not isinstance(held, annotation):
+                    return
+                annotation = type(held)
+            if annotation.__name__ in KEPT_AS_WRITTEN or not isinstance(saved, dict):
+                return
+            if annotation.__name__ == model and id(saved) not in seen:
+                seen.add(id(saved))
+                pairs.append((saved, held))
+            for key, field in annotation.model_fields.items():
+                inner = held.get(key) if isinstance(held, dict) else getattr(held, key, None)
+                walk(field.annotation, saved.get(key), inner)
+            return
+        origin, arguments = typing.get_origin(annotation), typing.get_args(annotation)
+        if _walks_as_sequence(origin):
+            # model_dump keeps a tuple a tuple. A tuple[A, B] has a type for each place.
+            if arguments and isinstance(saved, (list, tuple)) and isinstance(held, (list, tuple)):
+                fixed = origin is tuple and not (len(arguments) == 2 and arguments[1] is Ellipsis)
+                for index, (saved_item, held_item) in enumerate(zip(saved, held)):
+                    if not fixed or index < len(arguments):
+                        walk(arguments[index if fixed else 0], saved_item, held_item)
+        elif _walks_as_mapping(origin):
+            if len(arguments) == 2 and isinstance(saved, dict) and isinstance(held, dict):
+                for key, held_item in held.items():
+                    walk(arguments[1], saved.get(key), held_item)
+        else:
+            # Optional, Union and Annotated: each type it may be.
+            for argument in arguments:
+                walk(argument, saved, held)
+
+    walk(type(contract), body, contract)
+    return pairs
+
+
+def _saved_record(path: Path) -> dict[str, Any]:
+    """The reading's record in the contract saved at ``path``, as ``{key: value}``; empty when
+    there is no file, no record in it, or it can't be read as a JSON object."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        # The save goes on without it, so a seeded build saves as an unseeded one: log the error
+        # in full. The file is the kit's own contract, not the customer's source.
+        logging.getLogger(__name__).warning(
+            "reading record not carried; class: %s", type(exc).__name__, exc_info=True
+        )
+        return {}
+    # A contract that never held a record is not parsed again.
+    if READING_RECORD.encode() not in raw:
+        return {}
+    try:
+        saved = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return {}
+    if not isinstance(saved, dict) or READING_RECORD not in saved:
+        return {}
+    return {READING_RECORD: saved[READING_RECORD]}
+
+
+def write_contract(
+    contract: AgentContract,
+    destination: Path,
+    *,
+    shape: collections.abc.Callable[[Any, Any], Any] | None = None,
+) -> AgentContract:
+    """Save the contract to ``destination/contract.json``, its free text cleaned of URL credentials.
+
+    Every writer of the contract goes through here, so no saved contract holds a URL's password,
+    query or fragment in its prose. The file is written beside its place, synced and moved in,
+    so a write that fails partway leaves the earlier contract as it was. Only then are the
+    cleaned values copied back onto ``contract`` itself, in place: the stage and its tools hold
+    that object, and a fresh one would leave them working from the raw text. It is returned too.
+
+    The record of what a reading was made from is not part of the model. When the contract
+    already saved at ``destination`` holds one, the new save keeps its value, first, as the
+    reading put it; a save where none is held writes none.
+
+    ``shape``, when given, is applied to what is written and the contract saved before it (an
+    edit's save keeps the saved file's shape, with no new empty fields).
+    """
+    body = contract.model_dump()
+    places: list[tuple[Any, Any, Any, str]] = []
+    for name in FREE_TEXT:
+        model, field = name.split(".")
+        for saved, held in _holders(contract, body, model):
+            if isinstance(saved, dict) and isinstance(saved.get(field), (str, list)):
+                places.append((saved, held, saved[field], field))
+            elif isinstance(saved, dict) and isinstance(saved.get(field), dict):
+                # A mapping of prose (a tool's `returns`): each value is cleaned as a text of its
+                # own, never by its key, so an output field named `token` keeps its description.
+                kept = held.get(field) if isinstance(held, dict) else getattr(held, field, None)
+                if isinstance(kept, dict):
+                    for key, value in saved[field].items():
+                        if isinstance(value, str):
+                            places.append((saved[field], kept, value, key))
+    # One call for the whole save, over a list with no keys: only the URL rule applies, and a
+    # refused URL is logged once per save rather than once per string.
+    values = [value for _, _, value, _ in places]
+    cleaned = _redact(values)
+    for (saved, _, _, field), value in zip(places, cleaned):
+        saved[field] = value
+
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / CONTRACT_FILE
+    partial = destination / f".{CONTRACT_FILE}.{os.getpid()}.{threading.get_ident()}"
+    written = {**_saved_record(path), **body}
+    if shape is not None:
+        try:
+            before = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            before = None
+        if isinstance(before, dict):
+            written = shape(written, before)
+    try:
+        partial.write_text(
+            json.dumps(written, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        # Synced before the move, so the move never publishes a file the disk does not hold.
+        descriptor = os.open(partial, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(partial, path)
+    finally:
+        partial.unlink(missing_ok=True)
+
+    for saved, held, _, field in places:
+        value = saved[field]
+        current = held.get(field) if isinstance(held, dict) else getattr(held, field, None)
+        if isinstance(current, list) and isinstance(value, list):
+            current[:] = value
+        elif isinstance(held, dict):
+            held[field] = value
+        else:
+            setattr(held, field, value)
+    return contract
+
+
+def runtime_owns_tools(contract: AgentContract) -> bool:
+    """Whether a submitted voice worker is itself the runnable seam for every tool.
+
+    Frameworks commonly create function tools as closures that capture session state; forcing
+    those closures to also be importable outside the worker rejects valid agents or encourages
+    the harness to rewrite their behavior.
+    """
+    return bool(
+        contract.modality == "voice"
+        and contract.runtime
+        and (
+            contract.runtime.command
+            or contract.runtime.dockerfile
+            or contract.runtime.install
+        )
+    )
+
+
 def is_data_free_conversation(contract: AgentContract) -> bool:
     """Whether the contract claims conversation without custom tools or business state.
 
@@ -857,6 +1829,36 @@ def is_data_free_conversation(contract: AgentContract) -> bool:
             or contract.base_environment
             or store
         )
+    )
+
+
+def has_executable_tool_workflow(
+    contract: AgentContract, *, include_construct: bool = True
+) -> bool:
+    declared = {tool.name for tool in contract.tools if tool.name.strip()}
+    for entry in contract.tool_entrypoints:
+        if entry.tool not in declared:
+            continue
+        if entry.mode == "import" and entry.module.strip() and entry.callable.strip():
+            return True
+        if (
+            include_construct
+            and entry.mode == "construct"
+            and entry.module.strip()
+            and entry.callable.strip()
+            and entry.factory.strip()
+        ):
+            return True
+        if entry.mode == "service" and entry.service.strip() and entry.endpoint.strip():
+            return True
+    return False
+
+
+def validate_tool_workflow(contract: AgentContract) -> None:
+    if has_executable_tool_workflow(contract):
+        return
+    raise ValueError(
+        "required_tool_workflow_unavailable: no declared tool has an executable entrypoint"
     )
 
 
@@ -895,6 +1897,11 @@ def validate_contract(contract: AgentContract) -> list[str]:
             problems.append(
                 f"tool[{tool.name}]:types-for-unknown-args:{','.join(unknown)}"
             )
+        unknown_units = sorted(set(tool.arg_units) - set(tool.args))
+        if unknown_units:
+            problems.append(
+                f"tool[{tool.name}]:units-for-unknown-args:{','.join(unknown_units)}"
+            )
     # Conversational agents may expose no tools. Zero-argument tools are also legitimate;
     # cardinality alone is not evidence that authoring omitted something.
     if not contract.real_use_cases:
@@ -919,4 +1926,17 @@ def validate_contract(contract: AgentContract) -> list[str]:
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         problems.append(f"duplicate-tool-names:{','.join(duplicates)}")
+    for index, worker in enumerate(contract.workers):
+        if not worker.id.strip():
+            problems.append(
+                f"worker[{index}]:no-id: give this worker the id the agent's source uses for it, "
+                "one that no other worker has."
+            )
+    worker_ids = [worker.id for worker in contract.workers if worker.id.strip()]
+    repeated = sorted({one for one in worker_ids if worker_ids.count(one) > 1})
+    if repeated:
+        problems.append(
+            f"duplicate-worker-ids:{','.join(repeated)}: each worker is one agent of the app: "
+            "merge the entries that are the same agent, or give each its own id."
+        )
     return problems

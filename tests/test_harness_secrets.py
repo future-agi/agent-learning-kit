@@ -4,9 +4,38 @@ from fi.alk.harness.secrets import (
     SecretResolutionError,
     resolve_worker_secrets,
     runtime_configuration_value,
+    target_provider_environment,
     worker_environment,
 )
 from fi.simulate.runtime.spec import SecretRef
+
+
+@pytest.mark.parametrize(
+    "alias",
+    ["VERTEXAI_LOCATION", "VERTEX_LOCATION", "VERTEXAI_PROJECT", "VERTEX_PROJECT"],
+)
+@pytest.mark.parametrize("explicit", ["", "chosen-value"])
+def test_target_provider_projection_preserves_explicit_aliases(alias, explicit):
+    values = {
+        "GOOGLE_CLOUD_LOCATION": "global",
+        "GOOGLE_CLOUD_PROJECT": "target-project",
+        alias: explicit,
+    }
+    projected = target_provider_environment(values)
+    assert projected[alias] == explicit
+    primary = "VERTEXAI_LOCATION" if "LOCATION" in alias else "VERTEXAI_PROJECT"
+    if alias != primary:
+        assert primary not in projected
+    assert len(values) == 3
+
+
+def test_target_provider_projection_does_not_read_host_configuration(monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "host-location")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "host-project")
+    assert target_provider_environment({}) == {}
+    assert target_provider_environment({"GOOGLE_CLOUD_LOCATION": ""}) == {
+        "GOOGLE_CLOUD_LOCATION": ""
+    }
 
 
 def _ref(manager="futureagi", key="secret-livekit"):
@@ -72,6 +101,15 @@ def test_uploaded_runtime_values_cannot_replace_runner_model_credentials():
     )
 
 
+def test_google_adk_approval_reaches_harness_worker_but_cannot_be_uploaded():
+    child = worker_environment(
+        {"ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER": "customer-value"},
+        host_environment={"ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER": "1"},
+    )
+
+    assert child["ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER"] == "1"
+
+
 def test_worker_inherits_runner_topology_but_uploaded_values_cannot_replace_it():
     child = worker_environment(
         {
@@ -96,9 +134,9 @@ def test_worker_inherits_runner_topology_but_uploaded_values_cannot_replace_it()
     assert child["HARNESS_RUNTIME_WEBHOOK_URL"] == "http://runner.internal:8787"
 
 
-def test_worker_never_inherits_host_voice_provider_credentials():
+def test_worker_inherits_only_the_runners_cartesia_voice_credential():
     child = worker_environment(
-        {"LIVEKIT_API_KEY": "job-livekit"},
+        {"LIVEKIT_API_KEY": "job-livekit", "CARTESIA_API_KEY": "job-cartesia"},
         host_environment={
             "PATH": "/bin",
             "LIVEKIT_API_KEY": "runner-livekit",
@@ -111,7 +149,17 @@ def test_worker_never_inherits_host_voice_provider_credentials():
     assert child["LIVEKIT_API_KEY"] == "job-livekit"
     assert "LIVEKIT_API_SECRET" not in child
     assert "DEEPGRAM_API_KEY" not in child
-    assert "CARTESIA_API_KEY" not in child
+    # The one exception: the runner's Cartesia key voices the simulated caller
+    # (call_runner.py, `cartesia_key`), so the worker inherits it (f0b3fcea, #69), and a job's
+    # own value can't replace it.
+    assert child["CARTESIA_API_KEY"] == "runner-cartesia"
+
+    # A job that sends no LiveKit key gets none: the runner's key isn't inherited either.
+    without_job_keys = worker_environment(
+        {},
+        host_environment={"PATH": "/bin", "LIVEKIT_API_KEY": "runner-livekit"},
+    )
+    assert "LIVEKIT_API_KEY" not in without_job_keys
 
 
 def test_worker_inherits_runner_model_roles_but_jobs_cannot_replace_them():

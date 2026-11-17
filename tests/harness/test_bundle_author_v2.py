@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -10,14 +13,21 @@ import pytest
 
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
+    _SOURCE_TOOL_TRACE_VERSION,
+    _carries_world,
     _compile_source_tool_handlers,
     _contract_column_declarations,
     _contract_sql_type,
+    _docker_python,
+    _source_schema_artifacts,
     _sqlite_sql,
+    _uv_sync_build_command,
     author_bundle_v2,
     reseal_scenarios,
     resolve_environment_plan,
+    sealed_from,
 )
+from fi.alk.harness.generated_runtime import framework_instrumentation_command
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
 from fi.alk.harness.bundle_v2 import load_bundle_v2
 from fi.alk.harness.certification import (
@@ -30,8 +40,16 @@ from fi.alk.harness.certification import (
     CheckStatus,
     HarnessCertification,
 )
-from fi.alk.harness.job import HarnessJob, ProviderExecutionMode
+from fi.alk.harness.generated_runtime import GeneratedRuntimeError
+from fi.alk.harness.job import (
+    HarnessJob,
+    ProviderExecutionMode,
+    RepositorySource,
+    SourceKind,
+    SourceVisibility,
+)
 from fi.alk.harness.process_preflight import preflight_bundle
+from fi.alk.harness.process_runtime import plan_ports
 from fi.alk.harness.provision import source_fingerprint
 from fi.alk.harness.repair_controller import RepairHistory
 from fi.alk.harness.source_model import SourceModel
@@ -73,6 +91,425 @@ def test_source_tool_handler_rejects_path_separator(tmp_path: Path) -> None:
             },
             tmp_path,
         )
+
+
+@pytest.mark.parametrize("dependency", ["requirements", "selected", "unselected", "extra", "supplemental"])
+@pytest.mark.parametrize("mode", ["import", "construct", "none", "http"])
+def test_native_command_tool_trace_uses_executable_source_bindings(
+    tmp_path: Path, dependency: str, mode: str,
+) -> None:
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    dependencies = '["crewai==1.6.1"]' if dependency == "selected" else "[]"
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="agent"\nversion="1"\n'
+        f'dependencies={dependencies}\n'
+        '[project.optional-dependencies]\ncrew=["crewai==1.6.1"]\n'
+    )
+    (tmp_path / "requirements.txt").write_text("crewai==1.6.1\n")
+    if dependency == "requirements":
+        (tmp_path / "pyproject.toml").unlink()
+    runtime = {
+        "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        "extras": ["crew"] if dependency == "extra" else [],
+        "requirements_files": ["requirements.txt"] if dependency == "supplemental" else [],
+    }
+    entries = [] if mode == "none" else [{
+        "tool": "Lookup tool", "mode": mode, "module": "agent_tools", "callable": "lookup",
+    }]
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime,
+        tool_entrypoints=entries, contract_interface_kind="command", contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert control.build_commands[-1] == framework_instrumentation_command()
+    assert (control.environment.get("ALK_CREWAI_TOOL_TRACE") == "1") == (
+        dependency in {"requirements", "selected", "extra", "supplemental"}
+    )
+    if mode in {"none", "http"}:
+        assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
+    else:
+        assert json.loads(control.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
+            "name": "Lookup tool", "module": "agent_tools", "callable": "lookup",
+        }]
+    assert all(
+        "HARNESS_TOOL_TRACE" not in getattr(p, "environment", {})
+        for p in plan.processes if p.name != plan.control_service
+    )
+
+
+def test_an_http_python_agent_is_observed_through_its_framework_spans(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "requirements.txt").write_text("openai-agents==0.24.0\n")
+    runtime = {"language": "python", "execution": "native", "command": ["python", "agent.py"]}
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime,
+        tool_entrypoints=[{"tool": "lookup", "mode": "import", "module": "agent", "callable": "lookup"}],
+        contract_interface_kind="http", contract_modality="chat",
+    )
+    voice = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime,
+        tool_entrypoints=[], contract_interface_kind="http", contract_modality="voice",
+    )
+    # A voice agent's calls are traced by its LiveKit worker alone.
+    assert all(
+        "ALK_OBSERVE_FRAMEWORKS" not in p.environment and framework_instrumentation_command() not in p.build_commands
+        for p in voice.processes if hasattr(p, "build_commands")
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
+    assert control.build_commands[-1] == framework_instrumentation_command()
+
+
+@pytest.mark.parametrize("uv", ["exit 1", "exec sleep 30"])
+def test_an_instrumentor_that_fails_or_stalls_is_a_warning_and_the_build_goes_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uv: str
+) -> None:
+    from fi.alk.harness import generated_runtime
+    from fi.alk.harness.generated_runtime import FRAMEWORK_INSTRUMENTORS
+
+    assert all(
+        "==" in one
+        for _framework, one in FRAMEWORK_INSTRUMENTORS
+        if one.startswith("traceai-")
+    )
+    monkeypatch.setattr(generated_runtime, "INSTRUMENTOR_INSTALL_SECONDS", 1)
+    installed = tmp_path / "site"
+    (installed / "crewai-1.0.dist-info").mkdir(parents=True)
+    (installed / "crewai-1.0.dist-info" / "METADATA").write_text(
+        "Name: crewai\nVersion: 1.0\n"
+    )
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    (tools / "uv").write_text(f"#!/bin/sh\n{uv}\n")
+    (tools / "uv").chmod(0o755)
+    (tools / "python3").symlink_to(sys.executable)
+    result = subprocess.run(
+        generated_runtime.framework_instrumentation_command(),
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{tools}:/bin:/usr/bin", "PYTHONPATH": str(installed)},
+        timeout=60,
+    )
+    assert result.returncode == 0
+    assert (
+        "warning: framework instrumentor not installed, its calls go unobserved: traceai-crewai=="
+        in result.stderr
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "project"),
+    [
+        (
+            [
+                "uv",
+                "run",
+                "--project",
+                "graphs/python",
+                "--with",
+                "langgraph-cli[inmem]",
+                "langgraph",
+                "dev",
+            ],
+            "graphs/python",
+        ),
+        (["uv", "run", "--project=app", "python", "main.py"], "app"),
+        (["uv", "run", "python", "agent.py"], ""),
+        (["python", "agent.py"], ""),
+    ],
+)
+def test_framework_instrumentors_go_where_a_uv_run_project_s_frameworks_are(
+    tmp_path: Path, command: list[str], project: str
+) -> None:
+    from fi.alk.harness.generated_runtime import uv_run_project
+
+    assert uv_run_project(command) == project
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    runtime = {"language": "python", "execution": "native", "command": command}
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_runtime=runtime,
+        tool_entrypoints=[],
+        contract_interface_kind="http",
+        contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    step = control.build_commands[-1]
+    assert step == framework_instrumentation_command(project)
+    if project:
+        assert step[2].startswith(f"uv sync --project {project} || echo ")
+        assert f"{project}/.venv/bin/python" in step[2]
+    else:
+        assert "uv sync" not in step[2] and "p=.venv/bin/python" in step[2]
+
+
+def test_bundle_author_carries_command_tool_trace_bindings(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text("def lookup(query): return query\n")
+    (source / "requirements.txt").write_text("crewai==1.6.1\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "lookup",
+            "mode": "import",
+            "module": "agent_tools",
+            "callable": "lookup",
+        },
+        {
+            "tool": "editor",
+            "mode": "construct",
+            "module": "agent_tools",
+            "callable": "Editor.update",
+        },
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
+    assert process.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert process.environment["ALK_CREWAI_TOOL_TRACE"] == "1"
+    assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [
+        {"name": "lookup", "module": "agent_tools", "callable": "lookup"},
+        {
+            "name": "editor",
+            "module": "agent_tools",
+            "callable": "Editor.update",
+        },
+    ]
+
+
+def test_reseal_compiles_tools_added_to_a_traced_command_agent(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text(
+        "def lookup(query): return query\n"
+        "def update(value): return value\n"
+    )
+    (source / "requirements.txt").write_text("requests==2.32.5\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tools"] = [{"name": "lookup", "args": ["query"]}]
+    contract["tool_entrypoints"] = [{
+        "tool": "lookup", "mode": "import", "module": "agent_tools", "callable": "lookup",
+    }]
+    contract_path.write_text(json.dumps(contract))
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=bundle,
+    )
+    contract["tools"].append({"name": "update", "args": ["value"]})
+    contract["tool_entrypoints"].append({
+        "tool": "update", "mode": "import", "module": "agent_tools", "callable": "update",
+    })
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    assert resealed.metadata["source_tool_trace_version"] == _SOURCE_TOOL_TRACE_VERSION
+    assert "handlers/update.py" in {file.path for file in resealed.files}
+    assert "contract_copied" not in resealed.metadata
+
+
+def test_reseal_binds_a_tool_added_to_a_command_agent_built_with_none(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text("def lookup(query): return query\n")
+    (source / "requirements.txt").write_text("requests==2.32.5\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tools"] = [{"name": "lookup", "args": ["query"]}]
+    contract["tool_entrypoints"] = []
+    contract_path.write_text(json.dumps(contract))
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=bundle
+    )
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "lookup",
+            "mode": "import",
+            "module": "agent_tools",
+            "callable": "lookup",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    control = next(
+        p for p in resealed.processes if p.name == resealed.runtime.control_service
+    )
+    assert json.loads(control.environment["ALK_TOOL_TRACE_BINDINGS"]) == [
+        {"name": "lookup", "module": "agent_tools", "callable": "lookup"}
+    ]
+
+
+def test_reseal_compiles_tools_added_to_a_bundle_sealed_before_framework_observation(
+    tmp_path: Path,
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text(
+        "def lookup(query): return query\ndef update(value): return value\n"
+    )
+    (source / "requirements.txt").write_text("requests==2.32.5\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tools"] = [{"name": "lookup", "args": ["query"]}]
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "lookup",
+            "mode": "import",
+            "module": "agent_tools",
+            "callable": "lookup",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=bundle
+    )
+    # As the previous release sealed it: tool bindings at trace version 1, no framework observation.
+    manifest = load_bundle_v2(bundle)
+    observation = framework_instrumentation_command()
+    processes = [
+        process.model_copy(
+            update={
+                "environment": {
+                    k: v
+                    for k, v in process.environment.items()
+                    if k != "ALK_OBSERVE_FRAMEWORKS"
+                },
+                "build_commands": [
+                    step for step in process.build_commands if step != observation
+                ],
+            }
+        )
+        if hasattr(process, "build_commands")
+        else process
+        for process in manifest.processes
+    ]
+    manifest = manifest.model_copy(
+        update={
+            "processes": processes,
+            "files": _files(bundle),
+            "metadata": {**manifest.metadata, "source_tool_trace_version": 1},
+        }
+    )
+    manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+    (bundle / BUNDLE_V2_MANIFEST).write_text(
+        json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+    )
+    contract["tools"].append({"name": "update", "args": ["value"]})
+    contract["tool_entrypoints"].append(
+        {
+            "tool": "update",
+            "mode": "import",
+            "module": "agent_tools",
+            "callable": "update",
+        }
+    )
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    assert "handlers/update.py" in {file.path for file in resealed.files}
+    assert "contract_copied" not in resealed.metadata
+
+
+def test_reseal_preserves_construct_only_crewai_command_trace(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text(
+        "class Editor:\n"
+        "    def update(self, value): return value\n"
+    )
+    (source / "requirements.txt").write_text("crewai==1.6.1\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [{
+        "tool": "editor", "mode": "construct", "module": "agent_tools",
+        "callable": "Editor.update",
+    }]
+    contract_path.write_text(json.dumps(contract))
+    bundle_path = authoring / "environment-bundle"
+    built = author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring,
+        output=bundle_path,
+    )
+    original = next(
+        process for process in built.processes
+        if process.name == built.runtime.control_service
+    ).environment
+
+    contract["one_liner"] = "edited after the build"
+    contract_path.write_text(json.dumps(contract))
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle_path)
+    process = next(
+        item for item in resealed.processes
+        if item.name == resealed.runtime.control_service
+    )
+    assert process.environment == original
+    assert process.environment["HARNESS_TOOL_TRACE"] == (
+        "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    )
+    assert process.environment["ALK_CREWAI_TOOL_TRACE"] == "1"
+    assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
+        "name": "editor", "module": "agent_tools", "callable": "Editor.update",
+    }]
+    assert resealed.metadata["source_tool_trace_version"] == _SOURCE_TOOL_TRACE_VERSION
 
 
 def _job(
@@ -287,6 +724,52 @@ def test_phone_connect_only_uses_platform_telephony_without_target_secret(
     preflight_bundle(tmp_path / "bundle", bundle, parallelism=1, secret_refs={})
 
 
+def test_phone_connect_only_does_not_require_a_local_transport_seam(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "phone-target"
+    source.mkdir()
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "phone-only-job",
+            "run_id": "phone-only-run",
+            "execution": "hosted",
+            "source": {"kind": "provider", "visibility": "public"},
+            "agent": {
+                "connector": "phone",
+                "mode": "connect_only",
+                "config": {
+                    "phone_number": "+14155551234",
+                    "target_system_prompt": "Answer questions about a ride booking.",
+                },
+            },
+            "scenario_count": 1,
+            "runtime": {
+                "isolation": "dedicated_vm",
+                "cpu_units": 2,
+                "memory_mb": 4096,
+                "parallelism": 1,
+            },
+        }
+    )
+
+    plan = resolve_environment_plan(
+        source,
+        job,
+        contract_modality="voice",
+        runtime_dependencies=[
+            {
+                "kind": "transport",
+                "name": "phone_network",
+                "engine": "telephony",
+                "reached": {},
+            }
+        ],
+    )
+
+    assert plan.packaging == "provider_connect_only"
+
+
 def test_generic_connect_only_provider_uses_authored_world_schema(
     tmp_path: Path,
 ) -> None:
@@ -409,7 +892,8 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
 
     handler = (output / "handlers" / "lookup_account.py").read_text(encoding="utf-8")
     assert "from customer_tools import lookup_account" in handler
-    assert "return settled(lookup_account(**args))" in handler
+    # The adopted tool is called the way its own signature expects (keywords here), through the shared caller.
+    assert "return settled(call_agent_tool(lookup_account, args, db, state=False))" in handler
     load_bundle_v2(output)
     world = GeneratedWorld(":memory:")
     world.handlers["lookup_account"] = handler
@@ -422,6 +906,151 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
     }
 
 
+def test_a_reseal_keeps_framework_observation_of_a_chat_agent_with_no_import_tools(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+            "include_tools": False,
+        },
+    )
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=bundle
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["notes"] = "edited after the build"
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    control = next(
+        p for p in resealed.processes if p.name == resealed.runtime.control_service
+    )
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert (
+        control.environment["HARNESS_TOOL_TRACE"]
+        == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    )
+    assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
+
+
+def test_bundle_observes_imported_chat_tool_execution(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "def search_books(query):\n    return {'query': query, 'matches': 1}\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/v1/chat/completions", "include_tools": False,
+        },
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "search_books", "mode": "import", "module": "agent",
+            "callable": "search_books",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(
+        item for item in bundle.processes if item.name == bundle.runtime.control_service
+    )
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    shutil.copy2(bootstrap, source / "sitecustomize.py")
+    result = subprocess.run(
+        [sys.executable, "-c", "from agent import search_books; print(search_books('Dune'))"],
+        env={
+            **os.environ,
+            **{
+                key: value.replace("{{WORLD_DIR}}", str(tmp_path))
+                for key, value in process.environment.items()
+            },
+            "PYTHONPATH": str(source),
+        },
+        capture_output=True, text=True, check=True,
+    )
+    assert "'matches': 1" in result.stdout
+    records = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert records[0]["name"] == "search_books"
+    assert records[0]["arguments"] == {"query": "Dune"}
+    assert bundle.metadata["source_tool_trace_version"] == _SOURCE_TOOL_TRACE_VERSION
+
+
+def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "tools.py").write_text(
+        "class Editor:\n"
+        "    @classmethod\n"
+        "    def prepare(cls, context):\n"
+        "        return [{'name': 'edit', 'description': 'Edit a file'}]\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/chat", "include_tools": False,
+        },
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "edit", "mode": "construct", "module": "tools",
+            "callable": "Editor.prepare", "factory": "Editor()",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    shutil.copy2(bootstrap, source / "sitecustomize.py")
+    result = subprocess.run(
+        [sys.executable, "-c", "from tools import Editor; print(Editor.prepare({}))"],
+        env={
+            **os.environ,
+            **{k: v.replace("{{WORLD_DIR}}", str(tmp_path)) for k, v in process.environment.items()},
+            "PYTHONPATH": str(source),
+        },
+        capture_output=True, text=True, check=True,
+    )
+    assert "Edit a file" in result.stdout
+    assert not trace.exists(), "Registering a tool does not prove the agent executed it"
+
+
 def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:
     source = tmp_path / "voice-agent"
     source.mkdir()
@@ -432,6 +1061,15 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     )
     authoring = _authoring(tmp_path)
     _write_voice_contract(authoring)
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "search_books", "mode": "import", "module": "agent",
+            "callable": "search_books",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
     job = _job(
         connector="auto",
         with_secrets=True,
@@ -445,6 +1083,8 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     agent = next(process for process in bundle.processes if process.name == "agent")
     assert agent.environment["LIVEKIT_AGENT_NAME"].endswith("-w{{WORLD_INDEX}}")
     assert agent.environment["HARNESS_MODE"] == "1"
+    assert "ALK_TOOL_TRACE_BINDINGS" not in agent.environment
+    assert "source_tool_trace_version" not in bundle.metadata
     assert "target_provider" in agent.secret_purposes
     assert "target_http" not in bundle.capabilities
 
@@ -557,9 +1197,16 @@ def test_bundle_rejects_missing_runtime_configuration_after_source_checkout(
     authoring = _authoring(tmp_path)
     _write_voice_contract(authoring)
 
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract.setdefault("runtime", {})["required_environment"] = {
+        "agent": ["GOOGLE_CLOUD_PROJECT"]
+    }
+    contract_path.write_text(json.dumps(contract))
+
     with pytest.raises(
         BundleAuthorError,
-        match="target_runtime_configuration_missing: environment:GOOGLE_CLOUD_PROJECT",
+        match="target_runtime_configuration_missing: agent:GOOGLE_CLOUD_PROJECT",
     ):
         author_bundle_v2(
             source=source,
@@ -634,6 +1281,7 @@ def test_src_layout_keeps_nearest_project_manifest(tmp_path, project_dir, manife
             "--no-cache",
             "--python",
             "python3.14",
+            "--no-dev",
         ]
         assert any("download-files" in command for command in agent.build_commands)
     else:
@@ -688,7 +1336,10 @@ def test_repository_runtime_environment_rejects_secrets(tmp_path: Path) -> None:
         )
 
 
-def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) -> None:
+@pytest.mark.parametrize("command", [None, ["python", "-m", "app.agent"]])
+def test_callable_contract_compiles_repository_callback_adapter(
+    tmp_path: Path, command: list[str] | None,
+) -> None:
     source = tmp_path / "ava"
     app = source / "app"
     app.mkdir(parents=True)
@@ -703,6 +1354,11 @@ def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) 
     (source / "requirements.txt").write_text("agent-simulate\n", encoding="utf-8")
     authoring = _authoring(tmp_path)
     _write_callable_contract(authoring)
+    if command:
+        contract_path = authoring / "contract.json"
+        contract = json.loads(contract_path.read_text())
+        contract["runtime"]["command"] = command
+        contract_path.write_text(json.dumps(contract))
 
     bundle = author_bundle_v2(
         source=source,
@@ -712,12 +1368,14 @@ def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) 
     )
 
     agent = next(process for process in bundle.processes if process.name == "agent")
-    assert agent.working_directory == "."
+    assert agent.source_origin == "bundle"
+    assert agent.working_directory == "generated/source/agent"
     assert agent.build_commands[1][-1] == "requirements.txt"
     assert agent.run_command[:2] == [".venv/bin/python", "-c"]
     assert "ThreadingHTTPServer" in agent.run_command[2]
     assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "app.agent:agent_callback"
     assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert agent.fixed_port is None
     assert bundle.capabilities["target_http"].service == "agent"
     assert any(probe.capability == "target_http" for probe in bundle.readiness)
     preflight_bundle(
@@ -769,7 +1427,8 @@ def test_repository_callback_is_discovered_when_contract_omits_interface(
     )
 
     agent = next(process for process in bundle.processes if process.name == "agent")
-    assert agent.working_directory == "."
+    assert agent.source_origin == "bundle"
+    assert agent.working_directory == "generated/source/agent"
     assert agent.run_command[:2] == [".venv/bin/python", "-c"]
     assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "app.agent:agent_callback"
     assert bundle.capabilities["target_http"].service == "agent"
@@ -990,6 +1649,105 @@ def test_fixed_multi_store_fixture_compiles_to_a_preflight_clean_bundle(
     assert manifest.capabilities["target_http"].service == "agent"
     assert manifest.capabilities["cache_redis"].service == "cache"
     preflight_bundle(output, manifest, parallelism=2, secret_refs={})
+
+
+def test_native_multi_store_contract_uses_source_compose_dependency_topology(
+    tmp_path: Path,
+) -> None:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "harness"
+        / "generic_multi_store_chat"
+    )
+    runtime = {
+        "language": "python",
+        "execution": "native",
+        "command": ["python", "agent.py"],
+        "required_environment": {"agent": ["DATABASE_URL", "CACHE_URL"]},
+        "interface": {
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+            "health_path": "/health",
+        },
+    }
+    dependencies = [
+        {
+            "name": "account store",
+            "kind": "datastore",
+            "engine": "postgresql",
+            "reached": {"dsn_env": "DATABASE_URL", "database": "app"},
+        },
+        {
+            "name": "access cache",
+            "kind": "queue",
+            "engine": "redis",
+            "reached": {"dsn_env": "CACHE_URL"},
+        },
+    ]
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+        runtime_dependencies=dependencies,
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.depends_on == ["world-db", "cache"]
+    assert agent.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
+    assert plan.capabilities["target_http"].service == "agent"
+    assert plan.capabilities["cache_redis"].service == "cache"
+
+
+def test_native_multi_store_contract_accepts_compose_list_environment(
+    tmp_path: Path,
+) -> None:
+    import shutil
+
+    source = tmp_path / "generic_multi_store_chat"
+    shutil.copytree(
+        Path(__file__).resolve().parents[2] / "examples" / "harness" / "generic_multi_store_chat",
+        source,
+    )
+    compose = source / "compose.yml"
+    compose.write_text(compose.read_text().replace(
+        "      DATABASE_URL: postgresql://source:source@postgres:5432/app\n"
+        "      CACHE_URL: redis://cache:6379/2\n"
+        '      PORT: "8080"\n',
+        "      - DATABASE_URL=postgresql://source:source@postgres:5432/app\n"
+        "      - CACHE_URL=redis://cache:6379/2\n"
+        "      - PORT=8080\n",
+    ))
+    runtime = {
+        "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        "required_environment": {"agent": ["DATABASE_URL", "CACHE_URL"]},
+        "interface": {
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/v1/chat/completions", "health_path": "/health",
+        },
+    }
+    dependencies = [
+        {"name": "account store", "kind": "datastore", "engine": "postgresql",
+         "reached": {"dsn_env": "DATABASE_URL", "database": "app"}},
+        {"name": "access cache", "kind": "queue", "engine": "redis",
+         "reached": {"dsn_env": "CACHE_URL"}},
+    ]
+
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_modality="chat",
+        contract_interface_kind="http", contract_runtime=runtime,
+        runtime_dependencies=dependencies,
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
 
 
 def test_bundle_never_persists_resolved_secret(tmp_path: Path) -> None:
@@ -1466,6 +2224,233 @@ def test_generic_pipeline_packages_source_schema_and_world_separately(
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
 
 
+def test_documented_readme_schema_is_adopted_without_setup_or_fixture_sql(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text(
+        """# Local setup
+
+```sql
+CREATE DATABASE ticketsdb;
+\\c ticketsdb
+CREATE TABLE tickets (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    marker TEXT DEFAULT '--',
+    description TEXT
+);
+INSERT INTO tickets (title, description) VALUES ('Broken login', 'Fixture');
+```
+
+```sql
+CREATE TABLE tickets (id BIGINT PRIMARY KEY, embedding vector(768));
+```
+""",
+        encoding="utf-8",
+    )
+
+    artifacts = _source_schema_artifacts(source)
+
+    assert len(artifacts) == 1
+    assert artifacts[0].relative_path == "README.md#sql-1"
+    assert "CREATE TABLE tickets" in artifacts[0].sql
+    assert "title TEXT NOT NULL" in artifacts[0].sql
+    assert "marker TEXT DEFAULT '--'" in artifacts[0].sql
+    assert "description TEXT" in artifacts[0].sql
+    assert "CREATE DATABASE" not in artifacts[0].sql
+    assert "INSERT INTO" not in artifacts[0].sql
+    assert "embedding" not in artifacts[0].sql
+
+
+def test_documented_readme_schema_keeps_dependencies_across_sql_fences(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text(
+        """# Local setup
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TYPE ride_status AS ENUM ('requested', 'accepted');
+CREATE SEQUENCE ride_number_seq;
+CREATE TABLE rides (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    status ride_status NOT NULL,
+    ride_number BIGINT DEFAULT nextval('ride_number_seq')
+);
+```
+
+```postgresql
+CREATE TABLE riders (id UUID PRIMARY KEY);
+ALTER TABLE rides ADD COLUMN rider_id UUID REFERENCES riders(id);
+CREATE INDEX rides_rider_id_idx ON rides (rider_id);
+INSERT INTO riders VALUES (gen_random_uuid());
+```
+""",
+        encoding="utf-8",
+    )
+
+    artifacts = _source_schema_artifacts(source)
+
+    assert [artifact.relative_path for artifact in artifacts] == [
+        "README.md#sql-1",
+        "README.md#sql-2",
+    ]
+    sql = "\n".join(artifact.sql for artifact in artifacts)
+    assert "CREATE EXTENSION" in sql
+    assert "CREATE TYPE ride_status" in sql
+    assert "CREATE SEQUENCE ride_number_seq" in sql
+    assert "CREATE TABLE rides" in sql
+    assert "CREATE TABLE riders" in sql
+    assert "ALTER TABLE rides" in sql
+    assert "CREATE INDEX rides_rider_id_idx" in sql
+    assert "INSERT INTO" not in sql
+
+
+def test_documented_readme_schema_skips_an_alternative_fence_not_later_tables(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text(
+        """```sql
+CREATE TABLE items (id BIGINT PRIMARY KEY);
+```
+
+```sql
+CREATE TABLE items (id UUID PRIMARY KEY);
+ALTER TABLE items ADD COLUMN cloud_only TEXT;
+```
+
+```sql
+CREATE TABLE audit_log (id BIGINT PRIMARY KEY);
+```
+""",
+        encoding="utf-8",
+    )
+
+    artifacts = _source_schema_artifacts(source)
+
+    sql = "\n".join(artifact.sql for artifact in artifacts)
+    assert [artifact.relative_path for artifact in artifacts] == [
+        "README.md#sql-1",
+        "README.md#sql-3",
+    ]
+    assert "cloud_only" not in sql
+    assert "CREATE TABLE audit_log" in sql
+
+
+def test_docker_python_respects_project_requires_python(tmp_path: Path) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        "FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.10,<3.13'\n",
+        encoding="utf-8",
+    )
+
+    assert _docker_python(tmp_path) == "python3.12"
+
+
+@pytest.mark.parametrize("version", ["3.14", "3.14.2"])
+@pytest.mark.parametrize("manifest", ["pyproject.toml", "requirements.txt", None])
+def test_native_python_provisions_source_pin(tmp_path: Path, version: str, manifest: str | None) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / ".python-version").write_text(version + "\n")
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12\n")
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    if manifest:
+        (tmp_path / manifest).write_text(
+            "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+            if manifest == "pyproject.toml" else ""
+        )
+    process = _plan_python(
+        tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+        needs_secrets=False,
+    )
+    command = " ".join(process.build_commands[0])
+    assert "uv " in command
+    assert "--python" in command
+    assert version in command
+    if manifest != "pyproject.toml":
+        assert process.run_command == [".venv/bin/python", "agent.py"]
+
+
+def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    calls = tmp_path / "calls"
+    uv = binary / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$UV_CALLS"\n'
+        'case " $* " in\n'
+        '  *" --locked "*) echo "The lockfile at uv.lock needs to be updated" >&2; exit 2;;\n'
+        "  *) exit 0;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+
+    completed = subprocess.run(
+        _uv_sync_build_command(
+            tmp_path, "python3.12", extra_arguments=["--all-packages", "--extra", "cloud"]
+        ),
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{binary}:{os.environ['PATH']}",
+            "UV_CALLS": str(calls),
+        },
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    attempts = calls.read_text(encoding="utf-8").splitlines()
+    assert len(attempts) == 2
+    assert "--locked" in attempts[0]
+    assert "--locked" not in attempts[1]
+    assert "--no-dev" in attempts[0]
+    assert "--no-dev" in attempts[1]
+    assert all("--all-packages --extra cloud" in attempt for attempt in attempts)
+
+
+def test_uv_sync_does_not_reinterpret_other_install_failures(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    calls = tmp_path / "calls"
+    uv = binary / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$UV_CALLS"\n'
+        'echo "Could not connect to package registry" >&2\n'
+        "exit 7\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+
+    completed = subprocess.run(
+        _uv_sync_build_command(tmp_path, "python3.12"),
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{binary}:{os.environ['PATH']}",
+            "UV_CALLS": str(calls),
+        },
+        check=False,
+    )
+
+    assert completed.returncode == 7
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
+
+
 def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
     source = tmp_path / "source"
     (source / "db").mkdir(parents=True)
@@ -1497,9 +2482,9 @@ def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
     (artifact_root / "world-ir.schema.json").write_text(
         '{"title":"WorldIR"}\n', encoding="utf-8"
     )
-    # A stale compatibility artifact must not override the canonical semantic artifact.
+    # A world.sqlite the IR was imported from: the IR is its cache.
     with sqlite3.connect(authoring / "world.sqlite") as database:
-        database.execute("CREATE TABLE stale (id TEXT)")
+        database.execute("PRAGMA user_version = 1")
 
     output = tmp_path / "bundle"
     manifest = author_bundle_v2(
@@ -1530,8 +2515,9 @@ def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
 
 
+@pytest.mark.parametrize("source_invariants", [CheckStatus.PASSED, CheckStatus.NOT_APPLICABLE])
 def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
-    tmp_path: Path,
+    tmp_path: Path, source_invariants,
 ) -> None:
     source = tmp_path / "source"
     (source / "db").mkdir(parents=True)
@@ -1579,13 +2565,15 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
             static=CheckStatus.PASSED,
             schema_and_seed=CheckStatus.PASSED,
             processes=CheckStatus.PASSED,
-            source_invariants=CheckStatus.PASSED,
+            chat_ingress=CheckStatus.PASSED,
+            source_invariants=source_invariants,
             scenario_setup_ready="1/1",
             tool_contract="0/0",
             action_behavior="0/0",
             reset_equivalence=CheckStatus.PASSED,
             world_isolation=CheckStatus.PASSED,
         ),
+        limitations=("No runtime SQL business tables; private state is not certified",),
         repairs=RepairHistory(
             decisions=(),
             results=(),
@@ -1598,10 +2586,9 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
         certificate.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
 
-    # Build/cache directories do not alter source identity.  They also must not cause a second
-    # compilation to replace the exact environment bytes that passed runtime validation.
-    (source / "build").mkdir()
-    (source / "build" / "generated.py").write_text(
+    # Excluded interpreter caches must not replace the certified environment bytes.
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "generated.pyc").write_text(
         "def agent_callback(message):\n    return message\n", encoding="utf-8"
     )
     execution = tmp_path / "execution"
@@ -1612,6 +2599,16 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
     assert reused.digest == manifest.digest
     assert (tmp_path / "runtime-validation.json").is_file()
     assert load_bundle_v2(execution).digest == manifest.digest
+
+    changed_world = WorldIR.create(
+        source_model_fingerprint="sha256:" + "f" * 64, tables=()
+    )
+    (artifact_root / "world-ir.json").write_text(changed_world.model_dump_json())
+    with pytest.raises(BundleAuthorError, match="certified_bundle_inputs_changed: world"):
+        author_bundle_v2(
+            source=source, job=job, authoring=authoring, output=tmp_path / "changed-world"
+        )
+    (artifact_root / "world-ir.json").write_text(world.model_dump_json())
 
     # A black-box hosted agent has no harness-owned schema/world. Those fingerprints are
     # intentionally synthetic and must not be compared to model-authored placeholder artifacts
@@ -1634,6 +2631,7 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
             static=CheckStatus.PASSED,
             schema_and_seed=CheckStatus.NOT_APPLICABLE,
             processes=CheckStatus.PASSED,
+            chat_ingress=CheckStatus.PASSED,
             source_invariants=CheckStatus.NOT_APPLICABLE,
             scenario_setup_ready="1/1",
             tool_contract="0/0",
@@ -1658,6 +2656,15 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
         source=source, job=job, authoring=authoring, output=external_execution
     )
     assert external_reused.digest == manifest.digest
+
+    from fi.alk.harness.certification import CertificationGateError
+
+    (source / "build").mkdir()
+    (source / "build" / "agent.py").write_text("print('new source')\n")
+    with pytest.raises(CertificationGateError, match="source digest"):
+        author_bundle_v2(
+            source=source, job=job, authoring=authoring, output=tmp_path / "changed-source"
+        )
 
 
 def test_generic_pipeline_requires_source_schema_and_world(tmp_path: Path) -> None:
@@ -1716,6 +2723,119 @@ def test_generic_pipeline_compiles_harness_schema_for_in_process_store(
     assert "acct-1" not in schema
     with sqlite3.connect(output / "seed" / "world.sqlite") as copied:
         assert copied.execute("SELECT status FROM accounts").fetchone() == ("active",)
+
+
+_SQLITE_ORDERS_DDL = (
+    "CREATE TABLE orders (\n"
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+    "  status TEXT NOT NULL\n"
+    ");\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "schema_from"),
+    [
+        ("data/seed.sql", _SQLITE_ORDERS_DDL, "data/seed.sql"),
+        ("schema.sql", _SQLITE_ORDERS_DDL, ""),
+        ("README.md", f"# Orders\n\n```sql\n{_SQLITE_ORDERS_DDL}```\n", ""),
+    ],
+    ids=["declared", "conventional", "readme"],
+)
+def test_generic_pipeline_adopts_a_sqlite_stores_schema_as_postgres(
+    tmp_path: Path, path: str, content: str, schema_from: str
+) -> None:
+    source = tmp_path / "source"
+    (source / path).parent.mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / path).write_text(content, encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    contract = {
+        "modality": "chat",
+        "data_store": {"kind": "sqlite", "schema_from": schema_from},
+    }
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, status TEXT)")
+        database.execute("INSERT INTO orders VALUES (?, ?)", (1, "shipped"))
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    assert manifest.seed.stores[0].migrations == ["seed/source-schema.sql"]
+    schema = (output / "seed" / "source-schema.sql").read_text(encoding="utf-8")
+    assert "AUTOINCREMENT" not in schema
+    # The source's own columns, not the authored world's: only the source says NOT NULL.
+    assert (
+        'CREATE TABLE IF NOT EXISTS "orders" ("id" bigint PRIMARY KEY, '
+        '"status" text NOT NULL);'
+    ) in schema
+
+
+def test_generic_pipeline_refuses_a_sqlite_store_schema_sqlite_cannot_load(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text("CREATE TABLE (;\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "chat", "data_store": {"kind": "sqlite"}}),
+        encoding="utf-8",
+    )
+    sqlite3.connect(authoring / "world.sqlite").close()
+
+    with pytest.raises(BundleAuthorError, match="source_schema_not_sqlite"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
+
+
+@pytest.mark.parametrize(
+    "escape",
+    [
+        "ATTACH DATABASE '{outside}' AS outside; CREATE TABLE outside.proof (id INTEGER);",
+        "CREATE TABLE orders (id INTEGER); VACUUM INTO '{outside}';",
+        "ATTACH DATABASE 'relative.db' AS outside; CREATE TABLE outside.proof (id INTEGER);",
+    ],
+    ids=["attach", "vacuum-into", "attach-relative"],
+)
+def test_a_sqlite_store_schema_cannot_write_outside_its_scratch_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, escape: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path / "outside.db"
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(
+        escape.format(outside=outside), encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "chat", "data_store": {"kind": "sqlite"}}),
+        encoding="utf-8",
+    )
+    sqlite3.connect(authoring / "world.sqlite").close()
+
+    with pytest.raises(BundleAuthorError, match="source_schema_not_sqlite"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
+    assert not outside.exists()
+    assert not (tmp_path / "relative.db").exists()
 
 
 def test_generic_pipeline_accepts_explicitly_tool_free_agent(tmp_path: Path) -> None:
@@ -2302,11 +3422,8 @@ def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     (source / "requirements.txt").write_text("\n", encoding="utf-8")
     (source / "main.py").write_text("print('real target output')\n", encoding="utf-8")
     authoring = _authoring(tmp_path)
-    _write_chat_contract(authoring, command=["python", "main.py"])
-    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
-    contract.pop("data_store")
-    contract.pop("tools")
-    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    interface = {"kind": "command", "protocol": "fi.alk"}
+    _write_chat_contract(authoring, command=["python", "main.py"], interface=interface)
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
 
@@ -2322,69 +3439,73 @@ def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     )
 
     agent = next(process for process in manifest.processes if process.name == "agent")
-    assert agent.working_directory == "."
+    assert agent.source_origin == "bundle"
+    assert agent.working_directory == "generated/source/agent"
+    assert agent.fixed_port is None
     assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
         [".venv/bin/python", "main.py"]
     )
     assert "ThreadingHTTPServer" in agent.run_command[-1]
     assert manifest.capabilities["target_http"].service == "agent"
     sealed_contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
-    assert sealed_contract["runtime"]["interface"] == {
-        "kind": "callable",
-        "protocol": "fi.alk",
-        "path": "",
-        "health_path": "",
-        "include_tools": False,
-    }
+    assert sealed_contract["runtime"]["interface"] == interface
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
 
 
-def test_chat_callable_without_exported_callback_falls_back_to_command_bridge(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "source_text",
+    [
+        "print('target')\n",
+        "from http.server import HTTPServer, BaseHTTPRequestHandler\n"
+        "HTTPServer(('127.0.0.1', 9119), BaseHTTPRequestHandler).serve_forever()\n",
+    ],
+)
+@pytest.mark.parametrize("interface_kind", [None, "callable"])
+def test_chat_command_without_supported_interface_requires_runtime_repair(
+    tmp_path: Path, source_text: str, interface_kind: str | None,
 ) -> None:
+    from fi.alk.harness.authoring_runtime_validation import (
+        RuntimeValidationError,
+        _fallback_diagnostic,
+        _needs_runtime_plan_repair,
+    )
+
     source = tmp_path / "source"
     source.mkdir()
     (source / "requirements.txt").write_text("\n", encoding="utf-8")
-    (source / "main.py").write_text(
-        "async def main():\n    print('target')\n",
-        encoding="utf-8",
-    )
+    (source / "main.py").write_text(source_text, encoding="utf-8")
     authoring = _authoring(tmp_path)
     _write_chat_contract(
         authoring,
         command=["python", "main.py"],
         interface={
-            "kind": "callable",
+            "kind": interface_kind,
             "protocol": "fi.alk",
             "path": "",
             "health_path": "",
             "include_tools": True,
-        },
+        } if interface_kind else None,
     )
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
 
     output = tmp_path / "bundle"
-    manifest = author_bundle_v2(
-        source=source,
-        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
-        authoring=authoring,
-        output=output,
+    with pytest.raises(
+        BundleAuthorError, match="generated_runtime_entrypoint_ambiguous"
+    ) as failure:
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=output,
+        )
+    diagnostic = _fallback_diagnostic(
+        RuntimeValidationError("environment", str(failure.value))
     )
-
-    agent = next(process for process in manifest.processes if process.name == "agent")
-    assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
-        [".venv/bin/python", "main.py"]
-    )
-    assert "ThreadingHTTPServer" in agent.run_command[-1]
-    sealed_contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
-    assert sealed_contract["runtime"]["interface"] == {
-        "kind": "callable",
-        "protocol": "fi.alk",
-        "path": "",
-        "health_path": "",
-        "include_tools": False,
-    }
+    assert diagnostic.code == "generated_runtime_plan_invalid"
+    assert "chat" in diagnostic.redacted_message
+    assert _needs_runtime_plan_repair((diagnostic,))
+    assert not (output / "contract.json").exists()
 
 
 def test_declared_langgraph_graph_compiles_without_agent_script(tmp_path: Path) -> None:
@@ -2415,6 +3536,7 @@ def test_declared_langgraph_graph_compiles_without_agent_script(tmp_path: Path) 
 
     agent = next(process for process in manifest.processes if process.name == "agent")
     assert agent.environment["ALK_LANGGRAPH_ENTRYPOINT"] == "src/example/graph.py:graph"
+    assert agent.fixed_port is None
     assert "ThreadingHTTPServer" in agent.run_command[-1]
     sealed_contract = json.loads((output / "contract.json").read_text())
     assert sealed_contract["runtime"]["interface"]["kind"] == "callable"
@@ -2558,10 +3680,604 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
     assert agent.working_directory == "."
     assert agent.run_command == runtime["command"]
     assert agent.fixed_port == 9090
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
     readiness = next(
         item for item in plan.readiness if item.capability == "target_http"
     )
     assert readiness.path == "/docs"
+
+
+_PLAIN_HTTP_RUNTIME = {
+    "language": "python",
+    "command": ["python", "agent.py"],
+    "workdir": ".",
+    "interface": {
+        "kind": "http",
+        "protocol": "openai_chat",
+        "path": "/chat",
+        "health_path": "/health",
+        "port": 8080,
+    },
+}
+
+
+def _plain_http_agent(source: Path, files: dict[str, str]):
+    for name, text in {"agent.py": "", **files}.items():
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=_PLAIN_HTTP_RUNTIME,
+    )
+    return next(process for process in plan.processes if process.name == "agent")
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("agent.py", 'port = int(os.environ.get("PORT", "8080"))\n'),
+        ("agent.py", "port = int(os.environ['PORT'])\n"),
+        ("agent.py", 'port = int(os.getenv("PORT", 8080))\n'),
+        ("app/server.py", 'port = os.environ.get(\n    "PORT",\n    "8080",\n)\n'),
+        ("server.ts", "const port = Number(process.env.PORT ?? 8080);\n"),
+        ("server.ts", "const port = Number(Bun.env.PORT ?? 8080);\n"),
+    ],
+)
+def test_http_agent_that_reads_port_has_no_fixed_port(
+    tmp_path: Path, name: str, text: str
+) -> None:
+    agent = _plain_http_agent(tmp_path / "source", {name: text})
+    assert agent.fixed_port is None
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert agent.started_check is not None and agent.started_check.port is True
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"agent.py": 'ThreadingHTTPServer(("0.0.0.0", 8080), Handler)\n'},
+        {"agent.py": 'db_port = os.environ.get("DB_PORT", "5432")\n'},
+        {"agent.py": "port = process.env.PORT_ADMIN\n"},
+        {".venv/lib/uvicorn.py": 'port = os.environ.get("PORT")\n'},
+        {"node_modules/server.js": "const port = process.env.PORT;\n"},
+    ],
+)
+def test_http_agent_without_a_port_read_keeps_its_fixed_port(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    assert _plain_http_agent(tmp_path / "source", files).fixed_port == 8080
+
+
+def test_http_agent_that_reads_port_passes_preflight_at_several_worlds(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        'port = int(os.environ.get("PORT", "8080"))\n', encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=_PLAIN_HTTP_RUNTIME["command"],
+        interface=_PLAIN_HTTP_RUNTIME["interface"],
+    )
+    output = tmp_path / "bundle"
+    job = _job(connector="auto")
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=output
+    )
+
+    preflight_bundle(
+        output,
+        load_bundle_v2(output),
+        parallelism=4,
+        secret_refs={
+            alias: ref.purpose for alias, ref in job.agent.secret_refs.items()
+        },
+    )
+    plan = plan_ports(bundle, instances=4)
+    assert plan.effective_instances == 4
+    assert plan.degraded_reason is None
+    assert plan.port_for("agent", 0) != plan.port_for("agent", 1)
+
+
+@pytest.mark.parametrize("declare_mount_root", [False, True])
+def test_declared_http_runtime_selects_gpt_researcher_compose_backend(
+    tmp_path: Path, monkeypatch, declare_mount_root: bool
+) -> None:
+    fixture = Path(__file__).parents[1] / "fixtures" / "gpt_researcher_compose.yml"
+    shutil.copyfile(fixture, tmp_path / "docker-compose.yml")
+    (tmp_path / "Dockerfile").write_text(
+        "FROM python:3.12\nCMD uvicorn main:app --port 8000\n"
+    )
+    (tmp_path / "main.py").write_text("print('server')\n")
+    monkeypatch.setenv("PWD", "/ambient-private")
+    if declare_mount_root:
+        (tmp_path / "alk.yaml").write_text(
+            'schema_version: "1"\nruntime:\n  environment:\n    PWD: "."\n'
+        )
+    else:
+        with pytest.raises(
+            BundleAuthorError, match="compose_structural_configuration_missing: PWD"
+        ):
+            resolve_environment_plan(
+                tmp_path,
+                _job(connector="auto"),
+                contract_modality="chat",
+                contract_interface_kind="http",
+                contract_runtime={
+                    "command": ["python", "main.py"],
+                    "interface": {"kind": "http", "port": 8000, "health_path": "/"},
+                },
+            )
+        return
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000, "health_path": "/"},
+        },
+    )
+    assert plan.control_service == "gpt-researcher"
+    assert [process.name for process in plan.processes] == [
+        "world-db",
+        "gpt-researcher",
+    ]
+    agent = plan.processes[1]
+    assert agent.environment["PWD"] == "."
+    assert agent.run_command == ["python", "main.py"]
+    assert agent.fixed_port == 8000
+    assert plan.capabilities["target_http"].container_port == 8000
+    assert (
+        next(
+            probe for probe in plan.readiness if probe.capability == "target_http"
+        ).path
+        == "/"
+    )
+
+
+@pytest.mark.parametrize("command", [[], ["python", "agent.py", "start"]])
+def test_voice_runtime_with_http_health_interface_keeps_worker_entrypoint(
+    tmp_path: Path, command: list[str]
+) -> None:
+    (tmp_path / "agent.py").write_text("print('worker')\n")
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="livekit"),
+        contract_modality="voice",
+        contract_interface_kind="http",
+        contract_runtime={
+            "workdir": ".",
+            "command": command,
+            "interface": {"kind": "http", "port": 8081},
+        },
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert "agent.py" in agent.run_command
+    assert agent.started_check.log_marker == "registered worker"
+
+
+def test_http_workspace_requires_native_command_before_selecting_internal_agent(
+    tmp_path: Path,
+) -> None:
+    backend = tmp_path / "backend"
+    harness = backend / "packages" / "harness"
+    extension = backend / "packages" / "extension-api"
+    harness.mkdir(parents=True)
+    extension.mkdir()
+    (backend / "pyproject.toml").write_text(
+        "[project]\nname='gateway'\nversion='1'\n"
+        "[tool.uv.workspace]\nmembers=['packages/harness', 'packages/extension-api']\n"
+    )
+    (backend / "uv.lock").write_text("version = 1\n")
+    (harness / "pyproject.toml").write_text("[project]\nname='harness'\nversion='1'\n")
+    (extension / "pyproject.toml").write_text(
+        "[project]\nname='extension-api'\nversion='1'\n"
+    )
+    (harness / "agent.py").write_text("agent = object()\n")
+    runtime = {
+        "workdir": "backend",
+        "command": [],
+        "interface": {"kind": "http", "port": 8001, "health_path": "/health"},
+    }
+    with pytest.raises(BundleAuthorError, match="runtime_http_command_missing"):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime=runtime,
+        )
+
+    runtime["command"] = ["uv", "run", "--no-sync", "uvicorn", "app.gateway.app:app"]
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "backend"
+    assert agent.run_command == runtime["command"]
+    assert "--locked" in agent.build_commands[0][-1]
+    assert (
+        tmp_path / agent.working_directory / "packages/harness/pyproject.toml"
+    ).is_file()
+    assert (
+        tmp_path / agent.working_directory / "packages/extension-api/pyproject.toml"
+    ).is_file()
+
+
+def test_declared_compose_runtime_keeps_transitive_dependencies(tmp_path: Path) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["python", "main.py"]\n'
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: [{target: 8000, published: 8000}]\n"
+        "    depends_on: {cache: {condition: service_started}}\n"
+        "  cache:\n    image: redis:7\n    depends_on: [postgres]\n"
+        "  postgres:\n    image: postgres:16\n"
+        "  unrelated:\n    image: unsupported:latest\n"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+    assert {process.name for process in plan.processes} == {
+        "world-db",
+        "cache",
+        "backend",
+    }
+    assert next(
+        process for process in plan.processes if process.name == "backend"
+    ).depends_on == ["cache"]
+
+
+@pytest.mark.parametrize(
+    ("postgres_image", "redis_image", "redis_version"),
+    [
+        ("postgres", "redis", "7"),
+        ("registry.example/team/postgres:16", "bitnami/redis:7-alpine", "7"),
+    ],
+)
+def test_declared_compose_runtime_accepts_catalog_images_without_a_tag_or_with_a_namespace(
+    tmp_path: Path,
+    postgres_image: str,
+    redis_image: str,
+    redis_version: str,
+) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["python", "main.py"]\n'
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: ['8000:8000']\n"
+        "    depends_on: [cache, postgres]\n"
+        f"  cache:\n    image: {redis_image}\n"
+        f"  postgres:\n    image: {postgres_image}\n"
+    )
+
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+
+    cache = next(process for process in plan.processes if process.name == "cache")
+    assert cache.version == redis_version
+    assert {process.name for process in plan.processes} == {
+        "world-db",
+        "cache",
+        "backend",
+    }
+
+
+@pytest.mark.parametrize("ports", ["8000:8000", "8001:8001", "8000:8000/udp"])
+def test_declared_compose_runtime_rejects_ambiguous_or_missing_match(
+    tmp_path: Path, ports: str
+) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        f"  first:\n    build: .\n    ports: ['{ports}']\n"
+        f"  second:\n    build: .\n    ports: ['{ports}']\n"
+    )
+    with pytest.raises(BundleAuthorError, match="control_service_ambiguous"):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={
+                "command": ["python", "main.py"],
+                "interface": {"kind": "http", "port": 8000},
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("dependency", "error"),
+    [
+        ("depends_on: [missing]", "compose_dependency_missing"),
+        ("depends_on: worker", "compose_dependency_invalid"),
+        ("depends_on: [{worker: {}}]", "compose_dependency_invalid"),
+        ("links: [worker]", "compose_dependency_unsupported"),
+        ("volumes_from: [worker]", "compose_dependency_unsupported"),
+        ("network_mode: service:worker", "compose_dependency_unsupported"),
+        ("ipc: service:worker", "compose_dependency_unsupported"),
+        ("pid: service:worker", "compose_dependency_unsupported"),
+        (
+            "environment: {CACHE_URL: 'redis://worker:6379'}",
+            "compose_dependency_undeclared",
+        ),
+        ("environment: [CACHE_HOST=worker]", "compose_dependency_undeclared"),
+    ],
+)
+def test_declared_compose_runtime_does_not_drop_dependency_references(
+    tmp_path: Path, dependency: str, error: str
+) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: ['8000:8000']\n"
+        f"    {dependency}\n"
+        "  worker:\n    build: ./worker\n"
+    )
+    with pytest.raises(BundleAuthorError, match=error):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={
+                "command": ["python", "main.py"],
+                "interface": {"kind": "http", "port": 8000},
+            },
+        )
+
+
+def test_declared_compose_http_runtime_ignores_udp_port_match(tmp_path: Path) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  tcp:\n    build: .\n    ports: ['8000:8000/tcp']\n"
+        "  udp:\n    build: .\n    ports: [{target: 8000, protocol: udp}]\n"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+    assert plan.control_service == "tcp"
+    assert [process.name for process in plan.processes] == ["world-db", "tcp"]
+
+
+def test_adk_web_command_without_interface_uses_source_http_api(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "software_bug_assistant"
+    app.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='software-bug-assistant'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    command = [
+        "uv",
+        "run",
+        "adk",
+        "web",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+    ]
+    _write_chat_contract(authoring, command=command)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.run_command[:2] == ["sh", "-c"]
+    assert "adk web" in agent.run_command[-1]
+    assert "$PORT" in agent.run_command[-1]
+    assert agent.fixed_port_consumable is True
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert "ALK_SUBPROCESS_COMMAND" not in agent.environment
+    assert "ThreadingHTTPServer" not in agent.run_command[-1]
+    assert agent.fixed_port == 8080
+    readiness = next(
+        item for item in manifest.readiness if item.capability == "target_http"
+    )
+    assert readiness.path == "/docs"
+
+    interface = json.loads((output / "contract.json").read_text())["runtime"][
+        "interface"
+    ]
+    assert interface["kind"] == "http"
+    assert interface["protocol"] == "json_template"
+    assert interface["path"] == "/run_sse"
+    assert interface["request_template"]["app_name"] == "software_bug_assistant"
+    assert interface["setup_requests"][0]["path"] == (
+        "/apps/software_bug_assistant/users/{{thread_id}}/sessions"
+    )
+
+
+def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "bug_agent"
+    tools = source / "deployment" / "mcp-toolbox"
+    app.mkdir(parents=True)
+    tools.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='bug-agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (app / "tools.py").write_text(
+        "from toolbox_core import ToolboxSyncClient\n"
+        "tools = ToolboxSyncClient('http://127.0.0.1:5000').load_toolset('tickets')\n",
+        encoding="utf-8",
+    )
+    (tools / "tools.yaml").write_text(
+        "sources:\n"
+        "  db:\n"
+        "    kind: postgres\n"
+        "tools:\n"
+        "  get-ticket:\n"
+        "    kind: postgres-sql\n"
+        "    source: db\n"
+        "    description: Get one ticket.\n"
+        "    parameters:\n"
+        "      - name: ticket_id\n"
+        "        type: string\n"
+        "    statement: SELECT * FROM tickets WHERE ticket_id = $1;\n"
+        "toolsets:\n"
+        "  tickets:\n"
+        "    - get-ticket\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=[
+            "uv",
+            "run",
+            "adk",
+            "web",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+        ],
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE tickets (ticket_id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    adapter = next(
+        process for process in manifest.processes if process.name == "mcp-toolbox"
+    )
+    assert adapter.depends_on == ["world-db"]
+    assert adapter.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert "mcp-toolbox" in agent.depends_on
+    assert agent.environment["MCP_TOOLBOX_URL"] == "{{MCP_TOOLBOX_URL}}"
+    assert (output / "generated" / "mcp-toolbox" / "server.py").is_file()
+    definition = json.loads(
+        (output / "generated" / "mcp-toolbox" / "toolbox.json").read_text()
+    )
+    assert definition["tools"]["get-ticket"]["statement"].endswith("$1;")
+
+
+def test_explicit_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='target'\nversion='1'\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["uv", "run", "adk", "run", "app"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert "ThreadingHTTPServer" in agent.run_command[-1]
+    assert "ALK_SUBPROCESS_COMMAND" in agent.environment
+
+
+def test_adk_web_command_repairs_stale_http_interface(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "bug_agent"
+    app.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='bug-agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["uv", "run", "adk", "web", "--port=9090"],
+        interface={
+            "kind": "http",
+            "port": 9090,
+            "path": "/run",
+            "request_template": {
+                "new_message": {"parts": [{"text": "{{new_message}}"}]}
+            },
+        },
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.fixed_port == 9090
+    assert agent.fixed_port_consumable is True
+    interface = json.loads((output / "contract.json").read_text())["runtime"][
+        "interface"
+    ]
+    assert interface["path"] == "/run_sse"
+    assert interface["health_path"] == "/docs"
+    assert interface["request_template"]["app_name"] == "bug_agent"
 
 
 @pytest.mark.parametrize(
@@ -2599,6 +4315,419 @@ def test_livekit_lower_bound_in_pyproject_is_read(tmp_path):
     assert _livekit_isolatable(tmp_path)
     (tmp_path / "pyproject.toml").write_text('dependencies = ["livekit-agents>=1.2,<2"]\n')
     assert not _livekit_isolatable(tmp_path)
+
+
+def _tool_entry(name: str) -> dict[str, str]:
+    return {"tool": name, "mode": "import", "module": "customer_tools", "callable": name}
+
+
+def _chat_tools_build(tmp_path: Path) -> tuple[Path, Path, dict]:
+    """A chat target with one source tool, built and sealed."""
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "customer_tools.py").write_text(
+        "def lookup_account(email):\n    return {'email': email}\n\n"
+        "def refund(order):\n    return {'refunded': order}\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    contract = {
+        "modality": "chat",
+        "runtime": {
+            "language": "python",
+            "interface": {"kind": "openai_chat", "protocol": "openai", "include_tools": False},
+        },
+        "tools": [{"name": "lookup_account", "args": ["email"]}],
+        "tool_entrypoints": [_tool_entry("lookup_account")],
+    }
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=authoring / "environment-bundle",
+    )
+    return source, authoring, contract
+
+
+@pytest.mark.parametrize("persisted", [False, True])
+def test_a_reseal_compiles_the_tool_a_contract_edit_adds(
+    tmp_path: Path, persisted: bool
+) -> None:
+    from fi.alk.harness.amend import _persist
+    from fi.alk.harness.contract import AgentContract
+
+    source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    contract["tools"].append({"name": "refund", "args": ["order"]})
+    contract["tool_entrypoints"].append(_tool_entry("refund"))
+    if persisted:
+        # As a nudge's contract tools write it.
+        _persist(AgentContract.model_validate(contract), authoring)
+    else:
+        (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    fresh = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring, output=tmp_path / "fresh"
+    )
+    assert "handlers/refund.py" in {one.path for one in resealed.files}
+    for path in ("contract.json", "handlers/lookup_account.py", "handlers/refund.py"):
+        assert (bundle / path).read_bytes() == (tmp_path / "fresh" / path).read_bytes()
+    assert resealed.processes == fresh.processes
+    assert resealed.metadata["sealed_from"] == sealed_from(authoring)
+    assert resealed.metadata["contract_compiled"] == hashlib.sha256(
+        (authoring / "contract.json").read_bytes()
+    ).hexdigest()
+
+
+def test_a_reseal_drops_the_handler_of_a_tool_a_contract_edit_removes(
+    tmp_path: Path,
+) -> None:
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    contract["tools"].append({"name": "refund", "args": ["order"]})
+    contract["tool_entrypoints"] = [_tool_entry("refund")]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    handlers = authoring / "environment-bundle" / "handlers"
+    assert sorted(path.name for path in handlers.iterdir()) == ["refund.py"]
+
+
+def _graph_build(tmp_path: Path) -> tuple[Path, dict, dict]:
+    """A langgraph target whose contract names no interface; the build seals ``callable``."""
+    source = tmp_path / "source"
+    graph_source = source / "src" / "example" / "graph.py"
+    graph_source.parent.mkdir(parents=True)
+    graph_source.write_text("graph = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        '[project]\nname = "example"\nversion = "0.1"\n', encoding="utf-8"
+    )
+    (source / "langgraph.json").write_text(
+        json.dumps({"graphs": {"Example": "./src/example/graph.py:graph"}}),
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=[])
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    built = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+    assert built["runtime"]["interface"]["kind"] == "callable"
+    return authoring, contract, built
+
+
+def test_a_reseal_keeps_the_runtime_interface_the_build_sealed(tmp_path: Path) -> None:
+    authoring, contract, built = _graph_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    resealed = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+    assert "interface" not in contract["runtime"]
+    assert resealed["runtime"] == built["runtime"]
+    assert [tool["name"] for tool in resealed["tools"]] == ["status", "history"]
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" in metadata and "contract_compiled" in metadata
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"runtime": {"language": "python", "command": ["python", "other.py"], "workdir": "."}},
+        {"modality": "voice"},
+        {"data_store": {"kind": "postgres"}},
+        {"runtime_dependencies": [{"name": "orders", "kind": "database"}]},
+    ],
+)
+def test_a_reseal_leaves_a_contract_edit_it_cannot_compile_unstamped(
+    tmp_path: Path, edit: dict
+) -> None:
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    (authoring / "contract.json").write_text(json.dumps({**contract, **edit}), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+    assert (bundle / "contract.json").read_bytes() == (authoring / "contract.json").read_bytes()
+
+
+def test_a_reseal_after_a_copied_contract_stays_unstamped(tmp_path: Path) -> None:
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    contract["runtime"]["command"] = ["python", "other.py"]
+    contract["tool_entrypoints"].append(_tool_entry("refund"))
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    reseal_scenarios(authoring)
+
+    # The copied contract now equals the authored one; the bundle still runs the build's.
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+    assert sorted(path.name for path in (bundle / "handlers").iterdir()) == [
+        "lookup_account.py"
+    ]
+
+
+def test_a_reseal_leaves_an_interface_edit_unstamped(tmp_path: Path) -> None:
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    interface = contract["runtime"]["interface"]
+    contract["runtime"]["interface"] = {**interface, "port": 9123, "include_tools": True}
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+
+
+def test_a_reseal_leaves_an_interface_edit_on_a_graph_unstamped(tmp_path: Path) -> None:
+    authoring, contract, _built = _graph_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    contract["runtime"]["interface"] = {"kind": "callable", "include_tools": True}
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+
+
+@pytest.mark.parametrize("older", ["traced", "bridged"])
+def test_a_reseal_leaves_a_bundle_an_older_build_compiled_unstamped(
+    tmp_path: Path, older: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    manifest = load_bundle_v2(bundle)
+    if older == "traced":
+        extra = {"ALK_TOOL_TRACE_BINDINGS": "[]"}
+        manifest = manifest.model_copy(
+            update={
+                "metadata": {
+                    key: value
+                    for key, value in manifest.metadata.items()
+                    if key != "source_tool_trace_version"
+                }
+            }
+        )
+    else:
+        # A ``callable`` command an older build bridged through a subprocess.
+        extra = {"ALK_SUBPROCESS_COMMAND": '["python", "main.py"]'}
+        sealed = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+        sealed["runtime"]["interface"] = {
+            "kind": "callable", "protocol": "fi.alk", "path": "",
+            "health_path": "", "include_tools": False,
+        }
+        (bundle / "contract.json").write_text(json.dumps(sealed), encoding="utf-8")
+        del contract["runtime"]["interface"]
+    processes = [
+        process.model_copy(update={"environment": {**process.environment, **extra}})
+        if hasattr(process, "environment")
+        else process
+        for process in manifest.processes
+    ]
+    manifest = manifest.model_copy(update={"processes": processes, "files": _files(bundle)})
+    manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+    (bundle / BUNDLE_V2_MANIFEST).write_text(
+        json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    contract["tools"].append({"name": "refund", "args": ["order"]})
+    contract["tool_entrypoints"].append(_tool_entry("refund"))
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+    assert metadata["contract_copied"] is True
+    assert (bundle / "contract.json").read_bytes() == (authoring / "contract.json").read_bytes()
+
+
+def _adk_build(tmp_path: Path) -> tuple[Path, dict]:
+    """An ``adk web`` chat target whose contract names no interface; the build seals ADK's."""
+    source = tmp_path / "source"
+    app = source / "bug_agent"
+    app.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='bug-agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["uv", "run", "adk", "web", "--port=9090"])
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="auto"),
+        authoring=authoring,
+        output=authoring / "environment-bundle",
+    )
+    return authoring, contract
+
+
+@pytest.mark.parametrize("written", [False, True])
+def test_a_reseal_stamps_an_adk_bundle_only_when_it_seals_adks_interface(
+    tmp_path: Path, written: bool
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    authoring, contract = _adk_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    if written:
+        # An older build kept the HTTP interface the model wrote for ``adk web``.
+        stale = {"kind": "http", "port": 9090, "path": "/run"}
+        sealed = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+        sealed["runtime"]["interface"] = stale
+        (bundle / "contract.json").write_text(json.dumps(sealed), encoding="utf-8")
+        contract["runtime"]["interface"] = stale
+        manifest = load_bundle_v2(bundle).model_copy(update={"files": _files(bundle)})
+        manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+        (bundle / BUNDLE_V2_MANIFEST).write_text(
+            json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert ("contract_compiled" in metadata) is not written
+    assert ("sealed_from" in metadata) is not written
+
+
+@pytest.mark.parametrize(
+    ("written", "root_app", "stamped"),
+    [(True, False, False), (False, False, True), (False, True, True)],
+)
+def test_a_reseal_judges_an_adk_bundle_by_the_app_in_its_workdir(
+    tmp_path: Path, written: bool, root_app: bool, stamped: bool
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    # ``adk web`` runs in agents/, below the project root; a root package is not its app.
+    source = tmp_path / "source"
+    for app in ["agents/bug_agent", *(["other_agent"] if root_app else [])]:
+        (source / app).mkdir(parents=True)
+        (source / app / "__init__.py").write_text("", encoding="utf-8")
+        (source / app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text("[project]\nname='x'\nversion='1'\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["uv", "run", "adk", "web", "--port=9090"], workdir="agents"
+    )
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    if written:
+        stale = {"kind": "http", "port": 9090, "path": "/run"}
+        sealed = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+        sealed["runtime"]["interface"] = stale
+        (bundle / "contract.json").write_text(json.dumps(sealed), encoding="utf-8")
+        contract["runtime"]["interface"] = stale
+        manifest = load_bundle_v2(bundle).model_copy(update={"files": _files(bundle)})
+        manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+        (bundle / BUNDLE_V2_MANIFEST).write_text(
+            json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    assert ("contract_compiled" in load_bundle_v2(bundle).metadata) is stamped
+
+
+def test_a_reseal_leaves_an_adk_bundle_that_recorded_no_app_unstamped(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    authoring, contract = _adk_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    manifest = load_bundle_v2(bundle)
+    metadata = {k: v for k, v in manifest.metadata.items() if k != "adk_web_app"}
+    manifest = manifest.model_copy(update={"metadata": metadata, "files": _files(bundle)})
+    manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+    (bundle / BUNDLE_V2_MANIFEST).write_text(
+        json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    assert "contract_compiled" not in load_bundle_v2(bundle).metadata
+
+
+@pytest.mark.parametrize("template", [{"message": "{{new_message}}"}, "{{new_message}}"])
+def test_a_reseal_stamps_an_adk_bundle_whose_build_kept_the_written_interface(
+    tmp_path: Path, template: object
+) -> None:
+    # Two app packages: no build derives ADK's interface, so the written one is the build's.
+    source = tmp_path / "source"
+    for name in ("first_agent", "second_agent"):
+        (source / name).mkdir(parents=True)
+        (source / name / "__init__.py").write_text("", encoding="utf-8")
+        (source / name / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='agents'\nversion='1'\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["uv", "run", "adk", "web", "--port=9090"],
+        interface={
+            "kind": "http", "port": 9090, "path": "/run", "request_template": template,
+        },
+    )
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" in metadata and "contract_compiled" in metadata
+
+
+def test_a_reseal_leaves_a_contract_added_after_the_build_unstamped(tmp_path: Path) -> None:
+    _source, authoring, _model, bundle, _ = _places(tmp_path, ir_seed=False)
+    assert not (bundle / "contract.json").exists()
+    (authoring / "contract.json").write_text(json.dumps({"modality": "chat"}), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
 
 
 def test_reseal_carries_an_added_scenario_into_the_sealed_bundle(tmp_path: Path) -> None:
@@ -2655,11 +4784,264 @@ def test_reseal_carries_an_added_scenario_into_the_sealed_bundle(tmp_path: Path)
     )
 
 
+@pytest.mark.parametrize("case", ["edited", "stale", "unimportable"])
+def test_a_compile_seeds_world_sqlite_over_a_world_ir_it_does_not_import_to(
+    tmp_path: Path, case: str
+) -> None:
+    """A stale canonical IR never seeds; the hashed world.sqlite does."""
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    source, authoring, source_model, _, _ = _places(tmp_path, ir_seed=False)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        # Runtime validation records the World IR it imported from the SQLite seed.
+        world = import_sqlite_world(database, source_model, validate=False).world
+        if case == "edited":
+            database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+        elif case == "unimportable":
+            database.execute("ALTER TABLE places ADD COLUMN extra TEXT")
+    if case == "stale":
+        # An IR that went stale earlier, with world.sqlite unchanged since.
+        with sqlite3.connect(":memory:") as database:
+            database.execute("CREATE TABLE places (id TEXT PRIMARY KEY, label TEXT)")
+            database.execute("INSERT INTO places VALUES ('home', 'stale')")
+            world = import_sqlite_world(database, source_model, validate=False).world
+    GenericHarnessArtifactStore(authoring / "generic-harness").write_world_ir(world)
+    reseal_scenarios(authoring)
+
+    # A later compile, as certify-only and validation make one.
+    fresh = tmp_path / "fresh"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=fresh,
+    )
+    assert not (fresh / "seed" / "world-ir.json").exists()
+    with sqlite3.connect(fresh / "seed" / "world.sqlite") as database:
+        assert database.execute("SELECT label FROM places").fetchall() == [
+            ("renamed" if case == "edited" else "home",)
+        ]
+
+
+def test_a_reseal_keeps_a_validation_repair_of_the_world(tmp_path: Path) -> None:
+    from fi.alk.harness.authoring_runtime_validation import _stored_in_world
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_ir import WorldRow, WorldTable, WorldValue
+
+    source, authoring, source_model, bundle, _ = _places(tmp_path, ir_seed=True)
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    world = store.read_world_ir()
+    [row] = world.tables[0].rows
+    label = WorldValue.present(row.values["label"].logical_type, "repaired")
+    repaired = world.model_copy(
+        update={
+            "tables": (
+                WorldTable(
+                    source_name="places",
+                    rows=(
+                        WorldRow(
+                            identity=row.identity,
+                            values={**row.values, "label": label},
+                        ),
+                    ),
+                ),
+            )
+        }
+    )
+    # Runtime validation repairs the world, then the build seals it.
+    store.write_world_ir(_stored_in_world(authoring, repaired, source_model))
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=bundle,
+    )
+    # A scenario-only chat save reseals.
+    scenario = authoring / "scenarios" / "one" / "scenario.json"
+    scenario.write_text(
+        json.dumps({"name": "one", "instruction": "Edited", "sub_goals": ["works"]}),
+        encoding="utf-8",
+    )
+
+    reseal_scenarios(authoring)
+
+    for ir in (bundle / "seed" / "world-ir.json", store.root / "world-ir.json"):
+        assert "repaired" in ir.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("ir_seed", [True, False])
+def test_the_world_a_bundle_seeds_is_always_the_hashed_world_sqlite(
+    tmp_path: Path, ir_seed: bool
+) -> None:
+    """The environment hash covers world.sqlite, not generic-harness/world-ir.json.
+
+    Through a repair stored in the world or an IR recorded after the build, a reseal
+    without and with a world edit, and certify-only's compile, the seeded world stays
+    what world.sqlite imports to.
+    """
+    from fi.alk.harness.authoring_runtime_validation import _stored_in_world
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+    from fi.alk.harness.world_ir import WorldRow, WorldTable, WorldValue
+
+    source, authoring, source_model, bundle, _ = _places(tmp_path, ir_seed=ir_seed)
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    job = _job(connector="http", metadata={"generic_harness_v1": True})
+
+    def imported() -> WorldIR:
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            return import_sqlite_world(database, source_model, validate=False).world
+
+    def seeded(output: Path) -> WorldIR:
+        ir = output / "seed" / "world-ir.json"
+        if ir.is_file():
+            return WorldIR.model_validate_json(ir.read_text(encoding="utf-8"))
+        with sqlite3.connect(output / "seed" / "world.sqlite") as database:
+            return import_sqlite_world(database, source_model, validate=False).world
+
+    def holds(output: Path) -> None:
+        assert seeded(output) == imported()
+        preflight_bundle(output, load_bundle_v2(output), parallelism=1, secret_refs={})
+
+    world = imported()
+    if ir_seed:
+        # A repair stored as runtime validation stores it, then the build seals it.
+        [row] = world.tables[0].rows
+        label = WorldValue.present(row.values["label"].logical_type, "repaired")
+        world = _stored_in_world(
+            authoring,
+            world.model_copy(
+                update={
+                    "tables": (
+                        WorldTable(
+                            source_name="places",
+                            rows=(
+                                WorldRow(
+                                    identity=row.identity,
+                                    values={**row.values, "label": label},
+                                ),
+                            ),
+                        ),
+                    )
+                }
+            ),
+            source_model,
+        )
+        store.write_world_ir(world)
+        author_bundle_v2(source=source, job=job, authoring=authoring, output=bundle)
+    else:
+        # Runtime validation records the IR it imported, after the build sealed.
+        store.write_world_ir(world)
+    holds(bundle)
+    # A scenario-only chat save, then a world edit, each resealed.
+    (authoring / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "instruction": "Edited", "sub_goals": ["works"]}),
+        encoding="utf-8",
+    )
+    reseal_scenarios(authoring)
+    holds(bundle)
+    assert ("repaired" in seeded(bundle).model_dump_json()) is ir_seed
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+    reseal_scenarios(authoring)
+    holds(bundle)
+    # The compile certify-only makes after its preparation.
+    from fi.alk.harness.authoring_entrypoint import _refresh_source_facts
+
+    _refresh_source_facts(job, source, authoring)
+    fresh = tmp_path / "fresh"
+    author_bundle_v2(source=source, job=job, authoring=authoring, output=fresh)
+    holds(fresh)
+    assert "renamed" in seeded(fresh).model_dump_json()
+
+
+@pytest.mark.parametrize("ir_seed", [True, False])
+@pytest.mark.parametrize("resealed", [True, False])
+def test_a_certified_bundle_is_reused_only_while_it_seeds_world_sqlite(
+    tmp_path: Path, resealed: bool, ir_seed: bool
+) -> None:
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    source, authoring, source_model, bundle, sealed = _places(
+        tmp_path, ir_seed=ir_seed, contract=True
+    )
+    root = authoring / "generic-harness"
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        world = import_sqlite_world(database, source_model, validate=False).world
+    GenericHarnessArtifactStore(root).write_world_ir(world)
+    shutil.copytree(bundle, root / "certified-bundle")
+    certificate = HarnessCertification.create(
+        status=CertificationStatus.CERTIFIED,
+        source=CertificationSource(
+            digest=source_fingerprint(source), schema_hash=source_model.fingerprint
+        ),
+        authoring=CertificationAuthoring(
+            contract_hash=_artifact_digest(authoring / "contract.json"),
+            world_ir_hash=world.fingerprint,
+            scenario_set_hash=_artifact_digest(authoring / "scenarios"),
+        ),
+        compiler=CertificationCompiler(version="test", bundle_digest=sealed.digest),
+        runtime=CertificationRuntime(snapshot="test", validation_attempts=1),
+        checks=CertificationChecks(
+            static=CheckStatus.PASSED,
+            schema_and_seed=CheckStatus.PASSED,
+            processes=CheckStatus.PASSED,
+            chat_ingress=CheckStatus.PASSED,
+            source_invariants=CheckStatus.PASSED,
+            scenario_setup_ready="1/1",
+            tool_contract="0/0",
+            action_behavior="0/0",
+            reset_equivalence=CheckStatus.PASSED,
+            world_isolation=CheckStatus.PASSED,
+        ),
+        repairs=RepairHistory(
+            decisions=(),
+            results=(),
+            compiler_candidates_used=0,
+            environment_patches_used=0,
+            scenario_patches_used=0,
+        ),
+    )
+    (authoring / "runtime-validation.json").write_text(
+        certificate.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    # A world edit after validation froze the bundle; a chat save reseals it.
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+    if resealed:
+        reseal_scenarios(authoring)
+
+    def compile_() -> None:
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "out",
+        )
+
+    if not resealed:
+        with pytest.raises(BundleAuthorError, match="world.sqlite"):
+            compile_()
+        return
+    compile_()
+    seed = tmp_path / "out" / "seed"
+    if ir_seed:
+        assert "renamed" in (seed / "world-ir.json").read_text(encoding="utf-8")
+    else:
+        with sqlite3.connect(seed / "world.sqlite") as database:
+            assert database.execute("SELECT label FROM places").fetchall() == [
+                ("renamed",)
+            ]
+
+
 def test_reseal_without_a_sealed_bundle_changes_nothing(tmp_path: Path) -> None:
     assert reseal_scenarios(_authoring(tmp_path)) is None
 
 
-def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> None:
+def _places(tmp_path: Path, *, ir_seed: bool, contract: bool = False):
+    """A generic-harness world of places, built and sealed with an IR or SQLite seed."""
     from fi.alk.harness.source_model import LogicalType, SourceColumn, SourceTable
     from fi.alk.harness.world_import.sqlite import import_sqlite_world
 
@@ -2687,7 +5069,14 @@ def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> No
         database.execute("INSERT INTO places VALUES ('home', 'home')")
     with sqlite3.connect(authoring / "world.sqlite") as database:
         world = import_sqlite_world(database, source_model, validate=False).world
-    (artifact_root / "world-ir.json").write_text(world.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    if ir_seed:
+        (artifact_root / "world-ir.json").write_text(
+            world.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        )
+    if contract:
+        (authoring / "contract.json").write_text(
+            json.dumps({"modality": "chat", "tools": []}), encoding="utf-8"
+        )
     bundle = authoring / "environment-bundle"
     sealed = author_bundle_v2(
         source=source,
@@ -2695,12 +5084,2059 @@ def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> No
         authoring=authoring,
         output=bundle,
     )
+    return source, authoring, source_model, bundle, sealed
 
-    with sqlite3.connect(authoring / "world.sqlite") as database:
-        database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+
+@pytest.mark.parametrize(
+    ("ir_seed", "through_save_world"), [(True, False), (True, True), (False, True)]
+)
+def test_a_changed_world_reaches_the_sealed_seed_on_reseal(
+    tmp_path: Path, ir_seed: bool, through_save_world: bool
+) -> None:
+    source, authoring, source_model, bundle, sealed = _places(tmp_path, ir_seed=ir_seed)
+    artifact_root = authoring / "generic-harness"
+    assert (bundle / "seed" / "world-ir.json").is_file() is ir_seed
+
+    if through_save_world:
+        from fi.alk.harness.world.snapshot import save
+
+        # What save_world writes: the world's own SQLite file in the authoring root.
+        changed = GeneratedWorld(":memory:")
+        changed.connection.executescript(
+            "CREATE TABLE places (id TEXT PRIMARY KEY, label TEXT);"
+            "INSERT INTO places VALUES ('home', 'renamed');"
+        )
+        changed.connection.commit()
+        save(changed, authoring)
+    else:
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
     digest = reseal_scenarios(authoring)
 
     assert digest is not None and digest != sealed.digest
-    assert "renamed" in (bundle / "seed" / "world-ir.json").read_text(encoding="utf-8")
-    assert "renamed" in (artifact_root / "world-ir.json").read_text(encoding="utf-8")
+    preflight_bundle(bundle, load_bundle_v2(bundle), parallelism=1, secret_refs={})
+    if ir_seed:
+        for ir in (bundle / "seed" / "world-ir.json", artifact_root / "world-ir.json"):
+            assert "renamed" in ir.read_text(encoding="utf-8")
+    else:
+        with sqlite3.connect(bundle / "seed" / "world.sqlite") as database:
+            labels = database.execute("SELECT label FROM places").fetchall()
+        assert labels == [("renamed",)]
     assert reseal_scenarios(authoring) == digest
+
+
+def test_an_actor_who_speaks_on_calls_is_sealed_in_the_one_actor_list(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "actors.json").write_text(
+        json.dumps(
+            {
+                "actors": [
+                    {"id": "partner", "name": "Sam", "role": "the person's partner", "channel": "audio_mix"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", scenario_count=1),
+        authoring=authoring,
+        output=output,
+    )
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    sealed = {one["path"] for one in manifest["files"]}
+    assert "actors.json" in sealed
+    assert sealed.isdisjoint({"sub_actors.json", "call_actors.json"})
+    assert json.loads((output / "actors.json").read_text())["actors"][0]["channel"] == "audio_mix"
+
+
+def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", scenario_count=1),
+        authoring=authoring,
+        output=output,
+    )
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert {"actors.json", "actor_rules.json"} <= {
+        one["path"] for one in manifest["files"]
+    }
+    rules = json.loads((output / "actor_rules.json").read_text(encoding="utf-8"))
+    assert set(rules["records"]) == {"actors.json"}
+
+
+def test_a_world_without_actors_gets_the_full_action_log(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _action_log_seed
+
+    without = _action_log_seed(tmp_path)
+    assert "actor_id text" in without and "outcome text" in without and "effect text" in without
+    assert "INSERT INTO _alk_actors" not in without
+    (tmp_path / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+    with_actors = _action_log_seed(tmp_path)
+    assert "actor_id text" in with_actors and "INSERT INTO _alk_actors" in with_actors
+
+
+# The platform pins the same digest for the same files (test_harness_versioning_reseal.py).
+GOLDEN_SEALED_FROM = (
+    "sha256:402ed05450abe6c943865dd538ebd78e94d15c7e7a15d9b6a934e51cf4d26d3e"
+)
+
+
+def test_sealed_from_digests_only_the_reseal_inputs(tmp_path: Path) -> None:
+    folder = tmp_path / "scenarios" / "r\u00e9servation"
+    (folder / "__pycache__").mkdir(parents=True)
+    (folder / "scenario.json").write_bytes(b'{"name": "r"}')
+    (folder / "__pycache__" / "x.pyc").write_bytes(b"x")
+    for skipped in ("outbound-spool", "telemetry"):
+        (folder / skipped).mkdir()
+        (folder / skipped / "x.json").write_bytes(b"x")
+    nested = tmp_path / "scenarios" / "nested" / "deeper"
+    nested.mkdir(parents=True)
+    (nested / "ready.py").write_bytes(b"def ready(world): ...")
+    (tmp_path / "contract.json").write_bytes(b"{}")
+    (tmp_path / "sub_goals.json").write_bytes(b"[]")
+    (tmp_path / "world.sqlite").write_bytes(b"world")
+    (tmp_path / "simulator_prompt.md").write_bytes(b"not carried")
+
+    assert sealed_from(tmp_path) == GOLDEN_SEALED_FROM
+
+
+@pytest.mark.parametrize("ir_seed", [True, False])
+def test_a_bundle_keeps_the_stamp_of_the_world_it_was_sealed_from(
+    tmp_path: Path, ir_seed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, authoring, _, bundle, _ = _places(tmp_path, ir_seed=ir_seed)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'first' WHERE id = 'home'")
+    reseal_scenarios(authoring)
+    stamp = load_bundle_v2(bundle).metadata["sealed_from"]
+    assert stamp == sealed_from(authoring)
+    preflight_bundle(bundle, load_bundle_v2(bundle), parallelism=1, secret_refs={})
+
+    # A later world edit whose reseal fails leaves the bundle stamped for the first.
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'second' WHERE id = 'home'")
+
+    def fails(*_args: object) -> None:
+        raise RuntimeError("reseal failed")
+
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2._reseeded", fails)
+    with pytest.raises(RuntimeError):
+        reseal_scenarios(authoring)
+    assert load_bundle_v2(bundle).metadata["sealed_from"] == stamp
+    assert sealed_from(authoring) != stamp
+
+
+@pytest.mark.parametrize(
+    ("seed", "carried"),
+    [
+        (("world.sqlite",), True),
+        (("world-ir.json", "source-model.json"), True),
+        (("world-ir.json",), False),
+        (("world.sql",), False),
+    ],
+)
+def test_a_bundle_is_stamped_only_when_a_reseal_carries_its_world(
+    tmp_path: Path, seed: tuple[str, ...], carried: bool
+) -> None:
+    authoring, staging = tmp_path / "authoring", tmp_path / "staging"
+    (staging / "seed").mkdir(parents=True)
+    authoring.mkdir()
+    for name in seed:
+        (staging / "seed" / name).write_bytes(b"built")
+    assert _carries_world(authoring, staging) is True
+
+    (authoring / "world.sqlite").write_bytes(b"edited")
+
+    assert _carries_world(authoring, staging) is carried
+
+
+def test_bundle_retains_unused_static_credential_inventory_without_blocking(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('source')")
+    (source / "optional.py").write_text(
+        "import os\ndef unused(): return os.environ['UNUSED_TOKEN']\n"
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=output
+    )
+    inventory = json.loads((output / "credentials.json").read_text())
+    unused = next(
+        item
+        for item in inventory["requirements"]
+        if item["environment_name"] == "UNUSED_TOKEN"
+    )
+    assert unused["status"] == "missing"
+    assert unused["required"] is True
+
+@pytest.mark.parametrize("version", ["3.12", "3.12.8"])
+def test_native_runtime_honors_declared_python_version(tmp_path: Path, version: str) -> None:
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    (tmp_path / "Dockerfile").write_text("FROM python:3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12'\n"
+    )
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="http"),
+        contract_runtime={"language": "python", "version": version, "command": ["python", "agent.py"]},
+    )
+    process = next(p for p in plan.processes if p.name == "agent")
+    command = process.build_commands[0]
+    assert command[command.index("--python") + 1] == (
+        "==3.12.*,>=3.12" if version == "3.12" else "python3.12.8"
+    )
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+@pytest.mark.parametrize("version", ["3.11.9", "nonsense", "3.12garbage"])
+def test_native_runtime_rejects_invalid_declared_python(tmp_path: Path, version: str) -> None:
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12'\n"
+    )
+    with pytest.raises(BundleAuthorError, match="generated_runtime_python_version_unsupported"):
+        resolve_environment_plan(
+            tmp_path, _job(connector="http"),
+            contract_runtime={"language": "python", "version": version, "command": ["python", "agent.py"]},
+        )
+
+
+@pytest.mark.parametrize("child", [".", "packages/chat", "-chat"])
+def test_native_bun_plan_installs_locked_root_and_preserves_child_command(
+    tmp_path: Path, child: str
+) -> None:
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "plain-chat" if child == "." else "workspace-bot",
+                "packageManager": "bun@1.3.14",
+            }
+        )
+    )
+    (tmp_path / "bun.lock").write_text('{"lockfileVersion": 1}')
+    component = tmp_path / child
+    component.mkdir(parents=True, exist_ok=True)
+    if child != ".":
+        (component / "package.json").write_text('{"name":"chat"}')
+    (component / "server.ts").write_text("Bun.serve({fetch: () => new Response('ok')})")
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "bun",
+            "version": "1.3.14",
+            "execution": "native",
+            "workdir": child,
+            "command": ["bun", "run", "server.ts"],
+            "install": "touch /tmp/must-not-execute",
+            "workspaces": {"project": "files"},
+            "interface": {"kind": "http", "port": 8001},
+        },
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "."
+    assert agent.workspaces == {
+        "project": "files" if child == "." else child + "/files"
+    }
+    assert agent.build_commands[-1] == ["bun", "install", "--frozen-lockfile"]
+    assert agent.run_command == (
+        ["bun", "run", "server.ts"]
+        if child == "."
+        else [
+            "sh",
+            "-c",
+            'cd "./$1" && shift && exec "$@"',
+            "alk-source-process",
+            child,
+            "bun",
+            "run",
+            "server.ts",
+        ]
+    )
+    assert "must-not-execute" not in repr(agent.build_commands)
+
+
+@pytest.mark.parametrize(
+    "manifest,lock,version,command,error",
+    [
+        ({}, True, "", ["bun", "run", "server.ts"], "package_manager_missing"),
+        (
+            {"packageManager": "bun@latest"},
+            True,
+            "",
+            ["bun", "run", "server.ts"],
+            "package_manager_unpinned",
+        ),
+        (
+            {"packageManager": "npm@10.0.0"},
+            True,
+            "",
+            ["bun", "run", "server.ts"],
+            "package_manager_unpinned",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            False,
+            "",
+            ["bun", "run", "server.ts"],
+            "lock_required",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            True,
+            "1.3.13",
+            ["bun", "run", "server.ts"],
+            "version_mismatch",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            True,
+            "",
+            ["sh", "-c", "bun server.ts"],
+            "command_required",
+        ),
+        ([], True, "", ["bun", "run", "server.ts"], "manifest_invalid"),
+    ],
+)
+def test_native_bun_rejects_invalid_source(
+    tmp_path: Path, manifest, lock, version, command, error: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text(json.dumps(manifest))
+    if lock:
+        (tmp_path / "bun.lock").write_text("{}")
+    with pytest.raises(BundleAuthorError, match=error):
+        _plan_source_process(
+            tmp_path,
+            language="bun",
+            name="agent",
+            root=tmp_path,
+            entry=None,
+            control=True,
+            needs_secrets=False,
+            version=version,
+            run_override=command,
+        )
+
+
+def test_native_bun_requires_matching_installed_toolchain(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text('{"packageManager":"bun@1.3.14"}')
+    (tmp_path / "bun.lockb").write_bytes(b"frozen")
+    process = _plan_source_process(
+        tmp_path,
+        language="bun",
+        name="agent",
+        root=tmp_path,
+        entry=None,
+        control=True,
+        needs_secrets=False,
+        run_override=["bun", "server.ts"],
+    )
+    command = [sys.executable, *process.build_commands[0][1:]]
+    missing = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert missing.returncode != 0
+    assert "runtime_bun_toolchain_missing" in missing.stderr
+    binary = tmp_path / "bun"
+    binary.write_text("#!/bin/sh\necho 1.3.13\n")
+    binary.chmod(0o755)
+    wrong = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert wrong.returncode != 0
+    assert "runtime_bun_toolchain_version_mismatch" in wrong.stderr
+    binary.write_text("#!/bin/sh\necho 1.3.14\n")
+    matching = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert matching.returncode == 0
+    assert matching.stdout.strip() == "Bun toolchain 1.3.14"
+
+
+def test_native_bun_rejects_ambiguous_and_symlink_lock(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text('{"packageManager":"bun@1.3.14"}')
+    (tmp_path / "bun.lock").write_text("{}")
+    (tmp_path / "bun.lockb").write_bytes(b"frozen")
+    kwargs = dict(
+        language="bun",
+        name="agent",
+        root=tmp_path,
+        entry=None,
+        control=True,
+        needs_secrets=False,
+        run_override=["bun", "server.ts"],
+    )
+    with pytest.raises(BundleAuthorError, match="lock_required"):
+        _plan_source_process(tmp_path, **kwargs)
+    (tmp_path / "bun.lockb").unlink()
+    (tmp_path / "bun.lock").unlink()
+    (tmp_path / "bun.lock").symlink_to(tmp_path / "package.json")
+    with pytest.raises(BundleAuthorError, match="manifest_unsafe"):
+        _plan_source_process(tmp_path, **kwargs)
+
+
+def test_native_process_runs_from_scanned_bundle_context(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("from helper import answer\nprint(answer())\n")
+    (source / "helper.py").write_text("def answer():\n    return 'chat-ready'\n")
+    (source / "fixtures").mkdir()
+    (source / "fixtures/token.txt").write_text("sk-unreviewedFixtureValue1234567890")
+    (source / "manifest.json").write_text('{"application": "fixture"}')
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    document = json.loads((authoring / "contract.json").read_text())
+    document["runtime"]["execution"] = "native"
+    (authoring / "contract.json").write_text(json.dumps(document))
+    output = tmp_path / "bundle"
+    with pytest.raises(ValueError, match="generated_runtime_secret_material_detected"):
+        author_bundle_v2(
+            source=source,
+            authoring=authoring,
+            job=_job(connector="auto"),
+            output=output,
+        )
+    document["runtime"]["context_excludes"] = ["fixtures"]
+    (authoring / "contract.json").write_text(json.dumps(document))
+    manifest = author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=output
+    )
+    process = next(
+        p for p in manifest.processes if p.name == manifest.runtime.control_service
+    )
+    assert process.source_origin == "bundle"
+    context = output / process.working_directory
+    assert not (context / "fixtures").exists()
+    assert (context / "manifest.json").read_text() == '{"application": "fixture"}'
+    assert any(f.path.endswith("/manifest.json") for f in manifest.files)
+    assert (source / "fixtures/token.txt").exists()
+    shutil.rmtree(source)
+    result = subprocess.run(
+        [sys.executable, "agent.py"],
+        cwd=context,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout == "chat-ready\n"
+    load_bundle_v2(output)
+
+
+@pytest.mark.parametrize("directory", ["vendor", "coverage", "target"])
+def test_packaged_runtime_preserves_named_source_packages(tmp_path, directory):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    source = tmp_path / "source"
+    (source / directory).mkdir(parents=True)
+    (source / directory / "agent.py").write_text("print('source preserved')\n")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        command=["python", f"{directory}/agent.py"],
+    )
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    output = tmp_path / "bundle"
+    packaged = _package_process_sources(source, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    assert (
+        output / agent.working_directory / directory / "agent.py"
+    ).read_text() == "print('source preserved')\n"
+
+
+@pytest.mark.parametrize("required", ["agent.py", "requirements.txt", "extra.txt"])
+def test_packaging_cannot_exclude_declared_runtime_inputs(tmp_path, required):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "requirements.txt").write_text("")
+    (tmp_path / "extra.txt").write_text("")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        command=["python", "agent.py"],
+        requirements_files=["extra.txt"],
+    )
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    runtime.context_excludes = [required]
+    with pytest.raises(ValueError, match="context_exclude_required"):
+        _package_process_sources(tmp_path, tmp_path.parent / "bundle", plan, runtime)
+
+
+def test_workspace_exclusions_stay_relative_to_declared_component(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    app = tmp_path / "apps/chat"
+    (app / "fixtures").mkdir(parents=True)
+    (app / "fixtures/token.txt").write_text("sk-unreviewedFixtureValue1234567890")
+    (app / "server.ts").write_text("Bun.serve({fetch: () => new Response('ready')})")
+    (app / "package.json").write_text('{"name":"chat"}')
+    (tmp_path / "package.json").write_text(
+        '{"name":"workspace","packageManager":"bun@1.3.14","workspaces":["apps/*"]}'
+    )
+    (tmp_path / "bun.lock").write_text('{"lockfileVersion":1,"workspaces":{}}')
+    runtime = Runtime(
+        language="bun",
+        execution="native",
+        workdir="apps/chat",
+        command=["bun", "server.ts"],
+        context_excludes=["fixtures"],
+        interface={"kind": "http", "port": 8080, "path": "/chat"},
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime.model_dump(),
+    )
+    assert (
+        next(
+            p for p in plan.processes if p.name == plan.control_service
+        ).working_directory
+        == "."
+    )
+    output = tmp_path.parent / "bundle"
+    packaged = _package_process_sources(tmp_path, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    context = output / agent.working_directory
+    assert not (context / "apps/chat/fixtures").exists()
+    assert (context / "apps/chat/server.ts").is_file()
+    assert (context / "package.json").is_file()
+
+
+def test_workspace_exclusions_accept_repository_relative_paths(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    app = tmp_path / "apps/chat"
+    app.mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["apps/*"]\n'
+    )
+    (tmp_path / "uv.lock").write_text("version = 1\n")
+    (app / "pyproject.toml").write_text(
+        '[project]\nname="chat-server"\nversion="1"\n'
+    )
+    (app / "server.py").write_text("print('ready')\n")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "auth.md").write_text("sk-unreviewedFixtureValue1234567890")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        workdir="apps/chat",
+        command=[sys.executable, "server.py"],
+        context_excludes=["docs/auth.md"],
+    )
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    output = tmp_path.parent / (tmp_path.name + "-bundle")
+
+    packaged = _package_process_sources(tmp_path, output, plan, runtime)
+
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    context = output / agent.working_directory
+    assert not (context / "docs/auth.md").exists()
+    assert (context / "apps/chat/server.py").is_file()
+
+
+def test_python_workspace_packages_siblings_and_preserves_member_cwd(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    source = tmp_path / "source"
+    member = source / "apps" / "server"
+    sibling = source / "library"
+    member.mkdir(parents=True)
+    sibling.mkdir()
+    (source / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["apps/*", "library"]\n'
+    )
+    (source / "uv.lock").write_text("version = 1\n")
+    (member / "pyproject.toml").write_text(
+        '[project]\nname="chat-server"\nversion="1"\n'
+    )
+    (sibling / "pyproject.toml").write_text(
+        '[project]\nname="chat-library"\nversion="1"\n[project.optional-dependencies]\ntransport=[]\n'
+    )
+    (sibling / "value.txt").write_text("local source")
+    (member / "app.py").write_text(
+        'from pathlib import Path\nprint(Path("../../library/value.txt").read_text())\n'
+    )
+    (member / "fixtures").mkdir()
+    (member / "fixtures" / "token.txt").write_text(
+        "sk-unreviewedFixtureValue1234567890"
+    )
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        workdir="apps/server",
+        command=[sys.executable, "app.py"],
+        context_excludes=["fixtures"],
+        workspaces={"files": "files"},
+    )
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    agent = next(p for p in plan.processes if p.name == plan.control_service)
+    assert agent.working_directory == "."
+    assert agent.workspaces == {"files": "apps/server/files"}
+    assert "--package chat-server" in agent.build_commands[0][-1]
+    assert "--locked" in agent.build_commands[0][-1]
+    output = tmp_path / "bundle"
+    packaged = _package_process_sources(source, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    context = output / agent.working_directory
+    assert (context / "uv.lock").is_file()
+    assert not (context / "apps/server/fixtures").exists()
+    shutil.rmtree(source)
+    result = subprocess.run(
+        agent.run_command, cwd=context, check=True, text=True, capture_output=True
+    )
+    assert result.stdout == "local source\n"
+
+
+def test_compose_workspace_member_exclusions_without_runtime_workdir(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    member = tmp_path / "server"
+    (member / "fixtures").mkdir(parents=True)
+    (member / "fixtures/token.txt").write_text("sk-unreviewedFixtureValue1234567890")
+    (member / "agent.py").write_text("print('ready')")
+    (member / "pyproject.toml").write_text('[project]\nname="server"\nversion="1"\n')
+    (member / "Dockerfile").write_text('FROM python:3.12\nCMD ["python", "agent.py"]\n')
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["server"]\n'
+    )
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: ./server\n    command: [python, agent.py]\n"
+    )
+    runtime = Runtime(
+        language="python",
+        execution="compose",
+        compose_file="compose.yaml",
+        service="agent",
+        context_excludes=["fixtures"],
+    )
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    output = tmp_path.parent / (tmp_path.name + "-bundle")
+    packaged = _package_process_sources(tmp_path, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    assert not (output / agent.working_directory / "server/fixtures").exists()
+    assert (output / agent.working_directory / "server/agent.py").exists()
+    assert 'source_component' not in agent.model_dump()
+
+
+def test_environment_bundle_omits_public_suite_and_simulator(tmp_path):
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n")
+    (source / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["python", "agent.py"], interface={
+        "kind": "http", "port": 8080, "path": "/chat",
+    })
+    (authoring / "simulator_prompt.md").write_text("Public simulator prompt")
+    shutil.rmtree(authoring / "scenarios")
+    job = _job(connector="auto", with_secrets=False)
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=output,
+        include_scenarios=False,
+    )
+    assert (output / "contract.json").is_file()
+    assert not (output / "scenarios").exists()
+    assert not (output / "simulator_prompt.md").exists()
+    assert "scenarios/" not in manifest.provenance.adopted_files
+    with pytest.raises(BundleAuthorError, match="scenario_artifacts_missing"):
+        author_bundle_v2(source=source, job=job, authoring=authoring, output=tmp_path / "full")
+
+
+def test_native_plan_preserves_config_files_and_rejects_unknown_aliases(tmp_path):
+    (tmp_path / "agent.py").write_text("print('hello')")
+    runtime = {
+        "execution": "native",
+        "command": ["python", "agent.py"],
+        "config_files": {
+            ".env": {"values": {"MODE": "test"}, "secret_aliases": {"API_KEY": "KEY"}}
+        },
+        "directories": ["state"],
+    }
+    job = _job(connector="auto", with_secrets=True, secret_aliases=("KEY",))
+    plan = resolve_environment_plan(
+        tmp_path,
+        job,
+        contract_modality="chat",
+        contract_interface_kind="command",
+        contract_runtime=runtime,
+    )
+    process = next(p for p in plan.processes if p.name == "agent")
+    assert process.config_files[".env"].secret_aliases == {"API_KEY": "KEY"}
+    assert process.environment["MODE"] == "test"
+    assert process.directories == ["state"]
+    with pytest.raises(
+        BundleAuthorError, match="runtime_config_target_reference_required"
+    ):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="command",
+            contract_runtime=runtime,
+        )
+
+
+@pytest.mark.parametrize("version", ["3.11", "3.11.9"])
+def test_native_python_rejects_source_uv_environment_mismatch(tmp_path: Path, version: str) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    (tmp_path / ".python-version").write_text("3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+        "[tool.uv]\nenvironments=[\"python_version >= '3.14'\"]\n"
+    )
+    with pytest.raises(BundleAuthorError, match="generated_runtime_python_version_unsupported") as caught:
+        _plan_python(tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+                     needs_secrets=False, version=version)
+    assert "python_version >= '3.14'" in str(caught.value)
+    assert "source .python-version: 3.14" in str(caught.value)
+
+
+@pytest.mark.parametrize("version", ["3.13", "3.13.8", ">=3.11"])
+def test_native_python_selects_compatible_uv_environment_without_overriding_explicit_version(tmp_path: Path, version: str) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    (tmp_path / ".python-version").write_text("3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+        "[tool.uv]\nenvironments=[\"python_version >= '3.13'\"]\n"
+    )
+    plan = _plan_python(tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+                        needs_secrets=False, version=version)
+    command = plan.build_commands[0]
+    assert command[command.index("--python") + 1] == (
+        "python3.13.8" if version == "3.13.8" else
+        "python3.13" if version == ">=3.11" else "<3.15,==3.13.*,>=3.11"
+    )
+
+
+@pytest.mark.parametrize("environments", [
+    ["python_version == '3.11'", "python_version >= '3.14'"],
+    ["python_version == '3.11' or python_version >= '3.14'"],
+    ["python_version >= '3.14'", "sys_platform == 'linux'"],
+    ["python_full_version >= '3.11.8'"],
+])
+def test_python_selection_preserves_uv_alternatives_and_target_only_constraints(tmp_path: Path, environments: list[str]) -> None:
+    from fi.alk.harness.generated_runtime import _python_language_version
+
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nrequires-python='>=3.11'\n[tool.uv]\n"
+        f"environments={json.dumps(environments)}\n"
+    )
+    assert _python_language_version(tmp_path, "3.11", interpreter_selector=True) == "==3.11.*,>=3.11"
+
+
+# --- an agent that is one folder of a repository -------------------------------------------
+
+_PROJECT = "[project]\nname='proj'\nversion='1'\n"
+_STARTED = ["sh", "-c", 'cd "./$1" && shift && exec "$@"', "alk-source-process"]
+
+
+def _github_job(subfolder: str | None, **kwargs) -> HarnessJob:
+    return _job(**{"connector": "auto", **kwargs}).model_copy(
+        update={
+            "source": RepositorySource(
+                kind=SourceKind.GITHUB,
+                repository="acme/agents",
+                commit_sha="a" * 40,
+                visibility=SourceVisibility.PUBLIC,
+                subfolder=subfolder,
+            )
+        }
+    )
+
+
+def _repo(tmp_path: Path, files: dict[str, str]) -> Path:
+    source = tmp_path / "source"
+    source.mkdir(exist_ok=True)
+    for name, text in files.items():
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return source
+
+
+def _agent_of(plan_or_manifest):
+    return next(p for p in plan_or_manifest.processes if p.name == "agent")
+
+
+def _plan_for(source, subfolder, runtime=None, *, kind=None, modality="chat", **job):
+    return resolve_environment_plan(
+        source,
+        _github_job(subfolder, **job),
+        contract_modality=modality,
+        contract_interface_kind=kind,
+        contract_runtime={} if runtime is None else runtime,
+    )
+
+
+def _bundle(tmp_path, source, subfolder, runtime=None, *, job=None, modality="chat", contract=None):
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            contract
+            if contract is not None
+            else {
+                "modality": modality,
+                "runtime": runtime if runtime is not None else {"language": "python"},
+                "data_store": {"kind": "none"},
+                "tools": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=job or _github_job(subfolder, metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+    return manifest, output
+
+
+def _sealed(output: Path) -> dict:
+    return json.loads((output / "contract.json").read_text())
+
+
+def _callback(variable: str = "") -> str:
+    read = f'import os\nKEY = os.environ["{variable}"]\n' if variable else ""
+    return f"{read}def agent_callback(messages):\n    return 'ok'\n"
+
+
+# (files, where the project installs, the folder the process changes into)
+_SHAPES = {
+    "own": ({"agents/a/pyproject.toml": _PROJECT}, "agents/a", None),
+    "own_with_unrelated_root": (
+        {"agents/a/pyproject.toml": _PROJECT, "pyproject.toml": _PROJECT},
+        "agents/a",
+        None,
+    ),
+    "own_with_unrelated_requirements": (
+        {"agents/a/pyproject.toml": _PROJECT, "requirements.txt": "left-pad-for-the-root\n"},
+        "agents/a",
+        None,
+    ),
+    "above": ({"pyproject.toml": _PROJECT}, ".", "agents/a"),
+    "requirements_above": ({"requirements.txt": "requests\n"}, ".", "agents/a"),
+    "between": ({"agents/pyproject.toml": _PROJECT}, "agents", "a"),
+}
+_LANES = {
+    "plain": ("x = 1\n", {}, None),
+    "declared": (
+        "x = 1\n",
+        {"command": ["python", "agent.py"], "interface": {"kind": "command"}},
+        "command",
+    ),
+    "callback": (_callback(), {}, None),
+}
+
+
+@pytest.mark.parametrize("lane", sorted(_LANES))
+@pytest.mark.parametrize("shape", sorted(_SHAPES))
+def test_subfolder_install_root_and_run_folder(tmp_path, shape, lane):
+    files, installs_at, starts_in = _SHAPES[shape]
+    text, runtime, kind = _LANES[lane]
+    source = _repo(tmp_path, {**files, "agents/a/agent.py": text})
+
+    agent = _agent_of(_plan_for(source, "agents/a", dict(runtime), kind=kind))
+
+    assert agent.working_directory == installs_at
+    if starts_in is None:
+        assert agent.run_command[:4] == ["uv", "run", "--no-sync", "python"]
+        assert agent.source_component == "."
+        assert not any(argv[:2] == ["ln", "-s"] for argv in agent.build_commands)
+        assert "requirements.txt" not in json.dumps(agent.build_commands)
+    else:
+        assert agent.run_command[:5] == [*_STARTED, starts_in]
+        assert agent.source_component == starts_in
+        link = ["../" * len(Path(starts_in).parts) + ".venv", f"{starts_in}/.venv"]
+        assert ["ln", "-s", *link] in agent.build_commands
+    if lane == "callback":
+        assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "agent:agent_callback"
+
+
+def test_subfolder_workspace_member(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*"]\n',
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\n",
+            "agents/b/pyproject.toml": "[project]\nname='agent-b'\nversion='1'\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+
+    agent = _agent_of(_plan_for(source, "agents/a"))
+
+    assert agent.working_directory == "."
+    assert agent.source_component == "agents/a"
+    assert agent.run_command[:5] == [*_STARTED, "agents/a"]
+    links = [argv for argv in agent.build_commands if argv[:2] == ["ln", "-s"]]
+    assert links == [["ln", "-s", "../../.venv", "agents/a/.venv"]]
+
+
+def test_subfolder_setup_py_lane_links_venv(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "setup.py": "from setuptools import setup\nsetup()\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+
+    agent = _agent_of(_plan_for(source, "agents/a", {"version": "3.12"}))
+
+    assert agent.run_command[:5] == [*_STARTED, "agents/a"]
+    assert ["ln", "-s", "../../.venv", "agents/a/.venv"] in agent.build_commands
+
+    # A bare interpreter with no environment has nothing to link.
+    bare = _agent_of(_plan_for(source, "agents/a"))
+    assert not any(argv[:2] == ["ln", "-s"] for argv in bare.build_commands)
+
+
+def test_subfolder_scopes_credentials_with_the_project_above(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/agent.py": _callback(),
+            "agents/b/agent.py": _callback("B_ONLY_API_KEY"),
+        },
+    )
+
+    _, output = _bundle(tmp_path, source, "agents/a")
+
+    manifest = json.loads((output / "credentials.json").read_text())
+    required = {item["environment_name"]: item["required"] for item in manifest["requirements"]}
+    assert required["B_ONLY_API_KEY"] is False
+
+
+def test_subfolder_requires_what_its_shared_code_reads(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "common/__init__.py": "",
+            "common/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
+            "agents/a/agent.py": "from common import llm\n" + _callback(),
+        },
+    )
+
+    _, output = _bundle(tmp_path, source, "agents/a")
+
+    manifest = json.loads((output / "credentials.json").read_text())
+    required = {item["environment_name"]: item["required"] for item in manifest["requirements"]}
+    assert required["SHARED_API_KEY"] is True
+
+
+def test_a_workspace_member_requires_what_its_shared_code_reads(tmp_path):
+    # It ships from the workspace root, so the shared code it imports is shipped, and read.
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*"]\n',
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\n",
+            "agents/b/pyproject.toml": "[project]\nname='agent-b'\nversion='1'\n",
+            "common/__init__.py": "",
+            "common/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
+            "agents/a/agent.py": "from common import llm\n" + _callback(),
+            "agents/b/agent.py": _callback("B_ONLY_API_KEY"),
+        },
+    )
+
+    _, output = _bundle(tmp_path, source, "agents/a")
+
+    manifest = json.loads((output / "credentials.json").read_text())
+    required = {item["environment_name"]: item["required"] for item in manifest["requirements"]}
+    assert required["SHARED_API_KEY"] is True
+    assert required.get("B_ONLY_API_KEY") is not True
+
+
+@pytest.mark.parametrize("layout", ["libs/common/src/common", "libs/common/common"])
+def test_a_workspace_member_requires_what_another_member_it_imports_reads(tmp_path, layout):
+    # The shared code is its own member, installed by `uv run` and imported
+    # by its package name, in a src/ or a flat layout.
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*", "libs/*"]\n',
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\n"
+            "dependencies=['common']\n[tool.uv.sources]\ncommon={workspace=true}\n",
+            "agents/b/pyproject.toml": "[project]\nname='agent-b'\nversion='1'\n",
+            "libs/common/pyproject.toml": "[project]\nname='common'\nversion='1'\n",
+            f"{layout}/__init__.py": "",
+            f"{layout}/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
+            "agents/a/agent.py": "from common import llm\n" + _callback(),
+            "agents/b/agent.py": _callback("B_ONLY_API_KEY"),
+        },
+    )
+
+    _, output = _bundle(tmp_path, source, "agents/a")
+
+    manifest = json.loads((output / "credentials.json").read_text())
+    required = {item["environment_name"]: item["required"] for item in manifest["requirements"]}
+    assert required["SHARED_API_KEY"] is True
+    assert required.get("B_ONLY_API_KEY") is not True
+
+
+def test_callable_without_its_own_callback_ignores_a_siblings(tmp_path):
+    source = _repo(
+        tmp_path,
+        {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": _callback()},
+    )
+
+    with pytest.raises(BundleAuthorError, match="callback_entrypoint_missing"):
+        _plan_for(source, "agents/a", kind="callable")
+
+
+def test_callable_command_needs_its_own_callback_not_a_siblings(tmp_path):
+    source = _repo(
+        tmp_path,
+        {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": _callback()},
+    )
+    runtime = {
+        "command": ["python", "agent.py"],
+        "interface": {
+            "kind": "callable",
+            "protocol": "fi.alk",
+            "path": "",
+            "health_path": "",
+            "include_tools": True,
+        },
+    }
+
+    with pytest.raises(BundleAuthorError, match="generated_runtime_entrypoint_ambiguous"):
+        _bundle(tmp_path, source, "agents/a", runtime)
+
+
+def test_subfolder_wrapper_really_changes_folder(tmp_path):
+    source = _repo(
+        tmp_path, {"pyproject.toml": _PROJECT, "agents/a/agent.py": "x = 'inside'\n"}
+    )
+    agent = _agent_of(_plan_for(source, "agents/a"))
+    assert agent.run_command[0] == "sh"
+    started = agent.run_command[:5]
+
+    where = subprocess.run(
+        [*started, "pwd"], cwd=source, check=True, text=True, capture_output=True
+    )
+    read = subprocess.run(
+        [*started, "cat", "agent.py"], cwd=source, check=True, text=True, capture_output=True
+    )
+
+    assert Path(where.stdout.strip()).resolve() == (source / "agents" / "a").resolve()
+    assert read.stdout == "x = 'inside'\n"
+
+
+def test_subfolder_narrows_agent_py_search(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/src/agent.py": "x = 1\n",
+            "agents/b/agent.py": "x = 2\n",
+        },
+    )
+    manifest, _ = _bundle(tmp_path, source, "agents/a")
+
+    agent = _agent_of(manifest)
+
+    assert agent.run_command[:5] == [*_STARTED, "agents/a"]
+    assert agent.run_command[-1] == "src/agent.py"
+
+
+def test_two_callbacks_subfolder_picks_its_own(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/agent.py": _callback(),
+            "agents/b/agent.py": _callback("B_ONLY_API_KEY"),
+        },
+    )
+    manifest, output = _bundle(tmp_path, source, "agents/a")
+
+    agent = _agent_of(manifest)
+
+    assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "agent:agent_callback"
+    assert _sealed(output)["runtime"]["interface"]["kind"] == "callable"
+
+
+def test_sibling_callback_does_not_flip_interface(tmp_path):
+    source = _repo(
+        tmp_path, {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": _callback()}
+    )
+    manifest, output = _bundle(tmp_path, source, "agents/a")
+
+    assert "ALK_CALLBACK_ENTRYPOINT" not in _agent_of(manifest).environment
+    assert not _sealed(output)["runtime"].get("interface")
+
+
+def test_subfolder_langgraph_entry_runs_from_subfolder(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/langgraph.json": json.dumps({"graphs": {"A": "./graph.py:graph"}}),
+            "agents/a/graph.py": "graph = object()\n",
+            "agents/b/langgraph.json": json.dumps({"graphs": {"B": "./other.py:graph"}}),
+            "agents/b/other.py": "graph = object()\n",
+        },
+    )
+    manifest, output = _bundle(tmp_path, source, "agents/a")
+
+    agent = _agent_of(manifest)
+
+    assert agent.environment["ALK_LANGGRAPH_ENTRYPOINT"] == "graph.py:graph"
+    assert agent.run_command[:5] == [*_STARTED, "agents/a"]
+    assert _sealed(output)["runtime"]["interface"]["kind"] == "callable"
+
+
+def test_subfolder_ignores_sibling_toolbox(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/agent.py": "x = 1\n",
+            "agents/b/agent.py": "from toolbox_core import ToolboxSyncClient\n",
+            "agents/b/tools.yaml": (
+                "tools:\n  lookup:\n    kind: postgres-sql\n    statement: select 1\n"
+                "toolsets:\n  all: [lookup]\n"
+            ),
+        },
+    )
+    manifest, _ = _bundle(tmp_path, source, "agents/a")
+
+    assert "mcp-toolbox" not in [process.name for process in manifest.processes]
+
+
+def test_subfolder_own_toolbox_beside_a_siblings(tmp_path):
+    toolbox = (
+        "tools:\n  {name}:\n    kind: postgres-sql\n    statement: select 1\n"
+        "toolsets:\n  all: [{name}]\n"
+    )
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/agent.py": "from toolbox_core import ToolboxSyncClient\n",
+            "agents/a/tools.yaml": toolbox.format(name="own_lookup"),
+            "agents/b/agent.py": "from toolbox_core import ToolboxSyncClient\n",
+            "agents/b/tools.yaml": toolbox.format(name="sibling_lookup"),
+        },
+    )
+
+    _, output = _bundle(tmp_path, source, "agents/a")
+
+    definition = (output / "generated" / "mcp-toolbox" / "toolbox.json").read_text()
+    assert "own_lookup" in definition and "sibling_lookup" not in definition
+
+
+def test_subfolder_reads_only_the_folders_alk_yaml(tmp_path, monkeypatch):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    from fi.alk.harness import bundle_author_v2
+
+    read: list[Path] = []
+    real = bundle_author_v2._declared_runtime_environment
+
+    def spying(folder):
+        read.append(Path(folder).resolve())
+        return real(folder)
+
+    monkeypatch.setattr(bundle_author_v2, "_declared_runtime_environment", spying)
+
+    _bundle(tmp_path, source, "agents/a")
+
+    assert read and set(read) == {(source / "agents" / "a").resolve()}
+
+
+def test_subfolder_ignores_sibling_alk_yaml(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "alk.yaml": "runtime:\n  environment:\n    ROOT_SETTING: root\n",
+            "agents/a/alk.yaml": "runtime:\n  environment:\n    A_SETTING: own\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+    manifest, _ = _bundle(tmp_path, source, "agents/a")
+
+    environment = _agent_of(manifest).environment
+
+    assert environment["A_SETTING"] == "own"
+    assert "ROOT_SETTING" not in environment
+
+
+def test_subfolder_ignores_root_dockerfile(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "Dockerfile": 'FROM python:3.12\nCMD ["python", "server.py"]\n',
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+    runtime = {"interface": {"kind": "http", "port": 9000, "path": "/chat"}}
+    manifest, _ = _bundle(tmp_path, source, "agents/a", dict(runtime))
+
+    assert "server.py" not in json.dumps(_agent_of(manifest).run_command)
+    plan = _plan_for(source, "agents/a", dict(runtime), kind="http")
+    assert plan.packaging == "generated_python"
+
+
+def test_subfolder_with_a_project_above_ignores_the_root_dockerfile(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "Dockerfile": 'FROM python:3.12\nCMD ["python", "server.py"]\n',
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+
+    agent = _agent_of(_plan_for(source, "agents/a"))
+
+    assert "server.py" not in json.dumps(agent.run_command)
+
+
+@pytest.mark.parametrize("kind", ["http", None])
+def test_subfolder_dockerfile_launcher_follows_the_requirements_above(tmp_path, kind):
+    source = _repo(
+        tmp_path,
+        {
+            "requirements.txt": "flask\n",
+            "agents/a/agent.py": "x = 1\n",
+            "agents/a/Dockerfile": 'FROM python:3.12\nCMD ["python", "server.py"]\n',
+        },
+    )
+    runtime = {"interface": {"kind": "http", "port": 9000, "path": "/chat"}} if kind else {}
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind=kind))
+
+    assert agent.run_command[-2:] == [".venv/bin/python", "server.py"]
+
+
+def test_subfolder_reads_its_own_readme_schema(tmp_path):
+    fence = "```sql\nCREATE TABLE {name} (id integer primary key);\n```\n"
+    source = _repo(
+        tmp_path,
+        {
+            "README.md": fence.format(name="root_table"),
+            "agents/a/README.md": fence.format(name="own_table"),
+        },
+    )
+    contract = {"runtime": {"source_subfolder": "agents/a"}}
+
+    [schema] = _source_schema_artifacts(source, contract=contract)
+
+    assert schema.relative_path == "agents/a/README.md#sql-1"
+    assert "own_table" in schema.sql and "root_table" not in schema.sql
+
+
+def test_subfolder_reads_its_own_schema_sql(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "schema.sql": "CREATE TABLE root_table (id integer primary key);\n",
+            "agents/a/db/schema.sql": "CREATE TABLE own_table (id integer primary key);\n",
+        },
+    )
+    contract = {"runtime": {"source_subfolder": "agents/a"}}
+
+    paths = [item.relative_path for item in _source_schema_artifacts(source, contract=contract)]
+
+    assert paths == ["agents/a/db/schema.sql"]
+
+
+def test_subfolder_ignores_root_schema_sql(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "schema.sql": "CREATE TABLE root_table (id integer primary key);\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+    contract = {"runtime": {"source_subfolder": "agents/a"}}
+
+    assert _source_schema_artifacts(source, contract=contract) == []
+    whole = _source_schema_artifacts(source, contract={"runtime": {}})
+    assert [item.relative_path for item in whole] == ["schema.sql"]
+
+
+def test_subfolder_protects_install_root_requirements(tmp_path):
+    source = _repo(
+        tmp_path, {"requirements.txt": "requests\n", "agents/a/agent.py": "x = 1\n"}
+    )
+
+    with pytest.raises(
+        (GeneratedRuntimeError, BundleAuthorError), match="context_exclude_required"
+    ):
+        _bundle(
+            tmp_path,
+            source,
+            "agents/a",
+            {"language": "python", "context_excludes": ["requirements.txt"]},
+        )
+
+
+def test_no_subfolder_member_may_exclude_a_root_requirements_file(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["server"]\n',
+            "requirements.txt": "requests\n",
+            "server/pyproject.toml": "[project]\nname='server'\nversion='1'\n",
+            "server/agent.py": "x = 1\n",
+        },
+    )
+    runtime = Runtime(language="python", context_excludes=["requirements.txt"])
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    assert _agent_of(plan).source_component == "server"
+
+    packaged = _package_process_sources(source, tmp_path / "bundle", plan, runtime)
+
+    agent = _agent_of(packaged)
+    assert not (tmp_path / "bundle" / agent.working_directory / "requirements.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "project, installs_at, starts_in",
+    [
+        ({}, "agents/a", None),
+        ({"pyproject.toml": _PROJECT}, ".", "agents/a"),
+        ({"requirements.txt": "requests\n"}, ".", "agents/a"),
+        ({"setup.py": "from setuptools import setup\nsetup()\n"}, "agents/a", None),
+    ],
+    ids=["no_project", "project_above", "requirements_above", "setup_py_only"],
+)
+def test_subfolder_nested_agent_py_entry(tmp_path, project, installs_at, starts_in):
+    source = _repo(tmp_path, {**project, "agents/a/src/agent.py": "x = 1\n"})
+
+    agent = _agent_of(_plan_for(source, "agents/a"))
+
+    assert agent.working_directory == installs_at
+    assert agent.run_command[-1] == "src/agent.py"
+    if starts_in:
+        assert agent.run_command[:5] == [*_STARTED, starts_in]
+    else:
+        assert agent.run_command[0] != "sh"
+
+
+def test_subfolder_nested_own_project_goes_to_repair(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/app/pyproject.toml": _PROJECT,
+            "agents/a/app/agent.py": "x = 1\n",
+        },
+    )
+
+    with pytest.raises(BundleAuthorError) as refused:
+        _plan_for(source, "agents/a")
+
+    assert "runtime_workdir_nested_project" in str(refused.value)
+    assert "set runtime.workdir to agents/a/app" in str(refused.value)
+
+
+def test_subfolder_nested_own_project_callback_goes_to_repair(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/app/pyproject.toml": _PROJECT,
+            "agents/a/app/agent.py": _callback(),
+        },
+    )
+
+    with pytest.raises(BundleAuthorError) as refused:
+        _plan_for(source, "agents/a")
+
+    assert "runtime_workdir_nested_project" in str(refused.value)
+    assert "set runtime.workdir to agents/a/app" in str(refused.value)
+
+
+def test_contract_workdir_outside_subfolder_refused_at_plan(tmp_path):
+    source = _repo(
+        tmp_path, {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": "x = 2\n"}
+    )
+
+    with pytest.raises(BundleAuthorError, match="runtime_workdir_outside_subfolder"):
+        _plan_for(source, "agents/a", {"workdir": "agents/b"})
+
+
+def test_workdir_inside_subfolder_kept(tmp_path):
+    source = _repo(
+        tmp_path, {"pyproject.toml": _PROJECT, "agents/a/app/server.py": "x = 1\n"}
+    )
+    runtime = {
+        "execution": "native",
+        "workdir": "agents/a/app",
+        "command": ["python", "server.py"],
+        "interface": {"kind": "http", "port": 8001},
+    }
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind="http"))
+
+    assert agent.run_command == [*_STARTED, "agents/a/app", "python", "server.py"]
+
+
+@pytest.mark.parametrize("workdir", ["", "agents/a/"])
+def test_http_chat_default_workdir_reaches_discovery(tmp_path, workdir):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    runtime = {"workdir": workdir, "interface": {"kind": "http", "port": 8001}}
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind="http"))
+
+    assert agent.run_command[-1] == "agent.py"
+
+
+def test_empty_workdir_at_bundling(tmp_path):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    _, output = _bundle(tmp_path, source, "agents/a", {"language": "python"})
+
+    runtime = _sealed(output)["runtime"]
+
+    assert runtime["workdir"] == "agents/a"
+    assert runtime["source_subfolder"] == "agents/a"
+
+
+def test_no_subfolder_plan_is_unchanged(tmp_path):
+    source = _repo(tmp_path, {"pyproject.toml": _PROJECT, "agents/a/agent.py": "x = 1\n"})
+
+    agent = _agent_of(
+        resolve_environment_plan(
+            source,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_runtime={},
+        )
+    )
+
+    assert agent.working_directory == "."
+    assert agent.source_component == "."
+    assert agent.run_command == ["uv", "run", "--no-sync", "python", "agents/a/agent.py"]
+    assert not any(argv[:2] == ["ln", "-s"] for argv in agent.build_commands)
+
+
+def test_no_subfolder_sealed_contract_is_byte_identical(tmp_path):
+    source = _repo(tmp_path, {"agent.py": "x = 1\n"})
+    written = {"modality": "chat", "runtime": None, "data_store": {"kind": "none"}, "tools": []}
+    job = _job(connector="auto", metadata={"generic_harness_v1": True})
+
+    _, output = _bundle(tmp_path, source, None, job=job, contract=written)
+
+    sealed = _sealed(output)
+    assert sealed == written
+    assert "source_subfolder" not in json.dumps(sealed)
+
+
+def test_no_subfolder_no_failure_file(tmp_path, monkeypatch):
+    from fi.alk.harness import bundle_author_v2 as module
+
+    source = _repo(tmp_path, {"agent.py": "x = 1\n"})
+    authoring = _authoring(tmp_path)
+    job_path = tmp_path / "job.json"
+    job_path.write_text(_job(connector="auto").model_dump_json(), encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(module, "author_bundle_v2", lambda **kwargs: seen.append(kwargs))
+
+    code = module.main(
+        [
+            "--job", str(job_path), "--source", str(source),
+            "--authoring", str(authoring), "--output", str(tmp_path / "bundle"),
+        ]
+    )
+
+    assert code == 0 and len(seen) == 1
+    assert not (authoring / "failure.json").exists()
+
+
+def test_subfolder_voice_entry_gets_start(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/agent.py": (
+                "from livekit.agents import cli, WorkerOptions\n"
+                "cli.run_app(WorkerOptions(entrypoint_fnc=None))\n"
+            ),
+        },
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = _github_job(
+        "agents/a",
+        with_secrets=True,
+        secret_aliases=("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"),
+    )
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=tmp_path / "bundle"
+    )
+
+    agent = _agent_of(bundle)
+    assert agent.run_command[:5] == [*_STARTED, "agents/a"]
+    assert agent.run_command[-1:] == ["start"]
+
+
+def test_subfolder_bun_runs_from_subfolder(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/package.json": json.dumps({"name": "a", "packageManager": "bun@1.3.14"}),
+            "agents/a/bun.lock": '{"lockfileVersion": 1}',
+            "agents/a/server.ts": "Bun.serve({fetch: () => new Response('ok')})",
+        },
+    )
+    runtime = {
+        "language": "bun",
+        "version": "1.3.14",
+        "execution": "native",
+        "command": ["bun", "run", "server.ts"],
+        "interface": {"kind": "http", "port": 8001},
+    }
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind="http"))
+
+    assert agent.working_directory == "agents/a"
+    assert agent.run_command == ["bun", "run", "server.ts"]
+    assert agent.build_commands[-1] == ["bun", "install", "--frozen-lockfile"]
+
+
+def test_subfolder_workspaces_relative_to_run_folder(tmp_path):
+    source = _repo(
+        tmp_path, {"pyproject.toml": _PROJECT, "agents/a/agent.py": "x = 1\n"}
+    )
+
+    agent = _agent_of(
+        _plan_for(source, "agents/a", {"workspaces": {"files": "files"}})
+    )
+
+    assert agent.workspaces == {"files": "agents/a/files"}
+
+
+def test_subfolder_config_files_unchanged(tmp_path):
+    source = _repo(
+        tmp_path, {"pyproject.toml": _PROJECT, "agents/a/agent.py": "x = 1\n"}
+    )
+    runtime = {
+        "config_files": {"agents/a/settings.env": {"values": {"MODE": "test"}}},
+        "directories": ["agents/a/data"],
+    }
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime))
+
+    assert set(agent.config_files) == {"agents/a/settings.env"}
+    assert agent.directories == ["agents/a/data"]
+
+
+def test_subfolder_ignores_root_compose_with_broker(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/private/alk/broker.sock")
+    source = _repo(
+        tmp_path,
+        {
+            "compose.yaml": "services:\n  rootsvc:\n    build: .\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+
+    plan = _plan_for(source, "agents/a")
+
+    assert plan.packaging == "generated_python"
+    assert plan.control_service == "agent"
+
+
+def test_subfolder_requires_a_named_root_compose_files_values(tmp_path, monkeypatch):
+    from fi.alk.harness import bundle_author_v2
+
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/agent.py": "x = 1\n",
+            "compose.yaml": (
+                "services:\n  agent:\n    build: agents/a\n    command: [python, agent.py]\n"
+                "    ports: ['8080:8080']\n"
+            ),
+        },
+    )
+    seen: dict = {}
+
+    class _Seen(Exception):
+        pass
+
+    def stop(*args, **kwargs):
+        seen.update(kwargs)
+        raise _Seen
+
+    monkeypatch.setattr(bundle_author_v2, "discover_credentials", stop)
+
+    with pytest.raises(_Seen):
+        _bundle(
+            tmp_path,
+            source,
+            "agents/a",
+            runtime={
+                "language": "python",
+                "execution": "compose",
+                "compose_file": "compose.yaml",
+                "service": "agent",
+                "interface": {"kind": "http", "port": 8080, "path": "/chat"},
+            },
+        )
+
+    assert seen["agent_compose_file"] == "compose.yaml"
+    assert seen["agent_subfolder"] == "agents/a"
+    # A Compose plan has no source process, so the folder's install root is what's scanned.
+    assert "agents/a" in seen["scan_paths"]
+
+
+def test_subfolder_finds_its_own_compose_with_broker(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/private/alk/broker.sock")
+    source = _repo(
+        tmp_path,
+        {
+            "compose.yaml": "services:\n  rootsvc:\n    build: .\n",
+            "agents/a/server.py": "x = 1\n",
+            "agents/a/compose.yaml": (
+                "services:\n  agent:\n    build: .\n    command: [python, server.py]\n"
+            ),
+        },
+    )
+
+    plan = _plan_for(
+        source, "agents/a", {"interface": {"kind": "http", "port": 8080}}, kind="http"
+    )
+
+    assert plan.packaging == "compose"
+    assert plan.control_service == "agent"
+
+
+def _bundle_main(tmp_path, job, source, authoring):
+    from fi.alk.harness.bundle_author_v2 import main
+
+    job_path = tmp_path / "job.json"
+    job_path.write_text(job.model_dump_json(), encoding="utf-8")
+    return main(
+        [
+            "--job", str(job_path), "--source", str(source),
+            "--authoring", str(authoring), "--output", str(tmp_path / "bundle"),
+        ]
+    )
+
+
+def test_bundle_main_bad_subfolder_writes_failure(tmp_path):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    authoring = _authoring(tmp_path)
+
+    code = _bundle_main(tmp_path, _github_job("agents/missing"), source, authoring)
+
+    assert code == 78
+    failure = json.loads((authoring / "failure.json").read_text())
+    assert (failure["domain"], failure["stage"], failure["code"], failure["retryable"]) == (
+        "agent",
+        "acquiring_source",
+        "subfolder_not_found",
+        False,
+    )
+    assert not (tmp_path / "bundle").exists()
+
+
+def _saved_from(tmp_path, source, folder):
+    from fi.alk.harness.tools import accept_contract
+
+    authoring = _authoring(tmp_path)
+    saved = accept_contract(
+        {
+            "agent": "pair",
+            "real_use_cases": ["order"],
+            "tools": [{"name": "add", "args": ["item_id"]}],
+        },
+        authoring,
+        source_root=source,
+        subfolder=folder,
+    )
+    assert not saved.get("is_error")
+    return authoring
+
+
+def test_bundle_main_contract_from_another_folder_writes_failure(tmp_path):
+    source = _repo(
+        tmp_path, {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": "x = 2\n"}
+    )
+    authoring = _saved_from(tmp_path, source, "agents/a")
+
+    code = _bundle_main(tmp_path, _github_job("agents/b"), source, authoring)
+
+    assert code == 78
+    failure = json.loads((authoring / "failure.json").read_text())
+    assert failure["code"] == "subfolder_not_found"
+    assert failure["details"] == {"subfolder": "agents/b", "built_from": "agents/a"}
+
+
+def test_bundle_main_job_without_a_folder_on_a_folder_contract_writes_failure(tmp_path):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    authoring = _saved_from(tmp_path, source, "agents/a")
+
+    code = _bundle_main(tmp_path, _github_job(None), source, authoring)
+
+    assert code == 78
+    failure = json.loads((authoring / "failure.json").read_text())
+    assert failure["code"] == "subfolder_not_found"
+    assert failure["details"] == {"subfolder": "", "built_from": "agents/a"}
+    assert "agents/a" in failure["message"] and "repository root" in failure["message"]
+
+
+@pytest.mark.parametrize("contract", [{"tools": []}, {"runtime": None, "tools": []}])
+def test_bundle_main_contract_without_runtime_writes_failure(tmp_path, contract):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    code = _bundle_main(tmp_path, _github_job("agents/a"), source, authoring)
+
+    assert code == 78
+    failure = json.loads((authoring / "failure.json").read_text())
+    assert failure["code"] == "subfolder_not_found"
+    assert failure["details"] == {"subfolder": "agents/a", "built_from": ""}
+    assert not (tmp_path / "bundle").exists()
+
+
+def test_bundle_main_matching_folder_passes(tmp_path, monkeypatch):
+    from fi.alk.harness import bundle_author_v2 as module
+
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    authoring = _saved_from(tmp_path, source, "agents/a")
+    seen = []
+    monkeypatch.setattr(module, "author_bundle_v2", lambda **kwargs: seen.append(kwargs))
+
+    code = _bundle_main(tmp_path, _github_job("agents/a"), source, authoring)
+
+    assert code == 0 and len(seen) == 1
+    assert not (authoring / "failure.json").exists()
+
+
+_GATEWAY_MARK = "ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"
+_TRACING_OFF = "OPENAI_AGENTS_DISABLE_TRACING"
+
+
+def _gateway_job(target_model: str | None) -> HarnessJob:
+    job = _job(connector="auto")
+    if target_model is not None:
+        job.agent.config["target_model"] = target_model
+    return job
+
+
+def _gateway_control_environment(tmp_path: Path, lane: str, target_model: str | None):
+    if lane == "compose":
+        source = tmp_path / "compose-agent"
+        source.mkdir()
+        (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+        (source / "requirements.txt").write_text("\n", encoding="utf-8")
+        (source / "compose.yml").write_text(
+            "services:\n  postgres:\n    image: postgres:16\n  agent:\n    build: .\n"
+            "    depends_on:\n      postgres: {condition: service_healthy}\n",
+            encoding="utf-8",
+        )
+        plan = resolve_environment_plan(
+            source,
+            _gateway_job(target_model),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={},
+        )
+    else:
+        text, runtime, kind = _LANES[lane]
+        source = _repo(
+            tmp_path,
+            {"pyproject.toml": _PROJECT, "agent.py": text},
+        )
+        plan = resolve_environment_plan(
+            source,
+            _gateway_job(target_model),
+            contract_modality="chat",
+            contract_interface_kind=kind,
+            contract_runtime=dict(runtime),
+        )
+    return next(p for p in plan.processes if p.name == plan.control_service).environment
+
+
+@pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
+def test_routed_target_model_marks_the_agent_process_for_chat_completions(
+    tmp_path: Path, lane: str
+) -> None:
+    environment = _gateway_control_environment(
+        tmp_path, lane, "vertex_ai/gemini-3.7-flash"
+    )
+    assert environment[_GATEWAY_MARK] == "1"
+    # Off until the kit's hook has kept the SDK's export local; the hook turns it back on.
+    assert environment[_TRACING_OFF] == "1"
+
+
+@pytest.mark.parametrize("lane", ["callback", "declared"])
+def test_routed_sdk_agent_in_a_repo_with_an_agents_folder_has_tracing_off_until_the_hook(
+    tmp_path: Path, lane: str
+) -> None:
+    text, runtime, kind = _LANES[lane]
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/__init__.py": "",
+            "agent.py": "from agents import Agent, Runner\n" + text,
+        },
+    )
+    plan = resolve_environment_plan(
+        source,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_modality="chat",
+        contract_interface_kind=kind,
+        contract_runtime=dict(runtime),
+    )
+    environment = next(
+        p for p in plan.processes if p.name == plan.control_service
+    ).environment
+    assert environment[_GATEWAY_MARK] == "1"
+    assert environment[_TRACING_OFF] == "1"
+
+
+@pytest.mark.parametrize(
+    "customer_value", [None, "0", "1"], ids=["unset", "customer_zero", "customer_one"]
+)
+def test_routed_compose_runtime_control_service_has_tracing_off_until_the_hook(
+    tmp_path: Path, customer_value: str | None
+) -> None:
+    from fi.alk.harness.contract import Runtime
+
+    # The compose runtime path builds the control service from the compose file's source services.
+    environment_block = (
+        f"    environment:\n      {_TRACING_OFF}: '{customer_value}'\n"
+        if customer_value is not None
+        else ""
+    )
+    (tmp_path / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n    command: [python, agent.py]\n"
+        + environment_block,
+        encoding="utf-8",
+    )
+    runtime = Runtime(
+        language="python", execution="compose", compose_file="compose.yaml", service="agent"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime.model_dump(),
+    )
+    environment = next(
+        p for p in plan.processes if p.name == plan.control_service
+    ).environment
+    assert environment[_GATEWAY_MARK] == "1"
+    # A customer's own "0" doesn't turn it on before the hook has kept the export local.
+    assert environment[_TRACING_OFF] == "1"
+    # The marker tells the hook the switch is the kit's to turn back on; a customer's own "1"
+    # stays theirs.
+    assert ("ALK_SDK_TRACING_OFF_BY_KIT" in environment) is (customer_value != "1")
+
+
+def test_routed_command_agent_keeps_framework_observation_with_tracing_off_until_the_hook(
+    tmp_path: Path,
+) -> None:
+    # A command-run Agents SDK agent's tool calls come from the framework spans the kit observes;
+    # the hook turns the SDK's tracing back on once its export is local, so the observer reads.
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="agent"\nversion="1"\n')
+    plan = resolve_environment_plan(
+        tmp_path,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_runtime={
+            "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        },
+        contract_interface_kind="command",
+        contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    assert control.environment[_GATEWAY_MARK] == "1"
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert control.environment[_TRACING_OFF] == "1"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["python", "-I", "agent.py"], ["python3", "-E", "agent.py"], ["python", "-uS", "agent.py"]],
+    ids=["isolated", "ignore_environment", "no_site"],
+)
+def test_a_routed_python_that_skips_the_hook_gets_the_sdks_tracing_switch(
+    tmp_path: Path, command: list[str]
+) -> None:
+    # -I, -E and -S never load the hook, so only the SDK's own switch keeps its export off.
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="agent"\nversion="1"\n')
+    plan = resolve_environment_plan(
+        tmp_path,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_runtime={"language": "python", "execution": "native", "command": command},
+        contract_interface_kind="command",
+        contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    assert control.environment[_TRACING_OFF] == "1"
+
+
+@pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
+@pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])
+def test_unrouted_target_model_leaves_the_agent_process_unmarked(
+    tmp_path: Path, lane: str, target_model: str | None
+) -> None:
+    environment = _gateway_control_environment(tmp_path, lane, target_model)
+    assert _GATEWAY_MARK not in environment
+    assert _TRACING_OFF not in environment
+
+
+def _compose_gateway_environment(tmp_path, monkeypatch, resolved, target_model, env_block):
+    from fi.alk.harness.compose_integration import compile_bundle
+
+    source = tmp_path / "source"
+    source.mkdir(exist_ok=True)
+    (source / "compose.yaml").write_text(
+        "services:\n  chat:\n    image: example/chat:latest\n" + env_block
+    )
+    authoring = tmp_path / "authoring"
+    authoring.mkdir(exist_ok=True)
+    contract = {
+        "modality": "chat",
+        "runtime": {
+            "execution": "compose",
+            "compose_file": "compose.yaml",
+            "service": "chat",
+            "interface": {
+                "kind": "http",
+                "protocol": "json_template",
+                "port": 8000,
+                "path": "/chat",
+            },
+        },
+    }
+    job = _gateway_job(target_model)
+    monkeypatch.setenv("ALK_TRUSTED_COMPOSE_SOCKET", "/private/alk/docker.sock")
+    compile_bundle(
+        source=source,
+        job=job,
+        authoring=authoring,
+        output=tmp_path / "bundle",
+        contract=contract,
+        include_scenarios=False,
+    )
+    return json.loads((tmp_path / "bundle" / "compose.json").read_text())["services"]["chat"]
+
+
+@pytest.mark.parametrize(
+    "env_block",
+    [
+        "",
+        "    environment:\n      MODE: small\n",
+        "    environment:\n      - MODE=small\n      - OPENAI_AGENTS_DISABLE_TRACING=0\n",
+    ],
+    ids=["none", "mapping", "list_with_customer_value"],
+)
+def test_routed_compose_control_service_has_agents_sdk_tracing_off(
+    tmp_path, monkeypatch, resolved_compose_images, env_block
+):
+    service = _compose_gateway_environment(
+        tmp_path, monkeypatch, resolved_compose_images,
+        "vertex_ai/gemini-3.7-flash", env_block,
+    )
+    environment = service["environment"]
+    if isinstance(environment, dict):
+        assert environment[_TRACING_OFF] == "1"
+        assert environment.get("MODE", "small") == "small"
+    else:
+        assert environment.count(f"{_TRACING_OFF}=1") == 1
+        assert not any(item == f"{_TRACING_OFF}=0" for item in environment)
+        assert "MODE=small" in environment or "MODE" not in env_block
+
+
+@pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])
+def test_unrouted_compose_control_service_is_left_alone(
+    tmp_path, monkeypatch, resolved_compose_images, target_model
+):
+    service = _compose_gateway_environment(
+        tmp_path, monkeypatch, resolved_compose_images, target_model, ""
+    )
+    assert "environment" not in service
+
+
+def test_the_tool_proxy_learns_the_declared_read_actions_and_a_plan_without_any_is_unchanged():
+    from fi.alk.harness.bundle_author_v2 import _tool_proxy_process, declared_read_actions
+
+    entries = [
+        {"tool": "get_order", "endpoint": "/orders/get", "method": "POST", "effect": "read"},
+        {"tool": "issue_refund", "endpoint": "/orders/refund", "method": "POST", "effect": "write"},
+        {"tool": "lookup", "endpoint": "", "effect": "read"},
+        {"tool": "list_refunds", "endpoint": "/refunds/list", "method": "POST"},
+    ]
+    assert declared_read_actions(entries) == ["orders.get"]
+    assert _tool_proxy_process(["orders.get"]).environment["READ_ACTIONS"] == "orders.get"
+    assert "READ_ACTIONS" not in _tool_proxy_process(declared_read_actions(entries[1:])).environment

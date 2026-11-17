@@ -31,6 +31,8 @@ from pydantic import (
     model_validator,
 )
 
+from . import user_files
+
 
 class ProviderLifecycleError(RuntimeError):
     """A repository lifecycle declaration or receipt is missing, unsafe, or inconsistent."""
@@ -243,15 +245,23 @@ def load_provider_manifest(
         ) from exc
 
 
+_RECEIPT_LIMIT_BYTES = 64 * 1024
+
+
 def validate_provision_receipt(
     path: str | Path,
     *,
     context: ProviderContext,
     secret_values: Mapping[str, str] | None = None,
+    beneath: Path | None = None,
 ) -> ProviderProvisionReceipt:
+    """``beneath`` is the lifecycle folder: the receipt's own folders below it are the lifecycle
+    user's, so the read never passes through a link there."""
     receipt_path = Path(path)
     try:
-        raw = receipt_path.read_text(encoding="utf-8")
+        raw = user_files.read_text(
+            receipt_path, beneath=beneath, limit=_RECEIPT_LIMIT_BYTES
+        )
         body = json.loads(raw)
         receipt = ProviderProvisionReceipt.model_validate(body)
     except (OSError, ValueError) as exc:
@@ -310,7 +320,14 @@ def build_lifecycle_invocation(
             "provider_required_secrets_missing: " + ", ".join(missing)
         )
     output_path = lifecycle_directory / output_relative_path
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    lifecycle_directory.mkdir(parents=True, exist_ok=True)
+    try:
+        # From the first provision on, the lifecycle user owns the folders below it.
+        user_files.make_folders(output_path.parent, beneath=lifecycle_directory)
+    except OSError as exc:
+        raise ProviderLifecycleError(
+            f"provider_lifecycle_output_unsafe: {output_relative_path}"
+        ) from exc
     executable_path = os.pathsep.join(
         filter(
             None,
@@ -352,8 +369,13 @@ def run_lifecycle_invocation(
     *,
     log_path: Path,
     run: Callable[..., Any],
+    user: int | None = None,
+    group: int | None = None,
 ) -> int:
-    """Execute one bounded lifecycle command without a shell and without logging its env."""
+    """Execute one bounded lifecycle command without a shell and without logging its env.
+
+    ``user`` and ``group`` are the world identity the command runs as, when the caller has one.
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     environment = {
         key: value
@@ -361,6 +383,7 @@ def run_lifecycle_invocation(
         if key in {"PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR"}
     }
     environment.update(invocation.environment)
+    identity = {} if user is None else {"user": user, "group": group}
     try:
         result = run(
             list(invocation.argv),
@@ -370,6 +393,7 @@ def run_lifecycle_invocation(
             text=True,
             timeout=invocation.timeout_seconds,
             check=False,
+            **identity,
         )
     except (TimeoutError, subprocess.TimeoutExpired) as exc:
         raise ProviderLifecycleError("provider_lifecycle_command_timed_out") from exc
@@ -389,8 +413,6 @@ def run_lifecycle_invocation(
         reverse=True,
     ):
         combined = combined.replace(sensitive, "[REDACTED]")
-    log_path.write_text(
-        combined[-16000:],
-        encoding="utf-8",
-    )
+    with user_files.open_log(log_path) as handle:
+        handle.write(combined[-16000:].encode("utf-8"))
     return int(getattr(result, "returncode", 1))

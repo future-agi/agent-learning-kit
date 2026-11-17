@@ -209,6 +209,11 @@ def save(
                 # be able to import the tools it was bound to, and a scenario run happens
                 # long after the build stage that found the path.
                 "source_root": world.source_root,
+                **(
+                    {"source_subfolder": world.source_subfolder}
+                    if getattr(world, "source_subfolder", "")
+                    else {}
+                ),
                 "source_provenance": source_provenance(world.source_root),
                 # A run refuses legacy/demo worlds whose handlers were authored by the harness.
                 # New worlds can only acquire handlers through adopt_tool, and a source root is
@@ -218,6 +223,7 @@ def save(
                 or ("source" if world.source_root else "synthetic"),
                 "runtime_tools": sorted(getattr(world, "runtime_tools", set())),
                 "external_runtime": bool(getattr(world, "external_runtime", False)),
+                "native_runtime": bool(getattr(world, "native_runtime", False)),
                 # How this agent says no in a returned value. Without it a restored world
                 # cannot tell a refusal from a success, so every run records "Error: no such
                 # order" as if the call worked, and a check asking whether the agent was
@@ -309,6 +315,7 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
     world.handlers = handlers
     world.runtime_tools = set(manifest.get("runtime_tools") or [])
     world.external_runtime = bool(manifest.get("external_runtime", False))
+    world.native_runtime = bool(manifest.get("native_runtime", False))
     world.tools = manifest.get("tool_specs", [])
     world.refusal_signature = str(manifest.get("refusal_signature") or "")
     # The environment's own handlers (a design or a release), not bindings to an agent's code.
@@ -317,7 +324,7 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
     # is importable again, and the frozen state is what those tools act on.
     reached = str(manifest.get("source_root") or "")
     if reached:
-        world.reach(reached)
+        world.reach(reached, str(manifest.get("source_subfolder") or ""))
     frozen_state = root / STATE
     if frozen_state.exists():
         world.state_object = json.loads(frozen_state.read_text(encoding="utf-8"))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import tarfile
 import tempfile
 import uuid
@@ -20,6 +21,7 @@ EVENT_SCHEMA_VERSION = "futureagi.harness-conversation-event.v1"
 DEFAULT_CAPABILITIES_PATH = Path("/run/futureagi/conversation.json")
 # Finish retries before the platform's 90-second heartbeat expiry can replace this process.
 _UNAVAILABLE_BUDGET_SECONDS = 60.0
+logger = logging.getLogger(__name__)
 
 
 class ConversationTransportError(RuntimeError):
@@ -412,6 +414,20 @@ class PlatformSessionStore:
 
 
 def _workspace_archive(workspace: Path) -> bytes:
+    """The workspace as a gzipped tar, packed again once if a file changed while it was packed.
+
+    A file that shrinks after its size is read fails the pack after its header is written, so the
+    file cannot be skipped: the archive would be corrupt. A second failure is left to the next
+    checkpoint.
+    """
+    try:
+        return _pack(workspace)
+    except OSError as exc:
+        logger.warning("the workspace changed while it was packed, packing it again: %s", exc)
+        return _pack(workspace)
+
+
+def _pack(workspace: Path) -> bytes:
     root = workspace.resolve()
     with tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024) as file:
         with tarfile.open(fileobj=file, mode="w:gz") as archive:
