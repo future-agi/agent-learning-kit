@@ -842,7 +842,19 @@ def _ts_monorepo(tmp_path, main):
     )
 
 
-@pytest.mark.parametrize("main", ["dist/index.js", "./build/index.js", "out/index.js"])
+@pytest.mark.parametrize(
+    "main",
+    [
+        "dist/index.js",
+        "./build/index.js",
+        "out/index.js",
+        # Dileep, #225 (4598392979): the dual build, `tsc --outDir dist/cjs` from src/index.ts.
+        "dist/cjs/index.js",
+        "dist/esm/index.js",
+        # Rollup's flavoured name for the same src/index.ts.
+        "dist/index.esm.js",
+    ],
+)
 def test_a_package_main_in_an_uncommitted_build_folder_is_found_in_src(tmp_path, main):
     # Dileep, #225 (4596906756): the usual TypeScript monorepo shape. `main` points at build
     # output that isn't committed; the code is in src/. The whole-repo build and the folder
@@ -863,6 +875,10 @@ def test_a_package_main_in_an_uncommitted_build_folder_is_found_in_src(tmp_path,
         ("dist/worker.mjs", "src/worker.ts"),
         ("dist/worker.cjs", "src/worker.ts"),
         ("dist/src/worker.js", "src/worker.ts"),
+        ("dist/cjs/worker.js", "src/worker.ts"),
+        ("dist/esm/worker.mjs", "src/worker.ts"),
+        # Dileep, #225 (4598392989): one suffix is dropped, not two.
+        ("dist/app.module.js", "src/app.module.ts"),
     ],
 )
 def test_a_build_entry_that_is_not_the_index_finds_its_own_source(tmp_path, main, source):
@@ -894,6 +910,40 @@ def test_a_build_entry_with_no_source_of_its_own_takes_no_other_file(tmp_path):
     )
 
     assert _required(discover_credentials(root, agent_subfolder="agents/a"))["INDEX_API_KEY"] is False
+
+
+@pytest.mark.parametrize("main", ["dist/app.module.js", "dist/esm/app.module.js"])
+def test_a_dotted_build_entry_takes_its_own_source_not_a_shorter_name(tmp_path, main):
+    # Dileep, #225 (4598392989): dist/app.module.js was looked up as src/app.ts.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": main}),
+            "packages/shared/src/app.module.ts": "export const k = process.env.MODULE_API_KEY;\n",
+            "packages/shared/src/app.ts": "export const a = process.env.APP_API_KEY;\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["MODULE_API_KEY"] is True
+    assert required["APP_API_KEY"] is False
+
+
+def test_a_dotted_build_entry_with_no_source_of_its_own_takes_no_shorter_name(tmp_path):
+    # Only a build flavour (`.esm`, `.cjs`, `.umd`, `.min`) is dropped to find the source:
+    # dist/app.module.js never stands for src/app.ts.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": "dist/app.module.js"}),
+            "packages/shared/src/app.ts": "export const a = process.env.APP_API_KEY;\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["APP_API_KEY"] is False
 
 
 def test_a_build_folder_main_is_entered_through_src_index(tmp_path):

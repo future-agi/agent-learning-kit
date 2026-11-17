@@ -167,6 +167,9 @@ _BUILD_FOLDERS = frozenset({"dist", "build", "out"})
 # What a build writes: an entry with one of these suffixes is looked for with every script
 # suffix of the same stem, so `.mjs` and `.cjs` are found from `.ts` as `.js` is.
 _BUILT_SUFFIXES = frozenset({".js", ".mjs", ".cjs", ".jsx"})
+# The flavour a bundler adds to a built name (`index.esm.js` from `src/index.ts`). Only these are
+# dropped to find a source, and only after the exact name: `app.module.js` is never `app.ts`.
+_BUILD_FLAVOURS = frozenset({".esm", ".cjs", ".umd", ".min"})
 _SCRIPT_IMPORT = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
 )
@@ -1627,10 +1630,12 @@ def imported_by_agent(
     def built_from_source(package: Path, target: Path) -> Path | None:
         """An entry in a build folder that isn't committed (`dist/worker.js`), found where it is
         built from: its own path under `src/` (or the package, for `dist/src/...`), with each
-        source suffix the build compiles to that name. A folder entry (`dist`, `dist/sub`) is
-        entered through its index there. Never another module: `src/index.*` stands in only
-        for an entry that is itself an index. Looked up through the walk's charged lookups like
-        any other candidate."""
+        source suffix the build compiles to that name. A dual build's output folder
+        (`dist/cjs/worker.js`) is also tried without it (`src/worker.*`), and a bundler's flavour
+        (`index.esm.js`) is dropped only after the exact name has no source. A folder entry
+        (`dist`, `dist/sub`) is entered through its index there. Never another module:
+        `src/index.*` stands in only for an entry that is itself an index. Looked up through the
+        walk's charged lookups like any other candidate."""
         try:
             inside = target.relative_to(package).parts
         except ValueError:
@@ -1641,16 +1646,27 @@ def imported_by_agent(
         source = package / "src"
         if not rest:
             return found_at(script_index(source))
-        # `tsc` with the package as its root writes src/worker.ts to dist/src/worker.js.
-        bases = (source.joinpath(*rest), *((package.joinpath(*rest),) if rest[0] == "src" else ()))
+        # A dual build (`tsc --outDir dist/cjs`) writes src/index.ts to dist/cjs/index.js.
+        layouts = (rest, rest[1:]) if len(rest) > 1 else (rest,)
+        bases: list[Path] = []
+        for parts in layouts:
+            bases.append(source.joinpath(*parts))
+            # `tsc` with the package as its root writes src/worker.ts to dist/src/worker.js.
+            if parts[0] == "src":
+                bases.append(package.joinpath(*parts))
         candidates: list[Path] = []
+        flavoured: list[Path] = []
         for built in bases:
             if built.suffix in _BUILT_SUFFIXES:
-                stem = built.with_suffix("")
-                candidates += [stem.with_suffix(suffix) for suffix in _SCRIPT_SUFFIXES]
+                # One suffix off, as `script_candidates` joins them: app.module.js is app.module.ts.
+                stem = built.parent / built.stem
+                candidates += [Path(f"{stem}{suffix}") for suffix in _SCRIPT_SUFFIXES]
+                if stem.suffix in _BUILD_FLAVOURS:
+                    plain = stem.parent / stem.stem
+                    flavoured += [Path(f"{plain}{suffix}") for suffix in _SCRIPT_SUFFIXES]
             else:
                 candidates += [*script_candidates(built), *script_index(built)]
-        return found_at(dict.fromkeys(candidates))
+        return found_at(dict.fromkeys([*candidates, *flavoured]))
 
     def script_module(path: Path, name: str) -> Path | None:
         if len(name) > _LONGEST_NAME:
