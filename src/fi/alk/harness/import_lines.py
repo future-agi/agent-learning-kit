@@ -65,9 +65,12 @@ def _joined(lines: list[str], capped: list[bool] | None) -> list[str]:
     """``lines`` with each run that goes on inside an open bracket joined into one line, so a
     header that spans lines (``with open(\\n 'f') as g: import x``) is read as the one it is.
 
-    One pass: a line adds to the run while the brackets opened so far are unclosed. A run that
-    never closes is a file Python would refuse; its lines are kept apart, as they were, and
-    ``capped`` says the search can't be sure."""
+    One pass: a line adds to the run while the brackets opened so far are unclosed. A run's lines
+    are also kept one by one after it: a bracket can be left in the code by a string the search
+    doesn't take out (since Python 3.12 an f-string can hold its own quote), and a statement that
+    starts inside such a run is then still read. A run that never closes is a file Python would
+    refuse, or such a string; its lines are kept apart, as they were, and ``capped`` says the
+    search can't be sure."""
     out: list[str] = []
     held: list[str] = []
     depth = 0
@@ -77,7 +80,11 @@ def _joined(lines: list[str], capped: list[bool] | None) -> list[str]:
         depth -= line.count(")") + line.count("]") + line.count("}")
         if depth <= 0:
             depth = 0
-            out.append(" ".join(held) if len(held) > 1 else line)
+            if len(held) > 1:
+                out.append(" ".join(held))
+                out.extend(held)
+            else:
+                out.append(line)
             held = []
     if held:
         out.extend(held)
@@ -192,11 +199,21 @@ def import_lines(
     string never closed, a parenthesised list that isn't one or never ends, or an import past the
     colons tried (``_statements``).
 
-    Given ``limit``, it stops at the first name past that many, with ``capped`` set: the caller
-    keeps no more than ``limit`` names and cuts on the rest, so a name past it is work and memory
-    for nothing. The list then holds ``limit + 1`` names, which the caller reads as "more".
+    Each name is listed once. Given ``limit``, it stops at the first distinct name past that
+    many, with ``capped`` set: the caller keeps no more than ``limit`` distinct names and cuts on
+    the rest, so a name past it is work and memory for nothing. The list then holds ``limit + 1``
+    names, which the caller reads as "more". A name repeated is one name, as the caller counts it.
     """
     names: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+
+    def past_limit(entry: tuple[int, str]) -> bool:
+        if entry in seen:
+            return False
+        seen.add(entry)
+        names.append(entry)
+        return limit is not None and len(names) > limit
+
     lines = _joined(_code(content, capped).split("\n"), capped)
     at = 0
     while at < len(lines):
@@ -207,11 +224,11 @@ def import_lines(
         for piece in _statements(line, capped, most_colons):
             if piece.startswith("import") and piece[6:7].isspace():
                 for item in piece[6:].split(","):
-                    if name := _name(item):
-                        names.append((0, name))
-                        if limit is not None and len(names) > limit:
-                            return _stopped(names, capped)
-            elif piece.startswith("from") and (piece[4:5].isspace() or piece[4:5] == "."):
+                    if (name := _name(item)) and past_limit((0, name)):
+                        return _stopped(names, capped)
+            elif piece.startswith("from") and (
+                piece[4:5].isspace() or piece[4:5] == "."
+            ):
                 rest = piece[4:]
                 where = _import_keyword(rest)
                 head = "".join(rest[:where].split()) if where >= 0 else ""
@@ -220,10 +237,8 @@ def import_lines(
                 if not head or (module and not _NAME.fullmatch(module)):
                     continue
                 tail = rest[where + 6 :]
-                if module:
-                    names.append((level, module))
-                    if limit is not None and len(names) > limit:
-                        return _stopped(names, capped)
+                if module and past_limit((level, module)):
+                    return _stopped(names, capped)
                 if "(" in tail:
                     tail = tail.split("(", 1)[1]
                     if ")" in tail:
@@ -232,28 +247,58 @@ def import_lines(
                         # The list goes on over the next lines, up to the one that closes it. A
                         # line that isn't names isn't part of it: the list was never closed, and
                         # the line is read as the code it is.
-                        tail, at = _rest_of_list(tail, lines, at, capped)
+                        room = None if limit is None else limit + 1 - len(names)
+                        tail, at = _rest_of_list(
+                            tail, lines, at, capped, room, seen, level, module
+                        )
                 for item in tail.split(","):
-                    if name := _name(item):
-                        names.append((level, f"{module}.{name}".lstrip(".")))
-                        if limit is not None and len(names) > limit:
-                            return _stopped(names, capped)
+                    if (name := _name(item)) and past_limit(
+                        (level, f"{module}.{name}".lstrip("."))
+                    ):
+                        return _stopped(names, capped)
     return names
 
 
-def _stopped(names: list[tuple[int, str]], capped: list[bool] | None) -> list[tuple[int, str]]:
+def _stopped(
+    names: list[tuple[int, str]], capped: list[bool] | None
+) -> list[tuple[int, str]]:
     if capped is not None:
         capped[0] = True
     return names
 
 
 def _rest_of_list(
-    tail: str, lines: list[str], at: int, capped: list[bool] | None
+    tail: str,
+    lines: list[str],
+    at: int,
+    capped: list[bool] | None,
+    room: int | None = None,
+    seen: set[tuple[int, str]] | None = None,
+    level: int = 0,
+    module: str = "",
 ) -> tuple[str, int]:
     """The text of a parenthesised import list that goes on over ``lines`` from ``at``, and where
     reading resumes. A line that closes it is cut at its ``)``, and what follows is read as a
-    line of its own."""
+    line of its own.
+
+    Given ``room``, the reading stops once the list holds that many names not in ``seen``: the
+    caller then has more than its limit and stops, so the lines past it would be work for
+    nothing."""
     held = [tail]
+    new: set[str] = set()
+
+    def full(text: str) -> bool:
+        if room is None:
+            return False
+        for item in text.split(","):
+            if name := _name(item):
+                entry = (level, f"{module}.{name}".lstrip("."))
+                if seen is None or entry not in seen:
+                    new.add(entry[1])
+        return len(new) >= room
+
+    if full(tail):
+        return tail, at
     while at < len(lines):
         line = lines[at]
         closes = ")" in line
@@ -265,8 +310,8 @@ def _rest_of_list(
             lines[at] = line.split(")", 1)[1]
             return " , ".join(held), at
         at += 1
-    else:
-        pass
+        if full(inside):
+            return " , ".join(held), at
     if capped is not None:
         capped[0] = True
     return " , ".join(held), at
