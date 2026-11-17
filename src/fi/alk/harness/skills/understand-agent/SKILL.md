@@ -224,6 +224,14 @@ Find, in roughly this order:
    sees the dependency path; without this mapping ALK cannot normalize it back to the semantic
    tool the agent actually chose.
 
+   Write `module` as the dotted name the agent's own process imports, from the folder it runs
+   in: for `agent.py` in the folder the agent starts from, `agent`, not the name counted from the
+   repository root. A tool whose decorator returns the plain function (a plain `def`, or Pydantic
+   AI's `@agent.tool_plain`) is `import`. A tool a framework holds as its own object (an Agents
+   SDK `@function_tool`, a LangChain `@tool` with no plain function behind it) is `unreachable`,
+   but still fill in `module` and `callable` with the def's own name: the kit can't call it, but
+   watches it when it knows where it is, and records its calls.
+
    Some tools cannot be reached at all. A framework may define them as closures inside a class,
    so there is nothing importable. **Record that plainly rather than leaving the entry blank**:
    the environment stage must stop and tell the person which runnable seam the agent needs. It
@@ -248,6 +256,12 @@ Find, in roughly this order:
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
    startable but the simulator cannot honestly claim to have exercised it.
+
+   A LangGraph app has a `langgraph.json` that names its graph. When its requirements have no
+   `langgraph-cli`, the `langgraph dev` command can't run: leave `runtime.command` empty, set
+   `execution` to `auto`, and write no interface, and the kit serves the graph itself. (An app
+   whose `langgraph.json` has an `http` or `auth` key, or declares more than one graph, is run
+   as written.)
 
    If an HTTP ingress uses neither the ALK nor OpenAI envelope, do not stop and do not label it as
    one of those protocols. Read the route models, OpenAPI setup, client examples and tests, then use

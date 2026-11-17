@@ -1085,12 +1085,17 @@ def contract_tools(
                                 "that has to be built first. service: its effect is implemented "
                                 "by a shipped HTTP service. unreachable: no runnable seam exists, "
                                 "which blocks environment creation rather than generating a "
-                                "replacement.",
+                                "replacement. The kit can't call it, but traces it when `module` "
+                                "and `callable` say where it is (a tool a framework holds as its "
+                                "own object, such as an Agents SDK `@function_tool`: name the "
+                                "module and the def's own name).",
                             },
                             "module": {
                                 "type": "string",
-                                "description": "Importable path as the agent's own code would "
-                                "write it, e.g. package.module.file. Not a filesystem path.",
+                                "description": "The dotted name the agent's own process imports, "
+                                "from the folder it runs in (the runtime's workdir): `agent` for "
+                                "the file agent.py there, not the name counted from the "
+                                "repository root. Not a filesystem path.",
                             },
                             "callable": {
                                 "type": "string",
