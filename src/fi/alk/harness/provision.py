@@ -525,10 +525,14 @@ def _run(
                 raise ProvisionError(
                     "the compose file uses a git include, which is not allowed in a hosted run"
                 )
-            if _under_sandbox() and all(part in output for part in _ENV_FILE_PARSE_ERROR):
+            if _under_sandbox() and all(
+                part in output for part in _ENV_FILE_PARSE_ERROR
+            ):
                 # An included project's own env file is read by Compose whatever is passed, and
                 # Compose echoes the line it cannot parse, so show no output at all.
-                raise ProvisionError("an env file in the project could not be read by Compose")
+                raise ProvisionError(
+                    "an env file in the project could not be read by Compose"
+                )
             shown = _command_failure_output(output)
             raise ProvisionError(
                 f"{' '.join(command)} failed ({completed.returncode}): {shown}"
