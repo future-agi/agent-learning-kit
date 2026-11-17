@@ -265,6 +265,8 @@ class _CompiledSubGoal:
     check: Callable[..., object]
     what: str = ""
     both: bool = False
+    # The actor this sub-goal is about, if any.
+    actor: str = ""
     compares: str = ""
 
 
@@ -296,6 +298,10 @@ class _CompiledScenario:
     # One correct way through the call: handed to reference checks and shown to the judge.
     solution: tuple[dict[str, Any], ...] = ()
     call_execution_id: str | None = None
+    # The ids of the actors the scenario includes; it is skipped while they are off.
+    actors: tuple[str, ...] = ()
+    # Those of them that speak on the call: a call none of these reached is inconclusive.
+    speaking_actors: tuple[str, ...] = ()
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -419,6 +425,18 @@ def _declared_tool_names(bundle_dir: Path) -> set[str]:
         return set()
 
 
+def _speaking_actor_ids(bundle_dir: Path) -> frozenset[str]:
+    """The ids of the bundle's actors that speak on calls: those listed with a channel."""
+    path = bundle_dir / "actors.json"
+    try:
+        listed = json.loads(path.read_text(encoding="utf-8")).get("actors") or []
+    except (OSError, ValueError, AttributeError):
+        return frozenset()
+    return frozenset(
+        str(one.get("id") or "") for one in listed if isinstance(one, dict) and one.get("channel")
+    )
+
+
 def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
     """`sub_goals.json`'s `what`/`judged` text, which `folder.py` never writes into a scenario
     folder. Without it a judged sub-goal reaches the platform as a name and nothing to decide.
@@ -455,6 +473,7 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
             "judged": str(entry.get("judged") or ""),
             "contract": goal.contract(),
             "both": "yes" if goal.both else "",
+            "actor": goal.actor,
             "overlay": goal.overlay,
             "conversation_only": "yes" if goal.conversation_only() else "",
         }
@@ -492,6 +511,7 @@ def _load_one(
     declared_tools: set[str] | None = None,
     claims: dict[str, dict[str, str]] | None = None,
     defer_execution: bool = False,
+    speaking: frozenset[str] = frozenset(),
 ) -> _CompiledScenario:
     """One scenario folder -> a `Scenario`-protocol object. Mirrors `folder.py`'s documented
     layout (`scenario.json` + `setup.py` + `ready.py` + `checks/<goal>.py`) but reads
@@ -608,6 +628,9 @@ def _load_one(
         )
         for goal in sub_goals
     )
+    if body.get("starts_with"):
+        # An event-started run that leaves the world untouched is graded as such, never errored for no evidence.
+        requires_tool_evidence = False
 
     return _CompiledScenario(
         scenario_key=scenario_key,
@@ -619,6 +642,14 @@ def _load_one(
         presented=_presented(body, scenario_key=scenario_key),
         presented_fields=_presented(body, scenario_key=scenario_key, fields=True),
         solution=tuple(solution),
+        actors=tuple(
+            str((one or {}).get("id") or "") for one in body.get("actors") or []
+        ),
+        speaking_actors=tuple(
+            str((one or {}).get("id") or "")
+            for one in body.get("actors") or []
+            if str((one or {}).get("id") or "") in speaking
+        ),
     )
 
 
@@ -653,6 +684,7 @@ def _with_claims(
             what=claims[goal.name].get("what", "") or goal.what,
             both=combined(goal),
             compares=claims[goal.name].get("contract", "") or goal.compares,
+            actor=claims[goal.name].get("actor", "") or goal.actor,
         )
         if goal.name in claims
         else goal
@@ -685,6 +717,7 @@ def load_scenarios(
     settled_in_code = _deterministic_names(bundle_dir)
     declared_tools = _declared_tool_names(bundle_dir)
     claims = _load_catalogue_claims(bundle_dir)
+    speaking = _speaking_actor_ids(bundle_dir)
     scenarios: list[_CompiledScenario] = []
     for folder in entries:
         if not folder.is_dir():
@@ -697,6 +730,7 @@ def load_scenarios(
                     declared_tools=declared_tools,
                     claims=claims,
                     defer_execution=defer_execution,
+                    speaking=speaking,
                 ),
                 claims,
             )
