@@ -334,7 +334,9 @@ def _set_openai_agents_chat_style(module: Any, reason: str = "") -> None:
             )
         else:
             # Only the kit's own switch, and for this process only: the environment keeps it, so
-            # a child the hook never reaches (python -I) still has its tracing off. A customer
+            # a child the hook never reaches (python -I) starts with its tracing off. That child's
+            # exporter isn't made local, so if its own code turns tracing back on, it sends its
+            # spans and OPENAI_API_KEY (the gateway key) to OpenAI: a stated limit. A customer
             # who turned their tracing off themselves keeps it off.
             if os.environ.get(_SDK_TRACING_BY_KIT) == "1":
                 try:

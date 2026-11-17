@@ -15,6 +15,12 @@ jobs:
     # are unchanged.
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The version the hook's exporter handling was read against, and the version the kit's
+        # reference example pins (examples/harness/openai_agents_support/requirements.txt).
+        openai-agents: ["0.18.3", "0.24.0"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,7 +28,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install the kit with the pinned OpenAI Agents SDK
-        run: python -m pip install . pytest 'openai-agents==0.18.3'
+        run: python -m pip install . pytest 'openai-agents==${{ matrix.openai-agents }}'
       - name: Run the hook's real-SDK tests, failing if they skip
         shell: bash
         run: |
