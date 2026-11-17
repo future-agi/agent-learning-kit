@@ -62,6 +62,50 @@ def _serve(tmp_path, entrypoint, stub_fi=False):
         "        {'type': 'text', 'text': 'is complete.'},\n"
         "    ], 'tool_calls': [{'id': 'c1'}]}\n"
         "\n"
+        "import copy\n"
+        "\n"
+        "class Message:\n"
+        "    def __init__(self, type, content):\n"
+        "        self.type = type\n"
+        "        self.content = content\n"
+        "\n"
+        "def object_state_reply(agent_input):\n"
+        "    return {\n"
+        "        'messages': [\n"
+        "            Message('human', 'q'),\n"
+        "            Message('ai', [\n"
+        "                {'type': 'thinking', 'thinking': 'hmm', 'signature': 'sig-abc'},\n"
+        "                {'type': 'text', 'text': 'The status is complete.'},\n"
+        "            ]),\n"
+        "        ],\n"
+        "        'tool_calls': [{'id': 'c1'}],\n"
+        "        'state': {'stage': 'done'},\n"
+        "        'handle': object(),\n"
+        "    }\n"
+        "\n"
+        "BLOCK_DICT = {\n"
+        "    'content': [\n"
+        "        {'type': 'thinking', 'thinking': 'hmm', 'signature': 'sig-abc'},\n"
+        "        {'type': 'text', 'text': 'The status is complete.'},\n"
+        "    ],\n"
+        "    'tool_calls': [{'id': 'c1'}],\n"
+        "}\n"
+        "BARE_DICT = {'tool_calls': [{'id': 'c1'}]}\n"
+        "ORIGINALS = {'block': copy.deepcopy(BLOCK_DICT), 'bare': copy.deepcopy(BARE_DICT)}\n"
+        "CALLS = {'n': 0}\n"
+        "\n"
+        "def _same_dict_twice(name, shared):\n"
+        "    CALLS['n'] += 1\n"
+        "    if CALLS['n'] <= 2:\n"
+        "        return shared\n"
+        "    return {'content': 'intact' if shared == ORIGINALS[name] else 'mutated'}\n"
+        "\n"
+        "def block_dict_twice(agent_input):\n"
+        "    return _same_dict_twice('block', BLOCK_DICT)\n"
+        "\n"
+        "def bare_dict_twice(agent_input):\n"
+        "    return _same_dict_twice('bare', BARE_DICT)\n"
+        "\n"
         "def thinking_reply(agent_input):\n"
         "    return [\n"
         "        {'type': 'thinking', 'thinking': 'hmm', 'signature': 'sig-abc'},\n"
@@ -209,5 +253,20 @@ def test_a_callback_dict_with_block_content_sends_its_text_and_keeps_its_other_k
         body = _ask_body(next(served))
         assert body["content"] == "The status is complete."
         assert body["tool_calls"] == [{"id": "c1"}]
+    finally:
+        next(served, None)
+
+
+@pytest.mark.parametrize("entrypoint", ["block_dict_twice", "bare_dict_twice"])
+def test_a_callback_that_returns_the_same_dict_twice_is_answered_the_same_and_left_unchanged(
+    tmp_path, entrypoint
+):
+    served = _serve(tmp_path, f"chat_agent:{entrypoint}")
+    try:
+        base = next(served)
+        first, second = _ask_body(base), _ask_body(base)
+        assert first == second
+        assert first["tool_calls"] == [{"id": "c1"}]
+        assert _ask_body(base)["content"] == "intact"
     finally:
         next(served, None)

@@ -134,7 +134,7 @@ def _json_body(value: Any) -> dict[str, Any]:
         body = value.model_dump(mode="json", exclude_none=True)
     elif isinstance(value, dict):
         body = (
-            value
+            dict(value)
             if "content" in value or "messages" not in value
             else {"content": _text_of(value)}
         )
