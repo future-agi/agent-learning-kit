@@ -2004,3 +2004,61 @@ def test_hosted_uploaded_google_credential_reaches_compose_as_the_container_path
         run_call.argv[i : i + 2] == ["--env", "GOOGLE_APPLICATION_CREDENTIALS"]
         for i in range(len(run_call.argv) - 1)
     )
+
+
+def _every_reserved_name() -> list[str]:
+    from fi.alk.harness import secrets
+
+    names = sorted(secrets._CLIENT_EXACT)
+    names += [f"{prefix}SOME_NAME" for prefix in secrets._CLIENT_PREFIXES]
+    names += ["x_proxy", "HTTPS_PROXY", "lower_case_proxy"]
+    assert all(client_name_reserved(name) for name in names)
+    return names
+
+
+@pytest.mark.parametrize("manifest", [True, False])
+def test_every_reserved_name_stays_out_of_the_job_file_and_compose_environment(
+    tmp_path: Path, monkeypatch, caplog, manifest: bool
+) -> None:
+    reserved = _every_reserved_name()
+    base = {"PATH": "/usr/bin", "HOME": "/home/worker", "DOCKER_HOST": "tcp://base:2375"}
+    # On the bare CLI a shell value is not a runtime value, so the runtime layer is manifest-only.
+    runtime_names = reserved if manifest else []
+    _shell(monkeypatch, base, ",".join(runtime_names) if manifest else None)
+    for name in runtime_names:
+        monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", f"/evil-runtime/{name}")
+    environment = _compose_environment(
+        tmp_path,
+        runtime_services=["agent-runtime"],
+        running=True,
+        runtime_configuration_names=runtime_names,
+        port_variables={name: f"/evil-port/{name}" for name in reserved},
+        internal_overrides={name: f"/evil-internal/{name}" for name in reserved},
+    )
+    environment.save(tmp_path)
+    caplog.set_level(logging.DEBUG, logger=_COMPOSE_LOGGER)
+
+    calls = _drive_start_runtime(
+        tmp_path, monkeypatch, overrides={name: f"/evil-override/{name}" for name in reserved}
+    )
+
+    assert calls
+    for call in calls:
+        if call.job is None:
+            continue
+        assert not [name for name in call.job.values if client_name_reserved(name)]
+        for name in reserved:
+            assert call.env.get(name) == base.get(name), name
+        assert not [value for value in call.env.values() if value.startswith("/evil")]
+        assert not [value for value in call.job.values.values() if value.startswith("/evil")]
+        assert not [argument for argument in call.argv if argument.startswith("/evil")]
+        env_names = {
+            call.argv[index]
+            for index in range(1, len(call.argv))
+            if call.argv[index - 1] == "--env"
+        }
+        assert not [name for name in env_names if client_name_reserved(name)]
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    for name in reserved:
+        assert name in logged, name
+    assert "/evil" not in logged
