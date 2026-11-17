@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import secrets
+import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -501,6 +502,8 @@ def _modules_as_the_process_imports_them(
             and all(part.isidentifier() for part in module.split("."))
             and not names_a_file(module)
             and names_a_file(rest := module[len(prefix) :])
+            # `calendar.py` in the folder is not what `import calendar` finds first.
+            and rest.split(".")[0] not in sys.stdlib_module_names
         ):
             entry = entry.model_copy(update={"module": rest})
             changed = True

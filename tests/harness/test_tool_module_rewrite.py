@@ -285,3 +285,11 @@ def test_m3_a_module_that_is_not_a_dotted_identifier_is_refused(tmp_path, mode, 
     said = json.dumps(result)
     assert "module" in said and "dotted" in said
     assert not (tmp_path / "out" / "contract.json").exists()
+
+
+@pytest.mark.parametrize("mode", ["import", "unreachable"])
+def test_m4_a_standard_library_name_is_not_rewritten(tmp_path, mode):
+    """`calendar` would import the standard library's, not the tool file."""
+    repo = _repo(tmp_path, {"examples/hotel/calendar.py": "def book():\n    return 1\n"})
+    saved = _save(tmp_path, repo, _entries("examples.hotel.calendar", mode), "examples/hotel")
+    assert saved == [(mode, "examples.hotel.calendar")]
