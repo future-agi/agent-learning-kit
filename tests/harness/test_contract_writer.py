@@ -1389,6 +1389,10 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, _READS + " (the ingress probe record)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "probe_chat_workflow"): (
         1, _READS + " (the workflow probe record)"),
+    # Added by dev's actors (2aed5a4d): pre_run.refresh_stale rewrites a scenario's pre_run session
+    # in its scenario.json when the actor record changed; pre_run.py never names the contract.
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "refresh_stale"): (
+        1, _READS + " (rewrites stale pre-run sessions in scenario.json)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "validate_native"): (
         1, _READS + " (the native validation record)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_bytes"): (
@@ -1444,7 +1448,11 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "_reuse_certified_bundle"): (
         1, _COPIES),
     ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "compile_bundle"): (1, _COPIES),
-    ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "shutil.copy2"): (3, _COPIES),
+    # Eight: the three before dev's actors (2aed5a4d) and world door (06c8d288, 7588a371) merged, and
+    # five they added. None copies contract.json's content: the actors file, and the kit's own door
+    # modules (world_door.py twice, in_process_door.py, tool_trace_proxy.py) into the bundle's
+    # generated folders, so each is a copy of a file that is not the contract.
+    ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "shutil.copy2"): (8, _COPIES),
     ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "write_text"): (
         5, _COPIES + " (:3752 writes the parsed authoring body back as written)"),
     ("fi.alk.harness.bundle_author_v2", "reseal_scenarios", "Path.rename"): (2, _COPIES),
@@ -1498,6 +1506,9 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         "(generated_runtime._copy_sanitized_context)"),
     ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "resolve_environment_plan"): (
         1, _TEMP_COMPOSE),
+    # Added by dev's actors (2aed5a4d): written only when the authoring folder has an actors file.
+    ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "write_actor_rules"): (
+        1, "writes actor_rules.json into the bundle (actors.write_actor_rules), not the contract"),
     ("fi.alk.harness.bundle_author_v2", "reseal_scenarios", "_reseeded"): (
         1, "_carried_world writes the world seed (world.sqlite, world-ir.json)"),
     ("fi.alk.harness.chat_call_runner", "HostedChatCallRunner.run", "_drive_conversation"): (
