@@ -1021,11 +1021,18 @@ _PYTHON_CODE_MODULES = frozenset({"timeit", "code", "pdb"})
 # name with any version suffix (python3.12, node20, ruby3.2, perl5.36.0).
 _PYTHON_NAME = re.compile(r"(python|pypy|ipython|graalpy|micropython|py)[\d.]*")
 _SCRIPT_NAME = re.compile(
-    r"(node|nodejs|bun|deno|perl|ruby|php|lua|luajit|rscript|ts-node|tsx)[\d.]*"
+    r"(node|nodejs|bun|deno|perl|ruby|php|lua|luajit|rscript|ts-node|tsx|julia|elixir|osascript)"
+    r"[\d.]*"
 )
-# A runner that runs the command after it (uv run, npm exec, bunx x, pnpm dlx): any of the base's
-# code tokens after it is refused, whatever the program it runs is called.
+# A runner's verb (uv run, npm exec, bun x, pnpm dlx) or a runner on its own (npx): a code token
+# among the runner's own options, before the program, is refused. The program after it falls to
+# the interpreter and shell checks.
 _RUNNER_VERBS = frozenset({"run", "exec", "x", "dlx"})
+_RUNNERS = frozenset(
+    {"uv", "npm", "pnpm", "yarn", "bun", "poetry", "pdm", "hatch", "rye", "pipx", "bundle",
+     "cargo", "go", "deno", "conda", "mamba", "pixi"}
+)
+_STANDALONE_RUNNERS = frozenset({"npx", "bunx", "pnpx"})
 _CODE_TOKENS = frozenset({"-c", "-e", "--eval"})
 
 
@@ -1037,8 +1044,15 @@ def _runs_inline_code(command: list[str]) -> bool:
     mistaken for code."""
     for index, token in enumerate(command):
         name = Path(token).name.casefold()
-        if name in _RUNNER_VERBS and _CODE_TOKENS & set(command[index + 1:]):
-            return True
+        previous = Path(command[index - 1]).name.casefold() if index else ""
+        if name in _STANDALONE_RUNNERS or (name in _RUNNER_VERBS and previous in _RUNNERS):
+            # Only the runner's own options, before the program it runs: the program's own -c
+            # config or -e environment after it is not code.
+            for option in command[index + 1:]:
+                if option in _CODE_TOKENS or option == "--call":
+                    return True
+                if option == "--" or not option.startswith("-"):
+                    break
         python = bool(_PYTHON_NAME.fullmatch(name))
         script = bool(_SCRIPT_NAME.fullmatch(name))
         shell = name in _SHELL_LAUNCHERS

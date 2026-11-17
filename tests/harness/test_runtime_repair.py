@@ -345,11 +345,34 @@ def _validate_native(tmp_path, command, **fields):
         pytest.param(["python", "-m", "xonsh", "-c", "x"], id="python-m-xonsh-c"),
         pytest.param(["python", "-mtimeit", "-n1", "x"], id="python-mtimeit-joined"),
         pytest.param(["python3", "-Bm", "timeit", "x"], id="python-Bm-timeit"),
+        pytest.param(["npx", "-c", "echo hi"], id="npx-c"),
+        pytest.param(["npm", "exec", "-c", "echo hi"], id="npm-exec-c"),
+        pytest.param(["uv", "run", "julia", "-e", "x"], id="uv-julia-e"),
     ],
 )
 def test_runtime_patch_refuses_inline_code_joined_to_its_flag(tmp_path, command) -> None:
     with pytest.raises(ValueError, match="runtime_repair_inline_or_shell_command_forbidden"):
         _validate_native(tmp_path, command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["bundle", "exec", "rails", "server", "-e", "production"],
+        ["uv", "run", "app.py", "-c", "config.yaml"],
+        ["poetry", "run", "python", "main.py", "-c", "settings.toml"],
+        ["npm", "run", "start", "--", "-e", "staging"],
+        ["go", "run", "main.go", "-c", "conf.yml"],
+        ["pnpm", "dlx", "serve", "-c", "serve.json"],
+        ["python", "main.py", "--mode", "x", "-c", "conf"],
+        ["uv", "run", "uvicorn", "main:app", "--port", "8000"],
+    ],
+)
+def test_a_programs_own_c_or_e_flag_after_a_runner_is_not_inline_code(command) -> None:
+    # The program's own -c config or -e environment, after the program, is not code.
+    from fi.alk.harness.runtime_repair import _runs_inline_code
+
+    assert not _runs_inline_code(command)
 
 
 @pytest.mark.parametrize(
