@@ -567,8 +567,6 @@ def _validate_compose_security(config: dict[str, Any]) -> None:
                 if source.endswith(suffix):
                     source = source[: -len(suffix)]
                     break
-            if source.startswith("service:"):
-                source = source[len("service:") :]
             if source not in services:
                 violations.append(f"{name}: volumes_from outside the project")
         build = service.get("build")

@@ -679,6 +679,7 @@ def _net(spec, name="job"):
         (_svc(volumes_from=["container:db:ro"]), "agent: volumes_from outside the project"),
         (_svc(volumes_from=["missing"]), "agent: volumes_from outside the project"),
         (_svc(volumes_from=["db", "missing:ro"]), "agent: volumes_from outside the project"),
+        (_svc(volumes_from=["service:db"]), "agent: volumes_from outside the project"),
         # build
         (_svc(build={"context": ".", "network": "host"}), "agent: build.network"),
         (_svc(build={"context": ".", "network": "platform_default"}), "agent: build.network"),
