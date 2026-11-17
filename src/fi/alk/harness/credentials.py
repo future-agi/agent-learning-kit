@@ -180,7 +180,12 @@ _BUILT_SUFFIXES = frozenset({".js", ".mjs", ".cjs", ".jsx"})
 _BUILD_FLAVOURS = frozenset({".esm", ".es", ".cjs", ".umd", ".min", ".modern", ".bundle"})
 # The folders a dual build writes each flavour to (`tsc --outDir dist/cjs`): only these are dropped
 # to find a source, so dist/server/index.js is never src/index.ts.
-_BUILD_FLAVOUR_FOLDERS = frozenset({"cjs", "esm", "mjs", "es", "umd", "browser", "node"})
+_BUILD_FLAVOUR_FOLDERS = frozenset(
+    {
+        "cjs", "commonjs", "esm", "esm5", "mjs", "es", "es6", "es2015", "esnext", "module",
+        "umd", "browser", "node",
+    }
+)
 _SCRIPT_IMPORT = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
 )
@@ -1774,15 +1779,15 @@ def imported_by_agent(
 
     def built_from_source(package: Path, target: Path) -> Path | None:
         """An entry in a build folder that isn't committed (`dist/worker.js`), found where it is
-        built from: its own path under `src/` (or the package, for `dist/src/...`), with each
-        source suffix the build compiles to that name, or its path from the package itself
-        (`tsc` with rootDir `.`: dist/server/index.js from server/index.ts). A dual build's
-        flavour folder (`dist/cjs/worker.js`) is also tried without it (`src/worker.*`), and a
-        bundler's flavour
-        (`index.esm.js`) is dropped only after the exact name has no source. A folder entry
-        (`dist`, `dist/sub`) is entered through its index there. Never another module:
-        `src/index.*` stands in only for an entry that is itself an index. Looked up through the
-        walk's charged lookups like any other candidate."""
+        built from, with each source suffix the build compiles to that name. In order:
+        - its own path under `src/`, then from the package itself (`tsc` with rootDir `.`
+          writes server/index.ts to dist/server/index.js, and src/worker.ts to
+          dist/src/worker.js);
+        - for a dual build's flavour folder (`dist/cjs/worker.js`), the same without it;
+        - last, the name without a bundler's flavour (`index.esm.js` from `index.ts`).
+        A folder entry (`dist`, `dist/sub`) is entered through its index there. Never another
+        module: `src/index.*` stands in only for an entry that is itself an index. Looked up
+        through the walk's charged lookups like any other candidate."""
         try:
             inside = target.relative_to(package).parts
         except ValueError:

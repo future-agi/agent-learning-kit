@@ -851,6 +851,14 @@ def _ts_monorepo(tmp_path, main):
         # Dileep, #225 (4598392979): the dual build, `tsc --outDir dist/cjs` from src/index.ts.
         "dist/cjs/index.js",
         "dist/esm/index.js",
+        # Check of 35d83711 (L1, L2): every flavour folder, tshy's `commonjs` included.
+        *(
+            f"dist/{folder}/index.js"
+            for folder in (
+                "mjs", "es", "umd", "browser", "node",
+                "commonjs", "module", "esnext", "es6", "es2015", "esm5",
+            )
+        ),
         # Rollup's flavoured name for the same src/index.ts.
         "dist/index.esm.js",
         # Check of e94c4640 (L1, L2): other bundlers' flavours, and flavours stacked.
@@ -889,6 +897,8 @@ def test_a_package_main_in_an_uncommitted_build_folder_is_found_in_src(tmp_path,
         # dist/server/index.js; src/index.ts is another module.
         ("dist/server/index.js", "server/index.ts"),
         ("dist/lib/worker.js", "lib/worker.ts"),
+        # Check of 35d83711 (L2): the package's own path after a flavour folder is dropped.
+        ("dist/cjs/server/index.js", "server/index.ts"),
     ],
 )
 def test_a_build_entry_that_is_not_the_index_finds_its_own_source(tmp_path, main, source):
@@ -983,6 +993,8 @@ def test_a_dotted_build_entry_with_no_source_of_its_own_takes_no_shorter_name(tm
         ("dist/cjs/worker.js", "src/cjs/worker.ts", "src/worker.ts"),
         # ...and the exact name before a flavour dropped.
         ("dist/index.esm.js", "src/index.esm.ts", "src/index.ts"),
+        # Check of 35d83711 (L2): src/ before the package's own path.
+        ("dist/server/index.js", "src/server/index.ts", "server/index.ts"),
     ],
 )
 def test_a_build_entry_takes_its_exact_source_before_a_fallback(tmp_path, main, own, other):
