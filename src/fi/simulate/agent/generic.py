@@ -1253,7 +1253,7 @@ _REPLY_ITEM_KINDS = frozenset(
     {
         "text", "output_text", "refusal", "thinking", "redacted_thinking", "reasoning",
         "tool_use", "server_tool_use", "tool_result", "image", "message",
-        "ai", "human", "tool", "system", "assistant", "user",
+        "ai", "human", "tool", "system", "assistant", "user", "reasoning_content",
     }
 )
 _CHAT_ROLES = frozenset({"assistant", "user", "system", "tool", "developer"})
@@ -1261,7 +1261,12 @@ _CHAT_ROLES = frozenset({"assistant", "user", "system", "tool", "developer"})
 
 def _is_block_or_message(item: Any) -> bool:
     get = item.get if isinstance(item, Mapping) else lambda name: getattr(item, name, None)
-    return get("type") in _REPLY_ITEM_KINDS or get("role") in _CHAT_ROLES
+    if get("type") in _REPLY_ITEM_KINDS or get("role") in _CHAT_ROLES:
+        return True
+    # Untyped provider blocks that carry thinking: a Gemini thought part, a Bedrock reasoning block.
+    return get("type") is None and (
+        get("thought") is True or get("reasoningContent") is not None
+    )
 
 
 def _reply_text(value: Any) -> str:
@@ -8213,7 +8218,7 @@ def _message_content(message: Any) -> str:
         if "text" in message and message["text"] is not None:
             return _stringify(message["text"])
         if "parts" in message:
-            return " ".join(_stringify(part) for part in message["parts"])
+            return text_of(message["parts"])
     for attr in ("content", "text"):
         if hasattr(message, attr):
             value = getattr(message, attr)
