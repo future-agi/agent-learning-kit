@@ -347,3 +347,107 @@ def test_a_binding_with_an_odd_module_never_raises_into_the_agents_call(
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "7"
     assert not trace.exists()
+
+
+RAISED = "the tool raised an exception"
+
+
+def test_a_sync_tool_that_raises_is_recorded_as_an_error(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def start_return(order_id):\n    raise ValueError('order not delivered')\n",
+        ["start_return"],
+        "from agent import start_return\n"
+        "try:\n    start_return('A1')\nexcept ValueError:\n    pass\n",
+    )
+    (record,) = records
+    assert record["name"] == "start_return"
+    assert record["arguments"] == {"order_id": "A1"}
+    assert record["is_error"] is True
+    assert record["output"] == RAISED
+
+
+def test_an_async_tool_that_raises_after_an_await_is_recorded_once_as_an_error(
+    tmp_path: Path,
+) -> None:
+    records = _run_agent(
+        tmp_path,
+        "import asyncio\n"
+        "async def start_return(order_id):\n"
+        "    await asyncio.sleep(0.001)\n"
+        "    raise KeyError(order_id)\n",
+        ["start_return"],
+        "import asyncio\nfrom agent import start_return\n"
+        "try:\n    asyncio.run(start_return('A1'))\nexcept KeyError:\n    pass\n",
+    )
+    (record,) = records
+    assert (record["is_error"], record["output"]) == (True, RAISED)
+
+
+def test_a_nested_raise_marks_every_bound_tool_it_unwinds_through(tmp_path: Path) -> None:
+    source = (
+        "def helper(x):\n    raise RuntimeError('no')\n"
+        "def outer(x):\n    return helper(x)\n"
+        "def careful(x):\n    try:\n        return helper(x)\n    except RuntimeError:\n"
+        "        return 'recovered'\n"
+    )
+    records = _run_agent(
+        tmp_path,
+        source,
+        ["helper", "outer", "careful"],
+        "from agent import outer, careful\n"
+        "try:\n    outer(1)\nexcept RuntimeError:\n    pass\n"
+        "assert careful(2) == 'recovered'\n",
+    )
+    seen = sorted((r["name"], r["arguments"]["x"], r["is_error"]) for r in records)
+    assert seen == [
+        ("careful", 2, False),
+        ("helper", 1, True),
+        ("helper", 2, True),
+        ("outer", 1, True),
+    ]
+
+
+def test_a_normal_return_is_unchanged(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def note(x):\n    return None\ndef value(x):\n    return x\n",
+        ["note", "value"],
+        "from agent import note, value\nnote(1)\nvalue(2)\n",
+    )
+    assert [(r["name"], r["output"], r["is_error"]) for r in records] == [
+        ("note", None, False),
+        ("value", 2, False),
+    ]
+
+
+def test_generators_are_not_recorded_as_errors(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "import asyncio\n"
+        "def rows(n):\n    for i in range(n):\n        yield i\n"
+        "async def arows(n):\n    for i in range(n):\n        await asyncio.sleep(0.001)\n        yield i\n",
+        ["rows", "arows"],
+        "import asyncio\nfrom agent import rows, arows\n"
+        "assert list(rows(2)) == [0, 1]\n"
+        "async def main():\n    return [i async for i in arows(2)]\n"
+        "assert asyncio.run(main()) == [0, 1]\n",
+    )
+    assert sorted((r["name"], r["is_error"]) for r in records) == [
+        ("arows", False),
+        ("rows", False),
+    ]
+
+
+def test_the_semantic_reader_grades_a_raised_tool_as_a_refused_call(tmp_path: Path) -> None:
+    from fi.alk.harness.run.simulation import _semantic_calls
+
+    _run_agent(
+        tmp_path,
+        "def start_return(order_id):\n    raise ValueError('x')\n",
+        ["start_return"],
+        "from agent import start_return\n"
+        "try:\n    start_return('A1')\nexcept ValueError:\n    pass\n",
+    )
+    (call,) = _semantic_calls(tmp_path / "calls.jsonl")
+    assert (call.ok, call.refused, call.error) == (False, True, RAISED)

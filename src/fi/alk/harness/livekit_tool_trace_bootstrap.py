@@ -342,16 +342,20 @@ def _install_declared_python_tools() -> None:
             return
         if event != "return":
             return
-        # A coroutine also "returns" at every await; only a real return ends it.
-        finished = not code.co_flags & suspendable or dis.opname[
-            code.co_code[frame.f_lasti]
-        ].startswith("RETURN")
-        entry = (
-            entries.pop(id(frame), None) if finished else entries.get(id(frame))
-        )
-        if not finished:
-            # A paused coroutine is not a finished call: only its real return is recorded.
+        # The opcode the frame ended on tells a return from a raise. A coroutine or generator
+        # also "returns" at every await or yield; only a real return, or a raise, ends it.
+        try:
+            opname = dis.opname[code.co_code[frame.f_lasti]]
+        except (IndexError, TypeError):
+            opname = "RETURN_VALUE"
+        if opname == "RETURN_GENERATOR" or (
+            code.co_flags & suspendable and opname.startswith("YIELD")
+        ):
             return
+        raised = not opname.startswith("RETURN")
+        entry = entries.pop(id(frame), None)
+        if raised:
+            value = "the tool raised an exception"
         started = entry[1] if entry is not None else time.time()
         key = next(
             (
@@ -391,7 +395,7 @@ def _install_declared_python_tools() -> None:
                 "name": key,
                 "arguments": arguments,
                 "output": value,
-                "is_error": False,
+                "is_error": raised,
                 "at": started,
             }
             line = json.dumps(record, default=str, sort_keys=True)
