@@ -197,6 +197,8 @@ KEPT_WITH_A_URL = (
     "runtime_dependencies[].name",
     "data_store.host",
     "data_store.configured_by",
+    "workers[].id",
+    "workers[].name",
 )
 
 
@@ -222,6 +224,7 @@ def _full_contract() -> AgentContract:
         "dependencies": [{"name": URL, "engine": URL}],
         "runtime_dependencies": [{"name": URL}],
         "data_store": {"kind": "database", "host": URL, "configured_by": URL},
+        "workers": [{"id": URL, "name": URL, "tools": ["post"]}],
     }
     for name in FREE_TEXT:
         model, field = name.split(".")
@@ -303,6 +306,82 @@ def test_writing_a_written_contract_again_changes_nothing(tmp_path: Path) -> Non
     write_contract(AgentContract.model_validate_json(first), tmp_path / "second")
 
     assert (tmp_path / "second" / "contract.json").read_bytes() == first
+
+
+# What a reading saves beside its contract; any JSON value is kept as it was.
+RECORD = {
+    "version": 1,
+    "source": {"kind": "archive", "archive_artifact_id": "upload-1"},
+    "subfolder": "agents/a",
+    "evals_sha256": None,
+    "generic_harness_v1": True,
+    "odd": [0.1, "日本", {"nested": [None, False]}],
+}
+
+
+def _canon(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def test_write_contract_keeps_the_record_saved_beside_the_contract(
+    tmp_path: Path,
+) -> None:
+    held = _full_contract()
+    body = {**held.model_dump(), contract_module.READING_RECORD: RECORD}
+    (tmp_path / "contract.json").write_text(json.dumps(body), encoding="utf-8")
+
+    write_contract(held, tmp_path)
+    saved = json.loads((tmp_path / "contract.json").read_text(encoding="utf-8"))
+    write_contract(AgentContract.model_validate(saved), tmp_path)
+    again = json.loads((tmp_path / "contract.json").read_text(encoding="utf-8"))
+
+    for one in (saved, again):
+        assert next(iter(one)) == contract_module.READING_RECORD
+        assert _canon(one[contract_module.READING_RECORD]) == _canon(RECORD)
+    # Kept outside the model: neither the schema a model writes against nor the repair's hash
+    # of the contract sees it.
+    assert (
+        contract_module.READING_RECORD
+        not in AgentContract.model_json_schema()["properties"]
+    )
+    assert runtime_repair._contract_hash(
+        AgentContract.model_validate(again)
+    ) == runtime_repair._contract_hash(held)
+
+
+@pytest.mark.parametrize(
+    "saved",
+    [
+        None,
+        b"{}",
+        json.dumps({"agent": "a", "notes": "no reading_inputs here"}).encode(),
+        json.dumps({"runtime": {"reading_inputs": RECORD}}).encode(),
+        json.dumps(["reading_inputs", RECORD]).encode(),
+        b'{"reading_inputs": ',
+        b'\xff{"reading_inputs": {}}',
+    ],
+    ids=[
+        "no_file",
+        "empty",
+        "named_in_prose",
+        "nested",
+        "not_an_object",
+        "not_json",
+        "not_utf8",
+    ],
+)
+def test_write_contract_writes_no_record_where_none_is_saved(
+    tmp_path: Path, saved: bytes | None
+) -> None:
+    if saved is not None:
+        (tmp_path / "contract.json").write_bytes(saved)
+    write_contract(_full_contract(), tmp_path / "fresh")
+
+    write_contract(_full_contract(), tmp_path)
+
+    written = (tmp_path / "contract.json").read_bytes()
+    assert contract_module.READING_RECORD not in json.loads(written)
+    assert written == (tmp_path / "fresh" / "contract.json").read_bytes()
 
 
 def test_write_contract_cleans_the_callers_object_in_place_and_returns_it(tmp_path: Path) -> None:
@@ -1260,9 +1339,9 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         "before the cleaner stays as written (a named limit), and every send cleans again"),
     ("fi.alk.harness.authoring_entrypoint", "_prepare_source_data_invariants",
      "prune_invariant_scopes"): (1, _READS + " (the invariants file)"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair",
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair",
      "_write_generic_certificate"): (1, _READS + " (the certificate)"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair", "write_text"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "write_text"): (
         3, _READS + " (diagnostics and runtime-validation records)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once",
      "_freeze_certified_bundle"): (2, _READS + " (the frozen bundle)"),
@@ -1357,21 +1436,21 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     ("fi.alk.harness.agent_reading", "_reading", "model_error"): (1, _FAILURE),
     ("fi.alk.harness.agent_reading", "_reading", "refuse_unusable_folder"): (1, _FAILURE),
     ("fi.alk.harness.agent_reading", "_reading", "write_reading_failure"): (1, _FAILURE),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair",
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair",
      "apply_runtime_plan_patch"): (
         1, "the runtime-plan repair, which saves through write_contract (B13); " + _TEMP_COMPOSE),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair", "repair"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "repair"): (
         3, "calls its nested repair, scanned as validate_and_repair.repair"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair", "validate"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "validate"): (
         2, "calls its nested validate, which runs validate_once (listed above)"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair", "write_scenarios"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "write_scenarios"): (
         1, "writes the scenario folders (folder.write_folder and write_index)"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair.repair", "_build"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair.repair", "_build"): (
         1, "the build stage (cli._build), which saves the contract through tools._save_contract "
         "and amend, both write_contract (B13); it writes the world besides"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair.repair", "_scenarios"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair.repair", "_scenarios"): (
         1, "the scenario stage (cli._scenarios), which writes the scenario folders"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_and_repair.repair",
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair.repair",
      "request_runtime_plan_patch"): (1, "builds a runtime patch; " + _TEMP_COMPOSE),
     ("fi.alk.harness.bundle_author_v2", "<module>", "main"): (
         1, "the __main__ guard; main runs author_bundle_v2 (listed) and refuse_unusable_folder "

@@ -59,6 +59,7 @@ class RepoSource:
         return {}
 
     def briefing(self) -> str:
+        from .backends.files import secret_text
         from .source_folder import SubfolderNotFound, agent_folder
 
         ignored = {
@@ -82,6 +83,9 @@ class RepoSource:
             except ValueError:
                 continue
             if any(part in ignored for part in relative.parts) or not path.is_file():
+                continue
+            if secret_text(relative.as_posix()):
+                # A listed file is not named to the model, in the list or anywhere else.
                 continue
             indexed.append(relative.as_posix())
             if len(indexed) >= 240:

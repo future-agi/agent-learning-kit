@@ -295,6 +295,8 @@ class HarnessJobMetadata(BaseModel):
     model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
 
     customer_code_environment: dict[str, str] = Field(default_factory=dict)
+    # The hosts a controlled run lets the agent reach; absent when the platform does not control its egress.
+    egress_allowed_hosts: list[str] | None = None
 
 
 def routed_through_gateway(target_model: object) -> bool:

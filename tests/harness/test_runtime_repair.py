@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import PurePosixPath
 
 import pytest
 
@@ -138,6 +139,314 @@ def test_runtime_patch_rejects_missing_or_outside_evidence(tmp_path) -> None:
             patch,
             allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
         )
+
+
+@pytest.mark.parametrize("form", ["present", "link", "missing"])
+@pytest.mark.parametrize("name", [".env", "service/.env.production", ".aws/credentials"])
+def test_runtime_patch_never_checks_a_command_against_a_listed_file(tmp_path, form, name) -> None:
+    # A listed file, a link to one and a missing one get one answer before anything is read, so
+    # the command check can't be used to grow a guess at a key letter by letter.
+    source = tmp_path / "source"
+    (source / "service").mkdir(parents=True)
+    cited = name
+    if form != "missing":
+        target = source / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("OPENAI_API_KEY=canaryfakeguess1\n", encoding="utf-8")
+    if form == "link":
+        cited = "service/settings_local.py"
+        (source / cited).symlink_to(source / name)
+    contract = AgentContract(agent="agent", runtime=Runtime(language="python"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(language="python", workdir="service", command=["canaryfakeguess1", "run"]),
+        evidence_paths=(cited,),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Use service.",
+    )
+
+    with pytest.raises(ValueError, match="runtime_repair_evidence_kept_out"):
+        validate_runtime_plan_patch(
+            source,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+
+
+_CREDENTIAL_FIELDS = {
+    "command": lambda ref: {"command": ["python", ref]},
+    "command_flag": lambda ref: {"command": ["python", f"--config={ref}", "app.py"]},
+    "command_string": lambda ref: {"command": [f"python {ref}"]},
+    "workdir": lambda ref: {"workdir": ref},
+    # The folder is fine on its own; the file is only listed once it is read under the folder.
+    "workdir_and_operand": lambda ref: {
+        "workdir": str(PurePosixPath(ref).parent),
+        "command": ["python", PurePosixPath(ref).name],
+    },
+    "compose_file": lambda ref: {"compose_file": ref},
+    "dockerfile": lambda ref: {"dockerfile": ref},
+    "compose_overrides": lambda ref: {
+        "compose_file": "docker-compose.yml",
+        "service": "app",
+        "compose_overrides": [ref],
+    },
+    "requirements_files": lambda ref: {"requirements_files": [ref]},
+}
+
+
+@pytest.mark.parametrize("form", ["present", "link", "missing"])
+@pytest.mark.parametrize("name", [".env", ".aws/credentials"])
+@pytest.mark.parametrize("field", sorted(_CREDENTIAL_FIELDS))
+def test_runtime_patch_refuses_a_runtime_that_names_a_listed_file(
+    tmp_path, field, name, form
+) -> None:
+    # A listed file, a link to one and a missing one get one answer, before anything is read.
+    source = tmp_path / "source"
+    (source / "service").mkdir(parents=True)
+    (source / "service" / "app.py").write_text("print('agent')\n")
+    ref = name
+    if form != "missing":
+        target = source / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("OPENAI_API_KEY=canaryfakeguess1\n", encoding="utf-8")
+    if form == "link":
+        ref = "service/settings_local.cfg"
+        (source / ref).symlink_to(source / name)
+    contract = AgentContract(agent="agent", runtime=Runtime(language="python"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(language="python", **{"workdir": "service", **_CREDENTIAL_FIELDS[field](ref)}),
+        evidence_paths=("service/app.py",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Use service.",
+    )
+
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        validate_runtime_plan_patch(
+            source,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+
+
+def test_runtime_patch_still_passes_an_ordinary_runtime(tmp_path) -> None:
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (service / "main.py").write_text("app = None\n")
+    (service / "Dockerfile").write_text("FROM python:3.12\n")
+    contract = AgentContract(agent="agent", runtime=Runtime(language="python"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(
+            language="python",
+            workdir="service",
+            dockerfile="service/Dockerfile",
+            command=["python", "-m", "uvicorn", "main:app", "--port=8080", "--app-dir", "."],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+        evidence_paths=("service/pyproject.toml", "service/main.py"),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the HTTP service.",
+    )
+
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+    assert repaired.runtime == patch.runtime
+
+
+def _native_patch(tmp_path, runtime: Runtime):
+    (tmp_path / "service").mkdir(exist_ok=True)
+    (tmp_path / "service" / "app.py").write_text("print('agent')\n")
+    contract = AgentContract(agent="agent", runtime=Runtime(language="python"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime,
+        evidence_paths=("service/app.py",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the service.",
+    )
+    return contract, patch
+
+
+def _validate_native(tmp_path, command, **fields):
+    contract, patch = _native_patch(
+        tmp_path,
+        Runtime(
+            language="python",
+            workdir="service",
+            command=command,
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+            **fields,
+        ),
+    )
+    return validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(["python", "-cexec(open('.e'+'nv').read())"], id="python-joined-c"),
+        pytest.param(["python", "-c", "print(1)"], id="python-c"),
+        pytest.param(["python3.12", "-W", "error", "-cprint(1)"], id="python-joined-c-after-W"),
+        pytest.param(["python", "-Bc", "print(1)"], id="python-Bc"),
+        pytest.param(["python", "-uc", "print(1)"], id="python-uc"),
+        pytest.param(["python3", "-Ic", "print(1)"], id="python-Ic"),
+        pytest.param(["python3.12", "-IBc", "print(1)"], id="python-IBc"),
+        pytest.param(["python", "-Bcexec(open('.e'+'nv').read())"], id="python-Bc-joined"),
+        pytest.param(
+            ["python", "--check-hash-based-pycs", "default", "-cprint(1)"], id="python-option-value-then-c"
+        ),
+        pytest.param(["node", "-r", "./s.js", "-p", "1"], id="node-require-then-p"),
+        pytest.param(["node", "--require", "./s.js", "--eval=1"], id="node-require-then-eval"),
+        pytest.param(["node", "--import", "./s.mjs", "-e1"], id="node-import-then-e"),
+        pytest.param(["python", "-W", "error", "-Bc", "print(1)"], id="python-Bc-after-W"),
+        pytest.param(["uv", "run", "python", "-cprint(1)"], id="uv-python-joined-c"),
+        pytest.param(["node", "--print", "require('fs').readFileSync('.e'+'nv','utf8')"], id="node-print"),
+        pytest.param(["node", "--print=1"], id="node-print-joined"),
+        pytest.param(["node", "-p", "1"], id="node-p"),
+        pytest.param(["node", "-p1"], id="node-p-joined"),
+        pytest.param(["node", "-e", "1"], id="node-e"),
+        pytest.param(["node", "-e1"], id="node-e-joined"),
+        pytest.param(["node", "--eval=1"], id="node-eval-joined"),
+        pytest.param(["bun", "--print", "1"], id="bun-print"),
+        pytest.param(["bun", "-p", "1"], id="bun-p"),
+        pytest.param(["deno", "--eval=1"], id="deno-eval"),
+        pytest.param(["node", "-e", "x"], id="node-e-exact"),
+        pytest.param(["python", "-c", "x"], id="python-c-exact"),
+        pytest.param(["env", "A=1", "sh", "-c", "x"], id="env-then-shell-c"),
+        pytest.param(
+            ["python", "-m", "uv", "run", "python", "-c", "print(open('.env').read())"],
+            id="python-m-uv-then-python-c",
+        ),
+        pytest.param(
+            ["python3", "-m", "poetry", "run", "python", "-c", "x"], id="python-m-poetry-then-c"
+        ),
+        pytest.param(["uv", "run", "ipython", "-c", "x"], id="uv-ipython-c"),
+        pytest.param(["uv", "run", "pypy3", "-c", "x"], id="uv-pypy3-c"),
+        pytest.param(["py", "-c", "x"], id="py-launcher-c"),
+        pytest.param(["poetry", "run", "ts-node", "-e", "x"], id="poetry-ts-node-e"),
+        pytest.param(["npx", "tsx", "-e", "x"], id="npx-tsx-e"),
+        pytest.param(["uv", "run", "ruby3.2", "-e", "x"], id="uv-ruby-versioned-e"),
+        pytest.param(["uv", "run", "node20", "-e", "x"], id="uv-node-versioned-e"),
+        pytest.param(["uv", "run", "perl5.36.0", "-e", "x"], id="uv-perl-versioned-e"),
+        pytest.param(["uv", "run", "graalpy", "-c", "x"], id="uv-graalpy-c"),
+        pytest.param(["uv", "run", "micropython", "-c", "x"], id="uv-micropython-c"),
+        pytest.param(["uv", "run", "lua", "-e", "x"], id="uv-lua-e"),
+        pytest.param(["uv", "run", "Rscript", "-e", "x"], id="uv-rscript-e"),
+        pytest.param(["uv", "run", "ksh", "-c", "x"], id="uv-ksh-c"),
+        pytest.param(["uv", "run", "busybox", "ash", "-c", "x"], id="uv-busybox-ash-c"),
+        pytest.param(["uv", "run", "pwsh", "-c", "x"], id="uv-pwsh-c"),
+        pytest.param(["python", "-m", "xonsh", "-c", "x"], id="python-m-xonsh-c"),
+        pytest.param(["python", "-mtimeit", "-n1", "x"], id="python-mtimeit-joined"),
+        pytest.param(["python3", "-Bm", "timeit", "x"], id="python-Bm-timeit"),
+        pytest.param(["npx", "-c", "echo hi"], id="npx-c"),
+        pytest.param(["npm", "exec", "-c", "echo hi"], id="npm-exec-c"),
+        pytest.param(["uv", "run", "julia", "-e", "x"], id="uv-julia-e"),
+        pytest.param(["npm", "--prefix", ".", "exec", "-c", "base64 .e*"], id="npm-prefix-exec-c"),
+        pytest.param(["pnpm", "-C", ".", "exec", "-c", "base64 .e*"], id="pnpm-C-exec-c"),
+        pytest.param(["pnpm", "--dir", ".", "dlx", "-c", "base64 .e*"], id="pnpm-dir-dlx-c"),
+        pytest.param(["pnpm", "exec", "--shell-mode", "base64 .e*"], id="pnpm-shell-mode"),
+        pytest.param(["npm", "exec", "--package", "cowsay", "-c", "x"], id="npm-exec-package-c"),
+        pytest.param(["npx", "-p", "cowsay", "-c", "x"], id="npx-p-c"),
+        pytest.param(["npm", "exec", "--call=x"], id="npm-call-joined"),
+        pytest.param(["python", "-m", "cProfile", "-m", "timeit", "x"], id="python-cprofile-timeit"),
+    ],
+)
+def test_runtime_patch_refuses_inline_code_joined_to_its_flag(tmp_path, command) -> None:
+    with pytest.raises(ValueError, match="runtime_repair_inline_or_shell_command_forbidden"):
+        _validate_native(tmp_path, command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["bundle", "exec", "rails", "server", "-e", "production"],
+        ["uv", "run", "app.py", "-c", "config.yaml"],
+        ["poetry", "run", "python", "main.py", "-c", "settings.toml"],
+        ["npm", "run", "start", "--", "-e", "staging"],
+        ["go", "run", "main.go", "-c", "conf.yml"],
+        ["pnpm", "dlx", "serve", "-c", "serve.json"],
+        ["python", "main.py", "--mode", "x", "-c", "conf"],
+        ["uv", "run", "uvicorn", "main:app", "--port", "8000"],
+        ["deno", "run", "-c", "deno.json", "main.ts"],
+        ["pixi", "run", "-e", "prod", "start"],
+    ],
+)
+def test_a_programs_own_c_or_e_flag_after_a_runner_is_not_inline_code(command) -> None:
+    # The program's own -c config or -e environment, after the program, is not code.
+    from fi.alk.harness.runtime_repair import _runs_inline_code
+
+    assert not _runs_inline_code(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["python", "app.py"],
+        ["python", "-m", "uvicorn", "app:app", "--port", "8080"],
+        ["python", "app.py", "-p", "8080"],
+        ["python", "app.py", "-cfoo"],
+        ["python", "-B", "app.py"],
+        ["python", "-u", "app.py"],
+        ["python", "-Bu", "app.py"],
+        ["python", "--check-hash-based-pycs", "default", "app.py"],
+        ["python", "-Wignore", "app.py"],
+        ["python", "-m", "uvicorn", "-Bc"],
+        ["python", "-m", "uvicorn", "main:app", "-e", "x"],
+        ["python", "app.py", "-e", "staging", "--eval", "-c", "-p", "--print"],
+    ],
+)
+def test_runtime_patch_still_passes_a_command_with_flags_after_the_script(tmp_path, command) -> None:
+    repaired = _validate_native(tmp_path, command)
+    assert repaired.runtime.command == command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(["uv", "--directory", ".aws", "python", "credentials"], id="uv-directory-aws"),
+        pytest.param(["uv", "--directory", "secrets", "python", "db.txt"], id="uv-directory"),
+        pytest.param(["uv", "run", "--directory=secrets", "python", "db.txt"], id="uv-directory-joined"),
+        pytest.param(["bun", "--cwd", "secrets", "db.txt"], id="bun-cwd"),
+        pytest.param(["tool", "-C", "secrets", "db.txt"], id="short-C"),
+        pytest.param(["tool", "-Csecrets", "db.txt"], id="short-C-joined"),
+        pytest.param(["tool", "--chdir", "secrets", "db.txt"], id="chdir"),
+        pytest.param(["uv --directory secrets python db.txt"], id="one-string"),
+    ],
+)
+def test_runtime_patch_follows_a_flag_that_changes_folder(tmp_path, command) -> None:
+    for folder, name in ((".aws", "credentials"), ("secrets", "db.txt")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / name).write_text("aws_secret_access_key=canaryfakeguess1\n")
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        _validate_native(tmp_path, command)
+
+
+def test_runtime_patch_passes_an_ordinary_folder_changing_flag(tmp_path) -> None:
+    (tmp_path / "service" / "service").mkdir(parents=True)
+    (tmp_path / "service" / "service" / "app.py").write_text("print('agent')\n")
+    command = ["uv", "--directory", "service", "python", "app.py"]
+    assert _validate_native(tmp_path, command).runtime.command == command
+
+
+def test_runtime_patch_may_name_a_config_file_the_kit_generates(tmp_path) -> None:
+    # `.env` is a key of config_files: the kit writes it from the runtime's own values, so naming
+    # it is not naming the customer's file. Without that key it is still refused.
+    # Keys are relative to the source root, so this holds with no workdir (see
+    # test_a_config_file_key_at_the_root_is_still_exempt_for_the_kits_own_file); under a workdir
+    # `.env` is the workdir's own file and is refused either way.
+    command = ["python", "-m", "uvicorn", "main:app", "--env-file", ".env"]
+    generated = {"config_files": {".env": RuntimeConfigFile(values={"REGION": "global"})}}
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        _validate_native(tmp_path, command, **generated)
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        _validate_native(tmp_path, command)
 
 
 def test_runtime_patch_rejects_stale_contract(tmp_path) -> None:
@@ -984,6 +1293,384 @@ def test_generated_runtime_repair_rejects_unrelated_secret_file_alias(
                 {"GOOGLE_APPLICATION_CREDENTIALS_JSON", "UNRELATED_JSON"}
             ),
         )
+
+
+@pytest.mark.parametrize("repair", ["secret_file", "config_file"])
+def test_alias_binding_repair_still_works_when_the_compose_file_name_is_listed(
+    tmp_path, monkeypatch, repair
+) -> None:
+    # compose.env.yaml matches a secret-list glob; the kit reads its own compose file, so the
+    # kit's own alias-binding repairs must not be refused for citing it.
+    import asyncio
+
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/private/alk/broker.sock")
+    (tmp_path / "compose.env.yaml").write_text(
+        "services:\n  app:\n    image: example/app\n    ports: ['8080:8080']\n"
+    )
+    extra = (
+        {
+            "secret_files": {
+                "app": [
+                    RuntimeSecretFile(
+                        alias="GOOGLE_APPLICATION_CREDENTIALS",
+                        destination="/app/google-creds.json",
+                        environment_variable="GOOGLE_APPLICATION_CREDENTIALS",
+                    )
+                ]
+            }
+        }
+        if repair == "secret_file"
+        else {
+            "config_files": {
+                ".env": RuntimeConfigFile(
+                    values={"REGION": "global"},
+                    secret_aliases={
+                        "GOOGLE_APPLICATION_CREDENTIALS": "GOOGLE_APPLICATION_CREDENTIALS"
+                    },
+                )
+            }
+        }
+    )
+    contract = AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            execution="compose",
+            compose_file="compose.env.yaml",
+            service="app",
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+            **extra,
+        ),
+    )
+    code = (
+        "compose_secret_file_target_reference_required"
+        if repair == "secret_file"
+        else "compose_config_target_reference_required"
+    )
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_runtime_plan_invalid",
+        message=f"ValueError: {code}",
+    )
+    monkeypatch.setattr(
+        runtime_repair,
+        "Stage",
+        lambda *_args, **_kwargs: pytest.fail("the kit's own repair should bypass the model"),
+    )
+    patch = asyncio.run(
+        runtime_repair.request_runtime_plan_patch(
+            tmp_path,
+            contract,
+            (diagnostic,),
+            available_secret_aliases=frozenset({"GOOGLE_APPLICATION_CREDENTIALS_JSON"}),
+        )
+    )
+    assert patch is not None
+    assert patch.evidence_paths == ("compose.env.yaml",)
+
+    # The orchestrator applies it, which validates again: the kit's own patch still goes through.
+    authoring = tmp_path.parent / f"{tmp_path.name}-authoring"
+    authoring.mkdir()
+    contract_path = authoring / "contract.json"
+    contract_path.write_text(contract.model_dump_json(indent=2) + "\n")
+    codes = {"generated_runtime_plan_invalid"}
+    aliases = frozenset({"GOOGLE_APPLICATION_CREDENTIALS_JSON"})
+    applied = apply_runtime_plan_patch(
+        tmp_path, contract_path, patch, allowed_diagnostic_codes=codes,
+        available_secret_aliases=aliases,
+    )
+    assert applied.runtime.compose_file == "compose.env.yaml"
+    # The same patch as a model would submit it (its JSON, so no kit mark) is refused.
+    contract_path.write_text(contract.model_dump_json(indent=2) + "\n")
+    submitted = RuntimePlanPatch.model_validate_json(patch.model_dump_json())
+    with pytest.raises(ValueError, match="runtime_repair_evidence_kept_out"):
+        apply_runtime_plan_patch(
+            tmp_path, contract_path, submitted, allowed_diagnostic_codes=codes,
+            available_secret_aliases=aliases,
+        )
+
+
+def test_model_facing_validation_still_refuses_a_listed_compose_file_name(tmp_path) -> None:
+    (tmp_path / "compose.env.yaml").write_text(
+        "services:\n  app:\n    image: example/app\n", encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("print('agent')\n", encoding="utf-8")
+    contract = AgentContract(agent="fixture", runtime=Runtime(language="python"))
+    base = {
+        "base_contract_hash": _contract_hash(contract),
+        "diagnostic_codes": ("generated_runtime_plan_invalid",),
+        "summary": "Use the compose file.",
+    }
+    as_evidence = RuntimePlanPatch(
+        runtime=Runtime(language="python"), evidence_paths=("compose.env.yaml",), **base
+    )
+    as_runtime = RuntimePlanPatch(
+        runtime=Runtime(execution="compose", compose_file="compose.env.yaml", service="app"),
+        evidence_paths=("app.py",),
+        **base,
+    )
+    for patch, code in (
+        (as_evidence, "runtime_repair_evidence_kept_out"),
+        (as_runtime, "runtime_repair_runtime_names_kept_out_file"),
+    ):
+        with pytest.raises(ValueError, match=code):
+            validate_runtime_plan_patch(
+                tmp_path,
+                contract,
+                patch,
+                allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+            )
+
+
+def _listed_compose_contract() -> AgentContract:
+    return AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            language="python",
+            execution="compose",
+            compose_file="compose.env.yaml",
+            service="app",
+            workdir="service",
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+
+
+def _listed_compose_source(tmp_path):
+    (tmp_path / "compose.env.yaml").write_text(
+        "services:\n  app:\n    image: example/app\n", encoding="utf-8"
+    )
+    (tmp_path / "service").mkdir()
+    (tmp_path / "service" / "app.py").write_text("print('agent')\n", encoding="utf-8")
+
+
+def _listed_compose_patch(contract: AgentContract, **changes) -> RuntimePlanPatch:
+    runtime = contract.runtime.model_copy(update=changes)
+    return RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime,
+        evidence_paths=("service/app.py",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Change the runtime.",
+    )
+
+
+def test_model_patch_keeping_the_contracts_listed_compose_file_passes(tmp_path) -> None:
+    # The customer's own compose file has a listed name; the model didn't choose it, so a patch
+    # that carries it over and changes something else is judged on what it changed.
+    _listed_compose_source(tmp_path)
+    contract = _listed_compose_contract()
+    patch = _listed_compose_patch(
+        contract, interface=RuntimeInterface(kind="http", port=9090, path="/chat")
+    )
+
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+
+    assert repaired.runtime.compose_file == "compose.env.yaml"
+    assert repaired.runtime.interface.port == 9090
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"compose_file": "other.env.yaml"},
+        {"command": ["python", ".env"]},
+        {"dockerfile": ".alk-runtime.env"},
+    ],
+)
+def test_model_patch_newly_naming_a_listed_file_is_still_refused(tmp_path, changes) -> None:
+    _listed_compose_source(tmp_path)
+    contract = _listed_compose_contract()
+    patch = _listed_compose_patch(contract, **changes)
+
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+        )
+
+
+def _env_file_command_contract() -> AgentContract:
+    return AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            language="python",
+            workdir="service",
+            command=["python", "-m", "server", "--env-file", ".env"],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+
+
+def _env_file_command_patch(tmp_path, command) -> tuple[AgentContract, RuntimePlanPatch]:
+    (tmp_path / "service").mkdir(exist_ok=True)
+    (tmp_path / "service" / "app.py").write_text("print('agent')\n", encoding="utf-8")
+    contract = _env_file_command_contract()
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=contract.runtime.model_copy(update={"command": command}),
+        evidence_paths=("service/app.py",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Change the command.",
+    )
+    return contract, patch
+
+
+def test_command_token_listed_in_the_base_command_is_not_exempt_in_a_new_position(tmp_path) -> None:
+    # `.env` is in the base command only as the value of --env-file; handing it to python as the
+    # script is a new (previous token, token) pair and is refused.
+    contract, patch = _env_file_command_patch(tmp_path, ["python", ".env"])
+
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+        )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["python", "-m", "server", "--env-file", ".env"],
+        ["python", "-m", "server", "--port", "9090", "--env-file", ".env"],
+    ],
+)
+def test_command_pair_carried_over_from_the_base_command_passes(tmp_path, command) -> None:
+    contract, patch = _env_file_command_patch(tmp_path, command)
+
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+
+    assert repaired.runtime.command == command
+
+
+def _config_file_contract(**fields) -> AgentContract:
+    return AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            language="python",
+            config_files={".env": RuntimeConfigFile(values={"REGION": "global"})},
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+            **fields,
+        ),
+    )
+
+
+def _config_file_patch(tmp_path, command, **fields):
+    (tmp_path / "app.py").write_text("print('agent')\n", encoding="utf-8")
+    for folder in ("backend", "service"):
+        (tmp_path / folder).mkdir(exist_ok=True)
+        (tmp_path / folder / "app.py").write_text("print('agent')\n", encoding="utf-8")
+        (tmp_path / folder / ".env").write_text("K=fake\n", encoding="utf-8")
+    contract = AgentContract(agent="fixture", runtime=Runtime(language="python"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=_config_file_contract(command=command, **fields).runtime,
+        evidence_paths=("backend/app.py",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the service.",
+    )
+    return contract, patch
+
+
+def _check(tmp_path, command, **fields):
+    contract, patch = _config_file_patch(tmp_path, command, **fields)
+    return validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+
+
+def test_a_config_file_key_is_not_exempt_after_a_folder_flag_moves_the_command(tmp_path) -> None:
+    # The kit writes the root .env; `uv --directory backend run python .env` runs backend/.env.
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        _check(tmp_path, ["uv", "--directory", "backend", "run", "python", ".env"])
+
+
+def test_a_config_file_key_is_not_joined_to_the_workdir(tmp_path) -> None:
+    # Keys are root-relative: with a workdir, `.env` is service/.env, which is the customer's.
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        _check(tmp_path, ["python", "-m", "server", "--env-file", ".env"], workdir="service")
+
+
+def test_a_config_file_key_at_the_root_is_still_exempt_for_the_kits_own_file(tmp_path) -> None:
+    command = ["python", "-m", "server", "--env-file", ".env"]
+    assert _check(tmp_path, command).runtime.command == command
+    joined = ["python", "-m", "server", "--env-file=.env"]
+    assert _check(tmp_path, joined).runtime.command == joined
+
+
+def test_a_flag_joined_to_a_config_file_key_judges_only_the_value(tmp_path) -> None:
+    # `node --env-file=.env`: the whole token matches *.env as a path; only the value is judged.
+    command = ["node", "--env-file=.env", "app.py"]
+    assert _check(tmp_path, command).runtime.command == command
+    with pytest.raises(ValueError, match="runtime_repair_runtime_names_kept_out_file"):
+        _check(tmp_path, ["node", "--env-file=other.env", "app.py"])
+
+
+def test_kit_extras_repair_survives_a_listed_name_the_contract_already_carries(tmp_path) -> None:
+    # _explicit_dependency_candidate is still on the model-facing check. A compose runtime can't
+    # take an extras repair (it needs a native build root), so the carried-over listed name here
+    # is a command operand; it must not make the kit's repair return None.
+    from fi.alk.harness.runtime_repair import _explicit_dependency_candidate
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="agent-sdk"\nversion="1"\n'
+        '[project.optional-dependencies]\nvertex=["google-cloud-aiplatform"]\n'
+    )
+    contract = AgentContract(
+        agent="test",
+        runtime=Runtime(
+            language="python",
+            execution="native",
+            command=["python", "-m", "server", "--config=prod.env.json"],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+    guidance = (
+        "<untrusted_current_target_process_logs>\nInstall with: pip install "
+        '"agent-sdk[vertex]"\n</untrusted_current_target_process_logs>'
+    )
+
+    patch = _explicit_dependency_candidate(tmp_path, contract, guidance)
+
+    assert patch is not None
+    assert patch.runtime.extras == ["vertex"]
+    assert patch.runtime.command == contract.runtime.command
+
+
+def test_kit_extras_repair_survives_a_command_naming_its_own_config_file(tmp_path) -> None:
+    # `--env-file .env` where .env is a config_files key (a file the kit writes) is not a listed
+    # name chosen by the model, so the kit's own repair must not return None for it.
+    from fi.alk.harness.runtime_repair import _explicit_dependency_candidate
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="agent-sdk"\nversion="1"\n'
+        '[project.optional-dependencies]\nvertex=["google-cloud-aiplatform"]\n'
+    )
+    contract = AgentContract(
+        agent="test",
+        runtime=Runtime(
+            language="python",
+            execution="native",
+            command=["python", "-m", "server", "--env-file", ".env"],
+            config_files={".env": RuntimeConfigFile(values={"REGION": "global"})},
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+    guidance = (
+        "<untrusted_current_target_process_logs>\nInstall with: pip install "
+        '"agent-sdk[vertex]"\n</untrusted_current_target_process_logs>'
+    )
+
+    patch = _explicit_dependency_candidate(tmp_path, contract, guidance)
+
+    assert patch is not None
+    assert patch.runtime.extras == ["vertex"]
 
 
 def test_missing_compose_config_alias_uses_unique_supplied_file_alias(
@@ -2643,3 +3330,123 @@ def test_repair_reads_the_folders_alk_yaml(tmp_path) -> None:
     )
 
     _select_repair_runtime(root, _folder_contract().runtime)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["uvicorn", "main:app", "-e", "x"],
+        ["python", "-m", "uvicorn", "main:app", "-e", "x"],
+        ["node", "server.js", "-e", "staging"],
+        ["node", "server.js", "--eval", "-c", "-p", "--print"],
+        ["gunicorn", "app:app", "-c", "gunicorn.conf.py"],
+        ["python", "app.py", "-c", "-e", "-p"],
+    ],
+)
+def test_an_exact_inline_flag_after_the_script_or_on_another_program_is_not_inline_code(command) -> None:
+    from fi.alk.harness.runtime_repair import _runs_inline_code
+
+    assert not _runs_inline_code(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["python", "-c", "x"], ["node", "-e", "x"], ["python3", "-B", "-c", "x"], ["node", "--print", "x"]],
+)
+def test_an_exact_inline_flag_among_the_interpreters_own_options_is_inline_code(command) -> None:
+    from fi.alk.harness.runtime_repair import _runs_inline_code
+
+    assert _runs_inline_code(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["python", "-m", "timeit", "-n1", "print(1)"],
+        ["python3", "-B", "-m", "code"],
+        ["python", "-m", "pdb", "-c", "continue", "app.py"],
+        ["node", "--import", "data:text/javascript,console.log(1)", "app.js"],
+        ["node", "-r", "data:text/javascript,1", "app.js"],
+        ["node", "--import=data:text/javascript,1", "app.js"],
+        ["deno", "eval", "console.log(1)"],
+    ],
+)
+def test_a_module_or_url_that_runs_its_argument_as_code_is_inline_code(command) -> None:
+    from fi.alk.harness.runtime_repair import _runs_inline_code
+
+    assert _runs_inline_code(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["python", "-m", "uvicorn", "main:app"],
+        ["node", "--import", "./tracing.mjs", "app.js"],
+        ["deno", "run", "main.ts"],
+    ],
+)
+def test_an_ordinary_module_or_preload_is_not_inline_code(command) -> None:
+    from fi.alk.harness.runtime_repair import _runs_inline_code
+
+    assert not _runs_inline_code(command)
+
+
+@pytest.mark.parametrize(
+    "command, evidence",
+    [
+        (["uv", "run", "uvicorn", "main:app", "--port", "8080"], "import uvicorn\n"),
+        (
+            ["bundle", "exec", "rails", "server", "-e", "production"],
+            "# run with: bundle exec rails server\ngem 'rails'\n",
+        ),
+    ],
+)
+def test_a_program_a_runner_runs_is_accepted_when_the_source_names_it(
+    tmp_path, command, evidence
+) -> None:
+    contract, patch = _native_patch(
+        tmp_path,
+        Runtime(
+            language="python",
+            workdir="service",
+            command=command,
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+    (tmp_path / "service" / "app.py").write_text(evidence)
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+    assert repaired.runtime.command == command
+
+
+def test_a_launcher_is_evidenced_only_as_a_whole_word(tmp_path) -> None:
+    # "scripts" in a package.json is not evidence for a program called script.
+    contract, patch = _native_patch(
+        tmp_path,
+        Runtime(
+            language="python",
+            workdir="service",
+            command=["script", "app.py"],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+    (tmp_path / "service" / "app.py").write_text('{"scripts": {"start": "node x"}}\n')
+    with pytest.raises(ValueError, match="runtime_repair_launcher_not_source_evidenced"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+        )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(["uv", "run", "script", "-q", "-c", "base64 .e*", "/dev/null"], id="uv-script-c"),
+        pytest.param(["uv", "run", "flock", "/tmp/l", "-c", "base64 .e*"], id="uv-flock-c"),
+        pytest.param(["uv", "run", "git", "-c", "alias.x=!base64 .e*", "x"], id="uv-git-c"),
+    ],
+)
+def test_a_program_a_safe_launcher_runs_needs_its_own_evidence(tmp_path, command) -> None:
+    # uv vouches for itself, not for the program it runs: script and flock hand a shell its -c.
+    with pytest.raises(ValueError, match="runtime_repair_launcher_not_source_evidenced"):
+        _validate_native(tmp_path, command)

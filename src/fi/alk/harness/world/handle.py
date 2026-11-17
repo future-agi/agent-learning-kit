@@ -229,6 +229,35 @@ class HostedWorld(HttpObservationHandle):
         _reject_unless_read(sql)
         return self._store.query(sql, tuple(params))
 
+    def events(
+        self, actor_id: str | None = None, outcome: str | None = None
+    ) -> list[dict[str, Any]]:
+        """This trial's action log: every action attempted in the world, whose it was and what came of it. No log is
+        no events; a log that cannot be read raises `EvidenceUnavailable`."""
+        from ..world_door import EvidenceUnavailable, is_attempt
+
+        try:
+            rows = self.query('SELECT * FROM "_alk_tool_trace" ORDER BY at, id')
+        except Exception as exc:  # noqa: BLE001 - told apart below: no log, or a log out of reach
+            try:
+                present = self.query("SELECT to_regclass('_alk_tool_trace') IS NOT NULL AS present")
+            except Exception:  # noqa: BLE001 - the database itself is out of reach
+                raise EvidenceUnavailable("the world's action log could not be read") from exc
+            if present and not present[0].get("present"):
+                return []
+            raise EvidenceUnavailable("the world's action log could not be read") from exc
+        return [
+            row
+            for row in rows
+            if is_attempt(row)
+            and (actor_id is None or (row.get("actor_id") or "agent") == actor_id)
+            and (
+                outcome is None
+                or (row.get("outcome") or ("committed" if row.get("ok") else "refused"))
+                == outcome
+            )
+        ]
+
     # -- writing ------------------------------------------------------------------------------
 
     def put(
@@ -505,6 +534,11 @@ class ReadOnlyWorld(HttpObservationHandle):
 
     def query(self, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         return self.__world.query(sql, params)
+
+    def events(
+        self, actor_id: str | None = None, outcome: str | None = None
+    ) -> list[dict[str, Any]]:
+        return self.__world.events(actor_id, outcome)
 
     def put(
         self, collection: str, record: Mapping[str, Any], *, key: str = ""

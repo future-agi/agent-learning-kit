@@ -19,10 +19,13 @@ from pathlib import PurePosixPath
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import time
 from typing import Any, Literal
 import uuid
+
+from contextlib import asynccontextmanager
 
 from fastapi import (
     Depends,
@@ -48,6 +51,7 @@ from .credentials import (
 )
 from .executor import GitHubSourceAcquirer, SourceAcquisitionError
 from .github import parse_github_location
+from .isolated_process import _finish
 from .job import (
     AgentConnection,
     ExecutionMode,
@@ -210,6 +214,81 @@ class UploadedSecretFileResponse(BaseModel):
     size: int
 
 
+# How a cancelled job's worker is stopped. Tests patch these on the module.
+_STOP_GRACE_SECONDS = 10.0
+_STOP_POLL_SECONDS = 0.05
+_REAP_SECONDS = 5.0
+_STOP_OUTPUT_SECONDS = 150
+# How long a server stop waits for its jobs' cleanup. A deployment gives the service a stop grace
+# above this (Compose's stop_grace_period, e.g. 180s) and an init, or docker kills the cleanup
+# after its default 10 s.
+_CANCEL_WAIT_SECONDS = 170
+# How long a /cancel request waits for the job's cleanup before it answers; the platform's client
+# reads /cancel with a 30 s timeout. The job's own task carries on with the cleanup.
+_CANCEL_RESPONSE_SECONDS = 20
+
+
+def _start_worker(
+    command: list[str], *, log_handle: Any, env: dict[str, str]
+) -> subprocess.Popen:
+    """Start a worker in its own session. Synchronous, so a loop shutting down can't cancel it
+    halfway: asyncio's own start can wait for good when the loop closes mid-start."""
+    return subprocess.Popen(
+        command,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        env=env,
+    )
+
+
+async def _worker_exit(process: subprocess.Popen) -> int:
+    """The worker's exit code (`-signal` for a signal), polled so a cancel lands between polls."""
+    while (code := process.poll()) is None:
+        await asyncio.sleep(0.25)
+    return code
+
+
+def _signal_group(pgid: int, sig: signal.Signals) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        # PermissionError is what macOS gives for a group whose leader exited unreaped.
+        pass
+
+
+def _stop_worker(process: subprocess.Popen) -> None:
+    """Stop a worker and everything in its process group, then reap it. Safe to call twice."""
+    if process.pid <= 1 or process.returncode is not None:
+        # Already reaped before this call, so its pid may belong to someone else by now.
+        return
+    pgid = process.pid
+    _signal_group(pgid, signal.SIGTERM)
+    gone = False
+    deadline = time.monotonic() + _STOP_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        # Reap the leader as it exits: an unreaped leader still counts as a group member.
+        process.poll()
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            gone = True
+            break
+        except PermissionError:
+            # macOS: only an unreaped zombie is left.
+            break
+        time.sleep(_STOP_POLL_SECONDS)
+    if not gone:
+        # A group seen gone is never signalled again: its id could be reused.
+        _signal_group(pgid, signal.SIGKILL)
+    try:
+        process.wait(timeout=_REAP_SECONDS)
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "sandbox worker %s not reaped %ss after SIGKILL", pgid, _REAP_SECONDS
+        )
+
+
 class LocalSandbox:
     def __init__(
         self,
@@ -254,7 +333,6 @@ class LocalSandbox:
         (self.secret_files_root / "pending").mkdir(parents=True, mode=0o700)
         (self.secret_files_root / "jobs").mkdir(parents=True, mode=0o700)
         self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
-        self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         # Values supplied through the platform's .env flow live only for the lifetime of the
         # job. Persisted job/state artifacts contain the opaque mounted references created below.
@@ -696,6 +774,11 @@ class LocalSandbox:
             raise HTTPException(
                 status_code=409, detail="harness job is already running"
             )
+        task = self._tasks.get(job_id)
+        if task is not None and not task.done():
+            # A cancel answered before its cleanup ended: the job's state is terminal, but its
+            # worker and environment are still being stopped.
+            raise HTTPException(status_code=409, detail="harness job is still stopping")
         output = self.artifacts_root / response.job.run_id
         required = (
             output / "contract.json",
@@ -757,6 +840,77 @@ class LocalSandbox:
         )
         return self.get(job_id)
 
+    async def _cleanup_cancelled(
+        self,
+        job: HarnessJob,
+        process: subprocess.Popen | None,
+        output: Path,
+        state_path: Path,
+    ) -> None:
+        """A cancelled job's cleanup: the state first, then the worker, then its environment.
+        Each step's error is logged, so the next one still runs."""
+        canceled = True
+        try:
+            state = _read_json(state_path)
+            if state.get("stage") != HarnessStage.CANCELED.value:
+                canceled = False
+                state.update(
+                    stage=HarnessStage.FAILED.value,
+                    detail="sandbox service stopped while the job was running",
+                    failure={
+                        "domain": "infrastructure",
+                        "stage": state.get("stage") or HarnessStage.RUNNING.value,
+                        "code": "service_stopped",
+                        "message": "sandbox service stopped while the job was running",
+                        "retryable": False,
+                    },
+                    updated_at=_now(),
+                )
+                _write_json(state_path, state)
+        except Exception:
+            logger.exception("sandbox job %s: state not written on cancel", job.job_id)
+
+        async def stop_worker() -> None:
+            if process is None:
+                return
+            try:
+                await asyncio.to_thread(_stop_worker, process)
+            except Exception:
+                logger.exception("sandbox job %s: worker not stopped", job.job_id)
+
+        if canceled:
+            await stop_worker()
+            await self._stop_environment(job, output, state_path, canceled)
+        else:
+            # A service stop: docker kills the server when the worker's grace would end, so the
+            # environment's cleanup starts beside the worker's, not after it.
+            await asyncio.gather(
+                stop_worker(), self._stop_environment(job, output, state_path, canceled)
+            )
+
+    async def _stop_environment(
+        self, job: HarnessJob, output: Path, state_path: Path, canceled: bool
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(stop, output), timeout=_STOP_OUTPUT_SECONDS
+            )
+        except ProvisionError as exc:
+            try:
+                state = _read_json(state_path)
+                state.update(
+                    detail=(
+                        f"{'canceled' if canceled else 'stopped'}; isolated environment "
+                        f"cleanup failed: {exc}"
+                    ),
+                    updated_at=_now(),
+                )
+                _write_json(state_path, state)
+            except Exception:
+                logger.exception("sandbox job %s: state not written on cancel", job.job_id)
+        except Exception:
+            logger.exception("sandbox job %s: environment not stopped", job.job_id)
+
     async def _execute_rerun(self, job: HarnessJob, only: list[str]) -> None:
         """Run calls from immutable saved artifacts, with a fresh environment lifecycle."""
 
@@ -781,6 +935,7 @@ class LocalSandbox:
             )
             _write_json(state_path, state)
             log_handle = (directory / "worker.log").open("ab")
+            process: subprocess.Popen | None = None
             try:
                 shutil.rmtree(replay_root, ignore_errors=True)
                 replay_root.parent.mkdir(parents=True, exist_ok=True)
@@ -801,15 +956,9 @@ class LocalSandbox:
                 child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
 
                 async def run_stage(command: list[str]) -> int:
-                    process = await asyncio.create_subprocess_exec(
-                        *command,
-                        stdout=log_handle,
-                        stderr=asyncio.subprocess.STDOUT,
-                        start_new_session=True,
-                        env=child_environment,
-                    )
-                    self._processes[job.job_id] = process
-                    return await process.wait()
+                    nonlocal process
+                    process = _start_worker(command, log_handle=log_handle, env=child_environment)
+                    return await _worker_exit(process)
 
                 environment_up = [
                     sys.executable,
@@ -848,10 +997,16 @@ class LocalSandbox:
                 simulation_code = 1
                 cleanup_code = 0
                 if up_code == 0:
+                    cancelled = False
                     try:
                         simulation_code = await run_stage(simulation)
+                    except asyncio.CancelledError:
+                        # The cancel handler's stop(output) brings the environment down.
+                        cancelled = True
+                        raise
                     finally:
-                        cleanup_code = await run_stage(environment_down)
+                        if not cancelled:
+                            cleanup_code = await run_stage(environment_down)
 
                 # Exit 2 is a completed suite whose submitted agent failed checks.
                 successful_execution = (
@@ -906,6 +1061,15 @@ class LocalSandbox:
                         updated_at=_now(),
                     )
                     _write_json(state_path, state)
+            except asyncio.CancelledError:
+                # One owner: the job's own task stops its worker and its environment, whoever
+                # cancelled it, and no further cancel can cut that short.
+                await _finish(
+                    asyncio.create_task(
+                        self._cleanup_cancelled(job, process, output, state_path)
+                    )
+                )
+                raise
             except Exception as exc:
                 state = _read_json(state_path)
                 state.update(
@@ -923,11 +1087,7 @@ class LocalSandbox:
                 _write_json(state_path, state)
             finally:
                 log_handle.close()
-                self._processes.pop(job.job_id, None)
-                self._tasks.pop(job.job_id, None)
-                self._ephemeral_secrets.pop(job.job_id, None)
-                self._ephemeral_secret_file_names.pop(job.job_id, None)
-                self._delete_job_secret_files(job.job_id)
+                self._release_job(job.job_id)
                 shutil.rmtree(replay_root, ignore_errors=True)
 
     def preflight(self, request: SandboxPreflightRequest) -> SandboxPreflightResponse:
@@ -1062,6 +1222,7 @@ class LocalSandbox:
             )
             _write_json(state_path, state)
             log_handle = (directory / "worker.log").open("ab")
+            process: subprocess.Popen | None = None
             try:
                 if source is None:
                     workspace = directory / "workspace"
@@ -1177,26 +1338,25 @@ class LocalSandbox:
                         "1" if job.execution is ExecutionMode.HOSTED else "0"
                     )
                     child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
-                    process = await asyncio.create_subprocess_exec(
-                        sys.executable,
-                        "-m",
-                        "fi.alk.harness.sandbox_worker",
-                        str(directory / "job.json"),
-                        "--source",
-                        str(source),
-                        "--output",
-                        str(output),
-                        "--status",
-                        str(directory / "result.json"),
-                        "--adjustments",
-                        str(directory / "adjustments.jsonl"),
-                        stdout=log_handle,
-                        stderr=asyncio.subprocess.STDOUT,
-                        start_new_session=True,
+                    process = _start_worker(
+                        [
+                            sys.executable,
+                            "-m",
+                            "fi.alk.harness.sandbox_worker",
+                            str(directory / "job.json"),
+                            "--source",
+                            str(source),
+                            "--output",
+                            str(output),
+                            "--status",
+                            str(directory / "result.json"),
+                            "--adjustments",
+                            str(directory / "adjustments.jsonl"),
+                        ],
+                        log_handle=log_handle,
                         env=child_environment,
                     )
-                    self._processes[job.job_id] = process
-                    return_code = await process.wait()
+                    return_code = await _worker_exit(process)
                     result = _read_json(directory / "result.json")
                     if source_fingerprint(source) != submitted_source_digest:
                         return_code = 1
@@ -1256,6 +1416,15 @@ class LocalSandbox:
                         updated_at=_now(),
                     )
                     _write_json(state_path, state)
+            except asyncio.CancelledError:
+                # One owner: the job's own task stops its worker and its environment, whoever
+                # cancelled it, and no further cancel can cut that short.
+                await _finish(
+                    asyncio.create_task(
+                        self._cleanup_cancelled(job, process, output, state_path)
+                    )
+                )
+                raise
             except SubfolderNotFound as exc:
                 state = _read_json(state_path)
                 if state.get("stage") != HarnessStage.CANCELED.value:
@@ -1289,11 +1458,7 @@ class LocalSandbox:
                 _write_json(state_path, state)
             finally:
                 log_handle.close()
-                self._processes.pop(job.job_id, None)
-                self._tasks.pop(job.job_id, None)
-                self._ephemeral_secrets.pop(job.job_id, None)
-                self._ephemeral_secret_file_names.pop(job.job_id, None)
-                self._delete_job_secret_files(job.job_id)
+                self._release_job(job.job_id)
 
     def get(self, job_id: str) -> SandboxJobResponse:
         directory = self.jobs_root / job_id
@@ -1433,38 +1598,57 @@ class LocalSandbox:
             updated_at=_now(),
         )
         _write_json(state_path, state)
-        process = self._processes.get(job_id)
-        if process and process.returncode is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), timeout=10)
-            except TimeoutError:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
         task = self._tasks.get(job_id)
         if task and not task.done():
+            # The job's own task stops its worker and environment (_cleanup_cancelled).
+            # asyncio.wait neither raises the task's cancel into this request nor re-cancels it.
             task.cancel()
-        # SIGTERM stops the worker before its async ``finally`` can reliably run.  Cancellation
-        # must therefore own the same environment boundary explicitly; otherwise every timed-out
-        # hosted job leaves its database, network and volumes behind.
-        output = self.artifacts_root / response.job.run_id
-        try:
-            await asyncio.to_thread(stop, output)
-        except ProvisionError as exc:
-            state.update(
-                detail=f"canceled; isolated environment cleanup failed: {exc}",
-                updated_at=_now(),
-            )
-            _write_json(state_path, state)
+            await asyncio.wait({task}, timeout=_CANCEL_RESPONSE_SECONDS)
+            # The job's task clears its secrets as it ends (_release_job), while it still holds
+            # the job; clearing them here could take a rerun's that has already started.
+            if not task.done():
+                # Answer now; the task carries on with its cleanup.
+                answer = self.get(job_id)
+                return answer.model_copy(
+                    update={
+                        "status": answer.status.model_copy(
+                            update={"detail": "canceled; environment cleanup still running"}
+                        )
+                    }
+                )
+            # A task that ended inside the wait cleared its secrets itself, unless it was cancelled
+            # before its own try (queued for a slot). Clear them only while it is still the job's
+            # task: a rerun that took the job in between keeps its own.
+            if self._tasks.get(job_id) in (None, task):
+                self._forget_job_secrets(job_id)
+        else:
+            # Not started, or already ended: nothing else will bring its environment down.
+            output = self.artifacts_root / response.job.run_id
+            try:
+                await asyncio.to_thread(stop, output)
+            except ProvisionError as exc:
+                state.update(
+                    detail=f"canceled; isolated environment cleanup failed: {exc}",
+                    updated_at=_now(),
+                )
+                _write_json(state_path, state)
+            # No task of the job is running, so these secrets are its last.
+            self._forget_job_secrets(job_id)
+        return self.get(job_id)
+
+    def _release_job(self, job_id: str) -> None:
+        """A job's task, ending: its entry and secrets go, unless a new run of the job (a rerun
+        after a cancel answered early) already holds them."""
+        holder = self._tasks.get(job_id)
+        if holder is not None and holder is not asyncio.current_task():
+            return
+        self._tasks.pop(job_id, None)
+        self._forget_job_secrets(job_id)
+
+    def _forget_job_secrets(self, job_id: str) -> None:
         self._ephemeral_secrets.pop(job_id, None)
         self._ephemeral_secret_file_names.pop(job_id, None)
         self._delete_job_secret_files(job_id)
-        return self.get(job_id)
 
     def adjust(
         self, job_id: str, request: SandboxAdjustmentRequest
@@ -2070,17 +2254,32 @@ def _authorize(authorization: str | None = Header(default=None)) -> None:
 def create_app(root: Path | None = None) -> FastAPI:
     # No schema or docs pages: they skip the token check, and a closed server shows nothing to
     # a caller without one.
+    sandbox = LocalSandbox(
+        root or Path(os.getenv("ALK_SANDBOX_ROOT", "./artifacts/sandbox")),
+        max_concurrency=int(os.getenv("ALK_SANDBOX_MAX_CONCURRENCY", "2")),
+    )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        # uvicorn runs this before it re-raises SIGTERM, so every running job stops its worker
+        # and its environment before the server exits.
+        tasks = [task for task in sandbox._tasks.values() if not task.done()]
+        for task in tasks:
+            if not task.cancelling():
+                task.cancel()
+        if tasks:
+            await asyncio.wait(tasks, timeout=_CANCEL_WAIT_SECONDS)
+
     app = FastAPI(
         title="ALK local sandbox",
         version="1",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=lifespan,
     )
-    sandbox = LocalSandbox(
-        root or Path(os.getenv("ALK_SANDBOX_ROOT", "./artifacts/sandbox")),
-        max_concurrency=int(os.getenv("ALK_SANDBOX_MAX_CONCURRENCY", "2")),
-    )
+    app.state.sandbox = sandbox
 
     @app.get("/health")
     async def health() -> dict[str, str]:

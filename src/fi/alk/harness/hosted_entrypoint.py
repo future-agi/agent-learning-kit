@@ -36,15 +36,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
+from pydantic import ValidationError
+
 from ..providers.agent import _redact
 from . import observability
 from . import outbound as ob
+from . import user_files
+from .actors import ACTOR_RULES_FILE, ACTORS_FILE
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
 from .compose_broker import BrokerError, ComposeBrokerClient
 from .framework_detection import FrameworkFolders, framework_folders_for
 from .hosted_compose_bootstrap import initialize_hosted_compose
-from .source_folder import folder_failure
+from .source_folder import folder_failure, non_github_folder_failure
 from .world.observation import ObservationWorldFactory
 from .call_runner import CallRunnerContext, CallRunnerImpl
 from .hosted_scheduler import (
@@ -64,10 +68,11 @@ from .job import (
     ExecutionMode,
     FailureDomain,
     HarnessArtifactPolicy,
+    HarnessFailure,
     HarnessJob,
     HarnessStage,
 )
-from .privilege import IsolationUnavailable, establish_isolation
+from .privilege import IsolationMode, IsolationUnavailable, establish_isolation, isolation_mode
 from .process_preflight import PreflightError, preflight_bundle
 from .process_runtime import (
     SECTION_2F_DOMAIN,
@@ -80,6 +85,7 @@ from .process_runtime import (
 from .judge import judge_sub_goal as _judge_sub_goal
 from .joint_judge import judge_sub_goals_jointly as _judge_sub_goals_jointly
 from .scenario_source import (
+    AgentDocumentFailed,
     BundleScenarioSource,
     ScenarioDocumentInvalid,
     bundle_has_scenarios,
@@ -251,6 +257,17 @@ def load_job(job_path: Path) -> HarnessJob:
     if job.execution is not ExecutionMode.HOSTED:
         raise ValueError("hosted_entrypoint_requires_hosted_job")
     return job
+
+
+def _read_raw_job_failure(job_path: Path, error: ValidationError) -> HarnessFailure | None:
+    try:
+        raw = json.loads(job_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    # load_job's own check, outside the model: a job that isn't hosted is malformed otherwise too.
+    if not isinstance(raw, dict) or raw.get("execution") != ExecutionMode.HOSTED.value:
+        return None
+    return non_github_folder_failure(error, raw)
 
 
 def resolve_parallelism(job: HarnessJob) -> int:
@@ -476,6 +493,19 @@ class DefaultBundleSource:
                 _bundle_unavailable_code(exc.args[0]), str(exc)
             ) from exc
         return manifest, bundle_dir
+
+
+def close_actor_files(bundle_dir: Path, *, chown: user_files.Chown = user_files.chown_no_follow) -> None:
+    """Under per-user isolation, the bundle's actor files become the harness's own, mode 0600: actors act in the
+    harness's process, which still reads them, and no customer process can. Without it nothing changes."""
+    if isolation_mode() is not IsolationMode.PER_USER:
+        return
+    for name in (ACTORS_FILE, ACTOR_RULES_FILE):
+        path = bundle_dir / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        chown(path, os.geteuid(), os.getegid())
+        path.chmod(0o600)
 
 
 # =================================================================================================
@@ -1111,6 +1141,7 @@ _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]]
             ob.ArtifactKind.TRACE,
             ob.ArtifactKind.TOOL_TRACE,
             ob.ArtifactKind.TRANSCRIPT,
+            ob.ArtifactKind.WORLD_STATE,
             ob.ArtifactKind.OTHER,
         }
     ),
@@ -1623,14 +1654,12 @@ class OutboundAdapter:
             scenario_attempt=receipt.scenario_attempt,
             world_index=receipt.world_index,
             status=receipt.status,
-            sub_goals=[
-                {"name": g.name, "held": g.held, "reason": g.reason, "judged": g.judged}
-                for g in receipt.sub_goals
-            ],
+            sub_goals=[sub_goal_wire(g) for g in receipt.sub_goals],
             evaluations=[_evaluation_wire(e) for e in receipt.evaluations],
             call=call,
             failure=failure,
             extra_secret_values=self._extra_secret_values,
+            reason=receipt.reason,
         )
         self._persist_offline_json(Path("receipts") / f"{wire['digest']}.json", wire)
         push_result = await asyncio.to_thread(
@@ -1925,6 +1954,19 @@ class OutboundAdapter:
                 break
         await self.push_manifest(complete=complete, deadline=deadline)
         return self.is_fenced
+
+
+def sub_goal_wire(goal: Any) -> dict[str, Any]:
+    """One sub-goal as the receipt carries it. `verdict` is always given when there is one (`unmeasured`,
+    `inconclusive`, `not_applicable`, `pass`, `fail`), so the platform never reads it from the reason's wording."""
+    return {
+        "name": goal.name,
+        "held": goal.held,
+        "reason": goal.reason,
+        "judged": goal.judged,
+        **({"verdict": goal.verdict} if goal.verdict else {}),
+        **({"evidence": list(goal.evidence)} if getattr(goal, "evidence", ()) else {}),
+    }
 
 
 def _evaluation_wire(evaluation: Any) -> dict[str, Any]:
@@ -2447,25 +2489,47 @@ async def run_job(
         )
 
     async def _fail(
-        *, domain: FailureDomain, fail_stage: HarnessStage, code: str, message: str
+        *,
+        domain: FailureDomain,
+        fail_stage: HarnessStage,
+        code: str,
+        message: str,
+        retryable: bool | None = None,
+        details: dict | None = None,
     ) -> int:
         # routed through `_finish` -- terminal event first, pool close (bounded) after, for
         # every pre-run failure branch too, not just the post-run ones `_finish` already covered.
-        return await _finish(
-            HarnessStage.FAILED,
-            failure={
-                "domain": domain.value,
-                "stage": fail_stage.value,
-                "code": code,
-                "message": message,
-            },
-            complete=True,
-        )
+        failure: dict[str, Any] = {
+            "domain": domain.value,
+            "stage": fail_stage.value,
+            "code": code,
+            "message": message,
+        }
+        if retryable is not None:
+            failure["retryable"] = retryable
+        if details is not None:
+            failure["details"] = details
+        return await _finish(HarnessStage.FAILED, failure=failure, complete=True)
 
     try:
         # 1 (cont'd). job.json (§0.2).
         try:
             job = load_job(job_path)
+        except ValidationError as exc:
+            # One malformed job is reported: a folder named on a source that isn't GitHub. The
+            # rest of the job isn't trusted -- only that reason and the folder are read from it.
+            unusable = _read_raw_job_failure(job_path, exc)
+            if unusable is None:
+                logger.error("job.json invalid: %s", exc)
+                return EXIT_CRASHED
+            return await _fail(
+                domain=unusable.domain,
+                fail_stage=unusable.stage,
+                code=unusable.code,
+                message=unusable.message,
+                retryable=unusable.retryable,
+                details=unusable.details,
+            )
         except Exception as exc:  # noqa: BLE001 - a malformed job.json has no typed error to catch
             # EXIT_CRASHED (not a FAILED terminal) even though a channel now exists -- a
             # malformed job.json means `job.seed`/`job.agent`/etc are not trustworthy enough to
@@ -2479,6 +2543,8 @@ async def run_job(
                 fail_stage=unusable.stage,
                 code=unusable.code,
                 message=unusable.message,
+                retryable=unusable.retryable,
+                details=unusable.details,
             )
 
         try:
@@ -2543,6 +2609,7 @@ async def run_job(
                 code=exc.code,
                 message=exc.message,
             )
+        close_actor_files(bundle_dir)
 
         if (manifest.metadata or {}).get("generic_harness") == "v1":
             from .certification import (
@@ -2805,6 +2872,18 @@ async def run_job(
                 fail_stage=HarnessStage.VALIDATING_SCENARIOS,
                 code="scenario_preallocation_failed",
                 message=str(exc),
+            )
+        except AgentDocumentFailed as exc:
+            # A folder build whose agent document could not be made fails with the real error: the
+            # platform gets a terminal failure and no document, not a registration without one.
+            if adapter.is_fenced:
+                await _bounded_close()
+                return EXIT_FENCED
+            return await _fail(
+                domain=FailureDomain.AGENT,
+                fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code=exc.code,
+                message=exc.message,
             )
         except ScenarioDocumentInvalid as exc:
             # A scenario document that will not even compile is a generation-stage content defect
