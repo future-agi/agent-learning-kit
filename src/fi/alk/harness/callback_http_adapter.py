@@ -161,7 +161,9 @@ def _json_body(value: Any) -> dict[str, Any]:
             body = dict(value)
         else:
             # Graph state: the answer is its last message; the other fields travel with it.
-            body = {**_json_fields(value), "content": _text_of(value)}
+            messages = value["messages"]
+            last = messages[-1] if isinstance(messages, (list, tuple)) and messages else None
+            body = {**_json_fields(value), "content": _text_of(last)}
     else:
         body = {"content": _text_of(value)}
     if not isinstance(body, dict):
