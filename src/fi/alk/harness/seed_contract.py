@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from .agent_type_check import EXIT_REFUSED
+from .contract import READING_RECORD
 from .failure_file import write_failure_file
 from .job import (
     FailureDomain,
@@ -31,7 +32,7 @@ from .job import (
 )
 from .reading_result import _CONTRACT_LIMIT_BYTES
 
-RECORD_KEY = "reading_inputs"
+RECORD_KEY = READING_RECORD
 SEED_ACCEPTED = ".futureagi-seed-accepted"
 SEED_CONTRACT_INVALID = "seed_contract_invalid"
 SEED_CONTRACT_TOO_LARGE = "seed_contract_too_large"
@@ -367,7 +368,9 @@ def holds_seed(contract: Path, seed: str | Path) -> bool:
         if problem is not None or raw is None:
             return False
         return contract.stat().st_size == len(raw) and contract.read_bytes() == raw
-    except Exception:  # noqa: BLE001 - a contract that can't be compared isn't claimed as the seed
+    # A contract that can't be compared isn't claimed as the seed.
+    except Exception as exc:  # noqa: BLE001
+        print_trace(exc)
         return False
 
 
@@ -455,5 +458,6 @@ def _take_back(output: Path, had_model: bool) -> None:
         (output / _CONTRACT).unlink(missing_ok=True)
         if not had_model:
             (output / _SOURCE_MODEL).unlink(missing_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        # The outcome turns on this: a contract left behind is reported `used`.
+        print_trace(exc)
