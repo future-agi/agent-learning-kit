@@ -129,15 +129,29 @@ def _load_callback() -> Any:
 CALLBACK = _load_callback()
 
 
+def _json_fields(value: dict[str, Any]) -> dict[str, Any]:
+    """The fields of ``value`` that survive ``json.dumps``, minus the raw ``messages``."""
+    fields: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "messages" or not isinstance(key, str):
+            continue
+        try:
+            json.dumps(item)
+        except (TypeError, ValueError):
+            continue
+        fields[key] = item
+    return fields
+
+
 def _json_body(value: Any) -> dict[str, Any]:
     if hasattr(value, "model_dump"):
         body = value.model_dump(mode="json", exclude_none=True)
     elif isinstance(value, dict):
-        body = (
-            dict(value)
-            if "content" in value or "messages" not in value
-            else {"content": _text_of(value)}
-        )
+        if "content" in value or "messages" not in value:
+            body = dict(value)
+        else:
+            # Graph state: the answer is its last message; the other fields travel with it.
+            body = {**_json_fields(value), "content": _text_of(value)}
     else:
         body = {"content": _text_of(value)}
     if not isinstance(body, dict):

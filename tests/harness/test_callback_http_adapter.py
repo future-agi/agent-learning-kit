@@ -257,6 +257,19 @@ def test_a_callback_dict_with_block_content_sends_its_text_and_keeps_its_other_k
         next(served, None)
 
 
+def test_a_callback_that_returns_graph_state_keeps_its_other_fields(tmp_path):
+    served = _serve(tmp_path, "chat_agent:object_state_reply")
+    try:
+        body = _ask_body(next(served))
+        assert body["content"] == "The status is complete."
+        assert body["tool_calls"] == [{"id": "c1"}]
+        assert body["state"] == {"stage": "done"}
+        # Raw message objects and anything else that is not JSON stay out of the response.
+        assert "messages" not in body and "handle" not in body
+    finally:
+        next(served, None)
+
+
 @pytest.mark.parametrize("entrypoint", ["block_dict_twice", "bare_dict_twice"])
 def test_a_callback_that_returns_the_same_dict_twice_is_answered_the_same_and_left_unchanged(
     tmp_path, entrypoint
