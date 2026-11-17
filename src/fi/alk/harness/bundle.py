@@ -386,6 +386,17 @@ def export_session_bundle(
     if session == source:
         raise BundleError("bundle_session_is_source")
     session.mkdir(parents=True, exist_ok=True)
+    # Both are replayed as written and refused at their writers; a session an older kit wrote can
+    # still hold a credential in one, which would go out in the bundle.
+    from ..providers.secret_shapes import credential_in
+
+    for artifact in ("actors.json", "simulator_prompt.md"):
+        origin = session / artifact
+        if origin.is_file() and credential_in(origin.read_text(encoding="utf-8", errors="replace")):
+            raise BundleError(
+                f"bundle_credential_in_artifact: {artifact} holds a credential; "
+                "rewrite it with a placeholder"
+            )
     final = session / "environment-bundle"
     staging_parent = Path(tempfile.mkdtemp(prefix=".bundle-", dir=session))
     staging = staging_parent / "environment-bundle"
