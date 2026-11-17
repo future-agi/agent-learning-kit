@@ -216,6 +216,9 @@ def _checked_contract(
     folder the browser scan found the agent reaches, when it has run."""
     arrived = sorted(payload) if isinstance(payload, dict) else [type(payload).__name__]
     payload = _without_nulls(unwrapped(payload))
+    # The harness records the folder below; one the model wrote itself is dropped, never refused.
+    if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
+        payload["runtime"].pop("source_subfolder", None)
     try:
         contract = AgentContract.model_validate(payload)
     except Exception as invalid:
