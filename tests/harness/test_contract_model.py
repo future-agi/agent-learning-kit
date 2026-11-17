@@ -165,16 +165,21 @@ def test_a_contract_without_a_model_saves_and_builds_as_before(tmp_path):
 
     assert not result.get("is_error"), result
     raw = (tmp_path / "out" / "contract.json").read_bytes()
-    # The bytes and hash dev writes for this contract, `workers` included since #226.
+    # The bytes and hash dev writes for this contract, `workers` included since #226. Dev's later
+    # defaulted fields are in the dump too: each tool's `arg_units`, `returns`, `tables_read` and
+    # `tables_changed` (01d752bc, 0f11648c, e1287f3c) and `runtime.sse` (6b6f65be), all empty or
+    # null here. The merged bytes are identical to dev's own at 57b4d14a.
     assert hashlib.sha256(raw).hexdigest() == (
-        "5705f539a00886a4bc8bacb34fcf50b35e22d145e36391de98b192ad73050c1d"
+        "11c46ed8f4bddb11f2df20b73c2f22d06bdd247a186c0676dead93fd40b86a97"
     )
     assert "model" not in json.loads(raw)
     document = build_authored_agent(
         AgentContract.model_validate(json.loads(raw)).model_dump(mode="json")
     )
+    # The agent document hashed over that contract: the same dev fields, and dev's code gives the
+    # same value at 57b4d14a.
     assert document["setup_hash"] == (
-        "sh1:7aedd9f36dd3ed3fd5a1c7fd67d8a2ec6abe34ed09d616b7dccccf49e8cb1aa3"
+        "sh1:7b702f078fbe5bfb91677c29b38f6f63428c6f92acb21ba65a895b2764a20023"
     )
     assert document["model"] is None
 
