@@ -133,6 +133,20 @@ def gateway_wire_model(model: str) -> str:
     return os.environ.get("AGENTCC_CLAUDE_MODEL_ALIAS", "").strip() or model
 
 
+# Each switches the CLI to another provider or transport. ClaudeAgentOptions.env is merged over
+# the parent's, so whichever route a session takes, the others set around the kit are blanked,
+# or one of them could take the turn instead.
+_OTHER_CLAUDE_ROUTES = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_GATEWAY",
+    "ANTHROPIC_UNIX_SOCKET",
+)
+
+
 def provider_env(model: str | None = None) -> dict[str, str]:
     """The provider block passed to the session.
 
@@ -157,6 +171,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
             "ANTHROPIC_BASE_URL": gateway.base_url,
             # ClaudeAgentOptions.env is merged over the parent's, so a parent's Vertex flag must be undone.
             "CLAUDE_CODE_USE_VERTEX": "0",
+            **dict.fromkeys(_OTHER_CLAUDE_ROUTES, ""),
             # The SDK cannot look up a non-Claude context window, so it is declared.
             **(
                 {}
@@ -194,8 +209,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
         env.update(
             {
                 "CLAUDE_CODE_USE_VERTEX": "",
-                "CLAUDE_CODE_USE_BEDROCK": "",
-                "CLAUDE_CODE_USE_FOUNDRY": "",
+                **dict.fromkeys(_OTHER_CLAUDE_ROUTES, ""),
                 "ANTHROPIC_API_KEY": "",
                 "ANTHROPIC_BASE_URL": gateway_url.rstrip("/"),
                 "ANTHROPIC_AUTH_TOKEN": gateway_key,
@@ -207,6 +221,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
         return env
 
     env["CLAUDE_CODE_USE_VERTEX"] = "1"
+    env.update(dict.fromkeys(_OTHER_CLAUDE_ROUTES, ""))
     env["CLOUD_ML_REGION"] = os.environ.get("CLOUD_ML_REGION", "us-east5")
     for passthrough in (
         "ANTHROPIC_VERTEX_PROJECT_ID",

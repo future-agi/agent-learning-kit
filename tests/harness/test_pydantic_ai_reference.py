@@ -23,7 +23,10 @@ from reference_agents import (
     TOOLS,
     TRACE_HOOK,
     assert_bindings_match,
+    assert_a_failing_turn_keeps_the_key_out_of_its_frames,
     assert_detected,
+    assert_each_conversation_has_its_own_orders,
+    assert_tool_calls_keep_each_conversations_orders,
     assert_pins,
     assert_refuses_key_without_base_url,
     build_control_service,
@@ -48,7 +51,7 @@ from types import SimpleNamespace
 
 import anyio.to_thread
 
-STATE = {"agents": [], "runs": [], "output": "All done.", "raise": None}
+STATE = {"agents": [], "runs": [], "script": [], "results": [], "output": "All done.", "raise": None}
 
 
 async def run_in_executor(func, *args, **kwargs):
@@ -89,6 +92,9 @@ class Agent:
                 client_open=client is not None and not client.closed,
             )
         )
+        for name, arguments in STATE["script"]:
+            tool = next(t for t in self.tools if t.name == name)
+            STATE["results"].append(await tool.call(arguments))
         if STATE["raise"] is not None:
             raise STATE["raise"]
         return SimpleNamespace(output=STATE["output"])
@@ -383,12 +389,47 @@ def test_each_call_builds_and_closes_its_own_client(example_module, monkeypatch)
     assert len(pydantic_ai.STATE["agents"]) == 1
 
 
+def test_each_conversation_has_its_own_orders(example_module, monkeypatch) -> None:
+    agent = example_module()
+    assert_each_conversation_has_its_own_orders(agent)
+
+    # The same through the callback, with Pydantic AI running each plain tool on a worker
+    # thread.
+    import pydantic_ai
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def turn(thread_id: str, name: str, **arguments: str) -> str:
+        pydantic_ai.STATE["script"] = [(name, arguments)]
+        pydantic_ai.STATE["results"] = []
+        turn_input = _agent_input(CONVERSATION).model_copy(update={"thread_id": thread_id})
+        asyncio.run(agent.agent_callback(turn_input))
+        (result,) = pydantic_ai.STATE["results"]
+        return result
+
+    assert_tool_calls_keep_each_conversations_orders(turn)
+
+
+def test_a_turn_that_fails_later_keeps_the_key_out_of_its_frames(example_module) -> None:
+    def make_it_fail() -> None:
+        import pydantic_ai
+
+        pydantic_ai.STATE["raise"] = ConnectionError("model unreachable")
+
+    assert_a_failing_turn_keeps_the_key_out_of_its_frames(
+        example_module,
+        lambda agent: asyncio.run(agent.agent_callback(_agent_input(CONVERSATION))),
+        make_it_fail,
+    )
+
+
 def test_a_key_with_no_base_url_is_refused_before_a_client_is_built(
     example_module, monkeypatch
 ) -> None:
     def nothing_built() -> None:
-        import pydantic_ai
         import openai
+        import pydantic_ai
 
         assert openai.CLIENTS == []
         assert pydantic_ai.STATE["runs"] == []
@@ -448,7 +489,7 @@ def test_example_has_one_async_callback_and_plain_tools() -> None:
     ]
     assert async_names == ["agent_callback"]
     plain = {node.name for node in module.body if isinstance(node, ast.FunctionDef)}
-    assert plain == set(TOOLS)
+    assert plain == set(TOOLS) | {"_setting", "_orders"}
 
 
 # T5: requirements ---------------------------------------------------------------------------

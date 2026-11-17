@@ -19,7 +19,6 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import ModuleType
 
-import pytest
 from test_bundle_author_v2 import (
     _authoring,
     _github_job,
@@ -270,6 +269,82 @@ def assert_bindings_match(
 # The key and the base URL -------------------------------------------------------------------
 
 
+def _refusal_problem(
+    load: Callable[..., ModuleType],
+    call: Callable[[ModuleType], object] | None,
+    environment: Mapping[str, str],
+    base_url: str,
+    canary: str,
+) -> str | None:
+    """What is wrong with one case's refusal, or None."""
+    refused: BaseException | None = None
+    if call is None:
+        try:
+            load(**environment)
+        except RuntimeError as exc:
+            refused = exc
+        except Exception as exc:  # noqa: BLE001 - reported, so every case still runs
+            return f"the import failed with {type(exc).__name__}, not a refusal"
+        if refused is None:
+            return "the import was not refused"
+    else:
+        try:
+            module = load(**environment)
+        except Exception as exc:  # noqa: BLE001 - reported, not raised
+            return f"the import failed, where the call should refuse: {type(exc).__name__}"
+        try:
+            call(module)
+        except RuntimeError as exc:
+            refused = exc
+        except Exception as exc:  # noqa: BLE001 - reported, so every case still runs
+            return f"the call failed with {type(exc).__name__}, not a refusal"
+        if refused is None:
+            return "the call was not refused"
+    if base_url not in str(refused):
+        return f"the refusal does not name {base_url}"
+    return _key_in_example_frames(refused, canary)
+
+
+def _key_in_example_frames(error: BaseException, canary: str) -> str | None:
+    """Where the key shows in an error a traceback would print, or None."""
+    if canary in "".join(traceback.format_exception(error)):
+        return "the key is in the error or its traceback"
+    trace = error.__traceback__
+    while trace is not None:
+        frame = trace.tb_frame
+        name = frame.f_code.co_filename
+        # The example's own frame: a traceback that prints variables would show it. A library
+        # file of the same name is not the example's.
+        if name.endswith("agent.py") and "site-packages" not in name:
+            if canary in repr(frame.f_locals):
+                return "the key is in a variable of the example's frame"
+        trace = trace.tb_next
+    return None
+
+
+def assert_a_failing_turn_keeps_the_key_out_of_its_frames(
+    load: Callable[..., ModuleType],
+    call: Callable[[ModuleType], object],
+    make_it_fail: Callable[[], None],
+    *,
+    key: str = "OPENAI_API_KEY",
+    base_url: str = "OPENAI_BASE_URL",
+) -> None:
+    """A turn that fails after the base-URL check (a connection error, a 401, a model error)
+    carries the key nowhere a traceback would print: not in the error, not in the example's
+    frames. `make_it_fail()` makes the library raise once the module is loaded."""
+    canary = "secret-canary-key"
+    module = load(**{key: canary, base_url: "http://127.0.0.1:9/v1"})
+    make_it_fail()
+    try:
+        call(module)
+    except Exception as exc:  # noqa: BLE001 - any failure the library raises
+        problem = _key_in_example_frames(exc, canary)
+        assert problem is None, problem
+    else:
+        raise AssertionError("the turn did not fail, so nothing was checked")
+
+
 def assert_refuses_key_without_base_url(
     load: Callable[..., ModuleType],
     call: Callable[[ModuleType], object] | None,
@@ -281,22 +356,71 @@ def assert_refuses_key_without_base_url(
 ) -> None:
     """With `key` set and `base_url` unset, empty or blank, the example refuses.
 
-    The refusal is a RuntimeError naming `base_url`, raised at import when `call` is None and
-    otherwise by `call(module)`; the key is nowhere in it or its traceback. `load(**env)` is
-    the test file's fresh-import fixture; `after_refusal()` checks each case's side effects.
+    The refusal is a RuntimeError naming `base_url`: raised at import when `call` is None, and
+    otherwise by `call(module)` after an import that succeeds. The key is nowhere in it, its
+    traceback or the example's frames. `load(**env)` is the test file's fresh-import fixture;
+    `after_refusal()` checks each refused case's side effects. Every case runs, and the
+    failure names each case that went wrong.
     """
     canary = "secret-canary-key"
+    problems = []
     for value in (None, "", "   "):
         monkeypatch.delenv(base_url, raising=False)
         environment = {key: canary} if value is None else {key: canary, base_url: value}
-        with pytest.raises(RuntimeError, match=base_url) as refused:
-            module = load(**environment)
-            if call is not None:
-                call(module)
-        assert canary not in "".join(traceback.format_exception(refused.value)), repr(value)
-        if after_refusal is not None:
-            after_refusal()
+        problem = _refusal_problem(load, call, environment, base_url, canary)
+        if problem is None and after_refusal is not None:
+            try:
+                after_refusal()
+            except AssertionError as exc:
+                problem = f"after the refusal: {exc}"
+        if problem is not None:
+            label = "unset" if value is None else repr(value)
+            problems.append(f"{base_url} {label}: {problem}")
+    assert not problems, "\n".join(problems)
 
+
+# Order state -------------------------------------------------------------------------------
+
+
+def assert_each_conversation_has_its_own_orders(
+    module: ModuleType, call_tool: Callable[..., str] | None = None
+) -> None:
+    """A return started in one conversation is not there in another, and stays in its own.
+
+    `call_tool(name, **arguments)` calls one tool the way its library does; by default the
+    module's plain function of that name."""
+    call = call_tool or (lambda name, **arguments: getattr(module, name)(**arguments))
+
+    def in_conversation(thread: str, name: str, **arguments: str) -> str:
+        token = module._CONVERSATION.set(thread)
+        try:
+            return call(name, **arguments)
+        finally:
+            module._CONVERSATION.reset(token)
+
+    started = in_conversation("one", "start_return", order_id="A1001", reason="too small")
+    assert "Return started" in started
+    assert in_conversation("two", "look_up_order", order_id="A1001").endswith("return: none.")
+    assert in_conversation("one", "look_up_order", order_id="A1001").endswith(
+        "return: too small."
+    )
+
+
+
+def assert_tool_calls_keep_each_conversations_orders(
+    turn: Callable[..., str],
+) -> None:
+    """The same as `assert_each_conversation_has_its_own_orders`, with each tool call made by
+    the library in a turn of the callback, so the conversation is named the way the callback
+    names it and reaches the tool however the library runs it.
+
+    `turn(thread_id, name, **arguments)` runs one turn for that thread in which the library
+    calls tool `name`, and returns what the tool returned."""
+    # Not the names the plain-function check uses, so the two can run on one module.
+    started = turn("three", "start_return", order_id="A1001", reason="too small")
+    assert "Return started" in started
+    assert turn("four", "look_up_order", order_id="A1001").endswith("return: none.")
+    assert turn("three", "look_up_order", order_id="A1001").endswith("return: too small.")
 
 # The tracer ---------------------------------------------------------------------------------
 
