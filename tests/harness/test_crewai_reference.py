@@ -24,6 +24,7 @@ from reference_agents import (
     assert_bindings_match,
     assert_detected,
     assert_pins,
+    assert_refuses_key_without_base_url,
     build_control_service,
     fresh_import,
     run_tracer,
@@ -418,10 +419,25 @@ def test_import_needs_no_key_and_no_base_url(example_module) -> None:
     assert agent.MODEL == "vertex_ai/gemini-3.7-flash"
 
 
-def test_a_turn_with_no_base_url_fails_with_the_library_error(
+def test_a_key_with_no_base_url_is_refused_before_a_model_is_built(
     example_module, monkeypatch
 ) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    def nothing_built() -> None:
+        import crewai
+
+        assert crewai.STATE["llms"] == []
+
+    assert_refuses_key_without_base_url(
+        example_module,
+        lambda agent: asyncio.run(agent.agent_callback(_agent_input(CONVERSATION))),
+        monkeypatch,
+        after_refusal=nothing_built,
+    )
+
+
+def test_a_turn_with_neither_key_nor_base_url_fails_with_the_library_error(
+    example_module,
+) -> None:
     agent = example_module()
 
     with pytest.raises(ValueError, match="custom_openai=True requires base_url"):

@@ -18,7 +18,7 @@ imported, unless the environment already sets those variables.
 ## Environment
 
 - `OPENAI_API_KEY`: the key for the endpoint (required for a turn).
-- `OPENAI_BASE_URL`: the endpoint's base URL (required for a turn). Set it to the model gateway for the default model. CrewAI refuses to build a `custom_openai` model without one, so a missing URL fails every turn.
+- `OPENAI_BASE_URL`: the endpoint's base URL (required for a turn). Set it to the model gateway for the default model. With a key and no base URL (unset, empty or blank) the turn is refused before a model is built, naming the missing setting; with neither, CrewAI refuses to build a `custom_openai` model.
 - `OPENAI_MODEL`: the model name, default `vertex_ai/gemini-3.7-flash` (a gateway name).
 
 The endpoint must speak chat completions. The model is built as `LLM(..., custom_openai=True)`,

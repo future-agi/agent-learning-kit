@@ -54,12 +54,16 @@ async def agent_callback(agent_input):
     # prefix and `vertex_ai` isn't a CrewAI provider alias, so without it the name goes to
     # LiteLLM whatever `base_url` says, and LiteLLM isn't installed here. It also stops CrewAI
     # switching to the Responses API on a "responses-only" error; the gateway serves chat only.
-    llm = LLM(
-        model=MODEL,
-        custom_openai=True,
-        base_url=os.getenv("OPENAI_BASE_URL"),
-        api_key=os.getenv("OPENAI_API_KEY"),
-    )
+    # Blank counts as unset.
+    api_key = os.getenv("OPENAI_API_KEY", "").strip() or None
+    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
+    # The same rule as the other reference agents: a key needs the endpoint it belongs to.
+    if api_key and not base_url:
+        raise RuntimeError(
+            "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
+            "endpoint the key belongs to."
+        )
+    llm = LLM(model=MODEL, custom_openai=True, base_url=base_url, api_key=api_key)
     agent = Agent(
         role="Customer support agent",
         goal="Help customers of an online store with their orders and returns.",
