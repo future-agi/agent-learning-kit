@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 import secrets
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fi.simulate.agent.wrappers.http_events import (
@@ -39,6 +39,7 @@ from .contract import (
     AgentContract,
     Runtime,
     RuntimeInterface,
+    ToolEntry,
     RuntimeSecretFile,
     RuntimeConfigFile,
     HttpObservation,
@@ -58,6 +59,7 @@ from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
     PathLookupsSpent,
     RuntimeSelectionError,
+    charged_path,
     path_lookup_budget,
     select_runtime,
 )
@@ -71,7 +73,7 @@ from .model_citation import (
     source_lines,
 )
 from .python_source import utf8_size
-from .source_folder import SubfolderNotFound, agent_folder, bind_runtime
+from .source_folder import SubfolderNotFound, agent_folder, bind_runtime, is_within
 
 _LOG = logging.getLogger(__name__)
 
@@ -397,6 +399,10 @@ def _checked_against_source(
                 )
             if refusal := _builds_a_sibling(source_root, runtime, subfolder):
                 problems.append(refusal)
+            if rooted := _modules_as_the_process_imports_them(
+                contract.tool_entrypoints, source_root, runtime.workdir
+            ):
+                contract = contract.model_copy(update={"tool_entrypoints": rooted})
         except SubfolderNotFound:
             problems.append(
                 f"subfolder_not_found: {subfolder} is not a folder with files in the source, "
@@ -422,6 +428,67 @@ def _checked_against_source(
             "runtime": runtime,
         }
     )
+
+
+def _modules_as_the_process_imports_them(
+    entries: list[ToolEntry], source_root: Path, workdir: str
+) -> list[ToolEntry] | None:
+    """The entries with each module written as the agent's own process imports it, or None when
+    none changes. Only with a subfolder, where the process starts in the bound ``workdir``: a
+    reading writes ``examples.harness.x.agent`` for the file the process knows as ``agent``,
+    and the tracer matches a frame's module name exactly.
+
+    A module is rewritten when all of these hold; each is a file check, never an import, and
+    each is charged to the save's lookup budget:
+    - it starts with the workdir's path written dotted, and the rest names a file under the
+      workdir (``<rest>.py`` or ``<rest>/__init__.py``);
+    - the name as written is not itself a file under the workdir (``svc/agent.py`` beside
+      ``svc/svc/agent.py``: with the process in ``svc``, ``svc.agent`` is the inner one);
+    - no folder from the repository root down to the workdir has an ``__init__.py``: one that
+      does is part of a regular package, whose code knows its modules by the qualified name
+      (``GeneratedWorld.reach`` puts the package root on the path for exactly that).
+    """
+    from .source_tool_evidence import _file_in
+
+    folders = [part for part in PurePosixPath(workdir or "").parts if part != "."]
+    if not folders or ".." in folders or not all(part.isidentifier() for part in folders):
+        return None
+    if not any(entry.module and entry.mode in _ROOTED_MODES for entry in entries):
+        return None
+    root = Path(source_root).resolve()
+    try:
+        start = charged_path(root / Path(*folders))
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not is_within(start, root) or start == root:
+        return None
+    # The root and every folder down to the workdir, along the dotted path.
+    for depth in range(len(folders) + 1):
+        if _file_in(root.joinpath(*folders[:depth], "__init__.py"), root):
+            return None
+    prefix = ".".join(folders) + "."
+
+    def names_a_file(dotted: str) -> bool:
+        module = start.joinpath(*dotted.split("."))
+        return _file_in(module.with_suffix(".py"), start) or _file_in(module / "__init__.py", start)
+
+    rewritten, changed = [], False
+    for entry in entries:
+        module = entry.module
+        if (
+            entry.mode in _ROOTED_MODES
+            and module.startswith(prefix)
+            and all(part.isidentifier() for part in module.split("."))
+            and not names_a_file(module)
+            and names_a_file(rest := module[len(prefix) :])
+        ):
+            entry = entry.model_copy(update={"module": rest})
+            changed = True
+        rewritten.append(entry)
+    return rewritten if changed else None
+
+
+_ROOTED_MODES = {"import", "construct", "unreachable"}
 
 
 def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
