@@ -1,0 +1,61 @@
+{
+  "schema_version": "futureagi.multi-agent-reference.v1",
+  "id": "langgraph-async-deep-agents",
+  "framework": {
+    "name": "langgraph",
+    "version": "1.2.18"
+  },
+  "source": {
+    "repository": "https://github.com/langchain-ai/async-deep-agents.git",
+    "commit": "6cafef62b2783a3d16edacd7df151ad1a33ee7a5",
+    "subdirectory": ".",
+    "license": "MIT"
+  },
+  "adaptation": {
+    "patch": "agentcc.patch",
+    "sha256": "307d37bbfdfe7c6ecdcc74fc8d8059febfb41f2db47ef4265965bb0e2150951d",
+    "scope": "Pin released dependencies, update one renamed Deep Agents argument, and route the existing models through AgentCC. Topology and prompts are unchanged."
+  },
+  "source_checks": [
+    {"path": "graphs/python/src/agent.py", "contains": "AsyncSubAgent"},
+    {"path": "graphs/python/src/agent.py", "contains": "researcher"},
+    {"path": "graphs/python/src/agent.py", "contains": "coder"},
+    {"path": "langgraph.json", "contains": "./graphs/python/src/researcher.py:graph"}
+  ],
+  "runtime": {
+    "kind": "chat_http",
+    "command": ["uv", "run", "--project", "graphs/python", "--with", "langgraph-cli[inmem]", "langgraph", "dev", "--allow-blocking"],
+    "model_environment": {
+      "OPENAI_MODEL": "vertex_ai/gemini-3.7-flash"
+    }
+  },
+  "topology": {
+    "coordinator": "agent",
+    "workers": [
+      {"id": "researcher", "parent": "agent"},
+      {"id": "coder", "parent": "agent"}
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "parallel_specialists",
+      "instruction": "Ask for independent research and implementation work in one request. Require the supervisor to launch both specialist workers and return both task IDs without blocking.",
+      "expected_workers": ["agent", "researcher", "coder"],
+      "expected_effects": ["two background jobs launched", "distinct task IDs returned", "supervisor returns before workers finish"]
+    },
+    {
+      "id": "collect_specialist_results",
+      "instruction": "After both background jobs finish, ask the supervisor to check both task IDs and synthesize the two results.",
+      "expected_workers": ["agent", "researcher", "coder"],
+      "expected_effects": ["both task states checked", "research result retrieved", "code result retrieved"]
+    }
+  ],
+  "required_evidence": [
+    "stable parent and child IDs under one run ID",
+    "delegation and return events for every handoff",
+    "every tool call attributed to its worker",
+    "separate tool permissions per worker",
+    "independent results for each exercised worker and the whole task",
+    "missing child evidence reported as unmeasured"
+  ]
+}

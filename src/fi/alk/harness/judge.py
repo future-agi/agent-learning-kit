@@ -25,11 +25,14 @@ from typing import Any, Callable, Sequence
 
 import requests
 
+from fi.simulate.simulation.call_actors import someone_else
+
 from .backends import SessionSpec, tool, tool_server
 from .catalogue import criteria_text
 from .config import chosen_model, provider_env
 from .session import Stage, record_turn
 from .tools import schema
+from .world.observation import ObservationWorld
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +75,9 @@ JUDGE_METHOD = """
 How to decide:
 1. Read the criteria.
 2. Read the evidence. Read the conversation for what was said, the actions for what the agent did,
-   and inspect the records when the criteria are about what changed. The records are PostgreSQL;
-   use inspect_world to discover them rather than guessing names. When listen is offered, listen
+   and inspect the records when the criteria are about what changed. Use inspect_world to discover
+   what the environment supports. Only query records when a query tool is available; never invent
+   records or infer unobserved state from capability names. When listen is offered, listen
    to the recording: it is the fullest record of what was said. Use the transcript where it is
    unclear, and judge from the transcript and the actions when it cannot be heard.
 3. Establish whether the sub-goal's situation arose. If it did not, work out why from the evidence:
@@ -119,6 +123,12 @@ recording, the transcript, the actions or the records.
 """.strip()
 
 
+NOT_APPLICABLE = "Not applicable: "
+INCONCLUSIVE = "Inconclusive: "
+# Never decided: the evidence this sub-goal reads never arrived. Counted as evaluated-of-requested, never pass or fail.
+UNMEASURED = "Unmeasured: "
+
+
 def verdict_of(args: dict[str, Any]) -> tuple[bool | None, str]:
     """A `decide` call as (held, explanation); inconclusive is undecided."""
     explanation = str(args.get("explanation") or "").strip()
@@ -126,10 +136,22 @@ def verdict_of(args: dict[str, Any]) -> tuple[bool | None, str]:
     if not verdict and isinstance(args.get("passed"), bool):
         verdict = "pass" if args["passed"] else "fail"
     if verdict == "not_applicable":
-        return True, f"Not applicable: {explanation}"
+        return True, f"{NOT_APPLICABLE}{explanation}"
     if verdict == "inconclusive":
-        return None, f"Inconclusive: {explanation}"
+        return None, f"{INCONCLUSIVE}{explanation}"
     return verdict == "pass", explanation
+
+
+def verdict_named(held: bool | None, reason: str | None) -> str | None:
+    """The verdict `verdict_of` gave as (held, reason): pass, fail, not_applicable, inconclusive or None."""
+    reason = reason or ""
+    if held is True and reason.startswith(NOT_APPLICABLE):
+        return "not_applicable"
+    if held is None:
+        if reason.startswith(INCONCLUSIVE):
+            return "inconclusive"
+        return "unmeasured" if reason.startswith(UNMEASURED) else None
+    return "pass" if held else "fail"
 
 
 def compared(goal: Any) -> str:
@@ -172,11 +194,20 @@ class CallEvidence:
     rule that a judge has listened to the recording and read the transcript before it decides.
     """
 
-    def __init__(self, world: Any, messages: Sequence[Any], recording: str | None, label: str) -> None:
+    def __init__(
+        self,
+        world: Any,
+        messages: Sequence[Any],
+        recording: str | None,
+        label: str,
+        actors: dict[str, Any] | None = None,
+    ) -> None:
         self.world = world
         self.messages = messages
         self.recording = recording
         self.label = label
+        # Who else took part and what each did in the world, when: the same record the trial view shows.
+        self.actors = actors
         # Evidence a tool returned this turn: looked at only once the judge's next turn has read it.
         self.fetched: set[str] = set()
         # False where tool results reach the model inside one session, with no turns to count.
@@ -192,12 +223,29 @@ class CallEvidence:
         (self.fetched if self.batched else self.looked).add(what)
 
     def tools(self) -> list[Any]:
+        native = isinstance(self.world, ObservationWorld)
+
         @tool(
             "inspect_world",
-            "The world's tables: without a name, every table and its row count; with one, its rows.",
-            schema({"table": str}, []),
+            (
+                "The native environment's declared capabilities and evidence limits; no database state."
+                if native
+                else "The world's tables: without a name, every table and its row count; with one, its rows."
+            ),
+            schema({} if native else {"table": str}, []),
         )
         async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+            if native:
+                return _say(
+                    _dump(
+                        {
+                            "kind": "native_observation",
+                            "capabilities": list(self.world.capabilities),
+                            "state_access": "No local database or SQL query is available to the judge. Capability names are not state evidence.",
+                            "evidence": "Use recorded actions and their results, and read_transcript for the captured conversation.",
+                        }
+                    )
+                )
             table = str(args.get("table") or "").strip()
             state = self.world.state(table or None)
             if table:
@@ -250,7 +298,26 @@ class CallEvidence:
                 self.audio = "asked"
             return _say("The recording follows.")
 
-        return [inspect_world, query_world, read_transcript] + ([listen] if self.recording else [])
+        tools = [inspect_world]
+        if not native:
+            tools.append(query_world)
+        tools.append(read_transcript)
+        if self.actors:
+
+            @tool(
+                "read_actors",
+                "Everyone else who took part: each actor's part in the call (came in, reached the agent, why not), "
+                "every action each took in the world, with when and what the world made of it, and the brief each "
+                "played from. Use it to see what the agent was dealing with; the sub-goal still grades the agent, never "
+                "an actor.",
+                schema({}, []),
+            )
+            async def read_actors(args: dict[str, Any]) -> dict[str, Any]:
+                self._fetched("actors")
+                return _say(_dump(self.actors))
+
+            tools.append(read_actors)
+        return tools + ([listen] if self.recording else [])
 
     def verdict_problem(self, args: dict[str, Any]) -> str | None:
         """Why this `decide` call cannot be accepted, or None when it is a complete, informed verdict."""
@@ -372,11 +439,18 @@ async def request_final_verdicts(
         logger.warning("judge's final request for %s could not run: %s", evidence.label, exc)
 
 
-def describe_call(agent_instructions: str, scenario: Any, calls: Sequence[Any], recording: str | None) -> str:
+def describe_call(
+    agent_instructions: str,
+    scenario: Any,
+    calls: Sequence[Any],
+    recording: str | None,
+    messages: Sequence[Any] = (),
+) -> str:
     """What every judging mode tells the judge about the call, after the sub-goals themselves."""
     return (
         f"The agent's own instructions:\n{agent_instructions.strip() or '(not given)'}\n\n"
         f"{_customer_side(scenario)}"
+        f"{_others_present(messages)}"
         f"{_reference_solution(scenario)}"
         f"Actions the agent took:\n{_dump_calls(calls)}\n\n"
         + (
@@ -398,10 +472,11 @@ async def judge_sub_goal(
     scenario: Any = None,
     agent_instructions: str = "",
     recording: str | None = None,
+    actors: dict[str, Any] | None = None,
 ) -> tuple[bool | None, str]:
     """Decide one judged sub-goal in its own conversation: (passed, explanation). Never raises."""
     name = getattr(goal, "name", "")
-    evidence = CallEvidence(world, messages, recording, name)
+    evidence = CallEvidence(world, messages, recording, name, actors)
     verdict: dict[str, tuple[bool | None, str]] = {}
 
     @tool(
@@ -425,7 +500,7 @@ async def judge_sub_goal(
         f"Sub-goal {name!r}: {getattr(goal, 'what', '') or '(no summary)'}\n\n"
         + compared(goal)
         + f"Criteria:\n{criteria_text(getattr(goal, 'judged', ''))}\n\n"
-        + describe_call(agent_instructions, scenario, calls, recording)
+        + describe_call(agent_instructions, scenario, calls, recording, messages)
         + "Look as needed, then call decide."
     )
     ask = "Everything needed is above. Call decide now with its verdict."
@@ -519,14 +594,34 @@ def _reference_solution(scenario: Any) -> str:
     )
 
 
-_SPEAKERS = {"user": "Customer", "assistant": "Agent"}
+_SPEAKERS = {"user": "Customer", "assistant": "Agent", "task": "Task"}
+
+
+def _speaker(message: dict[str, Any]) -> str:
+    role = str(message.get("role") or "")
+    if role == "actor":
+        return someone_else(str(message.get("name") or ""))
+    return _SPEAKERS.get(role, role or "unknown")
+
+
+def _others_present(messages: Sequence[Any]) -> str:
+    """Who else spoke, so a request is attributed to the person who made it."""
+    names = sorted(
+        {
+            str(m.get("name") or "someone else")
+            for m in messages
+            if isinstance(m, dict) and m.get("role") == "actor"
+        }
+    )
+    if not names:
+        return ""
+    return f"Also heard during the call: {', '.join(names)}. They are not the person being served.\n\n"
 
 
 def _transcript(messages: Sequence[Any]) -> str:
     """The turns as spoken, oldest first. A long call keeps its tail, where a readback would be."""
     body = "\n".join(
-        f"{_SPEAKERS.get(str(m.get('role')), m.get('role') or 'unknown')}: "
-        f"{str(m.get('content') or '').strip()}"
+        f"{_speaker(m)}: {str(m.get('content') or '').strip()}"
         for m in messages
         if isinstance(m, dict)
     )

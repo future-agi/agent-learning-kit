@@ -21,6 +21,7 @@ def _contract(*, mode: str = "import") -> AgentContract:
                     "mode": mode,
                     "module": "agent",
                     "callable": "check_status",
+                    "factory": "Agent()" if mode == "construct" else "",
                     "endpoint": "/status" if mode == "service" else "",
                 }
             ],
@@ -58,3 +59,153 @@ def test_external_provider_tools_are_explicitly_runtime_only(tmp_path: Path) -> 
 
     assert report.certified_or_runtime_only == report.total == 1
     assert report.tools[0].availability is ToolAvailability.RUNTIME_ONLY
+
+
+def _voice(tools: list[str], entries: list[dict], *, modality: str = "voice"):
+    """A nudge-rebuilt contract: the first build's entrypoints, tools added since without one."""
+    return AgentContract.model_validate(
+        {
+            "agent": "rides",
+            "modality": modality,
+            "real_use_cases": ["book a ride"],
+            "runtime": {"language": "python", "command": ["python", "agent.py"]},
+            "tools": [{"name": name} for name in tools],
+            "tool_entrypoints": entries,
+        }
+    )
+
+
+def _source(tmp_path: Path) -> Path:
+    source = tmp_path / "source"
+    (source / "agent").mkdir(parents=True)
+    (source / "tests").mkdir()
+    (source / "agent" / "ride_agent.py").write_text(
+        "class RideAgent:\n"
+        "    @function_tool()\n"
+        "    async def search_places(self, text): ...\n"
+        "    @function_tool(name='send_otp')\n"
+        "    async def _send(self): ...\n",
+        encoding="utf-8",
+    )
+    (source / "tests" / "test_rides.py").write_text(
+        "def cancel_ride():\n    pass\n", encoding="utf-8"
+    )
+    return source
+
+
+def test_a_voice_worker_runs_rebuilt_tools_its_source_defines(tmp_path: Path) -> None:
+    contract = _voice(
+        ["book_ride", "search_places", "send_otp"],
+        [{"tool": "book_ride", "mode": "service", "endpoint": "book_ride"}],
+    )
+
+    report = certify_tool_inventory(
+        contract, tmp_path, external_provider=False, source=_source(tmp_path)
+    )
+
+    assert report.certified_or_runtime_only == report.total == 3
+    runtime = {item.tool: item.entrypoint_mode for item in report.tools}
+    assert runtime == {
+        "book_ride": "service",
+        "search_places": "runtime",
+        "send_otp": "runtime",
+    }
+
+
+def test_a_tool_the_runs_source_does_not_define_is_rejected_by_name(
+    tmp_path: Path,
+) -> None:
+    contract = _voice(["search_places", "cancel_ride"], [])
+
+    report = certify_tool_inventory(
+        contract, tmp_path, external_provider=False, source=_source(tmp_path)
+    )
+
+    rejected = {
+        item.tool: item.reason
+        for item in report.tools
+        if item.availability is ToolAvailability.REJECTED
+    }
+    assert rejected == {"cancel_ride": "the submitted source defines no cancel_ride"}
+
+
+def test_tools_without_an_entrypoint_stay_rejected_outside_a_voice_worker(
+    tmp_path: Path,
+) -> None:
+    chat = _voice(["search_places"], [], modality="chat")
+    source = _source(tmp_path)
+
+    for report in (
+        certify_tool_inventory(chat, tmp_path, external_provider=False, source=source),
+        certify_tool_inventory(
+            _voice(["search_places"], []), tmp_path, external_provider=False
+        ),
+    ):
+        assert report.tools[0].availability is ToolAvailability.REJECTED
+        assert report.tools[0].entrypoint_mode == "missing"
+
+
+def test_a_contract_with_every_entrypoint_certifies_the_same_with_its_source(
+    tmp_path: Path,
+) -> None:
+    contract = _voice(
+        ["book_ride"], [{"tool": "book_ride", "mode": "service", "endpoint": "book_ride"}]
+    )
+
+    assert certify_tool_inventory(
+        contract, tmp_path, external_provider=False, source=_source(tmp_path)
+    ) == certify_tool_inventory(contract, tmp_path, external_provider=False)
+
+
+def test_named_service_without_per_tool_path_is_runtime_only(tmp_path: Path) -> None:
+    payload = _contract(mode="service").model_dump(mode="python")
+    payload["tool_entrypoints"][0]["endpoint"] = ""
+    payload["tool_entrypoints"][0]["service"] = "remote-mcp"
+
+    report = certify_tool_inventory(
+        AgentContract.model_validate(payload), tmp_path, external_provider=False
+    )
+
+    assert report.certified_or_runtime_only == report.total == 1
+    assert report.tools[0].availability is ToolAvailability.RUNTIME_ONLY
+
+
+def test_native_tools_validate_declarations_without_claiming_execution(tmp_path):
+    from fi.alk.harness.tool_certification import ToolProbeMode
+    (tmp_path / "handlers").mkdir()
+    (tmp_path / "handlers/check_status.py").write_text("raise AssertionError('must not execute')\n")
+    for mode in ("import", "construct", "service"):
+        report = certify_tool_inventory(
+            _contract(mode=mode), tmp_path, external_provider=False,
+            native_observation=True,
+        )
+        item, = report.tools
+        assert item.availability is ToolAvailability.RUNTIME_ONLY
+        assert item.probe_mode is ToolProbeMode.RUNTIME_ONLY
+        assert item.schema_validated
+        assert not item.implementation_validated
+    payload = _contract().model_dump(mode="python")
+    payload["tool_entrypoints"] = []
+    report = certify_tool_inventory(
+        AgentContract.model_validate(payload), tmp_path, external_provider=False,
+        native_observation=True,
+    )
+    assert report.tools[0].availability is ToolAvailability.REJECTED
+
+
+def test_native_incomplete_and_ambiguous_declarations_are_rejected(tmp_path):
+    for mode, field in (("import", "module"), ("construct", "factory"), ("service", "endpoint")):
+        payload = _contract(mode=mode).model_dump(mode="python")
+        payload["tool_entrypoints"][0][field] = ""
+        report = certify_tool_inventory(
+            AgentContract.model_validate(payload), tmp_path, external_provider=False,
+            native_observation=True,
+        )
+        assert report.tools[0].availability is ToolAvailability.REJECTED
+    payload = _contract().model_dump(mode="python")
+    payload["tool_entrypoints"] *= 2
+    report = certify_tool_inventory(
+        AgentContract.model_validate(payload), tmp_path, external_provider=False,
+        native_observation=True,
+    )
+    assert report.tools[0].availability is ToolAvailability.REJECTED
