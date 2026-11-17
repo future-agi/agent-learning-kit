@@ -7048,6 +7048,49 @@ def test_routed_compose_control_service_has_agents_sdk_tracing_off(
         assert "MODE=small" in environment or "MODE" not in env_block
 
 
+def test_every_service_of_a_routed_compose_project_gets_the_tracing_switch(
+    tmp_path, monkeypatch, resolved_compose_images
+):
+    # An Agents SDK agent can run in an additional service too; no kit hook runs in any of them.
+    from fi.alk.harness.compose_integration import compile_bundle
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "compose.yaml").write_text(
+        "services:\n  chat:\n    image: example/chat:latest\n"
+        "  worker:\n    image: example/worker:latest\n"
+        "    environment:\n      - OPENAI_AGENTS_DISABLE_TRACING=0\n"
+    )
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    contract = {
+        "modality": "chat",
+        "runtime": {
+            "execution": "compose",
+            "compose_file": "compose.yaml",
+            "service": "chat",
+            "additional_services": ["worker"],
+            "interface": {"kind": "http", "protocol": "json_template", "port": 8000, "path": "/chat"},
+        },
+    }
+    monkeypatch.setenv("ALK_TRUSTED_COMPOSE_SOCKET", "/private/alk/docker.sock")
+    compile_bundle(
+        source=source,
+        job=_gateway_job("vertex_ai/gemini-3.7-flash"),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+        contract=contract,
+        include_scenarios=False,
+    )
+    services = json.loads((tmp_path / "bundle" / "compose.json").read_text())["services"]
+    for name in ("chat", "worker"):
+        environment = services[name]["environment"]
+        if isinstance(environment, dict):
+            assert environment[_TRACING_OFF] == "1", name
+        else:
+            assert f"{_TRACING_OFF}=1" in environment and f"{_TRACING_OFF}=0" not in environment, name
+
+
 @pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])
 def test_unrouted_compose_control_service_is_left_alone(
     tmp_path, monkeypatch, resolved_compose_images, target_model
