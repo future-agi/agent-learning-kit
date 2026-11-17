@@ -4834,9 +4834,43 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.contract import AgentContract, ToolSpec
     from fi.alk.harness.scenario import Persona, Scenario, Step
 
+    import typing
+
+    from pydantic import BaseModel
+
+    def nested_fields(model: type[BaseModel], seen: set) -> set[str]:
+        # The contract's own sections (runtime.interface.local_auth and so on) are models too,
+        # and a skill names their fields as well.
+        if model in seen:
+            return set()
+        seen.add(model)
+        names = set(model.model_fields)
+        for field in model.model_fields.values():
+            stack = [field.annotation]
+            while stack:
+                annotation = stack.pop()
+                if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+                    names |= nested_fields(annotation, seen)
+                stack.extend(typing.get_args(annotation))
+        return names
+
     fields = set()
+    seen_models: set = set()
     for model in (AgentContract, ToolSpec, Scenario, Persona, Step, SubGoal):
-        fields |= set(model.model_fields)
+        fields |= nested_fields(model, seen_models)
+    # The sub-agent a stage briefs is named by its own constant.
+    from fi.alk.harness.simulator_voice import _CALLER_PHONE_KEYS
+    from fi.alk.harness.understand import READER
+
+    # And the values a sub-goal's fields offer, as the catalogue's schema lists them.
+    from fi.alk.harness.catalogue import CONTRACT_SCHEMA
+
+    offered = {
+        value
+        for spec in CONTRACT_SCHEMA.values()
+        if isinstance(spec, dict)
+        for value in spec.get("enum", ())
+    }
     # Names from the check-writing examples the skills contain.
     from fi.alk.harness.contract import CALL_DIRECTIONS, MODALITIES
     from fi.alk.harness.scenario import CALLER_AWARENESS, FIXTURE_ORIGINS
@@ -4851,6 +4885,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
 
     ignore = (
         fields
+        | offered
         | set(MODALITIES)
         | set(CALL_DIRECTIONS)
         | set(CALLER_AWARENESS)
@@ -4863,6 +4898,12 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         | {"origin", "matching"}
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
         | {"book_ride", "cancel_ride", "verify_otp", "bookings"}
+        # The scenario skill's illustrations: tools of an imagined agent, a task named from a
+        # use case, and two field names in a PII example.
+        | {"create_booking", "cancel_booking", "verify_code"}
+        | {"cancel_subscription", "reset_password"}
+        | {"company", "pan"}
+        | set(_CALLER_PHONE_KEYS)
         | {"social_engineering_resisted", "true", "or"}
     )
 
@@ -4877,7 +4918,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         unknown = {
             name
             for name in mentioned - tools - ignore
-            if name not in {"route_to_stage", "AskUserQuestion"}
+            if name not in {"route_to_stage", "AskUserQuestion", READER}
         }
         assert not unknown, (
             f"{stage}/SKILL.md names tools that do not exist: {sorted(unknown)}"
