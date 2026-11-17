@@ -3586,9 +3586,10 @@ def _environment_tools(contract: dict[str, Any]) -> list[str]:
 
 def _observed_by_frameworks(processes: Sequence[Any]) -> bool:
     """Whether a process already records its tool calls: it runs the framework span observer
-    (the command route's), or carries the LiveKit tool-trace hook (``LIVEKIT_AGENT_NAME``)."""
+    (the command route's), or carries the LiveKit tool-trace hook (``FI_WORKER_HEALTH_PORT``,
+    which only a LiveKit worker is given)."""
     return any(
-        {"ALK_OBSERVE_FRAMEWORKS", "LIVEKIT_AGENT_NAME"}
+        {"ALK_OBSERVE_FRAMEWORKS", "FI_WORKER_HEALTH_PORT"}
         & set(getattr(process, "environment", None) or {})
         for process in processes
     )

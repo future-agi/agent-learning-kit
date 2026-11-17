@@ -734,7 +734,20 @@ def test_l1_a_process_with_the_livekit_tool_trace_hook_binds_no_unreachable_entr
     from types import SimpleNamespace as Process
 
     hooked = Process(
-        environment={"LIVEKIT_AGENT_NAME": "x-{{JOB_ID}}", "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/t"}
+        environment={
+            "LIVEKIT_AGENT_NAME": "x-{{JOB_ID}}",
+            "FI_WORKER_HEALTH_PORT": "{{PORT_agent}}",
+            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/t",
+        }
     )
     assert bundle_author_v2._observed_by_frameworks([hooked])
     assert bound([one()], watch_unreachable=not bundle_author_v2._observed_by_frameworks([hooked])) == []
+
+
+def test_l1_a_declared_livekit_agent_name_alone_is_not_the_hook():
+    """Round 3, L1: a non-LiveKit reading may declare the name; only the worker knob marks the hook."""
+    from types import SimpleNamespace as Process
+
+    named = Process(environment={"LIVEKIT_AGENT_NAME": "x"})
+    assert not bundle_author_v2._observed_by_frameworks([named])
+    assert bound([one()], watch_unreachable=not bundle_author_v2._observed_by_frameworks([named]))
