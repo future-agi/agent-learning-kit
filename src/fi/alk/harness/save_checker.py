@@ -57,8 +57,14 @@ START_SECONDS = 15.0
 # comes from the input (a watchdog kill, a crash), so the checks never move into this process.
 DEATHS = 3
 WATCH_INTERVAL = 0.05
-# Measured child peaks were 57-209 MB; this catches slow growth, not a burst.
-WATCH_CAP = 400 * 1024 * 1024
+# The cap catches slow growth, not a burst, and sits 2x above the heaviest honest child. Peaks of
+# the child's resident memory as the watchdog reads it, on macOS 15.6 / Python 3.12, for the crafted
+# tree of test_agent_type_refusal.py::test_a_crafted_script_does_not_hold_up_the_conversation (three
+# 1 MB `import type` files and an open-quote file): 130 MiB in the file's full run, 141 and 147 MiB
+# run alone; the file's other rows through the child, 28-56 MiB. The review measured about 470 MiB
+# for that tree on macOS / Python 3.13, which the old 400 MB cap killed. No RLIMIT_AS: on Linux it
+# limits address space, not resident memory, and could fail honest checks.
+WATCH_CAP = 1024 * 1024 * 1024
 
 STAGES = ("contract", "tool_evidence", "prompt_copy", "model", "runtime")
 _PARTS = ("scan", "instrumentation")
