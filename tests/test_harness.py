@@ -4652,6 +4652,28 @@ def test_claude_backend_routes_gemini_through_agentcc(monkeypatch):
     assert options.env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "1"
 
 
+def test_gateway_mode_switches_off_every_other_claude_provider_route(monkeypatch):
+    from fi.alk.harness.config import provider_env
+
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://gateway.futureagi.test")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "internal-key")
+
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+
+    # Set in the process around the kit, any of these would send the CLI somewhere else.
+    for name in (
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "ANTHROPIC_UNIX_SOCKET",
+    ):
+        assert env[name] == "", name
+
+
 def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
     from fi.alk.harness.build import environment_turns_for, turns_for
     from fi.alk.harness.contract import AgentContract, ToolSpec

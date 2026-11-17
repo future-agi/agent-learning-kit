@@ -196,6 +196,12 @@ def provider_env(model: str | None = None) -> dict[str, str]:
                 "CLAUDE_CODE_USE_VERTEX": "",
                 "CLAUDE_CODE_USE_BEDROCK": "",
                 "CLAUDE_CODE_USE_FOUNDRY": "",
+                # The CLI's newer routes and its socket, so none of them can take the turn.
+                "CLAUDE_CODE_USE_ANTHROPIC_AWS": "",
+                "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD": "",
+                "CLAUDE_CODE_USE_MANTLE": "",
+                "CLAUDE_CODE_USE_GATEWAY": "",
+                "ANTHROPIC_UNIX_SOCKET": "",
                 "ANTHROPIC_API_KEY": "",
                 "ANTHROPIC_BASE_URL": gateway_url.rstrip("/"),
                 "ANTHROPIC_AUTH_TOKEN": gateway_key,
