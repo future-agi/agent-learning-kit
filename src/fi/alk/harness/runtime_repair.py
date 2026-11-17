@@ -1108,7 +1108,7 @@ def validate_runtime_plan_patch(
         and not provider_selector_repair
     ):
         original = contract.runtime
-        transport_fields = {"path", "protocol", "request_template", "response_path", "failure_rule"}
+        transport_fields = {"path", "protocol", "request_template", "response_path", "failure_rule", "sse"}
         observation_fields = {"completed_tools", "completed_tool_events"}
         mutable = transport_fields | observation_fields
         if (

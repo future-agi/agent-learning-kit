@@ -17,6 +17,7 @@ from fi.simulate.agent.wrappers.http_events import (
     CompletedToolEvents,
     CompletedToolRows,
 )
+from fi.simulate.agent.wrappers.http_stream import HTTPStreamSpec
 
 from .agent_type_check import (
     SECOND_LOOK_READ,
@@ -275,6 +276,21 @@ def contract_tools(
     events_schema["properties"]["failure_events"]["items"] = (
         events_schema.pop("$defs")["CompletedToolFailureEvent"]
     )
+    sse_schema = HTTPStreamSpec.model_json_schema()
+    sse_definitions = sse_schema.pop("$defs")
+
+    def inline_sse_references(value):
+        if isinstance(value, dict):
+            reference = value.get("$ref")
+            if reference:
+                name = reference.rsplit("/", 1)[-1]
+                return inline_sse_references(sse_definitions[name])
+            return {key: inline_sse_references(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [inline_sse_references(item) for item in value]
+        return value
+
+    sse_schema = inline_sse_references(sse_schema)
     observation_schema = HttpObservation.model_json_schema()
     observation_schema["properties"]["parameters"]["additionalProperties"] = (
         observation_schema.pop("$defs")["ObservationParameter"]
@@ -960,6 +976,10 @@ def contract_tools(
                                 "response_path": {
                                     "type": "string",
                                     "description": RuntimeInterface.model_fields["response_path"].description,
+                                },
+                                "sse": {
+                                    **sse_schema,
+                                    "description": RuntimeInterface.model_fields["sse"].description,
                                 },
                                 "completed_tools": CompletedToolRows.model_json_schema(),
                                 "completed_tool_events": events_schema,
