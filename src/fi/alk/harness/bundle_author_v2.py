@@ -68,6 +68,7 @@ from .bundle_v2 import (
 from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
+    _python_install,
     framework_instrumentation_command,
     uv_run_project,
     _python_language_version,
@@ -1968,7 +1969,9 @@ def _langgraph_command_cannot_run(
     requirement or project dependency names ``langgraph-cli``; ``langgraph.json`` is at most
     64 KB, has no ``http`` or ``auth`` key (custom routes or auth make the app more than its
     graph), and declares one graph; no requirements line is an include (``-r``, ``-c``) and no
-    uv dependency group is declared, since either may install the CLI unseen; no editable, path
+    uv dependency group or dev dependency is declared, since either may install the CLI unseen;
+    the install strategy the build picks is not a poetry or ``setup.py`` one (their dependencies
+    are not read), and ``requirements.txt`` is read whenever that strategy installs it; no editable, path
     or URL requirement and no Dockerfile (for the same reason); and no Compose
     selection: a Compose service builds its own
     image, which this can't see, and a ``callable`` interface is refused on a Compose selection.
@@ -1998,7 +2001,14 @@ def _langgraph_command_cannot_run(
         if _discover_callback_entrypoint(run_folder) is not None:
             return False
         parsed = Runtime.model_validate(runtime)
+        component = _runtime_component(source_root, parsed.workdir)
+        strategy = _install_strategy(component, parsed)
         requirements = _declared_requirements(source_root, parsed)
+        if strategy == "pip-requirements" and (component / "pyproject.toml").is_file():
+            # pip-requirements wins over a pyproject: the build installs `requirements.txt` too.
+            requirements.extend(
+                (component / "requirements.txt").read_text(encoding="utf-8").splitlines()
+            )
         if any(
             _LANGGRAPH_CLI.match(requirement.strip())
             or _REQUIREMENT_INCLUDE.match(requirement.strip())
@@ -2011,10 +2021,15 @@ def _langgraph_command_cannot_run(
         pyproject = _pyproject_document(
             _runtime_component(source_root, parsed.workdir) / "pyproject.toml"
         )
-        if "dependency-groups" in pyproject or "default-groups" in (
-            pyproject.get("tool", {}).get("uv", {}) or {}
+        uv_settings = pyproject.get("tool", {}).get("uv", {}) or {}
+        if "dependency-groups" in pyproject or {"default-groups", "dev-dependencies"} & set(
+            uv_settings
         ):
-            # `uv sync` installs the default groups, which are not read here.
+            # `uv sync` installs the default groups and the dev dependencies, which are not read here.
+            return False
+        if strategy in {None, "poetry-locked", "pip-setup-project-unlocked"}:
+            # The build installs from a poetry project or a `setup.py`, which are not read here;
+            # an install strategy the build can't pick at all is a doubt too.
             return False
         path = run_folder / "langgraph.json"
         if not path.is_file() or path.stat().st_size > _LANGGRAPH_JSON_LARGEST:
@@ -3529,6 +3544,15 @@ def resolve_environment_plan(
         capabilities=capabilities,
         readiness=tuple(readiness),
     )
+
+
+def _install_strategy(component: Path, runtime: Runtime) -> str | None:
+    """The install strategy the generated runtime's build picks for this component, or ``None``
+    when it picks none."""
+    try:
+        return _python_install(component, runtime, list(runtime.command or []))[1]
+    except GeneratedRuntimeError:
+        return None
 
 
 def _declared_requirements(source: Path, runtime: Runtime) -> list[Any]:

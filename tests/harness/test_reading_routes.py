@@ -76,7 +76,7 @@ def deep_source(tmp_path: Path, *, requirements=DEEP_REQUIREMENTS, graph=GRAPH, 
     files = {
         f"{DEEP}/agent.py": DEFS + "graph = object()\n",
         f"{DEEP}/langgraph.json": graph if isinstance(graph, str) else json.dumps(graph),
-        f"{DEEP}/requirements.txt": requirements,
+        **({f"{DEEP}/requirements.txt": requirements} if requirements is not None else {}),
         **(extra or {}),
     }
     return _repo(tmp_path, files)
@@ -727,6 +727,62 @@ def test_m5_a_uv_group_keeps_todays_route(tmp_path, pyproject):
     )
     manifest, output = bundled(tmp_path, source, DEEP, contract=body)
     todays_route(manifest, output, body)
+
+
+PROJECT = "[project]\nname='x'\nversion='1'\ndependencies=['langgraph']\n"
+
+
+@pytest.mark.parametrize(
+    ("requirements", "extra"),
+    [
+        pytest.param(
+            DEEP_REQUIREMENTS + "langgraph-cli[inmem]\n",
+            {f"{DEEP}/pyproject.toml": PROJECT},
+            id="requirements-txt-beside-a-pyproject",
+        ),
+        pytest.param(
+            None,
+            {
+                f"{DEEP}/pyproject.toml": "[tool.poetry]\nname='x'\nversion='1'\n"
+                "[tool.poetry.dependencies]\npython='^3.12'\nlanggraph='*'\nlanggraph-cli='*'\n",
+                f"{DEEP}/poetry.lock": "",
+            },
+            id="poetry-lock",
+        ),
+        pytest.param(
+            None,
+            {
+                f"{DEEP}/setup.py": "from setuptools import setup\n"
+                "setup(name='x', install_requires=['langgraph', 'langgraph-cli[inmem]'])\n",
+            },
+            id="setup-py",
+        ),
+        pytest.param(
+            None,
+            {
+                f"{DEEP}/pyproject.toml": PROJECT
+                + "[tool.uv]\ndev-dependencies = ['langgraph-cli[inmem]']\n",
+                f"{DEEP}/uv.lock": "",
+            },
+            id="uv-dev-dependencies",
+        ),
+    ],
+)
+def test_a_dependency_the_build_installs_beyond_the_pyproject_keeps_todays_route(
+    tmp_path, requirements, extra
+):
+    source = deep_source(tmp_path, requirements=requirements, extra=extra)
+    root, run_folder, runtime = _scoped(source)
+    assert not bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
+    body = deep_reading()
+    manifest, output = bundled(tmp_path, source, DEEP, contract=body)
+    todays_route(manifest, output, body)
+
+
+def test_a_requirements_txt_beside_a_pyproject_without_the_cli_still_takes_the_graph_route(tmp_path):
+    source = deep_source(tmp_path, extra={f"{DEEP}/pyproject.toml": PROJECT})
+    root, run_folder, runtime = _scoped(source)
+    assert bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
 
 
 def test_l1_a_process_with_the_livekit_tool_trace_hook_binds_no_unreachable_entry():
