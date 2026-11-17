@@ -1704,6 +1704,37 @@ def test_no_job_value_is_in_the_compose_process_environment(
         assert name not in call.job.values, name
 
 
+_PROXY_AND_EXPORT = {
+    "HTTP_PROXY": "http://canary.invalid:3128",
+    "HTTPS_PROXY": "http://canary.invalid:3128",
+    "NO_PROXY": "",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://canary.invalid",
+}
+
+
+def test_a_jobs_proxy_and_export_settings_reach_only_the_env_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Agent settings, so the job may set them, but in Compose's own environment they would send
+    # its Docker API traffic through the job's proxy, or its telemetry to the job's endpoint.
+    names = list(_PROXY_AND_EXPORT)
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(names))
+    for name, value in _PROXY_AND_EXPORT.items():
+        monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", value)
+    calls = _record_compose(monkeypatch)
+    environment = _compose_environment(tmp_path, runtime_configuration_names=names)
+
+    provisioning._run(environment, "up")
+
+    call = calls[0]
+    for name in names:
+        assert name not in call.env, name
+    # A name the client reserves is skipped altogether; an agent setting goes to the file only.
+    for name in ("HTTP_PROXY", "HTTPS_PROXY"):
+        assert call.job.values.get(name) in (None, _PROXY_AND_EXPORT[name]), name
+    assert call.job.values["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://canary.invalid"
+
+
 _ROUND_TRIP_VALUES = {
     "PLAIN": "value",
     "DOLLAR": "cost $5 and $HOME",
