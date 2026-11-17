@@ -8,10 +8,10 @@ from __future__ import annotations
 import ast
 import contextlib
 import importlib
+import inspect
 import json
 import os
 import shutil
-import inspect
 import subprocess
 import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
