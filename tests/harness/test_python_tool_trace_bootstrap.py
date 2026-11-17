@@ -206,3 +206,55 @@ def test_declared_python_tool_is_traced_when_module_runs_as_script(
     assert [(record["name"], record["output"]) for record in records] == [
         ("lookup", "declared")
     ]
+
+
+def _records(trace: Path) -> list[dict]:
+    return [json.loads(line) for line in trace.read_text().splitlines()]
+
+
+def test_an_async_tool_with_two_awaits_records_one_call_with_its_real_result(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "agent.py").write_text(
+        "import asyncio\n"
+        "async def start_return(order_id, reason):\n"
+        "    await asyncio.sleep(0.01)\n"
+        "    await asyncio.sleep(0.01)\n"
+        "    return f'Return started for order {order_id}: {reason}.'\n"
+    )
+    trace, env = _trace_environment(
+        tmp_path,
+        [{"name": "start_return", "module": "agent", "callable": "start_return"}],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import asyncio\nfrom agent import start_return\n"
+            "asyncio.run(start_return('A1001', 'too small'))\n",
+        ],
+        check=True,
+        env=env,
+    )
+
+    (record,) = _records(trace)
+    assert record["name"] == "start_return"
+    assert record["arguments"] == {"order_id": "A1001", "reason": "too small"}
+    assert record["output"] == "Return started for order A1001: too small."
+    assert record["is_error"] is False
+
+
+def test_a_sync_tool_is_still_recorded_once(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text("def look_up(order_id):\n    return order_id\n")
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "look_up", "module": "agent", "callable": "look_up"}]
+    )
+
+    subprocess.run(
+        [sys.executable, "-c", "from agent import look_up\nlook_up('A1')\n"],
+        check=True,
+        env=env,
+    )
+
+    assert [(r["name"], r["output"]) for r in _records(trace)] == [("look_up", "A1")]

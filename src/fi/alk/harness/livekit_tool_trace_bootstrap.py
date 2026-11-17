@@ -337,6 +337,9 @@ def _install_declared_python_tools() -> None:
         entry = (
             entries.pop(id(frame), None) if finished else entries.get(id(frame))
         )
+        if not finished:
+            # A paused coroutine is not a finished call: only its real return is recorded.
+            return
         started = entry[1] if entry is not None else time.time()
         key = next(
             (
