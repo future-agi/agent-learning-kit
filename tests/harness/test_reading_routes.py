@@ -519,12 +519,12 @@ def test_h3_an_auto_selected_compose_file_bundles_as_on_the_old_kit(
     graph route) selects the folder's docker-compose.yml, and Compose refuses `callable`."""
     monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/nonexistent/broker.sock")
     compose = (
-        "services:\n  agent:\n    build: .\n"
+        "services:\n  agent:\n    build: {context: ., dockerfile: docker/agent.Dockerfile}\n"
         "    command: [langgraph, dev, --host, 0.0.0.0, --port, '2024']\n    ports: ['2024:2024']\n"
     )
     docker = "FROM python:3.12\nWORKDIR /app\nCOPY . .\nRUN pip install -r requirements.txt 'langgraph-cli[inmem]'\n"
     source = deep_source(
-        tmp_path, extra={f"{DEEP}/docker-compose.yml": compose, f"{DEEP}/Dockerfile": docker}
+        tmp_path, extra={f"{DEEP}/docker-compose.yml": compose, f"{DEEP}/docker/agent.Dockerfile": docker}
     )
     body = deep_reading()
     body["runtime"]["execution"] = execution
