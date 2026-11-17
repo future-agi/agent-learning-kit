@@ -22,9 +22,11 @@ import shutil
 import sys
 import tempfile
 
+from pydantic import ValidationError
+
 from .agent_type_check import EXIT_REFUSED, failure_message
 from .cli import _auto
-from .failure_file import FAILURE_FILE
+from .failure_file import FAILURE_FILE, write_failure_file
 from .job import (
     PROVIDER_MANAGED_CONNECTORS as PROVIDER_MANAGED_CONNECTORS,
     HarnessJob,
@@ -35,7 +37,7 @@ from .job import (
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
 from .scenarios import load as load_written
-from .source_folder import refuse_unusable_folder, saved_runtime
+from .source_folder import non_github_folder_failure, refuse_unusable_folder, saved_runtime
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 
 
@@ -734,7 +736,16 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
             output=args.output.resolve(),
         )
 
-    job = HarnessJob.model_validate(json.loads(args.job.read_text(encoding="utf-8")))
+    raw_job = json.loads(args.job.read_text(encoding="utf-8"))
+    try:
+        job = HarnessJob.model_validate(raw_job)
+    except ValidationError as error:
+        failure = non_github_folder_failure(error, raw_job)
+        if failure is None:
+            raise
+        write_failure_file(failure, args.output.resolve())
+        print(f"{failure.code}: {failure.message}", file=sys.stderr, flush=True)
+        return EXIT_REFUSED
     if refuse_unusable_folder(
         args.source.resolve(), job.source.subfolder, args.output.resolve()
     ):

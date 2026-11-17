@@ -7,6 +7,7 @@ copied as data (W2), so a planted bug in a rule fails a named case.
 from __future__ import annotations
 
 import itertools
+import json
 import logging
 import re
 import subprocess
@@ -446,7 +447,7 @@ PAGE_OUTCOMES = {  # the page's own words, as (input -> output); None = TH-9491'
     "https://bot:8812#x@db/": None,
     "https://bot:8812/x@db/": None,
     "https://bot:12 34@h": None,
-    "https://bot:hun ter 2@h": None,
+    "https://bot:hun ter 2@h": "https://h",
     "See https://docs.x.com/a\n&copy=2024 Acme": None,
     "https://api.example.com/v1\n" + GH: "https://api.example.com/v1[redacted]",
     f"git clone https://{GH}@github.com/org/repo.git": "git clone https://github.com/org/repo.git",
@@ -747,9 +748,7 @@ _KEPT = [
     # Rule 1's named limits, and a half of 65 characters (r1 M5).
     "https://bot:8812#x@db/",
     "https://bot:12 34@h",
-    "https://bot:hun ter 2@h",
     "https://bot:" + "a" * 65 + " b@h/v1",
-    "https://bot:hun     ter2@h/v1",
     # Rule 1 needs text on both sides of the run: a mention right after it isn't a password.
     "https://bot:abc @oncall",
     "see https://bot:hunter2  @team now",
@@ -970,14 +969,13 @@ R1B_LIMITS = {
     "http://admin@localhost:$(PORT)/bob@example.com": "http://example.com",
     "http://admin@localhost:/bob@example.com": "http://example.com",
     # Still leaks, as on the base: a password that reads as a port, an empty segment, two /,
-    # a segment over its bound, %40, and a line break inside the span in prose.
+    # a segment over its bound, and a line break inside the span in prose.
     "smtp://me@gmail.com:1234/pass@smtp.gmail.com": "smtp://gmail.com:1234/pass@smtp.gmail.com",
     "postgres://admin:P@ss/@db.example.com/app": "postgres://ss/@db.example.com/app",
     "postgres://admin:P@ss/a/b@db.example.com/app": "postgres://ss/a/b@db.example.com/app",
     "postgres://admin:P@ss/" + "a" * 65 + "@db.example.com/app": "postgres://ss/"
     + "a" * 65
     + "@db.example.com/app",
-    "postgres://admin:P%40ss/Xk9@db.example.com/app": "postgres://admin/Xk9@db.example.com/app",
     "see postgres://admin:P@ss/Xk\n9@db.example.com/app now": "see postgres://ss/Xk\n9@db.example.com/app now",
 }
 
@@ -1121,9 +1119,270 @@ def test_the_page_outcomes_hold() -> None:
 # -- S3 and S4: the corpus ----------------------------------------------------------------------
 
 
-# A named value inside escaped JSON, as kubectl's last-applied annotation or a stringified HTTP
-# body holds it: \" isn't read as a quote.
-R5_LIMITS = {"escaped json named value": r'{\"name\":\"svc\",\"password\":\"Zq8wYv3Lp9\"}'}
+# The reviewer's second pass on PR 308 (round 5). Secrets must lose their parts; honest text must
+# come out as TH-9491 alone leaves it.
+R5_SECRETS = {
+    # A named value inside escaped JSON, as kubectl's last-applied annotation holds it.
+    "escaped json: named value in an annotation": r'{\"name\":\"svc\",\"password\":\"Zq8wYv3Lp9\"}',
+    # A password whose first half reads like a port is still a password: a port is digits, a
+    # reference, or a name that ends in PORT.
+    "port-like pw: base64 slash": "postgres://app:A5GQ/lWrLxSR8NQLkQfyAyXM@db.example.com:5432/app",
+    "port-like pw: $name slash": "https://u:$Xk9QpZr/Wm4Ht@h/v1",
+    "port-like pw: $UPPER slash": "https://u:$XK9QpZr/Wm4Ht@h/v1",
+    "port-like pw: upper slash": "https://u:X7Kq/9qzWm4Ht@h/v1",
+    "port-like pw: upper =": "https://u:LQIT6Kq=03zmWm4/CtHt@h/v1",
+    "port-like pw: upper space": "https://u:XK9Kq Wm4HtZr@h/v1",
+    "port-like pw: upper words": "https://bot:PASS WORD99Kq@h/v1",
+    # The issuers' other shapes: Stripe test and webhook secrets, AWS temporary key IDs.
+    "stripe sk_test_": "key sk_test_" + "FAKEfake0123456789FAKEfa" + " here",
+    "stripe rk_test_": "key rk_test_" + "FAKEfake0123456789FAKEfa" + " here",
+    "stripe whsec_": "endpoint secret whsec_" + "FAKEfake0123456789FAKEfake0123" + " here",
+    "aws ASIA": "temporary ASIA" + "FAKEFAKE12345678" + " with its session token",
+    "aws ASIA in json": '{"AccessKeyId": "ASIA' + 'FAKEFAKE12345678"}',
+    # An Authorization header with no key prefix: a Vapi key is a bare UUID.
+    "bearer curl": "curl -H 'Authorization: Bearer 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b' https://api.vapi.ai/assistant",
+    "bearer header": "Authorization: Bearer 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b",
+    "bearer lower": "authorization: bearer 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b",
+    "basic json": '{"headers": {"Authorization": "Basic dXNlcjpGQUtFZmFrZTAxMjM0NTY3ODk="}}',
+    "basic upper": "AUTHORIZATION: BASIC dXNlcjpGQUtFZmFrZTAxMjM0NTY3ODk=",
+    # A start right after an escape the repr or the JSON text writes for a line break or a tab.
+    "escaped repr: sk-proj after \\n": repr("key below\n" + SKP),
+    "escaped repr: ghp_ after \\t": repr("a\t" + GH),
+    "escaped repr: AKIA after \\t": repr("a\t" + AK),
+    "escaped repr: ghp_ after \\r": repr("a\r" + GH),
+    "escaped repr: password= after \\n": repr("ok\npassword=hunter2pw"),
+    "escaped repr: camel after \\n": repr("ok\nclientSecret=hunter2pw"),
+    "escaped json: sk-proj after \\n": json.dumps({"text": "key below\n" + SKP}),
+    "escaped json: ghp_ after \\t": json.dumps({"text": "a\t" + GH}),
+    "escaped json: AKIA after \\t": json.dumps({"text": "a\t" + AK}),
+    "escaped json: password= after \\n": json.dumps({"text": "ok\npassword=hunter2pw"}),
+    "escaped json: pem with no END": json.dumps(
+        {"key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEFAKEFAKEFAKE\nABCDEFFAKE==", "n": 1}
+    ),
+    "escaped json: pem with no END, CRLF": json.dumps(
+        {"key": "-----BEGIN RSA PRIVATE KEY-----\r\nMIIEFAKEFAKEFAKE\r\nABCDEFFAKE=="}
+    ),
+    "escaped repr: pem with no END": repr(
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIEFAKEFAKEFAKE\nABCDEFFAKE=="
+    ),
+    # An Authorization header name takes any scheme word, or none.
+    "auth header: Token": "Authorization: Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE",
+    "auth header: Bot": "authorization: Bot Xk4fR9xQ2mZ7vB3nL8wY5cH1",
+    "auth header: a bare uuid": "Authorization: 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b",
+    "auth header: a quoted uuid": 'Authorization: "3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b"',
+    "auth header: proxy basic": "Proxy-Authorization: Basic dXNlcjpGQUtFZmFrZTAxMjM0NTY3ODk=",
+    "auth header: curl -H token": "curl -H 'Authorization: Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE' https://h/v1",
+    "auth header: JSON Token": '{"Authorization": "Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE"}',
+    "auth header: = form": "Authorization=Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE",
+    "auth: a quoted Bearer key": 'say "Bearer 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b" now',
+    "auth: a Bearer uuid with no context": "use Bearer 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b here",
+    "auth: a Bearer mixed key with no context": "use Bearer Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE here",
+    "auth: escaped break before the value": json.dumps(
+        {"h": "Authorization: Bearer\n3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b"}
+    ),
+    # A userinfo that holds an @ and has no scheme.
+    "bare //: @ in the password": " //admin:P@ss9Xk9Qp@db.example.com/app",
+    "bare //: after (": "(//admin:Xk9Qp2Zr8@db.example.com/app)",
+    "bare //: after ,": "a,//admin:Xk9Qp2Zr8@db.example.com/app",
+    "bare //: after [": "[//admin:Xk9Qp2Zr8@db.example.com/app]",
+    "bare //: after {": "{//admin:Xk9Qp2Zr8@db.example.com/app}",
+    "bare //: after |": "|//admin:Xk9Qp2Zr8@db.example.com/app",
+    "bare //: after an escaped break": repr("a\n//admin:Xk9Qp2Zr8@db.example.com/app"),
+    # A port name is PORT or port alone or ending _PORT or _port; other words are passwords.
+    "port word: myport": "https://u:myport/Xk9QpZr@h/v1",
+    "port word: support": "https://u:support/Xk9QpZr@h/v1",
+    "port word: passport": "https://u:passport/Xk9QpZr@h/v1",
+    "port word: export": "https://u:export/Xk9QpZr@h/v1",
+    "port word: XKPORT": "https://u:XKPORT/Xk9QpZr@h/v1",
+    # More escapes before a key.
+    "escape \\u000a": "a\\u000a" + SKP,
+    "escape \\u0009": "a\\u0009" + GH,
+    "escape \\f": json.dumps("a\x0c" + GH),
+    "escape \\b": json.dumps("a\x08" + GH),
+    "escape \\u000b": json.dumps("a\x0b" + GH),
+    "escape \\x0b": repr("a\x0b" + GH),
+    "escape \\x0c password": repr("a\x0cpassword=hunter2pw"),
+    "whsec_ base64": "whsec_MfKQ9r8+KYqrTwjUPD8ILPZIo2LaLSY8",
+    # A named value in JSON inside JSON, and the CLI flags that take a password.
+    "nested JSON: password": '{"content": "{\\"password\\": \\"hunter2pw9\\"}"}',
+    "curl -u": "curl -u admin:Xk9Qp2Zr8wq https://h/v1",
+    "curl --user": "curl --user admin:Xk9Qp2Zr8wq https://h/v1",
+    "curl -u quoted": 'curl -u "admin:Xk9Qp2Zr8wq" https://h/v1',
+    "--password =": "mysql --password=Xk9Qp2Zr8wq db",
+    # A key after \uXXXX escapes other than \u00XX, and after \a, \0 and \U........ ones.
+    "escape \\u201c key": json.dumps("Your key is \u201c" + SKP + "\u201d"),
+    "escape \\u201c AKIA": json.dumps("Your key is \u201c" + AK + "\u201d"),
+    "escape \\u201c password": json.dumps("a \u2014password=hunter2pw"),
+    "escape \\U key": "a\\U0001f511" + GH,
+    "escape \\a key": "a\\a" + GH,
+    "escape \\0 key": "a\\0" + GH,
+    # host: user:pw@host:port with / ? # in the password, IPv6 and a Go DSN.
+    "hostport: / in the password": "host: admin:A5GQ/lWrLxXk9@db.example.com:5432",
+    "hostport: ? in the password": "host: admin:A5GQ?lWrLxXk9@db.example.com:5432",
+    "hostport: IPv6": "host: admin:Xk9Qp2Zr8@[::1]:5432",
+    "hostport: Go DSN": "DSN=root:Xk9Qp2Zr8@tcp(db.example.com:3306)/app",
+    # Authorization in code, with a scheme or none.
+    "auth code: Go Header.Set": 'req.Header.Set("Authorization", "Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE")',
+    "auth code: subscript": 'headers["Authorization"] = "Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE"',
+    "auth code: =>": "'Authorization' => 'Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE'",
+    "auth code: tuple": "('Authorization', '3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b')",
+    "auth code: JSON in JSON": '{\\"Authorization\\": \\"Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE\\"}',
+    "auth code: JWT": "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.FAKEsigFAKEsig",
+    # A single-label host, and // after > * ; <.
+    "bare //: a Compose host": "--db //admin:Xk9Qp2Zr8@db/app",
+    "bare //: after >": "<code>//a:Xk9Qp2Zr8wq@h.io/x</code>",
+    "bare //: after *": "see *//a:Xk9Qp2Zr8wq@h.io/x*",
+    "bare //: after ;": "x;//a:Xk9Qp2Zr8wq@h.io/x",
+    # A key block with no END inside JSON in JSON.
+    "pem: JSON in JSON": json.dumps(
+        json.dumps({"k": "-----BEGIN RSA PRIVATE KEY-----\nMIIEFAKEFAKEFAKE\nABCDEFFAKE=="})
+    ),
+    # curl -u after a continuation, with no space; other tools' password flags.
+    "curl -u continued": "curl -s \\\n  -u admin:Xk9Qp2Zr8wq \\\n  https://h/v1",
+    "curl -uadmin": "curl -uadmin:Xk9Qp2Zr8wq https://h/v1",
+    "mysql -pPW": "mysql -uroot -pXk9Qp2Zr8wq db",
+    "mysql -p quoted": 'mysql -p"Xk9Qp2Zr8wq" db',
+    "redis-cli -a": "redis-cli -a Xk9Qp2Zr8wq ping",
+    "sqlplus": "sqlplus admin/Xk9Qp2Zr8wq@db.example.com/app",
+    # A URL value broken right after =, or inside the name.
+    "break: after =": "see https://h/x?token=\nXk9Qp2Zr8wqLm7 more",
+    "break: inside the name": "see https://h/x?a=1&api_ke\ny=Xk9Qp2Zr8wqLm7 more",
+    # The bare host form with no port stays (SECRETS_KEPT): it reads as mailto:a@b.
+    "bare host: no port": "host: admin:Xk9Qp2Zr8@db.example.com",
+    # A userinfo with no scheme: after whitespace, = or a quote, // opens a URL for rule 1.
+    "bare //: after a flag": "--db //admin:Xk9Qp2Zr8@db.example.com/app",
+    "bare //: after =": "DATABASE=//admin:Xk9Qp2Zr8@db:5432/app",
+    "bare //: after a quote": 'url = "//admin:Xk9Qp2Zr8@db.example.com/app"',
+    "bare //: at the start": "//admin:Xk9Qp2Zr8@db.example.com/app",
+    "bare //: broken by /": "--db //admin:Xk9Q/p2Zr8@db.example.com/app",
+    "bare //: broken by a space": "--db //bot:hun ter2@h.io/v1",
+    # The named limit: no // and no scheme, so `user:pw@host` can't be told from `mailto:a@b`.
+    "bare host: user:pw@host:port": "host: admin:Xk9Qp2Zr8@db.example.com:5432",
+    "bare host: = form": "DB=admin:Xk9Qp2Zr8@db:5432/app",
+}
+R5_HONEST = {
+    "port: $DB_PORT": "Mastodon dev: http://localhost:$DB_PORT/@admin",
+    "port: ${PORT}": "http://localhost:${PORT}/@admin and ops@acme.com",
+    "port: <port>": "http://localhost:<port>/@admin",
+    "port: PORT then comma": "Log in at http://host:PORT, qa@acme.com",
+    # A reference, never a credential, and prose with the words.
+    "bearer ref $TOKEN": 'curl -H "Authorization: Bearer $TOKEN" https://api.example.com/v1',
+    "bearer ref ${}": 'curl -H "Authorization: Bearer ${API_TOKEN_FOR_THE_VAPI}" https://h/v1',
+    "bearer ref <token>": "Authorization: Bearer <your-api-token-here>",
+    "bearer ref {{ }}": 'headers: {"Authorization": "Bearer {{ secrets.VAPI_PRIVATE_KEY }}"}',
+    "basic ref $": "Authorization: Basic $ENCODED_CREDENTIALS_VALUE",
+    "basic prose": "a basic setup is enough for the first run",
+    "bearer prose": "he was the bearer of bad news",
+    "basic prose 2": "Basic auth is on; send the bearer token in a header",
+    # Prose, paths, hosts, versions and placeholders after the words basic or bearer.
+    "basic prose snake": "Call the basic list_all_customers tool first.",
+    "basic prose path": "Use basic read/write/execute permissions.",
+    "basic prose hyphens": "a basic retrieval-augmented-generation setup",
+    "basic prose host": "basic docs.example.com/api/v2 lookup",
+    "basic prose slashes": "the basic e-mail/phone-number check",
+    "basic prose version": "a Basic python-3.12-slim image",
+    "basic prose home": "basic ~/.config/settings.json",
+    "basic prose bin": "a basic /usr/local/bin/python3 install",
+    "basic prose cidr": "Basic 192.168.100.200/24 subnet",
+    "bearer prose log": "INFO bearer token-refresh-scheduled for user 42",
+    "basic realm": "WWW-Authenticate: Basic realm=protected_area_v2",
+    "bearer placeholder upper": "Bearer YOUR_ACCESS_TOKEN",
+    "bearer placeholder dashes": "Bearer your-api-token-here",
+    "bearer placeholder long": "Bearer ACCESS_TOKEN_PLACEHOLDER",
+    "header placeholder upper": "Authorization: Bearer YOUR_ACCESS_TOKEN",
+    "header placeholder dashes": "Authorization: Bearer your-api-token-here",
+    "header placeholder %": "Authorization: Bearer %ACCESS_TOKEN_VALUE%",
+    "header reference $": 'curl -H "Authorization: Token $API_TOKEN" https://h/v1',
+    "header reference {{ }}": 'Authorization: Token {{ secrets.API_TOKEN_VALUE }}',
+    "header reference <>": "Authorization: <your-api-token-here>",
+    "header word": "Authorization: required for every request",
+    # An honest URL whose port is followed by Markdown, and ports named like a variable.
+    "port md bold": "**http://localhost:8080** ops@acme.com",
+    "port md table": "| http://localhost:8080| ops@acme.com |",
+    "port md code": "`http://localhost:8080` ops@acme.com",
+    "port APP_PORT": "http://localhost:$APP_PORT/@admin",
+    "port db_port": "http://localhost:db_port/@admin",
+    "port bare port": "http://host:port/api/users/@me",
+    # A userinfo shape with no port after the host is text: an e-mail address, a time.
+    "bare host: email": "write to email@example.com or user@host today",
+    "bare host: a:b@c": "the ratio a:b@c is fine",
+    "bare host: a time": "the talk is at 10:30@venue and 11:45@room",
+    "bare host: mailto": "mailto:john.doe99@example.com now",
+    "bare host: a handle": "ping me:you@host.io later",
+    # A // that starts a code comment, with a label before the colon.
+    "comment: Author": "//Author:j@corp.com",
+    "comment: short password": "//Contact:ab@acme.com",
+    "comment: a single-letter host": "x = 1 //y:z@w",
+    "comment: a space": "//TODO:ask bob@x",
+    # Flags: -u with no colon, prose, -p alone, a uid:gid, a reference.
+    "flag: curl -u no colon": "curl -u admin https://h/v1",
+    "flag: docker -u uid:gid": "docker run -u 1000:1000 img",
+    "flag: curl --user-agent": "curl --user-agent Mozilla/5.0 https://h/v1",
+    "flag: curl -u reference": 'curl -u "$USER:$PASSWORD" https://h/v1',
+    "flag: curl -u reference 2": "curl -u admin:$API_PASSWORD https://h/v1",
+    "flag: -p alone": "mysql -p Zq8wp4 db and -p 5432",
+    "flag: --password prose": "pass --password to the CLI, not the --password flag itself",
+    "flag: --password-file": "mysql --password-file /etc/pw.txt db",
+    "flag: --password reference": "mysql --password $DB_PASSWORD db",
+    "flag: --password placeholder": "mysql --password <password> db",
+    "flag: the Stripe docs key": "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc",
+    # Code and prose after the word authorization: unquoted code is a reference, as a named
+    # value's is.
+    "auth code: process.env": "authorization: process.env.API_TOKEN_V2",
+    "auth code: settings": "Authorization: settings.API_KEY_BASE64",
+    "auth code: self.config": "authorization: self.config.token_v2_value",
+    "auth code: a call": "dict(authorization=base64.b64encode(creds))",
+    "auth prose: a comma": "authorization, the 2024-plan and the rest",
+    # A time or a group:member is no userinfo; a non-ASCII closer after a port is not a password.
+    "hostport: a time": "lunch at 12:30@cafe.downtown:2",
+    "port: curly quote": "Open \u201chttp://localhost:8080\u201d as admin@acme.com",
+    "port: ellipsis": "Open http://localhost:8080\u2026 then email admin@acme.com",
+    "port: em dash": "Open http://localhost:8080\u2014 then email admin@acme.com",
+    # Quoted prose after Basic or Bearer.
+    "basic quoted prose": '"Basic read/write/execute permissions"',
+    "basic quoted prose 2": 'summary: "Basic e-mail/phone-number check"',
+    "bearer quoted prose": "'Bearer token-refresh-scheduled-v2'",
+    # curl -u placeholders and sort -u.
+    "curl -u placeholder": "curl -u username:password https://h/v1",
+    "curl -u placeholder 2": "curl -u USERNAME:PASSWORD https://h/v1",
+    "curl -u placeholder 3": "curl -u user:pass https://h/v1",
+    "curl -u braces": "curl -u {email_address}/token:{api_token} https://h/v1",
+    "curl -u your_": "curl -u your_email@example.com:your_api_token https://h/v1",
+    "sort -u on a curl line": "curl https://h/v1 | sort -u a:b",
+    # Fragment names that only contain a short root.
+    "anchor: keyword": "see https://x.com #keyword=api&page=2 now",
+    "anchor: design": "see https://x.com #design=v2&monkey=1 now",
+    # No password flag: -p with a space, a port flag, ls -a.
+    "flag: mysql -p space": "mysql -p 5432 db",
+    "flag: ssh -p22": "ssh -p22 host",
+    "flag: ls -a": "ls -a files and redis-cli -a",
+    # A URL broken after its query's last value: prose, not a value.
+    "break: mid value": "see https://h/x?q=cats and more",
+    "break: next line": "see https://h/x?q=1\nnext line follows",
+    # A digit-first password and a digit-first honest URL have one shape: both stay as TH-9491
+    # leaves them.
+    "digit port, path, e-mail": "POST http://localhost:8080/register?email=a@b.com",
+    "digit port, next=": "Open http://localhost:3000/login?next=/a@b.com",
+    # A markdown anchor after an address keeps its values; a credential name or a key does not.
+    "anchor: ops": "see https://x.com #ops&alerts=on and more",
+    "anchor: section": "docs at https://x.com/a #install&lang=en",
+    # Prose after a URL with a colon, with a run of words before an @.
+    "runs: many words": "see https://example.com:docs and contact the team at ops@acme.com",
+    "runs: five words": "https://example.com:contact us a b c d e@x.com",
+    # A word of 16 or more letters and nothing else is prose, not a credential.
+    "basic prose long word": "a basic internationalization guide",
+    "bearer prose long word": "the bearer instrumentation notes",
+    "basic prose long word 2": "Basic infrastructure and basic troubleshooting",
+    # Escapes in honest text: a name or a prefix that is no secret keeps its value.
+    "escaped repr: honest name": repr("ok\ntoken: streaming"),
+    "escaped repr: honest prefix": repr("see\nsk-dev-tools and\tskills"),
+    # A userinfo needs a ://, a // after whitespace, = or a quote, or it is text.
+    "bare: email": "write to email@example.com or user@host",
+    "bare: a:b@c": "the ratio a:b@c is fine, and so is 12:30@room",
+    "bare: mailto": "mailto:john.doe99@example.com",
+    "bare: a comment": "x = 1  // TODO: ask me@acme.com about it",
+    "bare: a UNC path": "open //server/share/file and //localhost:8080/@admin",
+}
 
 
 def _corpus() -> dict[str, str]:
@@ -1134,10 +1393,11 @@ def _corpus() -> dict[str, str]:
         ("r2", R2_CASES),
         ("r3", R3_CASES),
         ("r4 honest", R4_HONEST),
-        ("r5", R5_LIMITS),
+        ("r5 honest", R5_HONEST),
     ):
         cases.update({f"{label}: {name}": text for name, text in group.items()})
     cases.update({f"r4 secret: {name}": text for name, (text, _) in R4_SECRETS.items()})
+    cases.update({f"r5 secret: {name}": text for name, text in R5_SECRETS.items()})
     cases.update(
         {f"r4 drift {i}: {name}": text for i, (name, text) in enumerate(R4_DRIFT)}
     )
@@ -1181,6 +1441,24 @@ SECRET_PARTS = (
     "A0FAKE0FAKE",
     "8812",
     "ghp_A1b2C3d4",
+    "ter 2",
+    "Xk9Qp2Zr8wq",
+    "Tk4fR9xQ2mZ7",
+    "Xk4fR9xQ2mZ7",
+    "P@ss9Xk9Qp",
+    "ss9Xk9Qp",
+    "Xk9QpZr",
+    "MfKQ9r8",
+    "lWrLxSR8NQLkQfyAyXM",
+    "A5GQ",
+    "Wm4Ht",
+    "03zmWm4",
+    "WORD99",
+    "3f6a8c2e-1b4d",
+    "Xk9Qp2Zr8",
+    "p2Zr8",
+    "dXNlcjpGQUtFZmFrZTAx",
+    "Wm4HtZr",
 )
 # Cases where a secret is kept, each a limit the design page names.
 SECRETS_KEPT = {
@@ -1192,16 +1470,12 @@ SECRETS_KEPT = {
     "r2: nv prose is": "prose such as 'the password is' isn't matched",
     "r3: H md table": "a Markdown table cell has no = or :",
     "r3: R1 port, email": "honest text: the value after the port isn't a password",
-    "r3: R1 ws 5": "a run of 5 spaces in a password",
-    "r3: N aws sts json": "ASIA is no prefix; AccessKeyId is no name",
     "r3: N php =>": "=> isn't matched (r3 H3)",
     "r3: N go :=": ":= isn't matched (r3 H3)",
-    "r3: N cli flag": "--password X isn't matched (r3 H3)",
-    "r3: N bearer": "Authorization: Bearer X isn't matched (r3 H3)",
     "r3: N yaml phrase": "an unquoted passphrase with spaces (r4 L6)",
+    "r5 secret: bare host: no port": "no :port after the host: it reads as mailto:a@b or 12:30@room",
     "r4 secret: yaml block scalar": "a YAML block scalar (r4 L6)",
     "r4 secret: unquoted passphrase": "an unquoted passphrase with spaces (r4 L6)",
-    "r4 secret: rule1 blank line": "a blank line inside a password (r4 L3)",
     "r4 secret: camel passwd/pwd": "dbPwd isn't a name (r4 L6)",
     "r4 secret: pass camel": "smtpPass, a best-effort form (TH-9555)",
     "r4 drift 15: connection_string": "Pwd= isn't a name",
@@ -1210,7 +1484,6 @@ SECRETS_KEPT = {
     "r2: cut ghp": "a key cut short in a text that isn't the 600-character cut (r4 L1)",
     "r2: cut sk-proj end": "shorter than the key's least length, and not the cut (r4 L1)",
     "r4 honest: pagination nextToken": "a pagination name's value is honest (r4 L2)",
-    "r5: escaped json named value": "a named value inside escaped JSON, where \\\" isn't a quote",
 }
 # Text with no secret that the rules change, each as the design page says they would.
 HONEST_CHANGED = {
@@ -1221,7 +1494,6 @@ HONEST_CHANGED = {
     "r3: H changeme123": "a letter and a digit",
     "r3: H v2beta": "token: v2beta is masked (page, what can go wrong)",
     "r3: H ident digit": "an identifier with a digit isn't code",
-    "r3: H #channel2": "a markdown anchor after an address loses its values (r3 L6)",
     "r3: H pem prose": "the bare header is masked; the instruction after it is kept",
     "r4 honest: pem prose": "the bare header is masked; the instruction after it is kept",
 }
@@ -1520,3 +1792,493 @@ def test_text_with_no_literal_and_no_name_calls_no_pattern(
     # The spies do see a call when there is something to look at.
     assert secret_shapes.find("password=" + _PW)
     assert _Spy.calls > 0
+
+
+# -- Round 5, fix 1: what counts as a port ------------------------------------------------------
+
+_PORT_LIKE = {
+    "postgres://app:A5GQ/lWrLxSR8NQLkQfyAyXM@db.example.com:5432/app": "postgres://db.example.com:5432/app",
+    "https://u:$Xk9/Qp@h/v1": "https://h/v1",
+    "https://u:$XK9/Qp@h/v1": "https://h/v1",
+    "https://u:X/9qz@h/v1": "https://h/v1",
+    "https://u:LQIT6=03zm/Ct@h/v1": "https://h/v1",
+    "https://u:XK9 Qp@h/v1": "https://h/v1",
+    "https://bot:PASS WORD99@h/v1": "https://h/v1",
+    # A capital letter first was read as a port, so this leaked its password's start.
+    "postgres://admin:P%40ss/Xk9@db.example.com/app": "postgres://db.example.com/app",
+}
+
+
+@pytest.mark.parametrize("text", list(_PORT_LIKE))
+def test_a_password_that_reads_like_a_port_is_masked(text: str) -> None:
+    assert _redact(text) == _PORT_LIKE[text]
+
+
+# -- Round 5, fix 4: more key shapes ------------------------------------------------------------
+
+_MORE_SHAPES = {
+    "sk_test_" + "a" * 24: "[redacted]",
+    "rk_test_" + "a" * 24: "[redacted]",
+    "whsec_" + "a" * 32: "[redacted]",
+    "ASIA" + "IOSFODNN7EXAMPLE": "[redacted]",
+}
+
+
+@pytest.mark.parametrize("text", list(_MORE_SHAPES))
+def test_stripe_test_and_webhook_secrets_and_aws_temporary_key_ids_are_masked(
+    text: str,
+) -> None:
+    assert _redact(text) == _MORE_SHAPES[text]
+    assert _redact("see " + text + " now") == "see [redacted] now"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "sk_test_short",
+        "whsec_ is the prefix",
+        "ASIA" + "IOSFODNN7EXAMPL",
+        "ASIAN" + "IOSFODNN7EXAMPLE",
+        "the ASIA region",
+        "sk_testing_" + "a" * 24,
+    ],
+)
+def test_the_new_key_shapes_keep_honest_text(text: str) -> None:
+    assert _redact(text) == _base(text)
+
+
+# -- Round 5, fix 3: Authorization headers -----------------------------------------------------
+
+_HEADERS = {
+    "curl -H 'Authorization: Bearer 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b' https://api.vapi.ai/assistant": "curl -H 'Authorization: Bearer [redacted]' https://api.vapi.ai/assistant",
+    "Authorization: bearer 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b\nnext": "Authorization: bearer [redacted]\nnext",
+    '{"headers": {"Authorization": "Basic dXNlcjpGQUtFZmFrZTAxMjM0NTY3ODk="}}': '{"headers": {"Authorization": "Basic [redacted]"}}',
+    "AUTHORIZATION: BASIC dXNlcjpGQUtFZmFrZTAxMjM0NTY3ODk=": "AUTHORIZATION: BASIC [redacted]",
+    "Authorization: Bearer\t" + "a" * 15 + "1": "Authorization: Bearer\t[redacted]",
+    "-H 'Bearer " + "a" * 15 + "1'": "-H 'Bearer [redacted]'",
+    "Bearer " + "a" * 15: "Bearer " + "a" * 15,
+    "Bearer " + "a" * 24: "Bearer " + "a" * 24,
+    "basic internationalization": "basic internationalization",
+}
+
+
+@pytest.mark.parametrize("text", list(_HEADERS))
+def test_a_bearer_or_basic_value_of_16_or_more_characters_is_masked(text: str) -> None:
+    assert _redact(text) == _HEADERS[text]
+
+
+# -- Round 5, fix 2: a key right after an escape ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (repr("key below\n" + "sk-proj-" + "a" * 40), "'key below\\n[redacted]'"),
+        (repr("a\t" + GH), "'a\\t[redacted]'"),
+        (repr("a\t" + AK), "'a\\t[redacted]'"),
+        (repr("ok\npassword=hunter2pw"), "'ok\\npassword=[redacted]'"),
+        (
+            json.dumps({"k": "-----BEGIN RSA PRIVATE KEY-----\nMIIEFAKE\nABCD==", "n": 1}),
+            '{"k": "[redacted]", "n": 1}',
+        ),
+        # A line that is prose, not base64, ends the block as it does with real line breaks.
+        (
+            json.dumps({"k": "-----BEGIN PRIVATE KEY-----\nMIIEFAKE\nnot a key line"}),
+            '{"k": "[redacted]\\nnot a key line"}',
+        ),
+    ],
+)
+def test_a_key_after_an_escaped_line_break_or_tab_is_masked(
+    text: str, expected: str
+) -> None:
+    assert _redact(text) == expected
+
+
+# -- Round 5, fix 5: a userinfo with no scheme -----------------------------------------------
+
+_BARE = {
+    "--db //admin:Xk9Qp2Zr8@db.example.com/app": "--db //db.example.com/app",
+    "DATABASE=//admin:Xk9Qp2Zr8@db:5432/app": "DATABASE=//db:5432/app",
+    'url = "//admin:Xk9Qp2Zr8@db.example.com/app"': 'url = "//db.example.com/app"',
+    "--db //admin:Xk9Q/p2Zr8@db.example.com/app": "--db //db.example.com/app",
+    "--db //bot:hun ter2@h.io/v1": "--db //h.io/v1",
+}
+
+
+@pytest.mark.parametrize("text", list(_BARE))
+def test_a_userinfo_after_a_bare_double_slash_is_masked(text: str) -> None:
+    assert _redact(text) == _BARE[text]
+    assert _redact(_BARE[text]) == _BARE[text]
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("host: admin:Xk9Qp2Zr8@db.example.com:5432", "host: db.example.com:5432"),
+    ("DB=admin:Xk9Qp2Zr8@db:5432/app", "DB=db:5432/app"),
+    ("(admin:Xk9Qp2Zr8@10.0.0.5:6379)", "(10.0.0.5:6379)"),
+    ("redis: u:P@ss9Xk9Qp@cache.internal:6379", "redis: cache.internal:6379"),
+])
+def test_a_userinfo_with_no_scheme_is_masked_when_a_port_follows_the_host(
+    text: str, expected: str
+) -> None:
+    assert _redact(text) == expected
+
+
+# -- Round 5, speed: the new and changed patterns, on text built to restart them ---------------
+# Each shape repeats a start the pattern could try again at every position, or gives one start a
+# very long run to scan. 64 KiB and 1 MiB, best of three, with bounds a slow CI runner meets.
+# 256 KiB is between the two so a pattern that is quadratic in one long run shows by then (a
+# `(?=[^@]*@)` in the bare rule took 2.0 s there, against 0.2 s for the linear one).
+_R5_BOUNDS_S = {64 * 1024: 0.5, 256 * 1024: 0.8, _MIB: 2.0}
+_R5_SHAPES = {
+    "port: https://u:PORT repeated": 'rep("https://u:PORT ")',
+    "port: a long letter run after u:": '"https://u:" + "A" * (M - 12) + "@h"',
+    "port: a $ and a long run": '"https://u:$" + "a" * (M - 14) + "/x@h"',
+    "port: u:X/ repeated": 'rep("https://u:X/9 ")',
+    "escape: \\nsk- repeated": 'rep("\\\\nsk-")',
+    "escape: \\tAKIA repeated": 'rep("\\\\tAKIA")',
+    "escape: \\nghp_ repeated": 'rep("\\\\nghp_")',
+    "escape: \\npassword= repeated": 'rep("\\\\npassword=")',
+    "escape: \\ntoken: repeated": 'rep("\\\\ntoken: ")',
+    "escape: a run of n, then sk-": '"n" * (M - 3) + "sk-"',
+    "escape: a block with no END, escaped lines": '"-----BEGIN RSA PRIVATE KEY-----" + rep("\\\\nMIIEFAKE")',
+    "escape: a block, empty escaped lines": '"-----BEGIN RSA PRIVATE KEY-----" + rep("\\\\n\\\\r")',
+    "escape: headers with escapes and no END": 'rep("-----BEGIN PRIVATE KEY-----\\\\nAAAA")',
+    "bearer: bearer repeated": 'rep("bearer ")',
+    "bearer: bearer then 15 characters": 'rep("bearer " + "a" * 15 + " ")',
+    "bearer: bearer then a long run": '"Bearer " + "a" * (M - 8)',
+    "bearer: bearer then a long space run": '"bearer" + " " * (M - 7) + "a"',
+    "bearer: bearerbearer": 'rep("bearerbasic")',
+    "bearer: basic then 16 spaces repeated": 'rep("basic" + " " * 16 + "a" * 15 + " ")',
+    "keys: sk_test_ repeated": 'rep("sk_test_")',
+    "keys: whsec_ repeated": 'rep("whsec_")',
+    "keys: ASIA repeated": 'rep("ASIA")',
+    "keys: ASIA then a long run": '"ASIA" + "A" * (M - 4)',
+    "bare: //a: repeated after a space": 'rep(" //a:b")',
+    "bare: //a: repeated after =": 'rep("=//a:b")',
+    "bare: // then a long user": '" //" + "a" * (M - 4) + ":p@h"',
+    "bare: // a: and a long password": '" //a:" + "p" * (M - 6) + "@h"',
+    "bare: // a:p and one late @": 'rep(" //a:p")[:-1] + "@h"',
+    "bare: ////": 'rep(" ////")',
+    "auth: authorization: repeated": 'rep("authorization: ")',
+    "auth: authorization: token then 15": 'rep("authorization: token " + "a" * 15 + " ")',
+    "auth: authorization: and a long run": '"authorization: token " + "a1" * (M // 2 - 12)',
+    "auth: a quote and bearer repeated": 'rep("\'bearer a.b ")',
+    "auth: bearer then a long snake_case run": '"bearer " + "ab_" * (M // 3 - 3)',
+    "auth: -H repeated": 'rep("-H bearer ")',
+    "auth: authorization then spaces": '"authorization:" + " " * (M - 20) + "x"',
+    "bare: 1b (//a:p@ repeated": 'rep("(//a:p@")',
+    "bare: 1b //a:p@h/x@ repeated": 'rep(" //a:p@h/x@ ")',
+    "bare: 1b a long authority": '" //a:" + "p@" * (M // 2 - 8)',
+    "escape: \\u000a then sk- repeated": 'rep("\\\\u000ask-")',
+    "escape: \\x0b then password= repeated": 'rep("\\\\x0bpassword=")',
+    "escape: \\u then x repeated": 'rep("\\\\u00\\\\x0")',
+    "keys: whsec_ then a long base64 run": '"whsec_" + "a+/=" * (M // 4 - 2)',
+    "port: _port names repeated": 'rep("https://u:ab_port ")',
+    "port: a long name run then port": '"https://u:" + "a" * (M - 20) + "port/x@h"',
+    "port: a closer run before a space": 'rep("https://u:1`*|! ")',
+    "fragment: long values under plain names": '"https://x.com #" + "a=passwordxxxxxxxx9&" * (M // 20 - 1)',
+    "hostport: u:/ repeated": 'rep(" u:/a@[::1]:5 ")',
+    "hostport: tcp( repeated": 'rep(" u:p@tcp(h:1)/x")',
+    "hostport: a long password": '" u:" + "p" * (M - 20) + "@h:1"',
+    "auth code: Authorization\", repeated": 'rep(\'Authorization", "\')',
+    "auth code: Authorization\\\" repeated": 'rep("authorization\\\\\\"] = ")',
+    "escape: \\\\U repeated": 'rep("\\\\U0001f511sk-")',
+    "escape: \\\\ud83d repeated": 'rep("\\\\ud83d\\\\udd11password=")',
+    "flags: mysql -p repeated": 'rep("mysql -pa1b2 ")',
+    "flags: redis-cli -a repeated": 'rep("redis-cli -a a1 ")',
+    "flags: sqlplus repeated": 'rep("sqlplus u/p@h ")',
+    "flags: curl continued": 'rep("curl \\\\\\n  -u u:p ")',
+    "flags: -uadmin repeated": 'rep("curl -uu:p ")',
+    "break: =\\n repeated": 'rep("https://h/x?token=\\nabc ")',
+    "break: name\\n repeated": 'rep("https://h/x?a=1&b\\nc=d ")',
+    "bare: <//a:b@ repeated": 'rep("<//a:bbb@h.io/")',
+    "runs: https://u:a b c repeated": 'rep("https://u:a b c ")',
+    "runs: a long run of spaces": '"https://u:a" + " " * (M - 20) + "b@h"',
+    "runs: blank lines": '"https://u:a" + "\\n \\n" * (M // 4)',
+    "runs: u:a b c d@ repeated": 'rep("https://u:a b c d@")',
+    "runs: bare //u:a b c repeated": 'rep(" //u:a b c ")',
+    "fragment: # a=b repeated": 'rep("https://x.com #a&b=c ")',
+    "fragment: a long run of params": '"https://x.com #" + "a=b&" * (M // 4 - 4)',
+    "fragment: a long run of credential params": '"https://x.com #" + "token=b&" * (M // 8 - 4)',
+    "bare: a long run of @ after //a:": '" //a:" + "@" * (M - 6)',
+    "bare: //a:bbb@c. repeated": 'rep(" //a:bbb@c.d")',
+    "bare: long password then a host": '" //a:" + "p" * (M - 20) + "@h.io"',
+    "bare: u:p@h:1 repeated": 'rep(" u:p@h:1")',
+    "bare: a long user then :": '" " + "u" * (M - 4) + ":p@h:1"',
+    "bare: u:@ repeated": 'rep(" u:p@@@@@@h:1")',
+    "flags: curl then a long line": '"curl " + "a " * (M // 2 - 8) + "-u u:p"',
+    "flags: curl -u repeated": 'rep("curl -u u:p ")',
+    "flags: --password repeated": 'rep("--password a1 ")',
+    "flags: --password then spaces": '"--password" + " " * (M - 20) + "x"',
+    "nested: \\\"password repeated": 'rep(\'{\\\\\\"password\\\\\\": \\\\\\"hunter2pw9\\\\\\"}\')',
+    "nested: password then a long run of backslashes": '"password" + "\\\\" * (M - 12) + "\\"x"',
+    "nested: password then many backslash-quote": '"password" + "\\\\\\"" * (M // 3)',
+}
+
+
+@pytest.mark.parametrize("size", list(_R5_BOUNDS_S), ids=["64KiB", "256KiB", "1MiB"])
+@pytest.mark.parametrize("shape", list(_R5_SHAPES))
+def test_the_round_five_patterns_clean_adversarial_text_in_linear_time(
+    shape: str, size: int
+) -> None:
+    best = _best_of_three(shape, _R5_SHAPES[shape], size)
+    assert best < _R5_BOUNDS_S[size], f"{shape} at {size}: {best:.3f} s"
+
+
+# -- Round 5 review: header context, the second userinfo rule and the rest ----------------------
+
+_B64_BASIC = "dXNlcjpGQUtFZmFrZTAxMjM0NTY3ODk="
+_PORT_WORDS = ("myport", "support", "passport", "export", "XKPORT")
+_AFTER = {
+    "(": ")",
+    ",": "",
+    "[": "]",
+    "{": "}",
+    "|": "",
+}
+
+
+@pytest.mark.parametrize("text", [
+    "Authorization: Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE",
+    "authorization: Bot Xk4fR9xQ2mZ7vB3nL8wY5cH1",
+    "Authorization: 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b",
+    'Authorization: "3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b"',
+    "Proxy-Authorization: Basic " + _B64_BASIC,
+    "Authorization=Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE",
+    'say "Bearer 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b" now',
+    "use Bearer Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE here",
+])
+def test_an_authorization_value_is_masked_under_any_scheme_word(text: str) -> None:
+    out = _redact(text)
+    assert "[redacted]" in out
+    assert not any(
+        part in out for part in ("Tk4fR9xQ2mZ7", "Xk4fR9xQ2mZ7", "3f6a8c2e", _B64_BASIC[:12])
+    )
+
+
+def test_an_authorization_value_with_an_escaped_break_before_it_is_masked() -> None:
+    text = json.dumps({"h": "Authorization: Bearer\n3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b"})
+    assert "3f6a8c2e" not in _redact(text)
+
+
+@pytest.mark.parametrize("text", [
+    " //admin:P@ss9Xk9Qp@db.example.com/app",
+    "--db //admin:P@ss9Xk9Qp@db.example.com/app",
+    'x = "//admin:P@ss9Xk9Qp@db.example.com/app"',
+    "--db //admin:P@ss/Xk9Qp@db.example.com/app",
+])
+def test_a_bare_userinfo_with_an_at_in_the_password_is_masked_whole(text: str) -> None:
+    out = _redact(text)
+    assert "ss9Xk9Qp" not in out and "admin" not in out and "Xk9Qp@" not in out
+    assert out.endswith("//db.example.com/app" + ('"' if text.endswith('"') else ""))
+
+
+@pytest.mark.parametrize("opener", list(_AFTER))
+def test_a_bare_double_slash_after_a_bracket_or_comma_opens_a_userinfo(opener: str) -> None:
+    text = f"a{opener}//admin:Xk9Qp2Zr8@db.example.com/app{_AFTER[opener]}"
+    assert "Xk9Qp2Zr8" not in _redact(text)
+
+
+def test_a_bare_double_slash_after_an_escaped_break_opens_a_userinfo() -> None:
+    assert "Xk9Qp2Zr8" not in _redact(repr("a\n//admin:Xk9Qp2Zr8@db.example.com/app"))
+
+
+def test_the_whsec_row_takes_base64() -> None:
+    assert _redact("whsec_MfKQ9r8+KYqrTwjUPD8ILPZIo2LaLSY8 ok") == "[redacted] ok"
+    assert _redact("whsec_" + "a/b=" * 8 + " ok") == "[redacted] ok"
+
+
+@pytest.mark.parametrize("word", _PORT_WORDS)
+def test_a_word_ending_in_port_is_a_password_not_a_port(word: str) -> None:
+    assert _redact(f"https://u:{word}/Xk9QpZr@h/v1") == "https://h/v1"
+
+
+@pytest.mark.parametrize("name", ["PORT", "port", "DB_PORT", "db_port", "$PORT", "$DB_PORT"])
+def test_a_port_named_in_the_allowed_forms_is_kept(name: str) -> None:
+    text = f"http://localhost:{name}/@admin"
+    assert _redact(text) == _base(text)
+
+
+@pytest.mark.parametrize(
+    "escape, literal",
+    [("\\u000a", SKP), ("\\u0009", GH), ("\\f", GH), ("\\b", GH), ("\\v", AK),
+     ("\\x0b", GH), ("\\x0c", AK), ("\\u000b", SKP)],
+)
+def test_a_key_after_the_rarer_escapes_is_masked(escape: str, literal: str) -> None:
+    out = _redact("a" + escape + literal + " b")
+    assert out == "a" + escape + "[redacted] b"
+    assert _redact("a" + escape + "password=hunter2pw") == "a" + escape + "password=[redacted]"
+
+
+@pytest.mark.parametrize("name", ["password", "api_key", "token", "client_secret", "db_password"])
+@pytest.mark.parametrize("depth", [1, 2, 3])
+def test_a_named_value_in_json_inside_json_is_masked(name: str, depth: int) -> None:
+    text = json.dumps({name: "hunter2pw9"})
+    for _ in range(depth):
+        text = json.dumps({"content": text})
+    out = _redact(text)
+    assert "hunter2pw9" not in out and "[redacted]" in out
+    assert _redact(out) == out
+
+
+def test_the_remaining_limits_of_this_round_are_pinned() -> None:
+    # `//Author:jsmith@corp.com`: a password of 3 or more characters and a dotted host read as
+    # a URL, which no rule can tell from `//admin:Xk9@db.example.com`.
+    assert _redact("//Author:jsmith@corp.com") == "//corp.com"
+    # An ASIA key is ASIA plus 16 capitals and digits; requiring a digit would pass real keys.
+    assert _redact("ASIAPACIFICSOUTHEAST") == "[redacted]"
+    # Stripe's published docs key is kept, any other sk_test_ key is masked.
+    published = "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc"
+    assert _redact(published) == published
+    assert _redact("sk_test_" + "4eC39HqLyjWDarjtT1zdp7dX") == "[redacted]"
+    assert _redact("sk_test_" + "4eC39HqLyjWDarjtT1zdp7dcx") == "[redacted]"
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("curl -u admin:Xk9Qp2Zr8wq https://h/v1", "curl -u admin:[redacted] https://h/v1"),
+    ("curl --user admin:Xk9Qp2Zr8wq https://h/v1", "curl --user admin:[redacted] https://h/v1"),
+    ('curl -u "admin:Xk9Qp2Zr8wq" https://h/v1', 'curl -u "admin:[redacted]" https://h/v1'),
+    ("curl -s -X POST -u admin:hunter https://h/v1", "curl -s -X POST -u admin:[redacted] https://h/v1"),
+    ("mysql --password=Xk9Qp2Zr8wq db", "mysql --password=[redacted] db"),
+    ("mysql --password Xk9Qp2Zr8wq db", "mysql --password [redacted] db"),
+    ('mysql --password "Xk9 Qp2Zr8wq" db', 'mysql --password "[redacted]" db'),
+])
+def test_a_password_given_as_a_cli_flag_is_masked(text: str, expected: str) -> None:
+    assert _redact(text) == expected
+
+
+# -- Round 5 review, the page's older limits ---------------------------------------------------
+
+_BROKEN_PASSWORDS = {
+    "https://bot:hun ter 2@h/v1": "https://h/v1",
+    "https://bot:hun     ter2@h/v1": "https://h/v1",
+    "https://bot:a b c d@h/v1": "https://h/v1",
+    "hook: https://bot:hun\n\n  ter2@h/v1 now": "hook: https://h/v1 now",
+    "--db //bot:hun ter 2@h.io/v1": "--db //h.io/v1",
+}
+
+
+@pytest.mark.parametrize("text", list(_BROKEN_PASSWORDS))
+def test_a_password_with_more_whitespace_runs_a_wide_run_or_a_blank_line_is_masked(
+    text: str,
+) -> None:
+    assert _redact(text) == _BROKEN_PASSWORDS[text]
+    assert _redact(_BROKEN_PASSWORDS[text]) == _BROKEN_PASSWORDS[text]
+
+
+@pytest.mark.parametrize("text, expected", [
+    # Rule 2 empties a value; a named value in step 3 takes the rest of its piece.
+    ("see https://x.com #access_token=abc123def&tab=2", "see https://x.com #access_token=[redacted]"),
+    ("see https://x.com #ref=" + GH, "see https://x.com #ref="),
+    ("see https://x.com #tab=1&password=hunter2pw", "see https://x.com #tab=1&password="),
+    ("see https://x.com #sig=Zq8wYv3Lp9Kd", "see https://x.com #sig="),
+])
+def test_a_fragment_after_an_address_keeps_its_values_except_credentials(
+    text: str, expected: str
+) -> None:
+    assert _redact(text) == expected
+
+
+def test_a_query_after_an_address_still_loses_every_value() -> None:
+    assert _redact("see https://u:pw@h/x\n  ?key=sk-1 and more") == "see https://h/x\n  ?key= and more"
+
+
+def test_the_digit_first_password_is_one_shape_with_an_honest_url() -> None:
+    """`https://bot:8812/x@db.example.com/` and `http://localhost:8080/register?email=a@b.com`
+    are both digits, a delimiter, text, an @ and a dotted host with no whitespace. A rule that
+    masks the first rewrites the second's host, so both stay as TH-9491 leaves them."""
+    for text in ("https://bot:8812/x@db.example.com/", "https://bot:12 34@db.example.com/x"):
+        assert _redact(text) == _base(text)
+
+
+# -- Round 5, review 2 ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("host: admin:A5GQ/lWrLxXk9@db.example.com:5432", "host: db.example.com:5432"),
+    ("host: admin:A5GQ?lWrLxXk9@db.example.com:5432", "host: db.example.com:5432"),
+    ("host: admin:Xk9Qp2Zr8@[::1]:5432", "host: [::1]:5432"),
+    ("DSN=root:Xk9Qp2Zr8@tcp(db.example.com:3306)/app", "DSN=tcp(db.example.com:3306)/app"),
+    ("--db //admin:Xk9Qp2Zr8@db/app", "--db //db/app"),
+    ("curl -uadmin:Xk9Qp2Zr8wq https://h/v1", "curl -uadmin:[redacted] https://h/v1"),
+    ("curl -s \\\n  -u admin:Xk9Qp2Zr8wq \\\n  https://h/v1", "curl -s \\\n  -u admin:[redacted] \\\n  https://h/v1"),
+    ("mysql -uroot -pXk9Qp2Zr8wq db", "mysql -uroot -p[redacted] db"),
+    ('mysql -p"Xk9Qp2Zr8wq" db', 'mysql -p"[redacted]" db'),
+    ("redis-cli -a Xk9Qp2Zr8wq ping", "redis-cli -a [redacted] ping"),
+    ("sqlplus admin/Xk9Qp2Zr8wq@db.example.com/app", "sqlplus admin/[redacted]@db.example.com/app"),
+])
+def test_review_twos_userinfo_and_flag_forms_are_masked(text: str, expected: str) -> None:
+    assert _redact(text) == expected
+    assert _redact(expected) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "ssh://git@h:22",
+    "C:/x@h:22",
+    "mysql -p 5432 db",
+    "redis-cli -a",
+    "sqlplus -s /nolog",
+])
+def test_review_twos_userinfo_and_flag_forms_keep_honest_text(text: str) -> None:
+    assert _redact(text) == _base(text)
+
+
+@pytest.mark.parametrize("key", [SKP, AK, GH, "password=hunter2pw", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.FAKEsigFAKEsig"])
+@pytest.mark.parametrize("escape", ["\\u201c", "\\u2014", "\\ud83d\\udd11", "\\U0001f511", "\\a", "\\0"])
+def test_a_key_after_any_unicode_or_control_escape_is_masked(key: str, escape: str) -> None:
+    out = _redact("Your key is " + escape + key + " ok")
+    assert out.startswith("Your key is " + escape) and "[redacted]" in out
+    assert "FAKE" not in out and "hunter2" not in out
+
+
+def test_text_with_escapes_and_no_key_is_kept() -> None:
+    for text in ("caf\\u00e9 token", "say \\u201chello\\u201d to them", "a\\U0001f511 key"):
+        assert _redact(text) == _base(text)
+
+
+@pytest.mark.parametrize("text", [
+    'req.Header.Set("Authorization", "Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE")',
+    'headers["Authorization"] = "Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE"',
+    "'Authorization' => 'Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE'",
+    "('Authorization', '3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b')",
+    '{\\"Authorization\\": \\"Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE\\"}',
+    "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.FAKEsigFAKEsig",
+    "Authorization: Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE",
+    "Authorization: 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b",
+    "Proxy-Authorization: Basic dXNlcjpGQUtFZmFrZTAxMjM0NTY3ODk=",
+])
+def test_an_authorization_value_in_code_or_text_is_masked(text: str) -> None:
+    out = _redact(text)
+    assert "[redacted]" in out
+    assert not any(part in out for part in ("Tk4fR9xQ2mZ7", "3f6a8c2e", "FAKEsig", "dXNlcjpGQUtF"))
+
+
+def test_a_key_block_with_no_end_in_json_inside_json_is_masked() -> None:
+    text = json.dumps(
+        json.dumps({"k": "-----BEGIN RSA PRIVATE KEY-----\nMIIEFAKEFAKEFAKE\nABCDEFFAKE=="})
+    )
+    assert "MIIEFAKE" not in _redact(text)
+
+
+@pytest.mark.parametrize("text", [
+    "see https://h/x?token=\nXk9Qp2Zr8wqLm7 more",
+    "see https://h/x?a=1&api_ke\ny=Xk9Qp2Zr8wqLm7 more",
+])
+def test_a_url_value_broken_after_the_equals_or_inside_the_name_is_masked(text: str) -> None:
+    out = _redact(text)
+    assert "Xk9Qp2Zr8wqLm7" not in out and out.endswith(" more")
+
+
+@pytest.mark.parametrize("text", [
+    "https://h/x?q=1\nnext line follows",
+    "see https://h/x?q=cats and more",
+    "see https://h/x?a=1&b\nplain words here",
+])
+def test_a_url_followed_by_prose_keeps_the_prose(text: str) -> None:
+    assert _redact(text) == _base(text)
+
+
+def test_the_bare_host_with_no_port_is_a_named_limit() -> None:
+    """`host: user:pw@db.example.com` has no port: it reads as `mailto:a@b` or `12:30@room`."""
+    text = "host: admin:Xk9Qp2Zr8@db.example.com"
+    assert _redact(text) == text

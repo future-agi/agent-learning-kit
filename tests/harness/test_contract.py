@@ -254,3 +254,66 @@ def test_a_credential_named_argument_may_not_list_values():
 def test_a_credential_named_argument_may_list_references():
     contract = _credential_contract(arg_values={"password": ["$PASSWORD", "{{pw}}"]})
     assert _credential_problems(contract) == []
+
+
+def test_declared_workers_name_contract_tools_and_reach_the_brief():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
+            "workers": [
+                {
+                    "id": "order_lookup",
+                    "name": "Order-lookup worker",
+                    "tools": ["get_order"],
+                },
+                {"id": "refund", "name": "Refund worker", "tools": ["issue_refund"]},
+            ],
+        }
+    )
+    assert validate_contract(contract) == []
+    assert "order_lookup (Order-lookup worker): get_order" in contract.brief()
+
+
+def test_a_worker_without_an_id_of_its_own_is_returned_to_authoring_and_keeps_only_contract_tools():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}],
+            "workers": [
+                {"id": "order_lookup", "tools": ["get_order", "send_email"]},
+                {"id": "order_lookup", "name": "Second"},
+                {"id": " "},
+            ],
+        }
+    )
+    problems = validate_contract(contract)
+    assert [one.split(":")[0] for one in problems] == [
+        "worker[2]",
+        "duplicate-worker-ids",
+    ]
+    assert "duplicate-worker-ids:order_lookup:" in problems[1]
+    assert [(one.id, one.tools) for one in contract.workers] == [
+        ("order_lookup", ["get_order"]),
+        ("order_lookup", []),
+        (" ", []),
+    ]
+    fixed = contract.model_copy(
+        update={
+            "workers": [
+                contract.workers[0],
+                contract.workers[1].model_copy(update={"id": "refunds"}),
+            ]
+        }
+    )
+    assert validate_contract(fixed) == []
+
+
+def test_contract_without_workers_is_unchanged():
+    contract = AgentContract.model_validate(
+        {"agent": "plain", "real_use_cases": ["answer"], "tools": [{"name": "a"}]}
+    )
+    assert contract.workers == []
+    assert "WORKERS" not in contract.brief()

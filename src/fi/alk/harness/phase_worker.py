@@ -26,9 +26,11 @@ async def main() -> None:
         WorldUnavailable,
         WorldUsageError,
     )
+    from .isolated_process import CHANNEL_FD_ENV
     from .world.handle import HostedWorld
     from .world.runtime import Call
     from .world.stores.postgres import AttachedPostgresStore
+    from .world.workspace_channel import WorkspaceClient
 
     payload = json.load(sys.stdin)
     state = payload["world"]
@@ -44,6 +46,10 @@ async def main() -> None:
             )
             http_client = world
         else:
+            # The harness serves the workspace files: under per-user isolation this
+            # process cannot open them.
+            channel_fd = os.environ.get(CHANNEL_FD_ENV)
+            workspaces = WorkspaceClient(int(channel_fd)) if channel_fd else None
             world = HostedWorld(
                 AttachedPostgresStore(state["dsn"]),
                 state["world_index"],
@@ -51,7 +57,7 @@ async def main() -> None:
                 state["baseline"],
                 # The parent already validated this handle before scenario execution.
                 _validate_baseline=False,
-                workspace_roots=state.get("workspace_roots", {}),
+                workspace_channel=workspaces,
                 endpoints=state.get("endpoints", {}),
                 observations=state.get("observations", {}),
             )

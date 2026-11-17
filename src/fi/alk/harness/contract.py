@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import collections.abc
 import json
+import logging
 import os
 import re
 import shlex
@@ -28,6 +29,7 @@ from fi.simulate.agent.wrappers.http_events import (
     CompletedToolEvents,
     CompletedToolRows,
 )
+from fi.simulate.agent.wrappers.http_stream import HTTPStreamSpec
 
 from ..providers.agent import _redact
 from ..providers.secret_shapes import credential_in, credential_named_arg_values_refusal
@@ -134,6 +136,12 @@ class ToolSpec(BaseModel):
     def _normalize_args(cls, payload: Any) -> Any:
         if not isinstance(payload, dict):
             return payload
+        if isinstance(payload.get("returns"), list):
+            payload["returns"] = {str(one): "" for one in payload["returns"]}
+        if isinstance(payload.get("returns"), dict):
+            payload["returns"] = {str(k): str(v) for k, v in payload["returns"].items()}
+        elif "returns" in payload:
+            payload.pop("returns")
         if not payload.get("args"):
             for alias in ("parameters", "arguments", "params", "arg_names"):
                 value = payload.get(alias)
@@ -165,6 +173,14 @@ class ToolSpec(BaseModel):
     args: list[str] = Field(default_factory=list)
     arg_types: dict[str, str] = Field(default_factory=dict)
     arg_values: dict[str, Any] = Field(default_factory=dict)
+    # The unit or format a field is written in, where the name alone does not say: `timeout` -> "milliseconds".
+    arg_units: dict[str, str] = Field(default_factory=dict)
+    # What the tool hands back, by output field: its type and, where the name does not say it, its unit or format.
+    returns: dict[str, str] = Field(default_factory=dict)
+    # The world's tables the tool reads, and the ones it adds to, changes or deletes from, declared from its code.
+    # Empty means not recorded.
+    tables_read: list[str] = Field(default_factory=list)
+    tables_changed: list[str] = Field(default_factory=list)
     description: str = ""
     # Tools that must have run before this one stops refusing, and only for state the agent builds
     # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
@@ -203,7 +219,26 @@ class ToolEntry(BaseModel):
     service: str = ""
     endpoint: str = ""
     method: str = "POST"
+    # `read` when the tool only reads (a lookup, a search, a list), `write` when it changes anything. Empty reads the
+    # HTTP method: GET, HEAD and OPTIONS read, everything else counts as a write.
+    effect: str = ""
+    # Set at seal time when the world's door is bound to this tool but cannot stand in front of it (why, in words);
+    # empty when it can. The platform reads it so a fault or acting actor on the tool is held back, not run.
+    door_unreached: str = ""
     notes: str = ""
+
+
+class DeclaredWorker(BaseModel):
+    """An agent the app hands work to, as its source declares it.
+
+    Declared is not observed: a run shows whether the worker actually took part, from the spans the app exports.
+    ``name`` is the name the app gives the agent, because that is the name its spans carry.
+    """
+
+    id: str
+    name: str = ""
+    # The contract tools this worker holds, by name.
+    tools: list[str] = Field(default_factory=list)
 
 
 class PromptSource(BaseModel):
@@ -273,6 +308,8 @@ class DataStore(BaseModel):
     schema_from: str = ""
     loaded_by: str = ""
     loader_module: str = ""
+    # When the loader runs: "start" (once, as the agent starts) or "each_call"; empty when unknown.
+    loads: str = ""
 
     def has_seam(self) -> bool:
         """Whether there is any way to point this agent at our store.
@@ -492,6 +529,12 @@ class RuntimeInterface(BaseModel):
         "list-index segments selecting assistant text. Negative indexes are supported, "
         "e.g. output.-1.content.0.text. Bracket indexing and JSONPath expressions are not supported.",
     )
+    sse: HTTPStreamSpec | None = Field(
+        default=None,
+        description="Live JSON server-sent events for this source endpoint. Declare explicit "
+        "completion and optional failure predicates; EOF alone never completes a turn. Paths "
+        "select from {event, data, id}, and text rules assemble delta, cumulative, or final text.",
+    )
     headers_template: dict[str, str] = Field(
         default_factory=dict,
         description="Chat headers rendered after setup completes, using setup captures or local "
@@ -625,6 +668,8 @@ class RuntimeInterface(BaseModel):
                 )
             if self.protocol == "json_template" and self.request_template is None:
                 raise ValueError("runtime_json_template_requires_request_template")
+            if self.sse is not None and self.protocol != "json_template":
+                raise ValueError("runtime_sse_requires_json_template")
             available = set(_RUNTIME_TEMPLATE_INPUTS)
             if self.local_auth:
                 available.add(self.local_auth.template_variable)
@@ -667,6 +712,8 @@ class RuntimeInterface(BaseModel):
                 )
         if self.kind == "websocket" and self.protocol != "fi.alk":
             raise ValueError("runtime_websocket_protocol_unsupported: expected fi.alk")
+        if self.sse is not None and self.kind != "http":
+            raise ValueError("runtime_sse_requires_http")
         return self
 
 
@@ -849,6 +896,18 @@ class Runtime(BaseModel):
     # contract is saved, so it is kept out of the schema the model writes against and out of
     # the dump when empty.
     source_subfolder: SkipJsonSchema[str] = ""
+
+    @field_validator("source_subfolder")
+    @classmethod
+    def _folder_inside_the_source(cls, folder: str) -> str:
+        # Checked at the save, and again by its spelling when a bundle's contract is loaded: the
+        # run puts this folder on the import path, so it is never absolute or climbs with `..`.
+        # A folder that is a link out of the source is caught at the save (`agent_folder`).
+        if folder and (
+            folder.startswith("/") or any(part in ("", ".", "..") for part in folder.split("/"))
+        ):
+            raise ValueError("runtime_source_subfolder_invalid")
+        return folder
 
     @model_serializer(mode="wrap")
     def _omit_empty_subfolder(self, handler: Any) -> dict[str, Any]:
@@ -1170,6 +1229,8 @@ class AgentContract(BaseModel):
     model: ModelSource | None = None
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
+    # Empty for an agent that hands no work to other agents.
+    workers: list[DeclaredWorker] = Field(default_factory=list)
     data_schema: dict[str, Any] = Field(default_factory=dict)
     base_environment: dict[str, Any] = Field(default_factory=dict)
     # What the environment stage has to build before any tool can be answered.
@@ -1214,6 +1275,21 @@ class AgentContract(BaseModel):
             data.pop("unconfirmed_prompt_from", None)
         return data
 
+    @model_validator(mode="after")
+    def _resolvable_workers(self) -> AgentContract:
+        # A worker holds only tools the contract has; its id is checked by `validate_contract`.
+        self.workers = [
+            worker.model_copy(
+                update={
+                    "tools": [
+                        tool for tool in worker.tools if tool in self.tool_names()
+                    ]
+                }
+            )
+            for worker in self.workers
+        ]
+        return self
+
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}
 
@@ -1248,6 +1324,10 @@ class AgentContract(BaseModel):
                         ("refuses", tool.refuses),
                         ("effects", tool.effects),
                         ("arguments from", ", ".join(f"{arg} <- {source}" for arg, source in tool.inputs_from.items())),
+                        ("units", ", ".join(f"{arg} in {unit}" for arg, unit in sorted(tool.arg_units.items()))),
+                        ("returns", ", ".join(f"{field}: {kind}" for field, kind in tool.returns.items())),
+                        ("reads tables (declared)", ", ".join(tool.tables_read)),
+                        ("changes tables (declared)", ", ".join(tool.tables_changed)),
                     )
                     if text
                 )
@@ -1313,6 +1393,14 @@ class AgentContract(BaseModel):
                     for one in self.dependencies
                 )
                 + "\nThe agent's code is never edited; the environment must match its existing seam."
+            )
+        if self.workers:
+            parts.append(
+                "WORKERS (agents this one hands work to, and the tools each holds):\n  - "
+                + "\n  - ".join(
+                    f"{one.id} ({one.name or one.id}): {', '.join(one.tools) or 'no tools'}"
+                    for one in self.workers
+                )
             )
         if self.real_use_cases:
             # Every one of them. A scenario writer covers what it is shown, so a truncated
@@ -1415,6 +1503,10 @@ FREE_TEXT = (
     "ToolSpec.description",
     "ToolSpec.refuses",
     "ToolSpec.effects",
+    # What a tool hands back, by output field: each value is a description a person or model
+    # writes, and the contract only ever shows it (the build, the world and the checks never match
+    # it), so the values are cleaned. The field names are kept.
+    "ToolSpec.returns",
     "ToolEntry.notes",
     "Dependency.what",
 )
@@ -1443,13 +1535,26 @@ KEPT_AS_WRITTEN = (
     "AgentContract.runtime",
     "AgentContract.chosen_evals",
     "AgentContract.instrumentation",
+    # Names: a worker's id and name are matched against the spans the app exports, and its tools
+    # against the contract's tool names, so they are read as written.
+    "AgentContract.workers",
+    "DeclaredWorker.id",
+    "DeclaredWorker.name",
+    "DeclaredWorker.tools",
     "ToolSpec.name",
     "ToolSpec.args",
     "ToolSpec.arg_types",
+    # A unit or format each field is written in ("milliseconds"): the actor and the world read it
+    # as written, and its keys are checked against `args`.
+    "ToolSpec.arg_units",
     # The world answers with these as written.
     "ToolSpec.arg_values",
     "ToolSpec.requires",
     "ToolSpec.inputs_from",
+    # Names of the world's tables, matched against the tables a proof run changed
+    # (tool_certification) and against the world's schema.
+    "ToolSpec.tables_read",
+    "ToolSpec.tables_changed",
     "ToolEntry.tool",
     "ToolEntry.mode",
     "ToolEntry.module",
@@ -1460,6 +1565,12 @@ KEPT_AS_WRITTEN = (
     # The tool proxy calls it as written.
     "ToolEntry.endpoint",
     "ToolEntry.method",
+    # A flag, `read` or `write`, compared as written (the tool proxy, the world's door and the
+    # read-only check), so it is never prose even though it sits beside `notes`.
+    "ToolEntry.effect",
+    # Set by the seal from the kit's own constant text, not written by a reader; the platform
+    # tests it for emptiness and quotes it as set.
+    "ToolEntry.door_unreached",
     "Dependency.name",
     "Dependency.kind",
     "Dependency.used_by",
@@ -1482,8 +1593,17 @@ KEPT_AS_WRITTEN = (
     "LocalHttpAuth",
     "RuntimeHttpFailureRule",
     "RuntimeHttpSetupRequest",
+    # The live SSE endpoint's rules (fi.simulate): a JSON path, a mode and the values a frame is
+    # matched against, all compared with the frames as written.
+    "HTTPStreamSpec",
+    "HTTPStreamText",
+    "HTTPStreamMatch",
 )
 CONTRACT_FILE = "contract.json"
+# What a reading was made from, saved beside its contract and outside the model: a build handed
+# that reading is told apart from one that read the agent itself by this key alone, so every
+# later save of the contract keeps it.
+READING_RECORD = "reading_inputs"
 _SEQUENCES = (
     list,
     tuple,
@@ -1563,7 +1683,38 @@ def _holders(contract: AgentContract, body: dict[str, Any], model: str) -> list[
     return pairs
 
 
-def write_contract(contract: AgentContract, destination: Path) -> AgentContract:
+def _saved_record(path: Path) -> dict[str, Any]:
+    """The reading's record in the contract saved at ``path``, as ``{key: value}``; empty when
+    there is no file, no record in it, or it can't be read as a JSON object."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        # The save goes on without it, so a seeded build saves as an unseeded one: log the error
+        # in full. The file is the kit's own contract, not the customer's source.
+        logging.getLogger(__name__).warning(
+            "reading record not carried; class: %s", type(exc).__name__, exc_info=True
+        )
+        return {}
+    # A contract that never held a record is not parsed again.
+    if READING_RECORD.encode() not in raw:
+        return {}
+    try:
+        saved = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return {}
+    if not isinstance(saved, dict) or READING_RECORD not in saved:
+        return {}
+    return {READING_RECORD: saved[READING_RECORD]}
+
+
+def write_contract(
+    contract: AgentContract,
+    destination: Path,
+    *,
+    shape: collections.abc.Callable[[Any, Any], Any] | None = None,
+) -> AgentContract:
     """Save the contract to ``destination/contract.json``, its free text cleaned of URL credentials.
 
     Every writer of the contract goes through here, so no saved contract holds a URL's password,
@@ -1571,6 +1722,13 @@ def write_contract(contract: AgentContract, destination: Path) -> AgentContract:
     so a write that fails partway leaves the earlier contract as it was. Only then are the
     cleaned values copied back onto ``contract`` itself, in place: the stage and its tools hold
     that object, and a fresh one would leave them working from the raw text. It is returned too.
+
+    The record of what a reading was made from is not part of the model. When the contract
+    already saved at ``destination`` holds one, the new save keeps its value, first, as the
+    reading put it; a save where none is held writes none.
+
+    ``shape``, when given, is applied to what is written and the contract saved before it (an
+    edit's save keeps the saved file's shape, with no new empty fields).
     """
     body = contract.model_dump()
     places: list[tuple[Any, Any, Any, str]] = []
@@ -1579,6 +1737,14 @@ def write_contract(contract: AgentContract, destination: Path) -> AgentContract:
         for saved, held in _holders(contract, body, model):
             if isinstance(saved, dict) and isinstance(saved.get(field), (str, list)):
                 places.append((saved, held, saved[field], field))
+            elif isinstance(saved, dict) and isinstance(saved.get(field), dict):
+                # A mapping of prose (a tool's `returns`): each value is cleaned as a text of its
+                # own, never by its key, so an output field named `token` keeps its description.
+                kept = held.get(field) if isinstance(held, dict) else getattr(held, field, None)
+                if isinstance(kept, dict):
+                    for key, value in saved[field].items():
+                        if isinstance(value, str):
+                            places.append((saved[field], kept, value, key))
     # One call for the whole save, over a list with no keys: only the URL rule applies, and a
     # refused URL is logged once per save rather than once per string.
     values = [value for _, _, value, _ in places]
@@ -1590,8 +1756,18 @@ def write_contract(contract: AgentContract, destination: Path) -> AgentContract:
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / CONTRACT_FILE
     partial = destination / f".{CONTRACT_FILE}.{os.getpid()}.{threading.get_ident()}"
+    written = {**_saved_record(path), **body}
+    if shape is not None:
+        try:
+            before = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            before = None
+        if isinstance(before, dict):
+            written = shape(written, before)
     try:
-        partial.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
+        partial.write_text(
+            json.dumps(written, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         # Synced before the move, so the move never publishes a file the disk does not hold.
         descriptor = os.open(partial, os.O_RDONLY)
         try:
@@ -1755,6 +1931,11 @@ def validate_contract(contract: AgentContract) -> list[str]:
             problems.append(
                 f"tool[{tool.name}]:types-for-unknown-args:{','.join(unknown)}"
             )
+        unknown_units = sorted(set(tool.arg_units) - set(tool.args))
+        if unknown_units:
+            problems.append(
+                f"tool[{tool.name}]:units-for-unknown-args:{','.join(unknown_units)}"
+            )
     problems.extend(_credential_problems(contract))
     # Conversational agents may expose no tools. Zero-argument tools are also legitimate;
     # cardinality alone is not evidence that authoring omitted something.
@@ -1780,4 +1961,17 @@ def validate_contract(contract: AgentContract) -> list[str]:
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         problems.append(f"duplicate-tool-names:{','.join(duplicates)}")
+    for index, worker in enumerate(contract.workers):
+        if not worker.id.strip():
+            problems.append(
+                f"worker[{index}]:no-id: give this worker the id the agent's source uses for it, "
+                "one that no other worker has."
+            )
+    worker_ids = [worker.id for worker in contract.workers if worker.id.strip()]
+    repeated = sorted({one for one in worker_ids if worker_ids.count(one) > 1})
+    if repeated:
+        problems.append(
+            f"duplicate-worker-ids:{','.join(repeated)}: each worker is one agent of the app: "
+            "merge the entries that are the same agent, or give each its own id."
+        )
     return problems

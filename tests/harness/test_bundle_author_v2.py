@@ -13,6 +13,7 @@ import pytest
 
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
+    _SOURCE_TOOL_TRACE_VERSION,
     _carries_world,
     _compile_source_tool_handlers,
     _contract_column_declarations,
@@ -26,6 +27,7 @@ from fi.alk.harness.bundle_author_v2 import (
     resolve_environment_plan,
     sealed_from,
 )
+from fi.alk.harness.generated_runtime import framework_instrumentation_command
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
 from fi.alk.harness.bundle_v2 import load_bundle_v2
 from fi.alk.harness.certification import (
@@ -119,22 +121,132 @@ def test_native_command_tool_trace_uses_executable_source_bindings(
         tool_entrypoints=entries, contract_interface_kind="command", contract_modality="chat",
     )
     control = next(p for p in plan.processes if p.name == plan.control_service)
-    if mode in {"none", "http"}:
-        assert "HARNESS_TOOL_TRACE" not in control.environment
-        assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
-        assert "ALK_CREWAI_TOOL_TRACE" not in control.environment
-        return
     assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
-    assert json.loads(control.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
-        "name": "Lookup tool", "module": "agent_tools", "callable": "lookup",
-    }]
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert control.build_commands[-1] == framework_instrumentation_command()
     assert (control.environment.get("ALK_CREWAI_TOOL_TRACE") == "1") == (
         dependency in {"requirements", "selected", "extra", "supplemental"}
     )
+    if mode in {"none", "http"}:
+        assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
+    else:
+        assert json.loads(control.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
+            "name": "Lookup tool", "module": "agent_tools", "callable": "lookup",
+        }]
     assert all(
         "HARNESS_TOOL_TRACE" not in getattr(p, "environment", {})
         for p in plan.processes if p.name != plan.control_service
     )
+
+
+def test_an_http_python_agent_is_observed_through_its_framework_spans(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "requirements.txt").write_text("openai-agents==0.24.0\n")
+    runtime = {"language": "python", "execution": "native", "command": ["python", "agent.py"]}
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime,
+        tool_entrypoints=[{"tool": "lookup", "mode": "import", "module": "agent", "callable": "lookup"}],
+        contract_interface_kind="http", contract_modality="chat",
+    )
+    voice = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime,
+        tool_entrypoints=[], contract_interface_kind="http", contract_modality="voice",
+    )
+    # A voice agent's calls are traced by its LiveKit worker alone.
+    assert all(
+        "ALK_OBSERVE_FRAMEWORKS" not in p.environment and framework_instrumentation_command() not in p.build_commands
+        for p in voice.processes if hasattr(p, "build_commands")
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
+    assert control.build_commands[-1] == framework_instrumentation_command()
+
+
+@pytest.mark.parametrize("uv", ["exit 1", "exec sleep 30"])
+def test_an_instrumentor_that_fails_or_stalls_is_a_warning_and_the_build_goes_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uv: str
+) -> None:
+    from fi.alk.harness import generated_runtime
+    from fi.alk.harness.generated_runtime import FRAMEWORK_INSTRUMENTORS
+
+    assert all(
+        "==" in one
+        for _framework, one in FRAMEWORK_INSTRUMENTORS
+        if one.startswith("traceai-")
+    )
+    monkeypatch.setattr(generated_runtime, "INSTRUMENTOR_INSTALL_SECONDS", 1)
+    installed = tmp_path / "site"
+    (installed / "crewai-1.0.dist-info").mkdir(parents=True)
+    (installed / "crewai-1.0.dist-info" / "METADATA").write_text(
+        "Name: crewai\nVersion: 1.0\n"
+    )
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    (tools / "uv").write_text(f"#!/bin/sh\n{uv}\n")
+    (tools / "uv").chmod(0o755)
+    (tools / "python3").symlink_to(sys.executable)
+    result = subprocess.run(
+        generated_runtime.framework_instrumentation_command(),
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{tools}:/bin:/usr/bin", "PYTHONPATH": str(installed)},
+        timeout=60,
+    )
+    assert result.returncode == 0
+    assert (
+        "warning: framework instrumentor not installed, its calls go unobserved: traceai-crewai=="
+        in result.stderr
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "project"),
+    [
+        (
+            [
+                "uv",
+                "run",
+                "--project",
+                "graphs/python",
+                "--with",
+                "langgraph-cli[inmem]",
+                "langgraph",
+                "dev",
+            ],
+            "graphs/python",
+        ),
+        (["uv", "run", "--project=app", "python", "main.py"], "app"),
+        (["uv", "run", "python", "agent.py"], ""),
+        (["python", "agent.py"], ""),
+    ],
+)
+def test_framework_instrumentors_go_where_a_uv_run_project_s_frameworks_are(
+    tmp_path: Path, command: list[str], project: str
+) -> None:
+    from fi.alk.harness.generated_runtime import uv_run_project
+
+    assert uv_run_project(command) == project
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    runtime = {"language": "python", "execution": "native", "command": command}
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_runtime=runtime,
+        tool_entrypoints=[],
+        contract_interface_kind="http",
+        contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    step = control.build_commands[-1]
+    assert step == framework_instrumentation_command(project)
+    if project:
+        assert step[2].startswith(f"uv sync --project {project} || echo ")
+        assert f"{project}/.venv/bin/python" in step[2]
+    else:
+        assert "uv sync" not in step[2] and "p=.venv/bin/python" in step[2]
 
 
 def test_bundle_author_carries_command_tool_trace_bindings(tmp_path: Path) -> None:
@@ -216,7 +328,135 @@ def test_reseal_compiles_tools_added_to_a_traced_command_agent(tmp_path: Path) -
     reseal_scenarios(authoring)
 
     resealed = load_bundle_v2(bundle)
-    assert resealed.metadata["source_tool_trace_version"] == 1
+    assert resealed.metadata["source_tool_trace_version"] == _SOURCE_TOOL_TRACE_VERSION
+    assert "handlers/update.py" in {file.path for file in resealed.files}
+    assert "contract_copied" not in resealed.metadata
+
+
+def test_reseal_binds_a_tool_added_to_a_command_agent_built_with_none(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text("def lookup(query): return query\n")
+    (source / "requirements.txt").write_text("requests==2.32.5\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tools"] = [{"name": "lookup", "args": ["query"]}]
+    contract["tool_entrypoints"] = []
+    contract_path.write_text(json.dumps(contract))
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=bundle
+    )
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "lookup",
+            "mode": "import",
+            "module": "agent_tools",
+            "callable": "lookup",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    control = next(
+        p for p in resealed.processes if p.name == resealed.runtime.control_service
+    )
+    assert json.loads(control.environment["ALK_TOOL_TRACE_BINDINGS"]) == [
+        {"name": "lookup", "module": "agent_tools", "callable": "lookup"}
+    ]
+
+
+def test_reseal_compiles_tools_added_to_a_bundle_sealed_before_framework_observation(
+    tmp_path: Path,
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text(
+        "def lookup(query): return query\ndef update(value): return value\n"
+    )
+    (source / "requirements.txt").write_text("requests==2.32.5\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tools"] = [{"name": "lookup", "args": ["query"]}]
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "lookup",
+            "mode": "import",
+            "module": "agent_tools",
+            "callable": "lookup",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=bundle
+    )
+    # As the previous release sealed it: tool bindings at trace version 1, no framework observation.
+    manifest = load_bundle_v2(bundle)
+    observation = framework_instrumentation_command()
+    processes = [
+        process.model_copy(
+            update={
+                "environment": {
+                    k: v
+                    for k, v in process.environment.items()
+                    if k != "ALK_OBSERVE_FRAMEWORKS"
+                },
+                "build_commands": [
+                    step for step in process.build_commands if step != observation
+                ],
+            }
+        )
+        if hasattr(process, "build_commands")
+        else process
+        for process in manifest.processes
+    ]
+    manifest = manifest.model_copy(
+        update={
+            "processes": processes,
+            "files": _files(bundle),
+            "metadata": {**manifest.metadata, "source_tool_trace_version": 1},
+        }
+    )
+    manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+    (bundle / BUNDLE_V2_MANIFEST).write_text(
+        json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+    )
+    contract["tools"].append({"name": "update", "args": ["value"]})
+    contract["tool_entrypoints"].append(
+        {
+            "tool": "update",
+            "mode": "import",
+            "module": "agent_tools",
+            "callable": "update",
+        }
+    )
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
     assert "handlers/update.py" in {file.path for file in resealed.files}
     assert "contract_copied" not in resealed.metadata
 
@@ -269,7 +509,7 @@ def test_reseal_preserves_construct_only_crewai_command_trace(tmp_path: Path) ->
     assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
         "name": "editor", "module": "agent_tools", "callable": "Editor.update",
     }]
-    assert resealed.metadata["source_tool_trace_version"] == 1
+    assert resealed.metadata["source_tool_trace_version"] == _SOURCE_TOOL_TRACE_VERSION
 
 
 def _job(
@@ -652,7 +892,8 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
 
     handler = (output / "handlers" / "lookup_account.py").read_text(encoding="utf-8")
     assert "from customer_tools import lookup_account" in handler
-    assert "return settled(lookup_account(**args))" in handler
+    # The adopted tool is called the way its own signature expects (keywords here), through the shared caller.
+    assert "return settled(call_agent_tool(lookup_account, args, db, state=False))" in handler
     load_bundle_v2(output)
     world = GeneratedWorld(":memory:")
     world.handlers["lookup_account"] = handler
@@ -663,6 +904,47 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
         "email": "customer@example.com",
         "status": "active",
     }
+
+
+def test_a_reseal_keeps_framework_observation_of_a_chat_agent_with_no_import_tools(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+            "include_tools": False,
+        },
+    )
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=bundle
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["notes"] = "edited after the build"
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    control = next(
+        p for p in resealed.processes if p.name == resealed.runtime.control_service
+    )
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert (
+        control.environment["HARNESS_TOOL_TRACE"]
+        == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    )
+    assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
 
 
 def test_bundle_observes_imported_chat_tool_execution(tmp_path: Path) -> None:
@@ -716,7 +998,7 @@ def test_bundle_observes_imported_chat_tool_execution(tmp_path: Path) -> None:
     records = [json.loads(line) for line in trace.read_text().splitlines()]
     assert records[0]["name"] == "search_books"
     assert records[0]["arguments"] == {"query": "Dune"}
-    assert bundle.metadata["source_tool_trace_version"] == 1
+    assert bundle.metadata["source_tool_trace_version"] == _SOURCE_TOOL_TRACE_VERSION
 
 
 def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> None:
@@ -4843,6 +5125,75 @@ def test_a_changed_world_reaches_the_sealed_seed_on_reseal(
     assert reseal_scenarios(authoring) == digest
 
 
+def test_an_actor_who_speaks_on_calls_is_sealed_in_the_one_actor_list(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "actors.json").write_text(
+        json.dumps(
+            {
+                "actors": [
+                    {"id": "partner", "name": "Sam", "role": "the person's partner", "channel": "audio_mix"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", scenario_count=1),
+        authoring=authoring,
+        output=output,
+    )
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    sealed = {one["path"] for one in manifest["files"]}
+    assert "actors.json" in sealed
+    assert sealed.isdisjoint({"sub_actors.json", "call_actors.json"})
+    assert json.loads((output / "actors.json").read_text())["actors"][0]["channel"] == "audio_mix"
+
+
+def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", scenario_count=1),
+        authoring=authoring,
+        output=output,
+    )
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert {"actors.json", "actor_rules.json"} <= {
+        one["path"] for one in manifest["files"]
+    }
+    rules = json.loads((output / "actor_rules.json").read_text(encoding="utf-8"))
+    assert set(rules["records"]) == {"actors.json"}
+
+
+def test_a_world_without_actors_gets_the_full_action_log(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _action_log_seed
+
+    without = _action_log_seed(tmp_path)
+    assert "actor_id text" in without and "outcome text" in without and "effect text" in without
+    assert "INSERT INTO _alk_actors" not in without
+    (tmp_path / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+    with_actors = _action_log_seed(tmp_path)
+    assert "actor_id text" in with_actors and "INSERT INTO _alk_actors" in with_actors
+
+
 # The platform pins the same digest for the same files (test_harness_versioning_reseal.py).
 GOLDEN_SEALED_FROM = (
     "sha256:402ed05450abe6c943865dd538ebd78e94d15c7e7a15d9b6a934e51cf4d26d3e"
@@ -6523,3 +6874,269 @@ def test_bundle_main_matching_folder_passes(tmp_path, monkeypatch):
 
     assert code == 0 and len(seen) == 1
     assert not (authoring / "failure.json").exists()
+
+
+_GATEWAY_MARK = "ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"
+_TRACING_OFF = "OPENAI_AGENTS_DISABLE_TRACING"
+
+
+def _gateway_job(target_model: str | None) -> HarnessJob:
+    job = _job(connector="auto")
+    if target_model is not None:
+        job.agent.config["target_model"] = target_model
+    return job
+
+
+def _gateway_control_environment(tmp_path: Path, lane: str, target_model: str | None):
+    if lane == "compose":
+        source = tmp_path / "compose-agent"
+        source.mkdir()
+        (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+        (source / "requirements.txt").write_text("\n", encoding="utf-8")
+        (source / "compose.yml").write_text(
+            "services:\n  postgres:\n    image: postgres:16\n  agent:\n    build: .\n"
+            "    depends_on:\n      postgres: {condition: service_healthy}\n",
+            encoding="utf-8",
+        )
+        plan = resolve_environment_plan(
+            source,
+            _gateway_job(target_model),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={},
+        )
+    else:
+        text, runtime, kind = _LANES[lane]
+        source = _repo(
+            tmp_path,
+            {"pyproject.toml": _PROJECT, "agent.py": text},
+        )
+        plan = resolve_environment_plan(
+            source,
+            _gateway_job(target_model),
+            contract_modality="chat",
+            contract_interface_kind=kind,
+            contract_runtime=dict(runtime),
+        )
+    return next(p for p in plan.processes if p.name == plan.control_service).environment
+
+
+@pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
+def test_routed_target_model_marks_the_agent_process_for_chat_completions(
+    tmp_path: Path, lane: str
+) -> None:
+    environment = _gateway_control_environment(
+        tmp_path, lane, "vertex_ai/gemini-3.7-flash"
+    )
+    assert environment[_GATEWAY_MARK] == "1"
+    # Off until the kit's hook has kept the SDK's export local; the hook turns it back on.
+    assert environment[_TRACING_OFF] == "1"
+
+
+@pytest.mark.parametrize("lane", ["callback", "declared"])
+def test_routed_sdk_agent_in_a_repo_with_an_agents_folder_has_tracing_off_until_the_hook(
+    tmp_path: Path, lane: str
+) -> None:
+    text, runtime, kind = _LANES[lane]
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/__init__.py": "",
+            "agent.py": "from agents import Agent, Runner\n" + text,
+        },
+    )
+    plan = resolve_environment_plan(
+        source,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_modality="chat",
+        contract_interface_kind=kind,
+        contract_runtime=dict(runtime),
+    )
+    environment = next(
+        p for p in plan.processes if p.name == plan.control_service
+    ).environment
+    assert environment[_GATEWAY_MARK] == "1"
+    assert environment[_TRACING_OFF] == "1"
+
+
+@pytest.mark.parametrize(
+    "customer_value", [None, "0", "1"], ids=["unset", "customer_zero", "customer_one"]
+)
+def test_routed_compose_runtime_control_service_has_tracing_off_until_the_hook(
+    tmp_path: Path, customer_value: str | None
+) -> None:
+    from fi.alk.harness.contract import Runtime
+
+    # The compose runtime path builds the control service from the compose file's source services.
+    environment_block = (
+        f"    environment:\n      {_TRACING_OFF}: '{customer_value}'\n"
+        if customer_value is not None
+        else ""
+    )
+    (tmp_path / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n    command: [python, agent.py]\n"
+        + environment_block,
+        encoding="utf-8",
+    )
+    runtime = Runtime(
+        language="python", execution="compose", compose_file="compose.yaml", service="agent"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime.model_dump(),
+    )
+    environment = next(
+        p for p in plan.processes if p.name == plan.control_service
+    ).environment
+    assert environment[_GATEWAY_MARK] == "1"
+    # A customer's own "0" doesn't turn it on before the hook has kept the export local.
+    assert environment[_TRACING_OFF] == "1"
+    # The marker tells the hook the switch is the kit's to turn back on; a customer's own "1"
+    # stays theirs.
+    assert ("ALK_SDK_TRACING_OFF_BY_KIT" in environment) is (customer_value != "1")
+
+
+def test_routed_command_agent_keeps_framework_observation_with_tracing_off_until_the_hook(
+    tmp_path: Path,
+) -> None:
+    # A command-run Agents SDK agent's tool calls come from the framework spans the kit observes;
+    # the hook turns the SDK's tracing back on once its export is local, so the observer reads.
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="agent"\nversion="1"\n')
+    plan = resolve_environment_plan(
+        tmp_path,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_runtime={
+            "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        },
+        contract_interface_kind="command",
+        contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    assert control.environment[_GATEWAY_MARK] == "1"
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert control.environment[_TRACING_OFF] == "1"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["python", "-I", "agent.py"], ["python3", "-E", "agent.py"], ["python", "-uS", "agent.py"]],
+    ids=["isolated", "ignore_environment", "no_site"],
+)
+def test_a_routed_python_that_skips_the_hook_gets_the_sdks_tracing_switch(
+    tmp_path: Path, command: list[str]
+) -> None:
+    # -I, -E and -S never load the hook, so only the SDK's own switch keeps its export off.
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="agent"\nversion="1"\n')
+    plan = resolve_environment_plan(
+        tmp_path,
+        _gateway_job("vertex_ai/gemini-3.7-flash"),
+        contract_runtime={"language": "python", "execution": "native", "command": command},
+        contract_interface_kind="command",
+        contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    assert control.environment[_TRACING_OFF] == "1"
+
+
+@pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
+@pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])
+def test_unrouted_target_model_leaves_the_agent_process_unmarked(
+    tmp_path: Path, lane: str, target_model: str | None
+) -> None:
+    environment = _gateway_control_environment(tmp_path, lane, target_model)
+    assert _GATEWAY_MARK not in environment
+    assert _TRACING_OFF not in environment
+
+
+def _compose_gateway_environment(tmp_path, monkeypatch, resolved, target_model, env_block):
+    from fi.alk.harness.compose_integration import compile_bundle
+
+    source = tmp_path / "source"
+    source.mkdir(exist_ok=True)
+    (source / "compose.yaml").write_text(
+        "services:\n  chat:\n    image: example/chat:latest\n" + env_block
+    )
+    authoring = tmp_path / "authoring"
+    authoring.mkdir(exist_ok=True)
+    contract = {
+        "modality": "chat",
+        "runtime": {
+            "execution": "compose",
+            "compose_file": "compose.yaml",
+            "service": "chat",
+            "interface": {
+                "kind": "http",
+                "protocol": "json_template",
+                "port": 8000,
+                "path": "/chat",
+            },
+        },
+    }
+    job = _gateway_job(target_model)
+    monkeypatch.setenv("ALK_TRUSTED_COMPOSE_SOCKET", "/private/alk/docker.sock")
+    compile_bundle(
+        source=source,
+        job=job,
+        authoring=authoring,
+        output=tmp_path / "bundle",
+        contract=contract,
+        include_scenarios=False,
+    )
+    return json.loads((tmp_path / "bundle" / "compose.json").read_text())["services"]["chat"]
+
+
+@pytest.mark.parametrize(
+    "env_block",
+    [
+        "",
+        "    environment:\n      MODE: small\n",
+        "    environment:\n      - MODE=small\n      - OPENAI_AGENTS_DISABLE_TRACING=0\n",
+    ],
+    ids=["none", "mapping", "list_with_customer_value"],
+)
+def test_routed_compose_control_service_has_agents_sdk_tracing_off(
+    tmp_path, monkeypatch, resolved_compose_images, env_block
+):
+    service = _compose_gateway_environment(
+        tmp_path, monkeypatch, resolved_compose_images,
+        "vertex_ai/gemini-3.7-flash", env_block,
+    )
+    environment = service["environment"]
+    if isinstance(environment, dict):
+        assert environment[_TRACING_OFF] == "1"
+        assert environment.get("MODE", "small") == "small"
+    else:
+        assert environment.count(f"{_TRACING_OFF}=1") == 1
+        assert not any(item == f"{_TRACING_OFF}=0" for item in environment)
+        assert "MODE=small" in environment or "MODE" not in env_block
+
+
+@pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])
+def test_unrouted_compose_control_service_is_left_alone(
+    tmp_path, monkeypatch, resolved_compose_images, target_model
+):
+    service = _compose_gateway_environment(
+        tmp_path, monkeypatch, resolved_compose_images, target_model, ""
+    )
+    assert "environment" not in service
+
+
+def test_the_tool_proxy_learns_the_declared_read_actions_and_a_plan_without_any_is_unchanged():
+    from fi.alk.harness.bundle_author_v2 import _tool_proxy_process, declared_read_actions
+
+    entries = [
+        {"tool": "get_order", "endpoint": "/orders/get", "method": "POST", "effect": "read"},
+        {"tool": "issue_refund", "endpoint": "/orders/refund", "method": "POST", "effect": "write"},
+        {"tool": "lookup", "endpoint": "", "effect": "read"},
+        {"tool": "list_refunds", "endpoint": "/refunds/list", "method": "POST"},
+    ]
+    assert declared_read_actions(entries) == ["orders.get"]
+    assert _tool_proxy_process(["orders.get"]).environment["READ_ACTIONS"] == "orders.get"
+    assert "READ_ACTIONS" not in _tool_proxy_process(declared_read_actions(entries[1:])).environment

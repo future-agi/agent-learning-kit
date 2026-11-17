@@ -18,10 +18,11 @@ renders. Nothing above this line knows a vendor's name.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from collections import Counter
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -57,6 +58,21 @@ STAGE_IDLE_TIMEOUT_SECONDS = float(
     os.getenv("ALK_STAGE_IDLE_TIMEOUT_SECONDS", str(DEFAULT_STAGE_IDLE_TIMEOUT_SECONDS))
 )
 STAGE_IDLE_RETRIES = int(os.getenv("ALK_STAGE_IDLE_RETRIES", "1"))
+# Questions open to a person in this process. A turn waiting on a person's answer says nothing until they answer, and
+# however long they take is not a hang. Process-wide, as a hosted chat process runs one authoring session; the chat
+# sandbox's own lifetime, not renewed while it waits on the person, still ends a question nobody answers.
+_ASKING = 0
+
+
+@contextlib.contextmanager
+def asking_a_person() -> Iterator[None]:
+    """Hold the stage idle bound while a question waits on a person's answer."""
+    global _ASKING
+    _ASKING += 1
+    try:
+        yield
+    finally:
+        _ASKING -= 1
 
 logger = logging.getLogger(__name__)
 
@@ -315,17 +331,42 @@ class Stage:
         # emits nothing until that call returns, and killing it then throws away everything the
         # delegates proved.
         idle_bound = self._spec.idle_timeout_seconds or STAGE_IDLE_TIMEOUT_SECONDS
+        loop = asyncio.get_running_loop()
         while True:
+            # The next reply is awaited in this task, so the model's own context stays one context. A watcher stops it
+            # once the bound passes with nobody asked; while a person is asked, it waits on. The task is read before
+            # each wait: a generator may be stepped by another task than the one that began it.
+            task = asyncio.current_task()
+            expired = False
+
+            def expire(task: asyncio.Task[Any] | None = task) -> None:
+                nonlocal watcher, expired
+                if _ASKING:
+                    watcher = loop.call_later(idle_bound, expire)
+                    return
+                expired = True
+                if task is not None:
+                    task.cancel()
+
+            watcher = loop.call_later(idle_bound, expire)
             try:
-                received = await asyncio.wait_for(
-                    replies.__anext__(), timeout=idle_bound
-                )
+                received = await replies.__anext__()
             except StopAsyncIteration:
                 break
-            except TimeoutError as exc:
+            except asyncio.CancelledError as exc:
+                if not expired:
+                    raise
+                # A reply that lands just as the watcher fires is lost to a timeout: an exact-edge race, accepted.
+                if task is not None and hasattr(task, "uncancel"):
+                    task.uncancel()
+                    # Cancelled from outside as well: that cancel stands, never read as an idle stage.
+                    if task.cancelling() > 0:
+                        raise
                 raise StageIdleTimeout(
                     f"{self.name or 'model'} produced no event for {idle_bound:g}s"
                 ) from exc
+            finally:
+                watcher.cancel()
             for event in self._events(received, turn):
                 # Which stage this came from, stamped once here rather than by every caller,
                 # so a front end showing several stages can tell them apart.

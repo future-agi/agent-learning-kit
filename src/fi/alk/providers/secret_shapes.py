@@ -13,12 +13,42 @@ package, so only the drift test reads it, to tie the prefix patterns here to it.
 import re
 from urllib.parse import unquote, unquote_plus
 from bisect import bisect_left
+from collections.abc import Callable
 
 REDACTED = "[redacted]"
 
 # A key's own characters. A literal that follows one of them is inside a longer run, so no
 # pattern starts there: each run is tried once, which keeps every scan linear.
 _KEY = r"A-Za-z0-9_\-"
+# A line break, tab or control character as repr() or JSON text writes it: a backslash and a
+# letter, \u00XX or \xXX. The letter or hex digit is a key character, so a key right after one
+# reads as inside a longer run unless a start after an escape is allowed.
+_ESCAPES = (
+    r"\\[nrtfbva0]",
+    r"\\u[0-9a-fA-F]{4}",
+    r"\\x[0-9a-fA-F]{2}",
+    r"\\U[0-9a-fA-F]{8}",
+    # Names are searched for in the lower-cased text, where \U0001f511 reads \u0001f511.
+    r"\\u[0-9a-fA-F]{8}",
+)
+# Between a word and its value: whitespace, or one of those escapes.
+_GAP = r"(?:\s|\\[nrtfbva0]|\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}|\\U[0-9a-fA-F]{8})"
+_ESCAPE_BEFORE = re.compile(
+    r"\\(?:[nrtfbva0]|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|U[0-9a-fA-F]{8})\Z"
+)
+
+
+def _after_escape(inner: str) -> str:
+    # One lookbehind per escape, since each is a different width.
+    return "|".join(f"(?<={escape}{inner})" for escape in _ESCAPES)
+
+
+def _escaped_before(text: str, at: int) -> bool:
+    """Whether an escape written out as text ends at `at`."""
+    return _ESCAPE_BEFORE.search(text, max(0, at - 10), at) is not None
+
+
+
 # The 600-character cut (`session._shown`) ends a text with this.
 _AT_CUT = r"(?=\.\.\.\Z)"
 _CUT_LENGTH = 600
@@ -27,7 +57,7 @@ _CUT_LENGTH = 600
 def _start(literal: str) -> str:
     escaped = re.escape(literal)
     # The literal comes first, so the regex engine's literal search finds each start.
-    return f"{escaped}(?<![{_KEY}]{escaped})"
+    return f"{escaped}(?:(?<![{_KEY}]{escaped})|{_after_escape(escaped)})"
 
 
 # (kind, literal, the rest of the key, the characters a key cut short at 600 is made of).
@@ -63,6 +93,13 @@ _PREFIX_TABLE = (
     ("anthropic", "sk-ant-", r"[a-zA-Z0-9\-_]{40,}", _KEY),
     ("huggingface", "hf_", r"[a-zA-Z0-9]{34,}", "a-zA-Z0-9"),
     ("npm", "npm_", r"[A-Za-z0-9]{36,}", "A-Za-z0-9"),
+    # Beside sk_live_ and AKIA: Stripe's test and webhook secrets, and AWS's temporary key IDs,
+    # which a sandbox on a cloud role gets next to its session token.
+    ("stripe", "sk_test_", r"[0-9a-zA-Z]{24,}", "0-9a-zA-Z"),
+    ("stripe", "rk_test_", r"[0-9a-zA-Z]{24,}", "0-9a-zA-Z"),
+    # Svix issues standard base64 after whsec_, so + / = belong to it.
+    ("stripe", "whsec_", r"[0-9a-zA-Z+/=]{24,}", "0-9a-zA-Z+/="),
+    ("aws", "ASIA", r"[0-9A-Z]{16}(?![0-9A-Z])", "0-9A-Z"),
     ("pypi", "pypi-AgEIcHlwaS5vcmc", r"[A-Za-z0-9\-_]{50,}", _KEY),
     ("stripe", "rk_live_", r"[0-9a-zA-Z]{24,}", "0-9a-zA-Z"),
     ("slack", "xoxp-", r"[0-9A-Za-z\-]{20,}", r"0-9A-Za-z\-"),
@@ -134,6 +171,96 @@ _GUARDS = (
         re.compile(_GUARD_NAMES[1] + r"[\s:=]+['\"]?([a-z0-9+/=]{88})(?![a-z0-9+/=])"),
     ),
 )
+
+# An Authorization header's value with no key prefix, as a Vapi key (a UUID), a Token or Bot
+# scheme or a Basic pair is sent. Run on the lower-cased text, as the guards are. Two rules:
+#   header: after `authorization` (also proxy-authorization) and a : or =, any scheme word or
+#           none, then the value. The header name is the context, so no value shape is checked.
+#   word:   `bearer` or `basic`, whitespace or an escape, then the value, when a quote or -H
+#           stands just before it or the value looks like a key. Prose such as "the basic
+#           list_all_customers tool" has neither.
+# Both open with the lookbehind or the literal and fail at the first character that is no part
+# of the value, so a run of letters is read once. The value is 16 or more token characters and
+# holds a digit or one of + / =, so a long plain word or a placeholder (YOUR_ACCESS_TOKEN)
+# stays. A `$TOKEN`, `<token>` or `{{ }}` starts with no token character, so a reference is kept
+# without a check of its own.
+_AUTH_VALUE = r"[a-z0-9._~+/=\-]"
+_AUTH_HAS = r"(?=[a-z._~\-]*[0-9+/=])"
+_AUTH_WORD = re.compile(
+    r"(?<![a-z0-9_])(?:bearer|basic)" + _GAP + r"{1,16}" + _AUTH_HAS + "(" + _AUTH_VALUE + r"{16,})"
+)
+# The name may be quoted and followed by a comma or => as in code (`.Set("Authorization", ...)`,
+# `headers["Authorization"] = ...`, `'Authorization' => ...`), also inside JSON text in JSON text.
+# A comma counts only after a quote, so "authorization, the plan" stays.
+_AUTH_HEADER = re.compile(
+    r"authorization(?:\\{0,15}[\"'`]\]?\s{0,16}(?:=>|[:=,])|\s{0,16}[:=])"
+    r"\s{0,16}(?:\\{0,15}[\"'`])?(?:[a-z]+" + _GAP + r"{1,16})?"
+    + _AUTH_HAS
+    + "("
+    + _AUTH_VALUE
+    + r"{16,})"
+)
+_AUTH_FLAG = re.compile(r"(?:\A|\s)-h\s{0,4}[\"']?\Z")
+_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_HEX_RUN = re.compile(r"[0-9a-fA-F]{32,}")
+_MIXED_RUN = re.compile(r"[A-Za-z0-9_\-+]{20,}={0,2}")
+
+
+_SEGMENT_BREAK = re.compile(r"[-_./~+=]")
+
+
+def _has_mixed_segment(value: str) -> bool:
+    """A segment of 6 or more characters with letters and a digit in it, as a token or a UUID
+    part has; "token-refresh-scheduled-v2" has only words and a version."""
+    return any(
+        len(part) >= 6
+        and any(char.isdigit() for char in part)
+        and any(char.isalpha() for char in part)
+        for part in _SEGMENT_BREAK.split(value)
+    )
+
+
+def _looks_like_key(value: str) -> bool:
+    """A UUID, a hex run of 32 or more, or 20 or more characters of both cases and a digit with
+    no / or . in them: the shapes real tokens have and prose does not."""
+    if _UUID.match(value) or _HEX_RUN.fullmatch(value):
+        return True
+    return bool(
+        _MIXED_RUN.fullmatch(value)
+        and any(char.isdigit() for char in value)
+        and any(char.isupper() for char in value)
+        and any(char.islower() for char in value)
+    )
+
+
+def _auth_spans(text: str, low: str) -> list[tuple[int, int, str]]:
+    found = []
+    for m in _AUTH_HEADER.finditer(low):
+        begin, end = m.span(1)
+        # Unquoted code (process.env.X, settings.X, a call) is a reference, as a named value's
+        # is; a quoted value is a string.
+        if text[begin - 1] in "\"'`" or (
+            _secret_value(text[begin:end], False) and not _CODE.match(text, begin, end + 1)
+        ):
+            found.append((begin, end, "auth_header"))
+    for m in _AUTH_WORD.finditer(low):
+        start = m.start()
+        # A quote just before and the same quote right after the value, or -H, makes the word a
+        # header's scheme ("Basic read/write/execute permissions" has a quote only before it);
+        # else the value must be key-shaped.
+        if (
+            (
+                start
+                and text[start - 1] in "\"'`"
+                and text[m.end(1) : m.end(1) + 1] == text[start - 1]
+                and _has_mixed_segment(text[m.start(1) : m.end(1)])
+            )
+            or _AUTH_FLAG.search(low, max(0, start - 8), start)
+            or _looks_like_key(text[m.start(1) : m.end(1)])
+        ):
+            found.append((m.start(1), m.end(1), "auth_header"))
+    return found
+
 
 # A private-key block runs from its header to the END that pairs with it: the nearest header
 # before that END (r4 L4). Whatever lies between is masked (r3 H1).
@@ -219,8 +346,12 @@ _NAME_ALTERNATION = "|".join(map(re.escape, sorted(_FORMS, key=len, reverse=True
 # it can start with a space or tab.
 _AROUND = r"(?:(?=\s{0,4}\S)\s{0,4}|[ \t]*+)"
 # A quote may close a quoted name; Markdown emphasis or a backtick may sit around the ":".
+# A quote may be escaped for JSON text inside JSON text: one backslash per level, 2^level - 1 of
+# them, so up to 15 backslashes covers four levels. The count is bounded, so each name is
+# still matched once.
+_ESC_QUOTE = r"\\{1,15}"
 _TAIL = (
-    r"[\"'`]?(?:[*_`]{0,4}"
+    r"(?:" + _ESC_QUOTE + r"[\"'`]|[\"'`])?(?:[*_`]{0,4}"
     + _AROUND
     + r":(?:[*_]{1,4}|`(?=\s))?|"
     + _AROUND
@@ -240,7 +371,12 @@ def _value_start(letter: str) -> str:
     # A value already masked fails at once, so a second pass costs little.
     return (
         r"(?![\"'`]?\[redacted\])"
-        r'(?:(?P<dq>")'
+        r"(?!" + _ESC_QUOTE + r'"?\[redacted\])'
+        # An escaped quote opens a value inside JSON text inside JSON text; it ends at the
+        # first backslash or quote.
+        r"(?:(?P<edq>" + _ESC_QUOTE + '")'
+        + test(r'[^"\\\n]')
+        + r'|(?P<dq>")'
         + test(double)
         + r"|(?P<sq>')"
         + test(single)
@@ -252,13 +388,13 @@ def _value_start(letter: str) -> str:
     )
 
 
-def _per_form(start: str) -> dict[str, re.Pattern[str]]:
+def _per_form(start: Callable[[str], str]) -> dict[str, re.Pattern[str]]:
     # One regex per name, on the lower-cased text, each opening with its name, so the engine's
     # literal search finds it as str.find would: a run of a name's own first letter never
-    # starts an attempt. `start` is a lookbehind on the name that says where it may sit.
+    # starts an attempt. `start` gives a lookbehind on the name that says where it may sit.
     tail = r"(?!::)" + _TAIL + _value_start("[a-z]")
     return {
-        form: re.compile(re.escape(form) + start.format(re.escape(form)) + tail)
+        form: re.compile(re.escape(form) + start(re.escape(form)) + tail)
         for form in _FORMS
     }
 
@@ -266,18 +402,23 @@ def _per_form(start: str) -> dict[str, re.Pattern[str]]:
 # A name followed by "::" is code, not a name (Token::new(42), r1 L2).
 # Not right after a letter or digit: the whole identifier, or its end after "_" or "-". "pass"
 # only ever follows "_" or "-".
-_NAMED = _per_form(r"(?<![^\W_]{})")
-_NAMED["pass"] = _per_form(r"(?<=[_\-]{})")["pass"]
+_NAMED = _per_form(lambda name: rf"(?:(?<![^\W_]{name})|{_after_escape(name)})")
+_NAMED["pass"] = _per_form(lambda name: rf"(?<=[_\-]{name})")["pass"]
 # Right after a letter or digit: a camelCase or PascalCase ending (clientSecret) when its first
 # letter is a capital as written, which is checked on the text itself.
 _NAMED_CAMEL = {
     form: pattern
-    for form, pattern in _per_form(r"(?<=[^\W_]{})").items()
+    for form, pattern in _per_form(lambda name: rf"(?<=[^\W_]{name})").items()
     if _FORMS[form][0] in ("base", "flat", "compact", "upper", "lower_camel")
 }
 # At the start of a line or after a tab, for a value TH-9491 joins into one URL.
-_NAMED_AT_LINE = _per_form(r"(?<=[\n\t]{})")
+_NAMED_AT_LINE = _per_form(
+    lambda name: rf"(?:(?<=[\n\t]{name})|{_after_escape(name)})"
+)
 _QUOTE_END = {quote: re.compile(f"[{quote}\\n]") for quote in "\"'`"}
+# A value inside escaped quotes ends at the backslash before the closing one.
+_ESC_END = re.compile(r'[\\"\n]')
+_QUOTE_END["esc"] = _ESC_END
 _PLAIN_END = re.compile(r"[\s\"'`,;)\]}]")
 # A value is a reference, never masked, when it starts with one of these or holds one of those.
 _REFERENCE_STARTS = ("$", "<", "{{")
@@ -288,6 +429,8 @@ _CODE = re.compile(
     r"|[a-z]+(?:\.[A-Za-z][A-Za-z0-9_]*)+\Z"
 )
 
+# Strings that are published as examples by their issuers and are no secret: Stripe's docs key.
+_PUBLISHED_EXAMPLES = frozenset({"sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc"})
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 _KEY_LITERALS = tuple(dict.fromkeys(literal for _, literal, _, _ in _PREFIXES))
 # What a key may open with, the bare Telegram token and a JWT included. When a string holds none,
@@ -302,6 +445,8 @@ _LITERAL_ROOTS = (
     "gh",
     "github_pat_",
     "AKIA",
+    "ASIA",
+    "whsec_",
     "AIza",
     "glpat-",
     "xo",
@@ -334,14 +479,25 @@ _HEADER = "-----BEGIN "
 # or / (TH-9491's URL step stops a URL at each). Its userinfo is removed when the text after
 # "user:" doesn't begin with a port, holds at most one run of whitespace with text on both
 # sides, and is at most 64 characters on each side of that run.
+# A port is digits, a ${..}, %NAME% or <..> reference, or PORT or port alone or after a "_" ($PORT,
+# DB_PORT, db_port; never support, passport or export). It must be followed by one of
+# / ? # , ; . ) ] > a quote, whitespace or the end, so a generated password that opens with a
+# letter run and then holds / or = is never read as one: a cleaner on a security path fails
+# closed. Markdown closers ` * | ! : } end a port only before whitespace or the end: a password
+# goes on past them, an honest "**http://localhost:8080** ops@acme.com" does not.
 _PORT = (
-    r"(?:\d+|\$?\{[^{}\s]*\}|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%|<[^<>\s]*>"
-    r"|[A-Z][A-Z0-9_]*|[Pp][Oo][Rr][Tt])(?=[^A-Za-z0-9_\-@]|\Z)"
+    r"(?:\d+|\$?\{[^{}\s]*\}|%[A-Za-z_][A-Za-z0-9_]*%|<[^<>\s]*>"
+    r"|\$?(?:[A-Za-z0-9_]{0,32}_)?(?:PORT|port))"
+    r"(?=[/?#,;.)\]>\"'\s]|\Z|[^\x00-\x7f]|[`*|!:}]{1,4}(?:\s|\Z))"
 )
 _HALF = r"[^\s@]{1,64}"
 # A line break, after up to 4 spaces or tabs, with up to 16 characters of indent; or up to 4
 # spaces, tabs or NBSPs (r3 H2, r4 L3).
-_RUN = r"(?:[ \t]{0,4}\r?\n[ \t]{0,16}|[ \t\xa0]{1,4})"
+# A line break may be followed by one blank line, and a run of spaces is up to 16 wide. A
+# password holds up to 3 such runs, as long as the whole stays inside the 150 characters the
+# @ is looked for in.
+_RUN = r"(?:[ \t]{0,4}\r?\n(?:[ \t]{0,16}\r?\n)?[ \t]{0,16}|[ \t\xa0]{1,16})"
+_BROKEN = rf"{_HALF}(?:{_RUN}{_HALF}){{1,3}}"
 _SCHEME = r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]*://"
 # One match per start, bounded by the two halves: the next @ is the one the match reaches, and
 # no position is searched for again from another start.
@@ -352,7 +508,40 @@ _RULE1 = re.compile(
     # An @ within reach, looked for first, so a start with no @ near it fails after one
     # bounded scan.
     + r"(?=[^@]{0,150}@)"
-    + rf"(?:{_HALF}{_RUN}{_HALF}|(?=[^\s@]{{0,63}}[/?#]){_HALF})@)"
+    + rf"(?:{_BROKEN}|(?=[^\s@]{{0,63}}[/?#]){_HALF})@)"
+)
+
+# Rule 1 with no scheme: a // after whitespace, = or a quote, or at the text's start, opens a
+# userinfo as a scheme's :// does (--db //admin:pw@host/app). TH-9491's URL step needs a scheme, so
+# here a password with none of whitespace, / ? # in it is removed too. A bare `user:pw@host` with
+# no // at all can't be told from `mailto:a@b` or `12:30@room`: a named limit, not a rule.
+# Also after ( , [ { | and an escaped break, where a URL in code or JSON text sits.
+# The // comes first, so the engine's literal search finds each start, and what may stand before
+# it is checked after it, with the // inside each lookbehind.
+_BARE_START = r"//(?:(?<![^\s=\"'`(,\[{|><*;]//)|" + _after_escape("//") + ")"
+# After the @ a host: a dotted name, a name and a port, localhost or a bracketed address. A // that
+# starts a code comment ("//TODO:ask bob@x", "//y:z@w") has no such host, and a password under 3
+# characters ("//Author:j@corp.com") is a label, so neither opens a userinfo.
+_BARE_HOST = (
+    r"(?=[A-Za-z0-9_\-]+(?:\.[A-Za-z0-9_\-]|:\d|/)|localhost\b|\[)"
+)
+_RULE1_BARE = re.compile(
+    _BARE_START
+    + r"([^\s/?#@:\[\]]{0,128}:"
+    + rf"(?!{_PORT})"
+    + r"(?=[^@]{0,150}@)"
+    + rf"(?:{_BROKEN}|(?=[^\s@]{{0,63}}[/?#]){_HALF}"
+    # The password may hold an @: it runs to the last @ that a host follows, as a URL's does.
+    + r"|[^\s/?#]{3,64})@)"
+    + _BARE_HOST
+)
+# A userinfo with no // at all, `host: admin:pw@db:5432`, after whitespace, = , a quote or a
+# bracket: only when a port follows the host, which an e-mail address, a time (10:30@venue) or
+# `a:b@c` never has. Anchored on the token's start, so no position is tried twice.
+_RULE1_HOSTPORT = re.compile(
+    r"(?<![^\s=\"'`(,\[{|])([A-Za-z_][A-Za-z0-9_.\-]{0,63}:(?!/)\S{1,64}@)"
+    r"(?=[A-Za-z0-9_.\-]+:\d{1,5}(?![A-Za-z0-9_])|\[[0-9A-Fa-f:.%]+\]:\d{1,5}(?!\d)"
+    r"|(?:tcp|udp|unix)\()"
 )
 
 # Rule 1b (design addendum v2.5.2): a userinfo that holds an @ before the password's /, as in
@@ -369,27 +558,40 @@ _RULE1B_HOST = (
     + r"|\[[0-9A-Fa-f:.%A-Za-z]+\]"
     + r"|[A-Za-z0-9_\-]+(?=[/\"'`\s?#),;>\]}|]|\Z))"
 )
-_RULE1B = re.compile(
-    _SCHEME
-    # The port test (M1): with no : before the authority's first @, the text after its last :
-    # must not read as a port, so admin@localhost:8080/bob@example.com keeps its host.
-    + rf"(?![^\s/?#:@]{{0,129}}@[^\s/?#]{{0,194}}:{_PORT}/)"
-    + r"("
-    # The authority holds a :, and it comes before any [ (M-C): admin@[::1]/bob@x keeps its host.
-    + r"(?=[^\s/?#\[]{0,129}:)"
-    # At most 64 characters before its first : or @.
-    + r"(?=[^\s/?#:]{0,64}[:@])"
-    # Up to the authority's last @, then at most 64 to the /, then 1-64 to the path's @.
-    + r"[^\s/?#\[\]]{0,129}@[^\s/?#@]{0,64}/[^\s/?#@]{1,64}@"
-    + r")"
-    + rf"(?={_RULE1B_HOST})"
-)
+def _rule1b_pattern(start: str) -> re.Pattern[str]:
+    return re.compile(
+        start
+        # The port test (M1): with no : before the authority's first @, the text after its last
+        # : must not read as a port, so admin@localhost:8080/bob@example.com keeps its host.
+        + rf"(?![^\s/?#:@]{{0,129}}@[^\s/?#]{{0,194}}:{_PORT}/)"
+        + r"("
+        # The authority holds a :, and it comes before any [ (M-C): admin@[::1]/bob@x keeps its
+        # host.
+        + r"(?=[^\s/?#\[]{0,129}:)"
+        # At most 64 characters before its first : or @.
+        + r"(?=[^\s/?#:]{0,64}[:@])"
+        # Up to the authority's last @, then at most 64 to the /, then 1-64 to the path's @.
+        + r"[^\s/?#\[\]]{0,129}@[^\s/?#@]{0,64}/[^\s/?#@]{1,64}@"
+        + r")"
+        + rf"(?={_RULE1B_HOST})"
+    )
+
+
+_RULE1B = _rule1b_pattern(_SCHEME)
+# The same with no scheme: a // that opens a userinfo as _BARE_START says.
+_RULE1B_BARE = _rule1b_pattern(_BARE_START)
 
 # Rule 2: the piece after an address piece loses its query values when it starts with ?, & or
 # #, or whatever it starts with when the address's query ends in & or ?.
 # The lookahead finds the piece's :// once (a lookahead never retries), so a long piece with
 # many :// is scanned a bounded number of times.
-_THEN_PIECE = re.compile(r"(?<!\S)(?=\S*?://)(\S+)(?:(?<=[&?])\s+(?=\S)|\s+(?=[?&#]))")
+# Also, after a line break: the piece after an address whose query ends in = (the value was
+# broken off), and a piece that starts name= after an address whose last parameter has no = (the
+# name was broken). `rule2` checks which applies.
+_THEN_PIECE = re.compile(
+    r"(?<!\S)(?=\S*?://)(\S+)(?:(?<=[&?])\s+(?=\S)|\s+(?=[?&#])"
+    r"|(?<==)\s*\n\s*(?=\S)|\s*\n\s*(?=[^=&\s]+=))"
+)
 _PIECE = re.compile(r"\S+")
 _PARAM = re.compile(r"(^|[?&#;])([^=&#?\s]*)=([^&#\s]*)")
 # HTML 4.01's character entities, and &apos;. An & that starts one is text, not a query
@@ -421,9 +623,12 @@ def rule1(text: str) -> list[tuple[int, int]]:
 
     One sorted list, with spans that overlap or touch merged, since `remove` needs them in order
     and apart (addendum M4): a://u:x://v:p@h/x@host.example is both rules' at once."""
-    if "://" not in text or "@" not in text:
+    if "@" not in text:
         return []
-    spans = [match.span(1) for match in _RULE1.finditer(text)] + rule1b(text)
+    spans = [match.span(1) for match in _RULE1.finditer(text)]
+    spans += [match.span(1) for match in _RULE1_BARE.finditer(text)]
+    spans += [match.span(1) for match in _RULE1_HOSTPORT.finditer(text)]
+    spans += rule1b(text)
     spans.sort()
     merged: list[tuple[int, int]] = []
     for start, end in spans:
@@ -437,7 +642,27 @@ def rule1(text: str) -> list[tuple[int, int]]:
 def rule1b(text: str) -> list[tuple[int, int]]:
     """The userinfo rule 1b removes from `text`, up to the path's @. Its own function, so the
     speed test can time the cleaner without it."""
-    return [match.span(1) for match in _RULE1B.finditer(text)]
+    return [match.span(1) for match in _RULE1B.finditer(text)] + [
+        match.span(1) for match in _RULE1B_BARE.finditer(text)
+    ]
+
+
+# The long roots match anywhere; the short ones only as a word of the name, so #keyword= and
+# #design= keep their values while api_key, sessionid and auth_token do not.
+_CREDENTIAL_NAME = re.compile(
+    r"token|secret|passw|pwd|credential|session|signature"
+    r"|(?:\A|[_\-.])(?:key|auth|code|pass|sig)(?:\Z|[_\-.])|(?:api|access|private)key\Z",
+    re.IGNORECASE,
+)
+
+
+def _credential_param(name: str, value: str) -> bool:
+    """A fragment parameter that is a credential: its name says so, or its value is key-shaped.
+    No key pattern is 16 characters or shorter, so a short value is not run through them."""
+    return bool(
+        _CREDENTIAL_NAME.search(name)
+        or (len(value) >= 16 and (_looks_like_key(value) or find(value)))
+    )
 
 
 def rule2(text: str) -> list[tuple[int, int]]:
@@ -456,12 +681,28 @@ def rule2(text: str) -> list[tuple[int, int]]:
             continue
         piece = _PIECE.match(text, match.end())
         start = piece.start()
-        for param in _PARAM.finditer(piece.group()):
+        if address[-1] not in "&?" and text[start] not in "?&#":
+            # Matched only for a line break in a query: nothing to do unless the value or the
+            # name was broken.
+            if "?" not in address or "\n" not in text[match.end(1) : start]:
+                continue
+            if address[-1] == "=":
+                spans.append((start, piece.end()))
+                continue
+            if "=" in address.rsplit("&", 1)[-1].rsplit("?", 1)[-1]:
+                continue
+        text_of_piece = piece.group()
+        fragment = text_of_piece.startswith("#")
+        for param in _PARAM.finditer(text_of_piece):
             lead, name, value = param.groups()
             # An empty value or the marker never matches, so cleaning twice changes nothing.
             if not value or value == REDACTED:
                 continue
             if lead == "&" and name.split(";")[0] in _ENTITIES:
+                continue
+            # A markdown anchor (#ops&alerts=on) keeps its values: only a credential's name or
+            # a key-shaped value goes.
+            if fragment and not _credential_param(name, value):
                 continue
             spans.append((start + param.start(3), start + param.end(3)))
     return spans
@@ -512,7 +753,12 @@ def find(text: str, cut: bool = False) -> list[tuple[int, int, str]]:
     """
     low = text.translate(_ASCII_LOWER)
     names = any(root in low for root in _NAME_ROOTS)
-    if not names and not any(root in text for root in _LITERAL_ROOTS):
+    # A tool's own password flag (curl -u, mysql -p, redis-cli -a, sqlplus u/p@h).
+    flags = any(tool in low for tool in _TOOL_WORDS)
+    auth = "bearer" in low or "basic" in low or "authorization" in low
+    if not names and not auth and not flags and not any(
+        root in text for root in _LITERAL_ROOTS
+    ):
         return []
     literals = [literal for literal in _KEY_LITERALS if literal in text]
     paths = [path for path in _PATHS if path[1] in text]
@@ -523,7 +769,11 @@ def find(text: str, cut: bool = False) -> list[tuple[int, int, str]]:
     spans: list[tuple[int, int, str]] = []
     for kind, literal, pattern, cut_pattern in _PREFIXES:
         if literal in literals:
-            spans.extend((m.start(), m.end(), kind) for m in pattern.finditer(text))
+            spans.extend(
+                (m.start(), m.end(), kind)
+                for m in pattern.finditer(text)
+                if m.group() not in _PUBLISHED_EXAMPLES
+            )
             if cut:
                 spans.extend(
                     (m.start(), m.end(), "cut_" + kind)
@@ -543,10 +793,14 @@ def find(text: str, cut: bool = False) -> list[tuple[int, int, str]]:
         spans.extend((m.start(), m.end(), "jwt") for m in _JWT.finditer(text))
     for kind, _, pattern in guards:
         spans.extend((m.start(1), m.end(1), kind) for m in pattern.finditer(low))
+    if auth:
+        spans.extend(_auth_spans(text, low))
     if header:
         spans.extend((start, end, "private_key") for start, end in _blocks(text, cut))
     if names:
         _named(text, low, spans)
+    if names or flags:
+        _flag_values(text, low, spans)
     return spans
 
 
@@ -562,24 +816,29 @@ def line_starts(text: str) -> list[tuple[int, int, str]]:
             spans.extend(
                 (m.start(), m.end(), kind)
                 for m in pattern.finditer(text)
-                if m.start() and text[m.start() - 1] in "\n\r\t"
+                if _after_break(text, m.start())
             )
     if ":AA" in text:
         found: list[tuple[int, int, str]] = []
         _telegram(text, _TELEGRAM, "telegram", found)
         spans.extend(
-            span for span in found if span[0] and text[span[0] - 1] in "\n\r\t"
+            span for span in found if _after_break(text, span[0])
         )
     if "eyJ" in text:
         spans.extend(
             (m.start(), m.end(), "jwt")
             for m in _JWT.finditer(text)
-            if m.start() and text[m.start() - 1] in "\n\r\t"
+            if _after_break(text, m.start())
         )
     low = text.translate(_ASCII_LOWER)
     if any(root in low for root in _NAME_ROOTS):
         _named(text, low, spans, at_line=True)
     return spans
+
+
+def _after_break(text: str, at: int) -> bool:
+    """Whether `at` follows a line break or tab, written out or as an escape."""
+    return bool(at) and (text[at - 1] in "\n\r\t" or _escaped_before(text, at))
 
 
 def mask(
@@ -727,9 +986,20 @@ def _blocks(text: str, cut: bool) -> list[tuple[int, int]]:
     return spans
 
 
+# A block with no END inside a JSON string or a repr: its lines are split by an escaped line
+# break, and the last one ends at a quote, a bracket, the next escape or the text's end.
+_ESCAPED_KEY_LINES = re.compile(
+    r"(?:(?:\\{1,15}r)?\\{1,15}n[ \t]*[A-Za-z0-9+/=]+(?=\\|[\"'\]}]|\Z))+"
+)
+_ESCAPED_BREAK = re.compile(r"\\{1,15}[nr]")
+
+
 def _key_lines_end(text: str, start: int) -> int:
     """Where a block with no END stops: after the key lines that follow its header, at the
     first line that isn't one (r3 M5)."""
+    if _ESCAPED_BREAK.match(text, start):
+        lines = _ESCAPED_KEY_LINES.match(text, start)
+        return lines.end() if lines else start
     stop = start
     rest = text[start : start + 1]
     line = start if rest in ("", "\n", "\r") else _key_line_end(text, start)
@@ -811,12 +1081,94 @@ def _host_name(text: str, start: int, form: str) -> bool:
     )
 
 
+# A password given as a flag. `--password X` takes the named-value test on X (a letter and a
+# digit, or 16 or more characters), so prose such as "the --password flag" stays. The tool's own
+# flags take theirs only on a line (or a backslash-continued line) that names the tool, and after the last
+# | or && before the flag: elsewhere `-u` is a uid, `-p` a port, `-a` a list option, and
+# `sort -u a:b` after a pipe is not curl's.
+#   curl:      -u user:pw, --user user:pw, -uuser:pw
+#   mysql:     -pPW, -p"PW" (-p alone, with a space, is a port or a prompt)
+#   redis-cli: -a PW
+#   sqlplus:   user/pw@host
+_FLAG_PASSWORD = re.compile(r"--pass(?:word|wd)[ \t]{1,16}" + _value_start("[a-z]"))
+_TOOL_FLAGS = (
+    (
+        ("curl",),
+        re.compile(
+            r"(?<=\s)(?:--user(?:[ \t]{1,16}|=)|-u(?:[ \t]{1,16}|=)?)[\"']?[^\s:\"']{1,64}"
+            r":([^\s\"']{1,128})"
+        ),
+        True,
+    ),
+    (("mysql", "mariadb"), re.compile(r"(?<=\s)-p(?=[^\s\-])[\"']?([^\s\"']{1,128})"), False),
+    (("redis-cli",), re.compile(r"(?<=\s)-a[ \t]{1,16}[\"']?([^\s\"']{1,128})"), False),
+    (
+        ("sqlplus",),
+        re.compile(r"(?<=\s)[A-Za-z0-9_$#]{1,30}/([^\s@/\"']{1,64})@(?=\S)"),
+        False,
+    ),
+)
+# What a curl -u value is when it is a doc's placeholder, not a credential.
+_PLACEHOLDER = re.compile(
+    r"\{[^{}]*\}|\[[^\[\]]*\]"
+    r"|(?:your[_-]?)?(?:api[_-]?)?(?:pass(?:word|wd)?|pw|pwd|secret|token|key)(?:[_-]?here)?",
+    re.IGNORECASE,
+)
+_CURL_REACH = 400
+
+
+def _line_start(low: str, start: int) -> int:
+    """Where the line that holds `start` begins, a backslash-continued line counted as one, looked for
+    at most _CURL_REACH back."""
+    reach = max(0, start - _CURL_REACH)
+    stop = start
+    while True:
+        newline = low.rfind("\n", reach, stop)
+        if newline < 0:
+            return reach
+        before = newline - 1
+        if before >= reach and low[before] == "\r":
+            before -= 1
+        if before >= reach and low[before] == "\\":
+            stop = newline
+            continue
+        return newline + 1
+
+
+def _tool_before(low: str, start: int, tools: tuple[str, ...]) -> bool:
+    """Whether one of `tools` is on the line before `start`, after its last pipe or &&."""
+    begin = _line_start(low, start)
+    cut = max(low.rfind("|", begin, start), low.rfind("&&", begin, start))
+    begin = max(begin, cut + 1)
+    return any(low.find(tool, begin, start) >= 0 for tool in tools)
+
+
+def _flag_values(text: str, low: str, spans: list[tuple[int, int, str]]) -> None:
+    if "--pass" in low:
+        for match in _FLAG_PASSWORD.finditer(low):
+            _take(text, match, spans)
+    for tools, pattern, is_curl in _TOOL_FLAGS:
+        if not any(tool in low for tool in tools):
+            continue
+        for match in pattern.finditer(low):
+            value = text[match.start(1) : match.end(1)]
+            if (
+                _tool_before(low, match.start(), tools)
+                and not value.startswith(_REFERENCE_STARTS)
+                and not (is_curl and (value.isdigit() or _PLACEHOLDER.fullmatch(value)))
+            ):
+                spans.append((match.start(1), match.end(1), "flag_password"))
+
+
 def _take(text: str, match: re.Match[str], spans: list[tuple[int, int, str]]) -> int:
     """Masks the value a name's match opens, unless it is a reference. Returns its end."""
     begin = match.end()
     # The value's opening quote is the last group matched, if it has one.
     quote = text[begin - 1] if match.lastgroup else ""
-    stop = (_QUOTE_END[quote] if quote else _PLAIN_END).search(text, begin)
+    if match.lastgroup == "edq":
+        stop = _ESC_END.search(text, begin)
+    else:
+        stop = (_QUOTE_END[quote] if quote else _PLAIN_END).search(text, begin)
     finish = stop.start() if stop else len(text)
     if _secret_value(text[begin:finish], bool(quote)):
         spans.append((begin, finish, "named"))
@@ -832,7 +1184,9 @@ def _name_sits(text: str, start: int, form: str) -> bool:
     kind, capital = _FORMS[form]
     before = text[start - 1] if start else ""
     joined = before == "_" or before == "-"
-    whole = not before or not (before.isalnum() or joined)
+    # After an escaped line break or tab the escape's letter is no part of the identifier.
+    escaped = _escaped_before(text, start)
+    whole = escaped or not before or not (before.isalnum() or joined)
     if kind == "upper":
         if text.startswith("Pass", start) and "a" <= before <= "z":
             return True
@@ -1146,19 +1500,53 @@ _SEAM_GUARD = re.compile("|".join(_GUARD_NAMES))
 _TAIL_PATTERN = re.compile(_TAIL)
 # Every beginning of a tail: while what follows a name is one, its match is still open.
 _TAIL_OPEN = re.compile(
-    r"[\"'`]?[*_`]{0,4}(?:[ \t]*+|\s{0,4})(?:[=:][*_`]{0,4}(?:[ \t]*+|\s{0,4}))?"
+    r"\\{0,15}[\"'`]?[*_`]{0,4}(?:[ \t]*+|\s{0,4})(?:[=:][*_`]{0,4}(?:[ \t]*+|\s{0,4}))?"
 )
 _GUARD_TAIL = re.compile(r"[\s:=]+['\"]?")
 _GUARD_TAIL_OPEN = re.compile(r"[\s:=]*")
 _GUARD_VALUE_END = re.compile(r"[^A-Za-z0-9/+=]")
+# An Authorization header's value is held as a guard's is: `bearer` or `basic`, whitespace, then
+# its run of token characters, so no cut falls between the word and the value.
+# A flag that takes a password is held the same way: the flag, a gap, then its value, so no cut
+# falls between `--password` or `-u` and what follows.
+_SEAM_AUTH = re.compile(
+    r"bearer|basic|authorization|curl|mysql|mariadb|redis-cli|sqlplus"
+    r"|(?<![A-Za-z0-9_\-])(?:--password|--passwd|--user|-u|-a)(?=[ \t=])"
+)
+_FLAG_TAIL = re.compile(r"[ \t=]{1,16}[\"']?")
+_FLAG_TAIL_OPEN = re.compile(r"[ \t=]{0,16}[\"']?")
+_FLAG_VALUE_END = re.compile(r"[\s\"']")
+_FLAG_MARK = "flag"
+_CURL_MARK = "curl"
+_TOOL_WORDS = ("curl", "mysql", "mariadb", "redis-cli", "sqlplus")
+_AUTH_TAIL = re.compile(_GAP + "{1,16}")
+_PARTIAL_ESCAPE = r"(?:\\(?:u[0-9a-fA-F]{0,3}|U[0-9a-fA-F]{0,7}|x[0-9a-fA-F]?)?)?"
+_AUTH_TAIL_OPEN = re.compile(_GAP + r"{0,16}" + _PARTIAL_ESCAPE)
+# After `authorization`: a quote, a : or =, a quote, then a scheme word and its gap, or none.
+_HEADER_TAIL = re.compile(
+    r"(?:\\{0,15}[\"'`]\]?\s{0,16}(?:=>|[:=,])|\s{0,16}[:=])"
+    r"\s{0,16}(?:\\{0,15}[\"'`])?(?:[A-Za-z]+" + _GAP + "{1,16})?"
+)
+_HEADER_TAIL_OPEN = re.compile(
+    r"[\\\"'`\]\s:=,>]{0,48}(?:[A-Za-z]*" + _GAP + r"{0,16}" + _PARTIAL_ESCAPE + ")?"
+)
+_AUTH_VALUE_END = re.compile(r"[^A-Za-z0-9._~+/=\-]")
+_AUTH_MARK = "auth"
+_HEADER_MARK = "header"
 _PLAIN_START = re.compile(_PLAIN_VALUE)
+_HOST_OPEN = re.compile(r"[A-Za-z0-9_\-.:\[\]%]{0,260}")
+_ESC_RUN_OPEN = re.compile(_ESC_QUOTE)
+_ESC_QUOTE_AT = re.compile(_ESC_QUOTE + '"')
 _USER_END = re.compile(r"[\s/?#@:\[\]]")
 # Every beginning of rule 1's text after "user:", while no @ has come: a CRLF's \r alone too,
 # when its \n is still to come in the next delta (cr2 M3).
-_RULE1_OPEN = re.compile(rf"[^\s@]{{0,64}}(?:{_RUN}[^\s@]{{0,64}}|[ \t]{{0,4}}\r)?")
+_RULE1_OPEN = re.compile(
+    rf"[^\s@]{{0,64}}(?:{_RUN}[^\s@]{{0,64}}){{0,3}}(?:[ \t]{{0,16}}\r)?"
+)
 _HEADER_OPEN = re.compile(r"-----BEGIN[A-Z0-9 ]{0,60}-{0,5}")
 _SEAM_KEY = _HOST_LITERAL
 _URL_MARK = re.compile("://")
+_BARE_MARK = re.compile(_BARE_START)
 _LONGEST_END = len("-----END " + "X" * 40 + "PRIVATE KEY BLOCK-----")
 # How far back a delta's search reaches into the text before it: the longest name, guard name
 # or literal, less one, so one split across two deltas is still found.
@@ -1168,6 +1556,16 @@ _REACH = (
 
 # A named value's phases in ChatHold.
 _FRAME, _QUOTED, _PLAIN = range(3)
+
+
+def _query_open(text: str) -> bool:
+    """Whether rule 2 may reach the piece after an address piece: its query ends in & ? or =, or
+    its last parameter has no = (a name broken by a line break)."""
+    if "?" not in text:
+        return False
+    if text[-1:] in ("&", "?", "="):
+        return True
+    return "=" not in text.rsplit("&", 1)[-1].rsplit("?", 1)[-1]
 
 
 def _piece_start(piece: "_Piece") -> int:
@@ -1234,6 +1632,7 @@ class ChatHold:
         self._key: int | None = None
         # The last "://" and "-----BEGIN" taken, so each is taken once.
         self._url_seen = -1
+        self._bare_seen = -1
         self._header_seen = -1
 
     def cut(self, held: str, delta: str) -> int:
@@ -1356,7 +1755,7 @@ class ChatHold:
             return
         # It closed in this delta, so what `_close` and `_grow` decided from it is decided again.
         text = whole[max(piece.start, base) - base : piece.end - base]
-        piece.query_end = text[-1:] in ("&", "?") and "?" in text
+        piece.query_end = _query_open(text)
         if index + 1 < len(pieces) and base <= pieces[index + 1].start < self._end:
             following = pieces[index + 1]
             following.after = piece
@@ -1376,7 +1775,7 @@ class ChatHold:
         self._key = None
         if piece.address:
             text = whole[max(piece.start, base) - base : end - base]
-            piece.query_end = text[-1:] in ("&", "?") and "?" in text
+            piece.query_end = _query_open(text)
         if piece.extends:
             # Rule 2 has matched: the address piece and this one go out together.
             self._closed.append((piece.after.start, end, piece.after.start))
@@ -1438,6 +1837,15 @@ class ChatHold:
                     self._hold_of(at + base),
                 ]
 
+        # A // after whitespace, = or a quote opens rule 1 with no scheme; its user runs from
+        # just after the //.
+        for mark in _BARE_MARK.finditer(
+            whole, max(begin, self._bare_seen + 1 - base), stop
+        ):
+            at = mark.start()
+            self._bare_seen = at + base
+            self._users[at + base] = [at + base, at + 2 + base, -1, self._hold_of(at + base)]
+
     def _look_keys(self, whole: str, base: int, begin: int, stop: int) -> None:
         pieces = self._pieces
         if not pieces or pieces[-1].end != -1:
@@ -1448,16 +1856,33 @@ class ChatHold:
 
     def _look_names(self, whole: str, base: int, begin: int, stop: int) -> None:
         low = whole[begin:stop].translate(_ASCII_LOWER)
-        for pattern, found in ((_SEAM_NAME, self._names), (_SEAM_GUARD, self._guards)):
+        for pattern, found, mark in (
+            (_SEAM_NAME, self._names, ""),
+            (_SEAM_GUARD, self._guards, ""),
+            (_SEAM_AUTH, self._guards, _AUTH_MARK),
+        ):
             for name in pattern.finditer(low):
                 at = begin + name.start() + base
+                kind = mark
+                if mark == _AUTH_MARK:
+                    word = name.group()
+                    kind = (
+                        _HEADER_MARK
+                        if word == "authorization"
+                        else _CURL_MARK
+                        if word[0] != "-" and word in _TOOL_WORDS
+                        else _FLAG_MARK
+                        if word[0] == "-"
+                        else _AUTH_MARK
+                    )
                 if at not in found and at not in self._done:
                     found[at] = [
                         _FRAME,
                         at + len(name.group()),
                         -1,
-                        "",
+                        kind,
                         self._hold_of(at),
+                        -1,
                     ]
 
     def _block_end(self, whole: str, base: int) -> int:
@@ -1538,7 +1963,13 @@ class ChatHold:
             value = tail.end()
             if value >= len(whole):
                 return None
-            if whole[value] in "\"'`":
+            escaped = _ESC_QUOTE_AT.match(whole, value)
+            if _ESC_RUN_OPEN.fullmatch(whole, value):
+                # Backslashes to the end of the text: the quote is still to come.
+                return None
+            if escaped:
+                state[0], state[2], state[3] = _QUOTED, escaped.end() + base, "esc"
+            elif whole[value] in "\"'`":
                 state[0], state[2], state[3] = _QUOTED, value + 1 + base, whole[value]
             elif _PLAIN_START.match(whole, value):
                 state[0], state[2] = _PLAIN, value + base
@@ -1559,20 +1990,59 @@ class ChatHold:
 
     def _guard_step(self, whole: str, base: int, at: int, state: list) -> int | None:
         """As `_name_step`, for aws_secret_key and azure_storage_key's own names and tail."""
+        if state[3] == _CURL_MARK:
+            # A -u or --user on this line takes its password only because curl is on the line,
+            # so no cut falls between them: held to the line's end, or as far as the rule reads.
+            line = state[1] - base
+            while True:
+                line = whole.find("\n", line)
+                if line < 0:
+                    break
+                # A backslash-continued line is one line.
+                before = line - 1 - (whole[line - 1 : line] == "\r" and line > 0)
+                if before >= 0 and whole[before] == "\\":
+                    line += 1
+                    continue
+                return line + base
+            # Past the reach the rule reads, the window up to here is held whole: a -u inside it
+            # may not be cut away from curl.
+            if len(whole) - (state[1] - base) <= _CURL_REACH:
+                return None
+            return len(whole) + base
+        flag = state[3] == _FLAG_MARK
+        auth = state[3] in (_AUTH_MARK, _HEADER_MARK)
         if state[0] == _FRAME:
             name_end = state[1] - base
-            if _GUARD_TAIL_OPEN.fullmatch(whole, name_end):
+            if flag:
+                opening, closing = _FLAG_TAIL_OPEN, _FLAG_TAIL
+            elif state[3] == _HEADER_MARK:
+                opening, closing = _HEADER_TAIL_OPEN, _HEADER_TAIL
+            elif auth:
+                opening, closing = _AUTH_TAIL_OPEN, _AUTH_TAIL
+            else:
+                opening, closing = _GUARD_TAIL_OPEN, _GUARD_TAIL
+            if opening.fullmatch(whole, name_end):
                 return None
-            tail = _GUARD_TAIL.match(whole, name_end)
+            tail = closing.match(whole, name_end)
             if tail is None:
                 return 0
             if tail.end() >= len(whole):
                 return None
-            state[0], state[2] = _PLAIN, tail.end() + base
-        stop = _GUARD_VALUE_END.search(whole, state[2] - base)
+            state[0], state[2], state[5] = _PLAIN, tail.end() + base, tail.end() + base
+        if flag:
+            # A quoted value ends at its quote, so a space inside it is part of it.
+            opener = whole[state[5] - base - 1]
+            ender = _QUOTE_END[opener] if opener in "\"'" else _FLAG_VALUE_END
+        else:
+            ender = _AUTH_VALUE_END if auth else _GUARD_VALUE_END
+        stop = ender.search(whole, state[2] - base)
         if stop is None:
             state[2] = self._end
             return None
+        if auth and stop.start() + base - state[5] < 16:
+            # A value under 16 characters can't match: claiming it closed would chain each
+            # word of "bearer bearer bearer ..." to the next and hold the whole text.
+            return 0
         return stop.start() + base
 
     def _user_step(self, whole: str, base: int, state: list) -> int | None:
@@ -1590,7 +2060,13 @@ class ChatHold:
         if at < 0:
             state[1] = self._end
             return None if _RULE1_OPEN.fullmatch(whole, state[2] - base) else 0
-        match = _RULE1.match(whole, state[0] - base)
+        bare = whole.startswith("//", state[0] - base)
+        match = (_RULE1_BARE if bare else _RULE1).match(whole, state[0] - base)
+        if match is None and bare:
+            # The bare rule needs a host after the @, which may still be arriving: the text
+            # after the last @ is a host so far, so the match is still open.
+            tail = whole[whole.rfind("@") + 1 :]
+            return None if _HOST_OPEN.fullmatch(tail) else 0
         return match.end() + base if match is not None else 0
 
     def _limit(self, base: int) -> int:

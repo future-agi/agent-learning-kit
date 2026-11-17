@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,8 +16,13 @@ from urllib.request import urlopen
 import pytest
 
 from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
-from fi.alk.harness.chat_readiness import probe_chat_ingress
+from fi.alk.harness.chat_readiness import (
+    _chat_target_cause,
+    _failure_code,
+    probe_chat_ingress,
+)
 from fi.alk.harness.contract import AgentContract, Runtime, RuntimeInterface
+from fi.alk.harness.job import FailureCause
 from fi.alk.harness.runtime_repair import (
     RuntimePlanPatch,
     _contract_hash,
@@ -253,6 +259,50 @@ def test_failure_routing(tmp_path, profile_app, status, code):
     with pytest.raises(RuntimeValidationError) as error:
         asyncio.run(probe(tmp_path, url))
     assert error.value.diagnostics[0].code == code
+    # The agent answered with an error status: that is no refusal and no timeout.
+    assert error.value.cause is None
+
+
+@pytest.fixture
+def silent_or_closed_port(request):
+    """A port whose agent accepts and never answers, or one that refuses the connection."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    url = f"http://127.0.0.1:{listener.getsockname()[1]}"
+    if request.param == "silent":
+        listener.listen()
+    else:
+        listener.close()  # nothing holds the port: the connection is refused
+    try:
+        yield url
+    finally:
+        listener.close()
+
+
+@pytest.mark.parametrize(
+    "silent_or_closed_port,cause",
+    [
+        ("silent", FailureCause.CHAT_TARGET_TIMEOUT),
+        ("closed", FailureCause.CHAT_TARGET_REFUSED),
+    ],
+    indirect=["silent_or_closed_port"],
+)
+def test_ingress_names_a_silent_or_closed_agent_by_a_closed_cause(
+    tmp_path, silent_or_closed_port, cause
+):
+    with pytest.raises(RuntimeValidationError) as error:
+        asyncio.run(probe(tmp_path, silent_or_closed_port))
+    assert error.value.cause is cause
+
+
+def test_evidence_fetch_timeout_after_a_chat_answer_is_no_chat_target_cause():
+    # The chat answered; only the completed-tool-events GET timed out.
+    trace = {"timeout_error": True, "failure_stage": "tool_events", "status_code": 200}
+    assert _chat_target_cause(trace) is None
+    assert (
+        _chat_target_cause({"timeout_error": True, "failure_stage": "http"})
+        is FailureCause.CHAT_TARGET_TIMEOUT
+    )
 
 
 @pytest.mark.parametrize(
@@ -745,14 +795,16 @@ def test_dependency_patch_repeats_identical_http_request_and_stops_without_new_e
     assert (authoring / "scenarios.json").read_text() == '{"original": true}'
 
 
-@pytest.mark.parametrize("kind,code", [
-    ("timeout", "chat_ingress_timeout"),
-    ("wrapped_timeout", "chat_ingress_timeout"),
-    ("url_error_text", "external_service_unavailable"),
-    ("connection", "external_service_unavailable"),
-    ("value_error_text", "chat_ingress_failed"),
+@pytest.mark.parametrize("kind,code,cause", [
+    ("timeout", "chat_ingress_timeout", FailureCause.CHAT_TARGET_TIMEOUT),
+    ("wrapped_timeout", "chat_ingress_timeout", FailureCause.CHAT_TARGET_TIMEOUT),
+    ("url_error_text", "external_service_unavailable", FailureCause.CHAT_TARGET_REFUSED),
+    ("connection", "external_service_unavailable", FailureCause.CHAT_TARGET_REFUSED),
+    ("value_error_text", "chat_ingress_failed", None),
 ])
-def test_ingress_classifies_timeout_type_not_message(tmp_path, monkeypatch, kind, code):
+def test_ingress_classifies_timeout_type_not_message(
+    tmp_path, monkeypatch, kind, code, cause
+):
     import urllib.error
     import urllib.request
 
@@ -771,9 +823,47 @@ def test_ingress_classifies_timeout_type_not_message(tmp_path, monkeypatch, kind
     with pytest.raises(RuntimeValidationError) as failure:
         asyncio.run(probe(tmp_path, "http://127.0.0.1:1"))
     assert failure.value.diagnostics[0].code == code
+    assert failure.value.cause is cause
     receipt = receipts(tmp_path)[0]
     assert receipt["timeout_seconds"] == 1
     assert receipt["trace"]["timeout_error"] is (code == "chat_ingress_timeout")
+
+
+@pytest.mark.parametrize(
+    ("trace", "code"),
+    [
+        (
+            {
+                "failure_stage": "stream",
+                "stream_reason": "sse_disconnect",
+                "network_error": True,
+            },
+            "external_service_unavailable",
+        ),
+        (
+            {"failure_stage": "stream", "stream_reason": "sse_content_type"},
+            "chat_ingress_configuration_invalid",
+        ),
+        (
+            {
+                "failure_stage": "stream",
+                "stream_reason": "sse_incomplete",
+                "stream_completion_path_seen": False,
+            },
+            "chat_ingress_configuration_invalid",
+        ),
+        (
+            {
+                "failure_stage": "stream",
+                "stream_reason": "sse_incomplete",
+                "stream_completion_path_seen": True,
+            },
+            "chat_ingress_failed",
+        ),
+    ],
+)
+def test_ingress_classifies_stream_transport_failures(trace, code):
+    assert _failure_code(trace) == code
 
 
 @pytest.mark.parametrize("reset_mode", ["restore", "leave_mutated", "error"])
@@ -830,6 +920,48 @@ def test_internal_readiness_initializes_real_chat_and_requires_reset(tmp_path, p
     assert not (authoring / "runtime-validation.json").exists()
 
 
+def test_internal_readiness_keeps_the_cause_of_an_agent_that_crashes_on_reset(
+    tmp_path, profile_app
+):
+    """The agent answered once, then exited when the reset restarted it."""
+    from fi.alk.harness.authoring_runtime_validation import _probe_runtime_readiness
+    from fi.alk.harness.process_runtime import ProcessRuntimeError
+
+    url, _state = profile_app
+    contract = AgentContract(runtime=Runtime(
+        language="python", command=["python", "app.py"],
+        interface=interface(setup_requests=[{"path": "/profiles"}]),
+    ))
+
+    class World:
+        def read_only(self):
+            return self
+
+        def state(self):
+            return {}
+
+    class Factory:
+        async def create(self, *args, **kwargs):
+            return World()
+
+    class Provider:
+        async def reset(self, *args, **kwargs):
+            raise ProcessRuntimeError(
+                "depends_on", "spawn_failed", "agent: exited before started_check passed",
+                process="agent", cause=FailureCause.AGENT_EXITED_BEFORE_READY,
+            )
+
+    with pytest.raises(RuntimeValidationError, match="reset") as failure:
+        asyncio.run(_probe_runtime_readiness(
+            job=SimpleNamespace(seed=0), source=tmp_path, authoring=tmp_path,
+            manifest=SimpleNamespace(digest="bundle"), contract=contract,
+            provider=Provider(), runtime=SimpleNamespace(
+                endpoints={"target_http": SimpleNamespace(address=url)}
+            ), factory=Factory(), work=tmp_path, values={}, redactions={},
+        ))
+    assert failure.value.cause is FailureCause.AGENT_EXITED_BEFORE_READY
+
+
 def workflow_probe(tmp_path, url, **changes):
     from fi.alk.harness.chat_readiness import probe_chat_workflow
 
@@ -846,7 +978,7 @@ def workflow_probe(tmp_path, url, **changes):
     }))
     args = dict(
         job=SimpleNamespace(metadata={}, require_tool_workflow=True), source=tmp_path,
-        bundle=bundle, authoring=tmp_path,
+        bundle=bundle, authoring=tmp_path, work_directory=tmp_path,
         runtime=SimpleNamespace(
             metadata={"observation_mode": "native"}, world_index=0,
             endpoints={"target_http": SimpleNamespace(address=url, protocol="http")},
@@ -1003,21 +1135,25 @@ def test_private_workflow_allows_unobserved_internal_tools_without_strict_requir
     assert receipt["tool_evidence_status"] == "not_observed"
 
 
+@pytest.mark.parametrize("handoffs", [0, 1])
 def test_private_workflow_requires_evidence_for_executable_contract_tools(
-    tmp_path, profile_app, monkeypatch
+    tmp_path, profile_app, monkeypatch, handoffs
 ):
     from fi.alk.harness import chat_call_runner
     from fi.alk.harness.contract import ToolEntry, ToolSpec
     from fi.alk.harness.run.conversation import Exchange, Transcript
+    from fi.alk.harness.world.runtime import Call
 
     url, state = profile_app
     state.update(profile=True, body={"content": "The account is active"})
 
     async def conversation(target, *_args):
         answer = await target.say("Look up account A-1")
+        # A worker's run is not a tool call, so it is no evidence for one.
+        handed = [Call(name="Account worker", arguments={}, delegated_to="Account worker", handoff=True)]
         return Transcript(
             exchanges=[Exchange("customer", "Look up account A-1"), Exchange("agent", answer)],
-            calls=[], ended="finished",
+            calls=handed[:handoffs], ended="finished",
         )
 
     monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
@@ -1086,10 +1222,36 @@ def test_private_workflow_preserves_transport_classification(tmp_path, profile_a
     with pytest.raises(RuntimeValidationError) as failure:
         asyncio.run(workflow_probe(tmp_path, url))
     assert failure.value.diagnostics[0].code == code
+    assert failure.value.cause is None
     receipt_path, receipt = workflow_receipt(tmp_path)
     assert receipt["status"] == "failed"
     assert any("trace" in name for name in receipt["artifacts"])
     assert all("secret123" not in path.read_text() for path in receipt_path.parent.iterdir())
+
+
+@pytest.mark.parametrize(
+    "silent_or_closed_port,cause",
+    [
+        ("silent", FailureCause.CHAT_TARGET_TIMEOUT),
+        ("closed", FailureCause.CHAT_TARGET_REFUSED),
+    ],
+    indirect=["silent_or_closed_port"],
+)
+def test_private_workflow_names_a_silent_or_closed_agent_by_a_closed_cause(
+    tmp_path, monkeypatch, silent_or_closed_port, cause
+):
+    from fi.alk.harness import chat_call_runner
+
+    monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "1")
+
+    async def conversation(target, *_args):
+        await target.say("Look up my account")
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    with pytest.raises(RuntimeValidationError) as failure:
+        # The workflow's own deadline outlasts one request's, as it does in production.
+        asyncio.run(workflow_probe(tmp_path, silent_or_closed_port, timeout=10))
+    assert failure.value.cause is cause
 
 
 @pytest.mark.parametrize("cancel", [False, True])
@@ -1123,13 +1285,44 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
             if self.opening:
                 self.opening = False
                 return SimpleNamespace(text="Look up account A-1")
+            # The agent's process wrote the span of the call, naming the worker that made it.
+            span = {
+                "name": "lookup_account",
+                "arguments": "",
+                "output": "",
+                "is_error": False,
+                "source": "otel",
+                "agent_key": "Accounts worker",
+                "agent_role": "Accounts worker",
+                "at": 1.0,
+            }
+            # And a worker's run, which is no tool call.
+            handoff = {
+                "name": "Accounts worker",
+                "arguments": {},
+                "output": "done",
+                "is_error": False,
+                "source": "otel",
+                "delegated_to": "Accounts worker",
+                "kind": "handoff",
+                "at": 2.0,
+            }
+            spans.write_text(json.dumps(span) + "\n" + json.dumps(handoff) + "\n")
             started.set()
             await asyncio.Event().wait()
 
     monkeypatch.setattr(conversation, "Stage", CustomerStage)
+    spans = tmp_path / "agent-tool-calls.jsonl"
+    runtime = SimpleNamespace(
+        metadata={"observation_mode": "native", "tool_trace_path": str(spans)},
+        world_index=0,
+        endpoints={"target_http": SimpleNamespace(address=url, protocol="http")},
+    )
 
     async def run():
-        task = asyncio.create_task(workflow_probe(tmp_path, url, timeout=2))
+        task = asyncio.create_task(
+            workflow_probe(tmp_path, url, timeout=2, runtime=runtime)
+        )
         if cancel:
             await started.wait()
             task.cancel()
@@ -1157,10 +1350,16 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
         {"role": "assistant", "content": "The account is active <redacted>"},
     ]
     tool_trace = next(receipt_path.parent.glob("tool_trace-*.json"))
-    call = json.loads(tool_trace.read_text())
+    call, handed = (json.loads(line) for line in tool_trace.read_text().splitlines())
+    assert (handed["delegated_to"], handed["kind"], "handoff" in handed) == (
+        "Accounts worker",
+        "delegated",
+        False,
+    )
     assert call["name"] == "lookup_account"
     assert call["arguments"] == {"account_id": "A-1"}
     assert call["result"]["active"] is True
+    assert call["worker_label"] == "Accounts worker"
     assert all("secret123" not in path.read_text() for path in receipt_path.parent.iterdir())
 
 
@@ -1217,3 +1416,89 @@ def test_native_http_200_failure_rule_unlocks_existing_setup_repair(tmp_path, pr
     assert repaired.runtime.command == contract.runtime.command
     assert "secret123" not in json.dumps(receipts(tmp_path))
     assert sorted(item["status"] for item in receipts(tmp_path)) == ["failed", "passed"]
+
+
+@pytest.mark.parametrize(
+    "calls, passed",
+    [
+        # Every call stopped before the world: an unknown tool, and a tool that broke on our side.
+        ([dict(ok=False, refused=True, refusal_code="unknown_tool"),
+          dict(ok=False, error="TypeError: handle() missing 1 required positional argument")], False),
+        # Refused by the door because the agent may not take that action: nothing ran either.
+        ([dict(ok=False, refused=True, refusal_code="not_permitted")], False),
+        # The world's own rule said no: the tool ran, so the binding works.
+        ([dict(ok=False, refused=True, refusal_code="world_rule")], True),
+        # One call ran among failures.
+        ([dict(ok=False, refused=True, refusal_code="unknown_tool"), dict(ok=True, result={"active": True})], True),
+    ],
+)
+def test_private_workflow_fails_when_no_tool_call_reached_the_world(
+    tmp_path, profile_app, monkeypatch, calls, passed
+):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.contract import ToolEntry, ToolSpec
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+    from fi.alk.harness.world.runtime import Call
+
+    url, state = profile_app
+    state.update(profile=True, body={"content": "The account is active"})
+
+    async def conversation(target, *_args):
+        answer = await target.say("Look up account A-1")
+        return Transcript(
+            exchanges=[Exchange("customer", "Look up account A-1"), Exchange("agent", answer)],
+            calls=[Call(name="lookup_account", arguments={"account_id": "A-1"}, **one) for one in calls],
+            ended="finished",
+        )
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    contract = AgentContract(
+        tools=[ToolSpec(name="lookup_account")],
+        tool_entrypoints=[ToolEntry(
+            tool="lookup_account", mode="import", module="agent.tools", callable="lookup_account",
+        )],
+        runtime=Runtime(language="python", command=["python", "app.py"], interface=interface()),
+    )
+    probe = workflow_probe(
+        tmp_path, url, contract=contract, job=SimpleNamespace(metadata={}, require_tool_workflow=False),
+    )
+    if passed:
+        asyncio.run(probe)
+    else:
+        with pytest.raises(RuntimeValidationError) as failure:
+            asyncio.run(probe)
+        assert failure.value.diagnostics[0].code == "chat_tool_evidence_unverified"
+        assert "stopped before the world ran it" in str(failure.value)
+    _, receipt = workflow_receipt(tmp_path)
+    assert receipt["status"] == ("passed" if passed else "failed")
+
+
+def test_an_aborted_readiness_call_counts_its_tool_calls_not_its_hand_offs(
+    tmp_path, profile_app, monkeypatch
+):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.hosted_scheduler import CallAborted, CallOutcome
+    from fi.alk.harness.world.runtime import Call
+
+    url, _state = profile_app
+    calls = (
+        Call(name="lookup_account", arguments={}, ok=True),
+        Call(
+            name="Accounts worker",
+            arguments={},
+            delegated_to="Accounts worker",
+            handoff=True,
+        ),
+    )
+
+    async def aborted(self, *_args):
+        partial = CallOutcome(
+            calls=calls, turns=1, messages=(), started_at="", ended_at="", duration_ms=0
+        )
+        raise CallAborted("the target stopped", partial=partial)
+
+    monkeypatch.setattr(chat_call_runner.HostedChatCallRunner, "run", aborted)
+    with pytest.raises(RuntimeValidationError):
+        asyncio.run(workflow_probe(tmp_path, url))
+    _, receipt = workflow_receipt(tmp_path)
+    assert receipt["tool_call_count"] == 1

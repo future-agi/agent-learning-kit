@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,7 +11,23 @@ from fi.simulate.agent.wrapper import AgentInput
 
 from .chat_transport import create_chat_wrapper
 from .diagnostics import HarnessDiagnostic
-from .job import HarnessStage
+from .job import FailureCause, HarnessStage
+from .world.runtime import graded_calls, trace_row
+
+
+def _chat_target_cause(trace):
+    """The closed cause of a failed request to the agent, from the transport's own flags.
+
+    An HTTP error status is the agent answering, not a refusal: it has no cause here.
+    A failure in the tool-events stage came after the chat answered: it has no cause here either.
+    """
+    if trace.get("failure_stage") == "tool_events":
+        return None
+    if trace.get("timeout_error") is True:
+        return FailureCause.CHAT_TARGET_TIMEOUT
+    if trace.get("network_error") is True and not trace.get("status_code"):
+        return FailureCause.CHAT_TARGET_REFUSED
+    return None
 
 
 def _failure_code(trace):
@@ -18,6 +35,18 @@ def _failure_code(trace):
         return "chat_ingress_timeout"
     status = trace.get("status_code", 0)
     stage = trace.get("failure_stage")
+    stream_reason = trace.get("stream_reason")
+    if stage == "stream" and stream_reason in {
+        "sse_content_type",
+        "sse_encoding",
+    }:
+        return "chat_ingress_configuration_invalid"
+    if (
+        stage == "stream"
+        and stream_reason == "sse_incomplete"
+        and trace.get("stream_completion_path_seen") is False
+    ):
+        return "chat_ingress_configuration_invalid"
     if stage in {"setup", "http"} and status in {400, 404, 405, 415, 422}:
         return "chat_ingress_configuration_invalid"
     if status in {401, 403}:
@@ -31,6 +60,11 @@ def _failure_code(trace):
     if stage == "tool_events":
         return "chat_tool_evidence_unverified"
     return "chat_ingress_failed"
+
+
+def _reached_world(call):
+    """Whether a recorded call ran in the world: it succeeded, or the world's own rule refused it."""
+    return call.ok or (call.refused and getattr(call, "refusal_code", "") == "world_rule")
 
 
 def _usable_tool_call(call):
@@ -146,7 +180,10 @@ async def probe_chat_ingress(
             )
             receipt["diagnostic"] = diagnostic.model_dump(mode="json")
             raise RuntimeValidationError(
-                "environment", diagnostic.redacted_message, diagnostics=(diagnostic,)
+                "environment",
+                diagnostic.redacted_message,
+                diagnostics=(diagnostic,),
+                cause=None if trace.get("success") else _chat_target_cause(trace),
             )
         receipt["status"] = "passed"
     except RuntimeValidationError:
@@ -229,6 +266,7 @@ async def probe_chat_workflow(
     source: Path,
     bundle: Path,
     authoring: Path,
+    work_directory: Path,
     runtime,
     scenario,
     candidate_hash,
@@ -237,10 +275,14 @@ async def probe_chat_workflow(
     redaction_values,
     timeout=300.0,
 ):
-    """Exercise a private conversation and require observed tool execution evidence."""
+    """Exercise a private conversation and require observed tool execution evidence.
+
+    `work_directory` is the one the runtime was provisioned in, where its worlds live.
+    """
     from .authoring_runtime_validation import RuntimeValidationError
     from .call_runner import CallRunnerContext
-    from .chat_call_runner import HostedChatCallRunner
+    from .chat_call_runner import HostedChatCallRunner, handler_child_for
+    from .handler_child import HandlerChannel
     from .hosted_scheduler import CallAborted
 
     redactions = {
@@ -263,7 +305,7 @@ async def probe_chat_workflow(
         "artifacts": artifacts.paths,
     }
 
-    def failure(code, message):
+    def failure(code, message, cause=None):
         detail = sanitize_diagnostic(str(message), redactions)[:4000]
         if artifacts.transcript:
             detail += "\n<untrusted_transcript>\n" + artifacts.transcript[:6000] + "\n</untrusted_transcript>"
@@ -275,61 +317,83 @@ async def probe_chat_workflow(
         )
         receipt["diagnostic"] = diagnostic.model_dump(mode="json")
         return RuntimeValidationError(
-            "environment", diagnostic.redacted_message, diagnostics=(diagnostic,)
+            "environment",
+            diagnostic.redacted_message,
+            diagnostics=(diagnostic,),
+            cause=cause,
         )
 
     async def retain_interrupted_conversation(exc):
-        from dataclasses import asdict
-
-        from .call_runner import _collect_file_tool_calls
+        from .call_runner import _with_span_calls
         from .outbound import ArtifactKind
 
         transcript = getattr(exc, "partial_transcript", None)
         if transcript is None:
             return
-        if not transcript.calls:
-            transcript.calls.extend(_collect_file_tool_calls(runtime))
-        receipt["tool_call_count"] = len(transcript.calls)
+        transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
+        receipt["tool_call_count"] = len(graded_calls(transcript.calls))
         receipt["turns"] = len(transcript.exchanges)
         await artifacts.upload_artifact(transcript.artifact(), kind=ArtifactKind.TRANSCRIPT)
         if transcript.calls:
             trace = "\n".join(
-                json.dumps(asdict(call), sort_keys=True, default=str)
+                json.dumps(trace_row(call), sort_keys=True, default=str)
                 for call in transcript.calls
             ).encode("utf-8")
             await artifacts.upload_artifact(trace, kind=ArtifactKind.TOOL_TRACE)
 
+    handlers = None
     try:
-        runner = HostedChatCallRunner(
-            artifacts,
-            CallRunnerContext(
-                job=job,
-                bundle_dir=bundle,
-                work_directory=folder,
-                evidence_seam=None,
-                target_provider_secret_values=secret_values,
-                attempt_number=1,
-                source_directory=source,
-            ),
+        context = CallRunnerContext(
+            job=job,
+            bundle_dir=bundle,
+            work_directory=folder,
+            evidence_seam=None,
+            target_provider_secret_values=secret_values,
+            attempt_number=1,
+            source_directory=source,
+            readiness_probe=True,
         )
+        # Under per-user isolation the tool handlers, and the agent code they import, run in a
+        # child of their own: this process holds the capabilities and never imports that code.
+        # The child's scratch belongs with the world's, which its user can reach; this
+        # attempt's folder is the harness's alone.
+        handlers = await asyncio.to_thread(
+            handler_child_for, replace(context, work_directory=work_directory), runtime
+        )
+        if handlers is not None:
+            context = replace(context, handler_channel=HandlerChannel(handlers.sock))
+        runner = HostedChatCallRunner(artifacts, context)
         async with asyncio.timeout(timeout):
             outcome = await runner.run(scenario, runtime)
-        receipt["tool_call_count"] = len(outcome.calls)
+        graded = graded_calls(outcome.calls)
+        receipt["tool_call_count"] = len(graded)
         receipt["turns"] = outcome.turns
         from .contract import has_executable_tool_workflow
 
         requires_tool_evidence = getattr(job, "require_tool_workflow", False) or (
             has_executable_tool_workflow(runner._contract, include_construct=False)
         )
-        if not outcome.calls and requires_tool_evidence:
+        if not graded and requires_tool_evidence:
             raise failure(
                 "chat_tool_evidence_unverified",
                 "Required tool evidence was not captured. Inspect source-supported "
                 "observation mapping. This may be target noncompliance; do not "
                 "fabricate evidence or change business logic.",
             )
-        if not outcome.calls:
+        if not graded:
             receipt["tool_evidence_status"] = "not_observed"
+        elif not any(_reached_world(call) for call in outcome.calls):
+            if requires_tool_evidence:
+                raise failure(
+                    "chat_tool_evidence_unverified",
+                    "Every tool call stopped before the world ran it: "
+                    + "; ".join(
+                        f"{call.name}: {call.refusal_code or call.error or 'failed'}"[:200]
+                        for call in outcome.calls[:5]
+                    )
+                    + ". Inspect how the agent's tools are bound to the world.",
+                )
+            receipt["tool_evidence_status"] = "never_reached_world"
         receipt["status"] = "passed"
     except RuntimeValidationError:
         raise
@@ -340,9 +404,13 @@ async def probe_chat_workflow(
         ) from exc
     except CallAborted as exc:
         if exc.partial is not None:
-            receipt["tool_call_count"] = len(exc.partial.calls)
+            receipt["tool_call_count"] = len(graded_calls(exc.partial.calls))
             receipt["turns"] = exc.partial.turns
-        raise failure(_failure_code(artifacts.trace), str(exc)) from exc
+        raise failure(
+            _failure_code(artifacts.trace),
+            str(exc),
+            cause=_chat_target_cause(artifacts.trace),
+        ) from exc
     except asyncio.CancelledError as exc:
         receipt["status"] = "cancelled"
         await retain_interrupted_conversation(exc)
@@ -350,6 +418,8 @@ async def probe_chat_workflow(
     except Exception as exc:
         raise failure("chat_ingress_failed", str(exc)) from exc
     finally:
+        if handlers is not None:
+            handlers.close()
         path = folder / "receipt.json"
         path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
         path.chmod(0o600)

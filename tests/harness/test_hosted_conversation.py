@@ -447,7 +447,19 @@ harness_chat:
         {
             "kind": "turn_completed",
             "stage": "run",
-            "payload": {"command_message_id": "message-1", "replayed": True},
+            "payload": {
+                "command_message_id": "message-1",
+                "outcome": "success",
+                "usage": {
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "tokens_cached": 0,
+                    "usd": 0.0,
+                    "unpriced_turns": 0,
+                    "models": [],
+                },
+                "replayed": True,
+            },
             "acknowledge_through": 1,
         }
     ]

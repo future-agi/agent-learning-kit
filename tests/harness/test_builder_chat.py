@@ -106,7 +106,7 @@ class EditingConversation(BuilderConversation):
 def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch) -> HostedChatRuntime:
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
     monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
-    (tmp_path / "scenarios" / "one").mkdir(parents=True)
+    (tmp_path / "scenarios" / "one").mkdir(parents=True, exist_ok=True)
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text("{}")
     policy = tmp_path / "policy.yaml"
     policy.write_text("schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8")
@@ -170,6 +170,23 @@ def test_a_change_to_the_world_data_alone_is_saved(tmp_path, monkeypatch):
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
 
     (tmp_path / "world.sqlite").write_bytes(b"after")
+    result = asyncio.run(runtime._save_changes())
+
+    assert result.get("unchanged") is not True
+    assert len(client.published) == 1
+
+
+def test_a_change_to_the_cast_alone_is_saved(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None
+    )
+
+    (tmp_path / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
     result = asyncio.run(runtime._save_changes())
 
     assert result.get("unchanged") is not True
@@ -356,6 +373,147 @@ def test_world_change_is_all_or_nothing_and_reports_counts(tmp_path):
     assert "refused" in world_change(tmp_path, "DELETE FROM a WHERE id = 'x'")
     assert "exactly one" in world_change(tmp_path, "DROP TABLE a")
     assert "a: 2, b: 1" in world_change(tmp_path, "UPDATE b SET id = '2'")
+
+
+def _meta_world(
+    out: Path,
+    value: str,
+    schema: str = "CREATE TABLE meta (key TEXT PRIMARY KEY, value JSONB NOT NULL);\n",
+) -> Path:
+    """An authoring world as a repository agent leaves it: the agent's own schema types
+    ``meta.value`` jsonb, the world copied it as TEXT, and no source model records tables
+    (at authoring the seed-time model does not exist yet). Returns the agent's source root."""
+    import sqlite3
+
+    agent = out / "agent"
+    (agent / "db").mkdir(parents=True)
+    (agent / "db" / "schema.sql").write_text(schema)
+    db = sqlite3.connect(out / "world.sqlite")
+    db.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    db.execute("INSERT INTO meta VALUES ('session', ?)", (value,))
+    db.commit()
+    db.close()
+    return agent
+
+
+def _meta(out: Path) -> list[tuple[str, str]]:
+    import sqlite3
+
+    db = sqlite3.connect(out / "world.sqlite")
+    try:
+        return db.execute("SELECT key, value FROM meta ORDER BY key").fetchall()
+    finally:
+        db.close()
+
+
+def test_change_world_refuses_bare_text_in_a_json_column_and_leaves_the_world(tmp_path):
+    agent = _meta_world(tmp_path, "{}")
+    server = builder.suite_server(tmp_path, [], source_root=agent)
+    change = next(one for one in server.tools if one.name == "change_world")
+
+    said = asyncio.run(
+        change.handler({"sql": "UPDATE meta SET value = '2026-06-03' WHERE key = 'session'"})
+    )["content"][0]["text"]
+
+    assert said.startswith("Not changed")
+    assert "meta.value" in said and '\'"2026-06-03"\'' in said
+    assert _meta(tmp_path) == [("session", "{}")]
+
+
+def test_world_change_keeps_json_text_in_a_json_column(tmp_path):
+    from fi.alk.harness.builder import world_change
+
+    agent = _meta_world(tmp_path, "{}")
+
+    said = world_change(
+        tmp_path,
+        "INSERT INTO meta VALUES ('current_date', '\"2026-06-03\"')",
+        source_root=agent,
+    )
+
+    assert "1 rows changed" in said
+    assert _meta(tmp_path) == [("current_date", '"2026-06-03"'), ("session", "{}")]
+
+
+def test_world_change_is_not_blocked_by_bare_text_the_world_already_held(tmp_path):
+    from fi.alk.harness.builder import world_change
+
+    agent = _meta_world(tmp_path, "already-bare")
+
+    said = world_change(
+        tmp_path, "INSERT INTO meta VALUES ('flags', '[]')", source_root=agent
+    )
+
+    assert "1 rows changed" in said
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "INSERT INTO meta VALUES ('current_date', '2026-06-03')",
+        # The same bare text once more is one more cell the import refuses.
+        "INSERT INTO meta VALUES ('again', 'already-bare')",
+    ],
+)
+def test_world_change_refuses_new_bare_text_in_a_column_that_already_held_some(
+    tmp_path, statement
+):
+    from fi.alk.harness.builder import world_change
+
+    agent = _meta_world(tmp_path, "already-bare")
+
+    said = world_change(tmp_path, statement, source_root=agent)
+
+    assert said.startswith("Not changed") and "meta.value" in said
+    assert _meta(tmp_path) == [("session", "already-bare")]
+
+
+def test_world_change_repairs_bare_text_one_cell_at_a_time(tmp_path):
+    from fi.alk.harness.builder import world_change
+
+    agent = _meta_world(tmp_path, "already-bare")
+    world_change(tmp_path, "INSERT INTO meta VALUES ('other', '{}')", source_root=agent)
+
+    said = world_change(
+        tmp_path,
+        "UPDATE meta SET value = '\"already-bare\"' WHERE key = 'session'",
+        source_root=agent,
+    )
+
+    assert "1 rows changed" in said
+    assert _meta(tmp_path) == [("other", "{}"), ("session", '"already-bare"')]
+
+
+def test_world_change_refuses_bare_text_in_a_json_column_of_a_qualified_table(tmp_path):
+    from fi.alk.harness.builder import world_change
+
+    agent = _meta_world(
+        tmp_path,
+        "{}",
+        schema='CREATE TABLE "public"."meta" (key TEXT PRIMARY KEY, '
+        "value JSONB NOT NULL DEFAULT '[]'::jsonb);\n",
+    )
+
+    said = world_change(
+        tmp_path, "INSERT INTO meta VALUES ('current_date', '2026-06-03')", source_root=agent
+    )
+
+    assert said.startswith("Not changed") and "meta.value" in said
+    assert _meta(tmp_path) == [("session", "{}")]
+
+
+def test_world_change_refuses_a_literal_json_has_no_form_for(tmp_path):
+    from fi.alk.harness.builder import world_change
+
+    agent = _meta_world(tmp_path, "{}")
+
+    # A Python literal parses, but to a set inside a list, which JSON cannot hold.
+    said = world_change(
+        tmp_path, "INSERT INTO meta VALUES ('flags', '[{1, 2}]')", source_root=agent
+    )
+
+    assert said.startswith("Not changed") and "meta.value" in said
+    assert _meta(tmp_path) == [("session", "{}")]
 
 
 def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tmp_path, monkeypatch):
@@ -606,6 +764,22 @@ def test_one_yes_to_every_change_runs_the_rest_of_its_message_and_the_next_messa
         "refunded",
         "ask for store credit",
     ]
+
+
+def test_the_question_before_a_change_shows_names_as_they_are_written(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    runtime, guarded, ran, _offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: _CONFIRM)
+    questions = []
+    asked = runtime._ask
+
+    async def ask(tool, payload, context):
+        questions.append(payload["question"])
+        return await asked(tool, payload, context)
+
+    runtime._ask = ask
+    assert asyncio.run(guarded("add_actor")({"id": "zoe", "name": "Zoë Müller"})).get("is_error") is None
+    assert "Zoë Müller" in questions[0] and "\\u00eb" not in questions[0]
 
 
 def test_a_yes_to_one_change_runs_only_that_change_and_a_no_still_refuses(tmp_path, monkeypatch):
@@ -955,6 +1129,11 @@ def test_file_tools_on_any_backend_never_return_credentials(tmp_path):
     (work / "scenarios" / "a.json").write_text("SENTINEL-free")
     (work / ".env").write_text("SENTINEL=1")
     (work / "service_account.json").write_text('{"SENTINEL": 1}')
+    # The names TH-9042 added, each holding the same marker.
+    added = (".pgpass", ".kube/config", ".docker/config.json", "infra/terraform.tfstate", "gcp-key.json", "id_ed25519")
+    for name in added:
+        (work / name).parent.mkdir(parents=True, exist_ok=True)
+        (work / name).write_text("SENTINEL=2")
     tools = {spec.name: _spec_tool(spec.name, spec) for spec in file_tools(str(work / "scenarios"))}
 
     def run(name, **args):
@@ -968,6 +1147,38 @@ def test_file_tools_on_any_backend_never_return_credentials(tmp_path):
     assert ".env" not in run("Glob", pattern="*", path="..")
     assert "a.json" in run("Glob", pattern="*.json")
     assert "kept out of this session" in run("Grep", pattern="x", path="/")
+    assert "SENTINEL=2" not in run("Grep", pattern="SENTINEL", path="..")
+    for name in added:
+        assert "SENTINEL=2" not in run("Read", file_path=f"../{name}"), name
+        assert name.rsplit("/", 1)[-1] not in run("Glob", pattern="**/*", path=".."), name
+
+
+def test_the_gate_judges_a_call_where_the_session_resolves_it(tmp_path):
+    """Through the hook itself, with the payload's cwd: a relative path resolves in the session's
+    folder, not the harness's (TH-9042)."""
+    from fi.alk.harness.config import gate_hooks
+
+    session = tmp_path / "session"
+    (session / "k").mkdir(parents=True)
+    (session / ".pgpass").write_text("x")
+    (session / "notes.txt").symlink_to(".pgpass")
+    refuse = gate_hooks(["Read", "Glob", "Grep"])["PreToolUse"][0].hooks[0]
+
+    def denied(tool, arguments, cwd=str(session)):
+        payload = {"tool_name": tool, "tool_input": arguments, "cwd": cwd}
+        answer = asyncio.run(refuse(payload, None, None))
+        return answer.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    assert denied("Grep", {"pattern": "x", "path": "notes.txt"})
+    assert denied("Read", {"file_path": "notes.txt"})
+    assert denied("Grep", {"pattern": "x", "path": "."}, cwd="/run")
+    assert denied("Glob", {"pattern": "**/.kube/config"})
+    assert denied("Glob", {"pattern": "**/*.tfstate"})
+    for name in (".pgpass", ".kube/config", ".docker/config.json", "x.tfstate", "gcp-key.json", "id_ecdsa_sk"):
+        assert denied("Read", {"file_path": str(session / name)}), name
+    assert not denied("Read", {"file_path": str(session / ".kube" / "configmap.yaml")})
+    assert not denied("Grep", {"pattern": "x", "path": "k"})
+    assert not denied("Grep", {"pattern": "x", "path": "notes.txt"}, cwd=str(tmp_path))
 
 
 class RebuildClient(BuilderClient):
@@ -1254,15 +1465,265 @@ def test_a_failed_rebuild_turn_still_reports_usage_and_ends_the_sandbox(
     assert runtime.stopping.is_set()
 
 
-def test_a_chat_turn_carries_no_usage_and_keeps_the_sandbox(tmp_path, monkeypatch):
+class SpendingConversation(EditingConversation):
+    """A builder whose one turn costs what its model call reports."""
+
+    async def say(self, message, on_event=None):
+        from fi.alk.harness import spend
+
+        spend.record("builder", 0.02, turns=1, models={"m2"}, tokens_in=40, tokens_out=6)
+        await super().say(message, on_event)
+
+
+def test_a_chat_turn_reports_what_it_spent_and_keeps_the_sandbox(tmp_path, monkeypatch):
+    from fi.alk.harness import spend
+
+    monkeypatch.setattr(spend, "_stages", {})
+    # Spent before this turn: an earlier turn's, which it must not report again.
+    spend.record("builder", 0.5, turns=1, models={"m1"}, tokens_in=100, tokens_out=10)
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime.conversation = EditingConversation(tmp_path, writes=False)
+    runtime.conversation = SpendingConversation(tmp_path, writes=False)
 
     _turn(runtime, {"content": "hello"})
 
-    assert "usage" not in client.events[-1]["payload"]
+    completed = client.events[-1]
+    assert completed["kind"] == "turn_completed"
+    # The platform meters a turn no build's ledger covers from what its ending reports.
+    assert completed["payload"]["usage"] == {
+        "tokens_in": 40,
+        "tokens_out": 6,
+        "tokens_cached": 0,
+        "usd": 0.02,
+        "unpriced_turns": 0,
+        # Only the model this turn called, not the earlier turn's m1.
+        "models": ["m2"],
+    }
     assert not runtime.stopping.is_set()
+
+
+class LosingClient(BuilderClient):
+    """A client whose turn_completed POST fails once, as a lost delivery would."""
+
+    def __init__(self, *, control_only: bool = False):
+        super().__init__()
+        self.lost = False
+        self.sessions: dict[str, list] = {}
+        if control_only:
+            self.turn_context = {**self.turn_context, "capabilities": {"control_only": True}}
+
+    async def emit(self, kind, **kwargs):
+        if kind == "turn_completed" and not self.lost:
+            self.lost = True
+            raise ConversationTransportError("delivery failed")
+        return await super().emit(kind, **kwargs)
+
+    async def append_session(self, key, entries):
+        self.sessions.setdefault(key["project_key"], []).extend(entries)
+
+    async def load_session(self, key):
+        return {"entries": self.sessions.get(key["project_key"], [])}
+
+
+def _lose_then_replay(
+    tmp_path, monkeypatch, client, restart_path, conversation=None
+):
+    from fi.alk.harness import spend
+
+    monkeypatch.setattr(spend, "_stages", {})
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = (conversation or SpendingConversation)(
+        tmp_path, writes=False
+    )
+    with pytest.raises(ConversationTransportError):
+        _turn(runtime, {"content": "hello"})
+    # The restart: a new process with an empty spend ledger, the same command redelivered.
+    monkeypatch.setattr(spend, "_stages", {})
+    client.events.clear()
+    restarted = _runtime(restart_path, client, monkeypatch)
+    restarted.conversation = SpendingConversation(restart_path, writes=False)
+    if restart_path != tmp_path:
+        asyncio.run(restarted._restore_coordinator_state())
+    _turn(restarted, {"content": "hello"})
+    return [event for event in client.events if event["kind"] == "turn_completed"]
+
+
+def test_a_turn_whose_ending_was_lost_replays_its_usage_after_a_restart(
+    tmp_path, monkeypatch
+):
+    completed = _lose_then_replay(tmp_path, monkeypatch, LosingClient(), tmp_path)
+
+    # The same ending, usage included, marked replayed; the platform dedupes by command id.
+    assert len(completed) == 1
+    assert completed[0]["payload"] == {
+        "command_message_id": "m-1",
+        "outcome": "success",
+        "usage": {
+            "tokens_in": 40,
+            "tokens_out": 6,
+            "tokens_cached": 0,
+            "usd": 0.02,
+            "unpriced_turns": 0,
+            "models": ["m2"],
+        },
+        "replayed": True,
+    }
+
+
+def test_a_chat_sandbox_of_its_own_keeps_the_lost_ending_across_a_restart(
+    tmp_path, monkeypatch
+):
+    # A control-only sandbox restarts empty: the ending comes back with its coordinator state.
+    fresh = tmp_path / "restarted"
+    fresh.mkdir()
+    completed = _lose_then_replay(
+        tmp_path, monkeypatch, LosingClient(control_only=True), fresh
+    )
+
+    assert len(completed) == 1
+    assert completed[0]["payload"]["replayed"] is True
+    assert completed[0]["payload"]["usage"]["tokens_in"] == 40
+
+
+class FailingConversation(SpendingConversation):
+    """A builder whose turn spends, then fails."""
+
+    async def say(self, message, on_event=None):
+        from fi.alk.harness import spend
+
+        spend.record("builder", 0.02, turns=1, models={"m2"}, tokens_in=40, tokens_out=6)
+        raise RuntimeError("model unavailable")
+
+
+@pytest.mark.parametrize("outcome", ["failed", "interrupted"])
+def test_a_lost_failed_or_interrupted_ending_comes_back_in_a_fresh_sandbox(
+    tmp_path, monkeypatch, outcome
+):
+    """What a turn that did not succeed spent is billed too, so its ending must survive."""
+    conversation = FailingConversation if outcome == "failed" else None
+    if outcome == "interrupted":
+
+        async def interrupted(self, turn, *, command_sequence):
+            await turn
+            return {"kind": "interrupt", "message_id": "m-9", "sequence": 9}
+
+        monkeypatch.setattr(HostedChatRuntime, "_turn_until_interrupted", interrupted)
+    fresh = tmp_path / "restarted"
+    fresh.mkdir()
+
+    completed = _lose_then_replay(
+        tmp_path,
+        monkeypatch,
+        LosingClient(control_only=True),
+        fresh,
+        conversation=conversation,
+    )
+
+    assert len(completed) == 1
+    payload = completed[0]["payload"]
+    assert payload["replayed"] is True
+    assert payload["outcome"] == outcome
+    assert payload["usage"]["tokens_in"] == 40
+    assert payload["usage"]["usd"] == 0.02
+
+
+def test_a_control_only_checkpoint_stores_each_ending_once(tmp_path, monkeypatch):
+    """The coordinator state is appended every turn: it must not carry the whole history."""
+    from fi.alk.harness import spend
+
+    monkeypatch.setattr(spend, "_stages", {})
+    client = LosingClient(control_only=True)
+    client.lost = True  # every delivery succeeds
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = SpendingConversation(tmp_path, writes=False)
+    turns = [f"m-{n}" for n in range(1, 6)]
+    for sequence, message_id in enumerate(turns, start=1):
+        command = {
+            "sequence": sequence,
+            "message_id": message_id,
+            "kind": "user_message",
+            "payload": {"content": f"turn {sequence}"},
+        }
+        asyncio.run(runtime._handle(command))
+
+    entries = client.sessions["futureagi-coordinator-state"]
+    stored = [
+        list((entry["files"].get(".futureagi-turn-endings.json") or {}))
+        for entry in entries
+    ]
+    assert sorted(key for keys in stored for key in keys) == turns
+    assert max(len(keys) for keys in stored) == 1
+
+    # A fresh sandbox still gets every ending back.
+    fresh = tmp_path / "restarted"
+    fresh.mkdir()
+    restored = _runtime(fresh, client, monkeypatch)
+    asyncio.run(restored._restore_coordinator_state())
+    endings = json.loads((fresh / ".futureagi-turn-endings.json").read_text())
+    assert sorted(endings) == turns
+
+    # A turn after the restore adds only its own ending, not the restored ones again.
+    before = len(client.sessions["futureagi-coordinator-state"])
+    restored.conversation = SpendingConversation(fresh, writes=False)
+    asyncio.run(
+        restored._handle(
+            {
+                "sequence": 6,
+                "message_id": "m-6",
+                "kind": "user_message",
+                "payload": {"content": "turn 6"},
+            }
+        )
+    )
+    added = [
+        key
+        for entry in client.sessions["futureagi-coordinator-state"][before:]
+        for key in entry["files"].get(".futureagi-turn-endings.json") or {}
+    ]
+    assert added == ["m-6"]
+
+
+def test_an_endings_file_that_is_not_an_object_is_ignored(tmp_path, monkeypatch):
+    from fi.alk.harness import spend
+
+    monkeypatch.setattr(spend, "_stages", {})
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = SpendingConversation(tmp_path, writes=False)
+    (runtime.workspace / ".futureagi-turn-endings.json").write_text("[]")
+
+    _turn(runtime, {"content": "hello"})
+
+    completed = client.events[-1]
+    assert completed["kind"] == "turn_completed"
+    assert completed["payload"]["outcome"] == "success"
+    assert completed["payload"]["usage"]["tokens_in"] == 40
+    endings = json.loads((runtime.workspace / ".futureagi-turn-endings.json").read_text())
+    assert list(endings) == ["m-1"]
+
+
+def test_a_malformed_persisted_ending_is_skipped_and_reported(
+    tmp_path, monkeypatch, capsys
+):
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    good = {
+        "command_message_id": "m-1",
+        "outcome": "success",
+        "usage": {"tokens_in": 4},
+    }
+    endings = {
+        "m-1": good,
+        "m-2": {"command_message_id": "other", "outcome": "success"},
+        "m-3": {"command_message_id": "m-3", "outcome": "done"},
+        "m-4": {"command_message_id": "m-4", "outcome": "failed", "usage": "free"},
+    }
+    (tmp_path / ".futureagi-turn-endings.json").write_text(json.dumps(endings))
+
+    assert runtime._read_turn_endings() == {"m-1": good}
+    # A malformed ending is not replayed: the turn gets a bare ending, never the forged one.
+    assert runtime._turn_ending("m-2") == {"command_message_id": "m-2"}
+    reported = capsys.readouterr().out
+    assert all(key in reported for key in ("m-2", "m-3", "m-4"))
 
 
 def test_prove_scenarios_records_each_proof(tmp_path):
@@ -1778,7 +2239,7 @@ def test_a_replayed_rebuild_commits_the_workspace_holding_its_result(
 
 
 @pytest.mark.parametrize("ending", ["raised", "turn_failures", "interrupted"])
-def test_a_rebuild_turn_that_did_not_succeed_replays_as_failed(
+def test_a_rebuild_turn_that_did_not_succeed_replays_its_own_ending(
     tmp_path, monkeypatch, ending
 ):
     async def act(stage):
@@ -1812,7 +2273,15 @@ def test_a_rebuild_turn_that_did_not_succeed_replays_as_failed(
     assert client.results[-1] is None
     replay = client.events[client.redelivered_at :]
     assert [one["kind"] for one in replay] == ["turn_completed"]
-    assert replay[0]["payload"] == {"command_message_id": "m-3", "outcome": "failed"}
+    # The ending the turn first reported, usage included: never a success.
+    first = next(
+        one
+        for one in client.events[: client.redelivered_at]
+        if one["kind"] == "turn_completed"
+    )
+    assert replay[0]["payload"] == first["payload"]
+    assert replay[0]["payload"]["outcome"] in {"failed", "interrupted"}
+    assert "usage" in replay[0]["payload"]
 
 
 def test_a_cut_off_rebuild_turn_keeps_no_result(tmp_path, monkeypatch):
@@ -2064,6 +2533,70 @@ def test_declared_tool_evidence_must_be_in_the_agents_folder(tmp_path):
 
     assert sibling["is_error"] and "agents/a" in sibling["content"][0]["text"]
     assert not own.get("is_error"), own
+
+
+def _declare_from(tmp_path, evidence_file: str, quote: str):
+    root, source, contract, kept = _two_agent_world(tmp_path, "")
+    server = builder.suite_server(root, kept, contract, source)
+    declare = next(one for one in server.tools if one.name == "declare_tool")
+    return source, asyncio.run(
+        declare.handler(
+            {
+                "name": "cancel_a",
+                "description": "cancel",
+                "evidence_file": evidence_file,
+                "evidence_quote": quote,
+                "why": "the agent has it",
+            }
+        )
+    )
+
+
+def test_declared_tool_evidence_never_checks_a_guess_against_a_listed_file(tmp_path):
+    answers = []
+    for case, make in {
+        "listed": lambda src: (src / ".env").write_text("API_KEY=canary-value\n"),
+        "link": lambda src: (
+            (src / ".env").write_text("API_KEY=canary-value\n"),
+            (src / "notes.txt").symlink_to(src / ".env"),
+        ),
+        "missing": lambda src: None,
+    }.items():
+        world = tmp_path / case
+        world.mkdir()
+        root, source, contract, kept = _two_agent_world(world, "")
+        make(source)
+        server = builder.suite_server(root, kept, contract, source)
+        declare = next(one for one in server.tools if one.name == "declare_tool")
+        path = "notes.txt" if case == "link" else ".env"
+        for quote in ("API_KEY=canary-value", "API_KEY=c", "API_KEY=zzz"):
+            answers.append(
+                asyncio.run(
+                    declare.handler(
+                        {
+                            "name": "cancel_a",
+                            "description": "cancel",
+                            "evidence_file": path,
+                            "evidence_quote": quote,
+                            "why": "x",
+                        }
+                    )
+                )
+            )
+
+    texts = {one["content"][0]["text"] for one in answers}
+    # A link is named differently from the file it points at, so its text differs only by name.
+    assert all(one["is_error"] for one in answers)
+    assert {t.replace("notes.txt", ".env") for t in texts} == {
+        ".env is kept out of this session because it holds credentials; "
+        "name a file in the agent's code or configuration"
+    }
+
+
+def test_declared_tool_evidence_from_a_normal_file_still_works(tmp_path):
+    _, result = _declare_from(tmp_path, "agents/a/agent.py", "def cancel_a():")
+
+    assert not result.get("is_error"), result
 
 
 # -- Change review r2, A-H1: what the chat sends the platform loses URL credentials ------------------
@@ -2799,6 +3332,43 @@ _CHAT_CASES = {
     "named kebab": "cloud.aws.credentials.secret-key: Zq8wYv3Lp9Kd2xT ok",
     "named quoted with spaces": 'cfg "password": "correct horse battery 9" ok more',
     "named break + 4": "password:\n   Zq8wYv3Lp9 ok",
+    "escaped sk-proj in a repr": "got " + repr("key below\n" + _SKP) + " back",
+    "escaped ghp in JSON": 'then {"text": "a\\t' + _GH + '"} done',
+    "escaped password in a repr": "got " + repr("ok\npassword=hunter22x9") + " back",
+    "escaped pem with no END in JSON": 'body {"key": "-----BEGIN RSA PRIVATE KEY-----\\nMIIEFAKEQUJDREVG\\nABCDEFFAKE=="} ok',
+    "bare // at its colon": "run --db //admin:Xk9Qp2Zr8@db.example.com/app now and more",
+    "bare // broken by a space": "use //bot:hun ter2@h.io/v1 now and later",
+    "bare // after (": "see (//admin:Xk9Qp2Zr8@db.example.com/app) now and more",
+    "bare // with an @ in the password": "use //admin:P@ss9Xk9Qp@db.example.com/app now and more",
+    "header Token scheme": "send Authorization: Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE now",
+    "header bare uuid": 'then {"Authorization": "3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b"} ok',
+    "escaped u000a key": "got a\\u000a" + _SKP + " back",
+    "nested JSON named value": 'got {"content": "{\\"password\\": \\"correct horse 9 battery\\"}"} back',
+    "curl -u at its space": "run curl -s -u admin:Xk9Qp2Zr8wq https://h/v1 now",
+    "--password at its space": "then mysql --password Xk9Qp2Zr8wq db ok",
+    "host:port userinfo": "set host: admin:Xk9Qp2Zr8@db.example.com:5432 for now",
+    "three runs in a password": "see https://bot:hun ter 2@h/v1 now and later on",
+    "wide run in a password": "see https://bot:hun     ter2@h/v1 now and later on",
+    "blank line in a password": "see https://bot:hun\n\n  ter2@h/v1 now and later",
+    "fragment after an address": "see https://x.com/a #ops&token=Zq8wYv3Lp9Kd now and later",
+    "quoted --password with a space": 'then mysql --password "Xk9 Qp2Zr8wq" db ok',
+    "curl -u 390 characters on": "curl " + "a " * 192 + "-u admin:Xk9Qp2Zr8wq https://h/v1 now",
+    "CRLF blank line in a password": "see https://bot:hun\r\n\r\n  ter2@h/v1 now and later",
+    "Token then an escaped break": 'send {"Authorization": "Token\\u000aTk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE"} now',
+    "Bearer then \\x0a": 'send {"Authorization": "Bearer\\x0a3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b"} now',
+    "Go header Set": 'then req.Header.Set("Authorization", "Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE") ok',
+    "host:port IPv6": "set host: admin:Xk9Qp2Zr8@[::1]:5432 for now",
+    "host:port Go DSN": "set DSN=root:Xk9Qp2Zr8@tcp(db.example.com:3306)/app for now",
+    "bare // after <": "see <code>//a:Xk9Qp2Zr8wq@h.io/x</code> now and later",
+    "curl -u continued": "run curl -s \\\n  -u admin:Xk9Qp2Zr8wq \\\n  https://h/v1 now",
+    "mysql -p": "then mysql -uroot -pXk9Qp2Zr8wq db ok",
+    "redis-cli -a": "then redis-cli -a Xk9Qp2Zr8wq ping ok",
+    "sqlplus": "then sqlplus admin/Xk9Qp2Zr8wq@db.example.com/app ok",
+    "URL broken after =": "see https://h/x?token=\nXk9Qp2Zr8wqLm7 more and later",
+    "URL broken in a name": "see https://h/x?a=1&api_ke\ny=Xk9Qp2Zr8wqLm7 more and later",
+    "escaped \\U before a key": "got a\\U0001f511" + _GH + " back",
+    "bearer at its space": "run curl -H 'Authorization: Bearer 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b' now",
+    "basic at its space": 'then {"Authorization": "Basic dXNlcjpGQUtFZmFrZTAxMjM0NTY3ODk="} ok',
     "conn string": "Use DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=FAKEazureFAKEkey0123"
     "456789abcdef==;EndpointSuffix=core.windows.net then go",
     "azure key, spaced": "set AZURE_KEY = "
@@ -2806,6 +3376,16 @@ _CHAT_CASES = {
     + "== ok",
 }
 _PLANTED = [
+    "3f6a8c2e-1b4d",
+    "Xk9Qp2Zr8wq",
+    "Xk9Qp2Zr8",
+    "Xk9Qp2Zr8wqLm7",
+    "ter 2",
+    "correct horse 9",
+    "Tk4fR9xQ2mZ7",
+    "ss9Xk9Qp",
+    "Xk9Qp2Zr8",
+    "dXNlcjpGQUtFZmFrZTAx",
     "hun ter2",
     "ter2@",
     "hunter22",
@@ -4231,3 +4811,180 @@ def test_a_resubmitted_scenario_is_not_a_change_because_the_saved_copy_was_clean
     assert not runtime._changes_meaning(raw)
     assert runtime._changes_situation({**raw, "instruction": "ask for a cancellation"})
     assert runtime._changes_meaning({**raw, "instruction": "ask for a cancellation"})
+
+
+_R5_STREAM_SHAPES = {
+    "bare // starts": " //a:b ",
+    "bare // after =": "=//a:b",
+    "bearer words": "bearer ",
+    "basic then a run": "basic " + "a" * 15 + " ",
+    "escaped starts": "\\nsk-\\tAKIA ",
+    "runs words": "https://u:a b c d ",
+    "fragment words": "https://x.com #a&b=c ",
+    "curl words": "curl ",
+    "curl -u words": "curl -u a:b ",
+    "nested JSON words": '{\\"password\\": \\"a1 b\\"} ',
+    "header words": "authorization: token ",
+    "header then a value": "authorization: token " + "a1" * 8 + " ",
+    "bare // after (": "(//a:b ",
+    "bare // with @": " //a:p@q ",
+}
+
+
+@pytest.mark.parametrize("size", [64 * 1024, 1024 * 1024], ids=["64KiB", "1MiB"])
+@pytest.mark.parametrize("shape", list(_R5_STREAM_SHAPES))
+def test_the_round_five_seams_stay_linear_over_many_deltas(shape: str, size: int) -> None:
+    """The candidates the stream holds for a bare //, bearer and basic, in 1 KiB deltas: under
+    0.5 s at 64 KiB and under 6 s at 1 MiB, best of 3 (a quadratic hold took minutes)."""
+    unit = _R5_STREAM_SHAPES[shape]
+    text = (unit * (size // len(unit) + 1))[:size]
+    deltas = [text[at : at + 1024] for at in range(0, size, 1024)]
+
+    assert _seconds(deltas) < (0.5 if size < 1024 * 1024 else 6.0)
+
+
+def test_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.backends import ToolSpec
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "instruction": "ask for a refund"})
+    )
+    ran, asked, answers = [], [], ["No", _CONFIRM, "No"]
+
+    async def handler(args):
+        ran.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    async def ask(tool, payload, context):
+        asked.append(tool)
+        return {"content": [{"type": "text", "text": answers.pop(0)}]}
+
+    runtime._ask = ask
+    add, drop, submit = (
+        runtime._confirmed(ToolSpec(name, "", {}, handler))
+        for name in ("add_actor", "drop_actor", "submit_scenario")
+    )
+    friend = {
+        "name": "one",
+        "instruction": "ask for a refund",
+        "actors": [{"id": "friend"}],
+    }
+    assert asyncio.run(add.handler({"id": "friend"}))["is_error"] is True
+    assert asyncio.run(drop.handler({"id": "friend"})).get("is_error") is None
+    assert asyncio.run(submit.handler(friend))["is_error"] is True
+    assert asked == ["add_actor", "drop_actor", "submit_scenario"]
+    assert ran == [{"id": "friend"}]
+    assert runtime._changes_situation(friend)
+
+
+def test_a_change_to_a_scenario_s_world_actors_waits_for_a_yes_and_no_repair_makes_it(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.backends import ToolSpec
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "instruction": "ask for a refund"})
+    )
+    acted = {
+        "name": "one",
+        "instruction": "ask for a refund",
+        "actors": [{"id": "reviewer", "actions": []}],
+    }
+    assert runtime._changes_situation(acted) and runtime._changes_meaning(acted)
+    ran, asked = [], []
+
+    async def handler(args):
+        ran.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    async def ask(tool, payload, context):
+        asked.append(tool)
+        return {"content": [{"type": "text", "text": "No"}]}
+
+    runtime._ask = ask
+    submit = runtime._confirmed(ToolSpec("submit_scenario", "", {}, handler))
+    assert asyncio.run(submit.handler(acted))["is_error"] is True
+    assert (asked, ran) == (["submit_scenario"], [])
+
+
+def test_the_world_offers_only_actions_an_actor_can_send():
+    from fi.alk.harness.actors import world_action_names
+
+    contract = {
+        "tool_entrypoints": [
+            {"tool": "read", "endpoint": "records/read"},
+            {"tool": "approve", "endpoint": "/records/approve", "method": "post"},
+            {"tool": "look", "endpoint": "records/look", "method": "GET"},
+            {
+                "tool": "cancel",
+                "endpoint": "records/{record_id}/cancel",
+                "method": "POST",
+            },
+            {"tool": "local", "endpoint": ""},
+        ]
+    }
+    assert world_action_names(contract) == ["records.approve", "records.read"]
+
+
+def test_the_build_adds_actors_without_asking_and_never_drops_one(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.backends import ToolSpec
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    ran = []
+
+    async def handler(args):
+        ran.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    add, drop = (
+        runtime._confirmed(ToolSpec(name, "", {}, handler))
+        for name in ("add_actor", "drop_actor")
+    )
+    runtime._from_platform = True
+    assert asyncio.run(add.handler({"id": "friend"})).get("is_error") is None
+    dropped = asyncio.run(drop.handler({"id": "friend"}))
+    assert dropped["is_error"] is True and "aim_for" in dropped["content"][0]["text"]
+    assert ran == [{"id": "friend"}]
+
+
+def test_stale_pre_run_sessions_are_written_again_before_a_save_seals_the_scenarios(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    (tmp_path / "world.sqlite").write_bytes(b"before")
+    runtime._published_fingerprint()
+    order = []
+
+    async def refresh(root, write=None):
+        order.append(("refresh", root))
+        return []
+
+    monkeypatch.setattr("fi.alk.harness.pre_run.refresh_stale", refresh)
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: order.append(("reseal", root)))
+
+    (tmp_path / "world.sqlite").write_bytes(b"after")
+    asyncio.run(runtime._save_changes())
+
+    assert order == [("refresh", runtime.workspace), ("reseal", runtime.workspace)]
+
+
+def test_a_change_waiting_on_the_person_asks_to_be_answered_with_an_option(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    runtime, guarded, _ran, _offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: _CONFIRM)
+    asked = []
+
+    async def ask(tool, payload, context):
+        asked.append(payload)
+        return {"content": [{"type": "text", "text": _CONFIRM}]}
+
+    runtime._ask = ask
+    asyncio.run(guarded("edit_scenario")({"scenario_key": "one", "instruction": "ask for an exchange"}))
+
+    assert [one.get("options_only") for one in asked] == [True]
