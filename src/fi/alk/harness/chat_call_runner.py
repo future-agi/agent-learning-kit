@@ -33,6 +33,7 @@ from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import ChatActors, TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
+from .source_folder import contract_folder
 from .usage import (
     UsageDenied,
     UsageUnavailable,
@@ -441,7 +442,10 @@ def _tool_world(
                 "handler_child_required: per-user isolation never imports the agent's code here",
                 code="call_failed",
             )
-        world.reach(str(source_directory))
+        world.reach(
+            str(source_directory),
+            contract_folder(contract),
+        )
     return world
 
 
@@ -482,6 +486,7 @@ def handler_child_for(
         source=context.source_directory,
         work_directory=context.work_directory,
         world_index=runtime.world_index,
+        subfolder=contract_folder(contract),
     )
 
 

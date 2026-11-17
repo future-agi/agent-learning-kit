@@ -36,6 +36,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
+from pydantic import ValidationError
+
+from ..providers.agent import _redact
 from . import observability
 from . import outbound as ob
 from . import user_files
@@ -43,7 +46,9 @@ from .actors import ACTOR_RULES_FILE, ACTORS_FILE
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
 from .compose_broker import BrokerError, ComposeBrokerClient
+from .framework_detection import FrameworkFolders, framework_folders_for
 from .hosted_compose_bootstrap import initialize_hosted_compose
+from .source_folder import folder_failure, non_github_folder_failure
 from .world.observation import ObservationWorldFactory
 from .call_runner import CallRunnerContext, CallRunnerImpl
 from .hosted_scheduler import (
@@ -63,6 +68,7 @@ from .job import (
     ExecutionMode,
     FailureDomain,
     HarnessArtifactPolicy,
+    HarnessFailure,
     HarnessJob,
     HarnessStage,
 )
@@ -79,6 +85,7 @@ from .process_runtime import (
 from .judge import judge_sub_goal as _judge_sub_goal
 from .joint_judge import judge_sub_goals_jointly as _judge_sub_goals_jointly
 from .scenario_source import (
+    AgentDocumentFailed,
     BundleScenarioSource,
     ScenarioDocumentInvalid,
     bundle_has_scenarios,
@@ -250,6 +257,17 @@ def load_job(job_path: Path) -> HarnessJob:
     if job.execution is not ExecutionMode.HOSTED:
         raise ValueError("hosted_entrypoint_requires_hosted_job")
     return job
+
+
+def _read_raw_job_failure(job_path: Path, error: ValidationError) -> HarnessFailure | None:
+    try:
+        raw = json.loads(job_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    # load_job's own check, outside the model: a job that isn't hosted is malformed otherwise too.
+    if not isinstance(raw, dict) or raw.get("execution") != ExecutionMode.HOSTED.value:
+        return None
+    return non_github_folder_failure(error, raw)
 
 
 def resolve_parallelism(job: HarnessJob) -> int:
@@ -590,6 +608,29 @@ def _find_postgres_endpoint(runtime: EnvironmentRuntime) -> RuntimeEndpoint:
     )
 
 
+def _framework_folders(
+    job: HarnessJob,
+    manifest: EnvironmentBundleV2,
+    *,
+    source: Path,
+    bundle_dir: Path,
+    work_directory: Path,
+) -> FrameworkFolders:
+    # Called outside the `try` around `build`: an exception here would end the run with no
+    # terminal event, and all that is at stake is a label.
+    try:
+        return framework_folders_for(
+            job,
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=work_directory,
+        )
+    except Exception as exc:
+        logger.warning("framework folders failed: class=%s", type(exc).__name__)
+        return FrameworkFolders(source, source, None)
+
+
 def load_build_output(work_directory: Path) -> dict[str, Any]:
     """`write_build_output` (process_runtime.py) writes `<work_directory>/artifacts/build.json`.
     Read fresh each call — cheap, and the row counts are immutable after baseline freeze, so
@@ -774,7 +815,8 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
             parts.append(f"Summary: {summary}")
         if rules:
             parts.append("Rules:\n- " + "\n- ".join(rules))
-    return "\n\n".join(parts)
+    # The whole text, once: the job's own prompt, the summary and the rules may each hold a URL.
+    return _redact("\n\n".join(parts))
 
 
 def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:
@@ -2274,6 +2316,19 @@ async def run_job(
     )
     scenarios_client.configure_offline_control(events_spool.root / "control")
 
+    # Read once, at boot: the runtime deletes secrets.json on its first provision().
+    customer_secret_values = deps.peek_secret_values()
+    declared_secret_values = (
+        *customer_secret_values,
+        *tuple(simulator_secret_values.values()),
+    )
+    # Spans: the customer's values go whole (no names come with them here). The simulator channel
+    # goes whole too, apart from the platform settings named in NON_SECRET_SETTINGS, which a span
+    # keeps.
+    span_secret_values = (
+        *customer_secret_values,
+        *observability.declared_values(simulator_secret_values),
+    )
     adapter = OutboundAdapter(
         capabilities,
         events_spool=events_spool,
@@ -2281,10 +2336,7 @@ async def run_job(
         results_client=results_client,
         artifacts_client=artifacts_client,
         channel_state=channel_state,
-        extra_secret_values=(
-            *deps.peek_secret_values(),
-            *tuple(simulator_secret_values.values()),
-        ),
+        extra_secret_values=declared_secret_values,
         clock=deps.clock,
         flush_window_seconds=deps.flush_window_seconds,
     )
@@ -2447,31 +2499,63 @@ async def run_job(
         )
 
     async def _fail(
-        *, domain: FailureDomain, fail_stage: HarnessStage, code: str, message: str
+        *,
+        domain: FailureDomain,
+        fail_stage: HarnessStage,
+        code: str,
+        message: str,
+        retryable: bool | None = None,
+        details: dict | None = None,
     ) -> int:
         # routed through `_finish` -- terminal event first, pool close (bounded) after, for
         # every pre-run failure branch too, not just the post-run ones `_finish` already covered.
-        return await _finish(
-            HarnessStage.FAILED,
-            failure={
-                "domain": domain.value,
-                "stage": fail_stage.value,
-                "code": code,
-                "message": message,
-            },
-            complete=True,
-        )
+        failure: dict[str, Any] = {
+            "domain": domain.value,
+            "stage": fail_stage.value,
+            "code": code,
+            "message": message,
+        }
+        if retryable is not None:
+            failure["retryable"] = retryable
+        if details is not None:
+            failure["details"] = details
+        return await _finish(HarnessStage.FAILED, failure=failure, complete=True)
 
     try:
         # 1 (cont'd). job.json (§0.2).
         try:
             job = load_job(job_path)
+        except ValidationError as exc:
+            # One malformed job is reported: a folder named on a source that isn't GitHub. The
+            # rest of the job isn't trusted -- only that reason and the folder are read from it.
+            unusable = _read_raw_job_failure(job_path, exc)
+            if unusable is None:
+                logger.error("job.json invalid: %s", exc)
+                return EXIT_CRASHED
+            return await _fail(
+                domain=unusable.domain,
+                fail_stage=unusable.stage,
+                code=unusable.code,
+                message=unusable.message,
+                retryable=unusable.retryable,
+                details=unusable.details,
+            )
         except Exception as exc:  # noqa: BLE001 - a malformed job.json has no typed error to catch
             # EXIT_CRASHED (not a FAILED terminal) even though a channel now exists -- a
             # malformed job.json means `job.seed`/`job.agent`/etc are not trustworthy enough to
             # build a reportable failure from, and every downstream stage assumes a valid `job`.
             logger.error("job.json invalid: %s", exc)
             return EXIT_CRASHED
+
+        if (unusable := folder_failure(source, job.source.subfolder)) is not None:
+            return await _fail(
+                domain=unusable.domain,
+                fail_stage=unusable.stage,
+                code=unusable.code,
+                message=unusable.message,
+                retryable=unusable.retryable,
+                details=unusable.details,
+            )
 
         try:
             broker_socket = await asyncio.to_thread(initialize_hosted_compose, job, source)
@@ -2485,8 +2569,12 @@ async def run_job(
         if broker_socket is not None:
             os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)
 
+        # Spans are a channel out too (span_secret_values says which values they replace).
         observability.begin(
-            job.job_id, job.run_id, (job.metadata or {}).get("telemetry")
+            job.job_id,
+            job.run_id,
+            (job.metadata or {}).get("telemetry"),
+            secret_values=span_secret_values,
         )
 
         if job.seed is None:
@@ -2754,7 +2842,15 @@ async def run_job(
         if isinstance(scenario_source, NotWiredScenarioSource) and bundle_has_scenarios(
             bundle_dir
         ):
-            scenario_source = BundleScenarioSource()
+            scenario_source = BundleScenarioSource(
+                framework_folders=_framework_folders(
+                    job,
+                    manifest,
+                    source=source,
+                    bundle_dir=bundle_dir,
+                    work_directory=work_directory,
+                )
+            )
         try:
             scenarios = await scenario_source.build(
                 job,
@@ -2790,6 +2886,18 @@ async def run_job(
                 fail_stage=HarnessStage.VALIDATING_SCENARIOS,
                 code="scenario_preallocation_failed",
                 message=str(exc),
+            )
+        except AgentDocumentFailed as exc:
+            # A folder build whose agent document could not be made fails with the real error: the
+            # platform gets a terminal failure and no document, not a registration without one.
+            if adapter.is_fenced:
+                await _bounded_close()
+                return EXIT_FENCED
+            return await _fail(
+                domain=FailureDomain.AGENT,
+                fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code=exc.code,
+                message=exc.message,
             )
         except ScenarioDocumentInvalid as exc:
             # A scenario document that will not even compile is a generation-stage content defect

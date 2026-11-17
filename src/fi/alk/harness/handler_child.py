@@ -100,7 +100,7 @@ class ChildWorld(GeneratedWorld):
         self.tools = [dict(tool) for tool in tools]
         self.refusal_signature = refusal_signature
 
-    def reach(self, source_root: str) -> None:
+    def reach(self, source_root: str, subfolder: str = "") -> None:
         raise RuntimeError(
             "a handler child's world never imports the agent's code here"
         )
@@ -164,6 +164,7 @@ def start_handler_child(
     source: Path | None,
     work_directory: Path,
     world_index: int,
+    subfolder: str = "",
 ) -> HandlerChild:
     """Start the child for one conversation. A user that does not resolve is refused."""
     resolved = default_user_resolver(HANDLER_USER.value)
@@ -229,6 +230,10 @@ def start_handler_child(
                     "refusal_signature": refusal_signature,
                     "dsn": dsn,
                     "import_root": str(source) if source is not None else None,
+                    # An agent built from a folder imports its own modules by flat name, as
+                    # it does in-process: `GeneratedWorld.reach` puts the folder first. A
+                    # build without a folder sends what it always did.
+                    **({"import_subfolder": subfolder} if subfolder else {}),
                 }
             ).encode("utf-8")
         )
@@ -274,7 +279,7 @@ def main() -> None:
     world.handlers = dict(init.get("handlers") or {})
     world.refusal_signature = str(init.get("refusal_signature") or "")
     if init.get("import_root"):
-        world.reach(init["import_root"])
+        world.reach(init["import_root"], str(init.get("import_subfolder") or ""))
     try:
         serve(sock, world)
     finally:

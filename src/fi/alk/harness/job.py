@@ -56,9 +56,21 @@ class RepositorySource(BaseModel):
     archive_artifact_id: str | None = None
     image: str | None = None
     endpoint: str | None = None
+    subfolder: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_subfolder_is_none(cls, data):
+        # The platform sends "" for "no folder"; the echo compares the value exactly,
+        # so anything else is kept as sent.
+        if isinstance(data, dict) and data.get("subfolder") == "":
+            return {**data, "subfolder": None}
+        return data
 
     @model_validator(mode="after")
     def _required_locator(self) -> "RepositorySource":
+        if self.subfolder and self.kind is not SourceKind.GITHUB:
+            raise ValueError("subfolder_requires_github_source")
         # A connected provider agent is itself the source of truth. Its ID lives
         # in AgentConnection.config and its definition is fetched with the
         # run-scoped provider credential during authoring, so no repository
@@ -192,6 +204,27 @@ class ProviderExecutionMode(str, Enum):
     PROVIDER_IMPORT = "provider_import"
 
 
+PROVIDER_MANAGED_CONNECTORS = frozenset({"vapi", "retell", "retell_chat"})
+
+
+def provider_profile_source(agent: AgentConnection) -> str | None:
+    """Where the build loads this agent's profile from, if it loads one.
+
+    A profile from the provider's API or from the job's own config: ``"phone"`` or
+    ``"livekit"`` for a connect-only job on those connectors, ``"provider"`` for an import or a
+    connect-only job on a provider-managed connector, and ``None`` when there is none.
+    """
+    connector = agent.connector.strip().lower()
+    if agent.mode is ProviderExecutionMode.CONNECT_ONLY and connector in {"phone", "livekit"}:
+        return connector
+    if agent.mode is ProviderExecutionMode.PROVIDER_IMPORT or (
+        agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and connector in PROVIDER_MANAGED_CONNECTORS
+    ):
+        return "provider"
+    return None
+
+
 class ArtifactLevel(str, Enum):
     METADATA_ONLY = "metadata-only"
     TRACES = "traces"
@@ -264,6 +297,19 @@ class HarnessJobMetadata(BaseModel):
     customer_code_environment: dict[str, str] = Field(default_factory=dict)
     # The hosts a controlled run lets the agent reach; absent when the platform does not control its egress.
     egress_allowed_hosts: list[str] | None = None
+
+
+def routed_through_gateway(target_model: object) -> bool:
+    """True for a model name the model gateway must route, such as `vertex_ai/gemini-3.7-flash`.
+
+    The first segment is compared case-sensitively because the Agents SDK does the same: only
+    the exact prefix `openai` is stripped and sent on as a bare OpenAI name.
+    """
+    return (
+        isinstance(target_model, str)
+        and "/" in target_model
+        and target_model.partition("/")[0] != "openai"
+    )
 
 
 class HarnessJob(BaseModel):
@@ -345,6 +391,23 @@ class HarnessJob(BaseModel):
                 "values. Simulator credentials are not target credentials. A requested "
                 "provider/model must be configured through the agent's supported settings, "
                 "then verified with a real chat. Do not substitute a different provider."
+            )
+        if routed_through_gateway(target_model):
+            instructions.append(
+                "If the agent uses the OpenAI Agents SDK and passes its model as a name to "
+                "Agent(model=...) or RunConfig(model=...), give it "
+                f"the requested model written as openai/{target_model}: the SDK refuses or "
+                "reroutes a name whose first segment is not openai, and it removes openai/ and "
+                "sends the rest unchanged to its configured endpoint. A name handed to a model "
+                "object such as OpenAIChatCompletionsModel(model=...) is sent unchanged, so "
+                "leave it as the requested model. Never change the model itself. If the agent "
+                "is a Docker Compose project and its code neither calls "
+                'set_default_openai_api("chat_completions") nor hands the model to a '
+                "chat-completions model object, write in the contract's notes that when the kit "
+                "runs this Compose project as is (it does where a Compose broker is set up), "
+                "every turn on this model gets the gateway's HTTP 501 until the agent's startup "
+                'adds set_default_openai_api("chat_completions"); where the kit builds the '
+                "services from source instead, it sets this itself."
             )
         if self.require_tool_workflow:
             instructions.append(
