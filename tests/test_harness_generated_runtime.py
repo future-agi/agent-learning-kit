@@ -2062,3 +2062,33 @@ def test_every_reserved_name_stays_out_of_the_job_file_and_compose_environment(
     for name in reserved:
         assert name in logged, name
     assert "/evil" not in logged
+
+
+def test_stop_removes_the_job_directories_a_killed_worker_left_for_its_project_only(
+    tmp_path: Path, monkeypatch
+) -> None:
+    temp = tmp_path / "shared-temp"
+    temp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "AGENT_SETTING")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_AGENT_SETTING", "v")
+    environment = _stop_environment(tmp_path)
+
+    # The directory a live call makes is named after the project.
+    calls = _record_compose(monkeypatch)
+    provisioning._run(environment, "up")
+    assert calls[0].job.path.parent.name.startswith("alk-compose-env-compose-env.")
+    assert calls[0].job.path.parent.parent == temp
+
+    leftover = Path(tempfile.mkdtemp(prefix="alk-compose-env-compose-env.", dir=temp))
+    (leftover / "job").write_text('OPENAI_API_KEY="leftover"\n')
+    other = Path(tempfile.mkdtemp(prefix="alk-compose-env-other.", dir=temp))
+    (other / "job").write_text('OPENAI_API_KEY="other"\n')
+    longer = Path(tempfile.mkdtemp(prefix="alk-compose-env-compose-env-extra.", dir=temp))
+    monkeypatch.setattr(provisioning, "_docker", lambda *_a, **_k: "")
+
+    assert stop(tmp_path)
+
+    assert not leftover.exists()
+    assert (other / "job").exists()
+    assert longer.exists()

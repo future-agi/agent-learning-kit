@@ -11,6 +11,7 @@ lifecycle manager, so every Compose feature the user's project supports keeps wo
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import logging
@@ -352,6 +353,18 @@ def _compose_environment(values: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in base.items() if k not in values}
 
 
+def _job_directory_prefix(project: str) -> str:
+    """The job file's directory prefix: the project, then ``.``, which a project name never holds."""
+    return f"alk-compose-env-{project}."
+
+
+def _remove_leftover_job_directories(project: str) -> None:
+    """Remove the job directories a killed worker left behind for this project (and no other)."""
+    pattern = f"{glob.escape(_job_directory_prefix(project))}*"
+    for leftover in Path(tempfile.gettempdir()).glob(pattern):
+        shutil.rmtree(leftover, ignore_errors=True)
+
+
 def _write_env_file(fd: int, values: dict[str, str]) -> None:
     """Write ``NAME="value"`` lines through ``fd`` (from ``mkstemp``: 0600, created exclusively)."""
     with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape") as handle:
@@ -417,7 +430,7 @@ def _run(
                 *arguments,
             ]
         else:
-            job_directory = tempfile.mkdtemp(prefix="alk-compose-env-")
+            job_directory = tempfile.mkdtemp(prefix=_job_directory_prefix(environment.project))
             descriptor, job_file = tempfile.mkstemp(dir=job_directory)
             _write_env_file(descriptor, values)
             files = ["--file", environment.compose_file]
@@ -3117,6 +3130,7 @@ def stop(destination: str | Path) -> bool:
         stop_runtime(destination)
         environment = ProvisionedEnvironment.load(destination) or environment
     _detach_runner_network(environment)
+    _remove_leftover_job_directories(environment.project)
     # Tear down by project name with no file: Compose parses and interpolates nothing, so this
     # call (the only one the sandbox server makes in its own process, which holds controller
     # credentials) needs no job value and no ``--file``.
