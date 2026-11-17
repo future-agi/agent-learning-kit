@@ -735,6 +735,60 @@ def test_real_openai_agents_sdk_is_on_chat_completions_with_the_mark(
     assert result.stdout.strip() == "False"
 
 
+def test_real_openai_agents_sdk_keeps_the_gateway_key_off_its_trace_export(
+    tmp_path: Path,
+) -> None:
+    # Against the real SDK (CI pins 0.18.3): the exporter class sends nothing, the kit's switch
+    # is cleared so the kit's span observation runs, and a gateway key handed to the exporter
+    # through set_default_openai_key becomes the placeholder.
+    if not _real_openai_agents_installed():
+        pytest.skip("openai-agents is not installed in the test interpreter")
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    bootstrap = (
+        Path(__file__).resolve().parents[2]
+        / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    )
+    shutil.copy2(bootstrap, hook / "sitecustomize.py")
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"HARNESS_TOOL_TRACE", "PYTHONPATH"}
+    }
+    env.update(
+        {
+            "PYTHONPATH": str(hook),
+            _CHAT_MARK: "1",
+            "OPENAI_API_KEY": "sk-FAKE-GATEWAY",
+            "OPENAI_AGENTS_DISABLE_TRACING": "1",
+            "ALK_SDK_TRACING_OFF_BY_KIT": "1",
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os, agents\n"
+            "from agents.tracing import processors\n"
+            "exporter = processors.default_exporter()\n"
+            "print(type(exporter).export.__name__, type(exporter)._export_with_deadline.__name__)\n"
+            "print(os.environ.get('OPENAI_AGENTS_DISABLE_TRACING'))\n"
+            "agents.set_default_openai_key('sk-FAKE-GATEWAY', use_for_tracing=True)\n"
+            "print(exporter.api_key)\n",
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "export_nothing export_nothing",
+        "None",
+        "alk-tracing-disabled",
+    ]
+
+
 def test_openai_agents_hook_does_not_hide_a_later_finder_that_refuses_agents(
     tmp_path: Path,
 ) -> None:
