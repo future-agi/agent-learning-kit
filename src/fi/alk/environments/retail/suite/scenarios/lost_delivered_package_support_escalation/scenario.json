@@ -1,0 +1,89 @@
+{
+  "name": "lost_delivered_package_support_escalation",
+  "scenario_key": "lost-delivered-package-support-escalation",
+  "scenario_id": "",
+  "use_case": "Support case escalation and service error recovery",
+  "branch": "Customer reports package not received although tracking indicates delivered 3 days ago",
+  "tests": "the agent verifies ownership, checks tracking, and opens a support case for missing/lost delivery investigation",
+  "instruction": "You ordered items under order O420. The carrier tracking says delivered 3 days ago, but you never received the package and it is nowhere near your door. You want support to investigate and open a case for you.\n\nYour details:\nName: Liam Evans\nEmail: liam.evans@example.com\nPostal code: 94102\nOrder ID: O420",
+  "keywords": [
+    "missing_package"
+  ],
+  "persona": {
+    "name": "Liam Evans",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Anxious",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, my order O420 shows as delivered 3 days ago on tracking, but I never received it. Can you help open an investigation case?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "order_id": "O420",
+    "customer_id": "C420"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "94102",
+        "order_id": "O420"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_shipment_tracking",
+      "arguments": {
+        "customer_id": "C420",
+        "order_id": "O420"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_support_case",
+      "arguments": {
+        "order_id": "O420",
+        "customer_id": "C420",
+        "subject": "Missing package marked delivered",
+        "details": "Customer reports package not received despite delivery status 3 days ago"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O420",
+        "customer_id": "record: customer C420"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "task": "escalate_service_failure",
+    "overlay_intensity": "absent",
+    "disposition": "disputing_policy",
+    "overlay_vector": "none",
+    "counterparty": "verified_owner",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "subgoal_support_case_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

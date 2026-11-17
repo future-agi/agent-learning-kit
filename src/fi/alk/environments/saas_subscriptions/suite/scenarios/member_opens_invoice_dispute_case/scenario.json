@@ -1,0 +1,85 @@
+{
+  "name": "member_opens_invoice_dispute_case",
+  "scenario_key": "member-opens-invoice-dispute-case",
+  "scenario_id": "",
+  "use_case": "Open a billing case or report a payment",
+  "branch": "Regular member Dan Eng disputes a line item on inv_04_prev; any user can open a billing case",
+  "tests": "allows regular member to open a dispute billing case and returns case ID",
+  "instruction": "You are Dan Eng, team member at DataFlow. You want to open a formal billing dispute case for invoice inv_04_prev regarding seat charges.\n\nYour details:\n- Name: Dan Eng\n- Company: DataFlow\n- Tenant ID: T04\n- User ID: U04_MEMBER\n- Invoice ID: inv_04_prev\n- Category: dispute",
+  "keywords": [
+    "billing_case"
+  ],
+  "persona": {
+    "name": "Dan Eng",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "I want to open a formal dispute for our previous invoice inv_04_prev.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "invoice_id": "inv_04_prev",
+    "actor_id": "U04_MEMBER",
+    "tenant_id": "T04"
+  },
+  "solution": [
+    {
+      "tool": "get_user_role",
+      "arguments": {
+        "user_id": "U04_MEMBER",
+        "actor_id": "U04_MEMBER",
+        "tenant_id": "T04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_billing_case",
+      "arguments": {
+        "summary": "Disputing seat charges on inv_04_prev",
+        "invoice_id": "inv_04_prev",
+        "category": "dispute",
+        "request_key": "req-bc-403",
+        "actor_id": "U04_MEMBER",
+        "tenant_id": "T04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "record: T04",
+        "invoice_id": "record: inv_04_prev",
+        "category": "caller: dispute"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_chat",
+    "overlay": "none",
+    "disposition": "disputed_seats",
+    "interaction": "multi_turn",
+    "task": "create_billing_case",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "member"
+  },
+  "sub_goals": [
+    "billing_case_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

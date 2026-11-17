@@ -1,0 +1,82 @@
+{
+  "name": "email_payment_retry_status_reported",
+  "scenario_key": "email-payment-retry-status-reported",
+  "scenario_id": "",
+  "use_case": "Pick up a billing request that arrived by email",
+  "branch": "Reading payment retry email thread and reporting payment retry date and amount",
+  "tests": "Can the agent retrieve and report the payment retry status and amount for an invoice from an email thread?",
+  "instruction": "You are Karen Kite (user U11_ADMIN, tenant T11). Ask the billing desk to check email thread th_b14_retry_payment and let you know when the card will be charged and for what amount.\n\nYour details:\n- Name: Karen Kite\n- Role: Billing Admin\n- Email: karen@kiteworks.com\n- Tenant ID: T11\n- Thread ID: th_b14_retry_payment\n- Invoice ID: inv_11_addon",
+  "keywords": [
+    "email_billing_request"
+  ],
+  "persona": {
+    "name": "Karen Kite",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I sent an email in thread th_b14_retry_payment asking about our payment retry for inv_11_addon. Could you check the details?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_b14_retry_payment",
+    "tenant_id": "T11",
+    "actor_id": "U11_ADMIN",
+    "origin": "seed",
+    "invoice_id": "inv_11_addon"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b14_retry_payment"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: Thread ID th_b14_retry_payment"
+      }
+    },
+    {
+      "tool": "get_payment_status",
+      "arguments": {
+        "invoice_id": "inv_11_addon",
+        "tenant_id": "T11",
+        "actor_id": "U11_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "invoice_id": "caller: Invoice ID inv_11_addon",
+        "tenant_id": "record: Tenant ID T11"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "email_billing_request",
+    "interaction": "multi_turn",
+    "counterparty": "billing_admin",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "disposition": "payment_retry",
+    "interface": "clean_chat"
+  },
+  "sub_goals": [
+    "payment_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,22 +1,20 @@
 def check(world, calls, reference=None):
-    made = [c for c in calls if c.name == "calculate_working_days" and c.ok]
+    made = [c for c in calls if c.name == "calculate_working_days" and c.ok and isinstance(c.result, dict)]
     if not made:
         return "not done: calculate_working_days was not called successfully"
-        
     wanted = {}
-    if reference:
-        for step in reference:
-            if step["tool"] == "calculate_working_days":
-                for k in ("region", "start_date", "end_date"):
-                    if k in step.get("arguments", {}):
-                        wanted[k] = step["arguments"][k]
-                        
-    for field, expected in wanted.items():
-        if not any(str(c.arguments.get(field, "")).strip().lower() == str(expected).strip().lower() for c in made):
-            got = [c.arguments.get(field) for c in made]
-            return f"done wrong: {field} expected {expected!r}, got {got!r}"
-            
-    return None
+    for step in reference or ():
+        if step["tool"] == "calculate_working_days":
+            for k in ("region", "start_date", "end_date"):
+                if k in step.get("arguments", {}):
+                    wanted[k] = str(step["arguments"][k]).strip().lower()
+    # One calculation must cover the whole question: region and both dates from the same call, and
+    # its answer (the working-day count) returned to the agent.
+    for c in made:
+        if all(str(c.arguments.get(k, "")).strip().lower() == v for k, v in wanted.items()) and "working_days" in c.result:
+            return None
+    got = [{k: c.arguments.get(k) for k in ("region", "start_date", "end_date")} for c in made]
+    return f"done wrong: no single calculation of {wanted}; the calculations made were {got}"
 
 
 if __name__ == "__main__":

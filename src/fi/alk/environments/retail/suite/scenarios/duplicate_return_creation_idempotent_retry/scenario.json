@@ -1,0 +1,110 @@
+{
+  "name": "duplicate_return_creation_idempotent_retry",
+  "scenario_key": "duplicate-return-creation-idempotent-retry",
+  "scenario_id": "",
+  "use_case": "Return status inquiry and duplicate prevention",
+  "branch": "Customer repeats return confirmation causing idempotent return request with identical request key",
+  "tests": "the agent creates a return for C450 on order O450 using request_key REQ-C450-O450 and handles retry without creating duplicate records",
+  "instruction": "You want to return the Stretch Selvedge Denim Jeans (SKU AP05) from order O450. You confirm the return details, and then you repeat your confirmation to make sure it went through.\n\nYour details:\n- Name: Clint Barton\n- Email: clint.barton@example.com\n- Postal Code: 50001\n- Order ID: O450\n- Item: Stretch Selvedge Denim Jeans (SKU: AP05)\n- Quantity: 1",
+  "keywords": [
+    "duplicate_prevention"
+  ],
+  "persona": {
+    "name": "Clint Barton",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Anxious",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I need to return the jeans AP05 from order O450.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O450",
+    "origin": "generated",
+    "sku": "AP05",
+    "customer_id": "C450"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "50001",
+        "order_id": "O450"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O450"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "order_id": "O450",
+        "items": [
+          {
+            "sku": "AP05",
+            "quantity": 1,
+            "reason": "does_not_fit"
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_return",
+      "arguments": {
+        "customer_id": "C450",
+        "items": [
+          {
+            "sku": "AP05",
+            "quantity": 1,
+            "reason": "does_not_fit"
+          }
+        ],
+        "order_id": "O450",
+        "request_key": "REQ-C450-O450"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "items": "caller: item AP05 quantity 1",
+        "order_id": "caller: order number O450"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interface": "clean_prose",
+    "task": "return_eligible_item",
+    "disposition": "repeating",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "counterparty": "verified_owner",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "subgoal_return_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

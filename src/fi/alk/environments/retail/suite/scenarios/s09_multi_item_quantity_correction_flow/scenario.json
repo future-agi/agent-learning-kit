@@ -3,9 +3,9 @@
   "scenario_key": "s09-multi-item-quantity-correction-flow",
   "scenario_id": "",
   "use_case": "Eligible item return and label generation",
-  "branch": "Caller corrects return item quantity mid-turn from two to one unit for SKU AP12 on order O09",
+  "branch": "Caller who bought two units of AP12 on order O09 corrects the return quantity mid-turn from two to one",
   "tests": "the agent processes mid-turn quantity correction and accurately creates return authorization for 1 unit of AP12",
-  "instruction": "You ordered apparel SKU AP12 in order O09. During the conversation, you clarify that you only need to return 1 unit rather than two.\n\nYour details:\n- Name: Iris West\n- Email: iris.west@example.com\n- Postal Code: 63101\n- Order ID: O09\n- Final Item and Quantity: SKU AP12, Quantity 1\n- Reason: Wrong fit",
+  "instruction": "You bought two Insulated Winter Parkas (SKU AP12) in order O09. You start by asking to return both, then correct yourself in the same message: you only want to return 1 unit and keep the other. Confirm the return of one unit when asked.\n\nYour details:\n- Name: Iris West\n- Email: iris.west@example.com\n- Postal Code: 63101\n- Order ID: O09\n- Final Item and Quantity: SKU AP12, Quantity 1\n- Reason: Wrong fit",
   "keywords": [
     "return_authorization"
   ],
@@ -17,7 +17,7 @@
     "location": "India",
     "personality": "Friendly and cooperative",
     "communication_style": "Collaborative",
-    "initial_message": "Hi! I have order O09. I wanted to return two items... actually let me correct that, just one unit of SKU AP12 please.",
+    "initial_message": "Hi! I have order O09 with two parkas (AP12). I wanted to return both... actually let me correct that, just one unit of SKU AP12 please.",
     "languages": [
       "English"
     ],
@@ -84,7 +84,8 @@
       "environment_arguments": {},
       "fixed": {
         "customer_id": "record: customer C09",
-        "order_id": "caller: order number O09"
+        "order_id": "caller: order number O09",
+        "items": "the items and quantities the customer settled on"
       }
     }
   ],

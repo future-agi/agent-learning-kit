@@ -17,7 +17,7 @@
     "location": "Canada",
     "personality": "Impatient and direct",
     "communication_style": "Direct and concise",
-    "initial_message": "yo, wanna return my shirt sku AP06 from order O06, delivered a while back.",
+    "initial_message": "yo, wanna return my trousers sku AP06 from order O06, delivered a while back.",
     "languages": [
       "English"
     ],
@@ -50,14 +50,6 @@
       }
     },
     {
-      "tool": "get_order",
-      "arguments": {
-        "order_id": "O06"
-      },
-      "environment_arguments": {},
-      "fixed": {}
-    },
-    {
       "tool": "evaluate_return",
       "arguments": {
         "order_id": "O06",
@@ -70,7 +62,9 @@
         ]
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "order_id": "record: orders.order_id of the order the request is about"
+      }
     }
   ],
   "alternatives": [],

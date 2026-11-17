@@ -1,3 +1,17 @@
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, email or name the
+    desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
+def _for_caller(db, customer_id, what):
+    """Act only for the signed-in customer: a customer_id argument is checked, never trusted."""
+    caller = _caller(db)
+    if not caller or str(customer_id or "").strip() != caller:
+        raise ToolError(f"Permission denied: {what} is not the signed-in customer's ({caller or 'nobody is signed in'}).", category="permission_denied")
+
+
 def handle(args, db):
     customer_id = args.get("customer_id")
     subject = args.get("subject")
@@ -11,10 +25,13 @@ def handle(args, db):
     if not cust:
         raise ToolError(f"Customer {customer_id} not found.", category="not_found")
         
+    _for_caller(db, customer_id, f"customer {customer_id}")
     if order_id:
         ord_row = db.one("SELECT * FROM orders WHERE order_id = ?", [order_id])
         if not ord_row:
             raise ToolError(f"Order {order_id} not found.", category="not_found")
+        if ord_row["customer_id"] != customer_id:
+            raise ToolError(f"Order {order_id} is not an order of customer {customer_id}.", category="permission_denied")
             
     clock_row = db.one("SELECT now FROM clock")
     created_at = clock_row["now"]

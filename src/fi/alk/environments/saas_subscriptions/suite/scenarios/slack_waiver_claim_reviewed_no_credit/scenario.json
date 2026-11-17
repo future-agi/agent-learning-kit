@@ -1,0 +1,101 @@
+{
+  "name": "slack_waiver_claim_reviewed_no_credit",
+  "scenario_key": "slack-waiver-claim-reviewed-no-credit",
+  "scenario_id": "",
+  "use_case": "Answer an account manager in #billing-escalations",
+  "branch": "BM01/BM02 thread claims waiver for FinTrack T06; assistant checks records and finds pending review case BC-301 and CN-202 without crediting",
+  "tests": "Verifies waiver claim in Slack against billing records and does not credit without finance approval",
+  "instruction": "You are Olga Petrov, Finance at Cloudnest (User ID: U_FIN1). You are reviewing the #billing-escalations channel regarding thread BM01/BM02 where an account manager claimed a waiver was approved for FinTrack. Ask the billing desk assistant to check thread BM01 (ts: '1791799200.000001') in #billing-escalations, check the credit notes for invoice inv_06_curr and case BC-301, and confirm whether anything has been waived or credited.\n\nYour details:\n- Role: Finance\n- Your User ID: U_FIN1\n- Tenant ID: T06 (FinTrack)\n- Slack Channel: CH_BILLESC (#billing-escalations)\n- Message Timestamp: 1791799200.000001\n- Invoice ID: inv_06_curr\n- Case ID: BC-301",
+  "keywords": [
+    "slack_escalation"
+  ],
+  "persona": {
+    "name": "Olga Petrov",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, this is Olga from Finance. Could you check thread BM01 in #billing-escalations for FinTrack (T06) and see if credit note CN-202 or case BC-301 has been waived?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "records": {
+      "invoice_id": "inv_06_curr",
+      "tenant_id": "T06",
+      "message_ts": "1791799200.000001",
+      "case_id": "BC-301",
+      "credit_note_id": "CN-202",
+      "channel_id": "CH_BILLESC",
+      "caller_id": "U_FIN1"
+    }
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1791799200.000001",
+        "channel_id": "CH_BILLESC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: 1791799200.000001"
+      }
+    },
+    {
+      "tool": "get_credit_notes",
+      "arguments": {
+        "tenant_id": "T06",
+        "actor_id": "U_FIN1",
+        "invoice_id": "inv_06_curr"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T06",
+        "invoice_id": "caller: inv_06_curr"
+      }
+    },
+    {
+      "tool": "get_billing_case_status",
+      "arguments": {
+        "tenant_id": "T06",
+        "actor_id": "U_FIN1",
+        "case_id": "BC-301"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "case_id": "caller: BC-301"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_slack_escalation",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "interface": "clean_chat",
+    "disposition": "waiver_claimed",
+    "overlay": "none",
+    "counterparty": "billing_lead",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "claimed_discount_not_applied",
+    "slack_claim_not_authority"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

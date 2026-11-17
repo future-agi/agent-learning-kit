@@ -5,7 +5,7 @@
   "use_case": "Support case escalation and service error recovery",
   "branch": "Customer reports delivered package for order O12 was damaged in transit; agent verifies identity and creates support escalation ticket",
   "tests": "the agent verifies order ownership on order O12 and creates an escalated support case for transit damage",
-  "instruction": "You received order O12 yesterday, but the packaging and items arrived damaged during transit. You want the agent to verify your order and open a formal support ticket for a replacement review.\n\nYour details:\n- Name: Leo Fitz\n- Email: leo.fitz@example.com\n- Postal Code: 75001\n- Order ID: O12\n- Issue: Damaged in transit",
+  "instruction": "You received order O12 on 20 October, but the packaging and items arrived damaged during transit. You want the agent to verify your order and open a formal support ticket for a replacement review.\n\nYour details:\n- Name: Leo Fitz\n- Email: leo.fitz@example.com\n- Postal Code: 75001\n- Order ID: O12\n- Issue: Damaged in transit",
   "keywords": [
     "support_escalation"
   ],
@@ -17,7 +17,7 @@
     "location": "India",
     "personality": "Anxious",
     "communication_style": "Detailed and elaborate",
-    "initial_message": "Hello support desk. I received my package for order O12 yesterday, but the box was severely crushed and the contents were damaged during transit. I need someone to review this right away.",
+    "initial_message": "Hello support desk. I received my package for order O12 on 20 October, but the box was severely crushed and the contents were damaged during transit. I need someone to review this right away.",
     "languages": [
       "English"
     ],

@@ -91,9 +91,26 @@ class PostgresStore(ContainerStore):
 
     def execute(self, statement: str, params: Sequence[Any] = ()) -> int:
         """Run one mutation and report the rows it actually changed."""
+        if (held := getattr(self, "_held", None)) is not None:
+            return max(0, int(held.execute(statement, tuple(params)).rowcount or 0))
         with self._connect() as connection:
             cursor = connection.execute(statement, tuple(params))
             return max(0, int(cursor.rowcount or 0))
+
+    def hold(self) -> None:
+        """Keep one tool call's statements in one transaction on one connection, until
+        ``release``: its writes land together or not at all, and it reads what it wrote."""
+        self._held = _psycopg().connect(self.dsn())
+
+    def release(self, keep: bool) -> None:
+        held, self._held = self._held, None
+        try:
+            if keep:
+                held.commit()
+            else:
+                held.rollback()
+        finally:
+            held.close()
 
     def query(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         """Run one read statement, on a connection Postgres itself will not let write.
@@ -108,6 +125,11 @@ class PostgresStore(ContainerStore):
         ordinary ``LIKE '%turkey%'`` with nothing to bind then reads its own ``%t`` as an
         unmatched one and raises before the statement ever reaches Postgres.
         """
+        if (held := getattr(self, "_held", None)) is not None:
+            # Inside a held call: read on its own connection, so it sees what the call wrote.
+            cursor = held.execute(statement, tuple(params) if params else None)
+            columns = [description[0] for description in cursor.description or []]
+            return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
         with _psycopg().connect(
             self.dsn(), autocommit=True, options="-c default_transaction_read_only=on"
         ) as connection:

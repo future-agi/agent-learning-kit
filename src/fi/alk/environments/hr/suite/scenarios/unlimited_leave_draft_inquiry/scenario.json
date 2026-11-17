@@ -1,0 +1,86 @@
+{
+  "name": "unlimited_leave_draft_inquiry",
+  "scenario_key": "unlimited-leave-draft-inquiry",
+  "scenario_id": "",
+  "use_case": "Answer leave policy questions for the employee's region with citations",
+  "branch": "An employee asks about an unapproved draft for unlimited PTO, requiring the assistant to check draft metadata and cite the effective handbook.",
+  "tests": "Verifies that the assistant checks draft metadata and cites the active employee handbook rather than unapproved drafts.",
+  "instruction": "You heard rumors about an unlimited PTO policy for 2027. You want the HR assistant to check whether unlimited leave is in effect or whether our active employee handbook policy governs leave.\n\nYour details:\n- Employee ID: E10\n- Name: Jun Park\n- Region: APAC\n- Question: Is unlimited leave active for 2027 or does our current handbook policy still apply?",
+  "keywords": [
+    "leave_policy",
+    "handbook",
+    "unlimited_leave"
+  ],
+  "persona": {
+    "name": "Jun Park",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Analytical",
+    "communication_style": "Questioning",
+    "initial_message": "I heard someone mention that we have an unlimited PTO policy coming up. Is that officially approved and active?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E10",
+    "origin": "seed",
+    "region": "APAC"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E10"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_file_metadata",
+      "arguments": {
+        "fileId": "pto_unlimited_draft"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "handbook_2026"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: handbook_2026"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "task": "check_policy",
+    "interface": "clean_prose",
+    "disposition": "outdated_policy_belief",
+    "counterparty": "employee_apac",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

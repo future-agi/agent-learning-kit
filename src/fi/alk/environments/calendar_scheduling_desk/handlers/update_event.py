@@ -1,3 +1,9 @@
+def _kept(error):
+    """A fault this world simulates on purpose: what the call wrote before it stays written."""
+    error.keep_writes = True
+    return error
+
+
 def handle(args, db):
     import json
     import re
@@ -120,7 +126,7 @@ def handle(args, db):
         if fault["trigger_once"]:
             db.execute("UPDATE calendar_fault_injections SET is_active = FALSE WHERE fault_id = ?", (fault["fault_id"],))
         if fault["fault_type"] in ("timeout_after_commit", "timeout"):
-            raise ToolError("Gateway timeout: request timed out waiting for upstream server response.", category="timeout_unknown_outcome")
+            raise _kept(ToolError("Gateway timeout: request timed out waiting for upstream server response.", category="timeout_unknown_outcome"))
 
     attendees = [
         {

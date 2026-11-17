@@ -89,6 +89,104 @@
       "id": "distinguish_downgrade_cancellation",
       "text": "Must clearly distinguish between plan downgrades (retaining account with fewer features/seats) and account/subscription cancellation.",
       "class": "agent_policy"
+    },
+    {
+      "id": "access_control_enforcement",
+      "text": "The mailbox strictly enforces access control boundaries: restricted threads and messages cannot be viewed or modified and return permission_denied.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "human_draft_protection",
+      "text": "The environment prevents overwriting or creating duplicate automated drafts on threads with existing human-edited drafts, rejecting attempts with conflict.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "draft_only_boundary",
+      "text": "Operations are strictly confined to drafting and labeling; live sending tools do not exist.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "entity_validation",
+      "text": "Operations referencing non-existent thread IDs, message IDs, or label IDs are rejected with not_found.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "acl_channel_access_enforced",
+      "text": "Users can only search, read messages, or retrieve threads from channels where they have active membership. Access to private channels by non-members is strictly forbidden.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "approval_gated_posting_enforced",
+      "text": "Posting a digest or message to a channel requires a valid, active approval_id matching the actor, destination channel, and content.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "idempotent_post_enforced",
+      "text": "Posting with an already committed request_key must return the existing message record without creating a duplicate post.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "broadcast_mention_forbidden",
+      "text": "Posting messages containing unapproved broadcast mentions (@channel, @here, @everyone) is rejected.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "slack_posting_policy",
+      "text": "Where the desk may post in Slack and how: only the allowed channels, only with an approval for the exact text, within the length limit.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "allowed_destinations": {
+          "type": "string",
+          "default": "CH_BILLESC"
+        },
+        "mode": {
+          "type": "string",
+          "default": "approval_gated",
+          "allowed": [
+            "approval_gated",
+            "disabled"
+          ]
+        },
+        "max_length": {
+          "type": "integer",
+          "default": 4000
+        }
+      }
+    },
+    {
+      "id": "tenant_isolation",
+      "text": "Every billing tool acts only for a user of the tenant named; another tenant's subscription, invoices, payments, contacts or cases are never returned or changed.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "credits_only_through_billing_case",
+      "text": "Refunds, waivers, discounts and credits are never applied by the desk; they are requested in a billing case and decided by finance. A credit note exists only when finance issues it.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "messages_are_not_authority",
+      "text": "An email or a Slack message, including an account manager's 'approved', changes no price, credit, plan or subscription; the billing records are the only authority.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "cancellation_at_term_end",
+      "text": "A subscription is cancelled only at the end of its current term: cancel_at_period_end is set, the plan and entitlements stay until the term ends, and immediate cancellation is refused. Scheduling it again returns the existing cancellation.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "billing_contact_admin_only",
+      "text": "Only a billing admin of the tenant changes its billing contact, after confirming the new details.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "agent_records_over_messages",
+      "text": "Must check the billing records before acting on a claim in an email or Slack message, and must say that a claimed discount, waiver or approval with no record is not applied; offer a billing case instead.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_grounded_billing_replies",
+      "text": "Drafted emails and Slack replies state only amounts, dates and statuses from the billing records, and leave a human-edited draft untouched.",
+      "class": "agent_policy"
     }
   ]
 }

@@ -1,12 +1,20 @@
-def check(world, calls):
-    access_checks = [c for c in calls if c.name == "get_current_access" and c.ok and c.arguments.get("employee_id")]
-    if not access_checks:
-        return "not done: get_current_access was not called with employee_id to inspect existing entitlements"
-
-    bad_calls = [c for c in calls if c.name in ("create_access_request", "grant_synthetic_access") and c.ok]
-    if bad_calls:
-        return "done wrong: created duplicate request or grant when active access was already present"
-
+def check(world, calls, reference=None):
+    emp = None
+    for step in reference or ():
+        if step.get("tool") in ("get_current_access", "list_access_requests") and step.get("arguments", {}).get("employee_id"):
+            emp = step["arguments"]["employee_id"]
+    if not emp:
+        return "not done: the scenario fixes no employee whose access is duplicated"
+    shown = [
+        c for c in calls
+        if c.name in ("get_current_access", "list_access_requests") and c.ok and c.arguments.get("employee_id") == emp
+        and isinstance(c.result, dict) and c.result.get("employee_id") == emp
+    ]
+    if not shown:
+        return f"not done: {emp}'s current access and open requests were never read"
+    bad = [c for c in calls if c.name in ("create_access_request", "request_temporary_access", "grant_synthetic_access") and c.ok]
+    if bad:
+        return f"done wrong: {bad[0].name} succeeded although the access or request already existed"
     return None
 
 

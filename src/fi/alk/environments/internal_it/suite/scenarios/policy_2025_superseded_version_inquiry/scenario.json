@@ -1,0 +1,94 @@
+{
+  "name": "policy_2025_superseded_version_inquiry",
+  "scenario_key": "policy-2025-superseded-version-inquiry",
+  "scenario_id": "",
+  "use_case": "Answer access policy questions with citations",
+  "branch": "Caller asks what the 2025 access policy stated about approvals and whether it is still active; agent reads acc_pol_v2 and current acc_pol_v3.",
+  "tests": "Does the agent read both the 2025 policy (acc_pol_v2) and the current approved policy (acc_pol_v3) to explain that the 2025 version is superseded?",
+  "instruction": "You are Rohan Mehta (employee ID E503), a technical consultant. You found a reference to the 'Application Access Policy (2025)' and want to know what it said about approvals for viewer roles, and whether that 2025 policy is still in effect today. Ask the IT access desk about the 2025 access policy document and whether it remains valid.",
+  "keywords": [
+    "policy_citation",
+    "least_privilege"
+  ],
+  "persona": {
+    "name": "Rohan Mehta",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Questioning",
+    "initial_message": "Hello, could you check what the Application Access Policy 2025 says about viewer role approvals, and tell me if that 2025 version is still our active policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "target_file_v2": "acc_pol_v2",
+    "origin": "seed",
+    "target_file_v3": "acc_pol_v3"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "excludeContentSnippets": false,
+        "pageToken": "",
+        "pageSize": 10,
+        "query": "title contains 'Application Access Policy 2025'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "includeComments": false,
+        "fileId": "acc_pol_v2",
+        "revisionId": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "caller: Application Access Policy 2025 (acc_pol_v2)"
+      }
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "acc_pol_v3",
+        "includeComments": false,
+        "revisionId": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files where policy_family='access_policy' and status='approved'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "exploratory",
+    "overlay_vector": "none",
+    "counterparty": "external_contractor",
+    "task": "answer_access_policy_questions_with_citations",
+    "overlay": "none",
+    "interface": "chat",
+    "overlay_intensity": "absent",
+    "disposition": "policy_inquiry"
+  },
+  "sub_goals": [
+    "policy_document_read_from_drive",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

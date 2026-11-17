@@ -3,9 +3,9 @@
   "scenario_key": "cancel-pending-scheduled-change-success",
   "scenario_id": "",
   "use_case": "Manage and cancel pending scheduled plan changes",
-  "branch": "Pending downgrade PC04 exists for T04; billing admin requests and confirms cancellation of the scheduled change",
+  "branch": "A pending seat cut PC04 (Enterprise 80 to 60 seats) exists for T04; the billing admin asks for it to be canceled and confirms",
   "tests": "Cancels pending scheduled plan change upon billing admin request and preserves current plan",
-  "instruction": "You are David Data, billing admin for DataFlow. Your organization currently has a pending scheduled change (ID: PC04) to downgrade from Enterprise to Pro on November 1. You have decided to stay on Enterprise. Please ask the agent to cancel the pending change PC04. When the agent confirms that the pending change has been canceled and your Enterprise subscription will continue uninterrupted, thank them.\n\nYour details:\n- Organization: DataFlow (Tenant ID: T04)\n- Your User ID: U04_ADMIN (Role: Billing Administrator)\n- Pending Change ID: PC04",
+  "instruction": "You are David Data, billing admin for DataFlow. Your organization currently has a pending scheduled change (ID: PC04) to cut DataFlow's Enterprise plan from 80 to 60 seats on November 1. You have decided to keep all 80 Enterprise seats. Please ask the agent to cancel the pending change PC04. When the agent confirms that the pending change has been canceled and your Enterprise subscription will continue uninterrupted, thank them.\n\nYour details:\n- Organization: DataFlow (Tenant ID: T04)\n- Your User ID: U04_ADMIN (Role: Billing Administrator)\n- Pending Change ID: PC04",
   "keywords": [
     "plan_downgrade",
     "role_authorization"
@@ -18,7 +18,7 @@
     "location": "India",
     "personality": "Analytical",
     "communication_style": "Technical",
-    "initial_message": "Hi, I'm the billing admin for DataFlow. We have a pending downgrade scheduled under change ID PC04, but we want to keep Enterprise. Please cancel PC04.",
+    "initial_message": "Hi, I'm David Data, the billing admin for DataFlow. We have a pending change PC04 that would cut our Enterprise seats from 80 to 60 on November 1, but we want to keep all 80 seats. Please cancel PC04.",
     "languages": [
       "English"
     ],

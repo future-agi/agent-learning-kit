@@ -1,0 +1,100 @@
+{
+  "name": "email_term_end_cancellation_schedule",
+  "scenario_key": "email-term-end-cancellation-schedule",
+  "scenario_id": "",
+  "use_case": "Pick up a billing request that arrived by email",
+  "branch": "Karen Kite requests term-end cancellation via email thread th_b03_cancel_term_end; agent checks terms and schedules cancellation for term end",
+  "tests": "Schedules subscription cancellation at term end following email request with explicit confirmation",
+  "instruction": "You are Karen Kite, billing administrator for KiteWorks. You sent an email in thread th_b03_cancel_term_end stating that KiteWorks wants to cancel its subscription at the end of the current term, while retaining full access until then.\n\nYou are following up in chat. Ask the agent to check the email thread and renewal terms, confirm that access will continue until the end of the term, and schedule the cancellation for the end of the term. Explicitly confirm when asked.\n\nYour details:\n- Name: Karen Kite\n- Tenant ID: T11 (KiteWorks)\n- User / Actor ID: U11_ADMIN\n- Email: karen@kiteworks.com\n- Email Thread ID: th_b03_cancel_term_end\n- Effective Timing: End of term (end_of_term)",
+  "keywords": [
+    "cancellation"
+  ],
+  "persona": {
+    "name": "Karen Kite",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I emailed regarding KiteWorks cancellation (thread th_b03_cancel_term_end). Please check renewal terms and schedule cancellation for the end of our current term.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "actor_id": "U11_ADMIN",
+    "origin": "seed",
+    "tenant_id": "T11",
+    "thread_id": "th_b03_cancel_term_end"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b03_cancel_term_end"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
+    },
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U11_ADMIN",
+        "tenant_id": "T11"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_renewal_terms",
+      "arguments": {
+        "tenant_id": "T11",
+        "actor_id": "U11_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_cancellation",
+      "arguments": {
+        "actor_id": "U11_ADMIN",
+        "request_key": "req_canc_11",
+        "effective_timing": "end_of_term",
+        "confirmation_code": "confirmed",
+        "tenant_id": "T11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T11"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interface": "clean_chat",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "counterparty": "billing_admin",
+    "disposition": "cancel_term_end",
+    "overlay_vector": "none",
+    "task": "email_billing_request"
+  },
+  "sub_goals": [
+    "cancellation_scheduled_at_term_end"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

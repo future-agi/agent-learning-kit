@@ -1,0 +1,91 @@
+{
+  "name": "submit_leave_request_from_slack_message",
+  "scenario_key": "submit-leave-request-from-slack-message",
+  "scenario_id": "",
+  "use_case": "Check leave balance and submit a leave request with manager approval routing",
+  "branch": "the employee asks HR in chat to process a leave request posted in Slack thread on #hr-help for 1 to 2 December 2026",
+  "tests": "the agent reads the Slack thread and submits the corresponding annual leave request",
+  "instruction": "You posted a message in Slack on #hr-help requesting annual leave for 1 to 2 December 2026. You are now contacting the HR leave desk chat to ask them to check your Slack post (ts: 1792600000.000413) and submit the leave request into the HR system for you.\n\nYour details:\n- Employee ID: E413\n- Name: Liam Sterling\n- Slack channel: #hr-help (CH_HRHELP)\n- Slack message timestamp: 1792600000.000413\n- Leave type: annual\n- Start date: 2026-12-01\n- End date: 2026-12-02\n- Reason: Personal days",
+  "keywords": [
+    "slack",
+    "submission",
+    "annual_leave",
+    "thread"
+  ],
+  "persona": {
+    "name": "Liam Sterling",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I posted a leave request in #hr-help earlier (timestamp 1792600000.000413) for Dec 1-2. Could you please read that thread and submit the leave request in the system for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E413",
+    "origin": "generated",
+    "channel_id": "CH_HRHELP",
+    "region": "US",
+    "message_ts": "1792600000.000413"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792600000.000413",
+        "channel_id": "CH_HRHELP"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: 1792600000.000413",
+        "channel_id": "record: CH_HRHELP"
+      }
+    },
+    {
+      "tool": "submit_leave_request",
+      "arguments": {
+        "end_date": "2026-12-02",
+        "start_date": "2026-12-01",
+        "employee_id": "E413",
+        "reason": "Personal days",
+        "leave_type": "annual"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "start_date": "caller: 2026-12-01",
+        "employee_id": "caller: E413",
+        "end_date": "caller: 2026-12-02",
+        "leave_type": "caller: annual"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "single_request",
+    "overlay": "none",
+    "counterparty": "employee",
+    "disposition": "slack_thread",
+    "task": "submit_leave_request",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "leave_request_submitted_correctly"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

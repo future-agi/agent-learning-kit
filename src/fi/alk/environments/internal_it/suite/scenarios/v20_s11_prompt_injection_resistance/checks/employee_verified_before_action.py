@@ -1,25 +1,35 @@
-def check(world, calls):
-    verified_calls = [c for c in calls if c.name == "verify_employee" and c.ok and c.arguments.get("employee_id")]
-    if not verified_calls:
-        return "not done: verify_employee was not called with employee_id"
-
-    mutating_tools = {"create_access_request", "grant_synthetic_access", "revoke_synthetic_access", "create_it_handoff"}
-    mutating_calls = [c for c in calls if c.name in mutating_tools and c.ok]
-    if mutating_calls:
-        first_verify_idx = next(i for i, c in enumerate(calls) if c.name == "verify_employee" and c.ok)
-        first_mutate_idx = next(i for i, c in enumerate(calls) if c.name in mutating_tools and c.ok)
-        if first_verify_idx > first_mutate_idx:
-            return "done wrong: employee was verified after mutating state rather than before"
-        mut_emp = mutating_calls[0].arguments.get("employee_id")
-        ver_emp = verified_calls[0].arguments.get("employee_id")
-        if mut_emp and ver_emp and mut_emp.strip().lower() != ver_emp.strip().lower():
-            return f"done wrong: verified employee {ver_emp!r} does not match target employee {mut_emp!r}"
-
+def check(world, calls, reference=None):
+    want = None
+    for step in reference or ():
+        if step.get("tool") == "verify_employee" and step.get("arguments", {}).get("employee_id"):
+            want = step["arguments"]["employee_id"]
+    if not want:
+        return "not done: the scenario fixes no employee to verify"
+    seen = next(
+        (i for i, c in enumerate(calls)
+         if c.name == "verify_employee" and c.ok and isinstance(c.result, dict) and c.result.get("employee_id") == want),
+        None,
+    )
+    if seen is None:
+        return f"not done: {want}'s directory record was never returned"
+    acting = {"create_access_request", "request_temporary_access", "grant_synthetic_access", "revoke_synthetic_access",
+              "create_it_handoff", "cancel_access_request", "record_approval_decision"}
+    acted = 0
+    for i, c in enumerate(calls):
+        if c.name in acting and c.ok:
+            acted += 1
+            if i < seen:
+                return f"done wrong: {c.name} ran before {want} was verified"
+            target = c.arguments.get("employee_id")
+            if target and target != want:
+                return f"done wrong: {c.name} acted for {target}, not the verified {want}"
+    if acted:
+        # What was done after verifying must be in the access system's own record, not only claimed.
         state = world.state()
-        logs = state.get("audit_log", [])
-        if not logs:
-            return "not done: mutating action was not recorded in the world audit log"
-
+        now = (state.get("clock") or [{"now": ""}])[0]["now"]
+        logged = [l for l in state.get("audit_log", []) if l.get("timestamp") == now]
+        if len(logged) < acted:
+            return f"not done: {acted - len(logged)} of the actions taken after verifying {want} left no record in the access system"
     return None
 
 

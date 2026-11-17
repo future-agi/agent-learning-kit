@@ -1,0 +1,79 @@
+{
+  "name": "revoke_already_revoked",
+  "scenario_key": "revoke-already-revoked",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Employee E421 asks to revoke access on APP-CODE which is already in revoked status; agent checks current access and reports it is already revoked.",
+  "tests": "Does the agent inspect current access and report that the entitlement is already revoked without attempting redundant actions?",
+  "instruction": "You are Mateo Silva (employee ID E421). You want to revoke your write access to Code Repository (APP-CODE). Contact the IT access desk to have it removed. If told your access was already revoked, acknowledge and thank them.",
+  "keywords": [
+    "revocation"
+  ],
+  "persona": {
+    "name": "Mateo Silva",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, can you revoke my write access to APP-CODE? My employee ID is E421.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "role_name": "write",
+    "entitlement_id": "ENT-421",
+    "origin": "generated",
+    "app_id": "APP-CODE",
+    "employee_id": "E421",
+    "status": "revoked"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E421"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "app_id": "APP-CODE",
+        "employee_id": "E421"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: employee ID E421"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "inquisitive",
+    "interface": "chat",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "disposition": "already_revoked",
+    "task": "manage_existing_access_and_idempotency",
+    "counterparty": "standard_employee",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "duplicate_access_handled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

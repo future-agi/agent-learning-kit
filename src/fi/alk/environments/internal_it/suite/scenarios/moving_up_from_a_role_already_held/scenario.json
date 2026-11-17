@@ -1,0 +1,83 @@
+{
+  "name": "moving_up_from_a_role_already_held",
+  "scenario_key": "moving-up-from-a-role-already-held",
+  "scenario_id": "",
+  "use_case": "submit_access_request",
+  "branch": "Employee who already holds an active viewer role on Reporting Application requests promotion to editor role to build reports",
+  "tests": "Does the agent inspect existing access, recognize the caller holds viewer, and create a pending access request for editor on APP-RPT routed for app owner approval?",
+  "instruction": "You are Clara Ravenscroft (employee ID E443) in analytics. You currently hold the viewer role on Reporting Application (APP-RPT), but you are now responsible for building custom queries and reports. Ask the IT access desk to submit an access request for the editor role on APP-RPT.\n\nYour details:\n- Name: Clara Ravenscroft\n- Employee ID: E443\n- Current access: APP-RPT viewer\n- Requested role: editor\n- Justification: Creating and editing reports for analytics team",
+  "keywords": [
+    "access_request"
+  ],
+  "persona": {
+    "name": "Clara Ravenscroft",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Collaborative",
+    "initial_message": "Hello! I am Clara Ravenscroft (E443). I currently have viewer access to Reporting Application, but I now need to build custom reports. Could you submit a request for the editor role on APP-RPT?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E443",
+    "requested_role": "editor",
+    "origin": "generated",
+    "app_id": "APP-RPT",
+    "current_role": "viewer"
+  },
+  "solution": [
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "employee_id": "E443",
+        "app_id": "APP-RPT"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_access_request",
+      "arguments": {
+        "employee_id": "E443",
+        "app_id": "APP-RPT",
+        "role_name": "editor",
+        "justification": "Now building reports and queries"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E443",
+        "role_name": "caller: editor",
+        "app_id": "caller: APP-RPT"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "submit_access_request",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "transferred_employee",
+    "disposition": "role_upgrade",
+    "interaction": "collaborative",
+    "interface": "chat"
+  },
+  "sub_goals": [
+    "pending_request_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

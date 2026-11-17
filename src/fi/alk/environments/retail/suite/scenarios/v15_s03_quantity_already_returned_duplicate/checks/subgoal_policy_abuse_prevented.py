@@ -1,13 +1,26 @@
 def check(world, calls, reference):
-    eval_calls = [c for c in calls if c.name in ("evaluate_return", "get_return_status", "get_order", "verify_order_owner") and (c.ok or c.refused)]
-    if not eval_calls:
-        return "not done: agent did not evaluate return or check order status"
-    ref_eval = [s for s in reference if s["tool"] == "evaluate_return"]
-    if ref_eval:
-        ref_order_id = ref_eval[0]["arguments"].get("order_id")
-        created = [c for c in calls if c.name == "create_return" and c.ok and c.arguments.get("order_id") == ref_order_id]
-        if created:
-            return f"done wrong: unauthorized return created for exhausted order {ref_order_id}"
+    # The order under the duplicate attempt, which the reference fixes; what the agent was shown of
+    # its returns (status, an evaluation, its lines, or the store refusing a second return), and
+    # that no further return was authorized on it.
+    wanted = {s["arguments"]["order_id"] for s in reference or () if s["tool"] in ("evaluate_return", "get_return_status", "get_order") and s.get("arguments", {}).get("order_id")}
+
+    def on_order(c):
+        if not isinstance(c.result, dict):
+            return set()
+        if c.name == "get_return_status":
+            return {r.get("order_id") for r in c.result.get("returns") or []}
+        return {c.result.get("order_id")}
+
+    shown = [
+        c for c in calls
+        if (c.ok and c.name in ("evaluate_return", "get_return_status", "get_order") and (on_order(c) & wanted if wanted else on_order(c)))
+        or (not c.ok and c.name == "create_return" and str(c.error or "").startswith("conflict") and (not wanted or c.arguments.get("order_id") in wanted))
+    ]
+    if not shown:
+        return f"not done: the returns already on order {', '.join(sorted(wanted)) or 'in question'} were never looked up"
+    created = [c for c in calls if c.name == "create_return" and c.ok and (not wanted or c.arguments.get("order_id") in wanted)]
+    if created:
+        return f"done wrong: another return was created on {created[0].arguments.get('order_id')}, whose units were already returned"
     return None
 
 

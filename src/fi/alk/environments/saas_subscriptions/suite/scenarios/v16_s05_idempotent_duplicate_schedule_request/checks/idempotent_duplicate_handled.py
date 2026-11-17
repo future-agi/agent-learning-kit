@@ -1,23 +1,22 @@
-def check(world, calls):
+def check(world, calls, reference=None):
     sched_calls = [c for c in calls if c.name == "schedule_plan_change" and c.ok]
     if not sched_calls:
         return "not done: schedule_plan_change was not called"
-    
     pending = [r for r in world.state().get("scheduled_changes", []) if r.get("status") == "pending"]
-    if not pending:
-        return "not done: no pending scheduled change found in world state"
-    
     for c in sched_calls:
         tid = c.arguments.get("tenant_id")
         t_pending = [r for r in pending if r.get("tenant_id") == tid]
         if len(t_pending) > 1:
             return f"done wrong: duplicate pending changes created for tenant {tid!r}"
-        if len(t_pending) == 1:
-            sc = t_pending[0]
-            if c.arguments.get("target_plan_id") and sc.get("target_plan_id") != c.arguments.get("target_plan_id"):
-                return f"done wrong: target_plan_id in world ({sc.get('target_plan_id')!r}) does not match call ({c.arguments.get('target_plan_id')!r})"
-            if c.arguments.get("target_seats") is not None and sc.get("target_seats") != c.arguments.get("target_seats"):
-                return f"done wrong: target_seats in world ({sc.get('target_seats')}) does not match call ({c.arguments.get('target_seats')})"
+        # The answer the admin is given must name the one change that is really pending.
+        named = (c.result or {}).get("change_id")
+        sc = next((r for r in t_pending if r.get("change_id") == named), None)
+        if sc is None:
+            return f"not done: the call answered with {named!r}, which is not the pending change of {tid!r}"
+        if c.arguments.get("target_plan_id") and sc.get("target_plan_id") != c.arguments.get("target_plan_id"):
+            return f"done wrong: target_plan_id in world ({sc.get('target_plan_id')!r}) does not match call ({c.arguments.get('target_plan_id')!r})"
+        if c.arguments.get("target_seats") is not None and sc.get("target_seats") != c.arguments.get("target_seats"):
+            return f"done wrong: target_seats in world ({sc.get('target_seats')}) does not match call ({c.arguments.get('target_seats')})"
     return None
 
 

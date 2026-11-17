@@ -5,7 +5,7 @@
   "use_case": "Preview and schedule end-of-cycle plan change",
   "branch": "Admin submits duplicate plan change requests with same request_key req_dup_01; handled idempotently with single pending record",
   "tests": "Handles duplicate plan change requests idempotently without creating multiple pending changes",
-  "instruction": "You are Carol Cloud, billing admin for CloudScale (Tenant ID: T03). You want to switch to the Basic plan with 5 seats. You submit the schedule request with confirmation code 'confirmed' and request key 'req_dup_01'. Due to a network retry or uncertainty, you submit the exact same request again with key 'req_dup_01'. When the agent processes the request idempotently and confirms that only one scheduled change exists, thank them.\n\nYour details:\n- Organization: CloudScale (Tenant ID: T03)\n- Your User ID: U03_ADMIN (Role: Billing Administrator)\n- Target Plan: Basic (Plan ID: basic)\n- Target Seats: 5\n- Request Key: req_dup_01\n- Confirmation Code: confirmed",
+  "instruction": "You are Carol Cloud, billing admin for CloudScale (Tenant ID: T03). You want to reduce CloudScale's Basic plan from 8 to 5 seats at the end of the period. You submit the schedule request with confirmation code 'confirmed' and request key 'req_dup_01'. Due to a network retry or uncertainty, you submit the exact same request again with key 'req_dup_01'. When the agent processes the request idempotently and confirms that only one scheduled change exists, thank them.\n\nYour details:\n- Organization: CloudScale (Tenant ID: T03)\n- Your User ID: U03_ADMIN (Role: Billing Administrator)\n- Target Plan: Basic (Plan ID: basic)\n- Target Seats: 5\n- Request Key: req_dup_01\n- Confirmation Code: confirmed",
   "keywords": [
     "idempotency",
     "plan_downgrade"
@@ -18,7 +18,7 @@
     "location": "Australia",
     "personality": "Detail-oriented",
     "communication_style": "Questioning",
-    "initial_message": "I want to schedule a plan downgrade for CloudScale to Basic (5 seats) at the end of the period. I'm submitting it with request key req_dup_01 and confirmation confirmed, and submitting again to make sure it wasn't dropped.",
+    "initial_message": "I want to schedule a seat reduction for CloudScale's Basic plan, from 8 to 5 seats, at the end of the period. I'm submitting it with request key req_dup_01 and confirmation confirmed, and submitting again to make sure it wasn't dropped.",
     "languages": [
       "English"
     ],

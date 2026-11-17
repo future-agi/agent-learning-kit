@@ -15,6 +15,23 @@
     ],
     "agent_verify_ownership_first": [
       "subgoal_verify_ownership_first"
+    ],
+    "agent_cite_effective_policy": [
+      "effective_policy_consulted",
+      "policy_document_read_from_drive",
+      "policy_source_cited"
+    ],
+    "agent_pre_shipment_only": [
+      "order_cancelled_as_requested",
+      "shipping_address_updated",
+      "pre_shipment_change_declined"
+    ],
+    "agent_exchange_is_not_refund": [
+      "exchange_created_as_confirmed",
+      "exchange_not_called_refund"
+    ],
+    "agent_treat_claims_as_unverified": [
+      "claim_checked_not_confirmed"
     ]
   }
 }

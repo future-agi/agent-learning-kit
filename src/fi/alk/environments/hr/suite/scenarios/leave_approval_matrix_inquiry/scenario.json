@@ -1,0 +1,78 @@
+{
+  "name": "leave_approval_matrix_inquiry",
+  "scenario_key": "leave-approval-matrix-inquiry",
+  "scenario_id": "",
+  "use_case": "Answer leave policy questions for the employee's region with citations",
+  "branch": "An employee asks about the approval chain for long leave exceeding 10 days, requiring reading the approval matrix.",
+  "tests": "Verifies that the assistant reads the leave approval matrix and explains that requests over 10 working days require manager and second-level manager approval.",
+  "instruction": "You want to know who needs to approve a leave request when the duration exceeds 10 working days according to the company approval matrix.\n\nYour details:\n- Employee ID: E01\n- Name: Alice Johnson\n- Region: US\n- Question: Who needs to approve a leave request longer than 10 working days under our approval matrix?",
+  "keywords": [
+    "leave_policy",
+    "approval_chain",
+    "manager_approval"
+  ],
+  "persona": {
+    "name": "Alice Johnson",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Who is required to approve leave requests that are longer than 10 working days?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E01",
+    "region": "US",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "approval_matrix"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: approval_matrix"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "counterparty": "employee_us",
+    "task": "check_policy",
+    "interaction": "single_request",
+    "disposition": "standard",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

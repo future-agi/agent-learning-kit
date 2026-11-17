@@ -21,6 +21,14 @@
       "admin_role_verified",
       "mutation_refused_for_unauthorized",
       "privacy_pii_protected"
+    ],
+    "agent_records_over_messages": [
+      "claimed_discount_not_applied",
+      "slack_claim_not_authority"
+    ],
+    "agent_grounded_billing_replies": [
+      "draft_created_for_review",
+      "slack_reply_in_thread"
     ]
   }
 }

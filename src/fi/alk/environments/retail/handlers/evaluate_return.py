@@ -1,3 +1,17 @@
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, email or name the
+    desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
+def _for_caller(db, customer_id, what):
+    """Act only for the signed-in customer: a customer_id argument is checked, never trusted."""
+    caller = _caller(db)
+    if not caller or str(customer_id or "").strip() != caller:
+        raise ToolError(f"Permission denied: {what} is not the signed-in customer's ({caller or 'nobody is signed in'}).", category="permission_denied")
+
+
 import json
 from datetime import datetime
 
@@ -12,6 +26,11 @@ def handle(args, db):
     order = db.one("SELECT * FROM orders WHERE order_id = ?", [order_id])
     if not order:
         raise ToolError(f"Order {order_id} not found.", category="not_found")
+    # A dry run still discloses what the customer paid: only for the signed-in customer's order.
+    _for_caller(db, order["customer_id"], f"order {order_id}")
+    skus = [req.get("sku") for req in items if isinstance(req, dict)]
+    if len(skus) != len(set(skus)):
+        raise ToolError("Each SKU may appear once in items; give one line per SKU with the total quantity.", category="invalid_input")
         
     clock_row = db.one("SELECT now FROM clock")
     now_dt = datetime.fromisoformat(clock_row["now"].replace("Z", "+00:00"))
@@ -19,14 +38,17 @@ def handle(args, db):
     policy_rows = db.query("SELECT name, value FROM environment_policy")
     policy_map = {row["name"]: json.loads(row["value"]) for row in policy_rows}
     window_days = policy_map.get("return_window_days", 30)
+    accessories_window = int(policy_map.get("accessories_return_window_days", 14))
     fee_rate = float(policy_map.get("restocking_fee_rate", 0.0))
     final_sale_enforced = bool(policy_map.get("final_sale_enforced", True))
     
     is_delivered = (order["status"] == "delivered" and order["delivery_date"] is not None)
     out_of_window = False
+    age_days = 0
     if is_delivered:
         delivery_dt = datetime.fromisoformat(order["delivery_date"].replace("Z", "+00:00"))
-        if (now_dt - delivery_dt).days > window_days:
+        age_days = (now_dt - delivery_dt).days
+        if age_days > window_days:
             out_of_window = True
             
     items_eval = []
@@ -61,9 +83,22 @@ def handle(args, db):
             eligible = False
             ineligibility_reason = f"SKU {sku} is marked as final sale and cannot be returned."
             unit_net = int(round(ord_item["line_net_cents"] / ord_item["quantity"]))
+        elif prod and not prod["returnable"] and not (prod["is_final_sale"] and not final_sale_enforced):
+            eligible = False
+            ineligibility_reason = f"SKU {sku} is not returnable."
+            unit_net = int(round(ord_item["line_net_cents"] / ord_item["quantity"]))
+        elif prod and prod["category"] == "Accessories" and age_days > accessories_window:
+            eligible = False
+            ineligibility_reason = f"SKU {sku} is an accessory with a {accessories_window}-day return window; order {order_id} was delivered {age_days} days ago."
+            unit_net = int(round(ord_item["line_net_cents"] / ord_item["quantity"]))
         else:
             unit_net = int(round(ord_item["line_net_cents"] / ord_item["quantity"]))
-            returnable_qty = max(0, ord_item["quantity"] - ord_item["returned_quantity"])
+            on_returns = db.one(
+                "SELECT COALESCE(SUM(ri.quantity), 0) AS q FROM return_items ri JOIN returns r ON r.return_id = ri.return_id "
+                "WHERE ri.item_id = ? AND r.status != 'cancelled'",
+                [ord_item["item_id"]],
+            )
+            returnable_qty = max(0, ord_item["quantity"] - max(ord_item["returned_quantity"], int(on_returns["q"] if on_returns else 0)))
             if returnable_qty == 0:
                 eligible = False
                 ineligibility_reason = f"All purchased units of SKU {sku} have already been returned."

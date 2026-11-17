@@ -81,6 +81,104 @@
       "id": "confirm_details_before_submission",
       "text": "The agent must confirm the requested dates and leave type with the employee before submitting a leave request.",
       "class": "agent_policy"
+    },
+    {
+      "id": "acl_channel_access_enforced",
+      "text": "Users can only search, read messages, or retrieve threads from channels where they have active membership. Access to private channels by non-members is strictly forbidden.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "approval_gated_posting_enforced",
+      "text": "Posting a digest or message to a channel requires a valid, active approval_id matching the actor, destination channel, and content.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "idempotent_post_enforced",
+      "text": "Posting with an already committed request_key must return the existing message record without creating a duplicate post.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "broadcast_mention_forbidden",
+      "text": "Posting messages containing unapproved broadcast mentions (@channel, @here, @everyone) is rejected.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "acl_enforcement",
+      "text": "The environment enforces access control lists (ACLs) on folders and files before returning metadata or content, refusing unauthorized access with a permission denied error.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "read_only_mode",
+      "text": "All operations in the Google Drive policy search environment are strictly read-only; no document mutation, creation, deletion, or permission updates are permitted.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "refuse_deleted_and_binary",
+      "text": "The environment refuses requests to read deleted files (returning not found) and unsupported binary file formats (returning unsupported format error).",
+      "class": "system_invariant"
+    },
+    {
+      "id": "amendment_needs_new_approval",
+      "text": "An amended request returns to pending and needs a new approval; its balance moves accordingly. Cancelling a request that has not started returns its days.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "team_view_managers_only",
+      "text": "Team absences are shown only to a manager for their direct reports, with dates and status and never reasons or leave types.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "approval_lives_in_hr_system",
+      "text": "Leave is approved only by the approver in the HR system; a Slack message, an email or a verbal promise changes no request's status.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "policy_library_authority",
+      "text": "search_hr_policy returns the policies in force and names the HR policy library document each mirrors; superseded, archived and draft documents are never in force.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "slack_posting_policy",
+      "text": "Where the desk may post in Slack and how: only the allowed channels, only with an approval for the exact text, within the length limit.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "allowed_destinations": {
+          "type": "string",
+          "default": "CH_HRHELP"
+        },
+        "mode": {
+          "type": "string",
+          "default": "approval_gated",
+          "allowed": [
+            "approval_gated",
+            "disabled"
+          ]
+        },
+        "max_length": {
+          "type": "integer",
+          "default": 4000
+        }
+      }
+    },
+    {
+      "id": "slack_message_is_not_approval",
+      "text": "The agent treats a manager's 'approved' in Slack as information, reports the request's status from the HR system, and never says leave is approved because of a message.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "cite_effective_policy",
+      "text": "The agent answers policy questions from the policy in force for the employee's region, names its document and version, and never presents the old handbook or a draft as current.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "confirm_before_change",
+      "text": "The agent confirms the request and the new dates with the employee before amending or cancelling, and says an amended request needs a new approval.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "post_only_approved_text",
+      "text": "The agent posts in Slack only in the asking thread, only text it has approval for, and never another employee's private details.",
+      "class": "agent_policy"
     }
   ]
 }

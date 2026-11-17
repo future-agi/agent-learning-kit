@@ -3,7 +3,8 @@
 The release tool server (Vapi, Retell, canonical calls), the PostgreSQL proofs and the MCP
 endpoint all call `WorldTools.call`, so a proof exercises exactly what a run executes and every
 call, whoever made it, leaves the same `_alk_tool_trace` rows. A native call runs the release's
-handler in one transaction, committed only when the binding reports `ok`. A call to an attached
+handler in one transaction, one call at a time per world, committed only when the binding reports
+`ok` or the refusal is a fault the world simulates on purpose (`keep_writes`). A call to an attached
 MCP server (`servers.json`, tools named `<id>__<tool>`) goes to that server, started fresh for
 this world on first use and stopped by `close()`.
 
@@ -325,6 +326,9 @@ class WorldTools:
                 ) as connection,
                 connection.transaction() as transaction,
             ):
+                # Calls to one world take turns. Two at once would each check a slot free and
+                # both book it; the lock lasts until this call commits or rolls back.
+                connection.execute("SELECT pg_advisory_xact_lock(hashtext(current_database()))")
                 outcome = run_bound_call(
                     self.binding,
                     agent_tool,
@@ -334,7 +338,9 @@ class WorldTools:
                     ),
                     environment_tools=self._tools_for(agent_tool),
                 )
-                if outcome.status != "ok":
+                if outcome.status != "ok" and not any(
+                    operation.keep_writes for operation in outcome.operations
+                ):
                     raise psycopg.Rollback(transaction)
         except Exception as exc:  # noqa: BLE001 - the world database itself failed
             outcome = BoundResult(

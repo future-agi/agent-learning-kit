@@ -1,0 +1,82 @@
+{
+  "name": "list_employee_all_leave_requests_status",
+  "scenario_key": "list-employee-all-leave-requests-status",
+  "scenario_id": "",
+  "use_case": "Report a leave request's approval status truthfully",
+  "branch": "Employee inquires in chat about the status and summary of all their submitted leave requests",
+  "tests": "the agent retrieves the employee profile and lists all leave requests to report their current statuses accurately from the HR system",
+  "instruction": "You want to review the current status of all your leave requests on file. You ask the HR desk assistant in chat to look up all your submitted leave requests and summarize whether they are pending, approved, or rejected.\n\nYour details:\n- Name: Diana Prince\n- Employee ID: E04",
+  "keywords": [
+    "leave_status",
+    "list_requests",
+    "leave_summary",
+    "employee_requests"
+  ],
+  "persona": {
+    "name": "Diana Prince",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, can you please check and list the status of all my leave requests on file?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E04",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "actor_id": "E04",
+        "employee_id": "E04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E04"
+      }
+    },
+    {
+      "tool": "list_leave_requests",
+      "arguments": {
+        "actor_id": "E04",
+        "employee_id": "E04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E04"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "all_requests_summary",
+    "overlay_vector": "none",
+    "counterparty": "employee",
+    "interaction": "fresh_single_turn",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "task": "report_leave_status",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "employee_profile_retrieved",
+    "status_reported_from_hr_system"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

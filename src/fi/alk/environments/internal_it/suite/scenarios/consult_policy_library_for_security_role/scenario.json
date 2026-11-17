@@ -1,0 +1,106 @@
+{
+  "name": "consult_policy_library_for_security_role",
+  "scenario_key": "consult-policy-library-for-security-role",
+  "scenario_id": "",
+  "use_case": "enforce_privilege_boundaries",
+  "branch": "Employee asks what role they may have on security portal; agent consults current policy acc_pol_v3 and checks auditor role policy.",
+  "tests": "Does the agent consult the approved access policy document acc_pol_v3 and explain the auditor role for APP-SEC?",
+  "instruction": "You are Jack Wilson (employee ID E408). You want to know what role you are permitted to have on Security Portal (APP-SEC) according to current IT access policy, and whether auditor access requires approval. You are not asking to grant access today, just asking for policy guidance.",
+  "keywords": [
+    "policy_library"
+  ],
+  "persona": {
+    "name": "Jack Wilson",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "Australia",
+    "personality": "Analytical",
+    "communication_style": "Questioning",
+    "initial_message": "Hello IT desk, Jack Wilson (E408) here. Under our current access policy, what role should an internal reviewer hold on the Security Portal (APP-SEC), and does it need approval?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "policy_file_id": "acc_pol_v3",
+    "target_role": "auditor",
+    "target_app": "APP-SEC",
+    "employee_id": "E408"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E408"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E408"
+      }
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "revisionId": "",
+        "includeComments": false,
+        "fileId": "acc_pol_v3"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_role_details",
+      "arguments": {
+        "role_name": "auditor",
+        "app_id": "APP-SEC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "app_id": "caller: Security Portal (APP-SEC)",
+        "role_name": "caller: auditor role"
+      }
+    },
+    {
+      "tool": "check_access_policy",
+      "arguments": {
+        "employee_id": "E408",
+        "role_name": "auditor",
+        "app_id": "APP-SEC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "app_id": "caller: Security Portal (APP-SEC)",
+        "role_name": "caller: auditor role",
+        "employee_id": "caller: E408"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "enforce_privilege_boundaries",
+    "interaction": "inquisitive",
+    "overlay_vector": "none",
+    "interface": "chat",
+    "overlay_intensity": "absent",
+    "counterparty": "standard_employee",
+    "disposition": "policy_inquiry",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "least_privilege_role_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

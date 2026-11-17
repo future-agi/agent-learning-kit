@@ -1,0 +1,90 @@
+{
+  "name": "submit_annual_leave_after_balance_check",
+  "scenario_key": "submit-annual-leave-after-balance-check",
+  "scenario_id": "",
+  "use_case": "Check leave balance and submit a leave request with manager approval routing",
+  "branch": "the employee first checks their available annual leave balance and then submits a request for 3 days in December",
+  "tests": "the agent checks the employee's annual leave balance and submits the leave request for the confirmed dates",
+  "instruction": "You want to check how many annual leave days you have remaining and then submit a leave request for 3 working days from 9 December 2026 to 11 December 2026 for a family vacation.\n\nYour details:\n- Employee ID: E410\n- Name: Julian Hayes\n- Leave type: annual\n- Start date: 2026-12-09\n- End date: 2026-12-11\n- Reason: Family vacation",
+  "keywords": [
+    "leave",
+    "balance",
+    "submission",
+    "annual_leave"
+  ],
+  "persona": {
+    "name": "Julian Hayes",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'd like to check my annual leave balance first, and then book December 9th through December 11th off.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "region": "US",
+    "origin": "generated",
+    "employee_id": "E410"
+  },
+  "solution": [
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "employee_id": "E410",
+        "leave_type": "annual"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "leave_type": "caller: annual",
+        "employee_id": "caller: E410"
+      }
+    },
+    {
+      "tool": "submit_leave_request",
+      "arguments": {
+        "start_date": "2026-12-09",
+        "reason": "Family vacation",
+        "employee_id": "E410",
+        "end_date": "2026-12-11",
+        "leave_type": "annual"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "end_date": "caller: 2026-12-11",
+        "leave_type": "caller: annual",
+        "start_date": "caller: 2026-12-09",
+        "employee_id": "caller: E410"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "task": "submit_leave_request",
+    "counterparty": "employee",
+    "disposition": "sufficient_balance",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "leave_request_submitted_correctly",
+    "details_confirmed_before_submission"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

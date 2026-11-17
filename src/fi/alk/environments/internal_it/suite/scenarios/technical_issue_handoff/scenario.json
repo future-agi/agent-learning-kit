@@ -1,0 +1,80 @@
+{
+  "name": "technical_issue_handoff",
+  "scenario_key": "technical-issue-handoff",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "E432's dashboards do not load after a grant. Expected: an IT handoff.",
+  "tests": "Does the agent escalate technical failures to human IT operations via an IT handoff ticket?",
+  "instruction": "You are Monica Geller (employee ID E432). You were granted viewer access on Reporting Application (APP-RPT), but when you log in your dashboards fail to load with a 500 error. Report this technical issue to the IT access desk and request an IT escalation ticket.",
+  "keywords": [
+    "it_handoff",
+    "it_escalation"
+  ],
+  "persona": {
+    "name": "Monica Geller",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello IT desk, this is Monica Geller (E432). I have active viewer access on Reporting Application (APP-RPT), but my dashboards fail to load with a 500 server error. Can you escalate this to IT operations?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "role_name": "viewer",
+    "origin": "generated",
+    "employee_id": "E432",
+    "entitlement_id": "ENT-432",
+    "target_app": "APP-RPT"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E432"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_it_handoff",
+      "arguments": {
+        "details": "Dashboards failing to load despite active viewer entitlement",
+        "employee_id": "E432",
+        "issue_type": "technical_issue"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Monica Geller (E432)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay": "none",
+    "task": "manage_existing_access_and_idempotency",
+    "overlay_intensity": "absent",
+    "disposition": "technical_issue",
+    "interaction": "collaborative",
+    "interface": "chat",
+    "counterparty": "standard_employee"
+  },
+  "sub_goals": [
+    "it_escalation_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

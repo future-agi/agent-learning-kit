@@ -1,0 +1,80 @@
+{
+  "name": "renewal_notice_period_inquiry",
+  "scenario_key": "renewal-notice-period-inquiry",
+  "scenario_id": "",
+  "use_case": "Cancel at term end or explain renewal",
+  "branch": "Helen Hyper U08_ADMIN asks how much notice HyperScale T08 must give for cancellation",
+  "tests": "Retrieves notice period and auto-renewal terms for billing administrator",
+  "instruction": "You are Helen Hyper, Billing Admin for HyperScale (Tenant ID: T08, Actor ID: U08_ADMIN). You want to know how many days of notice HyperScale must give before cancellation. Ask the assistant to verify your admin role and check your renewal terms.\n\nYour details:\n- Tenant ID: T08 (HyperScale)\n- Admin Actor ID: U08_ADMIN",
+  "keywords": [
+    "renewal_terms"
+  ],
+  "persona": {
+    "name": "Helen Hyper",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I am Helen Hyper, billing admin for HyperScale (T08, U08_ADMIN). How much notice do we need to give if we decide not to renew?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "records": {
+      "admin_id": "U08_ADMIN",
+      "subscription_id": "sub_08",
+      "tenant_id": "T08"
+    },
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U08_ADMIN",
+        "tenant_id": "T08"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_renewal_terms",
+      "arguments": {
+        "tenant_id": "T08",
+        "actor_id": "U08_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T08"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "disposition": "notice_period",
+    "counterparty": "member",
+    "interaction": "resumed",
+    "interface": "clean_chat",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "task": "explain_renewal"
+  },
+  "sub_goals": [
+    "renewal_terms_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

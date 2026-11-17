@@ -1,0 +1,90 @@
+{
+  "name": "update_shipping_address_corrected_house_number",
+  "scenario_key": "update-shipping-address-corrected-house-number",
+  "scenario_id": "",
+  "use_case": "Change or cancel an order before it ships",
+  "branch": "Customer requests address update on processing order and immediately corrects a typo in the street number",
+  "tests": "the agent updates the shipping address for order O432 to the exact corrected address 452 Elm St, Austin, TX 78701",
+  "instruction": "You placed order O432 and want to update its delivery address because you made a typo. You first say 450 Elm St, then immediately correct the house number to 452 Elm St, Austin, TX 78701, and confirm the address change.\n\nYour details:\nName: David Kim\nEmail: david.kim@example.com\nPostal code: 78701\nOrder ID: O432\nNew Address: 452 Elm St, Austin, TX 78701",
+  "keywords": [
+    "update_shipping_address"
+  ],
+  "persona": {
+    "name": "David Kim",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hello, I made a mistake on the shipping address for order O432. Please send it to 450 Elm St... wait, typo, I meant 452 Elm St, Austin, TX 78701.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "new_address": "452 Elm St, Austin, TX 78701",
+    "customer_id": "C432",
+    "origin": "generated",
+    "order_id": "O432"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "78701",
+        "order_id": "O432"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O432"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_shipping_address",
+      "arguments": {
+        "confirmed": true,
+        "request_key": "REQ-C432-O432-ADDR",
+        "new_address": "452 Elm St, Austin, TX 78701",
+        "customer_id": "C432",
+        "order_id": "O432"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "new_address": "caller: corrected address 452 Elm St, Austin, TX 78701",
+        "order_id": "caller: order number O432"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "change_or_cancel_order",
+    "overlay_vector": "none",
+    "counterparty": "verified_owner",
+    "interaction": "correction_mid_turn",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "disposition": "cooperative"
+  },
+  "sub_goals": [
+    "shipping_address_updated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,82 @@
+{
+  "name": "sod_matrix_deployer_cluster_admin_inquiry",
+  "scenario_key": "sod-matrix-deployer-cluster-admin-inquiry",
+  "scenario_id": "",
+  "use_case": "Answer access policy questions with citations",
+  "branch": "Irfan Malcolm (E429) asks whether holding deployer and cluster admin roles concurrently is permitted; agent reads sod_matrix and explains the policy conflict.",
+  "tests": "Does the agent read the Separation of Duties Matrix (sod_matrix) and cite rule SOD-02 prohibiting concurrent deployer and cluster_admin access?",
+  "instruction": "You are Irfan Malcolm (employee ID E429), an infrastructure engineer. You are wondering whether an engineer can simultaneously hold both the deployer and cluster_admin roles on Production Cloud Platform (APP-PROD) under IT policy. Ask the IT access desk to check the Separation of Duties Matrix document and clarify if holding both deployer and cluster admin roles is permitted.",
+  "keywords": [
+    "sod_conflict",
+    "policy_citation"
+  ],
+  "persona": {
+    "name": "Irfan Malcolm",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "India",
+    "personality": "Analytical",
+    "communication_style": "Questioning",
+    "initial_message": "Hello, I am Irfan Malcolm (E429). Could you look up our Separation of Duties Matrix and tell me if an engineer is allowed to hold both deployer and cluster_admin roles on APP-PROD?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "target_file": "sod_matrix",
+    "employee_id": "E429",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "pageToken": "",
+        "pageSize": 10,
+        "excludeContentSnippets": false,
+        "query": "title contains 'Separation of Duties'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "sod_matrix",
+        "includeComments": false,
+        "revisionId": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files file_id='sod_matrix'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "sod_conflict",
+    "counterparty": "transferred_employee",
+    "interface": "chat",
+    "overlay_vector": "none",
+    "interaction": "exploratory",
+    "task": "answer_access_policy_questions_with_citations",
+    "overlay": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "policy_document_read_from_drive",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

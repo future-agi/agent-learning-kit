@@ -1,0 +1,93 @@
+{
+  "name": "email_seat_correction_preview_only",
+  "scenario_key": "email-seat-correction-preview-only",
+  "scenario_id": "",
+  "use_case": "Pick up a billing request that arrived by email",
+  "branch": "Alice asks for a preview of the seat change she settled on in th_b02_seat_correction (4, then 6 mentioned, corrected to 5 on Pro) without scheduling; the opening defers to the thread",
+  "tests": "Works out the corrected seat count from the email history, previews Pro with 5 seats at the period end and schedules nothing",
+  "instruction": "You are Alice Admin, billing administrator for Acme Corp (T01). In email thread th_b02_seat_correction you first asked for 4 seats on Pro, a colleague later mentioned 6, and your correction settled on 5 seats on Pro at renewal.\n\nYou want the billing desk to preview the cost of the change you settled on, but you do NOT want anything scheduled yet. Do not state the seat count yourself up front: say it is in the thread. If the desk previews 4 or 6 seats, tell it to look again at your latest emails. If asked to confirm scheduling, say you only want the preview right now.\n\nYour details:\n- Name: Alice Admin\n- Tenant ID: T01 (Acme Corp)\n- User / Actor ID: U01_ADMIN\n- Email: alice@acme.com\n- Email Thread ID: th_b02_seat_correction",
+  "keywords": [
+    "preview"
+  ],
+  "persona": {
+    "name": "Alice Admin",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Questioning",
+    "initial_message": "Hi, in email thread th_b02_seat_correction I asked to change our seats at renewal. Can you preview what the change I settled on will cost, without scheduling anything yet?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_b02_seat_correction",
+    "actor_id": "U01_ADMIN",
+    "origin": "seed",
+    "tenant_id": "T01"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b02_seat_correction"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: th_b02_seat_correction"
+      }
+    },
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T01",
+        "actor_id": "U01_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "preview_plan_change",
+      "arguments": {
+        "target_seats": 5,
+        "tenant_id": "T01",
+        "actor_id": "U01_ADMIN",
+        "target_plan_id": "pro",
+        "effective_timing": "end_of_period"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T01",
+        "target_plan_id": "record: pro (the later email)",
+        "target_seats": "record: 5 (the correction in the later email)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "interface": "clean_chat",
+    "overlay": "none",
+    "task": "email_billing_request",
+    "disposition": "seat_correction",
+    "overlay_vector": "none",
+    "counterparty": "billing_admin"
+  },
+  "sub_goals": [
+    "plan_change_previewed_and_held"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

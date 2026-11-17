@@ -1,0 +1,79 @@
+{
+  "name": "mid_cycle_seat_addon_invoice",
+  "scenario_key": "mid-cycle-seat-addon-invoice",
+  "scenario_id": "",
+  "use_case": "Explain an invoice or a bill increase",
+  "branch": "The admin asks what invoice inv_11_addon represents",
+  "tests": "explains that inv_11_addon is a mid-cycle add-on invoice for 2 additional seats",
+  "instruction": "You are Karen Kite, billing admin for KiteWorks. You type with some typos. You want to understand what the separate invoice inv_11_addon represents on your account. Ask what charges are on it.\n\nYour details:\n- Tenant ID: T11\n- Tenant Name: KiteWorks\n- Your Name: Karen Kite\n- Your User ID: U11_ADMIN\n- Your Role: billing_admin\n- Invoice ID: inv_11_addon",
+  "keywords": [
+    "invoice_explanation"
+  ],
+  "persona": {
+    "name": "Karen Kite",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you expln wat invoice inv_11_addon was for?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "invoice_id": "inv_11_addon",
+    "origin": "seed",
+    "user_id": "U11_ADMIN",
+    "tenant_id": "T11"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T11",
+        "actor_id": "U11_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_invoice_lines",
+      "arguments": {
+        "invoice_id": "inv_11_addon",
+        "tenant_id": "T11",
+        "actor_id": "U11_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "invoice_id": "caller: inv_11_addon"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "explain_invoice",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "typo_heavy",
+    "counterparty": "member",
+    "interaction": "multi_turn",
+    "disposition": "standard"
+  },
+  "sub_goals": [
+    "invoice_breakdown_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

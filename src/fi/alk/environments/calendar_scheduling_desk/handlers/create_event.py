@@ -1,3 +1,9 @@
+def _kept(error):
+    """A fault this world simulates on purpose: what the call wrote before it stays written."""
+    error.keep_writes = True
+    return error
+
+
 def handle(args, db):
     import json
     import re
@@ -72,9 +78,9 @@ def handle(args, db):
         if fault["trigger_once"]:
             db.execute("UPDATE calendar_fault_injections SET is_active = FALSE WHERE fault_id = ?", (fault["fault_id"],))
         if fault["fault_type"] == "timeout":
-            raise ToolError("Gateway timeout: request timed out waiting for upstream server.", category="timeout_unknown_outcome")
+            raise _kept(ToolError("Gateway timeout: request timed out waiting for upstream server.", category="timeout_unknown_outcome"))
         if fault["fault_type"] == "permission_denied":
-            raise ToolError("Permission denied by upstream API.", category="permission_denied")
+            raise _kept(ToolError("Permission denied by upstream API.", category="permission_denied"))
 
     clock_row = db.one("SELECT now FROM clock LIMIT 1")
     now_str = clock_row["now"] if clock_row else "2026-10-26T09:00:00Z"
