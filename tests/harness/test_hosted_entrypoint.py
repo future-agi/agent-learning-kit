@@ -3578,9 +3578,15 @@ def test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window() -> 
     # `emit_skipped_receipts`/`receipt()` push with `deadline=None` -- a degraded-but-alive
     # events channel could previously retry every skipped scenario's receipt for the full
     # `RetryPolicy` budget regardless of how much of the flush window was already spent, well past
-    # the point the gateway tears the sandbox down. A tiny window plus a slow
-    # `emit_skipped_receipts` reproduces the shape without a real multi-second stall dominating the
-    # suite: `asyncio.wait_for`'s own cancellation cuts the sleep short well before it would run out.
+    # the point the gateway tears the sandbox down. Here `emit_skipped_receipts` never finishes on
+    # its own (the stall stands in for the receipt push), so the run can end only when the flush
+    # window's `wait_for` cancels it. The test checks the bound itself, not elapsed time: a spy on
+    # `wait_for` records the `timeout` the code passes with `emit_skipped_receipts`, and that must
+    # be the REMAINING window -- `deadline - now`, where the deadline is the arm time plus the
+    # window and the terminal's own flush has already run since arming. So the tightest true bound
+    # is `0 < timeout < window`: `None`, a padded timeout, or the full window (which would not
+    # shrink as the window is spent) all fail, whatever the runner's speed. The outer guard turns
+    # a missing bound into a failure rather than a hang.
     async def scenario() -> None:
         scenarios = [
             FakeScenario("first", "platform-first", [FakeSubGoal("holds", True)]),
@@ -3589,27 +3595,47 @@ def test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window() -> 
         harness = _build_harness(
             scenarios=scenarios, cancel_on_scenario="first", instances=1
         )
-        harness.deps.flush_window_seconds = 0.2
+        harness.deps.flush_window_seconds = 2.0
 
         original_emit = HostedScheduler.emit_skipped_receipts
+        never = asyncio.Event()
+        stall: dict[str, float] = {}
+        bounds: list[float | None] = []
+        real_wait_for = asyncio.wait_for
 
-        async def slow_emit(self: HostedScheduler, result: RunResult) -> None:
-            await asyncio.sleep(2.0)
-            await original_emit(self, result)
+        async def stalled_emit(self: HostedScheduler, result: RunResult) -> None:
+            try:
+                await never.wait()
+            except asyncio.CancelledError:
+                stall["cut"] = time.monotonic()
+                raise  # swallowing the cancel would break the bound under test
 
-        HostedScheduler.emit_skipped_receipts = slow_emit  # type: ignore[method-assign]
-        started = time.monotonic()
+        async def spying_wait_for(aw: Any, timeout: float | None = None) -> Any:
+            # `he.asyncio` is the shared asyncio module, so this also sees the outer guard below;
+            # record only the call that wraps the stalled receipts.
+            code = getattr(aw, "cr_code", None)
+            if code is stalled_emit.__code__:
+                bounds.append(timeout)
+            return await real_wait_for(aw, timeout=timeout)
+
+        HostedScheduler.emit_skipped_receipts = stalled_emit  # type: ignore[method-assign]
         try:
-            code = await he.run_job(
-                harness.job_path, harness.source, harness.output, deps=harness.deps
-            )
+            try:
+                with mock.patch.object(he.asyncio, "wait_for", spying_wait_for):
+                    code = await real_wait_for(
+                        he.run_job(
+                            harness.job_path,
+                            harness.source,
+                            harness.output,
+                            deps=harness.deps,
+                        ),
+                        timeout=30.0,
+                    )
+            except asyncio.TimeoutError:
+                pytest.fail("the post-terminal wire block was not bounded by the flush window")
         finally:
             HostedScheduler.emit_skipped_receipts = original_emit
-        elapsed = time.monotonic() - started
 
-        assert elapsed < 1.5, (
-            f"post-terminal wire block was not bounded: {elapsed:.2f}s"
-        )
         assert (
             code == he.EXIT_OK
         )  # the terminal was already delivered before the window ran out
@@ -3621,9 +3647,15 @@ def test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window() -> 
             key[1]: body["status"] for key, body in harness.transport.receipts.items()
         }
         assert statuses.get("first") == "passed"
-        assert (
-            "second" not in statuses
-        )  # window ran out before the skipped receipt could go
+
+        assert "cut" in stall, "the stalled receipts were never cancelled"
+        window = harness.deps.flush_window_seconds
+        # Exactly one bounded wait, and its timeout is the remaining window: positive, and
+        # strictly under the full window because the terminal flush ran after the window armed.
+        assert len(bounds) == 1, bounds
+        bound = bounds[0]
+        assert bound is not None, "the receipts wait was given no timeout"
+        assert 0 < bound < window, (bound, window)
 
         assert (
             harness.provisioner.closed is True
