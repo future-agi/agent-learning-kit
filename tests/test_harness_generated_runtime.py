@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -1013,6 +1014,58 @@ def test_start_runtime_refuses_a_file_that_only_reaches_out_with_injected_values
     with pytest.raises(provisioning.ProvisionError, match="network_mode outside the project"):
         provisioning.start_runtime(tmp_path)
     assert not any("run" in arguments for arguments in calls)
+
+
+def test_start_runtime_runs_the_config_it_validated(tmp_path: Path, monkeypatch) -> None:
+    environment = provisioning.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.json"),
+        project="runtime-validation",
+        runtime_services=["agent-runtime"],
+        running=True,
+    )
+    environment.save(tmp_path)
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
+    monkeypatch.delenv("ALK_RUNNER_CONTAINER", raising=False)
+    monkeypatch.setattr(
+        provisioning,
+        "_docker",
+        lambda *arguments, **_kwargs: (
+            "running" if arguments and arguments[0] == "inspect" else ""
+        ),
+    )
+    clean = {"name": "runtime-validation", "services": {"agent-runtime": {"environment": {}}}}
+    swapped = {
+        "name": "runtime-validation",
+        "services": {"agent-runtime": {"network_mode": "container:x"}},
+    }
+    file_reads = 0
+    run_calls: list[tuple[list[str], str | None]] = []
+
+    def fake_subprocess_run(command, **kwargs):
+        nonlocal file_reads
+        stdout = ""
+        if "config" in command:
+            if "-" in command:
+                stdout = kwargs.get("input") or ""
+            else:
+                # start_runtime reads the file twice before it runs; the file is swapped after.
+                file_reads += 1
+                stdout = json.dumps(clean if file_reads <= 2 else swapped)
+        elif "run" in command:
+            run_calls.append((list(command), kwargs.get("input")))
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    monkeypatch.setattr(provisioning.subprocess, "run", fake_subprocess_run)
+
+    provisioning.start_runtime(tmp_path)
+
+    assert len(run_calls) == 1
+    argv, stdin = run_calls[0]
+    assert argv[argv.index("--file") + 1] == "-"
+    assert environment.compose_file not in argv
+    assert json.loads(stdin) == clean
+    assert "container:x" not in stdin
 
 
 def test_start_runtime_runs_when_the_file_is_clean_with_injected_values(

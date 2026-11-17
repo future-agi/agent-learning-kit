@@ -240,10 +240,16 @@ def _run(
     check: bool = True,
     timeout: int = 900,
     process_overrides: dict[str, str] | None = None,
+    config_text: str | None = None,
 ) -> str:
-    files = ["--file", environment.compose_file]
-    if environment.compose_override_file:
-        files.extend(("--file", environment.compose_override_file))
+    if config_text is not None:
+        # Run exactly the rendering that was validated. Reading the files again would let a
+        # change made after the check, by the job itself, reach Compose unchecked.
+        files = ["--project-directory", environment.source, "--file", "-"]
+    else:
+        files = ["--file", environment.compose_file]
+        if environment.compose_override_file:
+            files.extend(("--file", environment.compose_override_file))
     command = [
         "docker",
         "compose",
@@ -279,6 +285,7 @@ def _run(
             text=True,
             check=False,
             timeout=timeout,
+            input=config_text,
         )
 
     try:
@@ -2625,9 +2632,17 @@ def start_runtime(
     arguments.append(service)
     # ``injected`` is applied only here, so the file validated at provision time was rendered
     # without it. A value such as ``${HARNESS_MODE:+container:x}`` could pass that check and
-    # change meaning now; validate the file as ``compose run`` will render it.
-    _validate_compose_security(_config(environment, process_overrides=injected))
-    _run(environment, *arguments, timeout=900, process_overrides=injected)
+    # change meaning now; validate the file as ``compose run`` will render it, then run that
+    # same rendering instead of letting Compose read the files a second time.
+    validated = _config(environment, process_overrides=injected)
+    _validate_compose_security(validated)
+    _run(
+        environment,
+        *arguments,
+        timeout=900,
+        process_overrides=injected,
+        config_text=json.dumps(validated),
+    )
     deadline = time.monotonic() + 60
     # LiveKit workers commonly stay alive while warming VAD/STT/TTS processes and only register
     # for dispatch afterwards.  Starting a room after five seconds races that registration: the
