@@ -2204,10 +2204,12 @@ def reset(destination: str | Path) -> ProvisionedEnvironment:
         timeout=120,
     )
     started = time.monotonic()
-    if environment.services:
-        _start_managed_services(environment, environment.services, build=False)
+    # After ``down`` no job container is alive, so nothing can change the files between this
+    # check and the ``up`` below. Validate before starting anything.
     config = _config(environment)
     _validate_compose_security(config)
+    if environment.services:
+        _start_managed_services(environment, environment.services, build=False)
     recorded_runtime = [
         name for name in environment.runtime_services if name in config["services"]
     ]

@@ -965,6 +965,38 @@ def _network_mode_depends_on_injected_harness_mode(tmp_path: Path, monkeypatch):
     return calls
 
 
+def test_reset_validates_before_it_starts_services(tmp_path: Path, monkeypatch) -> None:
+    environment = provisioning.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.json"),
+        project="reset-validation",
+        services=["db"],
+        running=True,
+    )
+    environment.save(tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    def run(_environment, *arguments, **_kwargs):
+        calls.append(arguments)
+        if "config" in arguments:
+            return json.dumps(
+                {
+                    "name": "p",
+                    "services": {"db": {"network_mode": "container:x"}},
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_detach_runner_network", lambda *_a, **_k: None)
+
+    with pytest.raises(provisioning.ProvisionError, match="network_mode outside the project"):
+        reset(tmp_path)
+
+    assert any("down" in arguments for arguments in calls)
+    assert not any("up" in arguments for arguments in calls)
+
+
 def test_start_runtime_refuses_a_file_that_only_reaches_out_with_injected_values(
     tmp_path: Path, monkeypatch
 ) -> None:
