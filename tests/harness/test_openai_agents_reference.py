@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import importlib.util
 import json
 import os
 import shutil
@@ -181,6 +182,47 @@ def test_build_runs_the_callback_bridge_and_binds_the_tool_tracer(
     assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     bindings = json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])
     assert_bindings_match(bindings, example_module(), "agent")
+
+
+BINDING_SHAPES = textwrap.dedent(
+    """
+    async def a(): ...
+
+
+    def outer():
+        def b(): ...
+
+
+    c = lambda: 1
+
+
+    def d(): ...
+    """
+)
+
+
+def _shapes_module(tmp_path: Path):
+    path = tmp_path / "shapes.py"
+    path.write_text(BINDING_SHAPES, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("shapes", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("name", ["a", "b", "c"])
+def test_bindings_check_refuses_what_the_tracer_would_not_record(
+    tmp_path: Path, name: str
+) -> None:
+    # An async def, a nested def and an assigned lambda can't be bound by code name and module.
+    binding = [{"name": name, "module": "m", "callable": name}]
+    with pytest.raises(AssertionError):
+        assert_bindings_match(binding, _shapes_module(tmp_path), "m", tools=(name,))
+
+
+def test_bindings_check_accepts_a_plain_top_level_def(tmp_path: Path) -> None:
+    binding = [{"name": "d", "module": "m", "callable": "d"}]
+    assert_bindings_match(binding, _shapes_module(tmp_path), "m", tools=("d",))
 
 
 # T3: the tracer and an SDK-shaped call ------------------------------------------------------
