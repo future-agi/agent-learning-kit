@@ -8,7 +8,6 @@ reaches a network.
 from __future__ import annotations
 
 import ast
-import inspect
 import json
 import shutil
 import sys
@@ -31,6 +30,7 @@ from reference_agents import (
     REPO,
     TOOLS,
     TRACE_HOOK,
+    assert_bindings_match,
     assert_detected,
     assert_pins,
     build_control_service,
@@ -108,18 +108,9 @@ def test_build_runs_adks_own_server_and_binds_the_tool_tracer(
 
     assert agent.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     bindings = json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])
-    # Each binding is checked against the example's real module, so renaming a tool there
-    # breaks this test instead of leaving the build and its input in agreement.
     example = load_example()
-    assert sorted(item["name"] for item in bindings) == sorted(
-        tool.__name__ for tool in example.root_agent.tools
-    )
-    for item in bindings:
-        assert item["module"] == MODULE
-        function = getattr(example, item["callable"], None)
-        assert inspect.isfunction(function), item
-        assert not inspect.iscoroutinefunction(function), item
-        assert function.__name__ == item["name"]
+    assert sorted(tool.__name__ for tool in example.root_agent.tools) == sorted(TOOLS)
+    assert_bindings_match(bindings, example, MODULE)
 
 
 # T3: ADK's own tool path and the tracer -----------------------------------------------------
