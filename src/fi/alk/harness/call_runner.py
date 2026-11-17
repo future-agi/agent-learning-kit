@@ -408,7 +408,11 @@ def _hold_reader(dsn: str) -> Callable[[], float | None]:
         with lock:
             if not state["reading"] and now - state["read_at"] >= _HOLD_READ_SECONDS:
                 state["reading"], state["read_at"] = True, now
-                threading.Thread(target=refresh, name="alk-tool-hold", daemon=True).start()
+                try:
+                    threading.Thread(target=refresh, name="alk-tool-hold", daemon=True).start()
+                except RuntimeError:
+                    # No thread to read in: the next check tries again rather than waiting on a read never started.
+                    state["reading"] = False
             return state["until"]
 
     return read

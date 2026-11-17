@@ -4985,3 +4985,22 @@ def test_the_hold_is_read_from_only_the_door_s_latest_faulted_rows(monkeypatch) 
         {"at": 10.0, "fault": {"mode": "timeout_before_commit", "delay_seconds": 5}}
     ]
     assert "WHERE fault IS NOT NULL" in queries[0] and "LIMIT" in queries[0]
+
+
+def test_a_hold_read_whose_thread_cannot_start_is_tried_again(monkeypatch) -> None:
+    starts: list[int] = []
+
+    class Unstartable:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            starts.append(1)
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(cr.threading, "Thread", Unstartable)
+    monkeypatch.setattr(cr, "_HOLD_READ_SECONDS", 0.0)
+    check = cr._hold_reader("postgresql://world")
+    assert check() is None and check() is None
+    # Each check tries again: a failed start never leaves the read marked as under way.
+    assert len(starts) == 2
