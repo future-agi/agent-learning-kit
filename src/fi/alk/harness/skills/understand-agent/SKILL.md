@@ -60,6 +60,9 @@ Find, in roughly this order:
    schema, a tool array. Record the exact callable name the model would emit, not a friendly
    label.
 
+   If the agent hands work to other agents, record each one in `workers`: an `id`, the `name` the
+   app gives it, and the contract tools it holds. Every worker tool is also in `tools`.
+
 2. **Argument names and types.** Read the signature. An argument declared as a list is a
    different tool from one declared as a single value, and an environment built on the wrong one
    fails at the first call. Record types wherever the source states them.
