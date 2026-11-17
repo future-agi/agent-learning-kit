@@ -864,9 +864,14 @@ def test_the_env_passed_to_the_cli_is_exactly_this(
 
 
 def test_a_token_with_no_base_url_is_refused(example_module, monkeypatch) -> None:
+    seen: list[_Seen] = []
+
     def run_a_turn(agent) -> None:
-        _fake_query(agent, monkeypatch)
+        seen.append(_fake_query(agent, monkeypatch))
         _run(agent, CONVERSATION)
+
+    def cli_never_started() -> None:
+        assert seen[-1].calls == []
 
     assert_refuses_key_without_base_url(
         example_module,
@@ -874,6 +879,7 @@ def test_a_token_with_no_base_url_is_refused(example_module, monkeypatch) -> Non
         monkeypatch,
         key="ANTHROPIC_AUTH_TOKEN",
         base_url="ANTHROPIC_BASE_URL",
+        after_refusal=cli_never_started,
     )
 
 
