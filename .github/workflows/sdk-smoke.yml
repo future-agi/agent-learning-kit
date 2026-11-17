@@ -37,6 +37,8 @@ jobs:
           ! grep -q "skipped" pytest.out
 
   clean-install:
+    # Install, doctor, the local simulation and the suites that need their own SDK versions. The
+    # long test run is kit-tests, so neither job sits near its limit.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -60,6 +62,74 @@ jobs:
           python -c "import json, pathlib;
           report=json.loads(pathlib.Path('smoke-report.json').read_text());
           assert report['status'] == 'ran' and report['report']['results']"
+      - name: Install test dependencies
+        # Exercise the minimum LiveKit version supported by pyproject.toml.
+        run: >-
+          python -m pip install '.[livekit]' pytest pytest-asyncio 'hypothesis>=6.140'
+          'livekit-agents==1.8.3'
+          'livekit-plugins-cartesia==1.8.3'
+          'livekit-plugins-deepgram==1.8.3'
+          'livekit-plugins-elevenlabs==1.8.3'
+          'livekit-plugins-google==1.8.3'
+          'livekit-plugins-openai==1.8.3'
+          'livekit-plugins-silero==1.8.3'
+      - name: Pin the Claude Agent SDK to the lock's version
+        # The image installs the SDK at uv.lock's version, so the tests run the Claude Code CLI
+        # that ships (test_secret_paths.py drives it; TH-9042). Only the SDK is pinned here.
+        run: >-
+          python -m pip install "claude-agent-sdk==$(python -c "import tomllib;
+          print(next(p['version'] for p in tomllib.load(open('uv.lock', 'rb'))['package']
+          if p['name'] == 'claude-agent-sdk'))")"
+      - name: Rerun the Claude cost tests on the locked SDK
+        # The hosted image installs from uv.lock, while the step above gets pip's newest SDK. The
+        # two handle a resumed session differently, so the cost tests run on both.
+        run: |
+          version=$(python -c "import tomllib; lock = tomllib.load(open('uv.lock', 'rb')); print(next(p['version'] for p in lock['package'] if p['name'] == 'claude-agent-sdk'))")
+          python -m pip install "claude-agent-sdk==$version"
+          python -m pytest -q tests/harness/test_claude_cost.py
+      - name: Run the Claude Agent SDK reference on the SDK it pins
+        # Its real-CLI test runs the CLI bundled in the SDK the example pins, and refuses any other.
+        run: |
+          version=$(sed -n 's/^claude-agent-sdk==//p' examples/harness/claude_agent_sdk_support/requirements.txt)
+          python -m pip install "claude-agent-sdk==$version" 'traceai-claude-agent-sdk==0.1.2'
+          python -m pytest -q tests/harness/test_claude_agent_sdk_reference.py
+      - name: Run the measuring suite with the SDK instrumentors
+        # ALK's own environment has no traceAI instrumentors, so these tests would skip. They
+        # run here with them, on the OpenTelemetry the lock pins (1.39.1): an older SDK flushes
+        # differently, and measuring has to work on it.
+        run: >-
+          python -m pip install
+          'traceai-openai==0.1.15' 'traceai-anthropic==0.1.14' 'traceai-langchain==0.2.1'
+          'openai==2.54.0' 'anthropic==2.8.0' 'langchain-openai==1.8.0' 'langfuse==4.15.6'
+          'opentelemetry-api==1.39.1' 'opentelemetry-sdk==1.39.1'
+          'opentelemetry-exporter-otlp-proto-http==1.39.1' 'opentelemetry-proto==1.39.1'
+          && python -m pytest -q tests/harness/test_simulation_measure.py
+      - name: Run the tracing cleaner on the locked fi-instrumentation-otel
+        # The hosted image installs what uv.lock pins (fi-instrumentation-otel 1.0.0, with the
+        # traceAI instrumentors of the hosted-tracing extra), not the newest release the steps
+        # above resolve. The cleaner masks secrets in what is exported, so its tests run on that
+        # install as well.
+        run: >-
+          python -m pip install uv
+          && uv export --frozen --extra hosted-tracing --no-hashes --no-emit-project
+          --output-file locked-requirements.txt
+          && python -m venv .locked-venv
+          && .locked-venv/bin/python -m pip install -r locked-requirements.txt
+          && .locked-venv/bin/python -m pip install --no-deps .
+          && .locked-venv/bin/python -m pytest -q tests/harness/test_observability.py
+
+  kit-tests:
+    # The engine, dispatch, acceptance and harness suites, split out of clean-install, where they
+    # took 8.5 to 11.5 of its 15 minutes and cancelled runs at random. Same install and SDK pin
+    # as clean-install's.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
       - name: Install test dependencies
         # Exercise the minimum LiveKit version supported by pyproject.toml.
         run: >-
@@ -175,40 +245,3 @@ jobs:
           tests/test_release_workflow.py
           tests/test_release_pr_step.py
           tests/episode
-      - name: Rerun the Claude cost tests on the locked SDK
-        # The hosted image installs from uv.lock, while the step above gets pip's newest SDK. The
-        # two handle a resumed session differently, so the cost tests run on both.
-        run: |
-          version=$(python -c "import tomllib; lock = tomllib.load(open('uv.lock', 'rb')); print(next(p['version'] for p in lock['package'] if p['name'] == 'claude-agent-sdk'))")
-          python -m pip install "claude-agent-sdk==$version"
-          python -m pytest -q tests/harness/test_claude_cost.py
-      - name: Run the Claude Agent SDK reference on the SDK it pins
-        # Its real-CLI test runs the CLI bundled in the SDK the example pins, and refuses any other.
-        run: |
-          version=$(sed -n 's/^claude-agent-sdk==//p' examples/harness/claude_agent_sdk_support/requirements.txt)
-          python -m pip install "claude-agent-sdk==$version" 'traceai-claude-agent-sdk==0.1.2'
-          python -m pytest -q tests/harness/test_claude_agent_sdk_reference.py
-      - name: Run the measuring suite with the SDK instrumentors
-        # ALK's own environment has no traceAI instrumentors, so these tests would skip. They
-        # run here with them, on the OpenTelemetry the lock pins (1.39.1): an older SDK flushes
-        # differently, and measuring has to work on it.
-        run: >-
-          python -m pip install
-          'traceai-openai==0.1.15' 'traceai-anthropic==0.1.14' 'traceai-langchain==0.2.1'
-          'openai==2.54.0' 'anthropic==2.8.0' 'langchain-openai==1.8.0' 'langfuse==4.15.6'
-          'opentelemetry-api==1.39.1' 'opentelemetry-sdk==1.39.1'
-          'opentelemetry-exporter-otlp-proto-http==1.39.1' 'opentelemetry-proto==1.39.1'
-          && python -m pytest -q tests/harness/test_simulation_measure.py
-      - name: Run the tracing cleaner on the locked fi-instrumentation-otel
-        # The hosted image installs what uv.lock pins (fi-instrumentation-otel 1.0.0, with the
-        # traceAI instrumentors of the hosted-tracing extra), not the newest release the steps
-        # above resolve. The cleaner masks secrets in what is exported, so its tests run on that
-        # install as well.
-        run: >-
-          python -m pip install uv
-          && uv export --frozen --extra hosted-tracing --no-hashes --no-emit-project
-          --output-file locked-requirements.txt
-          && python -m venv .locked-venv
-          && .locked-venv/bin/python -m pip install -r locked-requirements.txt
-          && .locked-venv/bin/python -m pip install --no-deps .
-          && .locked-venv/bin/python -m pytest -q tests/harness/test_observability.py
