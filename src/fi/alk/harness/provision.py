@@ -21,6 +21,7 @@ import secrets
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -46,6 +47,7 @@ from .service_catalog import address, profile_for
 from .secrets import (
     CONTROLLER_CONNECTION_NAMES,
     RUNTIME_CONFIGURATION_NAMES_ENV,
+    agent_value_name_reserved,
     client_name_reserved,
     tool_credential_name,
     controller_name_reserved,
@@ -313,18 +315,30 @@ def _runtime_values(
 ) -> dict[str, str]:
     """The job's own values for the names it declared, minus names it may not set."""
     values: dict[str, str] = {}
+    refused: list[str] = []
     under_sandbox = _under_sandbox()
     for name in environment.runtime_configuration_names:
         value = runtime_configuration_value(name).strip()
         if not value:
             continue
         if client_name_reserved(name) and not tool_credential_name(name):
-            if skipped is not None:
+            if not agent_value_name_reserved(name):
+                # Intake admits it as the agent's own setting (a proxy, CA bundle or locale),
+                # which a Compose service can't get under its own name: refuse, never drop.
+                refused.append(name)
+            elif skipped is not None:
+                # Intake refuses these; this is the backstop.
                 skipped.add(name)
             continue
         if not under_sandbox and _local_denied(name):
             continue
         values[name] = value
+    if refused:
+        raise ProvisionError(
+            f"compose_value_name_reserved: {', '.join(sorted(refused))} (a Compose service "
+            "can't get a proxy, CA bundle or locale value under its own name; send it under "
+            "another name and set the name in the Compose file from it)"
+        )
     return values
 
 
@@ -369,11 +383,30 @@ def _job_directory_prefix(project: str) -> str:
     return f"alk-compose-env-{project}."
 
 
+def _remove_job_directory(directory: Path) -> None:
+    """Remove a job directory, which holds the job's values; a part that won't go is logged by
+    path and error type, never by content, and the removal carries on."""
+
+    def failed(_function, path, error) -> None:
+        if isinstance(error, tuple):  # onerror's (type, value, traceback)
+            error = error[1]
+        if isinstance(error, FileNotFoundError):
+            return  # already gone
+        logger.warning(
+            "compose: could not remove job env path %s: %s", path, type(error).__name__
+        )
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(directory, onexc=failed)
+    else:
+        shutil.rmtree(directory, onerror=failed)
+
+
 def _remove_leftover_job_directories(project: str) -> None:
     """Remove the job directories a killed worker left behind for this project (and no other)."""
     pattern = f"{glob.escape(_job_directory_prefix(project))}*"
     for leftover in Path(tempfile.gettempdir()).glob(pattern):
-        shutil.rmtree(leftover, ignore_errors=True)
+        _remove_job_directory(leftover)
 
 
 def _repository_env_file_usable(
@@ -543,7 +576,7 @@ def _run(
     finally:
         for directory in (job_directory, teardown_directory):
             if directory is not None:
-                shutil.rmtree(directory, ignore_errors=True)
+                _remove_job_directory(Path(directory))
 
 
 def _start_managed_services(

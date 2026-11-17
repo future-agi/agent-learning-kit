@@ -21,7 +21,7 @@ from fi.alk.harness.generated_runtime import (
 from fi.alk.harness import provision as provisioning
 from fi.alk.harness.contract import Dependency
 from fi.alk.harness.provision import reset, start_runtime, stop, stop_runtime
-from fi.alk.harness.secrets import client_name_reserved
+from fi.alk.harness.secrets import agent_value_name_reserved, client_name_reserved
 
 
 def _contract(**runtime) -> AgentContract:
@@ -1466,7 +1466,9 @@ def test_reserved_client_names_never_set_compose_or_the_run_arguments(
 ) -> None:
     runtime_names = (
         [
-            *_RESERVED_NAMES,
+            # The skip is the backstop for names intake refuses; a name intake admits (a proxy,
+            # a CA bundle) fails the job by name instead (test_an_admitted_value_...).
+            *[name for name in _RESERVED_NAMES if agent_value_name_reserved(name)],
             "PROXY_PORT",
             "HARNESS_POSTGRES_PORT",
             "PYTHONPATH",
@@ -1717,22 +1719,29 @@ def test_a_jobs_proxy_and_export_settings_reach_only_the_env_file(
 ) -> None:
     # Agent settings, so the job may set them, but in Compose's own environment they would send
     # its Docker API traffic through the job's proxy, or its telemetry to the job's endpoint.
-    names = list(_PROXY_AND_EXPORT)
+    names = ["OTEL_EXPORTER_OTLP_ENDPOINT"]
     _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(names))
-    for name, value in _PROXY_AND_EXPORT.items():
-        monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", value)
+    monkeypatch.setenv(
+        "ALK_RUNTIME_VALUE_OTEL_EXPORTER_OTLP_ENDPOINT", _PROXY_AND_EXPORT["OTEL_EXPORTER_OTLP_ENDPOINT"]
+    )
     calls = _record_compose(monkeypatch)
     environment = _compose_environment(tmp_path, runtime_configuration_names=names)
 
     provisioning._run(environment, "up")
 
     call = calls[0]
-    for name in names:
-        assert name not in call.env, name
-    # A name the client reserves is skipped altogether; an agent setting goes to the file only.
-    for name in ("HTTP_PROXY", "HTTPS_PROXY"):
-        assert call.job.values.get(name) in (None, _PROXY_AND_EXPORT[name]), name
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in call.env
     assert call.job.values["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://canary.invalid"
+
+    # A proxy reaches neither: the job fails naming it, before Compose runs.
+    proxies = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(proxies))
+    for name in proxies:
+        monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", _PROXY_AND_EXPORT[name] or "x")
+    environment = _compose_environment(tmp_path, runtime_configuration_names=proxies)
+    with pytest.raises(provisioning.ProvisionError, match="compose_value_name_reserved"):
+        provisioning._run(environment, "up")
+    assert len(calls) == 1
 
 
 def test_a_customers_tool_credential_reaches_the_env_file(tmp_path: Path, monkeypatch) -> None:
@@ -1752,6 +1761,83 @@ def test_a_customers_tool_credential_reaches_the_env_file(tmp_path: Path, monkey
         assert job.values[name] == f"{name.lower()}-canary", name
     # A name that steers docker stays out.
     assert "DOCKER_CONFIG" not in job.values
+
+
+def test_an_admitted_value_compose_cannot_carry_fails_the_job_by_name(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Intake admits a proxy, CA bundle or locale name as the agent's own setting (the local
+    # runtime hands it over), but a Compose service can't get it under its own name. The job fails
+    # naming it, before Compose runs, never drops it silently (Dileep, #337).
+    names = ["HTTPS_PROXY", "SSL_CERT_FILE", "LANG", "MY_KEY"]
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(names))
+    for name in names:
+        monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", f"{name.lower()}-canary")
+    calls = _record_compose(monkeypatch)
+    environment = _compose_environment(tmp_path, runtime_configuration_names=names)
+
+    with pytest.raises(provisioning.ProvisionError) as refused:
+        provisioning._run(environment, "up")
+
+    message = str(refused.value)
+    assert message.startswith("compose_value_name_reserved: HTTPS_PROXY, LANG, SSL_CERT_FILE")
+    assert "MY_KEY" not in message
+    assert "canary" not in message
+    assert calls == []
+
+def _failing_unlink(monkeypatch, inside: str):
+    """Make removing any file under a directory whose name holds ``inside`` fail."""
+    real_unlink = os.unlink
+
+    def unlink(path, *args, **kwargs):
+        # rmtree removes by bare name relative to an open directory (dir_fd) where it can.
+        if inside in str(path) or kwargs.get("dir_fd") is not None:
+            raise PermissionError(13, "Permission denied")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", unlink)
+
+
+def test_a_job_file_that_cannot_be_removed_is_logged_by_path_never_by_value(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, "MY_KEY")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_MY_KEY", "secret-canary-value")
+    calls = _record_compose(monkeypatch)
+    environment = _compose_environment(tmp_path, runtime_configuration_names=["MY_KEY"])
+    _failing_unlink(monkeypatch, provisioning._job_directory_prefix(environment.project))
+    caplog.set_level(logging.WARNING, logger=_COMPOSE_LOGGER)
+
+    provisioning._run(environment, "ps")
+
+    job_file = calls[0].job.path
+    assert job_file.exists()
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert [w for w in warnings if str(job_file) in w and "PermissionError" in w], warnings
+    assert "secret-canary-value" not in caplog.text
+    monkeypatch.undo()
+    job_file.unlink()
+
+
+def test_a_leftover_job_directory_that_cannot_be_removed_is_logged(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    project = "alk-leftover-probe"
+    leftover = Path(tempfile.mkdtemp(prefix=provisioning._job_directory_prefix(project)))
+    (leftover / "job.env").write_text("MY_KEY=secret-canary-value\n", encoding="utf-8")
+    _failing_unlink(monkeypatch, leftover.name)
+    caplog.set_level(logging.WARNING, logger=_COMPOSE_LOGGER)
+
+    try:
+        provisioning._remove_leftover_job_directories(project)
+        warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert [w for w in warnings if leftover.name in w and "PermissionError" in w], warnings
+        assert "secret-canary-value" not in caplog.text
+    finally:
+        monkeypatch.undo()
+        import shutil
+
+        shutil.rmtree(leftover, ignore_errors=True)
 
 
 _ROUND_TRIP_VALUES = {
@@ -2096,7 +2182,11 @@ def test_every_reserved_name_stays_out_of_the_job_file_and_compose_environment(
         "DOCKER_HOST": "tcp://base:2375",
     }
     # On the bare CLI a shell value is not a runtime value, so the runtime layer is manifest-only.
-    runtime_names = reserved if manifest else []
+    # It holds the names intake refuses: the skip is their backstop. A name intake admits (a
+    # proxy, CA bundle or locale) fails the job by name (test_an_admitted_value_...).
+    runtime_names = (
+        [name for name in reserved if agent_value_name_reserved(name)] if manifest else []
+    )
     _shell(monkeypatch, base, ",".join(runtime_names) if manifest else None)
     for name in runtime_names:
         monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", f"/evil-runtime/{name}")
