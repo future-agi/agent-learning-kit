@@ -80,8 +80,12 @@ One-time setup:
 - `E2B_API_KEY`, a repository Actions secret holding the E2B team's API key.
 - `RELEASE_BOT_APP_ID` and `RELEASE_BOT_PRIVATE_KEY`, the organization Actions
   secrets of the release bot GitHub App, shared with this repository. The app must
-  be installed on this repository and on `future-agi/deployment`, with write access to
-  contents and pull requests on both.
+  be installed on this repository with write access to contents and pull requests;
+  it opens the version-bump pull request.
+- `DEPLOY_BUMP_APP_ID` and `DEPLOY_BUMP_PRIVATE_KEY`, secrets of the `deploy-bump`
+  environment only (deployments limited to `main`). They belong to the deployment
+  bump GitHub App, installed only on `future-agi/deployment` with write access to
+  contents and pull requests. It opens the deployment pull request.
 - The PyPI trusted publisher above.
 - Two environments, each with required reviewers and deployments limited to `main`:
   `pypi` for the SDK upload and `e2b-template` for the template build. An

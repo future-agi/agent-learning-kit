@@ -72,7 +72,13 @@ def test_uploads_and_template_builds_wait_for_approval():
         name: job["environment"] for name, job in JOBS.items() if "environment" in job
     }
     # Separate groups: PyPI trusts uploads from any job that runs in `pypi`.
-    assert gated == {"sdk-publish": "pypi", "template-publish": "e2b-template"}
+    # deploy-bump only holds the deployment App's key; the bump PR it opens is
+    # reviewed in the deployment repo.
+    assert gated == {
+        "sdk-publish": "pypi",
+        "template-publish": "e2b-template",
+        "deployment-bump": "deploy-bump",
+    }
 
 
 def test_template_does_not_wait_for_the_sdk_upload():
@@ -174,9 +180,8 @@ def test_secrets_stay_in_their_job():
     assert WORKFLOW["permissions"] == {"contents": "read"}
     for job in JOBS:
         dumped = _dump(job)
-        assert ("RELEASE_BOT_" in dumped) == (
-            job in {"deployment-bump", "release-pr"}
-        ), job
+        assert ("RELEASE_BOT_" in dumped) == (job == "release-pr"), job
+        assert ("DEPLOY_BUMP_" in dumped) == (job == "deployment-bump"), job
         assert ("E2B_API_KEY" in dumped) == (job == "template-publish"), job
         assert ("id-token" in dumped) == (job == "sdk-publish"), job
         assert ("packages" in JOBS[job].get("permissions", {})) == (
