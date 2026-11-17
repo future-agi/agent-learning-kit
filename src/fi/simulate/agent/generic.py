@@ -439,6 +439,8 @@ class GenericAgentWrapper(AgentWrapper):
         if hasattr(raw, "messages"):
             return _last_message_content(getattr(raw, "messages"))
         if isinstance(raw, (list, tuple)):
+            if _is_bare_block_list(raw):
+                return text_of(raw)
             return _last_message_content(raw)
         realtime_text = _realtime_last_text(raw)
         if realtime_text:
@@ -1267,6 +1269,30 @@ def _is_block_or_message(item: Any) -> bool:
     return get("type") is None and (
         get("thought") is True or get("reasoningContent") is not None
     )
+
+
+_HISTORY_KINDS = frozenset({"message", "ai", "human", "tool", "system", "assistant", "user"})
+
+
+def _is_history_item(item: Any) -> bool:
+    get = item.get if isinstance(item, Mapping) else lambda name: getattr(item, name, None)
+    return get("type") in _HISTORY_KINDS or get("role") in _CHAT_ROLES
+
+
+def _is_bare_block_list(value: Any) -> bool:
+    """True for a list that is one reply's content blocks, not a message history."""
+    if not isinstance(value, (list, tuple)) or not value:
+        return False
+    if any(isinstance(item, (str, bytes)) or _is_history_item(item) for item in value):
+        return False
+    return any(
+        _is_block_or_message(item) or _is_untyped_text(item) for item in value
+    )
+
+
+def _is_untyped_text(item: Any) -> bool:
+    get = item.get if isinstance(item, Mapping) else lambda name: getattr(item, name, None)
+    return get("type") is None and isinstance(get("text"), str)
 
 
 def _reply_text(value: Any) -> str:
