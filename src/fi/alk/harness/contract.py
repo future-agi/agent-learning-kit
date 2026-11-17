@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import collections.abc
 import json
+import logging
 import os
 import re
 import shlex
@@ -203,6 +204,19 @@ class ToolEntry(BaseModel):
     endpoint: str = ""
     method: str = "POST"
     notes: str = ""
+
+
+class DeclaredWorker(BaseModel):
+    """An agent the app hands work to, as its source declares it.
+
+    Declared is not observed: a run shows whether the worker actually took part, from the spans the app exports.
+    ``name`` is the name the app gives the agent, because that is the name its spans carry.
+    """
+
+    id: str
+    name: str = ""
+    # The contract tools this worker holds, by name.
+    tools: list[str] = Field(default_factory=list)
 
 
 class PromptSource(BaseModel):
@@ -849,6 +863,18 @@ class Runtime(BaseModel):
     # the dump when empty.
     source_subfolder: SkipJsonSchema[str] = ""
 
+    @field_validator("source_subfolder")
+    @classmethod
+    def _folder_inside_the_source(cls, folder: str) -> str:
+        # Checked at the save, and again by its spelling when a bundle's contract is loaded: the
+        # run puts this folder on the import path, so it is never absolute or climbs with `..`.
+        # A folder that is a link out of the source is caught at the save (`agent_folder`).
+        if folder and (
+            folder.startswith("/") or any(part in ("", ".", "..") for part in folder.split("/"))
+        ):
+            raise ValueError("runtime_source_subfolder_invalid")
+        return folder
+
     @model_serializer(mode="wrap")
     def _omit_empty_subfolder(self, handler: Any) -> dict[str, Any]:
         data = handler(self)
@@ -1169,6 +1195,8 @@ class AgentContract(BaseModel):
     model: ModelSource | None = None
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
+    # Empty for an agent that hands no work to other agents.
+    workers: list[DeclaredWorker] = Field(default_factory=list)
     data_schema: dict[str, Any] = Field(default_factory=dict)
     base_environment: dict[str, Any] = Field(default_factory=dict)
     # What the environment stage has to build before any tool can be answered.
@@ -1212,6 +1240,21 @@ class AgentContract(BaseModel):
         if not data.get("unconfirmed_prompt_from"):
             data.pop("unconfirmed_prompt_from", None)
         return data
+
+    @model_validator(mode="after")
+    def _resolvable_workers(self) -> AgentContract:
+        # A worker holds only tools the contract has; its id is checked by `validate_contract`.
+        self.workers = [
+            worker.model_copy(
+                update={
+                    "tools": [
+                        tool for tool in worker.tools if tool in self.tool_names()
+                    ]
+                }
+            )
+            for worker in self.workers
+        ]
+        return self
 
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}
@@ -1312,6 +1355,14 @@ class AgentContract(BaseModel):
                     for one in self.dependencies
                 )
                 + "\nThe agent's code is never edited; the environment must match its existing seam."
+            )
+        if self.workers:
+            parts.append(
+                "WORKERS (agents this one hands work to, and the tools each holds):\n  - "
+                + "\n  - ".join(
+                    f"{one.id} ({one.name or one.id}): {', '.join(one.tools) or 'no tools'}"
+                    for one in self.workers
+                )
             )
         if self.real_use_cases:
             # Every one of them. A scenario writer covers what it is shown, so a truncated
@@ -1442,6 +1493,12 @@ KEPT_AS_WRITTEN = (
     "AgentContract.runtime",
     "AgentContract.chosen_evals",
     "AgentContract.instrumentation",
+    # Names: a worker's id and name are matched against the spans the app exports, and its tools
+    # against the contract's tool names, so they are read as written.
+    "AgentContract.workers",
+    "DeclaredWorker.id",
+    "DeclaredWorker.name",
+    "DeclaredWorker.tools",
     "ToolSpec.name",
     "ToolSpec.args",
     "ToolSpec.arg_types",
@@ -1483,6 +1540,10 @@ KEPT_AS_WRITTEN = (
     "RuntimeHttpSetupRequest",
 )
 CONTRACT_FILE = "contract.json"
+# What a reading was made from, saved beside its contract and outside the model: a build handed
+# that reading is told apart from one that read the agent itself by this key alone, so every
+# later save of the contract keeps it.
+READING_RECORD = "reading_inputs"
 _SEQUENCES = (
     list,
     tuple,
@@ -1562,6 +1623,32 @@ def _holders(contract: AgentContract, body: dict[str, Any], model: str) -> list[
     return pairs
 
 
+def _saved_record(path: Path) -> dict[str, Any]:
+    """The reading's record in the contract saved at ``path``, as ``{key: value}``; empty when
+    there is no file, no record in it, or it can't be read as a JSON object."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        # The save goes on without it, so a seeded build saves as an unseeded one: log the error
+        # in full. The file is the kit's own contract, not the customer's source.
+        logging.getLogger(__name__).warning(
+            "reading record not carried; class: %s", type(exc).__name__, exc_info=True
+        )
+        return {}
+    # A contract that never held a record is not parsed again.
+    if READING_RECORD.encode() not in raw:
+        return {}
+    try:
+        saved = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return {}
+    if not isinstance(saved, dict) or READING_RECORD not in saved:
+        return {}
+    return {READING_RECORD: saved[READING_RECORD]}
+
+
 def write_contract(contract: AgentContract, destination: Path) -> AgentContract:
     """Save the contract to ``destination/contract.json``, its free text cleaned of URL credentials.
 
@@ -1570,6 +1657,10 @@ def write_contract(contract: AgentContract, destination: Path) -> AgentContract:
     so a write that fails partway leaves the earlier contract as it was. Only then are the
     cleaned values copied back onto ``contract`` itself, in place: the stage and its tools hold
     that object, and a fresh one would leave them working from the raw text. It is returned too.
+
+    The record of what a reading was made from is not part of the model. When the contract
+    already saved at ``destination`` holds one, the new save keeps its value, first, as the
+    reading put it; a save where none is held writes none.
     """
     body = contract.model_dump()
     places: list[tuple[Any, Any, Any, str]] = []
@@ -1589,8 +1680,11 @@ def write_contract(contract: AgentContract, destination: Path) -> AgentContract:
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / CONTRACT_FILE
     partial = destination / f".{CONTRACT_FILE}.{os.getpid()}.{threading.get_ident()}"
+    written = {**_saved_record(path), **body}
     try:
-        partial.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
+        partial.write_text(
+            json.dumps(written, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         # Synced before the move, so the move never publishes a file the disk does not hold.
         descriptor = os.open(partial, os.O_RDONLY)
         try:
@@ -1745,4 +1839,17 @@ def validate_contract(contract: AgentContract) -> list[str]:
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         problems.append(f"duplicate-tool-names:{','.join(duplicates)}")
+    for index, worker in enumerate(contract.workers):
+        if not worker.id.strip():
+            problems.append(
+                f"worker[{index}]:no-id: give this worker the id the agent's source uses for it, "
+                "one that no other worker has."
+            )
+    worker_ids = [worker.id for worker in contract.workers if worker.id.strip()]
+    repeated = sorted({one for one in worker_ids if worker_ids.count(one) > 1})
+    if repeated:
+        problems.append(
+            f"duplicate-worker-ids:{','.join(repeated)}: each worker is one agent of the app: "
+            "merge the entries that are the same agent, or give each its own id."
+        )
     return problems

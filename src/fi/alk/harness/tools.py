@@ -215,6 +215,9 @@ def _checked_contract(
     folder the browser scan found the agent reaches, when it has run."""
     arrived = sorted(payload) if isinstance(payload, dict) else [type(payload).__name__]
     payload = _without_nulls(unwrapped(payload))
+    # The harness records the folder below; one the model wrote itself is dropped, never refused.
+    if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
+        payload["runtime"].pop("source_subfolder", None)
     try:
         contract = AgentContract.model_validate(payload)
     except Exception as invalid:
@@ -833,6 +836,21 @@ def contract_tools(
                         # That every tool has none is the real defect, and validate_contract
                         # is where it is caught, with an explanation.
                     },
+                },
+                "workers": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "tools": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["id"],
+                    },
+                    "description": "Agents this one hands work to, if any: an id no other worker has, the name the app "
+                    "gives the agent (its spans carry it), and the names of the tools above that it "
+                    "holds. Leave out for an agent that hands no work on.",
                 },
                 "data_schema": {
                     "type": "object",

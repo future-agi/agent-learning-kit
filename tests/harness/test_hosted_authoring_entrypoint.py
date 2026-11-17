@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from fi.alk.harness import hosted_authoring_entrypoint as entrypoint
 
 
@@ -129,7 +131,56 @@ def test_exhausted_runtime_repair_returns_nonretryable_exit(tmp_path, monkeypatc
         raise RuntimeValidationError("environment", "seed_dependency_unresolved")
 
     monkeypatch.setattr(entrypoint, "authoring_main", failed)
+    monkeypatch.setattr(entrypoint, "_FAILURE_CAUSE_PATH", tmp_path / "cause.json")
     assert entrypoint.main([]) == 78
+    assert json.loads((tmp_path / "cause.json").read_text()) == {"cause": None}
+
+
+def test_runtime_validation_exit_records_only_the_closed_cause(tmp_path, monkeypatch):
+    from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
+    from fi.alk.harness.job import FailureCause
+
+    monkeypatch.setattr(entrypoint, "_load_values", lambda path: {})
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    cause_path = tmp_path / "cause.json"
+    monkeypatch.setattr(entrypoint, "_FAILURE_CAUSE_PATH", cause_path)
+
+    def failed(argv, *, validate_runtime):
+        raise RuntimeValidationError(
+            "environment",
+            "agent: exited before started_check passed: RuntimeError: HELD-BACK CASE",
+            cause=FailureCause.AGENT_EXITED_BEFORE_READY,
+        )
+
+    monkeypatch.setattr(entrypoint, "authoring_main", failed)
+    assert entrypoint.main([]) == 78
+    assert json.loads(cause_path.read_text()) == {
+        "cause": "agent_exited_before_ready"
+    }
+
+
+def test_runtime_validation_exit_replaces_what_the_agent_left_at_the_cause_path(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
+
+    monkeypatch.setattr(entrypoint, "_load_values", lambda path: {})
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text("untouched")
+    cause_path = tmp_path / "cause.json"
+    # A process of the agent planted a link, hoping for a write through it.
+    cause_path.symlink_to(elsewhere)
+    monkeypatch.setattr(entrypoint, "_FAILURE_CAUSE_PATH", cause_path)
+
+    def failed(argv, *, validate_runtime):
+        raise RuntimeValidationError("environment", "invalid")
+
+    monkeypatch.setattr(entrypoint, "authoring_main", failed)
+    assert entrypoint.main([]) == 78
+    assert not cause_path.is_symlink()
+    assert json.loads(cause_path.read_text()) == {"cause": None}
+    assert elsewhere.read_text() == "untouched"
 
 
 def test_hosted_entrypoint_passes_one_shot_provider_secret_to_authoring(
@@ -338,3 +389,83 @@ def test_good_subfolder_continues(tmp_path, monkeypatch):
 
     assert calls == ["compose", "auto"]
     assert not (tmp_path / "authoring" / "failure.json").exists()
+
+
+def _write_non_github_folder_job(tmp_path: Path, **source) -> Path:
+    body = json.loads(_subfolder_job(tmp_path, "agents/a").read_text())
+    body["source"] = {"kind": "archive", "archive_artifact_id": "art-1", **source}
+    path = tmp_path / "job.json"
+    path.write_text(json.dumps(body), encoding="utf-8")
+    return path
+
+
+def test_subfolder_on_a_non_github_source_writes_failure_and_exits_refused(tmp_path, monkeypatch):
+    from platform_failure_rules import assert_platform_reads
+
+    authoring, calls = _watch_authoring(monkeypatch)
+    source = tmp_path / "source"
+    source.mkdir()
+
+    code = authoring.main(
+        [
+            str(_write_non_github_folder_job(tmp_path, subfolder="agents/a")),
+            "--source",
+            str(source),
+            "--output",
+            str(tmp_path / "authoring"),
+        ]
+    )
+
+    assert code == 78
+    failure = _written_failure(tmp_path)
+    assert_platform_reads(failure)
+    assert failure == {
+        "domain": "agent",
+        "stage": "acquiring_source",
+        "code": "subfolder_requires_github_source",
+        "message": failure["message"],
+        "retryable": False,
+        "details": {"subfolder": "agents/a"},
+    }
+    assert "GitHub" in failure["message"]
+    assert calls == []
+
+
+def test_other_invalid_job_still_raises_in_authoring(tmp_path, monkeypatch):
+    import pydantic
+
+    authoring, _calls = _watch_authoring(monkeypatch)
+    source = tmp_path / "source"
+    source.mkdir()
+
+    with pytest.raises(pydantic.ValidationError):
+        authoring.main(
+            [
+                str(_write_non_github_folder_job(tmp_path, archive_artifact_id="")),
+                "--source",
+                str(source),
+                "--output",
+                str(tmp_path / "authoring"),
+            ]
+        )
+    assert not (tmp_path / "authoring" / "failure.json").exists()
+
+
+def test_a_job_malformed_otherwise_too_still_raises_in_authoring(tmp_path, monkeypatch):
+    # The folder on a non-GitHub source is reported only when it's the job's one fault.
+    import pydantic
+
+    authoring, calls = _watch_authoring(monkeypatch)
+    source = tmp_path / "source"
+    source.mkdir()
+    job = _write_non_github_folder_job(tmp_path, subfolder="agents/a")
+    body = json.loads(job.read_text())
+    body.pop("job_id")
+    job.write_text(json.dumps(body), encoding="utf-8")
+
+    with pytest.raises(pydantic.ValidationError):
+        authoring.main(
+            [str(job), "--source", str(source), "--output", str(tmp_path / "authoring")]
+        )
+    assert not (tmp_path / "authoring" / "failure.json").exists()
+    assert calls == []
