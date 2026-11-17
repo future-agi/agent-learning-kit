@@ -25,7 +25,7 @@ def _text(text):
             [_text("The status"), THINKING, _text("is complete.")],
             "The status is complete.",
         ),
-        ([{"text": "a"}, {"text": "b"}], "ab"),
+        ([{"text": "a"}, {"text": "b"}], "a b"),
         (tuple(_blocks()), ANSWER),
         (
             [

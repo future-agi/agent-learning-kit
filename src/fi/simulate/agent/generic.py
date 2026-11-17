@@ -440,7 +440,7 @@ class GenericAgentWrapper(AgentWrapper):
             return _last_message_content(getattr(raw, "messages"))
         if isinstance(raw, (list, tuple)):
             if _is_bare_block_list(raw):
-                return text_of(raw)
+                return _bare_blocks_text(raw)
             return _last_message_content(raw)
         realtime_text = _realtime_last_text(raw)
         if realtime_text:
@@ -1293,6 +1293,22 @@ def _is_bare_block_list(value: Any) -> bool:
     return any(
         _is_block_or_message(item) or _is_untyped_text(item) for item in value
     )
+
+
+def _bare_blocks_text(items: Any) -> str:
+    """Text of one reply's bare block list.
+
+    Items without a ``type`` (Gemini parts, search hits, records with a ``text`` field) are
+    separate pieces joined with a space; a list holding typed blocks goes through ``text_of``.
+    """
+    if all(_field_of(item, "type") is None for item in items):
+        pieces = (
+            _field_of(item, "text")
+            for item in items
+            if _field_of(item, "thought") is not True
+        )
+        return " ".join(piece for piece in pieces if isinstance(piece, str) and piece)
+    return text_of(items)
 
 
 def _is_untyped_text(item: Any) -> bool:

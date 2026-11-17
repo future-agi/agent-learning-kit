@@ -160,3 +160,20 @@ def test_a_langchain_message_chunk_keeps_only_its_answer(reply, expected):
 )
 def test_a_record_under_a_reply_key_stays_json(reply, expected):
     _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (
+            [{"id": 1, "text": "note A"}, {"id": 2, "text": "note B"}],
+            "note A note B",
+        ),
+        ([{"text": "a"}, {"text": "b"}], "a b"),
+        ([{"type": "tool_result", "content": "result text"}], ""),
+        ([{"text": "a"}, {"text": PLAN, "thought": True}, {"text": "b"}], "a b"),
+    ],
+    ids=["search-hits", "untyped-parts", "tool-result-only-is-not-text", "thought-part"],
+)
+def test_untyped_text_items_of_a_bare_list_join_with_a_space(reply, expected):
+    _check(reply, expected)
