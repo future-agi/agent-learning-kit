@@ -155,6 +155,12 @@ _DEEPEST_FOLLOWED = 64
 # Linux's PATH_MAX: an import name longer than this can't name a file.
 _LONGEST_NAME = 4096
 _SCRIPT_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+# The largest package.json read for a folder's entry; a larger one is treated as absent.
+_LARGEST_PACKAGE_JSON = 64 * 1024
+# What one walk reads of package.json files in all, as it does of pyproject.toml (1 MiB, 16 of the
+# largest): an honest manifest is under 2 KB, so a repository reaches this only when crafted, and
+# a dense 64 KB one takes about 2 ms to parse, so this holds what they cost to a fraction of a second.
+_PACKAGE_JSONS_READ = 1024 * 1024
 _SCRIPT_IMPORT = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
 )
@@ -1595,6 +1601,89 @@ def imported_by_agent(
                 return [hit, *packages]
         return []
 
+    def script_candidates(target: Path) -> tuple[Path, ...]:
+        # A file as written, then with each suffix.
+        written = [target.with_suffix(suffix) for suffix in (".ts", ".tsx")]
+        return (
+            target,
+            *(written if target.suffix == ".js" else ()),
+            *(Path(f"{target}{suffix}") for suffix in _SCRIPT_SUFFIXES),
+        )
+
+    def script_index(target: Path) -> tuple[Path, ...]:
+        return tuple(target / f"index{suffix}" for suffix in _SCRIPT_SUFFIXES)
+
+    # A folder's package.json, found once, and each manifest read once by the real file it is:
+    # one reached through several links is the same file.
+    manifest_of: dict[Path, Path | None] = {}
+    package_entries: dict[Path, tuple[str | None, str | None]] = {}
+    manifest_bytes = [0]
+    # What each entry of a manifest leads to, found once by the real manifest: a crafted repository
+    # reaches one package.json by thousands of paths through links, and its entries' few dozen
+    # candidates, misses included, would be looked up again for each (20,000 paths took 65 s).
+    entry_hits: dict[tuple[Path, int], Path | None] = {}
+
+    def package_entry(directory: Path) -> tuple[Path | None, tuple[str | None, str | None]]:
+        """The folder's package.json, as the real file it is, with its ``main`` and its
+        ``exports`` (a string, or ``{".": string}``), each None when it isn't a string."""
+        if directory not in manifest_of:
+            # Charged and kept inside the repository like any file the walk finds.
+            manifest_of[directory] = found_at((directory / "package.json",))
+        if (manifest := manifest_of[directory]) is None:
+            return None, (None, None)
+        if manifest in package_entries:
+            return manifest, package_entries[manifest]
+        entries: tuple[str | None, str | None] = (None, None)
+        if manifest_bytes[0] >= _PACKAGE_JSONS_READ:
+            # Spent: no more is read, so the folder is entered through its index.
+            unread[0] = True
+        else:
+            try:
+                with manifest.open("rb") as handle:
+                    raw = handle.read(_LARGEST_PACKAGE_JSON + 1)
+            except OSError:
+                raw = b""
+            manifest_bytes[0] += len(raw)
+            if len(raw) > _LARGEST_PACKAGE_JSON or manifest_bytes[0] > _PACKAGE_JSONS_READ:
+                unread[0] = True
+            else:
+                try:
+                    data = json.loads(raw.decode("utf-8-sig"))
+                except (ValueError, RecursionError):
+                    data = None
+                if isinstance(data, dict):
+                    exported = data.get("exports")
+                    if isinstance(exported, dict):
+                        exported = exported.get(".")
+                    main = data.get("main")
+                    entries = (
+                        main if isinstance(main, str) else None,
+                        exported if isinstance(exported, str) else None,
+                    )
+        package_entries[manifest] = entries
+        return manifest, entries
+
+    def entry_hit(manifest: Path, which: int, entry: str | None) -> Path | None:
+        """The file a manifest's entry leads to, looked up once a walk. It is joined to the
+        manifest's own folder, which every path that reaches the manifest shares: an entry that
+        climbs above a folder link is resolved from the link's target, not from the link."""
+        if not entry:
+            return None
+        if (manifest, which) in entry_hits:
+            return entry_hits[(manifest, which)]
+        hit = None
+        if len(entry) > _LONGEST_NAME:
+            unread[0] = True
+        else:
+            target = Path(os.path.normpath(manifest.parent / entry))
+            if len(target.parts) > deepest:
+                # Past the depth cut: its candidates are never built, let alone looked up.
+                unread[0] = True
+            elif is_within(target, root):  # Never read when it leads out of the repository.
+                hit = found_at((*script_candidates(target), *script_index(target)))
+        entry_hits[(manifest, which)] = hit
+        return hit
+
     def script_module(path: Path, name: str) -> Path | None:
         if len(name) > _LONGEST_NAME:
             unread[0] = True
@@ -1603,15 +1692,17 @@ def imported_by_agent(
             # Joined as written, as Node joins it before it reads the disk: a ".." after a folder
             # link leaves the link, not its target.
             target = Path(os.path.normpath(start / name))
-            written = [target.with_suffix(suffix) for suffix in (".ts", ".tsx")]
-            if hit := found_at(
-                (
-                    target,
-                    *(written if target.suffix == ".js" else ()),
-                    *(Path(f"{target}{suffix}") for suffix in _SCRIPT_SUFFIXES),
-                    *(target / f"index{suffix}" for suffix in _SCRIPT_SUFFIXES),
-                )
-            ):
+            if hit := found_at(script_candidates(target)):
+                return hit
+            # A folder required by path is entered as Node enters it: through the main of its
+            # package.json, else its index. Node never reads exports for a path; it's tried last,
+            # for a package that names its entry only there.
+            manifest, (main, exported) = package_entry(target)
+            if manifest is not None and (hit := entry_hit(manifest, 0, main)):
+                return hit
+            if hit := found_at(script_index(target)):
+                return hit
+            if manifest is not None and (hit := entry_hit(manifest, 1, exported)):
                 return hit
         return None
 

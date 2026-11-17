@@ -32,7 +32,7 @@ from pydantic import ValidationError
 from .. import __version__ as _sdk_version
 from ..providers.agent import AgentBuildError, _redact, build_authored_agent
 from . import outbound as ob
-from .catalogue import CATALOGUE, SubGoal
+from .catalogue import CATALOGUE, NO_OVERLAY, SubGoal
 from .contract import AgentContract
 from .framework_detection import FrameworkFolders, detect_framework
 from .job import FailureDomain, SourceKind
@@ -80,6 +80,16 @@ def sampled_for_calling(scenarios: Sequence[Any]) -> list[Any]:
 # is never empty for a sub-goal this reader knows is judged. The round-trip loss this represents is
 # recorded under CONTRACT QUESTIONS in the report.
 _JUDGED_MARKER = "judged (reason not persisted by folder.py's on-disk layout)"
+
+
+class AgentDocumentFailed(RuntimeError):
+    """A build of a folder could not make its agent document. ``code`` and ``message`` go to the
+    platform as the job's failure; the message never carries the customer's own field names."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 class ScenarioDocumentInvalid(RuntimeError):
@@ -433,8 +443,34 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
             "judged": str(entry.get("judged") or ""),
             "contract": goal.contract(),
             "both": "yes" if goal.both else "",
+            "overlay": goal.overlay,
+            "conversation_only": "yes" if goal.conversation_only() else "",
         }
     return claims
+
+
+def _needs_a_tool_action(
+    goal: _CompiledSubGoal, *, overlay: str, claim: dict[str, str]
+) -> bool:
+    """Whether this sub-goal can hold only after the agent acted through a tool.
+
+    Only the scenario overlay's claim (a refusal, an escalation, an out-of-scope request) whose
+    own contract says it is settled by what was said needs none: judged by a model alone, with no
+    reference value and no observed record (`SubGoal.conversation_only`). A correct agent can
+    then make no call. Being the overlay's claim is not enough, since an escalation can be a
+    hand-over its contract reads; a catalogue row that says nothing keeps the guard too. Every
+    other sub-goal, coded ones included, is taken to depend on the solution's tool steps, so an
+    empty capture stays `evidence_missing`.
+
+    The claim is the catalogue's `overlay` field or a name holding the overlay's whole name. A
+    word of it (`time_block_reserved`, `emergency_contact_updated` on `emergency_crisis`) or a
+    name the overlay holds (`injection` on `prompt_injection`) is not the claim.
+    """
+    wanted = overlay.strip().lower()
+    if not goal.judged or not claim.get("conversation_only") or wanted in NO_OVERLAY:
+        return True
+    claimed = claim.get("overlay", "").strip().lower() == wanted
+    return not (claimed or wanted in goal.name.strip().lower())
 
 
 def _load_one(
@@ -442,6 +478,7 @@ def _load_one(
     *,
     settled_in_code: set[str] | None = None,
     declared_tools: set[str] | None = None,
+    claims: dict[str, dict[str, str]] | None = None,
     defer_execution: bool = False,
 ) -> _CompiledScenario:
     """One scenario folder -> a `Scenario`-protocol object. Mirrors `folder.py`'s documented
@@ -499,13 +536,6 @@ def _load_one(
         raise ScenarioDocumentInvalid(
             f"{folder.name}: every solution step must name a non-empty tool"
         )
-    # A solution may contain semantic narration steps (for example ``listen`` and ``respond``)
-    # alongside real agent tool calls.  The contract is the authoritative inventory of tools the
-    # target can actually emit, so evidence is required exactly when a solution references one of
-    # those declared tools.  Inferring this from arbitrary step names creates false infrastructure
-    # failures for conversational agents and requires an ever-growing pseudo-tool denylist.
-    requires_tool_evidence = bool(set(solution_tools) & (declared_tools or set()))
-
     setup_code = _read_text(folder / _SETUP_PY, label=folder.name)
     ready_code = _read_text(folder / _READY_PY, label=folder.name)
     setup = _compile_entry(
@@ -549,6 +579,23 @@ def _load_one(
             judged = _JUDGED_MARKER
             check = _judged_placeholder_check
         sub_goals.append(_CompiledSubGoal(name=name, judged=judged, check=check))
+
+    # A solution may contain semantic narration steps (for example ``listen`` and ``respond``)
+    # alongside real agent tool calls. The contract is the authoritative inventory of tools the
+    # target can actually emit, so a solution naming none of them needs no tool evidence. Naming
+    # one is not enough on its own: a refusal's solution can open with a lookup the correct agent
+    # never needs, and that agent then makes no call at all. So evidence is required only when a
+    # sub-goal also needs a tool action to hold.
+    coverage = body.get("coverage")
+    overlay = str(coverage.get("overlay") or "") if isinstance(coverage, dict) else ""
+    requires_tool_evidence = bool(
+        set(solution_tools) & (declared_tools or set())
+    ) and any(
+        _needs_a_tool_action(
+            goal, overlay=overlay, claim=(claims or {}).get(goal.name, {})
+        )
+        for goal in sub_goals
+    )
 
     return _CompiledScenario(
         scenario_key=scenario_key,
@@ -635,6 +682,7 @@ def load_scenarios(
                     folder,
                     settled_in_code=settled_in_code,
                     declared_tools=declared_tools,
+                    claims=claims,
                     defer_execution=defer_execution,
                 ),
                 claims,
@@ -770,6 +818,17 @@ class BundleScenarioSource:
                     getattr(exc, "code", ""),
                     " detail=subfolder_mismatch" if mismatch else "",
                 )
+                if job.source.subfolder:
+                    # A folder build with no document registers as the wrong agent: fail it.
+                    code = (
+                        exc.code
+                        if isinstance(exc, AgentBuildError)
+                        else "agent_document_failed"
+                    )
+                    raise AgentDocumentFailed(
+                        code,
+                        f"The agent document for the folder could not be built ({code}).",
+                    ) from exc
         registered = await register_with_platform(
             scenarios_client,
             scenarios,

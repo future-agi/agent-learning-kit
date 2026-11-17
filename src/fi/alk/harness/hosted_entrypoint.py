@@ -28,12 +28,15 @@ import os
 import random
 import re
 import signal
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
+
+from pydantic import ValidationError
 
 from ..providers.agent import _redact
 from . import observability
@@ -43,7 +46,7 @@ from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_b
 from .compose_broker import BrokerError, ComposeBrokerClient
 from .framework_detection import FrameworkFolders, framework_folders_for
 from .hosted_compose_bootstrap import initialize_hosted_compose
-from .source_folder import folder_failure
+from .source_folder import folder_failure, non_github_folder_failure
 from .world.observation import ObservationWorldFactory
 from .call_runner import CallRunnerContext, CallRunnerImpl
 from .hosted_scheduler import (
@@ -63,21 +66,24 @@ from .job import (
     ExecutionMode,
     FailureDomain,
     HarnessArtifactPolicy,
+    HarnessFailure,
     HarnessJob,
     HarnessStage,
 )
+from .privilege import IsolationUnavailable, establish_isolation
 from .process_preflight import PreflightError, preflight_bundle
 from .process_runtime import (
     SECTION_2F_DOMAIN,
     EnvironmentRuntime,
     ProcessRuntimeError,
     ProcessRuntimeProvider,
-    fixed_sandbox_user_resolver,
     RuntimeEndpoint,
+    hosted_user_resolution,
 )
 from .judge import judge_sub_goal as _judge_sub_goal
 from .joint_judge import judge_sub_goals_jointly as _judge_sub_goals_jointly
 from .scenario_source import (
+    AgentDocumentFailed,
     BundleScenarioSource,
     ScenarioDocumentInvalid,
     bundle_has_scenarios,
@@ -249,6 +255,17 @@ def load_job(job_path: Path) -> HarnessJob:
     if job.execution is not ExecutionMode.HOSTED:
         raise ValueError("hosted_entrypoint_requires_hosted_job")
     return job
+
+
+def _read_raw_job_failure(job_path: Path, error: ValidationError) -> HarnessFailure | None:
+    try:
+        raw = json.loads(job_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    # load_job's own check, outside the model: a job that isn't hosted is malformed otherwise too.
+    if not isinstance(raw, dict) or raw.get("execution") != ExecutionMode.HOSTED.value:
+        return None
+    return non_github_folder_failure(error, raw)
 
 
 def resolve_parallelism(job: HarnessJob) -> int:
@@ -2069,13 +2086,13 @@ class HostedEntrypointDeps:
     # Daytona forces the sandbox to a fixed non-root user (svc-control) and ignores os_user
     # overrides, so the guest cannot setuid/chown to the bundle's svc-agent/svc-tools/svc-data
     # users -- every process runs uniformly as svc-control. The bundle may still DECLARE those
-    # users (the model validates them); they are simply not enforced at runtime here.
+    # users (the model validates them); they are enforced only where the platform granted
+    # per-user isolation (`privilege.py`).
     build_provider: Callable[
         [ob.HostedCapabilities, ob.Transport], WorldProvisioner
     ] = field(
         default=lambda capabilities, transport: ProcessRuntimeProvider(
-            user_resolver=fixed_sandbox_user_resolver,
-            require_declared_user=False,
+            **hosted_user_resolution(),
             public_url_resolver=lambda port, ttl: _resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl
             ),
@@ -2445,25 +2462,47 @@ async def run_job(
         )
 
     async def _fail(
-        *, domain: FailureDomain, fail_stage: HarnessStage, code: str, message: str
+        *,
+        domain: FailureDomain,
+        fail_stage: HarnessStage,
+        code: str,
+        message: str,
+        retryable: bool | None = None,
+        details: dict | None = None,
     ) -> int:
         # routed through `_finish` -- terminal event first, pool close (bounded) after, for
         # every pre-run failure branch too, not just the post-run ones `_finish` already covered.
-        return await _finish(
-            HarnessStage.FAILED,
-            failure={
-                "domain": domain.value,
-                "stage": fail_stage.value,
-                "code": code,
-                "message": message,
-            },
-            complete=True,
-        )
+        failure: dict[str, Any] = {
+            "domain": domain.value,
+            "stage": fail_stage.value,
+            "code": code,
+            "message": message,
+        }
+        if retryable is not None:
+            failure["retryable"] = retryable
+        if details is not None:
+            failure["details"] = details
+        return await _finish(HarnessStage.FAILED, failure=failure, complete=True)
 
     try:
         # 1 (cont'd). job.json (§0.2).
         try:
             job = load_job(job_path)
+        except ValidationError as exc:
+            # One malformed job is reported: a folder named on a source that isn't GitHub. The
+            # rest of the job isn't trusted -- only that reason and the folder are read from it.
+            unusable = _read_raw_job_failure(job_path, exc)
+            if unusable is None:
+                logger.error("job.json invalid: %s", exc)
+                return EXIT_CRASHED
+            return await _fail(
+                domain=unusable.domain,
+                fail_stage=unusable.stage,
+                code=unusable.code,
+                message=unusable.message,
+                retryable=unusable.retryable,
+                details=unusable.details,
+            )
         except Exception as exc:  # noqa: BLE001 - a malformed job.json has no typed error to catch
             # EXIT_CRASHED (not a FAILED terminal) even though a channel now exists -- a
             # malformed job.json means `job.seed`/`job.agent`/etc are not trustworthy enough to
@@ -2477,6 +2516,8 @@ async def run_job(
                 fail_stage=unusable.stage,
                 code=unusable.code,
                 message=unusable.message,
+                retryable=unusable.retryable,
+                details=unusable.details,
             )
 
         try:
@@ -2804,6 +2845,18 @@ async def run_job(
                 code="scenario_preallocation_failed",
                 message=str(exc),
             )
+        except AgentDocumentFailed as exc:
+            # A folder build whose agent document could not be made fails with the real error: the
+            # platform gets a terminal failure and no document, not a registration without one.
+            if adapter.is_fenced:
+                await _bounded_close()
+                return EXIT_FENCED
+            return await _fail(
+                domain=FailureDomain.AGENT,
+                fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code=exc.code,
+                message=exc.message,
+            )
         except ScenarioDocumentInvalid as exc:
             # A scenario document that will not even compile is a generation-stage content defect
             # (deterministic on retry), never a transport failure -- same rationale as
@@ -2943,6 +2996,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", required=True, type=Path, help="/work/artifacts")
     args = parser.parse_args(argv)
+    try:
+        establish_isolation()
+    except IsolationUnavailable as exc:
+        # Infrastructure, not the agent: the platform retries within its attempt budget.
+        print(f"IsolationUnavailable: {exc}", file=sys.stderr, flush=True)
+        return EXIT_CRASHED
     try:
         return asyncio.run(run_job(args.job, args.source, args.output))
     finally:
