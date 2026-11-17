@@ -313,7 +313,10 @@ def _run(
         raise ProvisionError(
             f"{' '.join(command)} failed ({completed.returncode}): {shown}"
         )
-    return output
+    # Callers parse what Compose prints (JSON, a port, container ids). A warning on stderr
+    # (an obsolete ``version`` key) follows the data and would break that parse, so stderr is
+    # kept for the error message above only.
+    return (completed.stdout or "").strip()
 
 
 def _start_managed_services(

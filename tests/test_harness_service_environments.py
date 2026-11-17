@@ -3023,3 +3023,37 @@ def test_any_other_security_opt_is_rejected_by_category(security_opt):
     assert "field security_opt" not in str(error.value)
     assert "CANARY" not in str(error.value)
     assert "unconfined" not in str(error.value)
+
+
+def test_a_compose_warning_on_stderr_does_not_break_the_render(tmp_path, monkeypatch):
+    import json
+    import subprocess
+
+    warning = (
+        'time="2026-11-17T18:28:22+05:30" level=warning msg="the attribute `version` '
+        'is obsolete, it will be ignored"'
+    )
+
+    def fake_run(command, **_kwargs):
+        document = {"services": {"agent": {"environment": {"A": "b"}}}}
+        return subprocess.CompletedProcess(
+            command, 0, json.dumps(document, indent=2), warning
+        )
+
+    monkeypatch.setattr(provisioning.subprocess, "run", fake_run)
+    config = provisioning._config(_env_environment(tmp_path))
+    assert config["services"]["agent"]["environment"] == {"A": "b"}
+
+
+def test_a_failed_compose_command_still_reports_its_stderr(tmp_path, monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(
+        provisioning.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 1, "", "invalid compose file"
+        ),
+    )
+    with pytest.raises(ProvisionError, match="invalid compose file"):
+        provisioning._config(_env_environment(tmp_path))
