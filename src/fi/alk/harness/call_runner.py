@@ -3176,11 +3176,13 @@ def _same_result(span: Call, call: Call) -> bool:
 
 
 def _recorded_differently(span: Call, call: Call) -> bool:
-    """Whether a span and a call each recorded something about the call that the other contradicts: its result, the
-    worker that made it, the worker it handed work to, or whether it was a worker's run. Event ids are not compared
-    here: each tracer may number events in its own way, and a shared id is matched before any of this."""
+    """Whether a span and a call each recorded something about the call that the other contradicts: its result (not for
+    a door row), the worker that made it, the worker it handed work to, or whether it was a worker's run. Event ids are
+    not compared here: each tracer may number events in its own way, and a shared id is matched before any of this."""
     return (
-        (_kept_result(span) and _kept_result(call) and not _same_result(span, call))
+        # A door row keeps the world's answer, the span the tool's own output: a tool may reshape what the world said,
+        # so a door row is never told apart from its span by the answer alone.
+        (_kept_result(span) and _kept_result(call) and call.channel is None and not _same_result(span, call))
         or _other_worker(span, call)
         or bool(
             span.delegated_to

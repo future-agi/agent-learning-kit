@@ -3763,18 +3763,22 @@ def test_a_worker_s_call_whose_answer_differs_from_the_door_s_row_is_still_a_byp
         _door_call("issue_refund", "", 1794927459.8243933, amount=75.0, order_id="1048"),
         result={"fault": "bypass_channel", "amount": 75.0, "status": "issued", "order_id": "1048", "refund_id": "RF-9"},
     )
-    merged = cr._merge_span_calls([own_channel, shared_issue], [span_list, span_issue])
+    import copy
+
+    def fresh(*calls):
+        # Merging lends a span's worker to the call it pairs with, so each case starts from the rows as read.
+        return [copy.deepcopy(one) for one in calls]
+
+    merged = cr._merge_span_calls(fresh(own_channel, shared_issue), fresh(span_list, span_issue))
     found = cr.channel_bypasses(merged, _RETURNS_WORKERS)
     # The call on its own channel is not one; the refund on the shared address is, and it is the Refund worker's.
     assert [(one["worker"], one["tool"]) for one in found] == [("refund", "issue_refund")]
     # The same door row with no worker's record beside it names no one.
-    alone = cr._merge_span_calls([own_channel, shared_issue], [span_list])
+    alone = cr._merge_span_calls(fresh(own_channel, shared_issue), fresh(span_list))
     assert cr.channel_bypasses(alone, _RETURNS_WORKERS) == []
-    # Nor does a worker's record of another call, or of the same call long before.
+    # Nor does a worker's record of another call.
     other = replace(span_issue, arguments={"amount": 75.0, "order_id": "1049"})
-    late = replace(span_issue, at=span_issue.at - 60)
-    for record in (other, late):
-        assert cr.channel_bypasses(cr._merge_span_calls([shared_issue], [record]), _RETURNS_WORKERS) == []
+    assert cr.channel_bypasses(cr._merge_span_calls(fresh(shared_issue), fresh(other)), _RETURNS_WORKERS) == []
 
 
 def test_a_shared_tool_call_on_the_shared_address_gives_no_false_bypass() -> None:
@@ -4722,3 +4726,22 @@ def test_were_the_in_process_door_beside_the_proxy_it_would_decide_and_hold_ever
     both = cr.in_process_tools(_order_routes("get_order", "confirm_order"), {"tool_proxy": object(), "world_door": object()})
 
     assert both["confirm_order"] == {"action": "confirm_order"} and both["get_order"] == {"action": "get_order"}
+
+
+def test_a_worker_s_call_and_the_door_s_row_of_it_are_one_call_though_the_tool_reshaped_the_answer() -> None:
+    # A live trial (returns fixture, order 1047): the Refund worker's span kept its tool's output, the door's row on
+    # the worker's own channel kept the world's answer; the two answers differ, and they are one call.
+    span = Call(
+        name="issue_refund", arguments={"amount": 41.0, "order_id": "1047"}, ok=True,
+        result={"amount": 41.0, "status": "issued", "order_id": "1047", "refund_id": "RF-8"},
+        at=1794929929.828, worker_id="Refund worker", worker_label="Refund worker",
+    )
+    door = replace(
+        _door_call("issue_refund", "refund", 1794929929.834, amount=41.0, order_id="1047"),
+        ok=True, worker_label="Refund worker",
+        result={"fault": "skip_refund_check", "amount": 41.0, "status": "issued", "order_id": "1047", "refund_id": "RF-8"},
+    )
+    merged = cr._merge_span_calls([door], [span])
+    assert [(one.name, one.channel) for one in merged] == [("issue_refund", "refund")]
+    # A tracer that is not the door, answering differently, is still another call.
+    assert len(cr._merge_span_calls([replace(door, channel=None)], [span])) == 2
