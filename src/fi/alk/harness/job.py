@@ -11,6 +11,7 @@ from datetime import datetime
 from enum import Enum
 import json
 import re
+from urllib.parse import urlsplit
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
@@ -24,6 +25,39 @@ from .secrets import process_secret_environment_names
 HARNESS_JOB_SCHEMA_VERSION = "futureagi.harness-job.v1"
 MAX_HOSTED_SCENARIO_COUNT = 5000
 _E164_PHONE = re.compile(r"^\+[1-9]\d{1,14}$")
+
+# Connect-only Microsoft agents: the public config each one needs, and the URL field whose host
+# receives the Entra token. The host is pinned to Microsoft so a token is never sent elsewhere.
+MICROSOFT_CONNECT_ONLY_CONFIG: dict[str, tuple[str, ...]] = {
+    "copilot_studio": ("tenant_id", "client_id", "dataverse_url", "agent_id"),
+    "foundry": ("tenant_id", "client_id", "project_endpoint", "agent_name"),
+}
+MICROSOFT_ENDPOINT_HOSTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "copilot_studio": ("dataverse_url", (".dynamics.com",)),
+    "foundry": (
+        "project_endpoint",
+        (".services.ai.azure.com", ".cognitiveservices.azure.com"),
+    ),
+}
+
+
+def _validate_microsoft_connect_only(connector: str, config: dict) -> None:
+    missing = [
+        key
+        for key in MICROSOFT_CONNECT_ONLY_CONFIG[connector]
+        if not str(config.get(key) or "").strip()
+    ]
+    if missing:
+        raise ValueError(
+            f"{connector}_connect_only_requires: " + ", ".join(missing)
+        )
+    field, suffixes = MICROSOFT_ENDPOINT_HOSTS[connector]
+    parsed = urlsplit(str(config[field]).strip())
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host.endswith(suffixes):
+        raise ValueError(
+            f"{connector}_{field}_must_be_https_on: " + " or ".join(suffixes)
+        )
 
 
 class ExecutionMode(str, Enum):
@@ -100,6 +134,11 @@ class AgentConnection(BaseModel):
     def _provider_mode_is_explicit_and_safe(self) -> "AgentConnection":
         connector = self.connector.strip().lower()
         provider_connector = "retell" if connector == "retell_chat" else connector
+        if connector in MICROSOFT_CONNECT_ONLY_CONFIG:
+            if self.mode is not ProviderExecutionMode.CONNECT_ONLY:
+                raise ValueError(f"{connector}_supports_connect_only_only")
+            _validate_microsoft_connect_only(connector, self.config)
+            return self
         if "phone_number" in self.config and connector != "phone":
             if (
                 connector not in {"vapi", "retell"}
