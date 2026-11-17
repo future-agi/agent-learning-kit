@@ -17,9 +17,17 @@ from ..provider_import import (
 )
 from ..provider_lifecycle import ProviderType
 from ..releases import AgentRef, BindingMode, ToolDefinition, seal_agent_binding
+from .declared import (
+    DECLARED,
+    MCP_CLIENT,
+    declared_admission,
+    declared_profile,
+    declared_tool_definitions,
+)
 from .errors import AdaptationFailure
 
-ADAPTABLE_CONNECTORS = ("retell_chat", "retell", "vapi")
+# Provider agents are inspected at their provider; an `mcp_client` agent is declared (`declared.py`).
+ADAPTABLE_CONNECTORS = ("retell_chat", "retell", "vapi", MCP_CLIENT)
 _TARGET_CREDENTIALS = {
     ProviderType.RETELL: "RETELL_API_KEY",
     ProviderType.VAPI: "VAPI_API_KEY",
@@ -29,7 +37,7 @@ _TARGET_CREDENTIALS = {
 @dataclass(frozen=True)
 class AgentProfile:
     connector: str
-    provider: ProviderType
+    provider: ProviderType | None  # None: a declared agent, with no provider to clone
     target: dict[str, Any]
     admission: list[ToolAdmission]
     agent_tools: list[dict[str, Any]]
@@ -49,12 +57,14 @@ class AgentProfile:
         return [one for one in self.admission if one.action in {"routed", "replaced"}]
 
 
-def provider_of(connector: str) -> ProviderType:
+def provider_of(connector: str) -> ProviderType | None:
     if connector not in ADAPTABLE_CONNECTORS:
         raise AdaptationFailure(
             "compose_unsupported",
             f"adaptation supports {', '.join(ADAPTABLE_CONNECTORS)} agents, not {connector}",
         )
+    if connector == MCP_CLIENT:
+        return None
     return ProviderType.VAPI if connector == "vapi" else ProviderType.RETELL
 
 
@@ -67,13 +77,29 @@ def build_profile(
     its configuration digest is the canonical digest of the redacted profile.
     """
     provider = provider_of(connector)
-    redacted = _safe_profile_value(dict(target))
-    try:
-        admission = admit_provider_tools(provider, redacted)
-        definitions = admitted_tool_definitions(provider, redacted)
-    except ProviderImportError as exc:
-        code = str(exc).split(":", 1)[0]
-        raise AdaptationFailure(code or "provider_import_failed", str(exc)) from exc
+    if provider is None:
+        # A declaration holds only what the customer wrote down: nothing to redact, and every
+        # tool is routed, so its argument names stay exactly as the agent sends them.
+        try:
+            redacted = declared_profile(
+                {
+                    k: v
+                    for k, v in dict(target).items()
+                    if k not in ("provider", "source_target_id", "modality")
+                }
+            )
+        except ValueError as exc:
+            raise AdaptationFailure("adaptation_profile_invalid", str(exc)) from exc
+        admission = declared_admission(redacted)
+        definitions = declared_tool_definitions(redacted)
+    else:
+        redacted = _safe_profile_value(dict(target))
+        try:
+            admission = admit_provider_tools(provider, redacted)
+            definitions = admitted_tool_definitions(provider, redacted)
+        except ProviderImportError as exc:
+            code = str(exc).split(":", 1)[0]
+            raise AdaptationFailure(code or "provider_import_failed", str(exc)) from exc
     target_id = str(redacted.get("source_target_id") or "").strip()
     if agent is None:
         local = f"local:{target_id or 'agent'}"
@@ -121,10 +147,12 @@ def profile_from_file(body: Mapping[str, Any]) -> AgentProfile:
         connector = "vapi"
     elif provider == "retell":
         connector = "retell_chat" if target.get("modality") == "chat" else "retell"
+    elif provider == DECLARED:
+        connector = MCP_CLIENT
     else:
         raise AdaptationFailure(
             "adaptation_profile_invalid",
-            f"profile provider {provider!r} is not retell or vapi",
+            f"profile provider {provider!r} is not retell, vapi or {DECLARED}",
         )
     return build_profile(target, connector=connector, agent=agent)
 
@@ -132,7 +160,8 @@ def profile_from_file(body: Mapping[str, Any]) -> AgentProfile:
 def profile_from_job(
     job: Any, *, credentials: Mapping[str, str], request: Any = None
 ) -> AgentProfile:
-    """Inspect the job's provider target read-only, with the target's own API key."""
+    """Inspect the job's provider target read-only, with the target's own API key; a declared
+    agent (`mcp_client`) is read from the job's agent config, and no key is needed."""
     connector = job.agent.connector.strip().lower()
     provider = provider_of(connector)
     adaptation = (job.metadata or {}).get("adaptation") or {}
@@ -141,6 +170,14 @@ def profile_from_job(
         raise AdaptationFailure(
             "adaptation_job_invalid", "job metadata.adaptation.agent is missing"
         )
+    if provider is None:
+        try:
+            target = declared_profile(job.agent.config)
+        except ValueError as exc:
+            raise AdaptationFailure(
+                "adaptation_job_invalid", f"agent.config is not a declared agent: {exc}"
+            ) from exc
+        return build_profile(target, connector=connector, agent=agent)
     target_key = "assistant_id" if provider is ProviderType.VAPI else "agent_id"
     target_id = str(job.agent.config.get(target_key) or "").strip()
     try:

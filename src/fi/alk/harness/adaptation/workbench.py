@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..binding_trajectories import derive_trajectories
 from ..catalogue import load_catalogue
 from ..folder import read_folder
 from ..releases import (
@@ -92,11 +93,17 @@ class BindingDraft:
 
 
 def parse_binding_draft(body: Mapping[str, Any]) -> BindingDraft:
+    """`trajectories` may be left out or partial: code derives one for every scenario whose
+    reference solution the binding inverts (`binding_trajectories`), and the builder writes the rest."""
     mapping = body.get("binding")
     trajectories = body.get("trajectories")
+    if trajectories is None:
+        trajectories = {}
     candidates = body.get("extension_candidates") or []
     if not isinstance(mapping, Mapping) or not isinstance(trajectories, Mapping):
-        raise TypeError("a draft needs a `binding` object and a `trajectories` object")
+        raise TypeError(
+            "a draft needs a `binding` object and, if given, a `trajectories` object"
+        )
     if not isinstance(candidates, list) or not all(
         isinstance(one, Mapping) and {"agent_tool", "reason"} <= set(one)
         for one in candidates
@@ -339,10 +346,24 @@ class Workbench:
             )
         except ReleaseError as exc:
             return False, "\n".join(exc.detail.splitlines() or [exc.code])
+        # The harness writes every trajectory the binding determines; the builder's own, where it
+        # wrote one, wins.
+        derived = derive_trajectories(
+            binding,
+            (
+                (entry.key, scenario.solution)
+                for entry in self.base_suite.scenarios
+                if (scenario := read_folder(self.suite_root, Path(entry.path).name))
+                is not None
+            ),
+            self.environment_tools,
+        )
+        written = dict(draft.trajectories)
+        draft.trajectories = {**derived.trajectories, **written}
         problems: list[str] = []
         keys = {entry.key for entry in self.base_suite.scenarios}
         agent_tools = sorted(one["name"] for one in self.profile.agent_tools)
-        for key, calls in draft.trajectories.items():
+        for key, calls in written.items():
             if key not in keys:
                 problems.append(f"trajectory {key}: the suite has no such scenario")
                 continue
@@ -365,7 +386,28 @@ class Workbench:
             return False, "\n".join(problems)
         self.draft, self.binding, self.proof, self.verdicts = draft, binding, None, {}
         self._save_state(raw=dict(body))
-        return True, f"accepted as {binding.digest}; run_proof next"
+        still = {
+            key: reason
+            for key, reason in derived.undecided.items()
+            if key not in written
+        }
+        lines = [
+            f"accepted as {binding.digest}: {len(derived.trajectories)} trajectories derived "
+            f"from the reference solutions, {len(written)} written by you"
+            + (
+                f", {len(derived.unreached)} scenarios use a tool no entry reaches (unscorable)"
+                if derived.unreached
+                else ""
+            )
+            + "."
+        ]
+        if still:
+            lines.append(
+                f"{len(still)} scenarios still need a trajectory from you (resubmit with them):"
+            )
+            lines.extend(f"- {key}: {reason}" for key, reason in sorted(still.items()))
+        lines.append("run_proof next")
+        return True, "\n".join(lines)
 
     def run_proof(self) -> tuple[bool, str]:
         if self.mode is not BindingMode.TOOL_ROUTED:
@@ -831,6 +873,7 @@ def _agent_summary(agent: Mapping[str, Any], limit: int = 8000) -> str:
             "name",
             "begin_message",
             "general_prompt",
+            "instructions",
             "first_message",
             "model",
             "states",

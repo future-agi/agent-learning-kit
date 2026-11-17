@@ -299,7 +299,17 @@ class WorldTools:
         self.attached = attached
 
     def tools(self) -> list[Any]:
-        """What a canonical agent can call: the release's tools and the attached servers'."""
+        """What the agent can call: under a `tool_routed` binding its own tools, as the binding
+        records them (each call is routed to the environment's); otherwise the release's tools
+        and the attached servers'."""
+        if self.binding is not None and (
+            str(getattr(self.binding.mode, "value", self.binding.mode)) == "tool_routed"
+        ):
+            return list(self.binding.agent_tools)
+        return self._served()
+
+    def _served(self) -> list[Any]:
+        """The environment's own tools and the attached servers', in the world's vocabulary."""
         if self.attached is None or not self.attached.names:
             return list(self.environment_tools)
         self.attached.start()
@@ -357,7 +367,7 @@ class WorldTools:
         # Attached servers start only when a call needs them, so a proof attempt or a provider
         # call that never touches them never spawns them.
         if self.attached is not None and agent_tool in self.attached.names:
-            return self.tools()
+            return self._served()
         return self.environment_tools
 
     def _run(
