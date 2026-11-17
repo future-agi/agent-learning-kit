@@ -150,6 +150,8 @@ _KEY_LINE = re.compile(r"[ \t]*(?:\d+\t)?[A-Za-z0-9+/=]+")
 #            (SecretKey, AccountKey); the second word's capital is at the index given
 #   upper: "pass" only ending an upper-case identifier, after "_" or "-" (DB_PASS, r4 L2)
 #   exact: the whole identifier, or its end after "_" or "-"
+#   lower_camel: only a capitalised ending after a lower-case letter (dbPwd). A bare "pwd" is
+#            the shell's working directory, and "bypass" or "compass" are words.
 _FORMS = {
     "password": ("base", 0),
     "passwd": ("base", 0),
@@ -173,21 +175,32 @@ _FORMS = {
     "account-key": ("base", 0),
     "aws-secret-access-key": ("base", 0),
     "apikey": ("flat", 0),
-    "secretkey": ("compact", 6),
+    # Written in lower case too (secretkey=): a compact form would need its capital K.
+    "secretkey": ("base", 0),
     "privatekey": ("compact", 7),
     "accesskey": ("compact", 6),
     "signingkey": ("compact", 7),
     "storagekey": ("compact", 7),
     "accountkey": ("compact", 7),
+    # Upper-case after "_" or "-" (DB_PASS), or a capitalised ending after a lower-case letter
+    # (smtpPass); never bypass, compass or passport.
     "pass": ("upper", 0),
+    "pwd": ("lower_camel", 0),
     "pgpassword": ("exact", 0),
     "mysql_pwd": ("exact", 0),
 }
-# Pagination and idempotency names (r4 L2): honest values, never secrets.
+# Pagination and idempotency names: honest values, never secrets. An exact list, not a suffix
+# rule: FB_PAGE_TOKEN, page_token and fb_page_token hold real page access tokens.
 _PAGINATION = frozenset(
     {
         "pageToken",
         "nextPageToken",
+        "prevPageToken",
+        "next_page_token",
+        "prev_page_token",
+        "nextForwardToken",
+        "nextBackwardToken",
+        "next_forward_token",
         "NextToken",
         "nextToken",
         "continuationToken",
@@ -257,7 +270,7 @@ _NAMED["pass"] = _per_form(r"(?<=[_\-]{})")["pass"]
 _NAMED_CAMEL = {
     form: pattern
     for form, pattern in _per_form(r"(?<=[^\W_]{})").items()
-    if _FORMS[form][0] in ("base", "flat", "compact")
+    if _FORMS[form][0] in ("base", "flat", "compact", "upper", "lower_camel")
 }
 # At the start of a line or after a tab, for a value TH-9491 joins into one URL.
 _NAMED_AT_LINE = _per_form(r"(?<=[\n\t]{})")
@@ -818,7 +831,11 @@ def _name_sits(text: str, start: int, form: str) -> bool:
     joined = before == "_" or before == "-"
     whole = not before or not (before.isalnum() or joined)
     if kind == "upper":
+        if text.startswith("Pass", start) and "a" <= before <= "z":
+            return True
         return joined and text.startswith("PASS", start) and _upper_before(text, start)
+    if kind == "lower_camel":
+        return text.startswith("Pwd", start) and "a" <= before <= "z"
     if kind == "exact":
         return whole or joined
     camel = (
@@ -872,6 +889,112 @@ def _secret_value(value: str, quoted: bool) -> bool:
     ):
         return False
     return quoted or _CODE.match(value) is None
+
+
+# ------------------------------------------------------------------------- credential_in
+# Names that mark a value as a credential: the cleaner's key mask (agent._REDACTION_MARKERS is
+# this tuple) and the argument-name rule below.
+REDACTION_MARKERS = (
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "credential",
+    "authorization",
+    "password",
+    "passphrase",
+    "cookie",
+    "api-key",
+    "private_key",
+)
+# Query names that are credentials without holding a marker.
+_CREDENTIAL_QUERY_NAMES = frozenset({"key", "sig", "signature", "pwd", "pass", "auth"})
+# A query or fragment parameter of any URL or path: after ? # & or ;.
+_QUERY_PARAM = re.compile(r"[?#&;]([^=&#?;\s]*)=([^&#;\s]*)")
+_KEY_VALUE = re.compile(r"[A-Za-z0-9+/=_%\-]{16,}")
+# scheme://user:password@ : a username alone (ssh://git@host) is fine, and so is a port.
+_USERINFO_PASSWORD = re.compile(
+    r"[A-Za-z][A-Za-z0-9+.\-]*://[^/?#\s@:]*:(?P<password>[^/?#\s]+)@"
+)
+# A credential-named assignment with a quoted literal: password = "x", {"api_key": 'x'},
+# creds["password"] = "x". "==" is a comparison and is not read.
+_LITERAL_ASSIGNMENT = re.compile(
+    r"""([A-Za-z_][A-Za-z0-9_\-]*)["']?\]?\s*(?::|=(?!=))\s*[rbfRBF]{0,2}(["'])([^"'\n]+)\2"""
+)
+
+
+def _is_reference(value: object) -> bool:
+    return isinstance(value, str) and value.startswith(_REFERENCE_STARTS)
+
+
+def _names_a_credential(name: str) -> bool:
+    low = name.lower()
+    return any(marker in low for marker in REDACTION_MARKERS)
+
+
+def credential_in(value: object) -> bool:
+    """Whether `value` (a string, or lists and dicts holding strings) holds a credential.
+
+    For fields kept exactly as written, which are refused instead of cleaned: a tool's
+    `arg_values` and `endpoint`, and a scenario's kept fields. True when a string
+
+    - has a query or fragment parameter (`[?#&;]name=value`, in any URL or path) whose name
+      holds a credential marker or is key, sig, signature, pwd, pass or auth, or whose value is
+      16 or more key characters;
+    - has a URL with a literal password in its userinfo (`scheme://user:password@host`; a
+      reference there is not one);
+    - or has anything `find()` masks: a key shape, a named value, a path token.
+
+    It never refuses a query for being there (`?id=77`, `?api-version=...`), a fragment, a host
+    in capitals, a `{HOST}:{PORT}` or `${API_HOST}` template or a username with no password:
+    the cleaner changes those, and they are honest text. Numbers, booleans and None are not
+    read, and a dict's key names are not either; a shapeless value under a credential name is
+    `credential_named_arg_values_refusal`'s case, or kept in scenario fields.
+    """
+    if isinstance(value, dict):
+        return any(credential_in(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(credential_in(item) for item in value)
+    if not isinstance(value, str):
+        return False
+    # A reference in the password position ($PASS, ${DB_PASSWORD}, <...>, {{...}}) is no secret.
+    if any(
+        not match.group("password").startswith(_REFERENCE_STARTS)
+        for match in _USERINFO_PASSWORD.finditer(value)
+    ):
+        return True
+    for match in _QUERY_PARAM.finditer(value):
+        name = match.group(1).lower()
+        if (
+            _names_a_credential(name)
+            or name in _CREDENTIAL_QUERY_NAMES
+            or _KEY_VALUE.fullmatch(match.group(2))
+        ):
+            return True
+    return bool(find(value))
+
+
+def credential_in_check_code(code: str) -> bool:
+    """`credential_in` for a sub-goal's check code, which also refuses a credential-named
+    assignment with a literal value (`password = "x"`). A reference (`$...`, `<...>`,
+    `{{...}}`), an empty string and a comparison (`==`) are not one. Prose and URLs never
+    hold this form, so `credential_in` alone does not read it."""
+    if credential_in(code):
+        return True
+    return any(
+        _names_a_credential(match.group(1)) and not _is_reference(match.group(3))
+        for match in _LITERAL_ASSIGNMENT.finditer(code)
+    )
+
+
+def credential_named_arg_values_refusal(arg_name: str, values: object) -> bool:
+    """Whether a tool argument named `arg_name` may not list `values`: its name holds a credential
+    marker and some value is not a reference (`$...`, `<...>`, `{{...}}`). The agent's settings
+    carry such a secret, and a shapeless one (hunter2) can't be told from honest text."""
+    if not _names_a_credential(arg_name) or values is None:
+        return False
+    listed = values if isinstance(values, (list, tuple)) else [values]
+    return any(not _is_reference(value) for value in listed)
 
 
 # ---------------------------------------------------------------------------------- chat

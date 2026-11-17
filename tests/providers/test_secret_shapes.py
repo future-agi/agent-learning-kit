@@ -1210,8 +1210,6 @@ HONEST_CHANGED = {
     "r3: H #channel2": "a markdown anchor after an address loses its values (r3 L6)",
     "r3: H pem prose": "the bare header is masked; the instruction after it is kept",
     "r4 honest: pem prose": "the bare header is masked; the instruction after it is kept",
-    "r4 honest: pagination next_page_token": "a best-effort form (TH-9555)",
-    "r4 honest: pagination nextForwardToken": "a best-effort form (TH-9555)",
 }
 
 
