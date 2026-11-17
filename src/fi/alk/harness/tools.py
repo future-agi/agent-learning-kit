@@ -18,6 +18,7 @@ from fi.simulate.agent.wrappers.http_events import (
     CompletedToolEvents,
     CompletedToolRows,
 )
+from fi.simulate.agent.wrappers.http_stream import HTTPStreamSpec
 
 from .agent_type_check import (
     SECOND_LOOK_READ,
@@ -628,6 +629,21 @@ def contract_tools(
     events_schema["properties"]["failure_events"]["items"] = (
         events_schema.pop("$defs")["CompletedToolFailureEvent"]
     )
+    sse_schema = HTTPStreamSpec.model_json_schema()
+    sse_definitions = sse_schema.pop("$defs")
+
+    def inline_sse_references(value):
+        if isinstance(value, dict):
+            reference = value.get("$ref")
+            if reference:
+                name = reference.rsplit("/", 1)[-1]
+                return inline_sse_references(sse_definitions[name])
+            return {key: inline_sse_references(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [inline_sse_references(item) for item in value]
+        return value
+
+    sse_schema = inline_sse_references(sse_schema)
     observation_schema = HttpObservation.model_json_schema()
     observation_schema["properties"]["parameters"]["additionalProperties"] = (
         observation_schema.pop("$defs")["ObservationParameter"]
@@ -797,6 +813,33 @@ def contract_tools(
                                 "description": "Real permitted values per argument where it is "
                                 "constrained to a set, an enum or a lookup: "
                                 '{"priority": ["low", "normal", "urgent"]}.',
+                            },
+                            "arg_units": {
+                                "type": "object",
+                                "description": "The unit or format of every amount, duration, date or "
+                                "time argument whose name does not say it, from the code that reads it, the "
+                                "data it holds or what the person you work with said; when the code and "
+                                "their words disagree, the code's: "
+                                '{"<an amount field>": "<its minor unit and currency>", "timeout": "milliseconds"}.',
+                            },
+                            "returns": {
+                                "type": "object",
+                                "description": "Every field the tool hands back, with its type and, where the "
+                                "name does not say it, its unit or format, read from the code that builds the "
+                                "result or the record it returns: "
+                                '{"<an id field>": "string", "<an amount field>": "integer, <its minor unit and '
+                                'currency>"}.',
+                            },
+                            "tables_read": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "The world's tables the tool reads, declared from its code.",
+                            },
+                            "tables_changed": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "The world's tables the tool adds to, changes or deletes from, "
+                                "declared from its code.",
                             },
                             "description": {"type": "string"},
                             "requires": {
@@ -1060,6 +1103,12 @@ def contract_tools(
                                 "enum": ["POST"],
                                 "description": "HTTP method used by the submitted implementation.",
                             },
+                            "effect": {
+                                "type": "string",
+                                "enum": ["read", "write"],
+                                "description": "read when the tool only reads (a lookup, a search, a list), write "
+                                "when it changes anything. Leave out to go by the HTTP method.",
+                            },
                             "notes": {
                                 "type": "string",
                                 "description": "Anything about reaching it that the fields above "
@@ -1108,6 +1157,13 @@ def contract_tools(
                             "type": "string",
                             "description": "The module that loader is imported from, so it can "
                             "be called rather than reimplemented.",
+                        },
+                        "loads": {
+                            "type": "string",
+                            "enum": ["", "start", "each_call"],
+                            "description": "When that loader runs, read from the code: `start` when "
+                            "the agent loads its data once as it starts, `each_call` when it reads "
+                            "it again on every request. Empty when the code does not show it.",
                         },
                         "version": {
                             "type": "string",
@@ -1340,6 +1396,10 @@ def contract_tools(
                                 "response_path": {
                                     "type": "string",
                                     "description": RuntimeInterface.model_fields["response_path"].description,
+                                },
+                                "sse": {
+                                    **sse_schema,
+                                    "description": RuntimeInterface.model_fields["sse"].description,
                                 },
                                 "completed_tools": CompletedToolRows.model_json_schema(),
                                 "completed_tool_events": events_schema,
