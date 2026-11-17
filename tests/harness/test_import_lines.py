@@ -311,6 +311,12 @@ _FORMS = [
         id="a-closed-call-doesnt-join-the-next-lines",
     ),
     pytest.param("x = (\n    1\n", [], True, id="bracket-never-closed"),
+    pytest.param(
+        "from a import (b); from c import (\n d\n)\n",
+        [(0, "a"), (0, "a.b"), (0, "c"), (0, "c.d")],
+        False,
+        id="a-list-closed-on-its-line-then-one-that-goes-on",
+    ),
     # Since Python 3.12 an f-string can hold its own quote, so a bracket inside the inner string
     # is left in the code and joins the lines after it. A statement inside that run is still read.
     pytest.param(
@@ -535,3 +541,37 @@ def test_an_unclosed_list_stops_reading_lines_past_the_limit(monkeypatch):
     assert len(found) == 6
     assert capped[0]
     assert len(read) <= 10
+
+
+_UNCLOSED_ON_ONE_LINE = {
+    # Many lists on one line that each go on past it, then a long line with no names.
+    "lists-on-one-line": lambda k: (
+        "x = 1" + ";from m import (" * k + "\n" + "y " * (8 * k) + "\n"
+    ),
+    # The same lists inside a run that closes, so the joined line and its first line both hold them.
+    "lists-in-a-closed-run": lambda k: (
+        "x = ("
+        + ";from m import (" * k
+        + "\n"
+        + "a"
+        + ")" * (k + 1)
+        + "\n"
+        + "y " * (8 * k)
+        + "\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(_UNCLOSED_ON_ONE_LINE))
+def test_unclosed_lists_on_one_line_cost_in_proportion(name):
+    # Only a line's last statement can go on past it, so a second list that does isn't Python:
+    # the search says it can't be sure, and doesn't read the next line again for each list.
+    source = _UNCLOSED_ON_ONE_LINE[name](16_000)
+    assert len(source) > 500_000
+    capped = [False]
+    started = time.perf_counter()
+    import_lines(source, capped)
+    elapsed = time.perf_counter() - started
+    assert capped[0]
+    # Read once, this takes a few hundredths of a second; read again per list, it took over ten.
+    assert elapsed < 5.0

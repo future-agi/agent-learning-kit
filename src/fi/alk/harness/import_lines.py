@@ -221,6 +221,7 @@ def import_lines(
         at += 1
         if "import" not in line:
             continue
+        went_on = False
         for piece in _statements(line, capped, most_colons):
             if piece.startswith("import") and piece[6:7].isspace():
                 for item in piece[6:].split(","):
@@ -243,10 +244,17 @@ def import_lines(
                     tail = tail.split("(", 1)[1]
                     if ")" in tail:
                         tail = tail.split(")", 1)[0]
+                    elif went_on:
+                        # Only a line's last statement can go on past it, so a second list that
+                        # does isn't Python; reading the lines after it again for each one would
+                        # cost the square of the line.
+                        if capped is not None:
+                            capped[0] = True
                     else:
                         # The list goes on over the next lines, up to the one that closes it. A
                         # line that isn't names isn't part of it: the list was never closed, and
                         # the line is read as the code it is.
+                        went_on = True
                         room = None if limit is None else limit + 1 - len(names)
                         tail, at = _rest_of_list(
                             tail, lines, at, capped, room, seen, level, module
