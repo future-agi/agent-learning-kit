@@ -898,7 +898,9 @@ class SaveChecker:
         try:
             child = self._new_child()
         except Exception as error:
-            logger.debug("save checker: the child could not start", exc_info=True)
+            # Starting a child reads none of the customer's files, so the traceback is safe at
+            # WARNING; without it a hosted run at INFO can't tell why a session fell back.
+            logger.warning("save checker: the child could not start", exc_info=True)
             self._fallback(f"the child could not start ({type(error).__name__})")
             return
         if child is not None:

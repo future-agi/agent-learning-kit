@@ -607,6 +607,32 @@ def test_deaths_are_in_a_row_only_while_no_save_answers_between_them(tmp_path: P
     assert len(_pids(folder)) == 3
 
 
+def test_a_child_that_cannot_start_logs_its_traceback_at_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    checker, folder = _checker(tmp_path)
+
+    def broken() -> Any:
+        raise OSError("no forkserver")
+
+    monkeypatch.setattr(checker, "_new_child", broken)
+    checker.start()
+
+    assert _eventually(lambda: checker._thread_reason is not None)
+    started = [r for r in caplog.records if "the child could not start" in r.getMessage()]
+    # pytest's handler formats the record and keeps the traceback as `exc_text`.
+    warned = [
+        r
+        for r in started
+        if r.levelno == logging.WARNING and (r.exc_info or r.exc_text)
+    ]
+    assert len(warned) == 1
+    assert "OSError: no forkserver" in (warned[0].exc_text or "".join(str(warned[0].exc_info)))
+    # Not logged twice: nothing at DEBUG carries the traceback any more.
+    assert [r for r in started if r.levelno == logging.DEBUG] == []
+
+
 def test_deadline_kills_in_a_row_stay_in_the_child(
     tmp_path: Path, warnings: pytest.LogCaptureFixture
 ) -> None:
