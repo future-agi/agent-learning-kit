@@ -2232,6 +2232,10 @@ def provision(
         runtime_configuration_names=runtime_configuration_names,
     )
     _write_initial_env_file_override(destination, environment)
+    # Record the project before the first Compose call, not running: a worker killed mid-boot
+    # then leaves an environment that ``stop`` can find, so it removes the job file and tears the
+    # half-built stack down. The reuse and replace checks only act on a running environment.
+    environment.save(destination)
     config = _config(environment)
     _validate_compose_security(config)
     _write_port_override(destination, environment, config)

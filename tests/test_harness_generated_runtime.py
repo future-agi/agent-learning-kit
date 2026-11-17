@@ -2280,3 +2280,59 @@ def test_a_git_include_is_refused_with_a_clear_error_that_holds_no_value(
     assert "git include" in text and "not allowed" in text
     assert "job-secret-canary" not in text
     assert len(calls) == 1
+
+
+class _Killed(BaseException):
+    """Stands in for a worker killed mid-boot: ``except Exception`` does not catch it."""
+
+
+def test_a_worker_killed_during_its_first_provision_leaves_a_stoppable_project(
+    tmp_path: Path, monkeypatch
+) -> None:
+    temp = tmp_path / "shared-temp"
+    temp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    source = tmp_path / "agent"
+    session = tmp_path / "session"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    source.joinpath("agent.py").write_text("print('ready')\n")
+    calls: list[tuple[str, ...]] = []
+
+    def run(_environment, *arguments, **_kwargs):
+        calls.append(arguments)
+        if "up" in arguments or "build" in arguments:
+            raise _Killed
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(
+                {
+                    "services": {
+                        "agent-runtime": {
+                            "profiles": ["harness-runtime"],
+                            "build": {
+                                "context": str(session / "generated-runtime-context"),
+                                "dockerfile": GENERATED_DOCKERFILE,
+                            },
+                        }
+                    }
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    with pytest.raises(_Killed):
+        provisioning.provision(source, session, _contract())
+
+    recorded = provisioning.ProvisionedEnvironment.load(session)
+    assert recorded is not None and not recorded.running
+    leftover = Path(
+        tempfile.mkdtemp(prefix=f"alk-compose-env-{recorded.project}.", dir=temp)
+    )
+    (leftover / "job").write_text('OPENAI_API_KEY="leftover"\n')
+    calls.clear()
+    monkeypatch.setattr(provisioning, "_docker", lambda *_a, **_k: "")
+
+    assert stop(session)
+
+    assert not leftover.exists()
+    assert any("down" in arguments for arguments in calls)
