@@ -1418,7 +1418,12 @@ def _traced_unreachable_contract():
         tool_entrypoints=[ToolEntry(
             tool="lookup_account", mode="unreachable", module="agent", callable="lookup_account",
         )],
-        runtime=Runtime(language="python", command=["python", "app.py"], interface=interface()),
+        # A callback contract, as the bundler binds `unreachable` entries only on that route: a
+        # command would wire the framework observer and bind nothing.
+        runtime=Runtime(
+            language="python", command=[], execution="auto",
+            interface=RuntimeInterface(kind="callable", protocol="fi.alk"),
+        ),
     )
 
 
