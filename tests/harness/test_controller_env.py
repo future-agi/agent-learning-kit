@@ -254,6 +254,28 @@ _ONE_A = {"OPENAI_API_KEY", "GEMINI_API_KEY"}
 _ALIASES = "ALK_TARGET_PROVIDER_ALIASES"
 
 
+def _job_env_file(command):
+    """The values of the last ``--env-file`` a Compose call names (the job's), unescaped."""
+    files = [command[at + 1] for at, part in enumerate(command) if part == "--env-file"]
+    if not files:
+        return {}
+    values = {}
+    for line in Path(files[-1]).read_text(encoding="utf-8").split("\n"):
+        name, _, quoted = line.partition("=")
+        if not name:
+            continue
+        text, out, at = quoted[1:-1], [], 0
+        while at < len(text):
+            if text[at] == "\\":
+                out.append("\n" if text[at + 1] == "n" else text[at + 1])
+                at += 2
+            else:
+                out.append(text[at])
+                at += 1
+        values[name] = "".join(out)
+    return values
+
+
 @pytest.fixture
 def worker_runtime(clean_env, tmp_path):
     """A worker whose runtime namespace holds a customer's seven model values.
@@ -287,7 +309,9 @@ def worker_runtime(clean_env, tmp_path):
         calls = []
 
         def fake_run(command, **kwargs):
-            calls.append((list(command), dict(kwargs["env"])))
+            # What Compose sees: the job's env file (read now, before it is removed) under its
+            # process environment. Job values reach Compose only through that file.
+            calls.append((list(command), {**_job_env_file(command), **kwargs["env"]}))
             config = {
                 "services": {
                     "agent-runtime": {"image": "example", "environment": dict(canaries)}
@@ -337,7 +361,7 @@ def test_the_compose_run_does_not_give_the_controller_a_customers_model_key(work
     provision._run(environment, "ps")
 
     (argv, docker_environment), = calls
-    # Compose gets every value, under its own name, in its own copy of the environment...
+    # Compose sees every value, under its own name, through the job's env file...
     for name, canary in canaries.items():
         assert docker_environment[name] == canary
     assert not any(canary in " ".join(argv) for canary in canaries.values())
@@ -355,7 +379,7 @@ def test_the_runtime_env_flag_does_not_give_the_controller_a_customers_model_key
     provision.start_runtime(session, stable_seconds=0.25)
 
     argv, docker_environment = next(c for c in calls if "run" in c[0] and "config" not in c[0])
-    # The agent gets each by name: `--env NAME` inherits from docker's own environment copy.
+    # The agent gets each by name: `--env NAME` takes it from what Compose sees (the env file).
     for name, canary in canaries.items():
         assert any(argv[i : i + 2] == ["--env", name] for i in range(len(argv) - 1)), name
         assert docker_environment[name] == canary
