@@ -258,3 +258,78 @@ finally:
 
     assert len(records[0]["arguments"]["query"]) == 4096
     assert len(records[0]["output"]["result"]) == 4096
+
+
+def test_each_payload_says_whether_bounding_left_part_of_it_out(tmp_path: Path) -> None:
+    _fake_crewai(tmp_path)
+    script = """
+from crewai.events.event_bus import CrewAIEventsBus
+from crewai.events.types.tool_usage_events import ToolUsageFinishedEvent
+bus = CrewAIEventsBus()
+try:
+    for args, output in (({'query': 'x' * 5000}, 'ok'), ({'query': 'q'}, ['y'] * 17), ({'query': 'q'}, 'ok')):
+        assert bus.emit(None, ToolUsageFinishedEvent(tool_name='lookup', tool_args=args, output=output)) is bus.future
+finally:
+    bus.release.set()
+    bus.executor.shutdown()
+"""
+    _, records = _run(tmp_path, script)
+
+    assert [
+        (one.get("input_omitted", False), one.get("output_omitted", False))
+        for one in records
+    ] == [(True, False), (False, True), (False, False)]
+
+
+def test_each_agent_a_flow_runs_is_a_hand_off_from_the_flow_with_its_return(
+    tmp_path: Path,
+) -> None:
+    _fake_crewai(tmp_path)
+    (tmp_path / "crewai/events/types/agent_events.py").write_text(
+        "from types import SimpleNamespace\n"
+        "class AgentExecutionStartedEvent(SimpleNamespace): pass\n"
+        "class AgentExecutionCompletedEvent(SimpleNamespace): pass\n"
+        "class AgentExecutionErrorEvent(SimpleNamespace): pass\n"
+    )
+    (tmp_path / "crewai/events/types/flow_events.py").write_text(
+        "from types import SimpleNamespace\nclass FlowStartedEvent(SimpleNamespace): pass\n"
+    )
+    script = """
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace as N
+from crewai.events.event_bus import CrewAIEventsBus
+from crewai.events.types.agent_events import (
+    AgentExecutionStartedEvent as Start, AgentExecutionCompletedEvent as Done, AgentExecutionErrorEvent as Failed,
+)
+from crewai.events.types.flow_events import FlowStartedEvent
+import crewai_runtime_observer_bootstrap as observer
+assert observer.install()
+bus = CrewAIEventsBus()
+t0 = datetime(2026, 11, 3, 10, 0, tzinfo=timezone.utc)
+writer = N(id='a1', role='Draft writer')
+checker = N(id='a2', role='Draft checker\\n')
+write, verify = N(id='t1', name='write_draft', description='Write a post'), N(id='t2', name='check_draft', description='Verify it')
+bus.emit(None, FlowStartedEvent(flow_name='DraftFlow', no_handlers=True))
+steps = [(Start, writer, write, 0), (Done, writer, write, 2), (Start, checker, verify, 3), (Done, checker, verify, 4),
+         (Start, writer, write, 5), (Done, writer, write, 7), (Start, checker, verify, 8), (Failed, checker, verify, 9)]
+for kind, agent, task, second in steps:
+    extra = {'error': 'too long'} if kind is Failed else {'output': 'ok'} if kind is Done else {}
+    bus.emit(None, kind(agent=agent, task=task, timestamp=t0 + timedelta(seconds=second), no_handlers=True, **extra))
+"""
+    _result, records = _run(tmp_path, script)
+    handoffs = [
+        (r["agent_key"], r["delegated_to"], r["ended_at"] - r["at"], r["is_error"])
+        for r in records
+    ]
+    assert handoffs == [
+        ("DraftFlow", "Draft writer", 2.0, False),
+        ("DraftFlow", "Draft checker", 1.0, False),
+        ("DraftFlow", "Draft writer", 2.0, False),
+        ("DraftFlow", "Draft checker", 1.0, True),
+    ]
+    assert (
+        records[0]["arguments"] == {"task": "Write a post"}
+        and records[0]["task_name"] == "write_draft"
+    )
+    assert records[1]["output"] == "ok" and records[3]["output"] == "too long"
+    assert {r["kind"] for r in records} == {"handoff"}
