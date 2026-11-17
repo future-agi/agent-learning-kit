@@ -30,10 +30,11 @@ from typing import TYPE_CHECKING, Any, Callable, Sequence
 from pydantic import ValidationError
 
 from .. import __version__ as _sdk_version
-from ..providers.agent import build_authored_agent
+from ..providers.agent import AgentBuildError, _redact, build_authored_agent
 from . import outbound as ob
 from .catalogue import CATALOGUE, NO_OVERLAY, SubGoal
 from .contract import AgentContract
+from .framework_detection import FrameworkFolders, detect_framework
 from .job import FailureDomain, SourceKind
 
 if TYPE_CHECKING:
@@ -79,6 +80,16 @@ def sampled_for_calling(scenarios: Sequence[Any]) -> list[Any]:
 # is never empty for a sub-goal this reader knows is judged. The round-trip loss this represents is
 # recorded under CONTRACT QUESTIONS in the report.
 _JUDGED_MARKER = "judged (reason not persisted by folder.py's on-disk layout)"
+
+
+class AgentDocumentFailed(RuntimeError):
+    """A build of a folder could not make its agent document. ``code`` and ``message`` go to the
+    platform as the job's failure; the message never carries the customer's own field names."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 class ScenarioDocumentInvalid(RuntimeError):
@@ -729,6 +740,27 @@ def load_scenarios(
     return scenarios
 
 
+def authored_agent_document(
+    contract_text: str, *, subfolder: str | None, framework: Any
+) -> dict[str, Any]:
+    """The agent document stored for a saved contract, ``{"sdk_version", "agent"}``.
+
+    Both a build and a reading with no build make it here, so the two can't differ. The caller
+    reads the contract, so what it checked is what is used.
+    """
+    contract = AgentContract.model_validate(json.loads(contract_text)).model_dump(mode="json")
+    # The echo proves which folder was built, so it comes from the contract.
+    built_from = str((contract.get("runtime") or {}).get("source_subfolder") or "")
+    if built_from != (subfolder or ""):
+        raise AgentBuildError("agent_invalid", "subfolder_mismatch")
+    return {
+        "sdk_version": _sdk_version,
+        "agent": build_authored_agent(
+            contract, subfolder=built_from or None, framework=framework
+        ),
+    }
+
+
 class BundleScenarioSource:
     """The real `ScenarioSource`: reads and compiles the bundle's own scenario documents.
     `hosted_entrypoint.run_job` wires this in only when the injected source is still the default
@@ -736,6 +768,27 @@ class BundleScenarioSource:
     DECISION's presence test) -- an injected `ScenarioSource` (every test, every future caller)
     always wins over this one.
     """
+
+    def __init__(self, *, framework_folders: FrameworkFolders | None = None) -> None:
+        self._framework_folders = framework_folders
+
+    async def _detect_framework(self) -> dict[str, Any] | None:
+        folders = self._framework_folders
+        if folders is None:
+            return None
+        # The framework is only a label: a failure here must never cost the document.
+        try:
+            return await asyncio.to_thread(
+                detect_framework,
+                folders.folder,
+                repo_root=folders.repo_root,
+                package_dir=folders.package_dir,
+            )
+        except Exception as exc:
+            logger.warning(
+                "framework detection failed: class=%s", type(exc).__name__
+            )
+            return {"name": "unknown", "version": None}
 
     async def build(
         self,
@@ -796,21 +849,33 @@ class BundleScenarioSource:
         authored_agent = None
         source_kind = getattr(getattr(job, "source", None), "kind", None)
         if source_kind in (SourceKind.GITHUB, SourceKind.ARCHIVE):
+            framework = await self._detect_framework()
             try:
-                contract_file = bundle_dir / "contract.json"
-                contract = AgentContract.model_validate(
-                    json.loads(contract_file.read_text(encoding="utf-8"))
-                ).model_dump(mode="json")
-                authored_agent = {
-                    "sdk_version": _sdk_version,
-                    "agent": build_authored_agent(contract),
-                }
+                authored_agent = authored_agent_document(
+                    (bundle_dir / "contract.json").read_text(encoding="utf-8"),
+                    subfolder=job.source.subfolder,
+                    framework=framework,
+                )
             except Exception as exc:
+                # A field path can name the customer's own keys, so only the mismatch is named.
+                mismatch = getattr(exc, "detail", "") == "subfolder_mismatch"
                 logger.warning(
-                    "authored agent not built: class=%s code=%s",
+                    "authored agent not built: class=%s code=%s%s",
                     type(exc).__name__,
                     getattr(exc, "code", ""),
+                    " detail=subfolder_mismatch" if mismatch else "",
                 )
+                if job.source.subfolder:
+                    # A folder build with no document registers as the wrong agent: fail it.
+                    code = (
+                        exc.code
+                        if isinstance(exc, AgentBuildError)
+                        else "agent_document_failed"
+                    )
+                    raise AgentDocumentFailed(
+                        code,
+                        f"The agent document for the folder could not be built ({code}).",
+                    ) from exc
         registered = await register_with_platform(
             scenarios_client,
             scenarios,
@@ -888,7 +953,8 @@ def _chosen_evals_and_prompt(bundle_dir: Path) -> tuple[list[str], str, str]:
     modality = str(body.get("modality") or "").strip().lower()
     return (
         names,
-        str(body.get("system_prompt_excerpt") or "").strip(),
+        # Cleaned again at send, for a contract not saved by write_contract (an older bundle).
+        _redact(str(body.get("system_prompt_excerpt") or "").strip()),
         modality if modality in ("voice", "text") else "",
     )
 

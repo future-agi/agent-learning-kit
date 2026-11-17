@@ -753,6 +753,16 @@ class TerminalFailure(BaseModel):
     message: str
 
 
+class TerminalEventFailure(TerminalFailure):
+    """The terminal *event's* failure: ``TerminalFailure``, plus ``retryable`` and ``details`` when
+    the failure names them. This only checks the payload: the wire body is the dict the
+    entrypoint's ``_fail`` builds, which leaves out a key it wasn't given, so every failure that
+    never carried them is byte-for-byte what it was."""
+
+    retryable: bool | None = None
+    details: dict[str, Any] | None = None
+
+
 class ScenarioCounts(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -767,7 +777,7 @@ class TerminalPayload(BaseModel):
 
     stage: HarnessStage
     reason: TerminalReason | None
-    failure: TerminalFailure | None
+    failure: TerminalEventFailure | None
     scenario_counts: ScenarioCounts
 
     @model_validator(mode="after")
@@ -3306,6 +3316,7 @@ __all__ = [
     "SpooledRecord",
     "StageChangedPayload",
     "SubGoalResult",
+    "TerminalEventFailure",
     "TerminalFailure",
     "TerminalPayload",
     "TerminalReason",

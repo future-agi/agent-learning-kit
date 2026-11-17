@@ -21,6 +21,7 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
+from .job import routed_through_gateway
 from .process_preflight import preflight_bundle
 from .runtime_selection import ComposeSelection, select_runtime
 
@@ -30,6 +31,19 @@ def enabled() -> bool:
         os.environ.get("ALK_COMPOSE_BROKER_SOCKET")
         or os.environ.get("ALK_TRUSTED_COMPOSE_SOCKET")
     )
+
+
+def _disable_agents_sdk_tracing(service: dict) -> None:
+    environment = service.get("environment")
+    if isinstance(environment, dict):
+        environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
+        return
+    kept = [
+        item
+        for item in environment or []
+        if not (isinstance(item, str) and item.partition("=")[0] == "OPENAI_AGENTS_DISABLE_TRACING")
+    ]
+    service["environment"] = [*kept, "OPENAI_AGENTS_DISABLE_TRACING=1"]
 
 
 def runtime_capability_briefing() -> str:
@@ -188,6 +202,9 @@ def compile_bundle(*, source, job, authoring, output, contract, include_scenario
         }
     if directories:
         document["x-alk-directories"] = directories
+    if routed_through_gateway(job.agent.config.get("target_model")):
+        # The Agents SDK's own trace export would send the gateway key to OpenAI.
+        _disable_agents_sdk_tracing(document["services"][selection.control_service])
     base = selection.compose_file.parent
 
     from .contract import RuntimeSecretFile

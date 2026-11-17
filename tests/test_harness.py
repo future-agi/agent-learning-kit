@@ -1337,6 +1337,22 @@ def test_github_source_reads_like_a_repository(tmp_path):
     assert "https://github.com/acme/agent" in source.briefing()
 
 
+def test_the_briefing_file_list_leaves_out_credential_files(tmp_path):
+    listed = (
+        ".env.production", ".aws/credentials", "deploy/gcp-sa.json", ".kube/config",
+        "infra/prod.tfvars", ".netrc.bak",
+    )  # fmt: skip
+    for name in (*listed, "agent.py", "deploy/app.yaml"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("canary\n")
+
+    briefing = RepoSource(name="a", root=tmp_path).briefing()
+
+    assert "- agent.py" in briefing and "- deploy/app.yaml" in briefing
+    for name in listed:
+        assert f"- {name}" not in briefing, name
+
+
 def test_spec_source_gets_no_file_tools_because_there_is_nothing_to_read():
     source = SpecSource(
         name="a", system_prompt="you are a bot", tool_schema=[{"name": "t"}]
@@ -4013,9 +4029,15 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
         return names
 
     advertised = asyncio.run(advertised_fields())
-    # Set by the amendment tools during later stages, or by the seal (`door_unreached`), never by whoever submits the
-    # contract.
-    ours = {"amendments", "instrumentation", "door_unreached"}
+    # Set by the amendment tools during later stages, or by the seal (`door_unreached`), never by
+    # whoever submits the contract.
+    ours = {
+        "amendments",
+        "instrumentation",
+        "source_subfolder",
+        "unconfirmed_prompt_from",
+        "door_unreached",
+    }
 
     def named(model: type[BaseModel]) -> list[str]:
         """Every field the model would have to fill, nested ones included.
@@ -4721,6 +4743,54 @@ def test_claude_backend_routes_gemini_through_agentcc(monkeypatch):
     assert options.env["ANTHROPIC_MODEL"] == model
     assert options.env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "1"
 
+
+def test_gateway_mode_switches_off_every_other_claude_provider_route(monkeypatch):
+    from fi.alk.harness.config import provider_env
+
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://gateway.futureagi.test")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "internal-key")
+
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+
+    # Set in the process around the kit, any of these would send the CLI somewhere else.
+    for name in (
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "ANTHROPIC_UNIX_SOCKET",
+    ):
+        assert env[name] == "", name
+
+
+
+@pytest.mark.parametrize("mode", ["vertex", "agentcc"])
+def test_every_mode_switches_off_the_claude_routes_it_does_not_use(monkeypatch, mode):
+    from fi.alk.harness.config import provider_env
+
+    for name in ("ALK_CLAUDE_GATEWAY_URL", "ALK_CLAUDE_GATEWAY_API_KEY", "AGENTCC_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    if mode == "agentcc":
+        monkeypatch.setenv("AGENTCC_API_KEY", "sk-agentcc-test")
+        monkeypatch.setenv("AGENTCC_BASE_URL", "https://gateway.example.test/")
+
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+
+    # Set in the process around the kit, any of these would send the CLI somewhere else.
+    assert env["CLAUDE_CODE_USE_VERTEX"] == ("1" if mode == "vertex" else "0")
+    for name in (
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "ANTHROPIC_UNIX_SOCKET",
+    ):
+        assert env.get(name) == "", name
 
 def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
     from fi.alk.harness.build import environment_turns_for, turns_for
@@ -7416,6 +7486,90 @@ def test_voice_suite_evals_use_the_documented_platform_inputs(monkeypatch):
         ),
     ]
     assert all(verdict.holds for verdict in verdicts)
+
+
+_SUITE_EVAL_URL = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"
+
+
+def test_suite_eval_agent_prompt_loses_url_credentials(monkeypatch):
+    """B3 (TH-9491): the suite eval's agent_prompt, from a contract no writer cleaned."""
+    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import platform_evals
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+    from fi.alk.harness.run.grade import judge_suite_evals
+    from fi.alk.harness.scenario import Scenario
+
+    sent = []
+
+    def judge_builtin(name, inputs):
+        sent.append(inputs)
+        return {"output": "Pass", "why": "ok", "model": "turing_flash"}
+
+    monkeypatch.setattr(platform_evals, "configured", lambda: True)
+    monkeypatch.setattr(platform_evals, "judge_builtin", judge_builtin)
+    contract = AgentContract(
+        agent="voice-agent",
+        modality="voice",
+        system_prompt_excerpt=f"Post each call to {_SUITE_EVAL_URL} after.",
+    )
+    judge_suite_evals(
+        default_suite_evals(),
+        Scenario(name="s", instruction="i", sub_goals=[]),
+        Transcript(exchanges=[Exchange("agent", "hello")]),
+        contract,
+    )
+
+    prompts = [inputs["agent_prompt"] for inputs in sent if "agent_prompt" in inputs]
+    assert prompts == ["Post each call to https://hooks.example/v1 after."]
+    assert "hunter2" not in json.dumps(sent) and "sk-1" not in json.dumps(sent)
+
+
+def test_suite_eval_rules_stored_on_the_platform_lose_url_credentials(monkeypatch):
+    """B3b (TH-9491): each rule passed to platform_evals.ensure."""
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import grade, platform_evals
+    from fi.alk.harness.run.conversation import Transcript
+    from fi.alk.harness.scenario import Scenario
+
+    ensured = []
+    monkeypatch.setattr(
+        platform_evals, "ensure", lambda name, claim, agent, rules: ensured.append(list(rules))
+    )
+    monkeypatch.setattr(
+        platform_evals, "judge", lambda name, record: {"held": True, "why": "ok", "model": "m"}
+    )
+    contract = AgentContract(
+        agent="desk", hard_constraints=[f"Always post to {_SUITE_EVAL_URL}", "Be brief"]
+    )
+
+    grade._on_platform(
+        [("claim one", "one"), ("claim two", "two")],
+        Scenario(name="s", instruction="i", sub_goals=[]),
+        Transcript(),
+        contract,
+        "",
+    )
+
+    assert ensured == [["Always post to https://hooks.example/v1", "Be brief"]] * 2
+
+
+def test_suite_eval_local_judge_prompt_loses_url_credentials():
+    """B3c (TH-9491): the local judge's prompt, the summary and each rule."""
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run.grade import _judge_prompt
+
+    prompt = _judge_prompt(
+        AgentContract(
+            agent="desk",
+            one_liner=f"Books desks through {_SUITE_EVAL_URL}",
+            hard_constraints=[f"Always post to {_SUITE_EVAL_URL}"],
+        )
+    )
+
+    assert "THE AGENT UNDER TEST: desk - Books desks through https://hooks.example/v1\n" in prompt
+    assert "  - Always post to https://hooks.example/v1" in prompt
+    assert "hunter2" not in prompt and "sk-1" not in prompt
 
 
 def test_hosted_voice_marks_unavailable_required_evals_as_grading_failures(

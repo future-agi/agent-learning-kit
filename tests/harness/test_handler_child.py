@@ -193,6 +193,7 @@ def test_under_isolation_the_handlers_run_as_their_user_and_the_worker_never_get
     # The world's own role, never the superuser, and only on stdin.
     assert init["dsn"] == _WORLD_DSN
     assert _WORLD_DSN not in json.dumps(kwargs["env"]) + str(child["argv"])
+    # A build without a folder sends the child what it always did.
     assert set(init) == {"handlers", "tools", "refusal_signature", "dsn", "import_root"}
     assert "lookup_account" in init["handlers"] and init["import_root"] == str(source)
     # The worker gets the child's socket and the mode, and never the source.
@@ -514,3 +515,98 @@ def test_the_handler_child_runs_as_its_user_with_nothing_of_the_harness(per_user
     assert call.result["held"] == "PermissionError"
     assert call.result["imported"] is True
     assert _AGENT_MODULE not in sys.modules
+
+
+def test_the_child_puts_the_agents_folder_on_the_path_as_the_worker_does(monkeypatch):
+    # A folder build imports its own modules by flat name; the child reaches the folder too.
+    reached: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        handler_child.GeneratedWorld,
+        "reach",
+        lambda self, root, subfolder="": reached.append((root, subfolder)),
+    )
+    monkeypatch.setattr(handler_child, "serve", lambda sock, world: None)
+    monkeypatch.setattr(
+        chat, "_HostedToolStore", lambda dsn: SimpleNamespace(key="store", start=lambda: None)
+    )
+    parent, child = socket.socketpair()
+    try:
+        monkeypatch.setattr(sys, "argv", ["handler_child", str(child.fileno())])
+        monkeypatch.setattr(
+            sys,
+            "stdin",
+            io.StringIO(
+                json.dumps({"dsn": "x", "import_root": "/src", "import_subfolder": "agents/a"})
+            ),
+        )
+        handler_child.main()
+    finally:
+        parent.close()
+
+    assert reached == [("/src", "agents/a")]
+
+
+def test_under_isolation_a_folder_build_s_handler_imports_its_sibling_by_flat_name(
+    per_user, tmp_path, monkeypatch, spawned
+):
+    # Both halves at once: the conversation sends the child the contract's folder, and the
+    # child, fed what was sent, runs a handler whose module imports a sibling by flat name.
+    import threading
+
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(sys, "modules", dict(sys.modules))
+    context, source = _bundle(tmp_path)
+    folder = source / "agents" / "a"
+    folder.mkdir(parents=True)
+    (folder / "flat_tools_th_handler_child.py").write_text(
+        "import flat_sibling_th_handler_child\n\n"
+        "def lookup_account(account_id):\n"
+        "    return {'account_id': account_id, 'from': flat_sibling_th_handler_child.MARK}\n"
+    )
+    (folder / "flat_sibling_th_handler_child.py").write_text("MARK = 'sibling'\n")
+    (context.bundle_dir / "contract.json").write_text(
+        json.dumps(
+            {
+                "agent": "chat-agent",
+                "one_liner": "Looks up accounts",
+                "modality": "chat",
+                "tools": [{"name": "lookup_account", "args": ["account_id"]}],
+                "runtime": {
+                    "language": "python",
+                    "workdir": "agents/a",
+                    "source_subfolder": "agents/a",
+                },
+            }
+        )
+    )
+    (context.bundle_dir / "handlers" / "lookup_account.py").write_text(
+        "from flat_tools_th_handler_child import lookup_account\n\n"
+        "def handle(args, db):\n"
+        "    return lookup_account(**args)\n"
+    )
+    monkeypatch.setenv("AGENTCC_API_KEY", "model-key")
+
+    _run_chat(context, monkeypatch)
+
+    init = json.loads(spawned[0]["process"].stdin.getvalue())
+    assert init["import_subfolder"] == "agents/a"
+    # The child, as the spawned process runs it (the switch to its user aside), fed that init.
+    monkeypatch.setattr(
+        chat,
+        "_HostedToolStore",
+        lambda dsn: SimpleNamespace(key="store", start=lambda: None, stop=lambda: None),
+    )
+    parent, child = socket.socketpair()
+    monkeypatch.setattr(sys, "argv", ["handler_child", str(child.fileno())])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(init)))
+    thread = threading.Thread(target=handler_child.main, daemon=True)
+    thread.start()
+    try:
+        call = HandlerChannel(parent).call("lookup_account", {"account_id": "7"})
+    finally:
+        parent.close()
+        thread.join(10)
+
+    assert call.ok, call.error
+    assert call.result == {"account_id": "7", "from": "sibling"}
+

@@ -76,6 +76,8 @@ _PATCHED = "_alk_simulation_mark"
 _LOADER = "_alk_simulation_mark_loader"
 _FINDER = "_alk_simulation_mark_finder"
 _CHAINED_NAME = "_alk_chained_sitecustomize"
+# On ``sys`` because the kit's hook file and this module are separate modules that must agree.
+_CHAINED_FLAG = "_alk_sitecustomize_chained"
 
 _installed = False
 _failed_written = False
@@ -595,8 +597,12 @@ def _report_chained_failure(err: Exception) -> None:
 
 def _chain() -> None:
     """Run the next ``sitecustomize`` on the path: ours sits first, so a repository's or the
-    environment's own hook would otherwise never run."""
+    environment's own hook would otherwise never run. Runs once per process, whichever hook
+    file reaches it first; the flag is set before the hook runs, so it holds when that hook fails."""
+    if getattr(sys, _CHAINED_FLAG, False):
+        return
     try:
+        setattr(sys, _CHAINED_FLAG, True)
         own_dir = os.path.dirname(os.path.realpath(__file__))
         own_hook = os.path.realpath(os.path.join(own_dir, "sitecustomize.py"))
         remaining = None
