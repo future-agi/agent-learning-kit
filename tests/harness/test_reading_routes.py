@@ -618,6 +618,49 @@ def test_m1_a_function_and_a_same_named_method_give_one_record(tmp_path):
     assert [(r["name"], r["arguments"]) for r in records] == [("look_up_order", {"order_id": "A1"})]
 
 
+def test_m1_a_tool_defined_inside_a_function_is_matched_by_its_own_name(tmp_path):
+    """Round 3, M1: the frame's qualname is `build.<locals>.search`; the reading writes `search`."""
+    (tmp_path / "agent.py").write_text(
+        "def build():\n"
+        "    async def search(q):\n        return 'hit ' + q\n"
+        "    return search\n"
+        "search_tool = build()\n"
+        "def make_class():\n"
+        "    class Finder:\n"
+        "        def find(self, q):\n            return 'found ' + q\n"
+        "    return Finder\n"
+        "Finder = make_class()\n"
+    )
+    result, records = _traced_run(
+        tmp_path, [_unreachable_binding("search", "search")],
+        "import asyncio, agent\nasyncio.run(agent.search_tool('x'))\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert [(r["name"], r["output"]) for r in records] == [("search", "hit x")]
+    (tmp_path / "calls.jsonl").unlink()
+    result, records = _traced_run(
+        tmp_path, [_unreachable_binding("find", "Finder.find")],
+        "import agent\nagent.Finder().find('y')\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert [(r["name"], r["output"]) for r in records] == [("find", "found y")]
+
+
+def test_m1_a_tool_defined_inside_async_main_is_matched(tmp_path):
+    (tmp_path / "agent.py").write_text(
+        "import asyncio\n"
+        "async def main():\n"
+        "    def search(q):\n        return 'hit ' + q\n"
+        "    return search('z')\n"
+    )
+    result, records = _traced_run(
+        tmp_path, [_unreachable_binding("search", "search")],
+        "import asyncio, agent\nasyncio.run(agent.main())\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert [(r["name"], r["output"]) for r in records] == [("search", "hit z")]
+
+
 # --- Round 2, M5: an include or a uv group may install the CLI, so today's route is kept ------
 
 @pytest.mark.parametrize(

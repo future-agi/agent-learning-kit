@@ -382,7 +382,11 @@ def _install_declared_python_tools() -> None:
                     name
                     for (module, function, full_name), name in qualified.items()
                     if frame.f_code.co_name == function
-                    and (frame_qualname is None or frame_qualname == full_name)
+                    and (
+                        frame_qualname is None
+                        # A tool defined inside a function is written by its own name.
+                        or frame_qualname.rsplit("<locals>.", 1)[-1] == full_name
+                    )
                     and matches_module(frame, module)
                 ),
                 None,
