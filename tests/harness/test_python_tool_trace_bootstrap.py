@@ -258,3 +258,73 @@ def test_a_sync_tool_is_still_recorded_once(tmp_path: Path) -> None:
     )
 
     assert [(r["name"], r["output"]) for r in _records(trace)] == [("look_up", "A1")]
+
+
+def _run_agent(tmp_path: Path, source: str, names: list[str], driver: str) -> list[dict]:
+    (tmp_path / "agent.py").write_text(source)
+    trace, env = _trace_environment(
+        tmp_path, [{"name": n, "module": "agent", "callable": n} for n in names]
+    )
+    subprocess.run([sys.executable, "-c", driver], check=True, env=env, cwd=tmp_path)
+    return _records(trace) if trace.exists() else []
+
+
+def test_a_generator_tool_is_recorded_once_per_call(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def stream_rows(n):\n    for i in range(n):\n        yield i\n    return 'done'\n",
+        ["stream_rows"],
+        "from agent import stream_rows\nassert list(stream_rows(3)) == [0, 1, 2]\n",
+    )
+    assert [(r["name"], r["arguments"], r["is_error"]) for r in records] == [
+        ("stream_rows", {"n": 3}, False)
+    ]
+    assert records[0]["output"] == "done"
+
+
+def test_an_async_generator_tool_is_recorded_once_per_call(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "import asyncio\n"
+        "async def stream_rows(n):\n"
+        "    for i in range(n):\n"
+        "        await asyncio.sleep(0.001)\n"
+        "        yield i\n",
+        ["stream_rows"],
+        "import asyncio\nfrom agent import stream_rows\n"
+        "async def main():\n    return [i async for i in stream_rows(3)]\n"
+        "assert asyncio.run(main()) == [0, 1, 2]\n",
+    )
+    assert [(r["name"], r["arguments"]) for r in records] == [("stream_rows", {"n": 3})]
+
+
+def test_a_sync_tool_that_calls_another_bound_tool_records_both_once(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def inner(x):\n    return x * 2\n"
+        "def outer(x):\n    return inner(x) + 1\n",
+        ["inner", "outer"],
+        "from agent import outer\nassert outer(5) == 11\n",
+    )
+    assert sorted((r["name"], r["arguments"]["x"], r["output"]) for r in records) == [
+        ("inner", 5, 10),
+        ("outer", 5, 11),
+    ]
+
+
+def test_an_async_tool_that_awaits_another_bound_tool_records_both_once(
+    tmp_path: Path,
+) -> None:
+    records = _run_agent(
+        tmp_path,
+        "import asyncio\n"
+        "async def inner(x):\n    await asyncio.sleep(0.001)\n    return x * 2\n"
+        "async def outer(x):\n    await asyncio.sleep(0.001)\n"
+        "    y = await inner(x)\n    await asyncio.sleep(0.001)\n    return y + 1\n",
+        ["inner", "outer"],
+        "import asyncio\nfrom agent import outer\nassert asyncio.run(outer(5)) == 11\n",
+    )
+    assert sorted((r["name"], r["arguments"]["x"], r["output"]) for r in records) == [
+        ("inner", 5, 10),
+        ("outer", 5, 11),
+    ]
