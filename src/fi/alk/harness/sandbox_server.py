@@ -65,6 +65,7 @@ from .provision import ProvisionError, source_fingerprint, stop
 from .secrets import (
     CONTROLLER_CONNECTION_NAMES,
     RUNNER_RESERVED_ENVIRONMENT as _RUNNER_RESERVED_ENVIRONMENT,
+    RUNTIME_CONFIGURATION_NAMES_ENV,
     SecretResolutionError,
     TARGET_PROVIDER_ALIASES_ENV,
     client_name_reserved,
@@ -827,7 +828,7 @@ class LocalSandbox:
                     },
                     runtime_configuration=runtime_configuration,
                 )
-                child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
+                child_environment[RUNTIME_CONFIGURATION_NAMES_ENV] = ",".join(
                     sorted(runtime_configuration)
                 )
                 child_environment[TARGET_PROVIDER_ALIASES_ENV] = ",".join(
@@ -1244,7 +1245,7 @@ class LocalSandbox:
                     # The provisioner must explicitly pass customer-provided values into
                     # Dockerfile/generated runtime containers.  Persist names only; values stay
                     # in this child process environment and never enter the job or bundle.
-                    child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
+                    child_environment[RUNTIME_CONFIGURATION_NAMES_ENV] = ",".join(
                         sorted(runtime_configuration)
                     )
                     child_environment[TARGET_PROVIDER_ALIASES_ENV] = ",".join(

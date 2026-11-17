@@ -45,6 +45,7 @@ from .livekit_source import infer_livekit_agent_name_from_source
 from .service_catalog import address, profile_for
 from .secrets import (
     CONTROLLER_CONNECTION_NAMES,
+    RUNTIME_CONFIGURATION_NAMES_ENV,
     client_name_reserved,
     controller_name_reserved,
     target_provider_aliases,
@@ -285,7 +286,7 @@ def _local_denied(name: str) -> bool:
 def _under_sandbox() -> bool:
     # ``in``, never truthiness: the sandbox server sets the manifest to "" for a job with no
     # environment values, and that worker must still take the strict branch.
-    return "ALK_RUNTIME_CONFIGURATION_NAMES" in os.environ
+    return RUNTIME_CONFIGURATION_NAMES_ENV in os.environ
 
 
 def _compose_base() -> dict[str, str]:
@@ -1453,7 +1454,7 @@ def _contract_runtime_configuration_names(contract: Any | None) -> list[str]:
         "HARNESS_PLATFORM_API_KEY",
         "HARNESS_PLATFORM_SECRET_KEY",
     }
-    supplied = os.environ.get("ALK_RUNTIME_CONFIGURATION_NAMES", "")
+    supplied = os.environ.get(RUNTIME_CONFIGURATION_NAMES_ENV, "")
     names.update(
         name
         for name in supplied.split(",")
