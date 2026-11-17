@@ -7734,22 +7734,18 @@ def _is_sync_stream(value: Any) -> bool:
     return inspect.isgenerator(value) or hasattr(value, "__next__")
 
 
-_NON_TEXT_EVENT_KINDS = frozenset(
+_STREAM_TEXT_TYPES = frozenset(
     {
-        "message_start",
-        "message_delta",
-        "message_stop",
-        "content_block_start",
-        "content_block_stop",
-        "ping",
-        "thinking",
-        "redacted_thinking",
-        "reasoning",
-        "reasoning_content",
-        "tool_use",
-        "server_tool_use",
-        "tool_result",
-        "image",
+        "text",
+        "output_text",
+        "refusal",
+        "message",
+        "ai",
+        "human",
+        "tool",
+        "system",
+        "assistant",
+        "user",
     }
 )
 
@@ -7759,7 +7755,8 @@ def _stream_event_text(chunk: Any) -> Optional[str]:
 
     Anthropic raw events and OpenAI Responses events carry thinking, signatures, tool input
     and bookkeeping next to the answer. Only ``text_delta`` and
-    ``response.output_text.delta`` give text; every other event of those families gives "".
+    ``response.output_text.delta`` give text; any other chunk with a string ``type`` that is
+    not a text or message kind gives "", never its JSON.
     """
     get = (
         chunk.get
@@ -7775,13 +7772,10 @@ def _stream_event_text(chunk: Any) -> Optional[str]:
     if kind in ("text_delta", "response.output_text.delta"):
         value = get("text") if kind == "text_delta" else get("delta")
         return value if isinstance(value, str) else ""
-    if (
-        kind in _NON_TEXT_EVENT_KINDS
-        or kind.startswith("response.")
-        or kind.endswith("_delta")
-    ):
-        return ""
-    return None
+    if kind in _STREAM_TEXT_TYPES or kind.endswith(("Message", "MessageChunk")):
+        return None
+    # Any other typed event (provider bookkeeping, thinking, vendor events) is not answer text.
+    return ""
 
 
 def _stream_chunk_text(chunk: Any) -> str:

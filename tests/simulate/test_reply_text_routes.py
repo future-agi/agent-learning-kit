@@ -209,3 +209,28 @@ def test_a_stream_of_provider_events_keeps_only_the_answer_text(chunks):
 )
 def test_a_stream_event_with_a_non_text_type_gives_nothing(chunk):
     assert _stream_reply([chunk]) == ""
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [{"type": "vendor.custom_event", "payload": {"secret": "SIG"}}, "Hi"],
+        [{"type": "vendor.custom_event", "delta": {"secret": "SIG"}}, "Hi"],
+        [NS(type="vendor.custom_event", content="SIG", payload={"s": "SIG"}), "Hi"],
+        [NS(type="AIMessageChunk", content=[_text("Hi")])],
+        [{"type": "message", "role": "assistant", "content": "Hi"}],
+        [{"content": "H"}, NS(text="i")],
+    ],
+    ids=[
+        "unknown-dict-event",
+        "unknown-dict-event-with-delta",
+        "unknown-object-event",
+        "langchain-chunk-type-kept",
+        "message-type-kept",
+        "untyped-chunks-kept",
+    ],
+)
+def test_a_stream_event_of_an_unknown_type_gives_nothing(chunks):
+    text = _stream_reply(chunks)
+    assert text == "Hi"
+    assert "SIG" not in text
