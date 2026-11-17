@@ -488,9 +488,16 @@ def _modules_as_the_process_imports_them(
     subfolder_parts = [part for part in PurePosixPath(subfolder or "").parts if part != "."]
     handler_root = subfolder_parts == folders
 
+    resolved: dict[str, bool] = {}
+
     def names_a_file(dotted: str) -> bool:
-        module = start.joinpath(*dotted.split("."))
-        return _file_in(module.with_suffix(".py"), start) or _file_in(module / "__init__.py", start)
+        # One resolution per name within a save: many entries can name one module.
+        if dotted not in resolved:
+            module = start.joinpath(*dotted.split("."))
+            resolved[dotted] = _file_in(module.with_suffix(".py"), start) or _file_in(
+                module / "__init__.py", start
+            )
+        return resolved[dotted]
 
     rewritten, changed = [], False
     for entry in entries:

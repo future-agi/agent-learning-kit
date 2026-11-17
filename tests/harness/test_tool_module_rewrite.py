@@ -293,3 +293,19 @@ def test_m4_a_standard_library_name_is_not_rewritten(tmp_path, mode):
     repo = _repo(tmp_path, {"examples/hotel/calendar.py": "def book():\n    return 1\n"})
     saved = _save(tmp_path, repo, _entries("examples.hotel.calendar", mode), "examples/hotel")
     assert saved == [(mode, "examples.hotel.calendar")]
+
+
+def test_l5_many_entries_naming_one_module_save_within_the_lookup_budget(tmp_path):
+    folder = "/".join(f"d{i}" for i in range(12))
+    repo = _repo(tmp_path, {f"{folder}/agent.py": DEF})
+    module = f"{folder.replace('/', '.')}.agent"
+    names = [f"tool_{i}" for i in range(1500)]
+    entries = [
+        {"tool": name, "mode": "unreachable", "module": module, "callable": name} for name in names
+    ]
+    result = accept_contract(
+        _contract(entries), tmp_path / "out", source_root=repo, subfolder=folder
+    )
+    assert not result.get("is_error"), str(result)[:300]
+    saved = json.loads((tmp_path / "out" / "contract.json").read_text())
+    assert {one["module"] for one in saved["tool_entrypoints"]} == {"agent"}
