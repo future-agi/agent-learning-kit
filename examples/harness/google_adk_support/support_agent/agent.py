@@ -7,12 +7,28 @@ MODEL = os.getenv("OPENAI_MODEL", "vertex_ai/gemini-3.7-flash")
 API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_BASE_URL")
 
+_REFUSAL = (
+    "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
+    "endpoint the key belongs to."
+)
+
+
+def _key_without_base_url() -> bool:
+    key = os.getenv("OPENAI_API_KEY", "").strip()
+    return bool(key) and not os.getenv("OPENAI_BASE_URL", "").strip()
+
+
 # With no base URL LiteLLM's openai/ provider falls back to api.openai.com and would send the key there.
-if API_KEY and not BASE_URL:
-    raise RuntimeError(
-        "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
-        "endpoint the key belongs to."
-    )
+if _key_without_base_url():
+    raise RuntimeError(_REFUSAL)
+
+
+# A key set after import reaches LiteLLM with no api_base, so the check runs again on each call.
+def _refuse_key_without_base_url(callback_context, llm_request):
+    if _key_without_base_url():
+        raise RuntimeError(_REFUSAL)
+    return None
+
 
 _ORDERS = {
     "A1001": {"item": "trail running shoes", "status": "delivered", "return": None},
@@ -68,4 +84,5 @@ root_agent = Agent(
         "orders and start returns, and never guess an order's status. Answer briefly."
     ),
     tools=[look_up_order, start_return, return_policy],
+    before_model_callback=_refuse_key_without_base_url,
 )

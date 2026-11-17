@@ -295,7 +295,7 @@ def test_import_needs_no_environment_and_keeps_the_default_gateway_model(
     assert [tool.__name__ for tool in agent.root_agent.tools] == list(TOOLS)
 
 
-@pytest.mark.parametrize("base_url", [None, ""])
+@pytest.mark.parametrize("base_url", [None, "", "   "])
 def test_a_key_with_no_base_url_is_refused_before_a_model_is_built(
     load_example, base_url
 ) -> None:
@@ -307,6 +307,69 @@ def test_a_key_with_no_base_url_is_refused_before_a_model_is_built(
         load_example(**environment)
 
     assert "secret-canary-key" not in str(refused.value)
+
+
+def test_a_blank_key_is_not_a_key(load_example) -> None:
+    agent = load_example(OPENAI_API_KEY="   ")
+
+    assert agent.root_agent.name == APP
+
+
+def _run_one_turn(root_agent) -> list:
+    import asyncio
+
+    from google.adk.models.base_llm import BaseLlm
+    from google.adk.models.llm_response import LlmResponse
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types
+
+    reached = []
+
+    class Scripted(BaseLlm):
+        async def generate_content_async(self, llm_request, stream=False):
+            reached.append(True)
+            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="hi")]))
+
+    async def main() -> None:
+        root_agent.model = Scripted(model="scripted")
+        sessions = InMemorySessionService()
+        runner = Runner(app_name=APP, agent=root_agent, session_service=sessions)
+        session = await sessions.create_session(app_name=APP, user_id="customer")
+        message = types.Content(role="user", parts=[types.Part(text="hello")])
+        async for _ in runner.run_async(
+            user_id="customer", session_id=session.id, new_message=message
+        ):
+            pass
+        await runner.close()
+
+    asyncio.run(main())
+    return reached
+
+
+@pytest.mark.parametrize("base_url", [None, "", "   "])
+def test_a_key_set_after_import_is_refused_at_the_first_model_call(
+    load_example, monkeypatch, base_url
+) -> None:
+    agent = load_example()
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-canary-key")
+    if base_url is not None:
+        monkeypatch.setenv("OPENAI_BASE_URL", base_url)
+
+    with pytest.raises(RuntimeError, match="OPENAI_BASE_URL") as refused:
+        _run_one_turn(agent.root_agent)
+
+    assert "secret-canary-key" not in str(refused.value)
+
+
+def test_a_model_call_with_a_url_set_at_call_time_goes_through(
+    load_example, monkeypatch
+) -> None:
+    agent = load_example()
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.test/v1")
+
+    assert _run_one_turn(agent.root_agent) == [True]
 
 
 def test_a_second_import_sees_its_own_environment(load_example) -> None:
@@ -353,7 +416,12 @@ def test_example_is_an_adk_app_package_with_plain_tools() -> None:
     # A coroutine tool is traced at every await as well as at its return, and ADK would run it
     # on the event loop differently.
     assert not [n.name for n in module.body if isinstance(n, ast.AsyncFunctionDef)]
-    assert {n.name for n in module.body if isinstance(n, ast.FunctionDef)} == set(TOOLS)
+    # Private helpers (the call-time key check) are not tools.
+    assert {
+        n.name
+        for n in module.body
+        if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")
+    } == set(TOOLS)
     assert [p.name for p in EXAMPLE.iterdir() if p.is_dir() and (p / "agent.py").is_file()] == [
         APP
     ]
@@ -365,3 +433,4 @@ def test_example_ignores_adks_session_store_and_documents_the_start() -> None:
     assert "adk web --port 8080 ." in readme
     for name in ENVIRONMENT:
         assert name in readme
+    assert "OPENAI_API_BASE alone isn't read" in readme
