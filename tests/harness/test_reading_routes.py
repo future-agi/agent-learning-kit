@@ -419,15 +419,16 @@ def test_the_h2_probe_two_graphs_with_the_cli_installed_still_bundles(tmp_path):
 
 
 def test_the_uv_run_langgraph_dev_shape_is_unchanged(tmp_path):
+    """The command that carries its own CLI (`uv run --with langgraph-cli[inmem] langgraph dev`)
+    is not one the graph route takes over: `_langgraph_command_cannot_run` says no, even for an
+    app whose source is otherwise a single servable graph."""
     command = ["uv", "run", "--project", "graphs/python", "--with", "langgraph-cli[inmem]", "langgraph", "dev"]
-    runtime = {"language": "python", "execution": "native", "command": command}
-    (tmp_path / "agent.py").write_text("print('ready')\n")
-    plan = resolve_environment_plan(
-        tmp_path, _job(connector="auto"), contract_runtime=runtime, tool_entrypoints=[],
-        contract_interface_kind="http", contract_modality="chat",
-    )
-    control = next(p for p in plan.processes if p.name == plan.control_service)
-    assert "ALK_LANGGRAPH_ENTRYPOINT" not in control.environment
+    root, run_folder, runtime = _scoped(deep_source(tmp_path), command=command)
+    assert runtime["command"] == command
+    assert bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime) is False
+    # The same source with the plain command is taken, so the answer above is the command's.
+    plain = {**runtime, "command": ["langgraph", "dev"]}
+    assert bundle_author_v2._langgraph_command_cannot_run(root, run_folder, plain) is True
 
 
 def test_a_langgraph_json_is_not_read_past_64kb(tmp_path, monkeypatch):
