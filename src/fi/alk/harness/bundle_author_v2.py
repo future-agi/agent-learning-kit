@@ -3494,7 +3494,17 @@ def _environment_tools(contract: dict[str, Any]) -> list[str]:
     )
 
 
-def _source_tool_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]]:
+def _observed_by_frameworks(processes: Sequence[Any]) -> bool:
+    """Whether a process runs the framework span observer, which is the command route's."""
+    return any(
+        "ALK_OBSERVE_FRAMEWORKS" in (getattr(process, "environment", None) or {})
+        for process in processes
+    )
+
+
+def _source_tool_trace_bindings(
+    contract: dict[str, Any], *, watch_unreachable: bool = True
+) -> list[dict[str, str]]:
     bindings = []
     for raw in contract.get("tool_entrypoints", []):
         if not isinstance(raw, dict):
@@ -3503,7 +3513,12 @@ def _source_tool_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]
             entry = ToolEntry.model_validate(raw)
         except ValueError as exc:
             raise BundleAuthorError(f"contract_tool_entry_invalid: {exc}") from exc
-        if entry.mode == "import" and entry.module and entry.callable:
+        # An `unreachable` entry that says where the function is is watched, not called: no
+        # handler is compiled for it, and a name that never runs records nothing. (The command
+        # route binds `import` and `construct` only: its framework observer already sees these
+        # calls, and a second binding there could record one call twice.)
+        modes = {"import", "unreachable"} if watch_unreachable else {"import"}
+        if entry.mode in modes and entry.module and entry.callable:
             bindings.append(
                 {"name": entry.tool, "module": entry.module, "callable": entry.callable}
             )
@@ -3704,7 +3719,9 @@ def author_bundle_v2(
         tool_entrypoints=contract_body.get("tool_entrypoints"),
     )
     trace_bindings = (
-        _source_tool_trace_bindings(contract_body)
+        _source_tool_trace_bindings(
+            contract_body, watch_unreachable=not _observed_by_frameworks(plan.processes)
+        )
         if contract_modality == "chat"
         else []
     )
@@ -4268,7 +4285,9 @@ def _carry_contract(
         str(body.get("modality") or "").strip().lower() == "chat"
         and not traced_command
     ):
-        bindings = _source_tool_trace_bindings(body)
+        bindings = _source_tool_trace_bindings(
+            body, watch_unreachable=not _observed_by_frameworks(processes)
+        )
         processes = list(
             _with_source_tool_trace(
                 processes,
