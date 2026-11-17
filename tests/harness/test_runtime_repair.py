@@ -320,6 +320,18 @@ def _validate_native(tmp_path, command, **fields):
         pytest.param(["node", "-e", "x"], id="node-e-exact"),
         pytest.param(["python", "-c", "x"], id="python-c-exact"),
         pytest.param(["env", "A=1", "sh", "-c", "x"], id="env-then-shell-c"),
+        pytest.param(
+            ["python", "-m", "uv", "run", "python", "-c", "print(open('.env').read())"],
+            id="python-m-uv-then-python-c",
+        ),
+        pytest.param(
+            ["python3", "-m", "poetry", "run", "python", "-c", "x"], id="python-m-poetry-then-c"
+        ),
+        pytest.param(["uv", "run", "ipython", "-c", "x"], id="uv-ipython-c"),
+        pytest.param(["uv", "run", "pypy3", "-c", "x"], id="uv-pypy3-c"),
+        pytest.param(["py", "-c", "x"], id="py-launcher-c"),
+        pytest.param(["poetry", "run", "ts-node", "-e", "x"], id="poetry-ts-node-e"),
+        pytest.param(["npx", "tsx", "-e", "x"], id="npx-tsx-e"),
     ],
 )
 def test_runtime_patch_refuses_inline_code_joined_to_its_flag(tmp_path, command) -> None:

@@ -1014,6 +1014,11 @@ _PYTHON_VALUE_OPTIONS = frozenset({"--check-hash-based-pycs"})
 _SCRIPT_VALUE_OPTIONS = frozenset({"-r", "--require", "--import"})
 # Standard modules that run their arguments (or stdin) as code: `python -m timeit "<code>"`.
 _PYTHON_CODE_MODULES = frozenset({"timeit", "code", "pdb"})
+# Interpreters that take Python's own options, and those that take node's.
+_PYTHON_NAMES = ("python", "pypy", "ipython")
+_SCRIPT_INTERPRETERS = frozenset(
+    {"node", "nodejs", "bun", "deno", "perl", "ruby", "php", "ts-node", "tsx"}
+)
 
 
 def _runs_inline_code(command: list[str]) -> bool:
@@ -1024,8 +1029,8 @@ def _runs_inline_code(command: list[str]) -> bool:
     mistaken for code."""
     for index, token in enumerate(command):
         name = Path(token).name.casefold()
-        python = name.startswith("python")
-        script = name in {"node", "nodejs", "bun", "deno", "perl", "ruby", "php"}
+        python = name.startswith(_PYTHON_NAMES) or name == "py"
+        script = name in _SCRIPT_INTERPRETERS
         shell = name in _SHELL_LAUNCHERS
         if not (python or script or shell):
             continue
@@ -1035,7 +1040,10 @@ def _runs_inline_code(command: list[str]) -> bool:
         options = iter(command[index + 1:])
         for option in options:
             if python and option == "-m":
-                return next(options, "") in _PYTHON_CODE_MODULES
+                if next(options, "") in _PYTHON_CODE_MODULES:
+                    return True
+                # A module that runs another command (uv, poetry): its later tokens are read too.
+                break
             if name == "deno" and option == "eval":
                 return True
             if not option.startswith("-"):
