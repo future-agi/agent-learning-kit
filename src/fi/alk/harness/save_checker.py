@@ -57,7 +57,8 @@ START_SECONDS = 15.0
 # comes from the input (a watchdog kill, a crash), so the checks never move into this process.
 DEATHS = 3
 WATCH_INTERVAL = 0.05
-# The cap catches slow growth, not a burst, and sits 2x above the heaviest honest child. Peaks of
+# The cap catches slow growth, not a burst, and sits about 2x above the heaviest child measured,
+# this PR's crafted tree below. Peaks of
 # the child's resident memory as the watchdog reads it, on macOS 15.6 / Python 3.12, for the crafted
 # tree of test_agent_type_refusal.py::test_a_crafted_script_does_not_hold_up_the_conversation (three
 # 1 MB `import type` files and an open-quote file): 130 MiB in the file's full run, 141 and 147 MiB
