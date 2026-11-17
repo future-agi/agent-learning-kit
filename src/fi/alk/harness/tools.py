@@ -228,6 +228,17 @@ def _checked_contract(
     contract.unconfirmed_prompt_from = []
 
     problems = validate_contract(contract)
+    for entry in contract.tool_entrypoints:
+        if (
+            entry.mode in _ROOTED_MODES
+            and entry.module
+            and not all(part.isidentifier() for part in entry.module.split("."))
+        ):
+            problems.append(
+                f"tool[{entry.tool}]:module-not-dotted-identifier: module {entry.module[:80]!r} "
+                "must be a dotted Python name such as `agent` or `pkg.tools`, each part an "
+                "identifier; it is not a file path."
+            )
     if (
         require_setup_contract
         and contract.modality != "voice"

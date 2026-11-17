@@ -328,3 +328,23 @@ def test_an_async_tool_that_awaits_another_bound_tool_records_both_once(
         ("inner", 5, 10),
         ("outer", 5, 11),
     ]
+
+
+import pytest
+
+
+@pytest.mark.parametrize("module", [".", "/", "..", "agent\x00"])
+def test_a_binding_with_an_odd_module_never_raises_into_the_agents_call(
+    tmp_path: Path, module: str
+) -> None:
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "look_up", "module": module, "callable": "look_up"}]
+    )
+    # A frame of the main script carries the callable's name, so the path match is reached.
+    result = subprocess.run(
+        [sys.executable, "-c", "def look_up(x):\n    return x\nprint(look_up(7))\n"],
+        text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "7"
+    assert not trace.exists()

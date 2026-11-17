@@ -334,7 +334,7 @@ def test_the_agents_sdk_reading_changes_as_designed(tmp_path):
     assert [(mode, module) for mode, module, _ in after["saved_entries"]] == [("unreachable", "agent")] * 3
     assert "ALK_TOOL_TRACE_BINDINGS" not in before["control_environment"]
     assert json.loads(after["control_environment"]["ALK_TOOL_TRACE_BINDINGS"]) == [
-        {"name": n, "module": "agent", "callable": n} for n in TOOLS
+        {"name": n, "module": "agent", "callable": n, "qualname": n} for n in TOOLS
     ]
     assert after["trace_version"] == 1 and before["trace_version"] is None
     assert after["handlers"] == before["handlers"] == []

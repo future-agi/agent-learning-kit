@@ -194,12 +194,6 @@ def test_the_outer_file_alone_is_still_rewritten(tmp_path):
     assert _save(tmp_path, repo, _entries("svc.agent"), "svc") == [("unreachable", "agent")]
 
 
-def test_a_module_that_is_not_a_dotted_name_is_kept(tmp_path):
-    repo = _repo(tmp_path, {f"{SUBFOLDER}/agent.py": DEF})
-    module = f"{SUBFOLDER.replace('/', '.')}.agent-1"
-    assert _save(tmp_path, repo, _entries(module), SUBFOLDER) == [("unreachable", module)]
-
-
 def test_the_12_nov_agents_sdk_reading_is_rewritten(tmp_path):
     reading = _reading("openai_agents")
     repo = _repo(tmp_path, {f"{SUBFOLDER}/agent.py": DEF + "async def agent_callback(i):\n    return {}\n"})
@@ -275,3 +269,19 @@ def test_h2_a_workdir_that_is_the_subfolder_still_rewrites_an_import_entry(tmp_p
         workdir=SUBFOLDER,
     )
     assert saved == [("import", "agent")]
+
+
+@pytest.mark.parametrize("mode", ["unreachable", "import", "construct"])
+@pytest.mark.parametrize("module", [".", "/", "..", "agent\x00", "a..b", "agent-1", "a/b"])
+def test_m3_a_module_that_is_not_a_dotted_identifier_is_refused(tmp_path, mode, module):
+    repo = _repo(tmp_path, {f"{SUBFOLDER}/agent.py": DEF})
+    result = accept_contract(
+        _contract(_entries(module, mode)),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder=SUBFOLDER,
+    )
+    assert result.get("is_error"), result
+    said = json.dumps(result)
+    assert "module" in said and "dotted" in said
+    assert not (tmp_path / "out" / "contract.json").exists()

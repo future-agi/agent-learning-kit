@@ -317,8 +317,11 @@ def _install_declared_python_tools() -> None:
             return True
         if loaded_as != "__main__":
             return False
-        declared_path = Path(*module.split(".")).with_suffix(".py").resolve()
-        return Path(frame.f_code.co_filename).resolve() == declared_path
+        try:
+            declared_path = Path(*module.split(".")).with_suffix(".py").resolve()
+            return Path(frame.f_code.co_filename).resolve() == declared_path
+        except Exception:  # noqa: BLE001 - an odd module name is no match, never an error
+            return False
 
     # frame id -> (frame, entry time). Holding the frame keeps its id from being
     # reused while an entry for it is still open.
