@@ -8,6 +8,8 @@ import itertools
 import json
 import os
 import random
+import subprocess
+import sys
 import tokenize
 import tracemalloc
 from collections.abc import Iterator
@@ -1782,6 +1784,7 @@ def _allocated(size: int) -> int:
 
 
 def _rounded_live() -> int:
+    """What is alive that was allocated while tracing, each block rounded as allocated."""
     return sum(_allocated(trace.size) for trace in tracemalloc.take_snapshot().traces)
 
 
@@ -1812,7 +1815,32 @@ def _hazard_peak(root: Path) -> int:
         tracemalloc.stop()
 
 
+# Run in a fresh interpreter by `_measure`: this module, then one measure of the folder given.
+_MEASURE_IN_A_FRESH_PROCESS = """
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import test_scan_walk
+print(json.dumps(test_scan_walk._measure_here(Path(sys.argv[2]))))
+"""
+
+
 def _measure(root: Path) -> dict[str, int]:
+    """`_measure_here` in a fresh interpreter, where no other thread runs. In this one, a server
+    or loop an earlier test left running can allocate while the walk is measured, and what it
+    holds would be charged to the walk."""
+    done = subprocess.run(
+        [sys.executable, "-c", _MEASURE_IN_A_FRESH_PROCESS, str(Path(__file__).parent), str(root)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr[-4000:]
+    return json.loads(done.stdout.splitlines()[-1])
+
+
+def _measure_here(root: Path) -> dict[str, int]:
     """Walk and join ``root`` under tracemalloc: what was charged, what is really kept."""
     gc.collect()
     tracemalloc.start()

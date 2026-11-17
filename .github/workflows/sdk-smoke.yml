@@ -104,6 +104,8 @@ jobs:
           --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref
           tests/test_harness_architecture.py
           tests/test_harness_credentials.py
+          tests/harness/test_controller_env.py
+          tests/harness/test_call_runner.py
           tests/test_harness_secrets.py
           tests/test_harness.py
           --deselect tests/test_harness.py::test_hosted_claude_session_uses_durable_resume_and_restricted_tools
@@ -179,6 +181,12 @@ jobs:
           version=$(python -c "import tomllib; lock = tomllib.load(open('uv.lock', 'rb')); print(next(p['version'] for p in lock['package'] if p['name'] == 'claude-agent-sdk'))")
           python -m pip install "claude-agent-sdk==$version"
           python -m pytest -q tests/harness/test_claude_cost.py
+      - name: Run the Claude Agent SDK reference on the SDK it pins
+        # Its real-CLI test runs the CLI bundled in the SDK the example pins, and refuses any other.
+        run: |
+          version=$(sed -n 's/^claude-agent-sdk==//p' examples/harness/claude_agent_sdk_support/requirements.txt)
+          python -m pip install "claude-agent-sdk==$version" 'traceai-claude-agent-sdk==0.1.2'
+          python -m pytest -q tests/harness/test_claude_agent_sdk_reference.py
       - name: Run the measuring suite with the SDK instrumentors
         # ALK's own environment has no traceAI instrumentors, so these tests would skip. They
         # run here with them, on the OpenTelemetry the lock pins (1.39.1): an older SDK flushes
