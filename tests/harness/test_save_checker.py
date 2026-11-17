@@ -579,6 +579,34 @@ def test_a_child_that_cannot_start_still_moves_the_checks_into_this_process(
     assert "running the checks in this process: the child could not start (OSError)" in warnings.text
 
 
+def test_deaths_are_in_a_row_only_while_no_save_answers_between_them(tmp_path: Path) -> None:
+    # Dies, answers, dies: two deaths in the session, but never two in a row. Without the reset
+    # in the `done` branch the third save would leave `_deaths == 2`.
+    checker, folder = _checker(
+        tmp_path,
+        {"save": [[["die", 7]]]},
+        {"save": [GOOD_SAVE, [["die", 7]]]},
+        {},
+    )
+
+    async def main() -> tuple[list[Any], int]:
+        first, second, third = await _save(checker), await _save(checker), await _save(checker)
+        deaths = checker._deaths
+        # The next save still runs in the child.
+        return [first, second, third, await _save(checker)], deaths
+
+    results, deaths = asyncio.run(main())
+
+    assert isinstance(results[0], NotInTime)
+    assert isinstance(results[1], Saved)
+    assert isinstance(results[2], NotInTime)
+    assert deaths == 1
+    assert checker._thread_reason is None
+    assert isinstance(results[3], Saved)
+    assert checker.ran_in_child == 4
+    assert len(_pids(folder)) == 3
+
+
 def test_deadline_kills_in_a_row_stay_in_the_child(
     tmp_path: Path, warnings: pytest.LogCaptureFixture
 ) -> None:
