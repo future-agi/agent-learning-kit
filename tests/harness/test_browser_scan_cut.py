@@ -928,9 +928,9 @@ def test_an_import_after_a_header_that_spans_lines_is_line_searched_and_no_cut(t
 
 
 def test_an_import_past_the_colon_cap_is_a_cut(tmp_path):
-    # The line search tries a compound statement's first 8 colons; one with more before its
+    # The line search tries a compound statement's first 8 colons outside brackets; one with more before its
     # import isn't followed, so the walk left code unread and the reading is cut, not silent.
-    line = "if a[1:2:3:4:5:6:7:8:9]: import common.util"
+    line = "if a: " * 9 + "import common.util"
     repo = _padded(
         tmp_path / "source",
         **{"agents/a/z_main.py": f"{line}\n", "common/util.py": "import playwright\n"},

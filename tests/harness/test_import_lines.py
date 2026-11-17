@@ -122,10 +122,41 @@ _FORMS = [
     ),
     pytest.param("x = 'abc\nimport a\n", [(0, "a")], True, id="unclosed-single-quote"),
     pytest.param(
-        "if a[1:2:3:4:5:6:7:8:9]: import common.util\n", [], True, id="past-the-colons-tried"
+        "if a: " * 9 + "import common.util\n", [], True, id="past-the-colons-tried"
     ),
     pytest.param(
-        "if a[1:2:3:4:5:6:7:8:9]: x = 1\nimport os\n", [(0, "os")], False, id="colons-and-no-import"
+        "if a: " * 9 + "x = 1\nimport os\n", [(0, "os")], False, id="colons-and-no-import"
+    ),
+    # Colons inside brackets (hints, slices) are no statement's colon: they are not counted.
+    pytest.param(
+        "if a[1:2:3:4:5:6:7:8:9]: import common.util\n",
+        [(0, "common.util")],
+        False,
+        id="bracketed-colons-are-not-counted",
+    ),
+    pytest.param(
+        "def f(\n"
+        + "".join(f"    p{i}: int,\n" for i in range(10))
+        + "    x_import: int,\n):\n    return 1\n",
+        [],
+        False,
+        id="typed-multi-line-def-with-an-import-parameter",
+    ),
+    pytest.param(
+        "class K:\n    def __init__(\n        self,\n        a: int = 1,\n"
+        "        b: dict[str, int] | None = None,\n        c: str = 'x',\n"
+        "        d: list[int] = [],\n        e: float = 0.0,\n        f: bool = False,\n"
+        "        g: bytes = b'',\n        h: set[int] = set(),\n"
+        "        rabbitmq_import: str | None = None,\n    ) -> None:\n        pass\n",
+        [],
+        False,
+        id="typed-init-with-a-rabbitmq-import-parameter",
+    ),
+    pytest.param(
+        "def f(\n" + "".join(f"    p{i}: int,\n" for i in range(10)) + "): import x\n",
+        [(0, "x")],
+        False,
+        id="typed-multi-line-def-then-an-import",
     ),
     # A header that runs over lines: the closing line starts with no keyword.
     pytest.param(
@@ -310,8 +341,9 @@ def test_names_past_the_limit_are_not_collected(unit):
     elapsed = time.perf_counter() - started
     assert len(found) == limit + 1
     assert capped[0]
-    # Without the limit this file takes over a second on a quiet machine; the count above is
-    # the check, and the bound only keeps a loaded runner from failing it.
+    # The count above is the check: the limit is 5,000 and a 4 MiB file of each shape holds far
+    # more, so the search stops at limit + 1 names. The time bound only keeps a loaded runner
+    # from failing it.
     assert elapsed < 10.0
 
 

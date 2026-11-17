@@ -86,10 +86,32 @@ def _joined(lines: list[str], capped: list[bool] | None) -> list[str]:
     return out
 
 
+_BRACKET_OR_COLON = re.compile(r"[()\[\]{}:]")
+
+
+def _own_colons(segment: str, most: int) -> list[int]:
+    """Where the first ``most`` colons of ``segment`` that sit outside every bracket are. A colon
+    inside brackets (a type hint, a dict, a lambda, a slice) never ends a statement's header."""
+    found: list[int] = []
+    depth = 0
+    for hit in _BRACKET_OR_COLON.finditer(segment):
+        char = hit.group()
+        if char == ":":
+            if depth == 0:
+                found.append(hit.start())
+                if len(found) >= most:
+                    break
+        elif char in "([{":
+            depth += 1
+        elif depth:
+            depth -= 1
+    return found
+
+
 def _statements(code: str, capped: list[bool] | None, most_colons: int) -> list[str]:
     """The pieces of one line of code a statement can start at: each ``;`` segment, and for a
     segment that opens a compound statement (``if True: import x``) the text after each of its
-    first ``most_colons`` colons. A piece that is no import is skipped by the caller.
+    first ``most_colons`` colons outside brackets. A piece that is no import is skipped by the caller.
     Given ``capped``, its one item is set when a segment has more colons than are tried and an
     ``import`` after the last one tried: that import isn't searched, so the caller cuts."""
     pieces: list[str] = []
@@ -97,15 +119,12 @@ def _statements(code: str, capped: list[bool] | None, most_colons: int) -> list[
         segment = segment.strip()
         pieces.append(segment)
         if _COMPOUND_START.match(segment):
-            at = -1
-            for _ in range(most_colons):
-                at = segment.find(":", at + 1)
-                if at < 0:
-                    break
+            colons = _own_colons(segment, most_colons + 1)
+            for at in colons[:most_colons]:
                 pieces.append(segment[at + 1 :].strip())
-            else:
-                rest = segment[at + 1 :]
-                if capped is not None and ":" in rest and "import" in rest:
+            if len(colons) > most_colons:
+                last = colons[most_colons - 1] if most_colons else -1
+                if capped is not None and _import_keyword(segment[last + 1 :]) >= 0:
                     capped[0] = True
     return pieces
 
