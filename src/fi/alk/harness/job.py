@@ -297,17 +297,27 @@ class HarnessJobMetadata(BaseModel):
     customer_code_environment: dict[str, str] = Field(default_factory=dict)
 
 
+_OTHER_PROVIDER_MODEL = re.compile(
+    r"(?:gemini|gemma|claude|llama|meta-llama|codellama|mistral|mixtral|codestral|ministral|"
+    r"command|deepseek|qwen|grok|phi|jamba|nova)(?:[-_.:\d]|$)",
+    re.IGNORECASE,
+)
+
+
 def routed_through_gateway(target_model: object) -> bool:
-    """True for a model name the model gateway must route, such as `vertex_ai/gemini-3.7-flash`.
+    """True for a model name the model gateway must route, such as `vertex_ai/gemini-3.7-flash`,
+    or a bare name of another provider's model, such as `gemini-2.0-flash`.
 
     The first segment is compared case-sensitively because the Agents SDK does the same: only
     the exact prefix `openai` is stripped and sent on as a bare OpenAI name.
     """
-    return (
-        isinstance(target_model, str)
-        and "/" in target_model
-        and target_model.partition("/")[0] != "openai"
-    )
+    if not isinstance(target_model, str):
+        return False
+    if "/" in target_model:
+        return target_model.partition("/")[0] != "openai"
+    # A bare name of another provider's model (gemini-2.0-flash): the gateway routes it too, and
+    # serves the SDK's default request style only for OpenAI's own models.
+    return bool(_OTHER_PROVIDER_MODEL.match(target_model))
 
 
 class HarnessJob(BaseModel):

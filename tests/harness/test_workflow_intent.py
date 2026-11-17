@@ -336,6 +336,13 @@ def test_generic_job_briefs_authoring_on_its_execution_limit(tmp_path):
         ("OpenAI/gpt-4o", True),
         ("/x", True),
         ("gpt-4o", False),
+        ("o3-mini", False),
+        # A bare name of another provider's model: the gateway routes it, not OpenAI.
+        ("gemini-2.0-flash", True),
+        ("claude-sonnet-4-20250514", True),
+        ("Llama-3.1-8B-Instruct", True),
+        ("mistral-large-latest", True),
+        ("deepseek-chat", True),
         ("openai/gpt-4o", False),
         ("openai/vertex_ai/x", False),
         (None, False),
