@@ -15,6 +15,8 @@ import io
 import json
 import os
 import sys
+import threading
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1849,9 +1851,16 @@ _CUT_OFF_REPLY = (
 @pytest.mark.parametrize(
     ("last", "code"),
     [
-        (_MARKDOWN_REPLY, "simulator_stalled"),
+        # Closing markdown wrappers are set aside; the sentence inside them ended.
         ("The refund is **submitted.**", "simulator_stalled"),
-        ("```\nrefund: R-1043\n```", "simulator_stalled"),
+        ("Your refund id is `R-1043.`", "simulator_stalled"),
+        ("Here it is:\n```\nRefund R-1043 issued.\n```", "simulator_stalled"),
+        ("Would you like me to go ahead?", "simulator_stalled"),
+        # No sentence end once wrappers are gone: cut off, as before.
+        (_MARKDOWN_REPLY, "target_agent_stalled"),
+        ("- Your refund of", "target_agent_stalled"),
+        ("The refund is **R-1043**", "target_agent_stalled"),
+        ("It will post shortly (see the order page)", "target_agent_stalled"),
         (_CUT_OFF_REPLY, "target_agent_stalled"),
     ],
 )
@@ -4928,14 +4937,51 @@ def test_the_call_process_waits_through_the_hold_it_is_given(monkeypatch) -> Non
         return "report"
 
     monkeypatch.setattr(cr.SimulationRunner, "run", run)
-    monkeypatch.setattr(cr, "_read_action_log", lambda dsn, **_: [
-        {"at": 10.0, "fault": {"mode": "timeout_before_commit", "delay_seconds": 5}}
-    ])
+    reads: list[float] = []
+    release = threading.Event()
+
+    def held_rows(dsn):
+        # A slow database: the engine's check must not wait on it.
+        reads.append(time.monotonic())
+        release.wait(5)
+        return [{"at": 10.0, "fault": {"mode": "timeout_before_commit", "delay_seconds": 5}}]
+
+    monkeypatch.setattr(cr, "_held_rows", held_rows)
     monkeypatch.setenv(cr.TOOL_HOLD_DSN, "postgresql://world")
     assert asyncio.run(cr._default_place_call(object())) == "report"
-    assert seen[0]() == 15.0
+    check = seen[0]
+    started = time.monotonic()
+    assert check() is None and check() is None
+    # Answered at once, with one read under way rather than one per check.
+    assert time.monotonic() - started < 0.5 and len(reads) == 1
+    release.set()
+    deadline = time.monotonic() + 5
+    while check() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert check() == 15.0
     # Set for that call only.
     assert livekit.TARGET_BUSY_UNTIL.get() is None
     monkeypatch.delenv(cr.TOOL_HOLD_DSN)
     asyncio.run(cr._default_place_call(object()))
     assert seen[1] is None
+
+
+def test_the_hold_is_read_from_only_the_door_s_latest_faulted_rows(monkeypatch) -> None:
+    queries: list[str] = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql):
+            queries.append(sql)
+            return SimpleNamespace(fetchall=lambda: [(10.0, {"mode": "timeout_before_commit", "delay_seconds": 5})])
+
+    monkeypatch.setattr(cr, "_read_only", lambda dsn, timeout_ms=None: Connection())
+    assert cr._held_rows("postgresql://world") == [
+        {"at": 10.0, "fault": {"mode": "timeout_before_commit", "delay_seconds": 5}}
+    ]
+    assert "WHERE fault IS NOT NULL" in queries[0] and "LIMIT" in queries[0]

@@ -268,6 +268,10 @@ class _PrivateWorkflowArtifacts:
         return str(path)
 
 
+# A conversation's turns when its scenario does not say (`Scenario.max_turns`).
+_DEFAULT_TURNS = 10
+
+
 async def probe_chat_workflow(
     *,
     job,
@@ -291,11 +295,16 @@ async def probe_chat_workflow(
     """
     from .authoring_runtime_validation import RuntimeValidationError
     from .call_runner import CallRunnerContext
-    from .chat_call_runner import HostedChatCallRunner, agent_chat_timeout_seconds, handler_child_for
+    from .chat_call_runner import HostedChatCallRunner, _scenario_document, chat_conversation_timeout, handler_child_for
     from .handler_child import HandlerChannel
     from .hosted_scheduler import CallAborted
 
-    timeout = agent_chat_timeout_seconds(job) or timeout
+    # Each reply keeps the agent's own deadline (the runner applies it); the conversation gets one per turn.
+    try:
+        turns = int(_scenario_document(bundle, scenario.scenario_key).get("max_turns") or _DEFAULT_TURNS)
+    except (CallAborted, TypeError, ValueError):
+        turns = _DEFAULT_TURNS
+    timeout = chat_conversation_timeout(job, timeout, turns)
     redactions = {
         **(secret_values or {}),
         **(redaction_values or {}),

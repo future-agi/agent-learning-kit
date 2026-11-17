@@ -1536,10 +1536,14 @@ def test_the_readiness_call_reads_calls_from_the_bundle_s_own_evidence_seam(tmp_
 @pytest.mark.parametrize(
     ("config", "budget", "deadline"),
     [
+        # No reply deadline of its own: the conversation keeps today's 300 s.
         ({}, None, "300s"),
-        ({"chat_call_timeout_seconds": 900}, None, "900s"),
-        ({"chat_call_timeout_seconds": 5000}, None, "3300s"),
-        ({"chat_call_timeout_seconds": 900}, "600", "600s"),
+        # One reply deadline per turn (the scenario's 10), within the build's budget.
+        ({"chat_call_timeout_seconds": 60}, None, "600s"),
+        ({"chat_call_timeout_seconds": 900}, None, "3300s"),
+        ({"chat_call_timeout_seconds": 900}, "1200", "1200s"),
+        # A short reply deadline never shortens the conversation below the default.
+        ({"chat_call_timeout_seconds": 20}, None, "300s"),
     ],
 )
 def test_the_private_workflow_keeps_the_agent_s_chat_call_timeout_within_the_budget(

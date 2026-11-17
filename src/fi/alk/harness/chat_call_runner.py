@@ -219,11 +219,23 @@ def agent_chat_timeout_seconds(job: Any) -> float | None:
         return None
     if seconds is None or not math.isfinite(seconds) or seconds <= 0:
         return None
+    return min(seconds, _build_budget_seconds())
+
+
+def _build_budget_seconds() -> float:
     try:
-        budget = float(os.environ.get("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS") or _BUILD_BUDGET_SECONDS)
+        return float(os.environ.get("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS") or _BUILD_BUDGET_SECONDS)
     except ValueError:
-        budget = _BUILD_BUDGET_SECONDS
-    return min(seconds, budget)
+        return _BUILD_BUDGET_SECONDS
+
+
+def chat_conversation_timeout(job: Any, default: float, turns: int) -> float:
+    """A whole conversation's deadline: `default`, or, for an agent with its own reply deadline, that deadline for each
+    of the conversation's turns when longer, never past the build's budget. A short reply deadline never shortens it."""
+    per_reply = agent_chat_timeout_seconds(job)
+    if per_reply is None:
+        return default
+    return min(max(default, per_reply * max(1, turns)), max(default, _build_budget_seconds()))
 
 
 def _chat_target_timeout_seconds() -> float:

@@ -436,6 +436,10 @@ def _sandbox_provider():
     return provider
 
 
+# The tracer names LiveKit's agents framework records its own session spans under.
+_LIVEKIT_TRACERS = ("livekit",)
+
+
 def _patch_proxy(module) -> None:
     """Serve a span asked for before any provider is set from ours, leaving the process free to set its own."""
     cls = module.ProxyTracer
@@ -446,7 +450,11 @@ def _patch_proxy(module) -> None:
 
         def wrapper(self, *args, __original=original, __method=method, **kwargs):
             try:
-                if getattr(module, "_TRACER_PROVIDER", None) is None:
+                # LiveKit's own telemetry stays its own: a voice agent's tool calls are traced by its LiveKit hook,
+                # and its session spans are never served, read or exported here.
+                if getattr(module, "_TRACER_PROVIDER", None) is None and not str(
+                    getattr(self, "_instrumenting_module_name", "") or ""
+                ).startswith(_LIVEKIT_TRACERS):
                     tracer = _sandbox_provider().get_tracer(
                         self._instrumenting_module_name
                     )

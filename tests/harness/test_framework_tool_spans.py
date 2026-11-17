@@ -529,6 +529,26 @@ def test_a_process_that_sets_no_provider_is_still_observed(tmp_path: Path) -> No
     assert _by_tool(records) == {"lookup": ("Worker", None)}
 
 
+def test_a_voice_agent_s_livekit_session_spans_are_never_served_read_or_exported(tmp_path: Path) -> None:
+    """Observation is on in a voice agent too; LiveKit's own tracer (`livekit-agents`) stays as it was, a no-op with no
+    provider, so its session and tool spans never reach the trace or an exporter. A framework's tracer is served."""
+    records = _run(
+        tmp_path,
+        """
+        livekit = trace.get_tracer("livekit-agents")
+        with livekit.start_as_current_span("function_tool", attributes={
+            "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "issue_refund", "lk.function_tool.name": "issue_refund",
+        }) as session_span:
+            assert not session_span.is_recording()
+        with span("Refund worker", **{"gen_ai.span.kind": "AGENT", "agent.name": "Refund worker"}):
+            with span("lookup", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "lookup"}):
+                pass
+    """,
+        provider="",
+    )
+    assert _by_tool(records) == {"lookup": ("Refund worker", None)}
+
+
 def test_a_process_that_sets_its_own_provider_later_keeps_it(tmp_path: Path) -> None:
     records = _run(
         tmp_path,

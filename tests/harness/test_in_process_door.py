@@ -945,3 +945,27 @@ def test_a_tool_behind_the_door_keeps_hints_a_framework_can_read_from_a_copy_of_
     copy.__annotations__ = held.__annotations__
     assert typing.get_type_hints(copy)["tool_context"] is concierge_tools.ToolContext
     assert typing.get_type_hints(held)["key"] is str
+
+
+def test_adk_describes_a_tool_behind_the_door_whose_context_is_a_postponed_annotation(tmp_path, monkeypatch) -> None:
+    """The same, through ADK's own FunctionTool: the declaration it builds for the model."""
+    adk_tools = pytest.importorskip("google.adk.tools")
+    # The sandbox's ADK built declarations from the tool's type hints, not a JSON schema: take that path here too.
+    monkeypatch.setenv("ADK_DISABLE_JSON_SCHEMA_FOR_FUNC_DECL", "1")
+    module = tmp_path / "concierge_memory.py"
+    module.write_text(
+        "from __future__ import annotations\n"
+        "from google.adk.tools import ToolContext\n"
+        "def memorize(key: str, value: str, tool_context: ToolContext) -> dict:\n    return {'status': 'stored'}\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    import concierge_memory
+
+    held = bootstrap.door("memorize")(concierge_memory.memorize)
+    declaration = adk_tools.FunctionTool(held)._get_declaration()
+    assert declaration.name == "memorize"
+    # The path the sandbox's ADK took: the tool copied without `tool_context`, its hints read from the copy.
+    from google.adk.tools._automatic_function_calling_util import build_function_declaration
+
+    built = build_function_declaration(func=held, ignore_params=["tool_context"])
+    assert built.name == "memorize" and "tool_context" not in str(built)

@@ -245,21 +245,16 @@ _CONVERSATION_STALL_FAILURE_CODES = frozenset(
 )
 
 
-# Markdown an agent's reply may close on after its last sentence: emphasis, code, quotes and closing brackets.
-_MARKDOWN_TAIL = re.compile(r"[\s*_`~\])}\"'\u201d\u2019]+$")
-# A last line that is a list item, a table row or a code fence ends a block, not a sentence cut short.
-_MARKDOWN_BLOCK_END = re.compile(r"^(?:[-*+]\s+\S|\d+[.)]\s+\S|\||```)")
+# Closing markdown wrappers a reply may end on after its last sentence: bold, inline code and a code fence.
+_CLOSING_MARKDOWN = re.compile(r"(?:\*\*|```|`)\s*$")
 
 
 def _ends_a_turn(content: str) -> bool:
-    """Whether a reply ends where a speaker could stop: a sentence's end, once trailing markdown is set aside, or a
-    markdown block's last list item, table row or code fence."""
+    """Whether a reply ends where a speaker could stop: sentence-final punctuation, once closing markdown wrappers are
+    set aside. Nothing else counts: a list item or a bracket with no sentence end still reads as cut off."""
     text = content.rstrip()
-    if not text:
-        return False
-    if _MARKDOWN_BLOCK_END.match(text.splitlines()[-1].strip()):
-        return True
-    text = _MARKDOWN_TAIL.sub("", text)
+    while (stripped := _CLOSING_MARKDOWN.sub("", text).rstrip()) != text:
+        text = stripped
     return bool(text) and text[-1] in ".?!"
 
 
@@ -380,21 +375,41 @@ def held_until(rows: Sequence[Mapping[str, Any]]) -> float | None:
     return max(ends) if ends else None
 
 
+# The most recent of the door's held calls a read looks at; a trial makes only a few.
+_HOLD_ROWS = 20
+
+
+def _held_rows(dsn: str) -> list[dict[str, Any]]:
+    """The door's latest rows that carry a fault: only what the hold is read from, bounded in rows and time."""
+    with _read_only(dsn, timeout_ms=500) as connection:
+        cursor = connection.execute(
+            f'SELECT at, fault FROM "{_TOOL_TRACE_TABLE}" WHERE fault IS NOT NULL '  # noqa: S608 - fixed identifier
+            f"ORDER BY at DESC LIMIT {_HOLD_ROWS}"
+        )
+        return [{"at": at, "fault": fault} for at, fault in cursor.fetchall()]
+
+
 def _hold_reader(dsn: str) -> Callable[[], float | None]:
-    """The engine's check of a held tool call, read from the action log at most once a second; a failed read is no
-    hold."""
-    last: list[float | None] = [None]
-    read_at = [float("-inf")]
+    """The engine's check of a held tool call. The engine asks from its event loop, so the answer is the last one read
+    and never waits: a read runs in its own thread at most once a second, and a failed one is no hold."""
+    lock = threading.Lock()
+    state: dict[str, Any] = {"until": None, "read_at": float("-inf"), "reading": False}
+
+    def refresh() -> None:
+        try:
+            until = held_until(_held_rows(dsn))
+        except Exception:  # noqa: BLE001 - the backstop then waits as it always has
+            until = None
+        with lock:
+            state["until"], state["reading"] = until, False
 
     def read() -> float | None:
         now = time.monotonic()
-        if now - read_at[0] >= _HOLD_READ_SECONDS:
-            read_at[0] = now
-            try:
-                last[0] = held_until(_read_action_log(dsn, timeout_ms=500))
-            except Exception:  # noqa: BLE001 - the backstop then waits as it always has
-                last[0] = None
-        return last[0]
+        with lock:
+            if not state["reading"] and now - state["read_at"] >= _HOLD_READ_SECONDS:
+                state["reading"], state["read_at"] = True, now
+                threading.Thread(target=refresh, name="alk-tool-hold", daemon=True).start()
+            return state["until"]
 
     return read
 
