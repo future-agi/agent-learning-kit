@@ -66,6 +66,18 @@ def test_every_copy_keeps_the_text_of_every_reply_shape(copy_name, content, expe
     assert _copy(copy_name)(content) == expected
 
 
+GUARDED = (
+    "_TEXT_KINDS",
+    "_MISSING",
+    "_MOST_DEPTH",
+    "_field",
+    "_is_text_block",
+    "_block_text",
+    "_is_message",
+    "_text_of",
+)
+
+
 def test_the_three_copies_are_the_same_code():
     regions = {name: _region(path) for name, path in COPIES.items()}
     assert len(set(regions.values())) == 1, "text_of copies drifted"
@@ -79,7 +91,7 @@ def test_the_three_copies_are_the_same_code():
             if isinstance(t, ast.Name)
         ]
         names += [node.name for node in body if isinstance(node, ast.FunctionDef)]
-        for helper in ("_TEXT_KINDS", "_MISSING", "_field", "_block_text", "_text_of"):
+        for helper in GUARDED:
             assert names.count(helper) == 1, (
                 f"{name} defines {helper} {names.count(helper)} times"
             )
@@ -381,3 +393,15 @@ def test_the_frameworks_probe_reports_only_the_text_of_a_block_reply():
 )
 def test_records_with_a_type_or_role_key_stay_json(reply, expected):
     assert _generic_reply(reply) == expected
+
+
+def test_the_drift_guard_names_every_helper_of_the_region():
+    """A name defined in the region but not in the guard can be rebound outside it unseen."""
+    tree = ast.parse(_region(COPIES["content"]))
+    defined = set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            defined.add(node.name)
+        if isinstance(node, ast.Assign):
+            defined |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+    assert defined == set(GUARDED)
