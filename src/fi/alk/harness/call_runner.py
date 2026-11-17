@@ -70,6 +70,8 @@ from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_ac
 from .actor_meter import ActorMeter
 from .world_door import (
     APPROVAL_REQUIRED,
+    APPROVAL_UNKNOWN,
+    FAULTS_UNKNOWN,
     DOOR_OUT_OF_REACH,
     EGRESS_BLOCKED,
     EVIDENCE_INCOMPLETE,
@@ -958,6 +960,15 @@ def _unrecorded(row: Mapping[str, Any]) -> bool:
     return row.get("refusal_code") == EVIDENCE_INCOMPLETE
 
 
+def _calls_marked(row: Mapping[str, Any]) -> int:
+    """How many of the agent's calls one mark stands for: a mark for a door out of reach counts every call made while
+    it was, with how many in its arguments; any other mark is one call."""
+    arguments = _arguments(row.get("arguments"))
+    if row.get("error") == DOOR_OUT_OF_REACH and isinstance(arguments, dict):
+        return _int_or(arguments.get("count"), 1)
+    return 1
+
+
 def evidence_notices(
     log: Sequence[Mapping[str, Any]] | None, calls: Sequence[Call] = (), held: Collection[str] = ()
 ) -> list[dict[str, Any]]:
@@ -966,13 +977,7 @@ def evidence_notices(
     (`held`) are counted against the rows the log holds for it, so a door down for the rest of the trial is seen."""
     missing = [row for row in log or () if _unrecorded(row)]
     why = sorted({str(row.get("error") or "") for row in missing} - {""})
-    # One mark stands for every call made while the door was out of reach, with how many in its arguments.
-    count = sum(
-        _int_or(dict(_arguments(row.get("arguments")) or {}).get("count"), 1)
-        if row.get("error") == DOOR_OUT_OF_REACH and isinstance(_arguments(row.get("arguments")), dict)
-        else 1
-        for row in missing
-    )
+    count = sum(_calls_marked(row) for row in missing)
     for tool in sorted(set(held)):
         made = sum(1 for call in calls if call.name == tool)
         logged = sum(
@@ -980,7 +985,7 @@ def evidence_notices(
             for row in log or ()
             if (row.get("actor_id") or AGENT) == AGENT and str(row.get("name") or "") == tool and is_attempt(row)
         )
-        marked = sum(1 for row in missing if str(row.get("name") or "") == tool)
+        marked = sum(_calls_marked(row) for row in missing if str(row.get("name") or "") == tool)
         unseen = made - logged - marked
         if unseen > 0:
             count += unseen
@@ -1311,7 +1316,7 @@ def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[s
     is the agent's own words, so a retry that rewords it is still the same write; any other argument may name the
     record, so a different value (order-A, order-B, or 7, 8) is another write."""
     one, two = _arguments(first.get("arguments")), _arguments(later.get("arguments"))
-    if one == two:
+    if _exactly(one, two):
         return True
     if not isinstance(one, dict) or not isinstance(two, dict):
         return False
@@ -1319,11 +1324,16 @@ def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[s
     if not carried:
         return False
     others = (set(one) | set(two)) - set(fixed)
-    return all(one.get(field) == two.get(field) for field in carried) and all(
-        one.get(field) == two.get(field)
+    return all(_exactly(one.get(field), two.get(field)) for field in carried) and all(
+        _exactly(one.get(field), two.get(field))
         for field in others
         if not (_free_text(field) and isinstance(one.get(field), str) and isinstance(two.get(field), str))
     )
+
+
+def _exactly(one: Any, two: Any) -> bool:
+    """Equal as the same JSON: `true` is never `1`, nor `1.0` the integer `1`."""
+    return json.dumps(one, sort_keys=True, default=str) == json.dumps(two, sort_keys=True, default=str)
 
 
 def _arguments(value: Any) -> Any:
@@ -1642,7 +1652,19 @@ def fault_notices(
         # fault's row, or a world failure on another call, is not this one applied. An approval hold is in force on
         # every call the door saw, refused or let through after the approval.
         own = rows[on_call - 1] if 0 < on_call <= len(rows) else None
-        if (own is not None and _fault_applied(own)) or (mode == APPROVAL_REQUIRED and rows):
+        if own is not None and own.get("refusal_code") in (FAULTS_UNKNOWN, APPROVAL_UNKNOWN):
+            # The door held the call because it could not read the trial's faults or the approval: whether this fault
+            # held it is unknown.
+            notices.append({**base, "code": "fault_unreadable",
+                            "message": f"The {mode} fault on call {on_call} of {action} could not be applied: the "
+                                       "world's door could not read the trial's test conditions on that call."})
+            continue
+        if (own is not None and _fault_applied(own, fault)) or (mode == APPROVAL_REQUIRED and rows):
+            continue
+        if own is not None and own.get("outcome") == "faulted":
+            notices.append({**base, "code": "fault_not_applied",
+                            "message": f"The {mode} fault on call {on_call} of {action} could not be applied: the "
+                                       "world failed on that call before the fault could take effect."})
             continue
         # A call the door logged as another action with the same last part is that action's.
         others = sum(
@@ -1707,12 +1729,21 @@ def unmeasured_reasons(notices: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
     return tuple(str(one.get("message") or one.get("code")) for one in notices if one.get("code") in UNMEASURED_NOTICES)
 
 
-def _fault_applied(row: Mapping[str, Any]) -> bool:
-    """The door's row for a fault it applied: refused before commit (`faulted`), or committed with the answer lost
-    (`timeout_after_commit` keeps the commit and records `response_lost`)."""
-    return row.get("outcome") == "faulted" or (
-        row.get("outcome") == "committed" and row.get("error") == "response_lost"
-    )
+def _fault_applied(row: Mapping[str, Any], fault: Mapping[str, Any]) -> bool:
+    """Whether the row is the door applying this fault, by what each mode leaves on it: held before commit with the
+    mode's own reason (`unavailable`, `timeout_before_commit`, an error's message), or committed with the answer lost
+    (`timeout_after_commit`). A world that failed, or a door that could not decide, leaves another row."""
+    mode = str(fault.get("mode") or "")
+    error = str(row.get("error") or "")
+    if row.get("refusal_code"):
+        return False
+    if mode == "timeout_after_commit":
+        return row.get("outcome") == "committed" and error == "response_lost"
+    if row.get("outcome") != "faulted":
+        return False
+    if mode == "error":
+        return error == (str(fault.get("message") or "").strip() or "error")[:2000]
+    return error == mode if mode in ("unavailable", "timeout_before_commit") else False
 
 
 def _int_or(value: Any, default: int) -> int:

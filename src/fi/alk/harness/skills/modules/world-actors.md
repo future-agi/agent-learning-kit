@@ -19,7 +19,7 @@ who knows the details, someone who takes the phone, a phone menu, a manager acti
 already decided before the run starts is a record in the seed, not an actor.
 
 **What an actor may do is world data.** An actor's `permitted_actions` are chosen only from the world's own actions
-or a record change on one of the world's collections (`approvals.put` with the new record's fields, `approvals.change`
+or a record change on one of the world's collections (`<access collection>.put` with the new record's fields, `<access collection>.change`
 with `where` and `set`); `add_actor`'s reply lists both. The list is exactly what that person may do: when the request says who may do what, each actor gets those
 actions and nothing more, and every permission asked for appears on someone's list. A decision a person makes (an
 approval, a rejection, a grant of access) is a record change on the collection the world's rule reads, never one of the

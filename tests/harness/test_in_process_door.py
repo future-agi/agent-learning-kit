@@ -627,3 +627,22 @@ def test_the_trial_s_faults_read_as_none_only_when_none_were_ever_set(monkeypatc
     else:
         with pytest.raises(error):
             proxy._trial_faults()
+
+
+def test_a_mark_for_several_calls_counts_each_of_them_once():
+    """Three refunds, one recorded and two run while the door was out of reach, told in one mark of count 2: two
+    calls are unrecorded, never four."""
+    from fi.alk.harness.call_runner import evidence_notices
+    from fi.alk.harness.world.runtime import Call
+    from fi.alk.harness.world_door import DOOR_OUT_OF_REACH, EVIDENCE_INCOMPLETE
+
+    log = [
+        {"name": "issue_refund", "actor_id": "agent", "outcome": "committed"},
+        {"name": "issue_refund", "actor_id": "agent", "outcome": "unrecorded", "error": DOOR_OUT_OF_REACH,
+         "refusal_code": EVIDENCE_INCOMPLETE, "arguments": {"count": 2}},
+    ]
+    calls = [Call(name="issue_refund", arguments={}, ok=True) for _ in range(3)]
+
+    [notice] = evidence_notices(log, calls, {"issue_refund"})
+
+    assert notice["count"] == 2

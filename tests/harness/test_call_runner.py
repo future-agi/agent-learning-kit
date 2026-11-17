@@ -3602,3 +3602,13 @@ def test_each_call_is_paired_with_its_own_row_past_a_door_mark_and_a_row_from_be
     marks = cr._agent_marks(object(), Path("."), calls)
 
     assert [(one["action_id"], one["outcome"]) for one in marks] == [("a1", "committed"), ("a2", "refused")]
+
+
+def test_a_retry_whose_flag_is_true_where_the_first_had_1_is_another_write():
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    log = [
+        _logged("issue_refund", {"order": 7, "notify": 1}, error="response_lost"),
+        _logged("issue_refund", {"order": 7, "notify": True}),
+    ]
+    assert duplicate_commits(log) == []

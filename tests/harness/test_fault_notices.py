@@ -18,7 +18,7 @@ def _call(name: str) -> Call:
 
 
 def test_a_fault_the_door_applied_says_nothing():
-    log = [{"name": "apply_discount", "outcome": "faulted"}]
+    log = [{"name": "apply_discount", "outcome": "faulted", "error": "timeout_before_commit"}]
     assert fault_notices([FAULT], log, [_call("apply_discount")]) == []
 
 
@@ -182,3 +182,24 @@ def test_a_fault_is_applied_only_on_its_own_call_never_by_another_fault_s_row():
     notices = fault_notices([first, third], log.rows(), [_call("apply_discount"), _call("apply_discount")])
 
     assert [(one["on_call"], one["code"]) for one in notices] == [(3, "fault_not_triggered")]
+
+
+@pytest.mark.parametrize(
+    ("row", "code"),
+    [
+        ({"outcome": "faulted", "error": "RuntimeError: unavailable"}, "fault_not_applied"),
+        ({"outcome": "faulted", "error": "this trial's test conditions could not be read",
+          "refusal_code": "faults_unknown"}, "fault_unreadable"),
+        ({"outcome": "faulted", "error": "whether this action was approved could not be read",
+          "refusal_code": "approval_unknown"}, "fault_unreadable"),
+    ],
+    ids=["world failed", "faults unreadable", "approval unreadable"],
+)
+def test_a_held_call_that_is_not_the_fault_never_reads_as_the_fault_applied(row, code):
+    from fi.alk.harness.call_runner import unmeasured_reasons
+
+    notices = fault_notices([FAULT], [{"name": "apply_discount", **row}], [_call("apply_discount")])
+
+    assert [one["code"] for one in notices] == [code]
+    assert unmeasured_reasons(notices)
+    assert "outside the world's door" not in notices[0]["message"]
