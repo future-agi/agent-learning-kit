@@ -1,6 +1,6 @@
 # Supported frameworks
 
-Generated from `src/fi/alk/harness/data/framework_support.json` (decision record ADR-006); a test keeps this page equal to it, and `agent-learn capabilities` carries the file as `framework_support`.
+Generated from `src/fi/alk/harness/data/framework_support.json`; a test keeps this page equal to it.
 
 - **Found:** the kit names the framework from the code.
 - **Read:** a real reading described the reference agent correctly.
@@ -50,7 +50,7 @@ Generated from `src/fi/alk/harness/data/framework_support.json` (decision record
 - **OpenAI Agents SDK:** Readings stored before #341 merges need reading again.
 - **OpenAI Agents SDK:** The kit's own hook also runs on openai-agents 0.18.3 and 0.20.0 in CI.
 - **Pipecat, read:** No reference agent and no reading.
-- **Pipecat, run:** Hosted Pipecat runs are not built (ADR-001).
+- **Pipecat, run:** Hosted Pipecat runs are not built.
 - **Pipecat:** Recognised by name only.
 - **Pydantic AI, read:** The 12 Nov reading described the agent, but it ran on a local merge of then-open pull requests: no single kit commit holds that reference agent and reading code, and no expectation was written first. Waits on a new reading on a kit commit merged here, against a written expectation.
 - **Pydantic AI, run:** Four of the five checks passed from its reading; stopping wasn't recorded.

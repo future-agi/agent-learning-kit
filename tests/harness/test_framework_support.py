@@ -1,4 +1,4 @@
-"""The supported-frameworks list (ADR-006): every claim backed by evidence that exists."""
+"""The supported-frameworks list: every claim backed by evidence that exists."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def test_every_layer_uses_known_words_and_a_pending_one_says_what_it_waits_on() 
                 assert item["kind"] in EVIDENCE_KINDS, (entry["key"], layer, item)
                 if item["kind"] == "real_run":
                     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", item["date"]), item
-                    # ADR-006: each real run names the model that did the reading.
+                    # Each real run names the model that did the reading.
                     assert item.get("model"), item
                     assert item.get("result") in ("pass", "miss"), item
                     # `kit` is null when no single commit holds what ran.
@@ -231,6 +231,7 @@ def test_every_tested_version_is_a_pin_of_its_reference_or_a_ci_row() -> None:
                     pins.add(f"{match.group(1)}=={match.group(2)}")
         for version in entry["tested_versions"]:
             package, _, number = version.partition("==")
+            assert package == entry["package"], (entry["key"], version)
             in_ci = version in SMOKE or (
                 f"{package}==" in SMOKE and f'"{number}"' in SMOKE
             )
@@ -253,10 +254,22 @@ def test_the_docs_page_is_generated_from_the_file() -> None:
     assert page == framework_support.markdown_page()
 
 
-def test_capabilities_carry_the_file_as_framework_support() -> None:
-    from fi.alk.capabilities import capability_catalog
+def _pins(reference: str) -> dict[str, str]:
+    pins = {}
+    requirements = REPO / reference / "requirements.txt"
+    for line in requirements.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"([A-Za-z0-9_.-]+)(?:\[[^]]*\])?==(\S+)", line.strip())
+        if match:
+            pins[match.group(1)] = match.group(2)
+    return pins
 
-    catalog = capability_catalog()
-    assert catalog["framework_support"] == framework_support.load()
-    # The simulate SDK's adapter names stay where they were, unchanged.
-    assert "frameworks" in catalog["capabilities"]
+
+def test_pinned_versions_are_the_references_pin_of_the_entrys_own_package() -> None:
+    for entry in ENTRIES:
+        package = entry["package"]
+        if entry["reference"] is None:
+            assert entry["pinned_versions"] == [], entry["key"]
+            continue
+        pins = _pins(entry["reference"])
+        assert package in pins, (entry["key"], package)
+        assert entry["pinned_versions"] == [f"{package}=={pins[package]}"], entry["key"]

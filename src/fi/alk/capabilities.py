@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -242,7 +241,6 @@ def capability_catalog(
         "capabilities": capabilities,
         "consolidation": _consolidation_metadata(),
         "provider_capabilities": provider_capabilities(),
-        "framework_support": framework_support(),
         "research_sources": copy.deepcopy(RESEARCH_SOURCES),
         "summary": {
             "artifact_count": len(artifacts),
@@ -258,25 +256,6 @@ def capability_catalog(
         "findings": findings,
     }
     return payload
-
-
-# The supported-frameworks list (decision record ADR-006). Read as a file, so this command doesn't
-# load the harness; the harness's own loader is `fi.alk.harness.framework_support`, and a test
-# keeps the two equal.
-_FRAMEWORK_SUPPORT = (
-    Path(__file__).resolve().parent / "harness" / "data" / "framework_support.json"
-)
-_FRAMEWORK_SUPPORT_SCHEMA = "futureagi.framework-support.v1"
-
-
-def framework_support() -> dict[str, Any]:
-    """The frameworks a user can bring an agent in, how far each is proven, and the evidence."""
-    document = json.loads(_FRAMEWORK_SUPPORT.read_text(encoding="utf-8"))
-    if document.get("schema_version") != _FRAMEWORK_SUPPORT_SCHEMA:
-        raise ValueError(
-            f"unknown framework-support schema: {document.get('schema_version')!r}"
-        )
-    return document
 
 
 def static_capabilities() -> dict[str, list[str]]:

@@ -1,19 +1,23 @@
 """The supported-frameworks list: the frameworks a user can bring an agent in, and how far each is
-proven (decision record ADR-006).
+proven.
 
 The list is data, `data/framework_support.json` beside this file, because the platform doesn't
-import the kit and copies the file. This loader reads it, `agent-learn capabilities` carries it
-as `framework_support`, and `docs/frameworks/supported.md` is generated from it
-(`markdown_page()`); a test keeps the page equal to the file. `fi.simulate.supported_frameworks()`
+import the kit and reads a copy of the file. This loader reads it, and `docs/frameworks/supported.md`
+is generated from it (`markdown_page()`); a test keeps the page equal to the file. `fi.simulate.supported_frameworks()`
 (the simulate SDK's adapter names) is a different thing and is never this list.
 
 Schema `futureagi.framework-support.v1`. Changes are additive, a reader ignores fields it doesn't
 know, and a rename or removal needs a new schema version agreed with the platform first.
 
 One entry per framework, keyed by the reader's ten words (`scan_document.FRAMEWORK_NAMES`):
-`key`, `name`, `package`, `tested_versions` (exact `package==version`, the reference agent's own
-environment, each equal to a pin in its `requirements.txt` or a CI row), `python`, `reference`
-(the reference agent's folder), `layers` and `limits` (plain sentences).
+`key`, `name`, `package`, `tested_versions`, `pinned_versions`, `python`, `reference` (the
+reference agent's folder), `layers` and `limits` (plain sentences).
+
+- `tested_versions`: exact `package==version` strings a real run of the reference agent used (a
+  run-layer real run or a CI row that runs the agent). A reading doesn't start the framework, so it
+  doesn't make a version tested.
+- `pinned_versions`: the entry's package as pinned in the reference's `requirements.txt` (empty
+  with no reference).
 
 `layers` has `found`, `read`, `run` and `platform`, each `{status, evidence, note}`:
 
@@ -25,8 +29,12 @@ environment, each equal to a pin in its `requirements.txt` or a CI row), `python
 - **platform**: connected through the platform's own screens and saved as Agent and version 1.
 
 Status is `proven`, `pending` (the note says what it waits on) or `not_proven`. Evidence is a list
-of `{kind, ref, date}`, kind `test` (a test id) or `real_run` (a record and its date). Read and run
-are proven only by a real run: a real model on a real reference agent, never stand-in modules.
+of `{kind, ref, date}`, kind `test` (a test id) or `real_run` (a record and its date). A `real_run`
+item also has `model` (the reading model), `result` (`pass` or `miss`) and `kit` (the kit commit it
+ran on, or null when no single commit holds what ran). Read and run are proven only by a passing
+real run on a kit commit merged here that holds the reference agent: a real model on a real
+reference agent, never stand-in modules. A run on an agent outside the kit leaves its layer
+pending until the kit holds a reference agent.
 """
 
 from __future__ import annotations
@@ -84,9 +92,8 @@ def markdown_page(path: Path = DATA) -> str:
     lines = [
         "# Supported frameworks",
         "",
-        "Generated from `src/fi/alk/harness/data/framework_support.json` (decision record "
-        "ADR-006); a test keeps this page equal to it, and `agent-learn capabilities` carries "
-        "the file as `framework_support`.",
+        "Generated from `src/fi/alk/harness/data/framework_support.json`; a test keeps this "
+        "page equal to it.",
         "",
         "- **Found:** the kit names the framework from the code.",
         "- **Read:** a real reading described the reference agent correctly.",
