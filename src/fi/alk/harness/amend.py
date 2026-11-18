@@ -68,8 +68,9 @@ def widen(
     spec = next((tool for tool in contract.tools if tool.name == tool_name), None)
     if spec is None:
         return False, (
-            f"{tool_name!r} is not a tool this agent has. It has: "
-            f"{', '.join(sorted(contract.tool_names()))}"
+            f"{tool_name!r} is not in the contract. It has: "
+            f"{', '.join(sorted(contract.tool_names()))}. To add a tool the agent's source defines "
+            "(one it gained, or one an earlier version removed), use declare_tool."
         )
     if argument not in spec.args:
         return False, (
@@ -252,8 +253,9 @@ def fix_tool(
     spec = next((tool for tool in contract.tools if tool.name == tool_name), None)
     if spec is None:
         return False, (
-            f"{tool_name!r} is not a tool this agent has. It has: "
-            f"{', '.join(sorted(contract.tool_names()))}"
+            f"{tool_name!r} is not in the contract. It has: "
+            f"{', '.join(sorted(contract.tool_names()))}. To add a tool the agent's source defines "
+            "(one it gained, or one an earlier version removed), use declare_tool."
         )
 
     if remove:

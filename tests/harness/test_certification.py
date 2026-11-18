@@ -443,3 +443,137 @@ def test_chat_applicability_uses_bound_contract_and_provider_mode(
         agent=SimpleNamespace(mode=ProviderExecutionMode.CONNECT_ONLY),
     )
     assert requires_chat_ingress(job, tmp_path) is required
+
+
+def test_old_certificate_keeps_its_fingerprint() -> None:
+    certificate = _certificate()
+    body = certificate.model_dump_json()
+
+    for unrecorded in ("harness_version", "frameworks", "judge_reachable", "process_isolation", "door_user"):
+        assert unrecorded not in body
+    again = HarnessCertification.model_validate_json(body)
+    assert again.fingerprint == certificate.fingerprint
+    assert again.model_dump_json() == body
+
+
+def test_certificate_records_harness_and_frameworks() -> None:
+    held = _certificate()
+    certificate = HarnessCertification.create(
+        status=held.status,
+        source=held.source,
+        authoring=held.authoring,
+        compiler=held.compiler,
+        runtime=CertificationRuntime(
+            snapshot="snapshot-r1",
+            validation_attempts=1,
+            harness_version="0.3.1",
+            frameworks={"langchain-core": "0.3.12"},
+            process_isolation="per_user",
+            door_user="svc-tools",
+        ),
+        checks=held.checks.model_copy(update={"judge_reachable": CheckStatus.FAILED}),
+        repairs=held.repairs,
+        limitations=held.limitations,
+    )
+    body = json.loads(certificate.model_dump_json())
+
+    assert body["runtime"]["harness_version"] == "0.3.1"
+    assert body["runtime"]["frameworks"] == {"langchain-core": "0.3.12"}
+    assert (body["runtime"]["process_isolation"], body["runtime"]["door_user"]) == ("per_user", "svc-tools")
+    assert body["checks"]["judge_reachable"] == "failed"
+    assert certificate.fingerprint != held.fingerprint
+    assert HarnessCertification.model_validate(body).fingerprint == certificate.fingerprint
+
+
+def _authoring_with(tmp_path: Path, *, judged: str) -> Path:
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    (authoring / "sub_goals.json").write_text(
+        json.dumps(
+            {
+                "sub_goals": [
+                    {"name": "refund_issued", "check": "def check(world, calls):\n    return None\n"},
+                    {"name": "refusal_explained", "judged": judged},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return authoring
+
+
+@pytest.mark.parametrize(("judged", "calls"), [("Pass: the refusal names the policy.", 1), ("", 0)])
+def test_judge_check_runs_only_with_judged_sub_goals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, judged: str, calls: int
+) -> None:
+    from fi.alk.harness import authoring_runtime_validation, judge
+
+    asked: list[float] = []
+
+    def unreachable(timeout: float = 20) -> str:
+        asked.append(timeout)
+        return "failed"
+
+    monkeypatch.setattr(judge, "judge_reachable", unreachable)
+    checks = _certificate().checks
+
+    found = authoring_runtime_validation._with_judge_check(
+        checks, _authoring_with(tmp_path, judged=judged)
+    )
+
+    assert len(asked) == calls
+    assert found.judge_reachable == (CheckStatus.FAILED if calls else None)
+
+
+def test_judge_unreachable_without_a_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fi.alk.harness import judge
+
+    monkeypatch.setattr(judge, "provider_env", lambda model: {})
+
+    assert judge.judge_reachable(timeout=1) == "failed"
+
+
+def test_frameworks_are_read_from_the_agents_environment(tmp_path: Path) -> None:
+    from fi.alk.harness.generated_runtime import installed_frameworks
+
+    packages = tmp_path / ".venv" / "lib" / "python3.11" / "site-packages"
+    for name, version in (
+        ("langchain_core", "0.3.12"),
+        ("opentelemetry_api", "1.30.0"),
+        ("requests", "2.32.0"),
+    ):
+        info = packages / f"{name}-{version}.dist-info"
+        info.mkdir(parents=True)
+        (info / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: {name.replace('_', '-')}\nVersion: {version}\n",
+            encoding="utf-8",
+        )
+
+    # A distribution that only marks how spans are made is not a framework.
+    assert installed_frameworks(tmp_path) == {"langchain-core": "0.3.12"}
+
+
+def test_the_interpreter_counts_only_the_frameworks_the_agent_declares(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    import subprocess
+
+    from fi.alk.harness import generated_runtime
+
+    # The interpreter the agent is installed into also holds the harness's own dependencies.
+    installed = {"claude-agent-sdk": "0.2.156", "google-adk": "2.7.1", "crewai": "0.80.0"}
+
+    def run(command, **_kwargs):
+        listed = json.loads(command[2].split("w = ", 1)[1].split("\n", 1)[0].replace("'", '"'))
+        found = {name: version for name, version in installed.items() if name in listed}
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(found), stderr="")
+
+    monkeypatch.setattr(generated_runtime.subprocess, "run", run)
+    (tmp_path / "requirements.txt").write_text("crewai==0.80.0\nrequests\n", encoding="utf-8")
+
+    assert generated_runtime.installed_frameworks(tmp_path) == {"crewai": "0.80.0"}
+    # An agent that declares none records none, not the harness's own.
+    (tmp_path / "requirements.txt").write_text("requests\n", encoding="utf-8")
+    assert generated_runtime.installed_frameworks(tmp_path) == {}
+    assert generated_runtime.installed_frameworks(None) == {}

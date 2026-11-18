@@ -95,6 +95,17 @@ def _scenario(name: str = "adds-a-big-mac", **overrides) -> dict:
             {"tool": "add", "arguments": {"item_id": "big_mac"}},
         ],
         "sub_goals": ["item-added", "right-item"],
+        "negative_controls": [
+            {
+                "name": "adds_twice",
+                "why": "adds the item twice",
+                "steps": [
+                    {"tool": "lst", "arguments": {}},
+                    {"tool": "add", "arguments": {"item_id": "big_mac"}},
+                    {"tool": "add", "arguments": {"item_id": "big_mac"}},
+                ],
+            }
+        ],
     }
     payload.update(overrides)
     return payload
@@ -968,6 +979,86 @@ def test_a_deferred_scenario_is_not_checked_rather_than_a_problem(tmp_path, monk
     assert problems == [] and not_checked == ["adds-a-big-mac"]
 
 
+def _edit_scenario(root: Path, name: str, **fields) -> None:
+    body = root / "scenarios" / name / "scenario.json"
+    payload = json.loads(body.read_text(encoding="utf-8"))
+    payload.update(fields)
+    body.write_text(json.dumps(payload), encoding="utf-8")
+
+
+_ADDS_ONCE = {
+    "name": "adds_once",
+    "why": "adds the item once",
+    "steps": [{"tool": "lst", "arguments": {}}, {"tool": "add", "arguments": {"item_id": "big_mac"}}],
+}
+
+
+@pytest.mark.parametrize(
+    ("fields", "said"),
+    [
+        ({"negative_controls": [_ADDS_ONCE]}, "the checks pass a wrong behaviour"),
+        (
+            {"instruction": "Order one Big Mac. This tests whether the agent reaches the menu before adding the item "
+             "it was asked for."},
+            "gives the answer away",
+        ),
+    ],
+    ids=["control-the-checks-pass", "leaked-answer"],
+)
+def test_a_rebuild_keeps_a_case_only_by_the_rule_a_submit_keeps_it_by(tmp_path, fields, said):
+    """A case already in the suite that a submit would refuse is a problem in the rebuild, with the reason; one the
+    person is still editing is left unchecked as before."""
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _edit_scenario(root, "adds-a-big-mac", **fields)
+
+    problems, not_checked, _ = nudge.suite_gate(root, set())
+
+    assert [(one["item"], one["kind"]) for one in problems] == [("adds-a-big-mac", "scenario")]
+    assert said in problems[0]["message"] and not_checked == []
+    assert nudge.suite_gate(root, {"adds-a-big-mac"})[:2] == ([], ["adds-a-big-mac"])
+
+
+def test_a_suite_written_before_controls_were_required_still_rebuilds_its_cases_not_proved(tmp_path):
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _edit_scenario(root, "adds-a-big-mac", negative_controls=[])
+
+    problems, not_checked, _ = nudge.suite_gate(root, set())
+
+    assert problems == [] and not_checked == []
+    entry = load_proofs(root)["adds-a-big-mac"]
+    # Kept, recorded not proved with the builder's hint, so the platform holds it out of runs.
+    assert (entry["proved"], entry["kept_as_written"], entry["blocked_reason"]) == (False, False, "no_negative_control")
+    assert entry["why"].startswith("no negative control: add a wrong behaviour")
+    [warning] = nudge.unproved_without_control(root)
+    assert "adds-a-big-mac" in warning and "held out of runs" in warning
+
+
+def test_a_legacy_rebuild_reports_its_uncontrolled_cases_and_passes(tmp_path):
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _edit_scenario(root, "adds-a-big-mac", negative_controls=[])
+    server = nudge.nudge_server(root, {"nudge_id": "n-1", "stage": "suite"}, catalogue=load_catalogue(root), kept=None)
+
+    said = _call(server, "report_update", {"changed": False, "notes": "nothing to change"})
+
+    assert not said.get("is_error"), said
+    result = json.loads((root / nudge.NUDGE_RESULT).read_text(encoding="utf-8"))
+    assert result["checks"]["passed"] is True
+    assert any("not proved: no negative control" in one for one in result["checks"]["warnings"])
+
+
+def test_a_deferred_case_with_a_leaked_answer_is_a_problem_not_unchecked(tmp_path, monkeypatch):
+    from fi.alk.harness.prove import Proof
+
+    root = _suite(tmp_path, "adds-a-big-mac")
+    leaked = [{"who": "caller", "field": "instruction", "grader_field": "tests", "excerpt": "reaches the menu"}]
+    monkeypatch.setattr(nudge, "prove", lambda *_args: Proof(deferred=True, leaks=leaked))
+
+    problems, not_checked, _ = nudge.suite_gate(root, set())
+
+    assert [one["item"] for one in problems] == ["adds-a-big-mac"] and not_checked == []
+    assert "gives the answer away" in problems[0]["message"]
+
+
 def test_a_failing_generated_scenario_is_a_problem(tmp_path):
     root = _suite(tmp_path, "adds-a-big-mac")
     _break_scenario(root, "adds-a-big-mac")
@@ -1681,3 +1772,38 @@ def test_usage_delta_counts_only_what_the_turn_spent():
         # Only the model this turn called: m1 ran in an earlier turn.
         "models": ["m2"],
     }
+
+
+def test_a_builder_add_leaves_the_cases_it_did_not_write_byte_identical(tmp_path):
+    from fi.alk.harness.scenario_tools import write_scenarios
+
+    root = _suite(tmp_path, "adds-a-big-mac")
+    (legacy,) = load_scenarios(root)
+    legacy.keywords = ["Cart order", "legacy word"]
+    write_scenarios([legacy], root, load_catalogue(root))
+    before = {
+        path.relative_to(root): path.read_bytes()
+        for path in (root / "scenarios" / "adds-a-big-mac").rglob("*")
+        if path.is_file()
+    }
+    scenarios, _server, _catalogue, _kept = _session(root, "suite")
+
+    added = _call(
+        scenarios, "submit_scenario", _scenario(
+            "adds-two-big-macs",
+            keywords=["cart order"],
+            sources=[{"kind": "assumption", "quote": "Orders repeat.", "supports": "two items"}],
+        )
+    )
+    saved = _call(scenarios, "save_scenarios", {"design": {"keywords": ["cart order"]}})
+
+    assert not added.get("is_error"), added
+    assert saved["content"][0]["text"].startswith("Saved 2 scenarios"), saved
+    assert {
+        path.relative_to(root): path.read_bytes()
+        for path in (root / "scenarios" / "adds-a-big-mac").rglob("*")
+        if path.is_file()
+    } == before
+    assert {one.name: one.keywords for one in load_scenarios(root)}["adds-two-big-macs"] == [
+        "Cart order"
+    ]

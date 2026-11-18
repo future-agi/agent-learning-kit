@@ -22,6 +22,8 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import failure_record
+
 if TYPE_CHECKING:
     from .job import FailureCause
     from .source_model import SourceModel
@@ -98,6 +100,17 @@ def _world_isolation_status(build_output: dict):
     return CheckStatus.NOT_RUN
 
 
+# The processes that make up the world's door: the tool proxy in front of a tools service, or the in-process door.
+_DOOR_PROCESSES = ("tool-proxy", "world-door")
+
+
+def _door_user(manifest) -> str | None:
+    """The OS user the bundle's door processes are declared to run as; None when the bundle has no door or its door
+    processes do not agree on one user."""
+    users = {process.user.value for process in getattr(manifest, "processes", ()) if process.name in _DOOR_PROCESSES}
+    return users.pop() if len(users) == 1 else None
+
+
 def _write_runtime_evidence(
     *,
     job,
@@ -120,6 +133,7 @@ def _write_runtime_evidence(
         GenericHarnessArtifactStore,
         RuntimeValidationEvidence,
     )
+    from .privilege import isolation_mode
 
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     limitations = [
@@ -227,6 +241,8 @@ def _write_runtime_evidence(
             world_isolation=world_isolation,
         ),
         limitations=tuple(limitations),
+        process_isolation=isolation_mode().value,
+        door_user=_door_user(manifest),
     )
     store.write_runtime_evidence(evidence)
     store.write_tool_certification(tool_report)
@@ -348,7 +364,39 @@ def _make_local_seed_files_readable(bundle: Path) -> None:
         path.chmod(path.stat().st_mode | (0o055 if path.is_dir() else 0o044))
 
 
-def _write_generic_certificate(job, authoring: Path, repairs) -> None:
+def _has_judged_sub_goals(authoring: Path) -> bool:
+    from .catalogue import load_catalogue
+
+    for root in (authoring, authoring / "environment-bundle"):
+        try:
+            catalogue = load_catalogue(root)
+        except (OSError, ValueError):
+            continue
+        if any(goal.judged.strip() for goal in catalogue.sub_goals):
+            return True
+    return False
+
+
+def _with_judge_check(checks, authoring: Path):
+    """``checks`` with whether the judge answered, only when a judged sub-goal needs it."""
+    from .certification import CheckStatus
+    from .judge import judge_reachable
+
+    if not _has_judged_sub_goals(authoring):
+        return checks
+    return checks.model_copy(update={"judge_reachable": CheckStatus(judge_reachable())})
+
+
+def _harness_version() -> str | None:
+    from fi.alk import __version__
+
+    return None if __version__.startswith("0.0.0+") else __version__
+
+
+def _write_generic_certificate(
+    job, authoring: Path, repairs, source: Path | None = None
+) -> None:
+    from .generated_runtime import installed_frameworks
     from .certification import (
         CertificationAuthoring,
         CertificationCompiler,
@@ -361,12 +409,12 @@ def _write_generic_certificate(job, authoring: Path, repairs) -> None:
 
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     evidence = store.read_runtime_evidence()
-    source = getattr(job, "source", None)
+    origin = getattr(job, "source", None)
     certificate = HarnessCertification.create(
         status=CertificationStatus.CERTIFIED,
         source=CertificationSource(
-            repository=getattr(source, "repository", None),
-            commit=getattr(source, "commit_sha", None),
+            repository=getattr(origin, "repository", None),
+            commit=getattr(origin, "commit_sha", None),
             digest=evidence.source_digest,
             schema_hash=evidence.source_schema_hash,
         ),
@@ -382,8 +430,12 @@ def _write_generic_certificate(job, authoring: Path, repairs) -> None:
         runtime=CertificationRuntime(
             snapshot=_runtime_snapshot(job),
             validation_attempts=len(repairs.decisions),
+            harness_version=_harness_version(),
+            frameworks=installed_frameworks(source),
+            process_isolation=evidence.process_isolation,
+            door_user=evidence.door_user,
         ),
-        checks=evidence.checks,
+        checks=_with_judge_check(evidence.checks, authoring),
         repairs=repairs,
         limitations=evidence.limitations,
     )
@@ -766,6 +818,67 @@ async def _probe_runtime_readiness(
         path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
 
 
+def _prepare_runtime_work(job, work: Path, secrets_path: Path, *, local_runtime: bool) -> Path:
+    """Lay out a disposable runtime workspace: the job's sizes and a private copy of the secrets."""
+    runtime = getattr(job, "runtime", None)
+    (work / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": getattr(job, "job_id", ""),
+                "runtime": {
+                    "cpu_units": getattr(runtime, "cpu_units", 1),
+                    "memory_mb": getattr(runtime, "memory_mb", 512),
+                }
+            }
+        )
+    )
+    if local_runtime:
+        # Child processes drop to svc-* identities. They need search permission on the
+        # disposable workspace parent in order to reach their individually chowned trees;
+        # secrets below retain mode 0600 and are injected by the controller.
+        work.chmod(0o755)
+    secrets = work / "secrets.json"
+    secrets.write_bytes(secrets_path.read_bytes())
+    secrets.chmod(0o600)
+    return secrets
+
+
+def _runtime_provider(job, secrets: Path, authoring: Path, *, local_runtime: bool, generic: bool):
+    """The process runtime provider validation starts the bundle with."""
+    from . import outbound
+    from .hosted_entrypoint import _resolve_hosted_public_url, job_secret_purposes
+    from .process_runtime import (
+        ProcessRuntimeProvider,
+        default_user_resolver,
+        hosted_user_resolution,
+    )
+
+    capabilities = None if local_runtime else outbound.load_capabilities(unlink=False)
+    transport = outbound.RequestsTransport()
+    return ProcessRuntimeProvider(
+        secrets_path=secrets,
+        secret_purpose_map=job_secret_purposes(job),
+        # A local parity run shares the host/container process namespace and must resolve
+        # the same unprivileged identities installed in its image. A hosted sandbox runs
+        # each declared user only when the platform granted per-user isolation.
+        **(
+            {"user_resolver": default_user_resolver, "require_declared_user": False}
+            if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
+            else hosted_user_resolution()
+        ),
+        public_url_resolver=(
+            None
+            if capabilities is None
+            else lambda port, ttl: _resolve_hosted_public_url(
+                capabilities, transport, port=port, expires_in_seconds=ttl
+            )
+        ),
+        provider_attempt_id=(capabilities.attempt_id if capabilities is not None else None),
+        provider_expires_at=(capabilities.expires_at if capabilities is not None else None),
+        generic_artifact_root=(authoring / "generic-harness") if generic else None,
+    )
+
+
 async def validate_once(
     job,
     source: Path,
@@ -782,20 +895,11 @@ async def validate_once(
     from .compose_integration import enabled as compose_enabled
     from .hosted_compose_bootstrap import initialize_hosted_compose
     from .contract import AgentContract
-    from .hosted_entrypoint import (
-        ProcessWorldFactory,
-        _resolve_hosted_public_url,
-        job_secret_purposes,
-    )
+    from .hosted_entrypoint import ProcessWorldFactory, job_secret_purposes
     from .hosted_scheduler import _classify_ready, _run_phase
     from .job import ProviderExecutionMode, SourceKind
     from .process_preflight import preflight_bundle
-    from .process_runtime import (
-        ProcessRuntimeError,
-        ProcessRuntimeProvider,
-        default_user_resolver,
-        hosted_user_resolution,
-    )
+    from .process_runtime import ProcessRuntimeError
     from .scenario_source import does_nothing, load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
     from .tool_certification import ToolAvailability, certify_tool_inventory
@@ -866,26 +970,7 @@ async def validate_once(
         prefix="runtime-validation-", dir=temporary_parent
     ) as root:
         work = Path(root)
-        runtime = getattr(job, "runtime", None)
-        (work / "job.json").write_text(
-            json.dumps(
-                {
-                    "job_id": getattr(job, "job_id", ""),
-                    "runtime": {
-                        "cpu_units": getattr(runtime, "cpu_units", 1),
-                        "memory_mb": getattr(runtime, "memory_mb", 512),
-                    }
-                }
-            )
-        )
-        if local_runtime:
-            # Child processes drop to svc-* identities. They need search permission on the
-            # disposable workspace parent in order to reach their individually chowned trees;
-            # secrets below retain mode 0600 and are injected by the controller.
-            work.chmod(0o755)
-        secrets = work / "secrets.json"
-        secrets.write_bytes(secrets_path.read_bytes())
-        secrets.chmod(0o600)
+        secrets = _prepare_runtime_work(job, work, secrets_path, local_runtime=local_runtime)
         redaction_values = json.loads(secrets.read_text())
         process_logs = authoring / "generic-harness" / "process-logs"
         logs_before = set(process_logs.glob("*.log"))
@@ -899,35 +984,8 @@ async def validate_once(
         secret_values = tuple(
             str(value) for value in json.loads(secrets.read_text()).values()
         )
-        capabilities = (
-            None if local_runtime else outbound.load_capabilities(unlink=False)
-        )
-        transport = outbound.RequestsTransport()
-        provider = ProcessRuntimeProvider(
-            secrets_path=secrets,
-            secret_purpose_map=job_secret_purposes(job),
-            # A local parity run shares the host/container process namespace and must resolve
-            # the same unprivileged identities installed in its image. A hosted sandbox runs
-            # each declared user only when the platform granted per-user isolation.
-            **(
-                {"user_resolver": default_user_resolver, "require_declared_user": False}
-                if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
-                else hosted_user_resolution()
-            ),
-            public_url_resolver=(
-                None
-                if capabilities is None
-                else lambda port, ttl: _resolve_hosted_public_url(
-                    capabilities, transport, port=port, expires_in_seconds=ttl
-                )
-            ),
-            provider_attempt_id=(
-                capabilities.attempt_id if capabilities is not None else None
-            ),
-            provider_expires_at=(
-                capabilities.expires_at if capabilities is not None else None
-            ),
-            generic_artifact_root=(authoring / "generic-harness") if generic else None,
+        provider = _runtime_provider(
+            job, secrets, authoring, local_runtime=local_runtime, generic=generic
         )
         # Parallel runtime instances inside the one sandbox, each with its own ports and databases.
         requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4))
@@ -1244,7 +1302,13 @@ async def validate_once(
                     _chat_target_timeout_seconds,
                     agent_chat_timeout_seconds,
                 )
-                from .chat_readiness import probe_chat_ingress, probe_chat_workflow
+                from .chat_readiness import (
+                    probe_chat_ingress,
+                    probe_chat_workflow,
+                    record_tool_routing,
+                    request_uncovered_tools,
+                    world_call_log,
+                )
 
                 chat_ingress = CheckStatus.NOT_APPLICABLE
                 interface = contract.runtime.interface if contract.runtime else None
@@ -1284,7 +1348,20 @@ async def validate_once(
                             redaction_values=redaction_values,
                             evidence_seam=manifest.runtime.evidence_seam,
                         )
+                        await request_uncovered_tools(
+                            interface=interface,
+                            endpoint=endpoint.address,
+                            runtime=runtime,
+                            contract=contract,
+                            authoring=authoring,
+                            bundle=bundle,
+                            source=source,
+                            secret_values=target_secret_values,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
+                            local_auth_values=getattr(runtime, "_local_auth_values", None),
+                        )
                     else:
+                        since = time.time()
                         await probe_chat_ingress(
                             interface=interface,
                             endpoint=endpoint.address,
@@ -1299,6 +1376,34 @@ async def validate_once(
                             tools=_tools(contract) if interface.include_tools else (),
                             scenario_id=representative.scenario_id,
                             timeout=agent_chat_timeout_seconds(job) or _chat_target_timeout_seconds(),
+                        )
+                        from .call_runner import _collect_file_tool_calls
+
+                        # A test message can call tools too; then ask for the rest.
+                        try:
+                            called = _collect_file_tool_calls(runtime)
+                        except Exception:  # noqa: BLE001 - no trace, nothing observed
+                            called = ()
+                        record_tool_routing(
+                            authoring,
+                            representative.scenario_key,
+                            contract,
+                            runtime,
+                            received=world_call_log(runtime, since),
+                            reported=called,
+                            bundle=bundle,
+                        )
+                        await request_uncovered_tools(
+                            interface=interface,
+                            endpoint=endpoint.address,
+                            runtime=runtime,
+                            contract=contract,
+                            authoring=authoring,
+                            bundle=bundle,
+                            source=source,
+                            secret_values=target_secret_values,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
+                            local_auth_values=getattr(runtime, "_local_auth_values", None),
                         )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"
@@ -1400,6 +1505,27 @@ async def validate_once(
                 f"invariants, complete in {time.monotonic() - started:.0f}s",
                 flush=True,
             )
+            if not readiness_only:
+                # While the stack is up, play each case's reference and controls through the
+                # service-backed and MCP Toolbox tools for real; never fails validation.
+                from .live_proof import prove_live
+
+                try:
+                    live = await prove_live(
+                        authoring=authoring,
+                        contract=AgentContract.model_validate_json(
+                            (bundle / "contract.json").read_text(encoding="utf-8")
+                        ),
+                        runtime=runtime,
+                        provider=provider,
+                        factory=factory,
+                        work=work,
+                        seed=job.seed or 0,
+                    )
+                    if live:
+                        print(f"runtime validation: proved {len(live)} cases on the live runtime", flush=True)
+                except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
+                    print(f"runtime validation: live proofs not run: {type(exc).__name__}: {exc}", flush=True)
             if generic:
                 await provider.reset(runtime, work_directory=work)
                 reset_world = await factory.create(
@@ -1528,6 +1654,53 @@ async def _source_masks(source: Path) -> frozenset[str]:
     if cache is not None:
         cache[key] = masks
     return masks
+
+
+async def prove_on_sealed_runtime(
+    job,
+    source: Path,
+    authoring: Path,
+    *,
+    keys: set[str] | None = None,
+    until: float | None = None,
+    secrets_path: Path = Path("/run/futureagi/secrets.json"),
+    local_runtime: bool = False,
+) -> dict[str, dict[str, object]]:
+    """Start the pair's sealed bundle and play its cases on it, as certification does, without
+    certifying again: no compile, no setup pass, no repair. `{}` when the bundle serves no tool a
+    case could be played on; the cases then keep their offline proofs."""
+    from .bundle_v2 import RuntimeKindV2, load_bundle_v2
+    from .contract import AgentContract
+    from .hosted_entrypoint import ProcessWorldFactory
+    from .live_proof import MCP_TOOLBOX, TOOL_PROXY, prove_live
+
+    bundle = authoring / "environment-bundle"
+    manifest = load_bundle_v2(bundle)
+    if manifest.runtime.kind is RuntimeKindV2.COMPOSE or not {TOOL_PROXY, MCP_TOOLBOX} & set(manifest.capabilities):
+        return {}
+    contract = AgentContract.model_validate_json((bundle / "contract.json").read_text(encoding="utf-8"))
+    generic = bool(isinstance(getattr(job, "metadata", None), dict) and job.metadata.get("generic_harness_v1") is True)
+    with tempfile.TemporaryDirectory(prefix="live-proof-", dir=authoring.parent) as root:
+        work = Path(root)
+        secrets = _prepare_runtime_work(job, work, secrets_path, local_runtime=local_runtime)
+        provider = _runtime_provider(job, secrets, authoring, local_runtime=local_runtime, generic=generic)
+        try:
+            runtimes = await provider.provision(
+                manifest, source=source, bundle_dir=bundle, work_directory=work, instances=1
+            )
+            return await prove_live(
+                authoring=authoring,
+                contract=contract,
+                runtime=runtimes[0],
+                provider=provider,
+                factory=ProcessWorldFactory(work, bundle),
+                work=work,
+                seed=job.seed or 0,
+                keys=keys,
+                until=until,
+            )
+        finally:
+            await provider.close(work_directory=work)
 
 
 def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
@@ -1813,6 +1986,8 @@ async def _validate_and_repair(
         )
         candidate_hash = _generic_candidate_hash(source, authoring)
         for _attempt in range(decision_bound):
+            # A record left by an earlier attempt must never speak for this one.
+            failure_record.clear()
             try:
                 count = await validate(job, source, authoring)
             except RuntimeValidationError as exc:
@@ -1829,6 +2004,7 @@ async def _validate_and_repair(
                     f"runtime validation: {exc.phase}: {exc}",
                     flush=True,
                 )
+                failure_record.record(exc.phase, exc)
                 phase = (
                     RepairPhase.SCENARIOS
                     if exc.phase == "scenarios"
@@ -2067,7 +2243,7 @@ async def _validate_and_repair(
                 )
                 if evidence_path.is_file():
                     _write_generic_certificate(
-                        job, authoring, repair_controller.history
+                        job, authoring, repair_controller.history, source
                     )
                 else:
                     # Injected validators in unit/integration consumers may not implement the
@@ -2094,10 +2270,12 @@ async def _validate_and_repair(
     repairs = {"environment": 0, "scenarios": 0}
     for attempt in range(5):
         print(f"runtime validation: attempt {attempt + 1}/5", flush=True)
+        failure_record.clear()
         try:
             count = await validate(job, source, authoring)
         except RuntimeValidationError as exc:
             print(f"runtime validation: {exc.phase}: {exc}", flush=True)
+            failure_record.record(exc.phase, exc)
             if exc.phase not in repairs or repairs[exc.phase] >= 2:
                 raise
             repairs[exc.phase] += 1

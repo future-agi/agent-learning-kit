@@ -17,7 +17,7 @@ import re
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from fi.simulate.simulation.call_actors import (
     EVALUATED_BY,
@@ -71,7 +71,7 @@ from .folder import (
     write_index,
 )
 from .checks import reference_of, run_check
-from .proofs import record_proof, record_unprovable
+from .proofs import proof_key, record_proof, record_unprovable
 from .prove import (
     executes,
     native_runtime,
@@ -91,6 +91,7 @@ from .scenario import (
     Step,
     contract_sequence_problems,
     coverage_report,
+    hollow_scenario_problems,
     keyword_problems,
     redteam_problems,
     level_name,
@@ -193,10 +194,10 @@ def _no_longer_hold(
         try:
             proof = prove(scenario, catalogue, world_root)
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
-            record_unprovable(destination, scenario.scenario_key, type(exc).__name__)
+            record_unprovable(destination, proof_key(scenario), type(exc).__name__)
             failed.append((scenario.name, type(exc).__name__))
             continue
-        record_proof(destination, scenario.scenario_key, proof)
+        record_proof(destination, proof_key(scenario), proof, solution_steps=len(scenario.solution))
         if not proof.holds and not (proof.deferred and not proof.broken):
             why = "not ready" if not proof.ready else (
                 "the reference solution no longer passes it"
@@ -1434,8 +1435,10 @@ def _budgets_for_unknown_workers(scenario: Scenario, world_root: Path) -> str:
     )
 
 
-def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
-    """Solution steps that call a tool, argument or declared value the agent's contract does not have."""
+def _steps_the_contract_refuses(
+    scenario: Scenario, world_root: Path, *, steps: Sequence[Step] | None = None
+) -> list[str]:
+    """Solution steps (or `steps`) that call a tool, argument or declared value the agent's contract lacks."""
     try:
         contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -1444,7 +1447,7 @@ def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[st
     if not tools:
         return []
     wrong = []
-    for step in scenario.solution:
+    for step in scenario.solution if steps is None else steps:
         spec = tools.get(step.tool)
         if spec is None:
             wrong.append(f"{step.tool} is not one of the agent's tools")
@@ -1464,6 +1467,45 @@ def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[st
         "these solution steps do not match the agent's contract (its tools, their arguments and "
         "declared values): " + "; ".join(wrong)
     ]
+
+
+def _controls_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
+    """The same contract check over each negative control's steps, each problem naming its control."""
+    return [
+        f"negative control {control.name}: {problem}"
+        for control in scenario.negative_controls
+        for problem in _steps_the_contract_refuses(scenario, world_root, steps=control.steps)
+    ]
+
+
+# A writer's fault: the scenario is not kept. The lane codes (an unbound tool) are kept and labelled.
+_REFUSED_CODES = frozenset({"negative_control_passed", "no_negative_control", "answer_leaked", "source_unresolved"})
+
+
+def _a_read_that_declines(scenario: Scenario, proof: Any, world_root: Path) -> bool:
+    """Whether a one-call reference is a refusal: its call ran, left the world exactly as doing nothing does, and its
+    tool is not one the contract says writes."""
+    if proof.outcome != "no_change" or len(scenario.solution) != 1:
+        return False
+    tool = scenario.solution[0].tool
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        contract = {}
+    writes = any(
+        isinstance(one, dict) and one.get("name") == tool and str(one.get("effects") or "").strip()
+        for one in contract.get("tools") or []
+    ) or any(
+        isinstance(one, dict) and one.get("tool") == tool and one.get("effect") == "write"
+        for one in contract.get("tool_entrypoints") or []
+    )
+    return not writes
+
+
+def refuses_keeping(proof: Any) -> bool:
+    """Whether a scenario with this proof may not be kept: its checks do not hold (unless only the live runtime can
+    prove it), or the writer left a fault the lane caught. One rule for a submit and for every case a rebuild keeps."""
+    return (not proof.holds and not (proof.deferred and not proof.broken)) or proof.blocked_reason() in _REFUSED_CODES
 
 
 def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions: str) -> list[str]:
@@ -1635,6 +1677,20 @@ def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+NO_SOURCES = "Cite where this case comes from, or add an assumption source that says what you assumed."
+
+
+def _unchanged(scenario: Scenario, payload: dict[str, Any], kept: list[Scenario]) -> bool:
+    """Whether a saved scenario with this key (else this name) already holds exactly this content."""
+    named = str(payload.get("scenario_key") or "").strip()
+    previous = next((one for one in kept if named and one.scenario_key == named), None) or next(
+        (one for one in kept if one.name == scenario.name), None
+    )
+    if previous is None:
+        return False
+    return previous.model_dump(exclude={"scenario_key"}) == scenario.model_dump(exclude={"scenario_key"})
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -1653,10 +1709,16 @@ def accept_scenario(
     tools: set[str] | None = None,
     used: set[str] | None = None,
     renaming: bool = False,
+    require_sources: bool = False,
     service_tools: set[str] | None = None,
     read_tools: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
+
+    ``require_sources`` refuses a new or changed scenario that cites nothing: a requirement the
+    writer cannot cite is written as an ``assumption`` source, never left as a silent default. A
+    resubmission identical to the saved scenario (a case written before sources were required) is
+    exempt.
 
     ``renaming`` keeps a proved scenario under a new name without proving it again: what it tests
     is unchanged. ``used`` is every key the environment has given a scenario, so a new one never
@@ -1714,6 +1776,7 @@ def accept_scenario(
             )
             problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
             problems.extend(_steps_the_contract_refuses(scenario, world_root))
+            problems.extend(_controls_the_contract_refuses(scenario, world_root))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
             problems.extend(
@@ -1739,6 +1802,7 @@ def accept_scenario(
                 problems.extend(_identifiers_the_instruction_invents(scenario, trial))
                 problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
                 problems.extend(_steps_the_contract_refuses(scenario, world_root))
+                problems.extend(_controls_the_contract_refuses(scenario, world_root))
                 problems.extend(_records_the_agent_cannot_see(scenario, world_root))
                 problems.extend(_overlay_asserts_nothing(scenario, catalogue))
                 problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
@@ -1750,13 +1814,23 @@ def accept_scenario(
             finally:
                 trial.close()
 
+        # An assumption that writes down nothing it assumed cites nothing either.
+        cited = [one for one in scenario.sources if one.kind != "assumption" or (one.quote or one.supports).strip()]
+        if require_sources and not cited and not _unchanged(scenario, payload, kept):
+            problems.append(NO_SOURCES)
+        # A single call is decided once the proof shows what it does: a read that leaves the world as it was is a
+        # refusal (the agent checks, then declines); anything else is still refused.
+        single_call = hollow_scenario_problems(scenario)
+        problems = [one for one in problems if one not in single_call]
         if problems:
             return _err(
                 "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
             )
 
         proof = prove(scenario, catalogue, world_root)
-        if not proof.holds and not (proof.deferred and not proof.broken):
+        if single_call and not _a_read_that_declines(scenario, proof, world_root):
+            return _err("Not kept. Fix these and submit again:\n  - " + "\n  - ".join(single_call))
+        if refuses_keeping(proof):
             said = f"Not kept. {proof.why()}"
             # Code written against the wrong collection shape is the commonest way setup, ready and a
             # check fail here, and the exception alone does not say which collections are mappings and
@@ -1836,7 +1910,7 @@ def accept_scenario(
     # Saved on both paths: parallel writers share this process, so the proof file is safe to
     # write even where the folders are not. A rename is not proved again: its key keeps its proof.
     if proof is not None:
-        record_proof(world_root, scenario.scenario_key or _slug(scenario.name), proof)
+        record_proof(world_root, proof_key(scenario), proof, solution_steps=len(scenario.solution))
     if persist:
         write_scenarios(kept, world_root, catalogue)
     else:
@@ -1865,6 +1939,19 @@ def accept_scenario(
         if proof is not None and proof.unplayed
         else ""
     )
+    if proof is not None and proof.blocked_reason() == "control_not_run":
+        unproved += (
+            "\nNOT PROVED: no negative control could run here, because these tools have no endpoint: "
+            + ", ".join(sorted({tool for one in proof.controls for tool in one.get("assumed") or []}))
+            + ". It is kept as written; the checks were never shown to fail a wrong behaviour."
+        )
+    if proof is not None and proof.blocked_reason() == "judged_only":
+        unproved += (
+            f"\nNOT PROVED: {proof.why()} Give each negative control a `transcript` of the wrong behaviour as said; "
+            "the judge must fail it."
+        )
+    if proof is not None and proof.outcome == "no_change" and proof.proved:
+        unproved += "\nA refusal case: nothing should change, and each negative control's forbidden change fails its checks."
     if proof is None:
         proof_summary = "Nothing it tests changed, so it was not proved again."
     elif proof.deferred:
@@ -2050,6 +2137,7 @@ def scenario_tools(
         write_scenarios(unique, destination, catalogue)
     kept[:] = unique
     used.update(one.scenario_key for one in kept)
+    as_loaded = {one.scenario_key: one.model_dump(mode="json") for one in kept}
 
     def cap() -> int:
         return int(target["count"] or 0) if can_grow else wanted
@@ -2578,6 +2666,22 @@ def scenario_tools(
                     "must still pass. Empty when the instructions allow only one way.",
                     "items": {"type": "array", "items": {"type": "object"}},
                 },
+                "negative_controls": {
+                    "type": "array",
+                    "description": "Wrong behaviours written for this task that its checks must fail, at "
+                    "least one: the action done twice, the wrong record, or the forbidden change on a "
+                    "refusal case. Never 'do nothing'. Each is {name, why, steps (like solution), "
+                    "must_fail (sub-goal names; empty means any check)}.",
+                    "items": {"type": "object"},
+                },
+                "sources": {
+                    "type": "array",
+                    "description": "Where each requirement comes from: {kind (rule, file, chat_message, "
+                    "evidence_case, requirement, assumption), ref (rule:<n>, file:<path>, chat:<id>, "
+                    "evidence:<id>), quote (the exact words; required for rule and file), supports}. A "
+                    "requirement the person stated is cited in their words; a guess is an assumption.",
+                    "items": {"type": "object"},
+                },
                 "sub_goals": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -2753,6 +2857,7 @@ def scenario_tools(
             call_actor_list=load_call_actors(destination),
             tools=set(contract.tool_names()),
             used=used,
+            require_sources=True,
             service_tools=_service_tools(contract),
             read_tools=_read_tools(contract),
         )
@@ -3280,7 +3385,10 @@ def scenario_tools(
         if target.get("axes"):
             design = {**(design or {})}
             design["axes"] = {**target["axes"], **(design.get("axes") or {})}
-        settled, invented = tidy_keywords(kept, vocabulary_from(design))
+        written = [
+            one for one in kept if as_loaded.get(one.scenario_key) != one.model_dump(mode="json")
+        ]
+        settled, invented = tidy_keywords(written, vocabulary_from(design), among=kept)
         path = write_scenarios(kept, destination, catalogue)
         # Only sub-goals the suite actually names ship.
         dropped = unused_sub_goals(catalogue, kept)

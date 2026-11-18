@@ -108,6 +108,8 @@ def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch) -> HostedChatRu
     monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     (tmp_path / "scenarios" / "one").mkdir(parents=True, exist_ok=True)
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text("{}")
+    # These stub folders are not real scenarios; a test about one a run cannot load says so itself.
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.scenario_seal_problems", lambda root: {})
     policy = tmp_path / "policy.yaml"
     policy.write_text("schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8")
     runtime = HostedChatRuntime(
@@ -206,9 +208,7 @@ def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     assert not (tmp_path / ".futureagi-authoring-basis.json").exists()
 
 
-def test_a_failed_reseal_ends_the_turn_failed_with_nothing_to_land(
-    tmp_path, monkeypatch
-):
+def test_a_failed_reseal_keeps_the_change_as_a_draft(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     runtime.conversation = EditingConversation(tmp_path, writes=True)
@@ -223,12 +223,13 @@ def test_a_failed_reseal_ends_the_turn_failed_with_nothing_to_land(
 
     assert client.published == []
     reply = next(e for e in client.events if e["kind"] == "assistant_message")
-    assert "These changes were NOT saved" in reply["payload"]["text"]
-    assert reply["payload"]["error"] == "reseal_failed"
+    assert "kept as an unsaved draft and were NOT saved" in reply["payload"]["text"]
+    assert "seed import failed" in reply["payload"]["text"]
     kinds = [event["kind"] for event in client.events]
-    assert "checkpoint_committed" not in kinds
+    # The turn completes and its checkpoint is promoted as the chat's draft.
+    assert "checkpoint_committed" in kinds
     assert client.events[-1]["kind"] == "turn_completed"
-    assert client.events[-1]["payload"]["outcome"] == "failed"
+    assert client.events[-1]["payload"]["outcome"] != "failed"
 
 
 def test_read_only_tools_skip_the_workspace_checkpoint(tmp_path, monkeypatch):
@@ -2198,8 +2199,10 @@ def test_a_suite_rebuild_can_add_a_scenario(tmp_path, monkeypatch):
 
     async def act(stage):
         await _tool(stage, "scenarios", "aim_for").handler({"count": 2})
+        # A rebuild cites where a new case comes from, as any builder submit does.
+        assumed = [{"kind": "assumption", "quote": "Customers order one item at a time.", "supports": "one Big Mac"}]
         seen["added"] = await _tool(stage, "scenarios", "submit_scenario").handler(
-            _scenario("adds-one-big-mac")
+            {**_scenario("adds-one-big-mac"), "sources": assumed}
         )
 
     _rebuild(tmp_path, monkeypatch, "suite", act)
@@ -2209,6 +2212,22 @@ def test_a_suite_rebuild_can_add_a_scenario(tmp_path, monkeypatch):
         "adds-a-big-mac",
         "adds-one-big-mac",
     }
+
+
+def test_the_builder_s_submit_refuses_a_new_case_that_cites_nothing(tmp_path, monkeypatch):
+    from test_nudge_turn import _scenario
+
+    from fi.alk.harness.scenario_tools import NO_SOURCES
+
+    seen: dict = {}
+
+    async def act(stage):
+        await _tool(stage, "scenarios", "aim_for").handler({"count": 2})
+        seen["added"] = await _tool(stage, "scenarios", "submit_scenario").handler(_scenario("adds-one-big-mac"))
+
+    _rebuild(tmp_path, monkeypatch, "suite", act)
+
+    assert seen["added"].get("is_error") and NO_SOURCES in seen["added"]["content"][0]["text"]
 
 
 def test_a_replayed_rebuild_commits_the_workspace_holding_its_result(
@@ -2474,6 +2493,240 @@ def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_on
     answer = asyncio.run(runtime._ask("AskUserQuestion", {"question": "Which?"}, None))
     assert "Nobody answers" in answer["content"][0]["text"]
     assert calls == [corrected]
+
+
+def test_finished_message_reports_counts(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import scenario_tools
+    from fi.alk.harness.proofs import record_proof
+    from fi.alk.harness.prove import Proof
+
+    monkeypatch.setenv("ALK_HARNESS", "claude")
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n  stages:\n    builder:\n      enabled: true\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "authoring"
+    workspace.mkdir()
+
+    class LiveBuildClient(BuilderClient):
+        def __init__(self):
+            super().__init__()
+            self.turn_context = {**self.capabilities.turn_context, "capabilities": {"control_only": True}}
+
+        async def overview(self):
+            return {}
+
+    runtime = HostedChatRuntime(
+        client=LiveBuildClient(),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy),
+        workspace=workspace,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 10},
+    )
+    stage = asyncio.run(runtime._open_builder())
+    finish = next(one for one in stage.spec.servers["platform"].tools if one.name == "finish_build")
+    # Every solution uses only the two in-process tools, which have no endpoint: each step is assumed.
+    kept = [SimpleNamespace(name=f"case-{n}", scenario_key=f"case-{n}") for n in range(10)]
+    for one in kept:
+        not_run = [{"name": "wrong", "why": "orders twice", "failed": True, "held": [], "assumed": ["place_order"]}]
+        proof = Proof(
+            ready=True, solvable=True, vacuous=False, assumed=["place_order", "search_books"], controls=not_run
+        )
+        record_proof(workspace, one.scenario_key, proof, solution_steps=2)
+    monkeypatch.setattr(runtime, "_what_exists", lambda: (True, True))
+    monkeypatch.setattr(runtime, "_after_saved", lambda **kwargs: None)
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: kept)
+    monkeypatch.setattr(builder, "suite_health", lambda *args, **kwargs: [])
+
+    said = asyncio.run(finish.handler({}))["content"][0]["text"]
+
+    assert "0 proved, 10 kept as written (place_order, search_books), 0 not proved" in said
+    assert said.endswith(
+        "It is now being validated against the running agent and sealed; the environment opens when that "
+        "is done, and this conversation carries on there."
+    )
+    finished = json.loads((workspace / ".futureagi-build-finished.json").read_text(encoding="utf-8"))
+    assert finished["proofs"] == {"proved": 0, "kept_as_written": 10, "not_proved": 0}
+
+
+def _finished_runtime(tmp_path):
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n  stages:\n    builder:\n      enabled: true\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "authoring"
+    workspace.mkdir()
+    runtime = HostedChatRuntime(
+        client=BuilderClient(),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy),
+        workspace=workspace,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}},
+    )
+    return runtime, workspace
+
+
+def test_finished_turn_appends_code_counts(tmp_path):
+    runtime, workspace = _finished_runtime(tmp_path)
+    before = runtime._build_finished_stamp()
+    counts = {"proved": 3, "kept_as_written": 8, "not_proved": 1}
+    (workspace / ".futureagi-build-finished.json").write_text(
+        json.dumps({"proofs": counts}), encoding="utf-8"
+    )
+
+    text = runtime._close_with_proof_counts("The suite is built.", before)
+
+    assert (
+        text
+        == "The suite is built.\n\nProof counts: 3 proved, 8 kept as written, 1 not proved."
+    )
+    # A turn that did not write the finished file leaves the reply as the model wrote it.
+    assert (
+        runtime._close_with_proof_counts(
+            "Edited one case.", runtime._build_finished_stamp()
+        )
+        == "Edited one case."
+    )
+
+
+def test_overclaim_gets_a_correction(tmp_path):
+    runtime, workspace = _finished_runtime(tmp_path)
+    counts = {"proved": 3, "kept_as_written": 9, "not_proved": 0}
+    (workspace / ".futureagi-build-finished.json").write_text(
+        json.dumps({"proofs": counts}), encoding="utf-8"
+    )
+
+    text = runtime._close_with_proof_counts("All 12 scenarios proved.", None)
+
+    assert text.endswith("Correction: only 3 of 12 scenarios are proved.")
+    assert "Proof counts: 3 proved, 9 kept as written, 0 not proved." in text
+    from fi.alk.harness.hosted_chat_entrypoint import _proof_claim_mismatch
+
+    assert (
+        _proof_claim_mismatch("12 scenarios are proved.", counts)
+        == "Correction: only 3 of 12 scenarios are proved."
+    )
+    assert (
+        _proof_claim_mismatch("Every case is proved against the agent.", counts)
+        is not None
+    )
+
+
+def test_exact_claim_gets_no_correction():
+    from fi.alk.harness.hosted_chat_entrypoint import _proof_claim_mismatch
+
+    counts = {"proved": 3, "kept_as_written": 8, "not_proved": 1}
+    assert (
+        _proof_claim_mismatch(
+            "3 scenarios proved, 8 kept as written, 1 not proved.", counts
+        )
+        is None
+    )
+    assert _proof_claim_mismatch("Not all of them are proved yet.", counts) is None
+    assert (
+        _proof_claim_mismatch(
+            "All 4 proved.", {"proved": 4, "kept_as_written": 0, "not_proved": 0}
+        )
+        is None
+    )
+
+
+def test_one_broken_scenario_does_not_block_the_save(tmp_path, monkeypatch):
+    class FailedAwareClient(BuilderClient):
+        def __init__(self):
+            super().__init__()
+            self.failed: list = []
+
+        async def publish(self, digest, failed_scenarios=None):
+            self.failed.append(failed_scenarios)
+            return await super().publish(digest)
+
+    client = FailedAwareClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = EditingConversation(tmp_path, writes=True)
+    runtime._published_fingerprint()
+    sealed: list = []
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.scenario_seal_problems",
+        lambda root: {"broken_case": "checks/refunded.py would not compile"},
+    )
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root, skip=(): sealed.append(set(skip))
+    )
+
+    _turn(runtime, {"content": "edit three cases"})
+
+    assert sealed == [{"broken_case"}]
+    assert client.failed == [[{"scenario_key": "broken_case", "reason": "checks/refunded.py would not compile"}]]
+    text = _reply(client)
+    assert "Saved to the environment: added #41 late_driver" in text
+    assert "Saved, except 1 scenarios that could not be applied: broken_case: checks/refunded.py would not compile." in text
+
+
+def test_a_folder_a_run_cannot_load_keeps_its_sealed_version(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _copy_scenarios, scenario_seal_problems
+
+    authoring = tmp_path / "authoring"
+    for name, body in (("good", '{"scenario_key": "good"}'), ("broken", "{not json")):
+        (authoring / "scenarios" / name).mkdir(parents=True)
+        (authoring / "scenarios" / name / "scenario.json").write_text(body, encoding="utf-8")
+    sealed = tmp_path / "bundle"
+    (sealed / "scenarios" / "broken").mkdir(parents=True)
+    (sealed / "scenarios" / "broken" / "scenario.json").write_text('{"scenario_key": "broken", "v": 1}', encoding="utf-8")
+
+    assert "broken" in scenario_seal_problems(authoring)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    _copy_scenarios(authoring, staging, count=2, skip=frozenset({"broken"}), sealed=sealed)
+
+    assert json.loads((staging / "scenarios" / "broken" / "scenario.json").read_text())["v"] == 1
+    assert (staging / "scenarios" / "good").is_dir()
+
+
+def test_a_held_copy_never_takes_the_folder_of_a_case_written_now(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _copy_scenarios
+
+    authoring = tmp_path / "authoring"
+    for name, body in (("a_broken", "{not json"), ("late", '{"scenario_key": "late"}')):
+        (authoring / "scenarios" / name).mkdir(parents=True)
+        (authoring / "scenarios" / name / "scenario.json").write_text(body, encoding="utf-8")
+    sealed = tmp_path / "bundle"
+    (sealed / "scenarios" / "late").mkdir(parents=True)
+    (sealed / "scenarios" / "late" / "scenario.json").write_text('{"scenario_key": "a_broken"}', encoding="utf-8")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    _copy_scenarios(authoring, staging, count=2, skip=frozenset({"a_broken"}), sealed=sealed)
+
+    assert json.loads((staging / "scenarios" / "late" / "scenario.json").read_text())["scenario_key"] == "late"
+    assert sorted(path.name for path in (staging / "scenarios").iterdir()) == ["late"]
+
+
+def test_publish_sends_at_most_the_platform_limit_of_failed_scenarios():
+    from types import SimpleNamespace
+
+    body = _capabilities().model_dump(mode="json")
+    body["endpoints"]["publish"] = body["endpoints"]["run_status"].replace("run-status", "publish")
+    sent = []
+
+    class Transport:
+        def request(self, method, url, **kwargs):
+            sent.append(kwargs.get("json_body"))
+            return SimpleNamespace(status_code=200, body={"applied": True})
+
+    client = ConversationClient(ConversationCapabilities.model_validate(body), transport=Transport())
+    failed = [{"scenario_key": f"case-{one}", "reason": "bad check"} for one in range(250)]
+
+    asyncio.run(client.publish("sha256:abc", failed_scenarios=failed))
+    asyncio.run(client.publish("sha256:abc"))
+
+    assert len(sent[0]["failed_scenarios"]) == 200
+    assert sent[0]["failed_scenarios"][0] == {"scenario_key": "case-0", "reason": "bad check"}
+    assert "failed_scenarios" not in sent[1]
 
 
 def _two_agent_world(tmp_path: Path, folder: str):
@@ -3107,8 +3360,9 @@ def test_a_failed_reseal_sends_the_reply_cleaned_before_its_note(tmp_path, monke
 
     reply = next(e for e in client.events if e["kind"] == "assistant_message")
     assert _leaks(client.events) == []
-    assert reply["payload"]["error"] == "reseal_failed"
-    assert reply["payload"]["text"].startswith(f"{_SEEN}\n\nThese changes were NOT saved")
+    # The change stays in the chat's working copy as a draft and the turn completes.
+    assert "error" not in reply["payload"]
+    assert reply["payload"]["text"].startswith(f"{_SEEN}\n\nThese changes are kept as an unsaved draft and were NOT saved")
 
 
 @pytest.mark.parametrize(

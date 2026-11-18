@@ -834,6 +834,22 @@ def validate_runtime_resource_paths(config_files, directories):
             raise ValueError("runtime_resources_overlap")
 
 
+class RuntimeToolService(BaseModel):
+    """A separate HTTP server the source ships to answer the agent's tools, started beside a native runtime."""
+
+    command: list[str] = Field(
+        min_length=1,
+        max_length=64,
+        description="Source-declared argv that starts the tools server, run from workdir. Never invent a command.",
+    )
+    workdir: str = Field(default="", description="Repository-relative directory the command runs from.")
+    port: int = Field(ge=1, le=65535, description="The port the command listens on, as the source declares it.")
+    url_environment: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description="The environment variable the agent reads the tools server's base URL from.",
+    )
+
+
 class Runtime(BaseModel):
     """What it takes to run the agent's code."""
 
@@ -902,6 +918,11 @@ class Runtime(BaseModel):
     # prompt. Empty is valid for voice/browser agents and for contracts that are not backed by a
     # repository.
     interface: RuntimeInterface | None = None
+    tool_service: RuntimeToolService | None = Field(
+        default=None,
+        description="For native execution only: the separate HTTP server the source ships for the agent's tools, "
+        "when the agent's command does not start it. A Compose selection starts its own services instead.",
+    )
 
     # The folder of the repository this agent lives in. The harness records it when the
     # contract is saved, so it is kept out of the schema the model writes against and out of
@@ -1011,7 +1032,10 @@ class Runtime(BaseModel):
             )
         if self.service and not self.compose_file:
             raise ValueError("runtime_selection_incomplete: service needs compose_file")
-        for path in (self.compose_file, self.dockerfile, *self.compose_overrides):
+        if self.tool_service is not None and (self.execution == "compose" or self.compose_file or self.service):
+            raise ValueError("runtime_tool_service_requires_native: a Compose selection starts its own services")
+        tool_workdir = (self.tool_service.workdir,) if self.tool_service is not None else ()
+        for path in (self.compose_file, self.dockerfile, *self.compose_overrides, *tool_workdir):
             if path and (path.startswith("/") or ".." in path.split("/")):
                 raise ValueError(
                     "runtime_selection_path_invalid: use a repository-relative path"

@@ -41,6 +41,7 @@ from .contract import (
     Runtime,
     RuntimeInterface,
     RuntimeSecretFile,
+    RuntimeToolService,
     RuntimeConfigFile,
     HttpObservation,
     RuntimeHttpFailureRule,
@@ -1320,6 +1321,10 @@ def contract_tools(
                                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
                             },
                             "description": "Additional source-declared Compose roots needed by this workflow. Their declared dependency closures are retained alongside service. Requires explicit compose_file and service; exclude service itself. Never infer roots from environment URLs.",
+                        },
+                        "tool_service": {
+                            **RuntimeToolService.model_json_schema(),
+                            "description": Runtime.model_fields["tool_service"].description,
                         },
                         "required_environment": {
                             "type": "object",

@@ -115,6 +115,8 @@ is what enforces it (the world's behaviour, the check that fails without it), ne
 to follow it. Tell the person concretely what you will
 redo and what stays, then redo it, prove again what it affects, and keep everything that still holds.
 
+A case a person describes is cited as a requirement in their words.
+
 ## What you know, and how to answer
 
 Everything about how this system works is written down for you, listed under "What you know" at the
@@ -145,6 +147,12 @@ or removed. The person points with it: "#12", "12 to 30", "12, 250 and 499". Res
 yourself. When you mention a scenario, write its number and name, `#12 some_name`, so the person can
 find it. A message can start with a block naming rows the person selected on the Scenarios tab; that
 selection is what "these" and "the selected ones" mean.
+
+## Finishing a build
+
+`finish_build` reports how many scenarios are proved, kept as written and not proved. Say 'proved' only
+for the count finish_build reports as proved; call the rest 'kept as written' or 'not proved', with the
+reason it gives.
 
 ## Changing the environment
 

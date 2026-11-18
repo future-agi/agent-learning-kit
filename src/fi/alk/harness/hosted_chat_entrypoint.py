@@ -71,6 +71,79 @@ _RANGES = {
 _NOT_MESSAGES = {"interrupt", "cancel_operation", "user_response", "approval"}
 _PENDING_QUESTION = ".futureagi-pending-question.json"
 _BUILD_FINISHED = ".futureagi-build-finished.json"
+
+
+def _proof_summary(proofs: dict[str, dict[str, Any]], keys: list[str], counts: dict[str, int]) -> str:
+    """The proof counts the closing summary must repeat, with the tools and reasons behind them."""
+    tools = sorted(
+        {
+            tool
+            for key in keys
+            if (proofs.get(key) or {}).get("kept_as_written") is True
+            for tool in (proofs.get(key) or {}).get("assumed") or []
+        }
+    )
+    reasons = sorted(
+        {
+            str((proofs.get(key) or {}).get("blocked_reason") or "not_validated")
+            for key in keys
+            if (proofs.get(key) or {}).get("proved") is not True
+            and (proofs.get(key) or {}).get("kept_as_written") is not True
+        }
+    )
+    kept = f"{counts['kept_as_written']} kept as written" + (f" ({', '.join(tools)})" if tools else "")
+    unproved = f"{counts['not_proved']} not proved" + (f" ({', '.join(reasons)})" if reasons else "")
+    return (
+        f"{counts['proved']} proved, {kept}, {unproved}. Report exactly these counts; call only the "
+        f"{counts['proved']} proved scenarios proved."
+    )
+_NUMBER_PROVED = re.compile(
+    r"\b(\d+)\s+((?:[A-Za-z-]+\s+){0,2})proved\b", re.IGNORECASE
+)
+_ALL_PROVED = re.compile(r"\b(?:all|every)\b[^.]{0,40}\bproved\b", re.IGNORECASE)
+
+
+def _proof_claim_mismatch(text: str, counts: dict[str, int]) -> str | None:
+    """A correction when the reply claims more scenarios proved than the proofs hold, else None."""
+    proved = int(counts.get("proved") or 0)
+    total = (
+        proved
+        + int(counts.get("kept_as_written") or 0)
+        + int(counts.get("not_proved") or 0)
+    )
+    claims = [
+        int(match.group(1))
+        for match in _NUMBER_PROVED.finditer(text)
+        if not re.search(r"\b(?:not|un)", match.group(2), re.IGNORECASE)
+    ]
+    overclaimed = any(claim != proved for claim in claims) or (
+        proved < total
+        and any(
+            not re.search(
+                r"\bnot\b",
+                text[max(0, match.start() - 12) : match.start()],
+                re.IGNORECASE,
+            )
+            for match in _ALL_PROVED.finditer(text)
+        )
+    )
+    return (
+        f"Correction: only {proved} of {total} scenarios are proved."
+        if overclaimed
+        else None
+    )
+
+
+def _with_proof_counts(text: str, counts: dict[str, int]) -> str:
+    """The closing reply with the proof counts written by code, and a correction if the reply overclaims."""
+    correction = _proof_claim_mismatch(text, counts)
+    line = (
+        f"Proof counts: {int(counts.get('proved') or 0)} proved, {int(counts.get('kept_as_written') or 0)} kept as "
+        f"written, {int(counts.get('not_proved') or 0)} not proved."
+    )
+    return "\n\n".join(part for part in (text, line, correction) if part)
+
+
 _PROVIDER_PROFILE = "provider-import-profile.json"
 _JOURNAL = ".futureagi-conversation.json"
 # Each turn's ending as it was reported, usage included: kept before the turn's final
@@ -1116,6 +1189,7 @@ class HostedChatRuntime:
         )
         async def finish_build(args: dict[str, Any]) -> dict[str, Any]:
             from .builder import suite_health
+            from .proofs import load_proofs, proof_counts, proof_key
             from .scenario_tools import load_scenarios
             from .understand import load as load_contract
 
@@ -1143,12 +1217,19 @@ class HostedChatRuntime:
                 return text("Not finished:\n- " + "\n- ".join(missing[:60]), error=True)
             # The bundle is sealed from the world as it is now, after every change made during the build.
             await asyncio.to_thread(self._after_saved, world_changed=True)
+            proofs = load_proofs(self.workspace)
+            keys = [proof_key(one) for one in kept]
+            counts = proof_counts(proofs, keys)
             (self.workspace / _BUILD_FINISHED).write_text(
-                json.dumps({"scenarios": len(kept), "asked": asked, "note": str(args.get("note") or "")}),
+                json.dumps(
+                    {"scenarios": len(kept), "asked": asked, "note": str(args.get("note") or ""), "proofs": counts}
+                ),
                 encoding="utf-8",
             )
             return text(
-                f"Finished: {len(kept)} scenarios (the build asked for {asked}). It is now being "
+                f"Finished: {len(kept)} scenarios (the build asked for {asked}): "
+                + _proof_summary(proofs, keys, counts)
+                + " It is now being "
                 "validated against the running agent and sealed; the environment opens when that "
                 "is done, and this conversation carries on there."
             )
@@ -1239,13 +1320,22 @@ class HostedChatRuntime:
         fingerprint = self._environment_fingerprint()
         if fingerprint == self._published_fingerprint() and not force:
             return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
-        from .bundle_author_v2 import reseal_scenarios
+        from .bundle_author_v2 import reseal_scenarios, scenario_seal_problems
         from .pre_run import refresh_stale
 
+        # A scenario a run could not load is left out of the seal (it keeps its last sealed
+        # version) and named to the platform, so one broken case never blocks the rest.
         try:
             # A pre-run session written from an actor record that has since changed is written again before sealing.
             await refresh_stale(self.workspace)
-            await asyncio.to_thread(reseal_scenarios, self.workspace)
+            try:
+                problems = await asyncio.to_thread(scenario_seal_problems, self.workspace)
+            except Exception:  # noqa: BLE001 - an unreadable tree is the reseal's to report
+                problems = {}
+            if problems:
+                await asyncio.to_thread(reseal_scenarios, self.workspace, skip=set(problems))
+            else:
+                await asyncio.to_thread(reseal_scenarios, self.workspace)
         except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
             traceback.print_exc()
             return {
@@ -1253,12 +1343,18 @@ class HostedChatRuntime:
                 "code": "reseal_failed",
                 "message": f"the edited scenarios could not be sealed for runs: {exc}"[:600],
             }
+        failed = [{"scenario_key": key, "reason": reason} for key, reason in sorted(problems.items())]
         result: dict[str, Any] = {}
         for _attempt in range(3):
             try:
                 async with self._checkpoint_lock:
                     stored = await self.client.checkpoint(self.workspace)
-                    result = await self.client.publish(str(stored.get("digest") or ""))
+                    digest = str(stored.get("digest") or "")
+                    result = (
+                        await self.client.publish(digest, failed_scenarios=failed)
+                        if failed
+                        else await self.client.publish(digest)
+                    )
             except ConversationTransportError as exc:
                 return {"applied": False, "code": "publish_unreachable", "message": str(exc)}
             if result.get("code") != "conversation_checkpoint_not_latest":
@@ -1271,6 +1367,8 @@ class HostedChatRuntime:
                 "loaded, so these changes were not saved. The chat reloads the current "
                 "environment after this reply; the change has to be made again on it."
             )
+        if result.get("applied") and failed:
+            result["failed"] = failed
         if result.get("applied"):
             await self._record_touched(result)
             if result.get("revision"):
@@ -1288,10 +1386,16 @@ class HostedChatRuntime:
             return "", False
         result = await self._save_changes()
         if not result.get("applied"):
+            if result.get("code") == "reseal_failed":
+                # Not a fault of one case: the change stays in this chat's working copy as a draft.
+                return (
+                    "These changes are kept as an unsaved draft and were NOT saved to the environment: "
+                    f"{result.get('message') or 'they could not be sealed for runs'}."
+                ), True
             return (
                 "These changes were NOT saved to the environment: "
                 f"{result.get('message') or result.get('code') or 'unknown reason'}."
-            ), result.get("code") == "reseal_failed"
+            ), False
 
         def named(rows: list[dict[str, Any]]) -> str:
             return ", ".join(f"#{one.get('number')} {one.get('name')}" for one in rows)
@@ -1301,10 +1405,19 @@ class HostedChatRuntime:
             for label, key in (("added", "added"), ("removed", "removed"), ("changed", "changed"))
             if result.get(key)
         ]
+        failed = result.get("failed") or []
+        except_line = (
+            f" Saved, except {len(failed)} scenarios that could not be applied: "
+            + "; ".join(f"{one['scenario_key']}: {one['reason']}" for one in failed)
+            + "."
+            if failed
+            else ""
+        )
         return (
             "Saved to the environment: "
             + ("; ".join(parts) or "no scenario changed")
             + f". It now has {result.get('scenario_count')} scenarios."
+            + except_line
         ), False
 
     async def _selection_note(self, payload: dict[str, Any]) -> str:
@@ -1701,18 +1814,36 @@ class HostedChatRuntime:
         keys = [str(one) for one in self._nudge.get("user_draft_keys") or []]
         if self._nudge.get("stage") != SUITE:
             return _NUDGE_NOTE + _ENVIRONMENT_NUDGE_NOTE
+        restored = self._restore_note()
         if not keys:
             return (
                 _NUDGE_NOTE
                 + "\n\nNo scenario is being edited by the person now: no list of edits in "
                 "an earlier message applies any more, so repair every scenario this update "
                 "breaks."
+                + restored
             )
         return (
             _NUDGE_NOTE
             + "\n\nScenarios the person is still editing (keep what they wrote; only carry "
             "over a renamed tool or argument): " + ", ".join(keys)
+            + restored
         )
+
+    def _restore_note(self) -> str:
+        """The line on dropped scenarios this suite rebuild restores, or ""."""
+        from .catalogue import load_catalogue
+        from .dropped import restore_note
+        from .understand import load as load_contract
+
+        try:
+            return restore_note(
+                self.workspace,
+                load_contract(self.workspace),
+                load_catalogue(self.workspace).names(),
+            )
+        except (OSError, ValueError):
+            return ""
 
     def _report_again_if_written(self) -> None:
         """A write after the last report_update runs the gate again over what lands."""
@@ -1869,6 +2000,7 @@ class HostedChatRuntime:
         )
         emitted_text: list[str] = []
         turn_failures: list[str] = []
+        finished_before = self._build_finished_stamp()
         queue: asyncio.Queue[Event | None] = asyncio.Queue()
 
         def receive(event: Event) -> None:
@@ -1985,22 +2117,11 @@ class HostedChatRuntime:
         # added: added first, they would change how it is read (a reply that is one URL broken by
         # a line break is cleaned whole).
         final_text = _redact("".join(emitted_text).strip())
-        saved, unsealed = await self._publish_if_changed()
+        # Changes no run could replay (a contract or seed fault, not one case) are kept: the turn
+        # completes and its checkpoint is promoted as the chat's draft, unsaved to the environment.
+        saved, _unsealed = await self._publish_if_changed()
         if saved:
             final_text = f"{final_text}\n\n{_redact(saved)}".strip()
-        if unsealed:
-            # Changes no run could replay are not promoted with this turn.
-            await self._fail_turn(
-                journal,
-                message_id,
-                assistant_message_id,
-                invocation_id,
-                final_text,
-                "reseal_failed",
-            )
-            if self._restart_after_turn:
-                self.stopping.set()
-            return
         if self._last_health and not self._last_health.startswith("Healthy") and not self._control_only():
             problems = [line for line in self._last_health.splitlines() if line.strip()]
             final_text = (
@@ -2010,6 +2131,7 @@ class HostedChatRuntime:
             ).strip()
         self._last_health = ""
         self._report_again_if_written()
+        final_text = self._close_with_proof_counts(final_text, finished_before)
         if final_text:
             await self.client.emit(
                 "assistant_message",
@@ -2037,6 +2159,26 @@ class HostedChatRuntime:
         )
         if self._restart_after_turn:
             self.stopping.set()
+
+    def _build_finished_stamp(self) -> int | None:
+        """When the build-finished file was last written, or None when there is none."""
+        try:
+            return (self.workspace / _BUILD_FINISHED).stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _close_with_proof_counts(self, text: str, finished_before: int | None) -> str:
+        """Append code-written proof counts when this turn finished the build, so the reply cannot overclaim."""
+        stamp = self._build_finished_stamp()
+        if stamp is None or stamp == finished_before:
+            return text
+        try:
+            counts = json.loads(
+                (self.workspace / _BUILD_FINISHED).read_text(encoding="utf-8")
+            ).get("proofs")
+        except (OSError, ValueError, AttributeError):
+            return text
+        return _with_proof_counts(text, counts) if isinstance(counts, dict) else text
 
     async def _fail_turn(
         self,

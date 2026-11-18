@@ -1297,6 +1297,7 @@ def _collect_tool_trace_calls(
                 error=error,
                 refused=refused,
                 at=at,
+                endpoint=str(record.get("endpoint") or ""),
                 # The worker the world saw make it, by the channel it came through.
                 worker_id=str(record.get("worker_id") or ""),
                 refusal_code=str(record.get("refusal_code") or "") if refused else "",

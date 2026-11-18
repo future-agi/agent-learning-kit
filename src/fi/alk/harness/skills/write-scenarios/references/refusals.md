@@ -17,13 +17,17 @@ often; each is cheaper to avoid while writing than to fix after a refusal.
 | `fixture.origin must be seed, generated, or mixed` | Any other value. | Use one of the three. |
 | `fixture.origin is 'generated' ... but setup_code is empty` | The fixture claims the scenario creates data while creating none. | Seed everything the fixture names, or declare `origin: seed` and use only records that already exist. |
 | `setup_code only adjusts records that were already there ...` | The setup changes or drops rows it did not create, so the scenario shares its data with every other scenario touching those rows. | Create what the outcome turns on with `world.put`, or by driving the agent's own tool, then adjust that. An empty setup stays legal for the no-seam case. |
-| `the reference solution is a single call ...` | Nothing had to be established before the outcome, so an agent that fires that call on arrival passes. | Show how the outcome is reached: the lookups the decision depends on, named as sub-goals too. |
+| `the reference solution is a single call ...` | Nothing had to be established before the outcome, so an agent that fires that call on arrival passes. A refusal whose one call is a read that leaves the world unchanged (the agent checks, then declines) is kept. | Show how the outcome is reached: the lookups the decision depends on, named as sub-goals too. |
 | `the name contains the person's own name` | The name says who was on the other end rather than what broke. | Name it for the behaviour: `cancel_active_booking_with_fee`, not `dana_cancels_her_booking`. |
 | `fixture uses predictable verification code(s)` | Sequential or repeated digits. | Generate an unremarkable value of the right shape. |
 | `fixture uses placeholder payment-card ending(s)` | `4242`, `1234`, `0000` and similar in a card-ending field of the fixture. | Use an unremarkable ending. |
 | `setup_code must define setup(world)` / `ready_code must define ready(world)` | Wrong entry point. | Define the function with that exact name. |
 | `the prompt asks for ..., which this scenario does not supply` | The prompt has a slot nothing fills, and an unfilled slot reaches the person verbatim. | Add it to `variables`. |
 | `<tool> requires <value> from this call, but the reference solution does not create it first` | A hard rule says a value must come from this conversation, and the solution supplies it from setup or `environment_arguments` instead. | Put the step that produces it earlier in the solution. |
+| `no negative control` | Nothing shows the checks can tell a wrong behaviour from the right one. | Add a wrong behaviour written for this task to `negative_controls`: the action done twice, the wrong record, or the forbidden change. Never "do nothing". On a no-change scenario, the control performs the forbidden change. |
+| `negative control {name} passed` | The checks hold on a wrong behaviour, so they would pass an agent that does it. | Tighten the named checks until that control fails them. A no-change scenario with a fixed lookup also checks which record was read, or leaves that argument unfixed. |
+| `answer leaked: {field} repeats ...` | The instruction, persona, variables, opening message or an actor's brief repeats grader-only text: a sub-goal's words or name, or a value a check expects that the world does not hold. | Move the answer out of the instruction or persona. Say what the person wants, never what the grader checks. |
+| `source does not resolve: {kind} {ref}` | A cited rule or file does not contain the quoted words, or a requirement has no quote. | Quote the rule or file exactly, or cite it as an `assumption`. |
 
 
 ## The refusals writers hit most, and how to avoid them first time

@@ -2143,6 +2143,15 @@ def test_tool_trace_translates_rows_and_applies_v1_refused_rule(monkeypatch) -> 
     )
 
 
+def test_tool_trace_keeps_the_path_the_tool_proxy_logged(monkeypatch) -> None:
+    columns = ["id", "name", "endpoint", "arguments", "result", "ok", "error", "at"]
+    rows = [(1, "search", "/orders/search", {}, None, True, "", 1.0)]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    runtime = _runtime(endpoints={"database": _postgres_endpoint()})
+
+    assert cr._collect_tool_trace_calls(runtime)[0].endpoint == "/orders/search"
+
+
 def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(
     monkeypatch,
 ) -> None:

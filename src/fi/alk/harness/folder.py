@@ -144,6 +144,9 @@ def document_for(scenario: Scenario) -> dict:
     body = scenario.model_dump()
     body.pop("setup_code", None)
     body.pop("ready_code", None)
+    # Written only when set, so a suite saved before must_pass existed reads as unchanged.
+    if not body.get("must_pass"):
+        body.pop("must_pass", None)
     if not body.get("call_actors"):
         body.pop("call_actors", None)
     if not body.get("actors"):

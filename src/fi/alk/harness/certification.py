@@ -65,6 +65,30 @@ class CertificationRuntime(BaseModel):
 
     snapshot: str | None = None
     validation_attempts: int = Field(ge=1)
+    # The harness that made the certificate, and the agent framework distributions installed in the
+    # agent's environment, by version. Recorded only when known.
+    harness_version: str | None = None
+    frameworks: dict[str, str] = Field(default_factory=dict)
+    # Whether the check ran each process as its own OS user (`per_user`) or every process as the harness's
+    # (`fixed_user`), and the OS user the world's door processes are declared to run as (they run as it only under
+    # `per_user`). Recorded only when known.
+    process_isolation: str | None = None
+    door_user: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _without_unrecorded_versions(self, handler: Any) -> Any:
+        # A certificate made before these were recorded keeps its fingerprint and format.
+        data = handler(self)
+        if isinstance(data, dict):
+            if self.harness_version is None:
+                data.pop("harness_version", None)
+            if not self.frameworks:
+                data.pop("frameworks", None)
+            if self.process_isolation is None:
+                data.pop("process_isolation", None)
+            if self.door_user is None:
+                data.pop("door_user", None)
+        return data
 
 
 class CertificationChecks(BaseModel):
@@ -80,6 +104,9 @@ class CertificationChecks(BaseModel):
     action_behavior: str = "0/0"
     reset_equivalence: CheckStatus = CheckStatus.NOT_RUN
     world_isolation: CheckStatus = CheckStatus.NOT_RUN
+    # Whether the judge answered one short request during the check; recorded only when the
+    # environment has a judged sub-goal.
+    judge_reachable: CheckStatus | None = None
 
     @property
     def records_chat_ingress(self) -> bool:
@@ -92,6 +119,8 @@ class CertificationChecks(BaseModel):
         data = handler(self)
         if not self.records_chat_ingress and isinstance(data, dict):
             data.pop("chat_ingress", None)
+        if self.judge_reachable is None and isinstance(data, dict):
+            data.pop("judge_reachable", None)
         return data
 
 
@@ -113,6 +142,10 @@ class RuntimeValidationEvidence(BaseModel):
     scenario_set_hash: str
     checks: CertificationChecks
     limitations: tuple[str, ...] = ()
+    # How the runtime ran its processes (`privilege.isolation_mode`) and the door processes' declared OS user; absent
+    # in evidence written before they were recorded.
+    process_isolation: str | None = None
+    door_user: str | None = None
 
 
 class HarnessCertification(BaseModel):

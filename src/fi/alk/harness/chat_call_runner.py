@@ -756,6 +756,8 @@ class _HostedChatTarget:
         self._messages: list[dict[str, Any]] = []
         self._tool_call_ids: set[str] = set()
         self._turn = 0
+        # Calls the harness ran at the world itself, not ones the agent says it ran.
+        self.received: list[Call] = []
         # The world's door for the agent's calls: permission, faults and the action log, as at the HTTP door.
         self._door = door if door is not None else chat_door(world, None, {}, faults or [])
 
@@ -881,7 +883,9 @@ class _HostedChatTarget:
                     if not isinstance(result_content, str):
                         result_content = json.dumps(result_content, default=str)
                 else:
+                    calls_before = len(self.world.calls)
                     result_content = self._world_call(call_id, name, arguments)
+                    self.received.extend(self.world.calls[calls_before:])
                 self._messages.append(
                     {
                         "role": "tool",
@@ -997,6 +1001,8 @@ class HostedChatCallRunner:
 
         self._adapter = adapter
         self._context = context
+        # The last conversation's calls the harness ran at the world (``_HostedChatTarget``).
+        self.received: list[Call] = []
         self._records = TrialRecords(sealed_seed(context.work_directory))
         contract_path = context.bundle_dir / "contract.json"
         if not contract_path.is_file():
@@ -1196,6 +1202,15 @@ class HostedChatCallRunner:
                 deadline, deadlines = None, {}
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
             await asyncio.to_thread(_set_trial_faults, runtime, faults, deadline, deadlines)
+        target = _HostedChatTarget(
+            wrapper=wrapper,
+            contract=self._contract,
+            world=target_world,
+            scenario_key=scenario.scenario_key,
+            scenario_id=scenario.scenario_id,
+            door=door,
+        )
+        self.received = target.received
         try:
             # The trial's starting records, after its reset: whether it started from the seed.
             await asyncio.to_thread(self._records.begin, id(runtime), records_dsn)
@@ -1206,14 +1221,7 @@ class HostedChatCallRunner:
                     await asyncio.to_thread(self._records.rebase, id(runtime), records_dsn)
                 acting = asyncio.create_task(dispatcher.run())
             transcript = await _drive_conversation(
-                _HostedChatTarget(
-                    wrapper=wrapper,
-                    contract=self._contract,
-                    world=target_world,
-                    scenario_key=scenario.scenario_key,
-                    scenario_id=scenario.scenario_id,
-                    door=door,
-                ),
+                target,
                 conversation_scenario,
                 self._contract,
                 self._context.bundle_dir,

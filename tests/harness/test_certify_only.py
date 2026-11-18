@@ -1529,6 +1529,133 @@ def test_refresh_leaves_a_contract_whose_entrypoints_all_have_tools_untouched(
     assert not any("entrypoints" in note for note in notes)
 
 
+def _prove_only_argv(source: Path, authoring: Path, job_path: Path, *extra: str) -> list[str]:
+    return [str(job_path), "--source", str(source), "--output", str(authoring), "--prove-only", *extra]
+
+
+@pytest.mark.parametrize("live_pass_fails", [False, True])
+def test_prove_only_proves_on_the_sealed_runtime_then_offline(tmp_path, monkeypatch, live_pass_fails):
+    from fi.alk.harness import live_proof
+    from fi.alk.harness import prove_suite as prove_suite_module
+
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    job_path = tmp_path / "job.json"
+    job_path.write_text(_job(1).model_dump_json(), encoding="utf-8")
+    # An earlier job's live results: the requested case may have been edited since.
+    live_proof.write_live(authoring, {"case_a": {"assumed": ["stale"]}, "case_b": {"assumed": []}})
+    seen: dict[str, object] = {}
+
+    async def on_sealed_runtime(job, source, tree, *, keys, until):
+        seen["live_pass"] = (keys, until, live_proof.load_live(tree))
+        if live_pass_fails:
+            raise RuntimeError("the sealed runtime did not start")
+        live_proof.write_live(tree, {"case_a": {"assumed": []}})
+        return {"case_a": {"assumed": []}}
+
+    def offline(tree, output, *, deadline_at=None, keys=None, budget=1200):
+        seen["offline"] = (keys, deadline_at, output, live_proof.load_live(tree))
+        return {}
+
+    monkeypatch.setattr(runtime_validation, "prove_on_sealed_runtime", on_sealed_runtime)
+    monkeypatch.setattr(prove_suite_module, "prove_suite", offline)
+    _forbid_models(monkeypatch)
+
+    status = authoring_entrypoint.main(
+        _prove_only_argv(tmp_path, authoring, job_path, "--keys", "case_a", "--deadline-at", "10000")
+    )
+
+    assert status == 0
+    assert seen["live_pass"] == ({"case_a"}, 10000 - 600, {"case_b": {"assumed": []}})
+    keys, deadline_at, output, live = seen["offline"]
+    assert (keys, deadline_at, output) == ({"case_a"}, 10000, authoring / "scenario-proofs.json")
+    expected = {"case_b": {"assumed": []}} if live_pass_fails else {"case_a": {"assumed": []}, "case_b": {"assumed": []}}
+    assert live == expected
+
+
+def _sealed_tree(tmp_path: Path, monkeypatch, capabilities: dict, kind=None) -> Path:
+    from fi.alk.harness import bundle_v2
+    from fi.alk.harness.bundle_v2 import RuntimeKindV2
+
+    authoring = tmp_path / "authoring"
+    bundle = authoring / "environment-bundle"
+    bundle.mkdir(parents=True)
+    (bundle / "contract.json").write_text(
+        json.dumps(
+            {
+                "tools": [{"name": "lookup_order"}, {"name": "refund_order"}],
+                "tool_entrypoints": [
+                    {"tool": "lookup_order", "mode": "service", "endpoint": "lookup"},
+                    {"tool": "refund_order", "mode": "service", "endpoint": "refund"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = SimpleNamespace(
+        runtime=SimpleNamespace(kind=kind or RuntimeKindV2.PROCESS), capabilities=capabilities
+    )
+    monkeypatch.setattr(bundle_v2, "load_bundle_v2", lambda path: manifest)
+    return authoring
+
+
+def test_prove_on_sealed_runtime_plays_the_cases_on_the_started_bundle(tmp_path, monkeypatch):
+    from fi.alk.harness import hosted_entrypoint, live_proof, scenario_tools
+    from fi.alk.harness import catalogue as catalogue_module
+
+    from test_negative_controls import Stack
+    from proof_world import REFUND_CATALOGUE, catalogue, refund_case
+
+    authoring = _sealed_tree(tmp_path, monkeypatch, {"tool_proxy": object(), "target_http": object()})
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text("{}", encoding="utf-8")
+    stack = Stack()
+    started: list[str] = []
+
+    async def provision(manifest, *, source, bundle_dir, work_directory, instances):
+        started.append(bundle_dir.name)
+        return [stack]
+
+    async def close(*, work_directory):
+        started.append("closed")
+
+    stack.provision, stack.close = provision, close
+    monkeypatch.setattr(runtime_validation, "_runtime_provider", lambda *args, **kwargs: stack)
+    monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", lambda work, bundle: stack)
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: [refund_case()])
+    monkeypatch.setattr(catalogue_module, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+
+    results = asyncio.run(
+        runtime_validation.prove_on_sealed_runtime(_job(1), tmp_path, authoring, secrets_path=secrets)
+    )
+
+    assert started == ["environment-bundle", "closed"]
+    assert results["refund_case"]["assumed"] == []
+    assert live_proof.load_live(authoring)["refund_case"] == results["refund_case"]
+    # Only the requested cases are played, within the budget.
+    for options in ({"keys": {"another_case"}}, {"until": 0.0}):
+        assert asyncio.run(
+            runtime_validation.prove_on_sealed_runtime(_job(1), tmp_path, authoring, secrets_path=secrets, **options)
+        ) == {}
+
+
+@pytest.mark.parametrize("compose", [False, True])
+def test_prove_on_sealed_runtime_starts_nothing_without_a_tool_server(tmp_path, monkeypatch, compose):
+    from fi.alk.harness.bundle_v2 import RuntimeKindV2
+
+    capabilities = {"tool_proxy": object()} if compose else {"target_http": object()}
+    authoring = _sealed_tree(
+        tmp_path, monkeypatch, capabilities, kind=RuntimeKindV2.COMPOSE if compose else None
+    )
+
+    def no_provider(*args, **kwargs):
+        raise AssertionError("no runtime may start when no tool can be played on it")
+
+    monkeypatch.setattr(runtime_validation, "_runtime_provider", no_provider)
+    assert asyncio.run(runtime_validation.prove_on_sealed_runtime(_job(1), tmp_path, authoring)) == {}
+
+
 def _subfolder_certify(tmp_path: Path, subfolder: str, recorded: str | None):
     """An assembled environment whose repository holds two agents, saved through the real save."""
     from fi.alk.harness.job import RepositorySource, SourceKind, SourceVisibility

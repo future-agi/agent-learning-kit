@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any, Literal
 
@@ -488,6 +489,17 @@ def load_actors(root: Path) -> ActorList:
 
 
 def save_actors(root: Path, listing: ActorList) -> None:
+    hidden = {Path(path).name for path in evaluator_only_paths(root)}
+    named = [
+        str(path)
+        for actor in listing.actors
+        for one in actor.knowledge
+        if one.get("kind") == "files"
+        for path in one.get("paths") or []
+        if not knowledge_file_allowed(str(path), hidden)
+    ]
+    if named:
+        raise ValueError("an actor never sees what only the evaluator reads: " + ", ".join(named))
     body = {"schema": ACTORS_SCHEMA, **listing.model_dump(exclude_none=True)}
     (Path(root) / ACTORS_FILE).write_text(
         json.dumps(body, indent=2) + "\n", encoding="utf-8"
@@ -575,12 +587,63 @@ NOT_KNOWLEDGE = {
 }
 
 
-def knowledge_file_allowed(path: str) -> bool:
-    """Whether an actor may be given this environment file to read."""
+def knowledge_file_allowed(path: str, hidden: Collection[str] = ()) -> bool:
+    """Whether an actor may be given this environment file to read; ``hidden`` adds the environment's own
+    evaluator-only files, by name."""
     name = str(path).strip().lstrip("/")
-    return bool(name) and ".." not in Path(name).parts and Path(name).name not in EVALUATOR_ONLY["files"] and (
+    return bool(name) and ".." not in Path(name).parts and Path(name).name not in {*EVALUATOR_ONLY["files"], *hidden} and (
         name not in NOT_KNOWLEDGE["files"] and not any(name.startswith(prefix) for prefix in NOT_KNOWLEDGE["prefixes"])
     )
+
+
+# Each attached file's role, written by the platform when the person attaches it: `{"knowledge/<path>": <role>}`.
+KNOWLEDGE_ROLES = "knowledge/roles.json"
+FILE_ROLES = ("policy", "seed_records", "evaluator_only")
+_logger = logging.getLogger(__name__)
+
+
+def knowledge_roles(root: Path) -> dict[str, str]:
+    """Each attached file's role by its path under `knowledge/`. No file, or one that is not a JSON object, is no
+    roles (every file as before). A path outside `knowledge/` is left out with a warning. A role the harness does not
+    know is read as evaluator-only, the safe side (kept from the agent and every actor), with a warning."""
+    try:
+        body = json.loads((Path(root) / KNOWLEDGE_ROLES).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(body, dict):
+        _logger.warning("%s is not an object of path to role; read as no roles", KNOWLEDGE_ROLES)
+        return {}
+    roles: dict[str, str] = {}
+    for raw, role in body.items():
+        path = str(raw).strip().removeprefix("./")
+        if not path.startswith("knowledge/") or ".." in Path(path).parts or path == KNOWLEDGE_ROLES:
+            _logger.warning("%s names %r, which is not a file under knowledge/; left out", KNOWLEDGE_ROLES, raw)
+            continue
+        if role not in FILE_ROLES:
+            _logger.warning(
+                "%s gives %s the role %r, which is not one of %s; kept from the agent and actors as evaluator_only",
+                KNOWLEDGE_ROLES,
+                path,
+                role,
+                ", ".join(FILE_ROLES),
+            )
+            role = "evaluator_only"
+        roles[path] = role
+    return roles
+
+
+def evaluator_only_paths(root: Path) -> list[str]:
+    """The attached files only the evaluator may read, by path under `knowledge/`."""
+    return sorted(path for path, role in knowledge_roles(root).items() if role == "evaluator_only")
+
+
+def evaluator_only_rule(root: Path | None = None) -> dict[str, list[str]]:
+    """What only the grader may read, with the environment's own evaluator-only files beside the harness's. Files are
+    named as both readers compare them, by name."""
+    names = [Path(path).name for path in evaluator_only_paths(root)] if root is not None else []
+    # The harness's own first and in their order, so an environment without roles seals exactly as before.
+    added = [name for name in sorted(set(names)) if name not in EVALUATOR_ONLY["files"]]
+    return {**EVALUATOR_ONLY, "files": [*EVALUATOR_ONLY["files"], *added]}
 # How the world names an action: the route a tool's entrypoint calls, with `/` read as `.` (the tool proxy's rule).
 WORLD_ACTIONS = {
     "from": "tool_entrypoints",
@@ -691,6 +754,8 @@ def read_knowledge(
     file's text (bounded), a `records` entry the collection's rows matching its `where` (bounded) when the world's
     records can be read here. Never an evaluator-only file, and never a path outside the environment."""
     base = Path(root).resolve()
+    # The environment's own evaluator-only files, attached with that role.
+    hidden = {Path(path).name for path in evaluator_only_paths(root)}
     out = []
     for one in knowledge:
         if not isinstance(one, dict) or one.get("kind") not in ("files", "records"):
@@ -700,7 +765,7 @@ def read_knowledge(
             read = []
             for name in one.get("paths") or []:
                 path = (base / str(name)).resolve()
-                if not knowledge_file_allowed(str(name)) or base not in path.parents or not path.is_file():
+                if not knowledge_file_allowed(str(name), hidden) or base not in path.parents or not path.is_file():
                     continue
                 read.append({"path": str(name), "text": path.read_text(encoding="utf-8", errors="replace")[:KNOWLEDGE_FILE_CHARS]})
             out.append({**one, "read": read})
@@ -869,7 +934,7 @@ def with_caller_actor(doc: dict[str, Any], root: Path) -> dict[str, Any]:
     }
 
 
-def actor_rules(config: dict[str, Any] | None = None) -> dict[str, Any]:
+def actor_rules(config: dict[str, Any] | None = None, root: Path | None = None) -> dict[str, Any]:
     """Everything this release decides about actors, sealed into each bundle so the platform reads the rules of the
     release that built it instead of keeping its own copy."""
     from fi.simulate.simulation.call_actors import CHANNELS, DETAILS_MARK, LOUDNESS_RANGE
@@ -892,7 +957,8 @@ def actor_rules(config: dict[str, Any] | None = None) -> dict[str, Any]:
             },
         },
         "schema": ACTOR_RULES_SCHEMA,
-        "evaluator_only": EVALUATOR_ONLY,
+        # With the environment's evaluator-only attached files when ``root`` holds their roles.
+        "evaluator_only": evaluator_only_rule(root),
         "brief_inputs": BRIEF_INPUTS,
         "private_to_actor": PRIVATE_TO_ACTOR,
         # Files an actor's knowledge may never name, beside the evaluator-only ones.
@@ -985,7 +1051,8 @@ def permission_conflicts(listing: "ActorList", actor: "Actor") -> list[tuple[str
     return conflicts
 
 
-def write_actor_rules(bundle: Path, config: dict[str, Any] | None = None) -> None:
-    (Path(bundle) / ACTOR_RULES_FILE).write_text(
-        json.dumps(actor_rules(config), indent=2) + "\n", encoding="utf-8"
-    )
+def write_actor_rules(bundle: Path, config: dict[str, Any] | None = None, roles_root: Path | None = None) -> None:
+    """Seal the actor rules into ``bundle``, the evaluator-only files named in ``roles_root``'s attached-file roles
+    (``bundle`` itself when not given) among them."""
+    rules = actor_rules(config, root=Path(bundle) if roles_root is None else roles_root)
+    (Path(bundle) / ACTOR_RULES_FILE).write_text(json.dumps(rules, indent=2) + "\n", encoding="utf-8")

@@ -1201,6 +1201,8 @@ class WorldDoor:
             # under different methods, and a fault is found on the row of the call it held.
             "method": (call.method or "").upper() or None,
             "fault": outcome.fault,
+            # The HTTP path the call went to, so readiness can tell which declared service a call reached.
+            "endpoint": (call.path or "").split("?", 1)[0] or None,
         }
         if wait:
             self._write_row(row)
@@ -1414,10 +1416,11 @@ _EFFECT = "effect"
 # Likewise: why a call with no worker is the coordinator's while workers had channels.
 _ATTRIBUTION = "attribution"
 _BASIC = "name, arguments, result, ok, error, at"
-# Written when the table has them: how a call was made, and the scenario's fault the door applied on it.
-_CALL_COLUMNS = ("method", "fault")
+# Written when the table has them: how a call was made, the path it went to, and the scenario's fault the door applied on it.
+_CALL_COLUMNS = ("method", "fault", "endpoint")
 _CALL_COLUMNS_DDL = (
-    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb"
+    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb, "
+    "ADD COLUMN IF NOT EXISTS endpoint text"
 )
 # Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a
 # failed write can leave without the row.
