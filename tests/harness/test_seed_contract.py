@@ -144,7 +144,9 @@ def _reading(tmp_path: Path, data: bytes) -> Path:
 # -- the record a reading leaves ---------------------------------------------------------------
 
 
-def test_a_reading_records_what_it_was_made_from(tmp_path):
+def test_a_reading_records_what_it_was_made_from(tmp_path, monkeypatch):
+    # The shell's own ALK_BUILD_ID must not decide what this test expects.
+    monkeypatch.delenv("ALK_BUILD_ID", raising=False)
     job = _job()
     original = json.dumps(CONTRACT, indent=1).encode()
 
@@ -176,9 +178,8 @@ def _made_from(body: dict) -> dict:
 
 
 def _made_by_now() -> dict:
-    from fi.alk import __version__
-
-    return {"kit_version": __version__, "build_id": os.environ.get("ALK_BUILD_ID", "")}
+    # The same reading of the environment the writer does (hex only, lower-case), not the raw value.
+    return seed_contract._made_by()
 
 
 def test_a_reading_records_the_kit_version_and_build_that_made_it(monkeypatch):
