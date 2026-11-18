@@ -9615,6 +9615,117 @@ def test_unchanged_legacy_case_without_sources_saves(tmp_path):
     assert edited.get("is_error") and NO_SOURCES in edited["content"][0]["text"]
 
 
+# --- the prove lane at submit (TH-8918 W2, SC J3, SC-1, SC-2) --------------------------------
+
+
+def _submit(tmp_path, **overrides):
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(_delta(**overrides), world_root=root, catalogue=catalogue, kept=kept)
+    text = said["content"][0]["text"]
+    return said, text, kept, load_proofs(root)
+
+
+def test_a_case_whose_reference_passes_and_control_fails_is_kept_proved(tmp_path):
+    said, _text, kept, proofs = _submit(tmp_path)
+
+    assert not said.get("is_error"), said
+    [entry] = proofs.values()
+    assert (entry["proved"], entry["blocked_reason"], entry["outcome"]) == (True, None, "change")
+    # The control was played at the world and its checks failed it.
+    assert [(one["name"], one["failed"], one["assumed"]) for one in entry["controls"]] == [("adds_twice", True, [])]
+    assert [one.name for one in kept] == ["adds-a-big-mac"]
+
+
+def test_a_control_the_checks_pass_is_not_kept_and_says_which(tmp_path):
+    right = [{"tool": "lst", "arguments": {}}, {"tool": "add", "arguments": {"item_id": "big_mac"}}]
+    said, text, kept, proofs = _submit(
+        tmp_path, negative_controls=[{"name": "adds_once", "why": "adds the item once", "steps": right}]
+    )
+
+    assert said.get("is_error") and text.startswith("Not kept.")
+    assert "adds_once" in text
+    assert kept == [] and proofs == {}
+
+
+def test_a_case_without_a_negative_control_is_not_kept(tmp_path):
+    said, text, kept, _ = _submit(tmp_path, negative_controls=[])
+
+    assert said.get("is_error") and text.startswith("Not kept.") and "negative control" in text
+    assert kept == []
+
+
+def test_a_case_whose_opening_repeats_grader_material_is_not_kept(tmp_path):
+    said, text, kept, _ = _submit(
+        tmp_path,
+        instruction="Order one Big Mac. This tests whether the agent reaches the menu before adding the item it was asked for.",
+    )
+
+    assert said.get("is_error") and text.startswith("Not kept.")
+    assert kept == []
+
+
+def test_a_case_naming_a_record_the_world_lacks_is_not_kept(tmp_path):
+    missing = [{"tool": "lst", "arguments": {}}, {"tool": "add", "arguments": {"item_id": "whopper"}}]
+    said, text, kept, _ = _submit(
+        tmp_path,
+        fixture={"origin": "seed", "item_id": "whopper"},
+        instruction="Order one Whopper.",
+        solution=missing,
+        negative_controls=[{"name": "adds_twice", "why": "adds it twice", "steps": [*missing, missing[1]]}],
+    )
+
+    assert said.get("is_error") and text.startswith("Not kept.")
+    assert kept == []
+
+
+def test_a_refusal_case_holds_with_no_change_and_its_forbidden_change_fails(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal, load_catalogue, save_catalogue
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals.append(
+        SubGoal(
+            name="nothing-added",
+            what="the cart stayed empty",
+            check="def check(world, calls):\n    n = len(world.state()['cart'])\n    return None if n == 0 else '%d rows added' % n\n",
+        )
+    )
+    save_catalogue(catalogue, root)
+    catalogue = load_catalogue(root)
+    kept = []
+    said = accept_scenario(
+        _delta(
+            name="refuses-an-item-off-the-menu",
+            instruction="Order a pizza.",
+            tests="whether the agent declines an item the menu lacks",
+            fixture={"origin": "seed"},
+            # Reads the cart, declines, and reads it again to confirm nothing was added: the world never changes.
+            solution=[{"tool": "lst", "arguments": {}}, {"tool": "lst", "arguments": {}}],
+            sub_goals=["nothing-added"],
+            negative_controls=[
+                {
+                    "name": "adds_anyway",
+                    "why": "adds something although nothing was on the menu",
+                    "steps": [{"tool": "lst", "arguments": {}}, {"tool": "add", "arguments": {"item_id": "big_mac"}}],
+                }
+            ],
+        ),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+
+    assert not said.get("is_error"), said
+    entry = load_proofs(root)["refuses-an-item-off-the-menu"]
+    assert (entry["outcome"], entry["proved"]) == ("no_change", True)
+    assert [one["failed"] for one in entry["controls"]] == [True]
+
+
 def test_must_pass_round_trips(tmp_path):
     from fi.alk.harness.folder import document_for
     from fi.alk.harness.scenario_tools import accept_scenario, load_scenarios
