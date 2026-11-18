@@ -1320,6 +1320,11 @@ def _bare_blocks_text(items: Any) -> str:
 
     Items without a ``type`` (Gemini parts, search hits, records with a ``text`` field) are
     separate pieces joined with a space; a list holding typed blocks goes through ``text_of``.
+
+    The space is deliberate: a bare list may be unrelated hits or records, so an answer split
+    across two parts reads ``Hel lo`` here. A Gemini ``Content`` (``_reply_text``, ``_extract_content``)
+    is one reply split by the model, so its parts go through ``text_of`` and join with nothing
+    (``Hello``).
     """
     if all(_field_of(item, "type") is None for item in items):
         pieces = (
