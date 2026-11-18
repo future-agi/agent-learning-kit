@@ -749,7 +749,7 @@ def test_a_failed_probe_means_the_owner_is_needed(tmp_path: Path, mechanism: str
     )
     # A hook that raises for the probe's own events must not stop the tracer from installing.
     source = (tmp_path / "sitecustomize.py").read_text().replace(
-        "g = probe(); next(g); g.close()", "raise RuntimeError('probe failed')"
+        "                g = probe()\n", "                raise RuntimeError('probe failed')\n"
     )
     assert "probe failed" in source
     (tmp_path / "sitecustomize.py").write_text(source)

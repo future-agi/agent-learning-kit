@@ -1012,7 +1012,9 @@ def _install_declared_python_tools() -> None:
             monitoring.register_callback(tool, events.PY_THROW, probe_event)
             monitoring.set_events(tool, events.PY_UNWIND | events.PY_THROW)
             try:
-                g = probe(); next(g); g.close()
+                g = probe()
+                next(g)
+                g.close()
             finally:
                 monitoring.set_events(tool, 0)
             needs_owner = not probe_fired
