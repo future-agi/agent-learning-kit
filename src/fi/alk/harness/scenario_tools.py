@@ -75,6 +75,7 @@ from .proofs import proof_key, record_proof, record_unprovable
 from .understand import load as load_contract
 from .prove import (
     BlockedReason,
+    distinctive_goals,
     refuses_keeping,
     executes,
     native_runtime,
@@ -191,11 +192,12 @@ def _no_longer_hold(
         return []
     wanted = set(names)
     failed: list[tuple[str, str]] = []
-    for scenario in load_scenarios(destination):
+    suite = load_scenarios(destination)
+    for scenario in suite:
         if scenario.name not in wanted:
             continue
         try:
-            proof = prove(scenario, catalogue, world_root)
+            proof = prove(scenario, catalogue, world_root, case_goals=distinctive_goals(scenario, suite))
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
             record_unprovable(destination, proof_key(scenario), type(exc).__name__)
             failed.append((scenario.name, type(exc).__name__))
@@ -1795,7 +1797,11 @@ def accept_scenario(
                 "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
             )
 
-        proof = prove(scenario, catalogue, world_root)
+        named_key = str(payload.get("scenario_key") or "").strip()
+        suite = [
+            one for one in kept if not (named_key and one.scenario_key == named_key) and one.name != scenario.name
+        ] + [scenario]
+        proof = prove(scenario, catalogue, world_root, case_goals=distinctive_goals(scenario, suite))
         if single_call and not _a_read_that_declines(scenario, proof, world_root):
             return _err("Not kept. Fix these and submit again:\n  - " + "\n  - ".join(single_call))
         if refuses_keeping(proof):

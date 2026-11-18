@@ -6,12 +6,7 @@ import asyncio
 import copy
 from types import SimpleNamespace
 
-from fi.alk.harness import live_proof
-from fi.alk.harness import prove as module
-from fi.alk.harness.contract import ToolEntry
-from fi.alk.harness.prove import Proof
-from fi.alk.harness.world.runtime import Call
-
+import pytest
 from proof_world import (
     BASE,
     LOOKUP_O10,
@@ -24,6 +19,12 @@ from proof_world import (
     refund_case,
     scenario,
 )
+
+from fi.alk.harness import live_proof
+from fi.alk.harness import prove as module
+from fi.alk.harness.contract import ToolEntry
+from fi.alk.harness.prove import Proof
+from fi.alk.harness.world.runtime import Call
 
 LOOKUP_O20 = {"tool": "lookup_order", "arguments": {"order_id": "O-20"}, "fixed": {"order_id": "the caller"}}
 REFUND_O20 = {"tool": "refund_order", "arguments": {"order_id": "O-20"}, "fixed": {"order_id": "the caller"}}
@@ -674,3 +675,88 @@ def test_the_offline_end_state_leaves_out_the_harness_s_own_tables():
         state=lambda: {"orders": [{"id": 1}], "_alk_tool_trace": [{"name": "lookup"}], "harness_seed_sentinel": [{}]}
     )
     assert module._end_state(world) == {"orders": [{"id": 1}]}
+
+
+# A suite whose every case looks an order up first: the lookup is a step they share, not what any one is about.
+LOOKS_UP_ANY = check("return None if any(c.name == 'lookup_order' and c.ok for c in calls) else 'never looked up'")
+REFUNDED_ONCE = check(
+    "n = sum(1 for c in calls if c.ok and c.name == 'refund_order' and same_id(c.arguments.get('order_id'), 'O-10'))\n"
+    "return None if n == 1 else f'{n} refund calls'"
+)
+_SUITE_GOALS = dict(refund_once=REFUNDED_ONCE, looked_up=LOOKS_UP_ANY)
+LOOKUP_NOTHING = {"tool": "refund_order", "arguments": {"order_id": "O-10"}}
+_MISSES_LOOKUP = control("skips_lookup", "refunds without looking the order up", [LOOKUP_NOTHING])
+_TWO_REFUNDS = control("two_refunds", "refunds the order twice", [LOOKUP_O10, REFUND_O10, REFUND_O10])
+
+
+def _suite(size, target_control):
+    target = refund_case(negative_controls=[target_control])
+    others = [scenario([LOOKUP_O20], name=f"other_{n}", sub_goals=["looked_up", f"own_{n}"]) for n in range(size - 1)]
+    return target, [target, *others]
+
+
+def test_a_case_s_distinctive_goals_are_those_its_suite_does_not_all_name():
+    target, suite = _suite(3, _TWO_REFUNDS)
+    assert module.distinctive_goals(target, suite) == ["refund_once"]
+    # Two cases may both be about the same goal: below three, nothing is read as shared.
+    target, suite = _suite(2, _TWO_REFUNDS)
+    assert module.distinctive_goals(target, suite) == []
+
+
+@pytest.mark.parametrize("assumed", [False, True], ids=["ran", "assumed-steps-read-from-the-calls"])
+def test_a_control_that_only_breaks_the_shared_step_is_refused(monkeypatch, tmp_path, assumed):
+    install(monkeypatch, runtime_tools={"lookup_order", "refund_order"} if assumed else ())
+    target, suite = _suite(3, _MISSES_LOOKUP)
+
+    proof = module.prove(target, catalogue(**_SUITE_GOALS), tmp_path, case_goals=module.distinctive_goals(target, suite))
+
+    assert proof.misses_case_goal is True
+    assert proof.blocked_reason() == "control_misses_case_goal" and module.refuses_keeping(proof)
+    assert "refund_once" in proof.why() and proof.proved is False
+
+
+def test_a_control_aimed_at_the_case_s_own_goal_passes(monkeypatch, tmp_path):
+    install(monkeypatch)
+    target, suite = _suite(3, _TWO_REFUNDS)
+
+    proof = module.prove(target, catalogue(**_SUITE_GOALS), tmp_path, case_goals=module.distinctive_goals(target, suite))
+
+    assert proof.misses_case_goal is False and proof.proved is True
+
+
+def test_a_small_suite_and_a_saved_proof_are_left_to_the_existing_rules(monkeypatch, tmp_path):
+    install(monkeypatch)
+    target, suite = _suite(2, _MISSES_LOOKUP)
+    small = module.prove(target, catalogue(**_SUITE_GOALS), tmp_path, case_goals=module.distinctive_goals(target, suite))
+    # Re-proving without the suite (a Validate, a read) never applies the rule, so nothing saved is demoted by it.
+    reproved = module.prove(target, catalogue(**_SUITE_GOALS), tmp_path)
+    assert small.misses_case_goal is False and reproved.misses_case_goal is False
+    assert small.proved is True and reproved.proved is True
+
+
+def test_a_rebuild_keeps_a_case_whose_control_misses_its_goal_not_proved(monkeypatch, tmp_path):
+    from fi.alk.harness import nudge
+
+    missing = module.Proof(
+        ready=True, solvable=True, vacuous=False, case_goals=["refund_once"], evidence={"refund_once": ["tool_calls"]},
+        controls=[{"name": "skips", "why": "", "ran": True, "failed": True, "held": [], "failing": ["looked_up"],
+                   "assumed": []}],
+    )
+    target, suite = _suite(3, _MISSES_LOOKUP)
+    monkeypatch.setattr(nudge, "load_scenarios", lambda path: suite)
+    monkeypatch.setattr(nudge, "load_catalogue", lambda path: catalogue(**_SUITE_GOALS, own_0=LOOKS_UP_ANY, own_1=LOOKS_UP_ANY))
+    monkeypatch.setattr(nudge, "prove", lambda *_args, **_kwargs: missing)
+
+    problems, _not_checked, _left_out = nudge.suite_gate(tmp_path, set())
+
+    assert problems == []
+    assert any("refund_case" in one and "own goal" in one for one in nudge.unproved_without_control(tmp_path))
+
+
+def test_one_control_failing_any_one_of_the_case_s_goals_is_enough():
+    def ran(failing):
+        return {"name": "c", "why": "", "ran": True, "failed": True, "held": [], "failing": failing, "assumed": []}
+
+    proof = module.Proof(case_goals=["first", "second"], controls=[ran(["shared"]), ran(["second"])])
+    assert proof.misses_case_goal is False
+    assert module.Proof(case_goals=["first", "second"], controls=[ran(["shared"])]).misses_case_goal is True

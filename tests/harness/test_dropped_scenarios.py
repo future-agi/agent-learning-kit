@@ -112,7 +112,7 @@ def _result(root: Path) -> dict:
 @pytest.fixture(autouse=True)
 def _proved(monkeypatch):
     monkeypatch.setattr(
-        nudge, "prove", lambda *_args: Proof(ready=True, solvable=True, vacuous=False, controls=_RAN)
+        nudge, "prove", lambda *_args, **_kwargs: Proof(ready=True, solvable=True, vacuous=False, controls=_RAN)
     )
 
 
@@ -232,7 +232,7 @@ def test_restored_scenarios_are_proved_like_any_other(tmp_path, monkeypatch):
     _environment(root, cancel=True)
     proved: list[str] = []
 
-    def prove(scenario, *_args):
+    def prove(scenario, *_args, **_kwargs):
         proved.append(scenario.scenario_key)
         return Proof(ready=True, solvable=True, vacuous=False, controls=_RAN)
 
@@ -288,7 +288,7 @@ def test_a_restore_that_cannot_be_proved_stays_dropped_and_is_listed_with_why(
     root = _drop_cancels(_v4(tmp_path))
     _environment(root, cancel=True)
 
-    def prove(scenario, *_args):
+    def prove(scenario, *_args, **_kwargs):
         if scenario.scenario_key == "cancels-the-only-booking":
             return Proof(ready=True, solvable=False, vacuous=False)
         return Proof(ready=True, solvable=True, vacuous=False, controls=_RAN)
@@ -368,7 +368,7 @@ def test_editing_a_restored_scenario_is_not_refused(tmp_path):
 def _restore_with(tmp_path, monkeypatch, proof_for):
     root = _drop_cancels(_v4(tmp_path))
     _environment(root, cancel=True)
-    monkeypatch.setattr(nudge, "prove", lambda scenario, *_args: proof_for(scenario.scenario_key))
+    monkeypatch.setattr(nudge, "prove", lambda scenario, *_args, **_kwargs: proof_for(scenario.scenario_key))
     server, kept, _ = _suite_turn(root, "v7", "v4")
     said = _call(server, "report_update", {"changed": True, "notes": "restored"})
     assert not said.get("is_error"), said

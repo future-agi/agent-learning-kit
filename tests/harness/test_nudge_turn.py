@@ -972,7 +972,7 @@ def test_a_deferred_scenario_is_not_checked_rather_than_a_problem(tmp_path, monk
     from fi.alk.harness.prove import Proof
 
     root = _suite(tmp_path, "adds-a-big-mac")
-    monkeypatch.setattr(nudge, "prove", lambda *_args: Proof(deferred=True))
+    monkeypatch.setattr(nudge, "prove", lambda *_args, **_kwargs: Proof(deferred=True))
 
     problems, not_checked, _ = nudge.suite_gate(root, set())
 
@@ -1051,7 +1051,7 @@ def test_a_deferred_case_with_a_leaked_answer_is_a_problem_not_unchecked(tmp_pat
 
     root = _suite(tmp_path, "adds-a-big-mac")
     leaked = [{"who": "caller", "field": "instruction", "grader_field": "tests", "excerpt": "reaches the menu"}]
-    monkeypatch.setattr(nudge, "prove", lambda *_args: Proof(deferred=True, leaks=leaked))
+    monkeypatch.setattr(nudge, "prove", lambda *_args, **_kwargs: Proof(deferred=True, leaks=leaked))
 
     problems, not_checked, _ = nudge.suite_gate(root, set())
 

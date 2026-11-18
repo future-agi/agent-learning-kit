@@ -28,6 +28,8 @@ class ControlResult(_PlayedControl, total=False):
     """One negative control as played. ``failed`` is None when it could not be played: no evidence either way."""
 
     broken: list[str]
+    # Every check the control's steps made fail, named or not; read only with `ran` or a check of the calls alone.
+    failing: list[str]
     judged: bool
     verdicts: dict[str, JudgeVerdict]
     error: str

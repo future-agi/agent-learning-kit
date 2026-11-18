@@ -32,7 +32,15 @@ from .catalogue import (
 from .contract import validate_contract
 from .outbound import _redact_validation_error
 from .proofs import load_proofs, record_proof, record_unprovable
-from .prove import NO_NEGATIVE_CONTROL, prepared, prove, refuses_keeping
+from .prove import (
+    KEPT_THROUGH_REBUILD,
+    NO_NEGATIVE_CONTROL,
+    BlockedReason,
+    distinctive_goals,
+    prepared,
+    prove,
+    refuses_keeping,
+)
 from .scenario import Scenario, scenario_slug
 from .scenario_tools import load_scenarios, write_scenarios
 from .seed_rows import missing_seed_rows
@@ -378,9 +386,20 @@ def unproved_without_control(workspace: Path) -> list[str]:
         for one in load_scenarios(workspace)
         if (proofs.get(one.scenario_key) or {}).get("blocked_reason") == NO_NEGATIVE_CONTROL
     )
+    missing = sorted(
+        one.scenario_key
+        for one in load_scenarios(workspace)
+        if (proofs.get(one.scenario_key) or {}).get("blocked_reason") == BlockedReason.CONTROL_MISSES_CASE_GOAL
+    )
+    said = (
+        ["not proved: no control makes the case's own goal fail, so these are held out of runs until each has one: "
+         + ", ".join(missing)]
+        if missing
+        else []
+    )
     if not keys:
-        return []
-    return [
+        return said
+    return said + [
         "not proved: no negative control, so these are held out of runs until each has one: "
         + ", ".join(keys)
         + ". Add a wrong behaviour written for each task (the wrong record, the action done twice, or the forbidden "
@@ -432,17 +451,17 @@ def suite_gate(
                 problems.append(_problem(key, "scenario", why))
             continue
         try:
-            proof = prove(scenario, catalogue, workspace)
+            proof = prove(scenario, catalogue, workspace, case_goals=distinctive_goals(scenario, scenarios))
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
             record_unprovable(workspace, key, type(exc).__name__)
             holds, why = False, type(exc).__name__
         else:
             record_proof(workspace, key, proof, solution_steps=len(scenario.solution))
             # The rule a submit keeps a case by: a case the rebuild keeps with a proof a submit would refuse (a
-            # control its checks pass, a leaked answer) is a problem, however it held before. One with no control at
-            # all was written before controls were required: it stays, recorded not proved, and is held out of runs
-            # until it has one (`unproved_without_control`), so an older suite still rebuilds.
-            refused = refuses_keeping(proof) and proof.blocked_reason() != NO_NEGATIVE_CONTROL
+            # control its checks pass, a leaked answer) is a problem, however it held before. One written before a
+            # rule existed (no control at all, or a control that misses its own goal) stays, recorded not proved, and
+            # is held out of runs until it is fixed (`unproved_without_control`), so an older suite still rebuilds.
+            refused = refuses_keeping(proof) and proof.blocked_reason() not in KEPT_THROUGH_REBUILD
             if proof.deferred and not proof.broken and not refused:
                 # Only the live runtime can prove it; that is not a failure.
                 not_checked.append(key)
