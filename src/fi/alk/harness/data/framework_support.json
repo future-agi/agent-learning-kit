@@ -31,9 +31,15 @@
           "note": ""
         },
         "read": {
-          "status": "pending",
-          "evidence": [],
-          "note": "Waits on the real reading Pine is running now (TH-8952)."
+          "status": "not_proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-18-claude_agent_sdk.md#Result",
+              "date": "2026-11-18"
+            }
+          ],
+          "note": "The 18 Nov reading missed one line: it made ANTHROPIC_MODEL and ANTHROPIC_API_KEY required, though the model has a default and the agent blanks the API key in gateway mode. Everything else matched."
         },
         "run": {
           "status": "not_proven",
@@ -82,9 +88,15 @@
           "note": ""
         },
         "read": {
-          "status": "pending",
-          "evidence": [],
-          "note": "Waits on the real reading Pine is running now (TH-8952)."
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-18-crewai.md#Result",
+              "date": "2026-11-18"
+            }
+          ],
+          "note": ""
         },
         "run": {
           "status": "not_proven",
@@ -141,9 +153,14 @@
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents",
               "date": "2026-11-12"
+            },
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-18-deepagents.md#Result",
+              "date": "2026-11-18"
             }
           ],
-          "note": "The reading described the agent, but saved `langgraph dev`, which the agent doesn't install. Pine is reading it again on #341's head."
+          "note": "The 12 Nov reading described the agent but saved `langgraph dev`. The 18 Nov reading on kit PR #341's head matched its expected contract fully (the kit's graph route)."
         },
         "run": {
           "status": "pending",
@@ -263,9 +280,15 @@
           "note": ""
         },
         "read": {
-          "status": "pending",
-          "evidence": [],
-          "note": "Waits on the real reading Pine is running now (TH-8952). On an outside agent: the kit has no LangChain reference agent."
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-18-langchain.md#Result",
+              "date": "2026-11-18"
+            }
+          ],
+          "note": "Read from an outside agent (harbor-hotels-langchain): the kit has no LangChain reference agent."
         },
         "run": {
           "status": "not_proven",
@@ -286,7 +309,8 @@
         }
       },
       "limits": [
-        "No reference agent in the kit."
+        "No reference agent in the kit.",
+        "The 18 Nov reading binds the tools as `check_availability.func` (the plain function inside the `@tool` object); whether the tool tracer binds `.func` is unchecked until an agent run."
       ]
     },
     {
@@ -319,9 +343,15 @@
           "note": ""
         },
         "read": {
-          "status": "pending",
-          "evidence": [],
-          "note": "Waits on the real reading Pine is running now (TH-8952). On an outside agent: the kit has no LangGraph reference agent."
+          "status": "not_proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-18-langgraph.md#Result",
+              "date": "2026-11-18"
+            }
+          ],
+          "note": "The 18 Nov reading (of page-turner-langgraph-otel, an outside agent) left the contract's model empty, describing the provider and default model only in prose. Everything else matched."
         },
         "run": {
           "status": "not_proven",
@@ -365,9 +395,15 @@
           "note": ""
         },
         "read": {
-          "status": "pending",
-          "evidence": [],
-          "note": "Waits on the real reading Pine is running now (TH-8952). On an outside agent: the kit has no LiveKit reference agent."
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-18-livekit.md#Result",
+              "date": "2026-11-18"
+            }
+          ],
+          "note": "Read from an outside agent (harbor-voice-livekit): the kit has no LiveKit reference agent."
         },
         "run": {
           "status": "not_proven",
@@ -424,9 +460,14 @@
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
               "date": "2026-11-12"
+            },
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-18-openai_agents.md#Result",
+              "date": "2026-11-18"
             }
           ],
-          "note": "The reading described the agent, but marked its tools unreachable. Pine is reading it again on #341's head."
+          "note": "The 12 Nov reading described the agent but marked its tools unreachable from the repository root. The 18 Nov reading on kit PR #341's head matched its expected contract fully."
         },
         "run": {
           "status": "pending",
