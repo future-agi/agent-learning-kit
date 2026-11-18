@@ -3908,6 +3908,37 @@ def test_a_worker_s_call_whose_answer_differs_from_the_door_s_row_is_still_a_byp
     assert cr.channel_bypasses(cr._merge_span_calls(fresh(shared_issue), fresh(other)), _RETURNS_WORKERS) == []
 
 
+@pytest.mark.parametrize(
+    "worker_record",
+    [
+        {"ok": False, "error": "403 Forbidden"},
+        # The app's tool wrapper turned the refusal into an answer: the two outcomes differ, the call is the same.
+        {"ok": True, "result": {"detail": "forbidden"}},
+    ],
+    ids=["record-says-refused", "record-says-answered"],
+)
+def test_a_call_the_door_refused_on_the_shared_address_is_the_worker_s_bypass(tmp_path, worker_record) -> None:
+    # Plan rows 147, 154b (order 1048's shape): the Refund worker called the world on the shared address and the door
+    # refused it there, so the door's row names no worker; the worker's own event names it.
+    refused = replace(
+        _door_call("issue_refund", "", 1794927459.8243933, amount=75.0, order_id="1048"),
+        ok=False, refused=True, error="the agent may not issue_refund", refusal_code="not_permitted", result=None,
+    )
+    event = Call(
+        name="issue_refund", arguments={"amount": 75.0, "order_id": "1048"}, at=1794927459.819974,
+        worker_id="Refund worker", worker_label="Refund worker", **worker_record,
+    )
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": _RETURNS_WORKERS}), encoding="utf-8")
+
+    alone = replace(refused)
+    merged = cr._merge_span_calls([refused], [event])
+    [notice] = cr.channel_bypass_notices(merged, tmp_path)
+
+    assert (notice["code"], notice["workers"]) == (cr.WORKER_CHANNEL_BYPASSED, ["refund"])
+    # With no record of the worker making it, the refused row is credited to no one: never guessed.
+    assert cr.channel_bypass_notices([alone], tmp_path) == []
+
+
 def test_a_shared_tool_call_on_the_shared_address_gives_no_false_bypass() -> None:
     door = [
         _door_call("list_refunds", "", 10.0, order_id="1042"),
