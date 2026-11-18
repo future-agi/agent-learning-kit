@@ -13,6 +13,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/publish-pypi.yml
+      - scripts/check_offline_quickstart.py
       - scripts/e2b-template.py
       - scripts/bump_deployment_values.py
       - Dockerfile.hosted
@@ -31,13 +32,26 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ${{ env.UV_VERSION }}
       - name: Validate publisher inputs without credentials
         run: python3 scripts/e2b-template.py --dry-run
+      - name: Verify the installed quickstart offline
+        run: |
+          set -euo pipefail
+          uv build
+          uv venv .smoke --python ${{ matrix.python-version }}
+          uv pip install --python .smoke/bin/python dist/*.whl
+          .smoke/bin/python scripts/check_offline_quickstart.py --expect-wheel
 
   sdk-check:
     if: github.event_name == 'push'
@@ -84,7 +98,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   sdk-build:
-    needs: sdk-check
+    needs: [validate, sdk-check]
     if: needs.sdk-check.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -157,7 +171,7 @@ jobs:
           skip-existing: true
 
   release-pr:
-    needs: sdk-check
+    needs: [validate, sdk-check]
     if: needs.sdk-check.outputs.publish == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10

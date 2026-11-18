@@ -41,6 +41,8 @@ SIMULATE_COMMANDS = {
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    # Use LiteLLM's bundled pricing map unless the caller selected another source.
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     args = list(argv) if argv is not None else sys.argv[1:]
     if not args:
         return _help()
