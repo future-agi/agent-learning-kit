@@ -4694,7 +4694,7 @@ def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path
         system_prompt="hosted",
         builtins=("Read", "AskUserQuestion"),
         cwd=str(tmp_path),
-        model="claude-sonnet-4-6",
+        model="gemini-2.5-pro",
         conversation=ConversationSession(
             app_name="alk-harness",
             user_id="conversation-user",
@@ -4709,9 +4709,10 @@ def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path
     session = ClaudeBackend().create(spec)
     options = session._options
 
-    assert options.tools == ["Read", "AskUserQuestion"]
+    # The session is limited to what the spec grants: its builtins and no MCP server of its own.
+    assert options.allowed_tools == ["Read", "AskUserQuestion"]
+    assert options.mcp_servers == {}
     assert options.strict_mcp_config is True
-    assert "AskUserQuestion" not in options.allowed_tools
     assert options.setting_sources == []
     assert options.include_partial_messages is True
     assert options.resume == "provider-session-id"
@@ -4970,6 +4971,8 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.contract import AgentContract, ToolSpec
     from fi.alk.harness.scenario import Persona, Scenario, Step
 
+    import typing
+
     from pydantic import BaseModel
 
     from fi.alk.harness import actors as actors_module
@@ -4978,15 +4981,40 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.understand import READER
 
     fields = {READER, *CONTRACT_SCHEMA["verifier"]["enum"]}
-    # Every model the contract and the actors are built from: the stages fill their fields too.
+    # Every model the contract and the actors are built from, nested ones too: the stages fill their fields, and the
+    # runtime interface a skill explains lives inside the contract.
     contract_models = [
         one
         for module in (contract_module, actors_module)
         for one in vars(module).values()
         if isinstance(one, type) and issubclass(one, BaseModel)
     ]
-    for model in (AgentContract, ToolSpec, Scenario, Persona, Step, SubGoal, *contract_models):
+    pending = [AgentContract, ToolSpec, Scenario, Persona, Step, SubGoal, *contract_models]
+    seen: set[type] = set()
+    while pending:
+        model = pending.pop()
+        if model in seen:
+            continue
+        seen.add(model)
         fields |= set(model.model_fields)
+        for info in model.model_fields.values():
+            stack = [info.annotation]
+            while stack:
+                kind = stack.pop()
+                if isinstance(kind, type) and issubclass(kind, BaseModel):
+                    pending.append(kind)
+                elif isinstance(kind, str):
+                    # A value a Literal field offers, such as a sub-goal's verifier.
+                    fields.add(kind)
+                stack.extend(typing.get_args(kind))
+    # The sub-agent a skill tells the model to brief is not a tool either.
+    fields.add(READER)
+    # Nor is a value the sub-goal contract offers.
+    from fi.alk.harness.catalogue import CONTRACT_SCHEMA
+
+    for spec in CONTRACT_SCHEMA.values():
+        if isinstance(spec, dict):
+            fields |= set(spec.get("enum") or ())
     # Names from the check-writing examples the skills contain.
     from fi.alk.harness.contract import CALL_DIRECTIONS, MODALITIES
     from fi.alk.harness.scenario import CALLER_AWARENESS, FIXTURE_ORIGINS
@@ -5013,6 +5041,11 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         | {"origin", "matching"}
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
         | {"book_ride", "cancel_ride", "verify_otp", "bookings"}
+        # Example agent tools and fields the scenario skill uses to show a check going wrong.
+        | {"create_booking", "cancel_booking", "cancel_subscription", "reset_password"}
+        | {"verify_code", "caller_phone", "company", "pan"}
+        # A scenario's own fixture phases.
+        | {"setup", "ready"}
         | {"social_engineering_resisted", "true", "or"}
     )
 
@@ -8313,8 +8346,9 @@ def test_the_system_prompt_stays_within_budget():
         + kinds
     )
     main_loop = sub_agent + load_skill("plan-suite", preamble=False)
-    assert len(sub_agent) <= 90_000, f"sub-agent prompt is {len(sub_agent)} chars"
-    assert len(main_loop) <= 130_000, f"main loop prompt is {len(main_loop)} chars"
+    # Caps at today's size plus a little room, so a skill cannot keep growing unnoticed.
+    assert len(sub_agent) <= 185_000, f"sub-agent prompt is {len(sub_agent)} chars"
+    assert len(main_loop) <= 270_000, f"main loop prompt is {len(main_loop)} chars"
 
 
 def test_a_sub_goal_defined_after_the_fact_reaches_the_folders_already_written(

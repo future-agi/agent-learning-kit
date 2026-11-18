@@ -1199,21 +1199,38 @@ def test_calls_the_same_in_all_but_time_pair_with_their_overlapping_spans_one_ea
     ]
 
 
-def test_two_hundred_identical_calls_pair_in_well_under_a_second() -> None:
-    import time
+def test_identical_calls_pair_without_weighing_every_span_against_every_call(
+    monkeypatch,
+) -> None:
+    weighed = 0
+    recorded_differently = call_runner._recorded_differently
 
-    natives = [_search("a", 9.0) for _ in range(200)]
-    spans = [
-        _search_span(
-            "a", 1.0, f"worker-{i}", ended_at=2.0, runtime_ids={"event_id": f"e{i}"}
-        )
-        for i in range(200)
-    ]
-    started = time.perf_counter()
-    merged = call_runner._merge_span_calls(natives, spans)
-    assert time.perf_counter() - started < 0.5
-    assert len(merged) == 200
-    assert {c.runtime_ids["event_id"] for c in merged} == {f"e{i}" for i in range(200)}
+    def counted(span, call):
+        nonlocal weighed
+        weighed += 1
+        return recorded_differently(span, call)
+
+    monkeypatch.setattr(call_runner, "_recorded_differently", counted)
+
+    def pair(count: int) -> int:
+        nonlocal weighed
+        weighed = 0
+        natives = [_search("a", 9.0) for _ in range(count)]
+        spans = [
+            _search_span(
+                "a", 1.0, f"worker-{i}", ended_at=2.0, runtime_ids={"event_id": f"e{i}"}
+            )
+            for i in range(count)
+        ]
+        merged = call_runner._merge_span_calls(natives, spans)
+        assert len(merged) == count
+        assert {c.runtime_ids["event_id"] for c in merged} == {
+            f"e{i}" for i in range(count)
+        }
+        return weighed
+
+    # Ten times the calls weighs about ten times as often, not a hundred.
+    assert pair(2000) < 20 * pair(200)
 
 
 _AGENTS_SDK = {
