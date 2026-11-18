@@ -337,7 +337,10 @@ Selection does not add execution support: unsupported images, engines, installer
 and container launch semantics fail with a capability error.
 
 `runtime.required_environment` maps process names to required environment-variable
-names. Only values delivered to that process satisfy its declaration. Source-wide
+names. Only values delivered to that process satisfy its declaration. The contract save drops
+a name whose every read in the agent's code has a default (`os.getenv("PORT", "8080")`,
+`os.environ.get("MODEL") or "gpt-4o-mini"`; `""` and `None` are not defaults), so nobody is
+asked for a value the agent runs without (`environment_defaults.py`, TH-10401). Source-wide
 credential discovery remains an inventory of possible requirements. The preflight
 response preserves `ready_to_submit` as its legacy inventory result and separately
 reports `can_submit_for_authoring` and `configuration_status`. Submission permission
