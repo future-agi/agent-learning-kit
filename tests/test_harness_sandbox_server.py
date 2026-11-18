@@ -1318,8 +1318,8 @@ def test_a_refusal_of_this_sandboxs_own_configuration_is_a_500_naming_its_code(
 
 
 def test_a_submission_and_a_configuration_refusal_together_answer_the_callers_422(caplog):
-    # A 5xx is only for a request with no fault of its own (ADR-010, point 2): the caller
-    # hears about their part, and ours is logged as an error rather than lost behind it.
+    # A 5xx is only for a request with no fault of its own: the caller hears about their
+    # part, and ours is logged as an error rather than lost behind it.
     from pydantic import BaseModel as _Model
     from pydantic import model_validator as _after
 
@@ -1344,30 +1344,185 @@ def test_a_submission_and_a_configuration_refusal_together_answer_the_callers_42
     assert len(both.errors()) == 2
 
     with caplog.at_level("ERROR", logger=sandbox_server.__name__):
-        refused = JobRefused(both)
+        refused = JobRefused([(both, None)], job_id="job-1")
 
     assert refused.status_code == 422
     assert [entry["msg"] for entry in refused.detail] == [
         "Value error, github_commit_sha_invalid"
     ]
     assert all(entry["loc"] == ["body"] for entry in refused.detail)
-    logged = [r for r in caplog.records if r.levelname == "ERROR"]
-    assert any("hosted_isolation_must_be_dedicated_vm" in r.getMessage() for r in logged)
+    logged = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any(
+        "hosted_isolation_must_be_dedicated_vm" in m and "job-1" in m for m in logged
+    )
 
 
-def test_a_real_configuration_refusal_reaches_the_caller_as_a_500_with_its_code(tmp_path):
+def test_a_real_configuration_refusal_reaches_the_caller_as_a_500_with_its_code(
+    tmp_path, caplog
+):
     # A GitHub job runs hosted, and submit doesn't yet give it the isolation a hosted job
     # needs: that is ours to fix, and the caller is told what, not that we are down.
     client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
 
-    response = client.post(
-        "/v1/jobs",
-        json={"github_repository": "acme/agent", "github_commit_sha": "a" * 40},
-    )
+    with caplog.at_level("ERROR", logger=sandbox_server.__name__):
+        response = client.post(
+            "/v1/jobs",
+            json={"github_repository": "acme/agent", "github_commit_sha": "a" * 40},
+        )
 
     assert response.status_code == 500
     assert response.json()["detail"][0]["type"] == "sandbox_configuration"
     assert "hosted_isolation_must_be_dedicated_vm" in response.text
+    # Ours alone, so the platform is not the only one that knows: the sandbox logs it too,
+    # with the job it refused.
+    logged = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any(
+        "hosted_isolation_must_be_dedicated_vm" in m
+        and re.search(r"job_id=[0-9a-f-]{36}", m)
+        for m in logged
+    ), logged
+
+
+_BAD_TRIAL = {
+    "execution_key": "k",
+    "scenario_key": "s",
+    "scenario_id": "x",
+    "trial_index": "two",
+    "call_execution_id": "c",
+}
+
+
+def test_two_faults_in_one_submission_come_back_in_one_422(tmp_path, monkeypatch):
+    # The connector misses its assistant and the plan has a bad value: one request, both
+    # named, rather than one per round trip.
+    source = _local_source(tmp_path, monkeypatch)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs",
+        json={
+            "source_path": str(source),
+            "connector": "vapi",
+            "connector_mode": "provider_import",
+            "scenario_count": 1,
+            "metadata": {"execution_manifest": [_BAD_TRIAL]},
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert {
+        "type": "value_error",
+        "loc": ["body"],
+        "msg": "Value error, provider_import_requires_assistant_id",
+    } in detail
+    assert [e for e in detail if e["type"] == "int_parsing"] == [
+        {
+            "type": "int_parsing",
+            "loc": ["body", "metadata", "execution_manifest", 0, "trial_index"],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+        }
+    ]
+    assert len(detail) == 2
+    assert not any((tmp_path / "state" / "jobs").glob("*/job.json"))
+
+
+def test_an_error_without_a_code_names_the_field_it_is_about(tmp_path, monkeypatch):
+    source = _local_source(tmp_path, monkeypatch)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs",
+        json={
+            "source_path": str(source),
+            "scenario_count": 1,
+            "metadata": {"execution_manifest": [_BAD_TRIAL]},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        {
+            "type": "int_parsing",
+            "loc": ["body", "metadata", "execution_manifest", 0, "trial_index"],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+        }
+    ]
+
+
+def test_an_error_without_a_code_in_a_value_submit_sets_itself_is_ours(
+    tmp_path, monkeypatch, caplog
+):
+    # Submit chooses the artifact policy, so a bad value there (a renamed level, say) is this
+    # sandbox's fault: a 500 naming it, not a 422 telling the caller to change what they sent.
+    source = _local_source(tmp_path, monkeypatch)
+    real = sandbox_server.HarnessArtifactPolicy
+    monkeypatch.setattr(
+        sandbox_server,
+        "HarnessArtifactPolicy",
+        lambda **kwargs: real(**{**kwargs, "level": "everything"}),
+    )
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    with caplog.at_level("ERROR", logger=sandbox_server.__name__):
+        response = client.post("/v1/jobs", json={"source_path": str(source)})
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert [entry["type"] for entry in detail] == ["sandbox_configuration"]
+    assert detail[0]["loc"] == ["sandbox"]
+    assert any(r.levelname == "ERROR" for r in caplog.records)
+
+
+def test_a_malformed_commit_is_refused_before_any_upload_is_claimed(
+    hosted_sandbox, monkeypatch
+):
+    # The boundary refuses it: the uploaded credential never leaves pending/, so nothing has
+    # to be put back.
+    sandbox = hosted_sandbox
+
+    def claimed(*_args, **_kwargs):
+        raise AssertionError("an upload was claimed for a request refused at intake")
+
+    monkeypatch.setattr(LocalSandbox, "_claim_secret_files", claimed)
+
+    async def upload():
+        return await _upload_credential(sandbox, "GOOD")
+
+    key = asyncio.run(upload())
+    for sha, code in (
+        (None, "github_commit_sha_required"),
+        ("main", "github_commit_sha_invalid"),
+    ):
+        with pytest.raises(ValidationError, match=code):
+            LocalSandboxRequest(
+                github_repository="acme/agent",
+                github_commit_sha=sha,
+                secret_refs={"GOOD": _ref("mounted", key)},
+            )
+    assert len(list((sandbox.secret_files_root / "pending").iterdir())) == 1
+
+
+def test_a_refusal_whose_uploads_cannot_be_put_back_still_answers_and_cleans_up(
+    tmp_path, monkeypatch
+):
+    source = _local_source(tmp_path, monkeypatch)
+
+    def refuse(*_args, **_kwargs):
+        raise _refusal("execution_manifest_invalid")
+
+    def stuck(*_args, **_kwargs):
+        raise OSError("pending/ is read-only")
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", refuse)
+    monkeypatch.setattr(LocalSandbox, "_return_job_secret_files", stuck)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"source_path": str(source)})
+
+    assert response.status_code == 422
+    assert "execution_manifest_invalid" in response.text
+    assert not any((tmp_path / "state" / "jobs").iterdir())
 
 
 def test_an_unexpected_failure_building_the_job_is_still_a_500(tmp_path, monkeypatch):

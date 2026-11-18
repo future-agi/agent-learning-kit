@@ -22,6 +22,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 import uuid
 
@@ -58,6 +59,7 @@ from .job import (
     AgentConnection,
     ExecutionMode,
     HarnessArtifactPolicy,
+    HarnessExecutionManifestEntry,
     HarnessJob,
     HarnessJobStatus,
     HarnessStage,
@@ -65,6 +67,7 @@ from .job import (
     RepositorySource,
     SourceKind,
     SourceVisibility,
+    is_commit_sha,
 )
 from .refusals import refusal_kind
 from .packaging import PackagingManifest, inspect_packaging
@@ -90,36 +93,99 @@ _SANDBOX_JOB_PREFIX = "ALK_JOB_"
 _SANDBOX_FILE_PREFIX = "ALK_SECRET_FILE_"
 
 
+# Where each job-model field comes from in the request, so an error without a code can name
+# the field the caller sent. A field missing here is one submit fills itself.
+_SOURCE_FIELDS = {
+    "repository": "github_repository",
+    "ref": "github_ref",
+    "commit_sha": "github_commit_sha",
+    "visibility": "github_visibility",
+    "installation_id": "github_installation_id",
+    "subfolder": "github_subfolder",
+    "archive_artifact_id": "source_id",
+    "local_path": "source_path",
+}
+_AGENT_FIELDS = {
+    "connector": "connector",
+    "mode": "connector_mode",
+    "config": "connector_config",
+    "secret_refs": "secret_refs",
+}
+_JOB_FIELDS = {"scenario_count", "seed", "platform_run_id"}
+# Metadata entries submit writes itself, over whatever the request's metadata held.
+_SUBMIT_METADATA = {
+    "agent_name",
+    "source_kind",
+    "environment_value_names",
+    "secret_file_names",
+}
+
+Place = Callable[[tuple[str | int, ...]], list[str | int] | None]
+
+
+def _by_field(fields: Mapping[str, str]) -> Place:
+    def place(loc: tuple[str | int, ...]) -> list[str | int] | None:
+        if loc and loc[0] in fields:
+            return ["body", fields[str(loc[0])], *loc[1:]]
+        return None
+
+    return place
+
+
+def _in_job(loc: tuple[str | int, ...]) -> list[str | int] | None:
+    if loc and loc[0] in _JOB_FIELDS:
+        return ["body", *loc]
+    if len(loc) > 1 and loc[0] == "metadata" and loc[1] not in _SUBMIT_METADATA:
+        return ["body", *loc]
+    return None
+
+
+def _under(*prefix: str | int) -> Place:
+    return lambda loc: ["body", *prefix, *loc]
+
+
 class JobRefused(Exception):
-    """The job model refused a submission, answered in the shape of the route's own 422: one
-    entry per error, its code in ``msg``, and no ``input`` or ``ctx``, since either can carry
-    a submitted value.
+    """The job models refused a submission, answered in the shape of the route's own 422: one
+    entry per error, and no ``input`` or ``ctx``, since either can carry a submitted value.
 
-    A 5xx is only for a request with no fault of its own (ADR-010, point 2). Any submission
-    refusal makes it a 422, ``loc`` ["body"] (the job model's field names mean nothing to the
-    caller), listing the caller's entries; a configuration refusal that came with them is
-    logged as an error, so ours is not lost behind theirs. A request refused only for this
-    sandbox's own configuration is a 500 that names it, ``type`` "sandbox_configuration" and
-    ``loc`` ["sandbox"]."""
+    A 5xx is only for a request with nothing of its own at fault, so any fault of the
+    caller's makes it a 422 that lists the caller's entries:
 
-    def __init__(self, error: ValidationError):
-        messages = [
-            (item["type"], item["msg"])
+    - an error with a code (``Value error, <code>``) has ``loc`` ["body"], since the code says
+      what is wrong;
+    - an error without one (a type or length error) keeps its place, mapped onto the request
+      field it is about, such as ["body", "metadata", "execution_manifest", 0, "trial_index"].
+
+    The rest are this sandbox's own configuration: a configuration code, or an error without a
+    code in a value submit fills itself. Each is logged as an error with the job id, so ours is
+    never lost behind theirs. A request refused only for those is a 500 that names them,
+    ``type`` "sandbox_configuration" and ``loc`` ["sandbox"]."""
+
+    def __init__(
+        self, refusals: Sequence[tuple[ValidationError, Place | None]], *, job_id: str
+    ):
+        theirs: list[dict[str, Any]] = []
+        ours: list[str] = []
+        for error, place in refusals:
             for item in error.errors(
                 include_url=False, include_input=False, include_context=False
+            ):
+                kind, msg = item["type"], item["msg"]
+                coded = refusal_kind(msg)
+                where = place(tuple(item["loc"])) if place is not None else None
+                if coded == "submission":
+                    theirs.append({"type": kind, "loc": ["body"], "msg": msg})
+                elif coded is None and where is not None:
+                    theirs.append({"type": kind, "loc": where, "msg": msg})
+                else:
+                    ours.append(msg)
+        for msg in ours:
+            logger.error(
+                "job_refused_for_sandbox_configuration: job_id=%s %s", job_id, msg
             )
-        ]
-        ours = [msg for _type, msg in messages if refusal_kind(msg) == "configuration"]
-        theirs = [
-            (kind, msg) for kind, msg in messages if refusal_kind(msg) == "submission"
-        ]
         if theirs:
             self.status_code = 422
-            self.detail = [
-                {"type": kind, "loc": ["body"], "msg": msg} for kind, msg in theirs
-            ]
-            for msg in ours:
-                logger.error("job_refused_with_sandbox_configuration_fault: %s", msg)
+            self.detail = theirs
         else:
             self.status_code = 500
             self.detail = [
@@ -181,7 +247,26 @@ class LocalSandboxRequest(BaseModel):
                 )
         _validate_environment_values(self.environment_values, self.secret_refs)
         _validate_controller_names(self.connector_config, self.secret_refs)
+        if self.github_repository:
+            self._check_commit_sha()
         return self
+
+    def _check_commit_sha(self) -> None:
+        """A GitHub job runs hosted, and the job refuses a hosted GitHub job without the commit
+        it checks out, or with one that isn't 40 hex characters. Refuse it here, at the
+        boundary, before submit claims any upload.
+
+        Checked after the reserved names, so those are reported first, and only for a location
+        that is a GitHub repository: submit refuses any other location for what it is (a 400),
+        which would otherwise show only once a commit was added."""
+        try:
+            parse_github_location(self.github_repository or "")
+        except ValueError:
+            return
+        if not self.github_commit_sha:
+            raise ValueError("github_commit_sha_required")
+        if not is_commit_sha(self.github_commit_sha):
+            raise ValueError("github_commit_sha_invalid")
 
 
 class SandboxPreflightRequest(BaseModel):
@@ -743,6 +828,12 @@ class LocalSandbox:
             job_refs, mounted_values, secret_file_names = self._job_secret_refs(
                 identifier, request, hosted=hosted
             )
+            # Each model is built on its own and every refusal kept, so a request with two
+            # faults hears about both at once; the job is built only from parts that built.
+            refused: list[tuple[ValidationError, Place | None]] = []
+            source_spec: RepositorySource | None = None
+            agent: AgentConnection | None = None
+            artifacts: HarnessArtifactPolicy | None = None
             try:
                 source_spec = (
                     RepositorySource(kind=SourceKind.PROVIDER)
@@ -767,22 +858,45 @@ class LocalSandbox:
                         subfolder=request.github_subfolder,
                     )
                 )
+            except ValidationError as exc:
+                refused.append((exc, _by_field(_SOURCE_FIELDS)))
+            try:
+                agent = AgentConnection(
+                    connector=request.connector,
+                    mode=request.connector_mode,
+                    config=request.connector_config,
+                    secret_refs=job_refs,
+                )
+            except ValidationError as exc:
+                refused.append((exc, _by_field(_AGENT_FIELDS)))
+            try:
+                artifacts = HarnessArtifactPolicy(
+                    level="full", allow_bundle_download=True
+                )
+            except ValidationError as exc:
+                # Submit chooses the policy: nothing the caller sent is at fault.
+                refused.append((exc, None))
+            manifest = request.metadata.get("execution_manifest")
+            if isinstance(manifest, list):
+                for index, entry in enumerate(manifest):
+                    try:
+                        HarnessExecutionManifestEntry.model_validate(entry)
+                    except ValidationError as exc:
+                        refused.append(
+                            (exc, _under("metadata", "execution_manifest", index))
+                        )
+            if refused or source_spec is None or agent is None or artifacts is None:
+                raise JobRefused(refused, job_id=identifier)
+            try:
                 job = HarnessJob(
                     job_id=identifier,
                     run_id=run_id,
                     execution=ExecutionMode.HOSTED if hosted else ExecutionMode.LOCAL,
                     source=source_spec,
-                    agent=AgentConnection(
-                        connector=request.connector,
-                        mode=request.connector_mode,
-                        config=request.connector_config,
-                        secret_refs=job_refs,
-                    ),
+                    agent=agent,
                     scenario_count=request.scenario_count,
                     seed=request.seed,
-                    artifacts=HarnessArtifactPolicy(
-                        level="full", allow_bundle_download=True
-                    ),
+                    artifacts=artifacts,
                     platform_run_id=request.platform_run_id,
                     metadata={
                         **request.metadata,
@@ -804,8 +918,7 @@ class LocalSandbox:
                     },
                 )
             except ValidationError as exc:
-                # The job model refused what was submitted: the caller's 422, not a 500.
-                raise JobRefused(exc) from None
+                raise JobRefused([(exc, _in_job)], job_id=identifier) from None
             directory = self.jobs_root / identifier
             directory.mkdir()
             if request.provider_only:
@@ -829,11 +942,19 @@ class LocalSandbox:
                 },
             )
         except Exception as exc:
-            if isinstance(exc, JobRefused):
-                # The caller fixes the request and sends it again, with the same uploads.
-                self._return_job_secret_files(identifier, request.secret_refs)
-            self._delete_job_secret_files(identifier)
-            shutil.rmtree(self.jobs_root / identifier, ignore_errors=True)
+            try:
+                if isinstance(exc, JobRefused):
+                    # The caller fixes the request and sends it again, with the same uploads.
+                    self._return_job_secret_files(identifier, request.secret_refs)
+            except OSError:
+                # The refusal still stands and is still answered; the uploads that could not go
+                # back are deleted with the claim, so the caller uploads them again.
+                logger.exception(
+                    "job_refused_uploads_not_returned: job_id=%s", identifier
+                )
+            finally:
+                self._delete_job_secret_files(identifier)
+                shutil.rmtree(self.jobs_root / identifier, ignore_errors=True)
             raise
         if mounted_values:
             self._ephemeral_secrets[identifier] = mounted_values

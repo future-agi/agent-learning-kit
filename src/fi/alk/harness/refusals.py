@@ -6,6 +6,9 @@
 - a **configuration** refusal with a 500 that names the code: nothing in the submission can
   fix it, but the sandbox is not down either, so the platform can say something true.
 
+A 5xx is only for a request with nothing of its own at fault, so a request with both kinds is
+a 422 for the caller's part, and ours is logged.
+
 Each entry is the literal start of a code as ``job.py`` raises it: a code built with an
 f-string (``provider_import_requires_{key}``) is listed by its fixed start. A test checks
 that every code in ``job.py`` is in exactly one of the two lists.
@@ -78,14 +81,15 @@ CONFIGURATION: frozenset[str] = frozenset(
 _VALUE_ERROR = "Value error, "
 
 
-def refusal_kind(message: str) -> Literal["submission", "configuration"]:
-    """The kind of a validation error's message, by the longest listed code it starts with.
-
-    A message that names no listed code (a field-type error, say) came from what was
-    submitted, so it is the caller's."""
+def refusal_kind(message: str) -> Literal["submission", "configuration"] | None:
+    """The kind of a validation error's message, by the longest listed code it starts with,
+    or None when it names no listed code (a field-type error, say). Whose an uncoded error is
+    depends on the field it is about, which the caller decides."""
     code = message.removeprefix(_VALUE_ERROR)
     configuration = max(
         (len(c) for c in CONFIGURATION if code.startswith(c)), default=-1
     )
     submission = max((len(c) for c in SUBMISSION if code.startswith(c)), default=-1)
+    if configuration == submission == -1:
+        return None
     return "configuration" if configuration > submission else "submission"
