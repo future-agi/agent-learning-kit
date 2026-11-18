@@ -575,10 +575,11 @@ def test_a_generator_closed_early_is_recorded_and_is_not_an_error(
 
 
 @pytest.mark.parametrize("later", ["agent.other_tool(1)", "agent.not_a_tool()"])
-def test_a_generator_closed_at_a_bare_yield_is_settled_by_the_next_start(
+def test_a_generator_closed_at_a_bare_yield_is_settled_when_it_is_dropped(
     tmp_path: Path, mechanism: str, later: str
 ) -> None:
-    """Where a close fires no event, the open call is still settled and the exception events go off."""
+    """Where a close fires no event, the open call is settled when its generator is let go, and the
+    exception events go off again."""
     if mechanism != "monitoring":
         pytest.skip("only the monitoring path keeps process-wide events on while a call is open")
     source = (
@@ -596,7 +597,7 @@ def test_a_generator_closed_at_a_bare_yield_is_settled_by_the_next_start(
             _TRACED_PYTHON,
             "-c",
             "import sys, agent\n"
-            "g = agent.bare(3); next(g); g.close()\n"
+            "g = agent.bare(3); next(g); g.close(); del g\n"
             f"{later}\n"
             "tool = next(i for i in range(6) if sys.monitoring.get_tool(i) == 'alk-tool-trace')\n"
             "print(sys.monitoring.get_events(tool))\n",
@@ -609,6 +610,88 @@ def test_a_generator_closed_at_a_bare_yield_is_settled_by_the_next_start(
     closed = ("bare", {"n": 3}, False, "the generator was closed before it finished")
     assert seen[0] == closed
     assert seen.count(closed) == 1
+
+
+CLOSE_THEN_LOOK_UP = (
+    "def search(n):\n    yield 1\n    yield 2\n"
+    "def look_up(x):\n    return x\n"
+)
+
+
+def _close_driver(body: str) -> str:
+    """A traced process that runs ``body`` three times, reading and clearing the trace after each
+    step the way the runner does between calls, and prints the tool names each read saw."""
+    return (
+        "import json, os, sys, agent\n"
+        "path = os.environ['HARNESS_TOOL_TRACE']\n"
+        "def read():\n"
+        "    if not os.path.exists(path):\n        return []\n"
+        "    names = [json.loads(l)['name'] + ':' + json.loads(l)['output'] "
+        "for l in open(path).read().splitlines()]\n"
+        "    open(path, 'w').close()\n"
+        "    return names\n"
+        "for turn in range(3):\n"
+        + "".join(f"    {line}\n" for line in body.splitlines())
+    )
+
+
+def test_a_generator_closed_at_a_bare_yield_is_recorded_in_its_own_calls_trace(
+    tmp_path: Path, mechanism: str
+) -> None:
+    """The close is read right after it, never after the next tool call (the runner clears the
+    trace between calls, so a record settled later lands in the next call's evidence)."""
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path settles a close it was not told about")
+    (tmp_path / "agent.py").write_text(CLOSE_THEN_LOOK_UP)
+    result = subprocess.run(
+        [_TRACED_PYTHON, "-c", _close_driver(
+            "g = agent.search(3); next(g); g.close(); del g\n"
+            "after_close = read()\n"
+            "agent.look_up('x')\n"
+            "after_look_up = read()\n"
+            "print(json.dumps([after_close, after_look_up]))"
+        )],
+        check=True, text=True, capture_output=True, cwd=tmp_path,
+        env=_trace_environment(tmp_path, [
+            {"name": n, "module": "agent", "callable": n} for n in ("search", "look_up")
+        ])[1],
+    )
+    closed = "search:the generator was closed before it finished"
+    assert [json.loads(line) for line in result.stdout.splitlines()] == [
+        [[closed], ["look_up:x"]]
+    ] * 3
+
+
+def test_a_closed_generator_that_is_still_held_never_lands_on_the_next_call(
+    tmp_path: Path, mechanism: str
+) -> None:
+    """Where the close fires no event, a closed generator that is still held is not recorded (as on
+    the profile path), and it is never recorded against the call that follows."""
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path settles a close it was not told about")
+    (tmp_path / "agent.py").write_text(CLOSE_THEN_LOOK_UP)
+    trace, env = _trace_environment(
+        tmp_path, [{"name": n, "module": "agent", "callable": n} for n in ("search", "look_up")]
+    )
+    driver = _close_driver(
+        "g = agent.search(3); next(g); g.close(); held.append(g); del g\n"
+        "after_close = read()\n"
+        "agent.look_up('x')\n"
+        "after_look_up = read()\n"
+        "print(json.dumps([after_close, after_look_up, list(sys.version_info[:3])]))"
+    ).replace("for turn in range(3):", "held = []\nfor turn in range(3):", 1)
+    result = subprocess.run(
+        [_TRACED_PYTHON, "-c", driver],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    closed = "search:the generator was closed before it finished"
+    for after_close, after_look_up, version in map(json.loads, result.stdout.splitlines()):
+        assert after_look_up == ["look_up:x"]
+        if tuple(version) == (3, 12, 3):
+            # Nothing fires at this close, and the generator is still held.
+            assert after_close == []
+        else:
+            assert after_close in ([], [closed])
 
 
 ASYNC_TOOLS = (

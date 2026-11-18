@@ -755,6 +755,7 @@ def _install_declared_python_tools() -> None:
         monitoring = getattr(sys, "monitoring", None)
         if monitoring is None:
             return False
+        import collections
         import gc
         import types
         import weakref
@@ -787,8 +788,13 @@ def _install_declared_python_tools() -> None:
         guard = threading.Lock()
         # frame id -> weak reference to the generator that owns the frame, kept only for an
         # open generator call. Early 3.12 and 3.13 releases fire no event when a generator
-        # paused at a bare `yield` is closed, so such a call is found by its owner ending.
+        # paused at a bare `yield` is closed, so such a call is settled by a callback on the
+        # reference, which runs when the generator is let go.
         owners: dict[int, Any] = {}
+        # Calls settled by a callback that could not take `guard` (it may run inside the tracer's
+        # own code, on a thread that holds it): the next callback, start or finish turns the
+        # exception events off for them. A deque, so appending needs no lock.
+        unsettled: collections.deque[int] = collections.deque()
         generator_flag = 0x20  # inspect.CO_GENERATOR; coroutines and async generators differ
 
         def arguments_of(call: tuple[Any, float, str, Any]) -> Any:
@@ -799,37 +805,50 @@ def _install_declared_python_tools() -> None:
 
             return get
 
-        def settle_closed() -> None:
-            """Record each open generator call whose generator is gone or finished, and turn
-            the exception events off once no call is open."""
+        def turn_events_off_when_idle() -> None:
+            """Called with ``guard`` held: drop the exception events once no call is open."""
+            while unsettled:
+                unsettled.popleft()
+            if not calls:
+                monitoring.set_events(tool, start_only)
+
+        def dropped(frame_id: int) -> None:
+            """The generator that owned this open call was let go, so it ended without an event:
+            write its record, as a close. The callback can run anywhere a generator is freed,
+            including a collection inside the tracer's own code on a thread that holds ``guard``,
+            so it never waits for it: the call is taken off by an atomic ``dict.pop``, the record
+            written here, and only turning the exception events off waits for a free ``guard``."""
             try:
-                gone = []
-                with guard:
-                    for frame_id, owner in list(owners.items()):
-                        generator = owner()
-                        if generator is not None and generator.gi_frame is not None:
-                            continue
-                        del owners[frame_id]
-                        thrown.pop(frame_id, None)
-                        call = calls.pop(frame_id, None)
-                        if call is not None:
-                            gone.append(call)
-                    if gone and not calls:
-                        monitoring.set_events(tool, start_only)
-                for call in gone:
-                    write_record(
-                        call[2],
-                        arguments_of(call),
-                        "the generator was closed before it finished",
-                        False,
-                        call[1],
-                    )
+                owners.pop(frame_id, None)
+                thrown.pop(frame_id, None)
+                call = calls.pop(frame_id, None)
+                if call is None:
+                    return
+                if guard.acquire(blocking=False):
+                    try:
+                        turn_events_off_when_idle()
+                    finally:
+                        guard.release()
+                else:
+                    unsettled.append(frame_id)
+                write_record(
+                    call[2],
+                    arguments_of(call),
+                    "the generator was closed before it finished",
+                    False,
+                    call[1],
+                )
             except Exception:  # noqa: BLE001 - observation must never reach the agent's call
                 pass
 
+        def drain_unsettled() -> None:
+            if unsettled:
+                with guard:
+                    turn_events_off_when_idle()
+
         def on_start(code: Any, offset: int) -> Any:
-            if owners:
-                settle_closed()
+            if unsettled:
+                drain_unsettled()
             if code.co_name not in function_names:
                 return disable
             try:
@@ -856,7 +875,9 @@ def _install_declared_python_tools() -> None:
                         None,
                     )
                     if generator is not None:
-                        owner = weakref.ref(generator)
+                        owner = weakref.ref(
+                            generator, lambda _ref, frame_id=id(frame): dropped(frame_id)
+                        )
                 with guard:
                     calls[id(frame)] = (frame, time.time(), key, arguments)
                     if owner is not None:
@@ -883,17 +904,17 @@ def _install_declared_python_tools() -> None:
                 pass
 
         def finish(frame: Any, value: Any, raised: bool) -> None:
-            if owners:
-                settle_closed()
             with guard:
-                call = calls.get(id(frame))
-                if call is None or call[0] is not frame:
+                # `pop`, not `get` then `del`: a callback may take the call off at the same time.
+                call = calls.pop(id(frame), None)
+                if call is None:
                     return
-                del calls[id(frame)]
+                if call[0] is not frame:
+                    calls[id(frame)] = call
+                    return
                 owners.pop(id(frame), None)
                 thrown.pop(id(frame), None)
-                if not calls:
-                    monitoring.set_events(tool, start_only)
+                turn_events_off_when_idle()
             write_record(call[2], arguments_of(call), value, raised, call[1])
 
         def on_return(code: Any, offset: int, retval: Any) -> None:
