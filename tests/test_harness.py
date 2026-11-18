@@ -9682,10 +9682,8 @@ def test_a_case_naming_a_record_the_world_lacks_is_not_kept(tmp_path):
     assert kept == []
 
 
-def test_a_refusal_case_holds_with_no_change_and_its_forbidden_change_fails(tmp_path):
+def _refusal_environment(tmp_path):
     from fi.alk.harness.catalogue import SubGoal, load_catalogue, save_catalogue
-    from fi.alk.harness.proofs import load_proofs
-    from fi.alk.harness.scenario_tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     catalogue.sub_goals.append(
@@ -9696,34 +9694,73 @@ def test_a_refusal_case_holds_with_no_change_and_its_forbidden_change_fails(tmp_
         )
     )
     save_catalogue(catalogue, root)
-    catalogue = load_catalogue(root)
-    kept = []
-    said = accept_scenario(
-        _delta(
-            name="refuses-an-item-off-the-menu",
-            instruction="Order a pizza.",
-            tests="whether the agent declines an item the menu lacks",
-            fixture={"origin": "seed"},
-            # Reads the cart, declines, and reads it again to confirm nothing was added: the world never changes.
-            solution=[{"tool": "lst", "arguments": {}}, {"tool": "lst", "arguments": {}}],
-            sub_goals=["nothing-added"],
-            negative_controls=[
-                {
-                    "name": "adds_anyway",
-                    "why": "adds something although nothing was on the menu",
-                    "steps": [{"tool": "lst", "arguments": {}}, {"tool": "add", "arguments": {"item_id": "big_mac"}}],
-                }
-            ],
-        ),
-        world_root=root,
-        catalogue=catalogue,
-        kept=kept,
+    return root, load_catalogue(root)
+
+
+def _refusal(**overrides):
+    return _delta(
+        name="refuses-an-item-off-the-menu",
+        instruction="Order a pizza.",
+        tests="whether the agent declines an item the menu lacks",
+        fixture={"origin": "seed"},
+        # Checks the cart, then declines: one read, and the world never changes.
+        solution=[{"tool": "lst", "arguments": {}}],
+        sub_goals=["nothing-added"],
+        negative_controls=[
+            {
+                "name": "adds_anyway",
+                "why": "adds something although nothing was on the menu",
+                "steps": [{"tool": "lst", "arguments": {}}, {"tool": "add", "arguments": {"item_id": "big_mac"}}],
+            }
+        ],
+        **overrides,
     )
+
+
+def test_a_refusal_case_holds_with_no_change_and_its_forbidden_change_fails(tmp_path):
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, catalogue = _refusal_environment(tmp_path)
+    kept = []
+    said = accept_scenario(_refusal(), world_root=root, catalogue=catalogue, kept=kept)
 
     assert not said.get("is_error"), said
     entry = load_proofs(root)["refuses-an-item-off-the-menu"]
     assert (entry["outcome"], entry["proved"]) == ("no_change", True)
     assert [one["failed"] for one in entry["controls"]] == [True]
+
+
+def test_a_single_read_the_contract_says_writes_is_not_kept(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, catalogue = _refusal_environment(tmp_path)
+    (root / "contract.json").write_text(
+        json.dumps({"tools": [{"name": "lst", "effects": "marks the cart as viewed"}, {"name": "add"}]}),
+        encoding="utf-8",
+    )
+    kept = []
+    said = accept_scenario(_refusal(), world_root=root, catalogue=catalogue, kept=kept)
+
+    assert said.get("is_error") and "the reference solution is a single call" in said["content"][0]["text"]
+    assert kept == []
+
+
+def test_a_single_call_that_writes_is_still_not_kept(tmp_path):
+    said, text, kept, proofs = _submit(
+        tmp_path,
+        solution=[{"tool": "add", "arguments": {"item_id": "big_mac"}}],
+        negative_controls=[
+            {
+                "name": "adds_twice",
+                "why": "adds the item twice",
+                "steps": [{"tool": "add", "arguments": {"item_id": "big_mac"}}] * 2,
+            }
+        ],
+    )
+
+    assert said.get("is_error") and "the reference solution is a single call" in text
+    assert kept == [] and proofs == {}
 
 
 def test_must_pass_round_trips(tmp_path):

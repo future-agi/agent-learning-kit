@@ -91,6 +91,7 @@ from .scenario import (
     Step,
     contract_sequence_problems,
     coverage_report,
+    hollow_scenario_problems,
     keyword_problems,
     redteam_problems,
     level_name,
@@ -1481,6 +1482,26 @@ def _controls_the_contract_refuses(scenario: Scenario, world_root: Path) -> list
 _REFUSED_CODES = frozenset({"negative_control_passed", "no_negative_control", "answer_leaked", "source_unresolved"})
 
 
+def _a_read_that_declines(scenario: Scenario, proof: Any, world_root: Path) -> bool:
+    """Whether a one-call reference is a refusal: its call ran, left the world exactly as doing nothing does, and its
+    tool is not one the contract says writes."""
+    if proof.outcome != "no_change" or len(scenario.solution) != 1:
+        return False
+    tool = scenario.solution[0].tool
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        contract = {}
+    writes = any(
+        isinstance(one, dict) and one.get("name") == tool and str(one.get("effects") or "").strip()
+        for one in contract.get("tools") or []
+    ) or any(
+        isinstance(one, dict) and one.get("tool") == tool and one.get("effect") == "write"
+        for one in contract.get("tool_entrypoints") or []
+    )
+    return not writes
+
+
 def refuses_keeping(proof: Any) -> bool:
     """Whether a scenario with this proof may not be kept: its checks do not hold (unless only the live runtime can
     prove it), or the writer left a fault the lane caught. One rule for a submit and for every case a rebuild keeps."""
@@ -1797,12 +1818,18 @@ def accept_scenario(
         cited = [one for one in scenario.sources if one.kind != "assumption" or (one.quote or one.supports).strip()]
         if require_sources and not cited and not _unchanged(scenario, payload, kept):
             problems.append(NO_SOURCES)
+        # A single call is decided once the proof shows what it does: a read that leaves the world as it was is a
+        # refusal (the agent checks, then declines); anything else is still refused.
+        single_call = hollow_scenario_problems(scenario)
+        problems = [one for one in problems if one not in single_call]
         if problems:
             return _err(
                 "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
             )
 
         proof = prove(scenario, catalogue, world_root)
+        if single_call and not _a_read_that_declines(scenario, proof, world_root):
+            return _err("Not kept. Fix these and submit again:\n  - " + "\n  - ".join(single_call))
         if refuses_keeping(proof):
             said = f"Not kept. {proof.why()}"
             # Code written against the wrong collection shape is the commonest way setup, ready and a
