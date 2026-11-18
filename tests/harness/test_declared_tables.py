@@ -14,6 +14,7 @@ from fi.alk.harness.catalogue import Catalogue, SubGoal
 from fi.alk.harness.certification import CheckStatus
 from fi.alk.harness.contract import AgentContract
 from fi.alk.harness.proofs import load_proofs, record_proof
+from fi.alk.harness.prove import Proof
 from fi.alk.harness.tool_certification import certify_tool_inventory
 from fi.alk.harness.world.runtime import Call
 
@@ -56,7 +57,7 @@ def _certify(tmp_path, monkeypatch, proofs):
     contract = AgentContract.model_validate(CONTRACT)
     (tmp_path / "contract.json").write_text(contract.model_dump_json(), encoding="utf-8")
     for key, proof in proofs.items():
-        record_proof(tmp_path, key, SimpleNamespace(holds=True, ready=True, solvable=True, vacuous=False, **proof))
+        record_proof(tmp_path, key, Proof(ready=True, solvable=True, vacuous=False, **proof))
     _write_runtime_evidence(
         job=SimpleNamespace(),
         authoring=tmp_path,
@@ -109,7 +110,7 @@ def _proved(monkeypatch, tmp_path, *, actor_calls=0, assumed=()):
     monkeypatch.setattr(module, "prepared", lambda *a: (ready, outcome, outcome))
     monkeypatch.setattr(
         module,
-        "_run",
+        "run_steps",
         lambda *a, with_solution, steps=None: (
             (solved, list(solution), [], list(assumed)) if with_solution else (untouched, [], [], [])
         ),
