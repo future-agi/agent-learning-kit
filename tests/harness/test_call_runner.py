@@ -3918,7 +3918,7 @@ def test_a_worker_s_call_whose_answer_differs_from_the_door_s_row_is_still_a_byp
     ids=["record-says-refused", "record-says-answered"],
 )
 def test_a_call_the_door_refused_on_the_shared_address_is_the_worker_s_bypass(tmp_path, worker_record) -> None:
-    # Plan rows 147, 154b (order 1048's shape): the Refund worker called the world on the shared address and the door
+    # The Refund worker called the world on the shared address and the door
     # refused it there, so the door's row names no worker; the worker's own event names it.
     refused = replace(
         _door_call("issue_refund", "", 1794927459.8243933, amount=75.0, order_id="1048"),
