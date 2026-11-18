@@ -41,6 +41,8 @@ class SourceResult(_CitedSource, total=False):
     """One cited source and whether it resolved; ``resolved`` None means the platform decides it."""
 
     resolved_ref: str
+    # A resolved rule's place among the agent's rules.
+    rule_index: int
     matched_digest: str
 
 

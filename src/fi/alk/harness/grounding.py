@@ -10,12 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from .backends import tool
 from .catalogue import Catalogue
-from .contract import AgentContract
 from .json_file import write_json_atomic
 from .judge import NoGateway, chat_completion
 from .leaks import normalise
@@ -41,10 +41,23 @@ def _file(world_root: Path, ref: str) -> Path | None:
     return None
 
 
-def resolve_sources(scenario: Scenario, contract: AgentContract | None, world_root: Path) -> list[SourceResult]:
+class RuleSource(Protocol):
+    """Anything holding the agent's rules a `rule` source cites, as an `AgentContract` does."""
+
+    hard_constraints: list[str]
+
+
+@dataclass
+class Rules:
+    """Only the agent's rules, for resolving rule sources where no whole contract is at hand."""
+
+    hard_constraints: list[str]
+
+
+def resolve_sources(scenario: Scenario, contract: RuleSource | None, world_root: Path) -> list[SourceResult]:
     """One entry per cited source: `{kind, ref, resolved, problem, ...}`; `resolved` None means
-    the platform decides it."""
-    rules = list(getattr(contract, "hard_constraints", None) or []) if contract is not None else []
+    the platform decides it. A resolved rule carries its place among the rules in `rule_index`."""
+    rules = list(contract.hard_constraints or []) if contract is not None else []
     resolved: list[SourceResult] = []
     for source in getattr(scenario, "sources", None) or []:
         kind, ref, quote = source.kind, source.ref, source.quote
@@ -56,6 +69,7 @@ def resolve_sources(scenario: Scenario, contract: AgentContract | None, world_ro
                 entry.update(resolved=False, problem="no rule of the agent contains the quoted words")
             else:
                 entry["resolved_ref"] = f"rule:{matched}"
+                entry["rule_index"] = matched
         elif kind == "file":
             path = _file(world_root, ref)
             if path is None:
@@ -162,10 +176,10 @@ def policy_conflicts(
     cache = _load_checks(world_root)
     changed = False
     found: list[PolicyCheck] = []
-    for entry in resolve_sources(scenario, None if not rules else _Rules(rules), world_root):
+    for entry in resolve_sources(scenario, Rules(rules) if rules else None, world_root):
         if entry["kind"] != "rule" or entry.get("resolved") is not True:
             continue
-        at = int(str(entry.get("resolved_ref", "rule:-1")).split(":")[1])
+        at = entry.get("rule_index", -1)
         rule = rules[at] if 0 <= at < len(rules) else ""
         if not rule:
             continue
@@ -186,9 +200,3 @@ def policy_conflicts(
         _save_checks(world_root, cache)
     return found
 
-
-class _Rules:
-    """A contract stand-in carrying only the rules, for resolving rule sources."""
-
-    def __init__(self, rules: list[str]) -> None:
-        self.hard_constraints = rules
