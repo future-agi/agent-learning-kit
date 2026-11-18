@@ -390,6 +390,39 @@ def test_the_framework_is_a_builds_shape(tmp_path, model, write, expected):
     assert agent["agent"]["extension"]["framework"] == expected
 
 
+@pytest.mark.skipif(
+    sys.version_info >= (3, 13), reason="the kit's own interpreter is 3.12; 3.13 parses these"
+)
+def test_a_file_the_kits_python_cannot_parse_is_named_in_the_agent_document(tmp_path, model):
+    # The kit reads the agent's source on Python 3.12; a file in 3.13's or 3.14's syntax isn't
+    # read, and the agent document says which file and why, never a reading in part without a
+    # word (TH-8802).
+    source = _repo(tmp_path)
+    (source / "box.py").write_text("class Box[T=int]:\n    item: T\n", encoding="utf-8")
+    (source / "greet.py").write_text("def greet(n):\n    return t'hi {n}'\n", encoding="utf-8")
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    agent = json.loads((tmp_path / "reading" / "agent.json").read_text(encoding="utf-8"))
+    unparsed = agent["agent"]["extension"]["source"]["unparsed"]
+    assert {one["path"]: one["python"] for one in unparsed} == {
+        "box.py": "3.13",
+        "greet.py": "3.14",
+    }
+    assert all("the kit reads source with Python 3.12" in one["reason"] for one in unparsed)
+
+
+def test_an_agent_the_kits_python_reads_whole_has_no_unparsed_list(tmp_path, model):
+    _repo(tmp_path)
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    agent = json.loads((tmp_path / "reading" / "agent.json").read_text(encoding="utf-8"))
+    assert "unparsed" not in agent["agent"]["extension"].get("source", {})
+
+
 def test_with_no_folder_named_the_framework_comes_from_the_contracts_folder(tmp_path, model):
     source = _repo(tmp_path)
     shutil.copy(EXAMPLES / "llamaindex_agent.py", source / SUPPORT)

@@ -602,3 +602,147 @@ def _marks_in(char: str) -> tuple[bool, int]:
             break
         trailing += 1
     return trailing == len(decomposed), trailing
+
+
+# --- Source written for a newer Python than the kit's own (TH-8802) --------------------------
+#
+# The kit reads a customer's Python with its own interpreter, the hosted image's 3.12. The image
+# runs customers' code on 3.13 and 3.14 as well, and three constructs of those versions don't
+# parse on 3.12. A file using one is named with the version it needs; any other syntax error is
+# named as one, never as newer syntax.
+KIT_PYTHON = "3.12"
+_TEMPLATE_PREFIXES = frozenset({"t", "tr", "rt"})
+_NOT_AGENT_CODE = frozenset({"tests", "test", "node_modules", "site-packages", "venv", "__pycache__"})
+_UNPARSED_LISTED = 20
+
+
+def newer_syntax(text: str) -> tuple[str, str] | None:
+    """``(python, construct)`` for a 3.13 or 3.14 construct in ``text``, or None.
+
+    Read from the tokens, which 3.12 still makes for these files: a type parameter default
+    (3.13, ``class Box[T=int]``), a template string (3.14, ``t'...'``) and an except clause
+    naming several exceptions without parentheses (3.14). The newest one found is named.
+    """
+    try:
+        tokens = [
+            token
+            for token in tokenize.generate_tokens(io.StringIO(text).readline)
+            if token.type not in (tokenize.NL, tokenize.COMMENT)
+        ]
+    except (tokenize.TokenError, SyntaxError, ValueError):
+        return None
+    found: list[tuple[str, str]] = []
+    for index, token in enumerate(tokens):
+        after = tokens[index + 1] if index + 1 < len(tokens) else None
+        if (
+            token.type == tokenize.NAME
+            and token.string.lower() in _TEMPLATE_PREFIXES
+            and after is not None
+            and after.type == tokenize.STRING
+            and after.start == token.end
+        ):
+            found.append(("3.14", "a template string"))
+        elif token.type == tokenize.NAME and token.string == "except" and _bare_except_list(
+            tokens, index + 1
+        ):
+            found.append(("3.14", "an except clause without parentheses"))
+        elif (
+            token.type == tokenize.NAME
+            and token.string in ("class", "def", "type")
+            and _type_parameter_default(tokens, index + 1)
+        ):
+            found.append(("3.13", "a type parameter default"))
+    return max(found, default=None)
+
+
+def _bare_except_list(tokens: list[tokenize.TokenInfo], start: int) -> bool:
+    """An except clause's exceptions, up to its colon, listed with a comma and no parentheses."""
+    if start >= len(tokens) or tokens[start].string == "(":
+        return False
+    depth = 0
+    for token in tokens[start:]:
+        if token.type in (tokenize.NEWLINE, tokenize.ENDMARKER):
+            return False
+        if token.string in "([{" and token.type == tokenize.OP:
+            depth += 1
+        elif token.string in ")]}" and token.type == tokenize.OP:
+            depth -= 1
+        elif depth == 0 and token.string == ":":
+            return False
+        elif depth == 0 and token.string == "," and token.type == tokenize.OP:
+            return True
+        elif depth == 0 and token.string == "as":
+            return False
+    return False
+
+
+def _type_parameter_default(tokens: list[tokenize.TokenInfo], start: int) -> bool:
+    """``NAME [ ... = ... ]`` after class, def or type: a default inside its type parameters."""
+    if start + 1 >= len(tokens) or tokens[start].type != tokenize.NAME:
+        return False
+    if tokens[start + 1].string != "[":
+        return False
+    depth = 0
+    for token in tokens[start + 1 :]:
+        if token.type == tokenize.OP and token.string in "([{":
+            depth += 1
+        elif token.type == tokenize.OP and token.string in ")]}":
+            depth -= 1
+            if depth == 0:
+                return False
+        elif depth == 1 and token.type == tokenize.OP and token.string == "=":
+            return True
+        elif token.type in (tokenize.NEWLINE, tokenize.ENDMARKER):
+            return False
+    return False
+
+
+def unparsed_python_files(source: Path, subfolder: str | None = None) -> list[dict[str, object]]:
+    """The agent's Python files the kit's own Python can't parse, each with why.
+
+    The agent's files are its folder's ``.py`` files, past tests, virtual environments and hidden
+    folders, as the tool evidence reads them. Each entry is ``{"path", "python", "reason"}``:
+    ``python`` is the version a newer construct needs, or None for a plain syntax error. At most
+    ``_UNPARSED_LISTED`` are listed, under the scan's parse budget.
+    """
+    from .source_folder import SubfolderNotFound, agent_folder
+
+    root = source.resolve()
+    try:
+        base = agent_folder(root, subfolder) if subfolder else root
+    except SubfolderNotFound:
+        return []
+    budget = ParseBudget()
+    listed: list[dict[str, object]] = []
+    for path in sorted(base.rglob("*.py")):
+        parts = path.relative_to(root).parts[:-1]
+        if any(part.startswith(".") or part in _NOT_AGENT_CODE for part in parts):
+            continue
+        text = read_module(path)
+        if text is None or _runs_marks(text):
+            continue
+        if not budget.spend(text):
+            break
+        try:
+            ast.parse(text)
+        except SyntaxError as exc:
+            name = path.relative_to(root).as_posix()
+            newer = newer_syntax(text)
+            if newer is not None:
+                python, construct = newer
+                reason = (
+                    f"{name} uses {construct}, which needs Python {python}; the kit reads "
+                    f"source with Python {KIT_PYTHON}, so this file was not read"
+                )
+            else:
+                python = None
+                reason = (
+                    f"{name} doesn't parse on Python {KIT_PYTHON} "
+                    f"(line {exc.lineno}: {exc.msg}), so this file was not read"
+                )
+            listed.append({"path": name, "python": python, "reason": reason})
+            if len(listed) >= _UNPARSED_LISTED:
+                break
+        except (ValueError, RecursionError, MemoryError):
+            continue
+    return listed
