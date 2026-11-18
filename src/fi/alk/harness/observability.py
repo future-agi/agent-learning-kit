@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import signal
 from typing import Any, Iterator, Mapping
 
 from opentelemetry.sdk.trace.export import SpanExporter
@@ -60,13 +61,22 @@ def begin(
         from fi_instrumentation.fi_types import ProjectType
         from fi_instrumentation.otel import BatchSpanProcessor
 
-        _provider = register(
-            project_name=os.getenv("FI_HARNESS_PROJECT") or "hosted-harness",
-            project_type=ProjectType.OBSERVE,
-            # The platform binds the global provider to its own infrastructure tracing.
-            set_global_tracer_provider=False,
-            verbose=False,
-        )
+        # `register` replaces SIGTERM, the platform's Stop that seals calls in flight: keep the handlers it had.
+        handlers = {one: signal.getsignal(one) for one in (signal.SIGTERM, signal.SIGINT)}
+        try:
+            _provider = register(
+                project_name=os.getenv("FI_HARNESS_PROJECT") or "hosted-harness",
+                project_type=ProjectType.OBSERVE,
+                # The platform binds the global provider to its own infrastructure tracing.
+                set_global_tracer_provider=False,
+                verbose=False,
+            )
+        finally:
+            for one, handler in handlers.items():
+                # Off the main thread neither side can set a handler.
+                if handler is not None:
+                    with contextlib.suppress(ValueError):
+                        signal.signal(one, handler)
         cleaner = _CleaningExporter(_exporter(), secret_values)
         _swap(_provider, BatchSpanProcessor(span_exporter=cleaner))
         _instrument(_provider)

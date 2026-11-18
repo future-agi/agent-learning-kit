@@ -787,7 +787,10 @@ Never work around a contract you believe is wrong. Everything after you inherits
    before adding a check, run it with `try_check` against three agents you write yourself, one that
    does it right the way the reference does, one that does it right another way its instructions
    allow, and one that gets a fixed value wrong. The first two must hold and the third must fail;
-   if any verdict is wrong, the check is wrong.
+   if any verdict is wrong, the check is wrong. When the contract lists workers, add, for each declared
+   worker whose actions the world records, one sub-goal with `subject: worker:<id>` that checks that
+   worker's own work: what it called and tried, never an outcome the world enforces for it (a refused
+   tool, a deadline), which holds for every agent.
 9. `write_env_file` and `run_env_command`, where this agent's code needs a store or a service
    stood up. Nothing to do when it keeps its state in its own process.
 10. `add_world_check` for what has to be true of the environment itself.

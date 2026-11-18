@@ -95,6 +95,7 @@ _NEEDS_CONFIRMATION = frozenset(
         "declare_tool",
         "fix_tool",
         "amend_contract",
+        "set_worker_tools",
         "add_rule",
         "drop_rule",
         "add_sub_goal",
@@ -113,6 +114,7 @@ _ASKS_ALONE = frozenset(
         "declare_tool",
         "fix_tool",
         "amend_contract",
+        "set_worker_tools",
         "add_rule",
         "drop_rule",
     }
@@ -154,6 +156,7 @@ _WRITING_TOOLS = frozenset(
         "save_scenarios",
         "add_sub_goal",
         "amend_contract",
+        "set_worker_tools",
         "add_rule",
         "drop_rule",
         "fix_tool",

@@ -227,6 +227,10 @@ class ToolEntry(BaseModel):
     notes: str = ""
 
 
+# What a separate worker's id may hold: it names the worker's channel placeholder (`WORKER_CHANNEL_<id>`).
+_CHANNEL_WORKER_ID = re.compile(r"[A-Za-z0-9_.-]+")
+
+
 class DeclaredWorker(BaseModel):
     """An agent the app hands work to, as its source declares it.
 
@@ -238,6 +242,14 @@ class DeclaredWorker(BaseModel):
     name: str = ""
     # The contract tools this worker holds, by name.
     tools: list[str] = Field(default_factory=list)
+    # The ones it may use, when that is narrower than what its code holds; empty means all of `tools`.
+    allowed_tools: list[str] = Field(default_factory=list)
+    # separate: its calls reach the world on its own channel (attributed, not isolated); shared: told apart from none.
+    binding: Literal["separate", "shared"] = "shared"
+    # For a separate worker, the environment variable its tool client reads as the base address of its tools.
+    address_env: str = ""
+    # The process that serves this worker alone, which the harness ends past its deadline; empty inside the app's one.
+    process: str = ""
 
 
 class PromptSource(BaseModel):
@@ -1395,9 +1407,18 @@ class AgentContract(BaseModel):
             )
         if self.workers:
             parts.append(
-                "WORKERS (agents this one hands work to, and the tools each holds):\n  - "
+                "WORKERS (agents this one hands work to, and the tools each holds). Each one whose work the world can "
+                "show gets its own checks: a sub-goal with `subject: worker:<id>` (see 'When the agent hands work to "
+                "workers'):\n  - "
                 + "\n  - ".join(
                     f"{one.id} ({one.name or one.id}): {', '.join(one.tools) or 'no tools'}"
+                    + (
+                        f"; may use only {', '.join(one.allowed_tools)}"
+                        if one.allowed_tools and set(one.allowed_tools) != set(one.tools)
+                        else ""
+                    )
+                    + ("; its own channel to the world" if one.binding == "separate" else "")
+                    + f"; its checks take subject worker:{one.id}"
                     for one in self.workers
                 )
             )
@@ -1540,6 +1561,11 @@ KEPT_AS_WRITTEN = (
     "DeclaredWorker.id",
     "DeclaredWorker.name",
     "DeclaredWorker.tools",
+    # Tool names, a binding kind, an environment variable's name and a process name: read as written.
+    "DeclaredWorker.allowed_tools",
+    "DeclaredWorker.binding",
+    "DeclaredWorker.address_env",
+    "DeclaredWorker.process",
     "ToolSpec.name",
     "ToolSpec.args",
     "ToolSpec.arg_types",
@@ -1932,6 +1958,35 @@ def validate_contract(contract: AgentContract) -> list[str]:
                 f"worker[{index}]:no-id: give this worker the id the agent's source uses for it, "
                 "one that no other worker has."
             )
+        beyond = sorted(set(worker.allowed_tools) - set(worker.tools))
+        if beyond:
+            problems.append(
+                f"worker[{index}]:allowed-tools-it-does-not-hold:{','.join(beyond)}: a worker may be allowed "
+                "only tools it holds."
+            )
+        if worker.binding == "separate" and worker.id.strip():
+            # A separate worker reaches the world through its own channel, named from its id and its address variable.
+            if not _CHANNEL_WORKER_ID.fullmatch(worker.id):
+                problems.append(
+                    f"worker[{index}]:id-not-usable-for-a-channel:{worker.id}: a separate worker's id may hold only "
+                    "letters, digits, '_', '.' and '-'."
+                )
+            if not worker.address_env.strip():
+                problems.append(
+                    f"worker[{index}]:separate-without-address-env: name the environment variable its tool client "
+                    "reads as the base address of its tools, or record it as shared."
+                )
+    addresses = [
+        worker.address_env.strip()
+        for worker in contract.workers
+        if worker.binding == "separate" and worker.address_env.strip()
+    ]
+    shared_address = sorted({one for one in addresses if addresses.count(one) > 1})
+    if shared_address:
+        problems.append(
+            f"duplicate-worker-address-env:{','.join(shared_address)}: two separate workers cannot read one address "
+            "variable, or the world cannot tell them apart; record them as shared or give each its own variable."
+        )
     worker_ids = [worker.id for worker in contract.workers if worker.id.strip()]
     repeated = sorted({one for one in worker_ids if worker_ids.count(one) > 1})
     if repeated:

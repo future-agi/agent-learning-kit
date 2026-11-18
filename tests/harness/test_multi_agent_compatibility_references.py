@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-REFERENCES = ROOT / "examples" / "harness" / "multi_agent_compatibility"
+REFERENCES = ROOT / "tests" / "fixtures" / "harness_agents" / "multi_agent_compatibility"
 
 
 def run_verifier(*args: str) -> subprocess.CompletedProcess[str]:
@@ -101,15 +101,29 @@ def test_verifier_checks_materialized_orchestration(tmp_path: Path) -> None:
 def test_returns_reference_declares_the_workers_and_tools_its_app_builds() -> None:
     import ast
 
-    app = ROOT / "examples" / "harness" / "returns_reference"
+    app = ROOT / "tests" / "fixtures" / "harness_agents" / "returns_multi_agent"
     reference = json.loads((app / "reference.json").read_text(encoding="utf-8"))
+    tree = ast.parse((app / "agent.py").read_text(encoding="utf-8"))
+    # A worker's tools are built by a function of their own (each reaches the world through its own address).
+    builders = {
+        node.name: sorted(
+            inner.name
+            for inner in node.body
+            if isinstance(inner, ast.FunctionDef)
+            and any(getattr(one, "id", "") == "function_tool" for one in inner.decorator_list)
+        )
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
     built = {}
-    for node in ast.walk(ast.parse((app / "agent.py").read_text(encoding="utf-8"))):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Agent":
             fields = {one.arg: one.value for one in node.keywords}
-            tools = fields["tools"].elts
-            built[ast.literal_eval(fields["name"])] = sorted(
-                one.id for one in tools if isinstance(one, ast.Name)
+            tools = fields["tools"]
+            built[ast.literal_eval(fields["name"])] = (
+                builders[tools.func.id]
+                if isinstance(tools, ast.Call)
+                else sorted(one.id for one in tools.elts if isinstance(one, ast.Name))
             )
     topology = reference["topology"]
     assert topology["coordinator"] in built
@@ -149,7 +163,7 @@ def test_the_returns_reference_answers_every_turn_of_a_conversation_on_one_event
     stub.set_trace_processors = lambda _processors: None
     monkeypatch.setitem(sys.modules, "agents", stub)
     spec = importlib.util.spec_from_file_location(
-        "returns_reference_agent", ROOT / "examples" / "harness" / "returns_reference" / "agent.py"
+        "returns_reference_agent", ROOT / "tests" / "fixtures" / "harness_agents" / "returns_multi_agent" / "agent.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -157,4 +171,24 @@ def test_the_returns_reference_answers_every_turn_of_a_conversation_on_one_event
     assert module.reply(first) == "turn 1"
     assert module.reply([*first, {"role": "assistant", "content": "Done"}, {"role": "user", "content": "Thanks"}]) == (
         "turn 3"
+    )
+
+
+FIXTURES = ROOT / "tests" / "fixtures" / "harness_agents"
+NOT_A_SAMPLE = "It is not a sample agent, not a template, and not a statement of which frameworks are supported."
+
+
+def test_internal_fixtures_are_not_in_examples() -> None:
+    assert (FIXTURES / "returns_multi_agent" / "agent.py").is_file()
+    assert (FIXTURES / "multi_agent_compatibility" / "verify_references.py").is_file()
+    assert not (ROOT / "examples" / "harness" / "returns_reference").exists()
+    assert not (ROOT / "examples" / "harness" / "multi_agent_compatibility").exists()
+
+
+def test_fixture_readmes_say_they_are_not_samples() -> None:
+    returns = (FIXTURES / "returns_multi_agent" / "README.md").read_text(encoding="utf-8").splitlines()[0]
+    corpus = (FIXTURES / "multi_agent_compatibility" / "README.md").read_text(encoding="utf-8").splitlines()[0]
+    assert returns == f"Internal acceptance fixture for multi-agent testing in CI. {NOT_A_SAMPLE}"
+    assert corpus == (
+        f"Compatibility evidence for three pinned upstream applications for multi-agent testing in CI. {NOT_A_SAMPLE}"
     )

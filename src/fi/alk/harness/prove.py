@@ -404,6 +404,9 @@ class _WorldActors:
                     "arguments": call.arguments,
                     "result": call.result,
                     "ok": call.ok,
+                    # As the live log keeps them, so a check's helpers read the same columns here as in a trial.
+                    "error": call.error or None,
+                    "action_id": f"proof-{index}",
                     "actor_id": self.by_actors.get(index, "agent"),
                     "outcome": "committed" if call.ok else "refused",
                     "refusal_code": None if call.ok else "world_rule",

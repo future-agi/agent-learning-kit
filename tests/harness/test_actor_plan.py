@@ -1554,7 +1554,7 @@ def test_a_proof_starts_from_the_world_after_the_pre_run_threads_and_credits_the
             self.calls = []
 
         def call(self, name, arguments):
-            self.calls.append(SimpleNamespace(name=name, arguments=arguments, ok=True,
+            self.calls.append(SimpleNamespace(name=name, arguments=arguments, ok=True, error="",
                                               result={"ts": f"ts{len(self.calls) + 1}"}))
 
     world, by_actors = World(), {}

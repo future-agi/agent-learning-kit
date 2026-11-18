@@ -561,6 +561,291 @@ def test_a_mark_from_an_earlier_seal_is_cleared_when_the_door_reaches_the_tool()
     assert "door_unreached" not in with_door_unreached(contract, {})["tool_entrypoints"][0]
 
 
+def _stopping_run(monkeypatch, remaining, claim=None, swallows=False):
+    """A framework's run of one agent, behind the worker stop, with the door answering `remaining` for the worker and
+    `claim` for its stop; each request is asked with how many runs had ended by then."""
+    import asyncio
+
+    asked, ended = [], []
+
+    def post(path, body):
+        asked.append((path, body, len(ended)))
+        if path == "/worker_deadline":
+            return {"remaining": remaining} if remaining is not None else {}
+        if path == "/worker_stop":
+            return claim if claim is not None else {"stop": True, "id": "s1"}
+        return {"kept": body.get("stopped") is True}
+
+    monkeypatch.setattr(bootstrap, "_post", post)
+
+    async def run(starting_agent, seconds):
+        try:
+            await asyncio.sleep(seconds)
+        except asyncio.CancelledError:
+            ended.append(starting_agent.name)
+            if swallows:
+                return f"{starting_agent.name} kept going"
+            raise
+        return f"{starting_agent.name} answered"
+
+    return bootstrap.stop_at_deadline(run, "starting_agent", {"Writer": "writer"}), asked, ended
+
+
+def test_a_worker_past_its_deadline_is_stopped_and_its_stop_kept(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    run, asked, ended = _stopping_run(monkeypatch, 0.05)
+
+    async def call():
+        run_task = asyncio.ensure_future(run(SimpleNamespace(name="Writer"), 30))
+        with pytest.raises(bootstrap.WorkerStopped):
+            await run_task
+        # The cancelled run sees its cancellation on the loop's next turn.
+        await asyncio.sleep(0.01)
+
+    asyncio.run(call())
+    assert ended == ["Writer"]
+    # Claimed while the run was still going, then reported ended at its cancel.
+    assert ("/worker_stop", {"worker": "writer"}, 0) in asked
+    assert ("/worker_stop_end", {"id": "s1", "stopped": True}, 1) in asked
+
+
+def test_a_worker_already_past_its_deadline_never_runs_even_with_no_await(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    asked, ran = [], []
+
+    def post(path, body):
+        asked.append(path)
+        if path == "/worker_deadline":
+            return {"remaining": 0}
+        if path == "/worker_stop":
+            return {"stop": True, "id": "s1"}
+        return {"kept": body.get("stopped") is True}
+
+    monkeypatch.setattr(bootstrap, "_post", post)
+
+    async def run(starting_agent):
+        # No suspension point: scheduled first, it would finish before any stop.
+        ran.append(starting_agent.name)
+        return "completed"
+
+    stopping = bootstrap.stop_at_deadline(run, "starting_agent", {"Writer": "writer"})
+    with pytest.raises(bootstrap.WorkerStopped):
+        asyncio.run(stopping(SimpleNamespace(name="Writer")))
+    assert ran == []
+    assert asked == ["/worker_deadline", "/worker_stop", "/worker_stop_end"]
+
+
+def test_a_worker_whose_stop_the_seal_refused_runs_on_and_is_never_cancelled(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    run, asked, ended = _stopping_run(monkeypatch, 0.01, claim={"stop": False})
+    assert asyncio.run(run(SimpleNamespace(name="Writer"), 0.05)) == "Writer answered"
+    assert ended == [] and all(path != "/worker_stop_end" for path, *_ in asked)
+
+
+def test_a_worker_that_swallows_its_cancel_is_not_reported_stopped(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    run, asked, ended = _stopping_run(monkeypatch, 0.01, swallows=True)
+    assert asyncio.run(run(SimpleNamespace(name="Writer"), 30)) == "Writer kept going"
+    assert ended == ["Writer"]
+    assert ("/worker_stop_end", {"id": "s1", "stopped": False}, 1) in asked
+
+
+def test_the_door_keeps_a_stop_only_when_the_agent_says_the_run_ended(monkeypatch):
+    monkeypatch.setattr(in_process_door, "DATABASE_URL", "db")
+    kept: list[bool] = []
+
+    def claim(_address, _worker, _process, stop):
+        kept.append(stop())
+        return kept[-1]
+
+    monkeypatch.setattr(in_process_door, "claim_worker_stop", claim)
+    for stopped in (True, False):
+        claimed = in_process_door.worker_stop("writer")
+        assert claimed["stop"] is True
+        assert in_process_door.worker_stop_end(claimed["id"], stopped) == {"kept": stopped}
+    assert kept == [True, False]
+    # Sealed first: the claim is refused before any stop, and the agent is told to let the worker run on.
+    monkeypatch.setattr(in_process_door, "claim_worker_stop", lambda *_args: False)
+    assert in_process_door.worker_stop("writer") == {"stop": False}
+    assert in_process_door.worker_stop_end("unknown", True) == {"kept": False}
+
+
+def test_a_worker_inside_its_deadline_and_any_other_agent_run_as_before(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    run, asked, ended = _stopping_run(monkeypatch, 5)
+    assert asyncio.run(run(SimpleNamespace(name="Writer"), 0)) == "Writer answered"
+    # The coordinator is no worker: its run is never timed, and the door is never asked about it.
+    assert asyncio.run(run(SimpleNamespace(name="Coordinator"), 0)) == "Coordinator answered"
+    assert ended == [] and all(path != "/worker_stop" for path, *_ in asked)
+    assert [body for path, body, _ in asked if path == "/worker_deadline"] == [{"worker": "writer"}]
+    # No deadline for the worker this trial: it runs on.
+    run, asked, ended = _stopping_run(monkeypatch, None)
+    assert asyncio.run(run(SimpleNamespace(name="Writer"), 0)) == "Writer answered"
+
+
+def test_only_a_framework_in_the_table_has_its_worker_runs_stopped(monkeypatch):
+    import types
+
+    class Runner:
+        @classmethod
+        async def run(cls, starting_agent, text):
+            return text
+
+    stoppable = types.ModuleType(bootstrap.WORKER_RUNS[0][0])
+    setattr(stoppable, bootstrap.WORKER_RUNS[0][1], Runner)
+    other = types.ModuleType("another_framework.run")
+    other.Runner = type("Runner", (), {"run": Runner.__dict__["run"]})
+    before = other.Runner.__dict__["run"]
+    bootstrap._stop_workers_in(stoppable, {"Writer": "writer"})
+    bootstrap._stop_workers_in(other, {"Writer": "writer"})
+    # Stopped: still a classmethod, now cancelled at the deadline. Any other framework: not stopped.
+    assert isinstance(Runner.__dict__["run"], classmethod)
+    assert getattr(Runner.__dict__["run"].__func__, bootstrap._STOPS, False)
+    assert other.Runner.__dict__["run"] is before
+
+
+def test_the_door_tells_a_worker_how_long_it_has_left_from_this_trial_s_deadlines(monkeypatch):
+    import time
+
+    rows = {"row": (time.time() + 60, {"writer": time.time() + 5})}
+    monkeypatch.setattr(in_process_door._proxy, "_trial_row", lambda _columns: rows["row"])
+    assert 0 < in_process_door.worker_remaining("writer")["remaining"] <= 5
+    assert 5 < in_process_door.worker_remaining("reader")["remaining"] <= 60
+    rows["row"] = (None, {})
+    assert in_process_door.worker_remaining("writer") == {}
+    rows["row"] = None
+    assert in_process_door.worker_remaining("writer") == {}
+
+
+def test_the_plan_names_only_the_workers_inside_the_agent_s_process_to_its_door():
+    from dataclasses import replace
+
+    from fi.alk.harness.bundle_author_v2 import (
+        WORLD_DOOR_PROCESS,
+        EnvironmentPlanV2,
+        _world_door_process,
+        door_outcome,
+        with_in_process_workers,
+    )
+
+    door = _world_door_process([]).model_copy(update={"depends_on": []})
+    agent = door.model_copy(update={"name": "agent", "environment": {}})
+    plan = EnvironmentPlanV2(
+        packaging="process", control_service="agent", processes=(agent, door), capabilities={}, readiness=()
+    )
+    contract = {
+        "workers": [
+            {"id": "writer", "name": "Writer"},
+            {"id": "served", "name": "Served", "process": "served-worker"},
+            {"id": "unnamed"},
+        ]
+    }
+    wired = {one.name: one.environment for one in with_in_process_workers(plan, contract).processes}
+    assert json.loads(wired["agent"]["ALK_WORLD_DOOR_WORKERS"]) == {"Writer": "writer"}
+    assert "ALK_WORLD_DOOR_WORKERS" not in wired[WORLD_DOOR_PROCESS]
+    # The bundle's door record names the same workers, which the runner counts as held to their deadline.
+    assert door_outcome(with_in_process_workers(plan, contract), contract)["workers"] == ["writer"]
+    # No in-process door: nothing can stop a worker there, and the plan stays as it was.
+    alone = replace(plan, processes=(agent,))
+    assert with_in_process_workers(alone, contract) is alone
+
+
+def test_a_graph_under_its_framework_s_default_name_is_never_taken_for_a_worker(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    asked = []
+    answers = {"/worker_deadline": {"remaining": 0.01}, "/worker_stop": {"stop": True, "id": "s1"}}
+    monkeypatch.setattr(bootstrap, "_post", lambda path, body: asked.append((path, body)) or answers.get(path, {}))
+
+    async def ainvoke(self, seconds):
+        await asyncio.sleep(seconds)
+        return self.name
+
+    # A worker recorded under the default name: every unnamed graph, the coordinator's included, carries it too.
+    run = bootstrap.stop_at_deadline(ainvoke, "self", {"LangGraph": "researcher", "Coder": "coder"}, "LangGraph")
+    assert asyncio.run(run(SimpleNamespace(name="LangGraph"), 0.05)) == "LangGraph"
+    assert asked == []
+    # A graph compiled under its own name is that worker, and is stopped at its deadline.
+    with pytest.raises(bootstrap.WorkerStopped):
+        asyncio.run(run(SimpleNamespace(name="Coder"), 5))
+    assert ("/worker_stop", {"worker": "coder"}) in asked
+
+
+def test_only_an_awaited_run_is_stopped_and_a_streamed_or_blocking_run_is_left_as_it_is():
+    import types
+
+    class Runner:
+        @classmethod
+        async def run(cls, starting_agent):
+            return starting_agent
+
+        @classmethod
+        def run_streamed(cls, starting_agent):
+            return starting_agent
+
+    class Pregel:
+        async def ainvoke(self, payload):
+            return payload
+
+        def invoke(self, payload):
+            return payload
+
+    agents_run = types.ModuleType(bootstrap.WORKER_RUNS[0][0])
+    agents_run.Runner = Runner
+    pregel = types.ModuleType(bootstrap.WORKER_RUNS[1][0])
+    pregel.Pregel = Pregel
+    streamed, blocking = Runner.__dict__["run_streamed"], Pregel.__dict__["invoke"]
+    for module in (agents_run, pregel):
+        bootstrap._stop_workers_in(module, {"Writer": "writer"})
+    assert getattr(Runner.__dict__["run"].__func__, bootstrap._STOPS, False)
+    assert getattr(Pregel.__dict__["ainvoke"], bootstrap._STOPS, False)
+    # Not stopped at a deadline: the worker runs on, and is not listed as stopped.
+    assert Runner.__dict__["run_streamed"] is streamed and Pregel.__dict__["invoke"] is blocking
+
+
+def test_a_stopped_graph_worker_its_coordinator_does_not_catch_fails_the_agent_s_turn_as_the_agent_s(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from fi.alk.harness.hosted_scheduler import _CODE_DOMAIN
+    from fi.alk.harness.job import FailureDomain
+
+    answers = {"/worker_deadline": {"remaining": 0.01}, "/worker_stop": {"stop": True, "id": "s1"}}
+    monkeypatch.setattr(bootstrap, "_post", lambda path, body: answers.get(path, {"kept": True}))
+
+    async def ainvoke(self, seconds):
+        await asyncio.sleep(seconds)
+        return self.name
+
+    worker = bootstrap.stop_at_deadline(ainvoke, "self", {"Coder": "coder"}, "LangGraph")
+
+    async def coordinator(handles):
+        try:
+            return await worker(SimpleNamespace(name="Coder"), 5)
+        except TimeoutError:
+            if handles:
+                return "answered without the coder"
+            raise
+
+    # A coordinator may handle the stop as any timeout; one that does not fails its turn, which the runner reports as
+    # `target_agent_failed`: the agent's failure, since the deadline is a condition the scenario set.
+    assert asyncio.run(coordinator(True)) == "answered without the coder"
+    with pytest.raises(bootstrap.WorkerStopped):
+        asyncio.run(coordinator(False))
+    assert _CODE_DOMAIN["target_agent_failed"] is FailureDomain.AGENT
+
+
 def test_a_tool_whose_approval_was_never_given_raises_the_world_s_refusal_not_a_timeout(monkeypatch):
     """The decorated tool, held by the door for an approval never given, tells the agent it was refused and why, so
     it does not read a timeout and retry."""
@@ -660,3 +945,55 @@ def test_a_call_whose_flag_is_true_is_never_taken_for_the_lost_answer_of_a_call_
     [kept] = one_call_per_lost_answer([other], log)
 
     assert not kept.answer_lost
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_a_tool_behind_the_door_keeps_hints_a_framework_can_read_from_a_copy_of_it(
+    tmp_path, monkeypatch, asynchronous
+) -> None:
+    """An ADK tool (travel concierge's `memorize`) annotates `tool_context: ToolContext` under postponed annotations.
+    ADK describes a tool by copying it with the wrapper's globals and reading its hints: before, a sub-agent holding
+    such a tool failed every turn (`NameError: name 'ToolContext' is not defined`) once control passed to it, so its
+    hand-off never ran."""
+    import types
+    import typing
+
+    module = tmp_path / "concierge_tools.py"
+    module.write_text(
+        "from __future__ import annotations\n"
+        "class ToolContext:\n    pass\n"
+        + ("async " if asynchronous else "")
+        + "def memorize(key: str, value: str, tool_context: ToolContext) -> dict:\n    return {'status': 'stored'}\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    import concierge_tools
+
+    held = bootstrap.door("memorize")(concierge_tools.memorize)
+    copy = types.FunctionType(held.__code__, held.__globals__, held.__name__, held.__defaults__, held.__closure__)
+    copy.__annotations__ = held.__annotations__
+    assert typing.get_type_hints(copy)["tool_context"] is concierge_tools.ToolContext
+    assert typing.get_type_hints(held)["key"] is str
+
+
+def test_adk_describes_a_tool_behind_the_door_whose_context_is_a_postponed_annotation(tmp_path, monkeypatch) -> None:
+    """The same, through ADK's own FunctionTool: the declaration it builds for the model."""
+    adk_tools = pytest.importorskip("google.adk.tools")
+    # The sandbox's ADK built declarations from the tool's type hints, not a JSON schema: take that path here too.
+    monkeypatch.setenv("ADK_DISABLE_JSON_SCHEMA_FOR_FUNC_DECL", "1")
+    module = tmp_path / "concierge_memory.py"
+    module.write_text(
+        "from __future__ import annotations\n"
+        "from google.adk.tools import ToolContext\n"
+        "def memorize(key: str, value: str, tool_context: ToolContext) -> dict:\n    return {'status': 'stored'}\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    import concierge_memory
+
+    held = bootstrap.door("memorize")(concierge_memory.memorize)
+    declaration = adk_tools.FunctionTool(held)._get_declaration()
+    assert declaration.name == "memorize"
+    # The path the sandbox's ADK took: the tool copied without `tool_context`, its hints read from the copy.
+    from google.adk.tools._automatic_function_calling_util import build_function_declaration
+
+    built = build_function_declaration(func=held, ignore_params=["tool_context"])
+    assert built.name == "memorize" and "tool_context" not in str(built)

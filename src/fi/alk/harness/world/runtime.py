@@ -208,6 +208,9 @@ class Call:
     # Part of the arguments or the result was left out to keep the record bounded.
     input_omitted: bool = False
     output_omitted: bool = False
+    # The channel the world saw the call come in on, from its door row: "" for the shared address, a worker's id for
+    # that worker's own channel, None when there was no door row or the row is from before channels. Never lent.
+    channel: str | None = None
     # The world committed it, but the answer never reached the agent.
     answer_lost: bool = False
 
@@ -284,8 +287,38 @@ def _worker_event(call: Call) -> dict[str, Any]:
     }
 
 
-def trace_row(call: Call) -> dict[str, Any]:
-    """One call as the sealed tool trace keeps it, with who in the agent made it when the runtime said."""
+def worker_events(
+    call: Call, workers: Mapping[str, str] | None = None
+) -> list[dict[str, Any]]:
+    """The call as normalised worker events, the shape documented in HOW-IT-WORKS.md (worker events): its tool call,
+    hand-off or control pass, then a hand-off's return once its worker came back. `workers` maps the name a framework
+    gives each declared worker to its id, so `worker_id` and `by` are the contract's ids wherever a name matches."""
+    placed = _worker_event(call)
+    kind = placed.get("kind", "tool_call")
+    agent = call.worker_id or call.worker_label or None
+    named = agent if kind == "tool_call" else call.delegated_to
+    status = "refused" if call.refused else "ok" if call.ok else "error"
+    event: dict[str, Any] = {
+        "type": kind,
+        "id": placed.get("span_id", ""),
+        "worker_id": (workers or {}).get(named or "", named),
+        "worker_name": named,
+        "parent_id": placed.get("parent_span_id", ""),
+        "relationship": placed.get("relationship", "unknown"),
+        "tool": call.name,
+        "at": call.at,
+    }
+    if kind == "tool_call":
+        return [{**event, "ended_at": call.ended_at or None, "status": status}]
+    event.update(by=(workers or {}).get(agent or "", agent), by_name=agent)
+    if kind != "delegated" or not call.ended_at:
+        return [event]
+    return [event, {**event, "type": "returned", "at": call.ended_at, "status": status}]
+
+
+def trace_row(call: Call, workers: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """One call as the sealed tool trace keeps it, with who in the agent made it when the runtime said; `workers` as
+    `worker_events` takes it."""
     return {
         "name": call.name,
         "arguments": call.arguments,
@@ -307,12 +340,15 @@ def trace_row(call: Call) -> dict[str, Any]:
             if getattr(call, key)
         },
         **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
+        # Why the world refused it, as its action log coded it.
+        **({"refusal_code": call.refusal_code} if call.refusal_code else {}),
         **{
             key: True
             for key in ("input_omitted", "output_omitted", "answer_lost")
             if getattr(call, key)
         },
         **_worker_event(call),
+        "worker_events": worker_events(call, workers),
     }
 
 

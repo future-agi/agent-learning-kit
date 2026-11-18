@@ -39,7 +39,7 @@ jobs:
 
   clean-install:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -115,6 +115,7 @@ jobs:
           tests/test_call_originator_factory.py
           tests/test_retell_evidence.py
           tests/harness/test_process_runtime.py
+          tests/harness/test_multi_agent_compatibility_references.py
           tests/harness/test_source_folder.py
           tests/test_harness_sandbox_server.py
           --deselect tests/test_harness_sandbox_server.py::test_private_github_submission_becomes_hosted_job
@@ -151,6 +152,13 @@ jobs:
           tests/harness/test_hosted_authoring_entrypoint.py
           tests/harness/test_certify_only.py
           tests/harness/test_bundle_author_v2.py
+          tests/harness/test_call_runner.py
+          tests/harness/test_chat_readiness.py
+          tests/harness/test_in_process_door.py
+          tests/harness/test_framework_tool_spans.py
+          tests/harness/test_python_extras.py
+          tests/harness/test_tool_certification.py
+          tests/harness/test_contract.py
           tests/harness/test_python_tool_trace_bootstrap.py
           tests/harness/test_workflow_intent.py
           tests/harness/test_simulation_mark_bootstrap.py

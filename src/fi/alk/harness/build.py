@@ -89,6 +89,12 @@ def blockers(
         if entry is None or entry.mode in ("", "generate", "unreachable"):
             if runtime_owned:
                 continue
+            if entry is not None and source_root:
+                from .tool_certification import framework_coordination
+
+                if framework_coordination(tool, entry, contract, Path(source_root)):
+                    # The framework injects it to coordinate the workers; its calls are observed in the run.
+                    continue
             problems.append(
                 f"{tool.name}: no runnable shipped entrypoint was identified; expose the real "
                 "implementation as an importable callable or an HTTP service, then point the "
