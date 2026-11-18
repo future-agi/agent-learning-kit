@@ -95,11 +95,12 @@ class JobRefused(Exception):
     entry per error, its code in ``msg``, and no ``input`` or ``ctx``, since either can carry
     a submitted value.
 
-    Whose problem it is decides the answer (``refusals``). A refusal of this sandbox's own
-    configuration is a 500 that names it, ``type`` "sandbox_configuration" and ``loc``
-    ["sandbox"], and it alone is reported: the caller can't get past it by fixing their part.
-    Otherwise it is a 422, ``loc`` ["body"], as the job model's field names mean nothing to
-    the caller."""
+    A 5xx is only for a request with no fault of its own (ADR-010, point 2). Any submission
+    refusal makes it a 422, ``loc`` ["body"] (the job model's field names mean nothing to the
+    caller), listing the caller's entries; a configuration refusal that came with them is
+    logged as an error, so ours is not lost behind theirs. A request refused only for this
+    sandbox's own configuration is a 500 that names it, ``type`` "sandbox_configuration" and
+    ``loc`` ["sandbox"]."""
 
     def __init__(self, error: ValidationError):
         messages = [
@@ -109,16 +110,21 @@ class JobRefused(Exception):
             )
         ]
         ours = [msg for _type, msg in messages if refusal_kind(msg) == "configuration"]
-        if ours:
+        theirs = [
+            (kind, msg) for kind, msg in messages if refusal_kind(msg) == "submission"
+        ]
+        if theirs:
+            self.status_code = 422
+            self.detail = [
+                {"type": kind, "loc": ["body"], "msg": msg} for kind, msg in theirs
+            ]
+            for msg in ours:
+                logger.error("job_refused_with_sandbox_configuration_fault: %s", msg)
+        else:
             self.status_code = 500
             self.detail = [
                 {"type": "sandbox_configuration", "loc": ["sandbox"], "msg": msg}
                 for msg in ours
-            ]
-        else:
-            self.status_code = 422
-            self.detail = [
-                {"type": kind, "loc": ["body"], "msg": msg} for kind, msg in messages
             ]
         super().__init__("; ".join(entry["msg"] for entry in self.detail))
 

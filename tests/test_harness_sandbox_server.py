@@ -1307,8 +1307,9 @@ def test_a_refusal_of_this_sandboxs_own_configuration_is_a_500_naming_its_code(
     assert not any((tmp_path / "state" / "jobs").glob("*/job.json"))
 
 
-def test_a_submission_and_a_configuration_refusal_together_report_the_configuration():
-    # Ours comes first: the caller can't get past it by fixing their part.
+def test_a_submission_and_a_configuration_refusal_together_answer_the_callers_422(caplog):
+    # A 5xx is only for a request with no fault of its own (ADR-010, point 2): the caller
+    # hears about their part, and ours is logged as an error rather than lost behind it.
     from pydantic import BaseModel as _Model
     from pydantic import model_validator as _after
 
@@ -1332,12 +1333,16 @@ def test_a_submission_and_a_configuration_refusal_together_report_the_configurat
         both = exc
     assert len(both.errors()) == 2
 
-    refused = JobRefused(both)
+    with caplog.at_level("ERROR", logger=sandbox_server.__name__):
+        refused = JobRefused(both)
 
-    assert refused.status_code == 500
+    assert refused.status_code == 422
     assert [entry["msg"] for entry in refused.detail] == [
-        "Value error, hosted_isolation_must_be_dedicated_vm"
+        "Value error, github_commit_sha_invalid"
     ]
+    assert all(entry["loc"] == ["body"] for entry in refused.detail)
+    logged = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert any("hosted_isolation_must_be_dedicated_vm" in r.getMessage() for r in logged)
 
 
 def test_a_real_configuration_refusal_reaches_the_caller_as_a_500_with_its_code(tmp_path):
