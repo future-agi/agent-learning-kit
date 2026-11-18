@@ -802,6 +802,9 @@ played exactly like `solution`.
 
 - Make it specific to the task: the action done twice, the action taken on a record the rules
   exclude, the wrong record looked up. A control that fails for a reason unrelated to the task proves nothing.
+- A control is the most plausible wrong behaviour for THIS case: the mistake its main check exists to
+  catch. A step every scenario in the suite shares (the same lookup, the same greeting) is not what a
+  case is about, so a control that only breaks that step is refused; break what this case alone checks.
 - "Do nothing" is never a control. The third gate already covers it.
 - On a no-change (refusal) scenario, the control performs the forbidden change, and the checks must
   fail it. The checks of such a scenario may hold on an untouched world; the control is what shows

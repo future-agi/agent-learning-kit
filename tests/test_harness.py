@@ -9621,6 +9621,26 @@ def test_a_control_the_checks_pass_is_not_kept_and_says_which(tmp_path):
     assert kept == [] and proofs == {}
 
 
+@pytest.mark.parametrize(
+    ("shared", "kept_it"), [("item-added", False), ("right-item", True)], ids=["control-breaks-only-the-shared-step", "control-breaks-its-own-goal"]
+)
+def test_a_control_must_fail_the_goal_its_case_is_about(tmp_path, shared, kept_it):
+    """In a suite of three where every case checks `shared`, the control (the item added twice) counts only when it
+    makes a goal this case alone names fail."""
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = [Scenario.model_validate(_delta(name=f"other-{n}", sub_goals=[shared, "polite"])) for n in range(2)]
+
+    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+
+    text = said["content"][0]["text"]
+    assert bool(said.get("is_error")) is not kept_it, text
+    if not kept_it:
+        assert "every scenario in this suite shares" in text and "right-item" in text
+
+
 def test_a_case_without_a_negative_control_is_not_kept(tmp_path):
     said, text, kept, _ = _submit(tmp_path, negative_controls=[])
 

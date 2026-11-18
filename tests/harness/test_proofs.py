@@ -279,6 +279,11 @@ def test_the_refusal_table_quotes_the_reason_each_refused_proof_gives():
         Proof(ready=True, solvable=True, vacuous=False, controls=passed_control),
         Proof(ready=True, solvable=True, vacuous=False, controls=RAN, leaks=leak),
         Proof(ready=True, solvable=True, vacuous=False, controls=RAN, sources=source),
+        Proof(
+            ready=True, solvable=True, vacuous=False, case_goals=["own_goal"],
+            controls=[{"name": "shared", "why": "", "ran": True, "failed": True, "held": [], "failing": ["shared_step"],
+                       "assumed": []}],
+        ),
     ]
 
     for proof in refused:

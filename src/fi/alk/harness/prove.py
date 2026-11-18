@@ -71,6 +71,7 @@ class BlockedReason(str, Enum):
     UNCHECKED = "unchecked"
     NO_NEGATIVE_CONTROL = "no_negative_control"
     NEGATIVE_CONTROL_PASSED = "negative_control_passed"
+    CONTROL_MISSES_CASE_GOAL = "control_misses_case_goal"
     POLICY_CONFLICT = "policy_conflict"
     ANSWER_LEAKED = "answer_leaked"
     SOURCE_UNRESOLVED = "source_unresolved"
@@ -95,10 +96,14 @@ LANE_CODES = frozenset(
 )
 # A case with no negative control at all: refused at submit, kept not proved through a rebuild.
 NO_NEGATIVE_CONTROL = BlockedReason.NO_NEGATIVE_CONTROL
+# Refused at submit, but kept not proved through a rebuild: a case written before the rule existed (no control at
+# all, or a control that misses the case's own goal) stays in the suite, held out of runs, so an older suite rebuilds.
+KEPT_THROUGH_REBUILD = frozenset({BlockedReason.NO_NEGATIVE_CONTROL, BlockedReason.CONTROL_MISSES_CASE_GOAL})
 # A writer's fault: the scenario is not kept. The lane codes (an unbound tool) are kept and labelled.
 REFUSED_CODES = frozenset(
     {
         BlockedReason.NEGATIVE_CONTROL_PASSED,
+        BlockedReason.CONTROL_MISSES_CASE_GOAL,
         BlockedReason.NO_NEGATIVE_CONTROL,
         BlockedReason.ANSWER_LEAKED,
         BlockedReason.SOURCE_UNRESOLVED,
@@ -196,6 +201,9 @@ class Proof:
     # Checks the reference failed only because a step it took was assumed: each reads the world alone, which an
     # assumed step never changes (`excused_by_assumed_steps`).
     excused: list[str] = field(default_factory=list)
+    # The sub-goals that make this case its own, not a step every case in its suite shares (`distinctive_goals`). Set
+    # only where a case is written or rebuilt, so a saved proof is never re-judged by this rule on read.
+    case_goals: list[str] = field(default_factory=list)
 
     @property
     def holds(self) -> bool:
@@ -218,10 +226,31 @@ class Proof:
             and not self.assumed
             and not self.deferred
             and self.controls_failed
+            and not self.misses_case_goal
             and not self.leaks
             and not self.unresolved_sources
             and not self.conflicts
         )
+
+    @property
+    def misses_case_goal(self) -> bool:
+        """The controls make none of this case's own goals fail, though they were played where that could be seen.
+
+        A goal failing under a control counts when the control ran, or when its check reads only the calls: an
+        unrun step is still recorded with its arguments, so the check judged what the control would do. A check of
+        the world under an unrun step shows nothing, so a goal no control could show leaves the rule undecided."""
+        if not self.case_goals or self.judged_only or not self.controls:
+            return False
+        shown: set[str] = set()
+        for one in self.controls:
+            if one.get("judged") or "failing" not in one:
+                continue
+            for goal in self.case_goals:
+                if one.get("ran") or self.evidence.get(goal) == ["tool_calls"]:
+                    shown.add(goal)
+                    if goal in (one.get("failing") or []):
+                        return False
+        return shown == set(self.case_goals)
 
     @property
     def kept_as_written(self) -> bool:
@@ -255,6 +284,8 @@ class Proof:
                     return NO_NEGATIVE_CONTROL
                 if any(one.get("failed") is False for one in self.ran_controls):
                     return BlockedReason.NEGATIVE_CONTROL_PASSED
+                if self.misses_case_goal:
+                    return BlockedReason.CONTROL_MISSES_CASE_GOAL
             elif any(one.get("failed") is False for one in self.judged_controls):
                 return BlockedReason.NEGATIVE_CONTROL_PASSED
         if self.conflicts:
@@ -397,6 +428,13 @@ class Proof:
                     f"{one['name']} ({one['why']}): held {', '.join(one.get('held') or []) or 'every check'}"
                     for one in passed
                 ) + "\n\nTighten the named checks so this wrong behaviour fails them."
+        if self.misses_case_goal and not self.deferred:
+            return (
+                "the negative controls only make checks fail that every scenario in this suite shares, so they show "
+                "nothing about what this scenario is for. Write a control that is the most plausible wrong behaviour "
+                "for this case, the mistake its own check exists to catch, so that at least one of these fails:\n  - "
+                + "\n  - ".join(self.case_goals)
+            )
         if not self.controls and not self.judged_only and not self.deferred:
             return (
                 "no negative control: add a wrong behaviour written for this task (for example the "
@@ -416,6 +454,19 @@ class Proof:
         if self.judged_only and not self.controls_failed:
             return JUDGED_ONLY_TEXT
         return "holds"
+
+
+# Below this many scenarios, a sub-goal every scenario names may be what they are all about, not a shared step.
+SHARED_GOAL_SUITE_SIZE = 3
+
+
+def distinctive_goals(scenario: Scenario, suite: Sequence[Scenario]) -> list[str]:
+    """This scenario's sub-goals that are not named by every scenario of its suite (``suite`` includes it). Empty for
+    a suite under `SHARED_GOAL_SUITE_SIZE`: there a goal they all name may be the one they are all about."""
+    if len(suite) < SHARED_GOAL_SUITE_SIZE:
+        return []
+    shared = set.intersection(*(set(getattr(one, "sub_goals", None) or []) for one in suite))
+    return [goal for goal in scenario.sub_goals if goal not in shared]
 
 
 def excused_by_assumed_steps(proof: Proof) -> list[str]:
@@ -1074,13 +1125,14 @@ def prove(
     actors: list[dict[str, Any]] | None = None,
     judge: ControlJudge | None = None,
     conflict_judge: Callable[[str, str], tuple[bool | None, str]] | None = None,
+    case_goals: Sequence[str] = (),
 ) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping.
 
     `judge(goal, world, calls, messages, scenario) -> (held, explanation)` decides a judged-only
     case's controls; None uses the harness judge. `conflict_judge(expected, rule) -> (conflict, why)`
     decides whether a cited rule contradicts the expected outcome; None uses the harness judge."""
-    proof = Proof()
+    proof = Proof(case_goals=list(case_goals))
     if contract is None:
         contract = load_proof_contract(world_root)
     if actors is None:
