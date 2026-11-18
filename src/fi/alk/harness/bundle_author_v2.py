@@ -30,6 +30,13 @@ import yaml
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import Version
 
+from .actors import (
+    ACTOR_RULES_FILE,
+    ACTORS_FILE,
+    actors_seed,
+    load_actors,
+    write_actor_rules,
+)
 from .bundle import CapabilityProtocol
 from .catalogue import CATALOGUE
 from .bundle_v2 import (
@@ -61,6 +68,8 @@ from .bundle_v2 import (
 from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
+    framework_instrumentation_command,
+    uv_run_project,
     _python_language_version,
     select_python_extras,
     python_workspace_root,
@@ -83,7 +92,7 @@ from .source_folder import (
     saved_runtime,
 )
 from .job import HarnessJob
-from .job import ProviderExecutionMode, SourceKind
+from .job import ProviderExecutionMode, SourceKind, routed_through_gateway
 from .process_preflight import preflight_bundle
 from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
@@ -140,6 +149,29 @@ class EnvironmentPlanV2:
 
 _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
 _CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
+# The world's action log: every action the door saw, who took it and what came of it.
+_TOOL_TRACE_DDL = (
+    "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+    "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+    "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL, "
+    "action_id text NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text), "
+    "actor_id text NOT NULL DEFAULT 'agent', worker_id text, parent_event_id text, "
+    "outcome text NOT NULL DEFAULT 'committed', refusal text, refusal_code text, "
+    "on_behalf_of text, idempotency_key text, action text);\n"
+    # The columns a prebuilt world's own tool server writes, so one row carries both sets; `action` (the world action in
+    # full) for a table made before it was recorded.
+    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS action text, ADD COLUMN IF NOT EXISTS agent_tool text, "
+    "ADD COLUMN IF NOT EXISTS provider_call_id text, ADD COLUMN IF NOT EXISTS tool_call_id text, "
+    "ADD COLUMN IF NOT EXISTS status text, ADD COLUMN IF NOT EXISTS effect text, "
+    # How each call was made and the scenario's fault the door applied on it.
+    "ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb;\n"
+)
+
+
+def _action_log_seed(authoring: Path) -> str:
+    """The world's full action log, and who may do what in it, so World changes can be shown on every trial. An older
+    bundle keeps the table it was seeded with; the door writes either shape."""
+    return _TOOL_TRACE_DDL + actors_seed(load_actors(authoring))
 
 
 def _catalog_image(image: str) -> tuple[str, str]:
@@ -2036,7 +2068,28 @@ def _managed_world_db() -> ManagedProcess:
     )
 
 
-def _tool_proxy_process() -> SourceProcess:
+def declared_read_actions(tool_entrypoints: list[dict[str, Any]] | None) -> list[str]:
+    """The world actions the contract declares read-only, by route: what the tool proxy logs as reads whatever the
+    method the agent calls them with."""
+    return sorted(
+        {
+            route.replace("/", ".")
+            for entry in tool_entrypoints or []
+            if isinstance(entry, dict)
+            and entry.get("effect") == "read"
+            and (route := str(entry.get("endpoint") or "").strip("/"))
+        }
+    )
+
+
+def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
+    environment = {
+        "PORT": "{{PORT_tool-proxy}}",
+        "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
+        "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+    }
+    if read_actions:
+        environment["READ_ACTIONS"] = ",".join(read_actions)
     return SourceProcess(
         name="tool-proxy",
         working_directory="generated/tool-proxy",
@@ -2044,14 +2097,189 @@ def _tool_proxy_process() -> SourceProcess:
         # The ALK interpreter carries the proxy's dependencies in both local and
         # hosted runtimes; its path is not necessarily /opt/alk-venv.
         run_command=[sys.executable, "proxy.py"],
-        environment={
-            "PORT": "{{PORT_tool-proxy}}",
-            "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
-            "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
-        },
+        environment=environment,
         started_check=StartedCheck(port=True, timeout_seconds=180),
         user=ProcessUser.SVC_TOOLS,
         depends_on=["tools-api", "world-db"],
+    )
+
+
+# The world's door for tools the agent runs in its own process (`in_process_door.py`).
+WORLD_DOOR_PROCESS = "world-door"
+
+
+def in_process_door_bindings(
+    tool_entrypoints: list[dict[str, Any]] | None, language: str = "python"
+) -> list[dict[str, str]]:
+    """The contract tools a Python agent runs in its own process that the world's door can stand in front of: a
+    module-level callable (`import`) or a method on an object the agent builds (`construct`). A tool in a tools
+    service already has the proxy; one with no runnable seam has nothing to wrap."""
+    if str(language or "python").strip().lower() not in {"", "python", "py"}:
+        return []
+    bound = []
+    for raw in tool_entrypoints or []:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            entry = ToolEntry.model_validate(raw)
+        except ValueError:
+            continue
+        if entry.mode in {"import", "construct"} and entry.module and entry.callable:
+            bound.append({"name": entry.tool, "module": entry.module, "callable": entry.callable})
+    return bound
+
+
+_SCRIPT_RUN = r"(?<![^\s'\"])((?:\S*/)?python[0-9.]*)\s+({stem})\.py(?=[\s'\"]|$)"
+
+
+def run_bound_script_as_module(
+    command: list[str], bound: list[dict[str, str]], environment: dict[str, str] | None = None
+) -> list[str]:
+    """`python agent.py` as `python -m agent` when `agent` holds bound tools, so the door's import hook reaches them.
+    Only where the two start the same; any other command is returned as it is."""
+    if (environment or {}).get("PYTHONSAFEPATH"):
+        return list(command)
+    # `test` ships with Python though the list leaves it out.
+    reserved = set(sys.stdlib_module_names) | set(sys.builtin_module_names) | {"test"}
+    stems = {
+        item["module"] for item in bound if item["module"].isidentifier() and item["module"] not in reserved
+    }
+    command = list(command)
+    for index, part in enumerate(command[:-1]):
+        script = command[index + 1]
+        if Path(part).name.startswith("python") and script.endswith(".py") and script[:-3] in stems:
+            return [*command[: index + 1], "-m", script[:-3], *command[index + 2 :]]
+    if len(command) >= 3 and Path(command[0]).name in {"sh", "bash"} and command[1] == "-c":
+        for stem in sorted(stems):
+            shelled = re.sub(_SCRIPT_RUN.format(stem=re.escape(stem)), rf"\1 -m {stem}", command[2])
+            if shelled != command[2]:
+                return [*command[:2], shelled, *command[3:]]
+    return command
+
+
+DOOR_UNREACHED_SCRIPT = "the agent is started as a script, so the world's door cannot reach the tools it defines"
+
+
+def _modules_started_as_scripts(command: Sequence[str], bound: list[dict[str, str]]) -> set[str]:
+    """The bound modules the command starts by their file path: run as `__main__`, never imported, out of the door's
+    reach."""
+    parts = list(command)
+    if len(parts) >= 3 and Path(parts[0]).name in {"sh", "bash"} and parts[1] == "-c":
+        try:
+            parts = [*parts[:2], *shlex.split(parts[2])]
+        except ValueError:
+            parts = [*parts[:2], *parts[2].split()]
+    started = set()
+    for part in parts:
+        if not part.endswith(".py"):
+            continue
+        dotted = part[:-3].lstrip("./").replace("/", ".")
+        started.update(
+            item["module"] for item in bound if dotted == item["module"] or dotted.endswith("." + item["module"])
+        )
+    return started
+
+
+def door_unreached_tools(
+    processes: Sequence[Any], control_service: str, tool_entrypoints: list[dict[str, Any]] | None, language: str
+) -> dict[str, str]:
+    """The in-process tools the world's door is bound to but cannot reach, by tool name, with why. Empty when the
+    bundle has no door."""
+    if not any(getattr(process, "name", None) == WORLD_DOOR_PROCESS for process in processes):
+        return {}
+    bound = in_process_door_bindings(tool_entrypoints, language)
+    for process in processes:
+        if isinstance(process, SourceProcess) and process.name == control_service:
+            scripts = _modules_started_as_scripts(process.run_command, bound)
+            return {item["name"]: DOOR_UNREACHED_SCRIPT for item in bound if item["module"] in scripts}
+    return {}
+
+
+def with_door_unreached(contract: dict[str, Any], unreached: dict[str, str]) -> dict[str, Any]:
+    """The contract with each tool entry saying whether the door is bound to it but out of reach (`door_unreached`)."""
+    entries = []
+    for entry in contract.get("tool_entrypoints") or []:
+        if isinstance(entry, dict):
+            entry = {key: value for key, value in entry.items() if key != "door_unreached"}
+            if unreached.get(str(entry.get("tool") or "")):
+                entry["door_unreached"] = unreached[str(entry["tool"])]
+        entries.append(entry)
+    return {**contract, "tool_entrypoints": entries} if "tool_entrypoints" in contract else dict(contract)
+
+
+def declared_read_tools(tool_entrypoints: list[dict[str, Any]] | None) -> list[str]:
+    """The tools the contract declares read-only, by name: what the in-process door logs as reads."""
+    return sorted(
+        {
+            str(entry.get("tool"))
+            for entry in tool_entrypoints or []
+            if isinstance(entry, dict) and entry.get("effect") == "read" and entry.get("tool")
+        }
+    )
+
+
+def _world_door_process(read_tools: list[str]) -> SourceProcess:
+    environment = {
+        "PORT": "{{PORT_world-door}}",
+        "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+    }
+    if read_tools:
+        environment["READ_ACTIONS"] = ",".join(read_tools)
+    return SourceProcess(
+        name=WORLD_DOOR_PROCESS,
+        working_directory="generated/world-door",
+        source_origin="bundle",
+        run_command=[sys.executable, "server.py"],
+        environment=environment,
+        started_check=StartedCheck(port=True, timeout_seconds=180),
+        user=ProcessUser.SVC_TOOLS,
+        depends_on=["world-db"],
+    )
+
+
+def with_in_process_door(
+    plan: EnvironmentPlanV2, tool_entrypoints: list[dict[str, Any]] | None, language: str = "python"
+) -> EnvironmentPlanV2:
+    """The plan with the world's door in front of the tools the agent runs in its own process: a door process on the
+    world's database, its address and the bound tools in the agent's environment, and the agent started after it. A
+    plan whose tools sit behind the tool proxy, with no world database or nothing to bind, is returned as it is."""
+    names = {process.name for process in plan.processes}
+    bound = in_process_door_bindings(tool_entrypoints, language)
+    if (
+        not bound
+        or not plan.control_service
+        or "tool-proxy" in names
+        or WORLD_DOOR_PROCESS in names
+        or "world-db" not in names
+    ):
+        return plan
+    processes: list[ManagedProcess | SourceProcess] = []
+    for process in plan.processes:
+        if isinstance(process, SourceProcess) and process.name == plan.control_service:
+            environment = {**process.environment, "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}"}
+            # Its own list: the tool trace's bindings also turn on its call records, which this process may not keep.
+            environment["ALK_WORLD_DOOR_BINDINGS"] = json.dumps(bound, sort_keys=True)
+            depends = [*process.depends_on, *([] if WORLD_DOOR_PROCESS in process.depends_on else [WORLD_DOOR_PROCESS])]
+            run = run_bound_script_as_module(process.run_command, bound, process.environment)
+            process = process.model_copy(update={"environment": environment, "depends_on": depends, "run_command": run})
+        processes.append(process)
+    processes.append(_world_door_process(declared_read_tools(tool_entrypoints)))
+    return replace(
+        plan,
+        processes=tuple(processes),
+        capabilities={
+            **plan.capabilities,
+            "world_door": CapabilityV2(
+                protocol=CapabilityProtocol.HTTP,
+                service=WORLD_DOOR_PROCESS,
+                container_port=8080,
+                configuration_name="ALK_WORLD_DOOR_URL",
+            ),
+        },
+        readiness=(
+            *plan.readiness,
+            ReadinessProbeV2(capability="world_door", path="/health", timeout_seconds=180),
+        ),
     )
 
 
@@ -2591,6 +2819,11 @@ def resolve_environment_plan(
                 environment["TOOLS_API_URL"] = "{{TOOLS_API_URL}}"
             if service_name == control_name:
                 environment = {**declared_runtime_environment, **environment}
+                if routed_through_gateway(job.agent.config.get("target_model")):
+                    # Read at start-up by the shared sitecustomize hook.
+                    environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
+                    # Off until the hook has kept the SDK's export local; it then turns it on.
+                    _sdk_tracing_off_until_the_hook(environment)
             if is_livekit and service_name == control_name:
                 environment.setdefault(
                     "LIVEKIT_AGENT_NAME",
@@ -2742,7 +2975,7 @@ def resolve_environment_plan(
                     )
                 )
         if "tools-api" in source_services:
-            processes.append(_tool_proxy_process())
+            processes.append(_tool_proxy_process(declared_read_actions(tool_entrypoints)))
             # The target must not become eligible to start until the evidence proxy is ready.
             # Depending only on the upstream tools process leaves a race where the agent starts
             # with TOOLS_API_URL pointing at a port that has not been bound yet.
@@ -2858,6 +3091,13 @@ def resolve_environment_plan(
         )
         if port is not None and not is_livekit:
             environment["PORT"] = f"{{{{PORT_{control_name}}}}}"
+        if routed_through_gateway(job.agent.config.get("target_model")):
+            # Read at start-up by the shared sitecustomize hook.
+            # The SDK's tracing is off until the kit's hook has kept its export from reaching
+            # OpenAI; the hook then turns it back on, so the kit's span observation runs. A
+            # process the hook never reaches (python -I, a shell around it) keeps it off.
+            environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
+            _sdk_tracing_off_until_the_hook(environment)
         callback_entrypoint = (
             discovered_callback or _callback_entrypoint(run_folder)
             if is_callback
@@ -3170,19 +3410,30 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
+    # A voice agent's tool calls are traced by its LiveKit worker, never twice.
     if (
         not isinstance(selected, ComposeSelection)
         and runtime_model.command
-        and contract_interface_kind == "command"
+        and str(contract_modality or "").strip().lower() != "voice"
     ):
         trace_environment = _source_tool_trace_environment(
-            root, runtime_model, tool_entrypoints or []
+            root,
+            runtime_model,
+            (tool_entrypoints or []) if contract_interface_kind == "command" else [],
         )
         if trace_environment:
             processes = [
-                process.model_copy(update={
-                    "environment": {**process.environment, **trace_environment},
-                })
+                process.model_copy(
+                    update={
+                        "environment": {**process.environment, **trace_environment},
+                        "build_commands": [
+                            *process.build_commands,
+                            framework_instrumentation_command(
+                                uv_run_project(process.run_command)
+                            ),
+                        ],
+                    }
+                )
                 if isinstance(process, SourceProcess) and process.name == control_name
                 else process
                 for process in processes
@@ -3197,6 +3448,19 @@ def resolve_environment_plan(
     )
 
 
+def _sdk_tracing_off_until_the_hook(environment: dict[str, str]) -> None:
+    """Turn the Agents SDK's tracing off for a gateway-routed process. The marker tells the kit's
+    hook the switch is the kit's to turn back on once the SDK's export is local; a customer's own
+    switch, already on, stays theirs."""
+    # The SDK reads "1" and "true" (any case) as off.
+    if str(environment.get("OPENAI_AGENTS_DISABLE_TRACING", "")).strip().lower() not in {
+        "1",
+        "true",
+    }:
+        environment["ALK_SDK_TRACING_OFF_BY_KIT"] = "1"
+    environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
+
+
 def _source_tool_trace_environment(
     source: Path, runtime: Runtime, entries: list[dict[str, Any]]
 ) -> dict[str, str]:
@@ -3209,12 +3473,14 @@ def _source_tool_trace_environment(
             declared.append({
                 "name": entry.tool, "module": entry.module, "callable": entry.callable,
             })
-    if not declared:
-        return {}
+    # Every Python agent's framework spans are read for its tool calls and the agent that made
+    # each, so any multi-agent source is observed without changes to it.
     environment = {
         "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-        "ALK_TOOL_TRACE_BINDINGS": json.dumps(declared, sort_keys=True),
+        "ALK_OBSERVE_FRAMEWORKS": "1",
     }
+    if declared:
+        environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(declared, sort_keys=True)
     component = _runtime_component(source, runtime.workdir)
     project = _pyproject_document(component / "pyproject.toml").get("project", {})
     requirements = list(project.get("dependencies", []))
@@ -3240,6 +3506,15 @@ _SOURCE_TOOL_TRACE_VERSION = 1
 
 
 def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
+    """Whether ALK traces the source's tools or its framework spans; LiveKit's own trace alone does not count."""
+    return any(
+        {"ALK_TOOL_TRACE_BINDINGS", "ALK_OBSERVE_FRAMEWORKS"}
+        & set(getattr(process, "environment", None) or {})
+        for process in processes
+    )
+
+
+def _binds_source_tools(processes: Sequence[Any]) -> bool:
     return any(
         "ALK_TOOL_TRACE_BINDINGS" in (getattr(process, "environment", None) or {})
         for process in processes
@@ -3486,6 +3761,36 @@ def _source_tool_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]
     return bindings
 
 
+def _with_door_bindings(
+    processes: list[Any] | tuple[Any, ...],
+    *,
+    control_service: str,
+    tool_entrypoints: list[dict[str, Any]] | None,
+    language: str,
+) -> list[Any]:
+    """A resealed plan's door kept in step with the contract: the agent's bound tools and the door's read tools. A
+    plan with no world door is returned as it is."""
+    if not any(getattr(process, "name", None) == WORLD_DOOR_PROCESS for process in processes):
+        return list(processes)
+    bound = in_process_door_bindings(tool_entrypoints, language)
+    read_tools = declared_read_tools(tool_entrypoints)
+    updated = []
+    for process in processes:
+        if isinstance(process, SourceProcess) and process.name == control_service:
+            environment = {key: value for key, value in process.environment.items() if key != "ALK_WORLD_DOOR_BINDINGS"}
+            if bound:
+                environment["ALK_WORLD_DOOR_BINDINGS"] = json.dumps(bound, sort_keys=True)
+            run = run_bound_script_as_module(process.run_command, bound, process.environment)
+            process = process.model_copy(update={"environment": environment, "run_command": run})
+        elif isinstance(process, SourceProcess) and process.name == WORLD_DOOR_PROCESS:
+            environment = {key: value for key, value in process.environment.items() if key != "READ_ACTIONS"}
+            if read_tools:
+                environment["READ_ACTIONS"] = ",".join(read_tools)
+            process = process.model_copy(update={"environment": environment})
+        updated.append(process)
+    return updated
+
+
 def _with_source_tool_trace(
     processes: list[Any] | tuple[Any, ...],
     *,
@@ -3503,12 +3808,9 @@ def _with_source_tool_trace(
             if key not in {"HARNESS_TOOL_TRACE", "ALK_TOOL_TRACE_BINDINGS"}
         }
         if bindings:
-            environment.update(
-                {
-                    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-                    "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
-                }
-            )
+            environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(bindings)
+        if bindings or "ALK_OBSERVE_FRAMEWORKS" in environment:
+            environment["HARNESS_TOOL_TRACE"] = "{{WORLD_DIR}}/agent-tool-calls.jsonl"
         updated.append(process.model_copy(update={"environment": environment}))
     return tuple(updated)
 
@@ -3687,13 +3989,28 @@ def author_bundle_v2(
         if contract_modality == "chat"
         else []
     )
-    if trace_bindings and not _uses_source_tool_trace(plan.processes):
+    if trace_bindings and not _binds_source_tools(plan.processes):
         plan = replace(
             plan,
             processes=_with_source_tool_trace(
                 plan.processes,
                 control_service=plan.control_service or "",
                 bindings=trace_bindings,
+            ),
+        )
+    plan = with_in_process_door(
+        plan,
+        contract_body.get("tool_entrypoints"),
+        str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+    )
+    if contract_body:
+        contract_body = with_door_unreached(
+            contract_body,
+            door_unreached_tools(
+                plan.processes,
+                plan.control_service or "",
+                contract_body.get("tool_entrypoints"),
+                str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
             ),
         )
     provided_environment = {
@@ -3745,6 +4062,11 @@ def author_bundle_v2(
         if include_scenarios:
             _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
             adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
+            if (authoring_root / ACTORS_FILE).is_file():
+                shutil.copy2(authoring_root / ACTORS_FILE, temporary / ACTORS_FILE)
+                # Only with actors, so a bundle without them seals exactly as before.
+                write_actor_rules(temporary, config=job.agent.config)
+                adopted_catalogue += [ACTORS_FILE, ACTOR_RULES_FILE]
         adopted_chat_files = _copy_chat_authoring(
             authoring_root, temporary, include_simulator=include_scenarios
         )
@@ -3763,6 +4085,18 @@ def author_bundle_v2(
                 Path(__file__).with_name("tool_trace_proxy.py"),
                 generated / "proxy.py",
             )
+            # The proxy is one surface of the world's door, which it imports from beside it.
+            shutil.copy2(
+                Path(__file__).with_name("world_door.py"),
+                generated / "world_door.py",
+            )
+        if any(process.name == WORLD_DOOR_PROCESS for process in plan.processes):
+            generated = temporary / "generated" / WORLD_DOOR_PROCESS
+            generated.mkdir(parents=True)
+            shutil.copy2(Path(__file__).with_name("in_process_door.py"), generated / "server.py")
+            # The door's rules, and the trial faults the tool proxy reads, beside it.
+            shutil.copy2(Path(__file__).with_name("world_door.py"), generated / "world_door.py")
+            shutil.copy2(Path(__file__).with_name("tool_trace_proxy.py"), generated / "tool_trace_proxy.py")
         if any(process.name == "mcp-toolbox" for process in plan.processes):
             toolbox = _mcp_toolbox_definition(agent_root)
             if toolbox is None:
@@ -3783,9 +4117,7 @@ def author_bundle_v2(
         prefix = (
             "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
             "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
-            "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
-            "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
-            "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+            + _action_log_seed(authoring_root)
         )
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:
@@ -4223,6 +4555,15 @@ def _carry_contract(
     built = (sealed.get("runtime") or {}).get("interface")
     if built is not None and _interface(authored) != _interface(sealed):
         body = {**authored, "runtime": {**(authored.get("runtime") or {}), "interface": built}}
+    runtime = body.get("runtime") if isinstance(body.get("runtime"), dict) else {}
+    language = str(runtime.get("language") or "python")
+    control_service = manifest.runtime.control_service or ""
+    door_bound = _with_door_bindings(
+        processes, control_service=control_service, tool_entrypoints=body.get("tool_entrypoints"), language=language
+    )
+    body = with_door_unreached(
+        body, door_unreached_tools(door_bound, control_service, body.get("tool_entrypoints"), language)
+    )
     sealed_path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if body == sealed:
         return True, processes, metadata
@@ -4241,7 +4582,7 @@ def _carry_contract(
     traced_command = (
         isinstance(interface, dict)
         and str(interface.get("kind") or "").strip().lower() == "command"
-        and _uses_source_tool_trace(processes)
+        and _binds_source_tools(processes)
     )
     if (
         str(body.get("modality") or "").strip().lower() == "chat"
@@ -4259,6 +4600,12 @@ def _carry_contract(
             metadata["source_tool_trace_version"] = _SOURCE_TOOL_TRACE_VERSION
         else:
             metadata.pop("source_tool_trace_version", None)
+    processes = _with_door_bindings(
+        processes,
+        control_service=manifest.runtime.control_service or "",
+        tool_entrypoints=body.get("tool_entrypoints"),
+        language=str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+    )
     return True, processes, metadata
 
 
@@ -4478,13 +4825,69 @@ if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
 
 
+# A table as a schema names it: bare or quoted, with an optional bare or quoted schema.
+_SQL_TABLE = r'(?:"?[A-Za-z_]\w*"?\s*\.\s*)?"?([A-Za-z_]\w*)"?'
+# Where a column's type ends in its definition: at its first default or constraint.
+_COLUMN_TYPE_END = re.compile(
+    r"\s(?:DEFAULT|NOT|NULL|PRIMARY|REFERENCES|CHECK|UNIQUE|CONSTRAINT|COLLATE|GENERATED)\b",
+    re.IGNORECASE,
+)
+# Table-level clauses that sit among the column definitions.
+_NOT_COLUMNS = ("PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT")
+
+
+def _sql_code(text: str) -> str:
+    """``text`` without its comments, and with each string literal emptied to ``''``, so a
+    quote, comma, parenthesis or ``--`` inside a default never reads as SQL."""
+    out: list[str] = []
+    at = 0
+    while at < len(text):
+        if text[at] == "'":
+            end = at + 1
+            while end < len(text) and not (
+                text[end] == "'" and text[end + 1 : end + 2] != "'"
+            ):
+                end += 2 if text[end : end + 2] == "''" else 1
+            out.append("''")
+            at = end + 1
+        elif text.startswith("--", at):
+            end = text.find("\n", at)
+            at = len(text) if end < 0 else end
+        elif text.startswith("/*", at):
+            end = text.find("*/", at + 2)
+            out.append(" ")
+            at = len(text) if end < 0 else end + 2
+        else:
+            out.append(text[at])
+            at += 1
+    return "".join(out)
+
+
+def _column_kind(definition: str) -> str | None:
+    """What a column definition declares, as the gates read it: ``boolean``, ``text[]`` (any
+    array), ``jsonb`` or ``json``. Read off the type alone, never its default or constraints,
+    so ``jsonb DEFAULT '[]'`` is JSON and ``jsonb[]`` an array."""
+    kind = _COLUMN_TYPE_END.split(" " + definition.strip(), maxsplit=1)[0].strip().upper()
+    if kind.startswith("BOOL"):
+        return "boolean"
+    if "[" in kind or kind.startswith("ARRAY") or kind.endswith(" ARRAY"):
+        return "text[]"
+    if kind.startswith("JSONB"):
+        return "jsonb"
+    if kind.startswith("JSON"):
+        return "json"
+    return None
+
+
 def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
-    """Column declarations read off the agent's own schema, keyed by table and column."""
+    """Column declarations read off the agent's own schema, keyed by table and column: those
+    of each ``CREATE TABLE`` and each ``ALTER TABLE ... ADD COLUMN``. A schema-qualified
+    table is keyed by its own name, as the world names it."""
     declared: dict[tuple[str, str], str] = {}
     for path in paths:
-        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        sql = _sql_code(path.read_text(encoding="utf-8"))
         for found in re.finditer(
-            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s*\(',
+            rf"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?{_SQL_TABLE}\s*\(",
             sql,
             re.IGNORECASE,
         ):
@@ -4493,24 +4896,44 @@ def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
                 depth += (sql[at] == "(") - (sql[at] == ")")
                 at += 1
             for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
-                words = part.strip().split()
-                if len(words) < 2:
+                words = part.strip().split(None, 1)
+                if len(words) < 2 or words[0].strip('"').upper() in _NOT_COLUMNS:
                     continue
-                name = words[0].strip('"')
-                if name.upper() in (
-                    "PRIMARY",
-                    "FOREIGN",
-                    "UNIQUE",
-                    "CHECK",
-                    "CONSTRAINT",
-                ):
+                if kind := _column_kind(words[1]):
+                    declared[(found.group(1).lower(), words[0].strip('"').lower())] = kind
+        for found in re.finditer(
+            rf"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?{_SQL_TABLE}\s+([^;]*)",
+            sql,
+            re.IGNORECASE,
+        ):
+            for part in re.split(r",(?![^()]*\))", found.group(2)):
+                added = re.match(
+                    r'\s*ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s+(.+)',
+                    part,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                if not added or added.group(1).upper() in _NOT_COLUMNS:
                     continue
-                kind = words[1].upper()
-                rest = " ".join(words[1:]).upper()
-                if kind.startswith("BOOL"):
-                    declared[(found.group(1).lower(), name.lower())] = "boolean"
-                elif "[]" in rest or kind.startswith("ARRAY"):
-                    declared[(found.group(1).lower(), name.lower())] = "text[]"
-                elif kind.startswith("JSONB"):
-                    declared[(found.group(1).lower(), name.lower())] = "jsonb"
+                if kind := _column_kind(added.group(2)):
+                    declared[(found.group(1).lower(), added.group(1).lower())] = kind
     return declared
+
+
+def declared_json_columns(
+    source: Path | str | None, *, contract: dict[str, Any] | None = None
+) -> set[tuple[str, str]]:
+    """The ``(table, column)`` pairs the agent's own schema declares JSON or JSONB.
+
+    These are the types the validation seed imports against (``inspect_postgres`` on the same
+    schema), known here before any database exists, so a world can be checked where it is
+    written. Empty when the source declares no schema file, for example when its tables exist
+    only in ORM migrations.
+    """
+    if not source:
+        return set()
+    try:
+        declared = _schema_column_types(_source_schema_paths(Path(source), contract=contract))
+    except (OSError, ValueError, BundleAuthorError):
+        # A missing or unreadable schema is reported where the bundle is compiled.
+        return set()
+    return {key for key, kind in declared.items() if kind in ("json", "jsonb")}

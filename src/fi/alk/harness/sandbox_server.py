@@ -19,10 +19,13 @@ from pathlib import PurePosixPath
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import time
 from typing import Any, Literal
 import uuid
+
+from contextlib import asynccontextmanager
 
 from fastapi import (
     Depends,
@@ -34,7 +37,9 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from fi.simulate.runtime.spec import SecretRef
 
@@ -48,6 +53,7 @@ from .credentials import (
 )
 from .executor import GitHubSourceAcquirer, SourceAcquisitionError
 from .github import parse_github_location
+from .isolated_process import _finish
 from .job import (
     AgentConnection,
     ExecutionMode,
@@ -62,7 +68,19 @@ from .job import (
 )
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
-from .secrets import SecretResolutionError, resolve_worker_secrets, worker_environment
+from .secrets import (
+    CONTROLLER_CONNECTION_NAMES,
+    RUNNER_RESERVED_ENVIRONMENT as _RUNNER_RESERVED_ENVIRONMENT,
+    RUNTIME_CONFIGURATION_NAMES_ENV,
+    SecretResolutionError,
+    TARGET_PROVIDER_ALIASES_ENV,
+    agent_value_name_reserved,
+    client_name_reserved,
+    tool_credential_name,
+    controller_name_reserved,
+    resolve_worker_secrets,
+    worker_environment,
+)
 from .source_folder import SubfolderNotFound, agent_folder, subfolder_not_found
 
 
@@ -72,6 +90,9 @@ _SANDBOX_FILE_PREFIX = "ALK_SECRET_FILE_"
 
 
 class LocalSandboxRequest(BaseModel):
+    # A 422 must not echo a submitted value (a secret) back.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     source_path: str | None = None
     source_id: str | None = None
     provider_only: bool = False
@@ -119,10 +140,14 @@ class LocalSandboxRequest(BaseModel):
                     "A subfolder needs the generic harness, which this job didn't ask for."
                 )
         _validate_environment_values(self.environment_values, self.secret_refs)
+        _validate_controller_names(self.connector_config, self.secret_refs)
         return self
 
 
 class SandboxPreflightRequest(BaseModel):
+    # A 422 must not echo a submitted value (a secret) back.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     source_path: str | None = None
     source_id: str | None = None
     github_repository: str | None = None
@@ -144,6 +169,7 @@ class SandboxPreflightRequest(BaseModel):
         ):
             raise ValueError("exactly_one_source_required")
         _validate_environment_values(self.environment_values, self.secret_refs)
+        _validate_controller_names(self.connector_config, self.secret_refs)
         return self
 
 
@@ -154,6 +180,9 @@ class SandboxRerunRequest(BaseModel):
     deliberately supplied again (or resolved from fresh references); they are never recovered
     from the completed job's persisted payload.
     """
+    # A 422 must not echo a submitted value (a secret) back.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
 
     secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
     environment_values: dict[str, SecretStr] = Field(default_factory=dict)
@@ -162,6 +191,9 @@ class SandboxRerunRequest(BaseModel):
     @model_validator(mode="after")
     def _valid_environment(self) -> "SandboxRerunRequest":
         _validate_environment_values(self.environment_values, self.secret_refs)
+        # The same alias checks a submit runs: a rerun's refs reach docker compose's environment
+        # under their own names just as a submit's do.
+        _validate_controller_names({}, self.secret_refs)
         return self
 
 
@@ -210,6 +242,81 @@ class UploadedSecretFileResponse(BaseModel):
     size: int
 
 
+# How a cancelled job's worker is stopped. Tests patch these on the module.
+_STOP_GRACE_SECONDS = 10.0
+_STOP_POLL_SECONDS = 0.05
+_REAP_SECONDS = 5.0
+_STOP_OUTPUT_SECONDS = 150
+# How long a server stop waits for its jobs' cleanup. A deployment gives the service a stop grace
+# above this (Compose's stop_grace_period, e.g. 180s) and an init, or docker kills the cleanup
+# after its default 10 s.
+_CANCEL_WAIT_SECONDS = 170
+# How long a /cancel request waits for the job's cleanup before it answers; the platform's client
+# reads /cancel with a 30 s timeout. The job's own task carries on with the cleanup.
+_CANCEL_RESPONSE_SECONDS = 20
+
+
+def _start_worker(
+    command: list[str], *, log_handle: Any, env: dict[str, str]
+) -> subprocess.Popen:
+    """Start a worker in its own session. Synchronous, so a loop shutting down can't cancel it
+    halfway: asyncio's own start can wait for good when the loop closes mid-start."""
+    return subprocess.Popen(
+        command,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        env=env,
+    )
+
+
+async def _worker_exit(process: subprocess.Popen) -> int:
+    """The worker's exit code (`-signal` for a signal), polled so a cancel lands between polls."""
+    while (code := process.poll()) is None:
+        await asyncio.sleep(0.25)
+    return code
+
+
+def _signal_group(pgid: int, sig: signal.Signals) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        # PermissionError is what macOS gives for a group whose leader exited unreaped.
+        pass
+
+
+def _stop_worker(process: subprocess.Popen) -> None:
+    """Stop a worker and everything in its process group, then reap it. Safe to call twice."""
+    if process.pid <= 1 or process.returncode is not None:
+        # Already reaped before this call, so its pid may belong to someone else by now.
+        return
+    pgid = process.pid
+    _signal_group(pgid, signal.SIGTERM)
+    gone = False
+    deadline = time.monotonic() + _STOP_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        # Reap the leader as it exits: an unreaped leader still counts as a group member.
+        process.poll()
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            gone = True
+            break
+        except PermissionError:
+            # macOS: only an unreaped zombie is left.
+            break
+        time.sleep(_STOP_POLL_SECONDS)
+    if not gone:
+        # A group seen gone is never signalled again: its id could be reused.
+        _signal_group(pgid, signal.SIGKILL)
+    try:
+        process.wait(timeout=_REAP_SECONDS)
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "sandbox worker %s not reaped %ss after SIGKILL", pgid, _REAP_SECONDS
+        )
+
+
 class LocalSandbox:
     def __init__(
         self,
@@ -254,12 +361,14 @@ class LocalSandbox:
         (self.secret_files_root / "pending").mkdir(parents=True, mode=0o700)
         (self.secret_files_root / "jobs").mkdir(parents=True, mode=0o700)
         self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
-        self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         # Values supplied through the platform's .env flow live only for the lifetime of the
         # job. Persisted job/state artifacts contain the opaque mounted references created below.
         self._ephemeral_secrets: dict[str, dict[str, str]] = {}
         self._ephemeral_secret_file_names: dict[str, set[str]] = {}
+        # The aliases the caller sent as target_provider refs for the latest run of each job (a
+        # rerun rebuilds them from its own refs). They never become controller variables.
+        self._ephemeral_target_aliases: dict[str, frozenset[str]] = {}
         self._recover_orphans()
 
     async def upload_secret_file(
@@ -273,7 +382,10 @@ class LocalSandbox:
         name = str(environment_name).strip()
         if not _ENVIRONMENT_NAME.fullmatch(name):
             raise HTTPException(status_code=400, detail="environment_name is invalid")
-        if name in _RUNNER_RESERVED_ENVIRONMENT or name.startswith("ALK_"):
+        if (
+            _runner_owned(name)
+            or client_name_reserved(name)
+        ):
             raise HTTPException(status_code=400, detail="environment_name is reserved")
         self._purge_stale_secret_files()
         identifier = str(uuid.uuid4())
@@ -696,6 +808,11 @@ class LocalSandbox:
             raise HTTPException(
                 status_code=409, detail="harness job is already running"
             )
+        task = self._tasks.get(job_id)
+        if task is not None and not task.done():
+            # A cancel answered before its cleanup ended: the job's state is terminal, but its
+            # worker and environment are still being stopped.
+            raise HTTPException(status_code=409, detail="harness job is still stopping")
         output = self.artifacts_root / response.job.run_id
         required = (
             output / "contract.json",
@@ -726,16 +843,24 @@ class LocalSandbox:
                     request.secret_refs, claimed_files, secret_file_names
                 )
             else:
-                resolved = resolve_worker_secrets(
-                    request.secret_refs,
-                    environment={**os.environ, **claimed_files},
-                )
+                try:
+                    resolved = _resolve_local_references(
+                        request.secret_refs, claimed_files
+                    )
+                except SecretResolutionError as exc:
+                    if str(exc).startswith("secret_reference_reserved"):
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+                    raise
         except Exception:
             self._delete_job_secret_files(job_id)
             raise
         runtime_configuration.update(resolved)
         self._ephemeral_secrets[job_id] = dict(runtime_configuration)
         self._ephemeral_secret_file_names[job_id] = secret_file_names
+        # Rebuilt from this request's own refs, not the submit's.
+        self._ephemeral_target_aliases[job_id] = _caller_target_aliases(
+            request.secret_refs, {*request.environment_values, *secret_file_names}
+        )
 
         state_path = self.jobs_root / job_id / "state.json"
         state = _read_json(state_path)
@@ -756,6 +881,77 @@ class LocalSandbox:
             self._execute_rerun(response.job, request.only)
         )
         return self.get(job_id)
+
+    async def _cleanup_cancelled(
+        self,
+        job: HarnessJob,
+        process: subprocess.Popen | None,
+        output: Path,
+        state_path: Path,
+    ) -> None:
+        """A cancelled job's cleanup: the state first, then the worker, then its environment.
+        Each step's error is logged, so the next one still runs."""
+        canceled = True
+        try:
+            state = _read_json(state_path)
+            if state.get("stage") != HarnessStage.CANCELED.value:
+                canceled = False
+                state.update(
+                    stage=HarnessStage.FAILED.value,
+                    detail="sandbox service stopped while the job was running",
+                    failure={
+                        "domain": "infrastructure",
+                        "stage": state.get("stage") or HarnessStage.RUNNING.value,
+                        "code": "service_stopped",
+                        "message": "sandbox service stopped while the job was running",
+                        "retryable": False,
+                    },
+                    updated_at=_now(),
+                )
+                _write_json(state_path, state)
+        except Exception:
+            logger.exception("sandbox job %s: state not written on cancel", job.job_id)
+
+        async def stop_worker() -> None:
+            if process is None:
+                return
+            try:
+                await asyncio.to_thread(_stop_worker, process)
+            except Exception:
+                logger.exception("sandbox job %s: worker not stopped", job.job_id)
+
+        if canceled:
+            await stop_worker()
+            await self._stop_environment(job, output, state_path, canceled)
+        else:
+            # A service stop: docker kills the server when the worker's grace would end, so the
+            # environment's cleanup starts beside the worker's, not after it.
+            await asyncio.gather(
+                stop_worker(), self._stop_environment(job, output, state_path, canceled)
+            )
+
+    async def _stop_environment(
+        self, job: HarnessJob, output: Path, state_path: Path, canceled: bool
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(stop, output), timeout=_STOP_OUTPUT_SECONDS
+            )
+        except ProvisionError as exc:
+            try:
+                state = _read_json(state_path)
+                state.update(
+                    detail=(
+                        f"{'canceled' if canceled else 'stopped'}; isolated environment "
+                        f"cleanup failed: {exc}"
+                    ),
+                    updated_at=_now(),
+                )
+                _write_json(state_path, state)
+            except Exception:
+                logger.exception("sandbox job %s: state not written on cancel", job.job_id)
+        except Exception:
+            logger.exception("sandbox job %s: environment not stopped", job.job_id)
 
     async def _execute_rerun(self, job: HarnessJob, only: list[str]) -> None:
         """Run calls from immutable saved artifacts, with a fresh environment lifecycle."""
@@ -781,16 +977,29 @@ class LocalSandbox:
             )
             _write_json(state_path, state)
             log_handle = (directory / "worker.log").open("ab")
+            process: subprocess.Popen | None = None
             try:
                 shutil.rmtree(replay_root, ignore_errors=True)
                 replay_root.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(output / "environment-bundle", replay_root)
                 runtime_configuration = self._ephemeral_secrets.get(job.job_id, {})
+                file_names = self._ephemeral_secret_file_names.get(job.job_id, set())
+                target_aliases = self._rerun_target_aliases(job)
                 child_environment = worker_environment(
-                    {}, runtime_configuration=runtime_configuration
+                    {
+                        name: value
+                        for name, value in runtime_configuration.items()
+                        if name in CONTROLLER_CONNECTION_NAMES
+                        and name not in file_names
+                        and name not in target_aliases
+                    },
+                    runtime_configuration=runtime_configuration,
                 )
-                child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
+                child_environment[RUNTIME_CONFIGURATION_NAMES_ENV] = ",".join(
                     sorted(runtime_configuration)
+                )
+                child_environment[TARGET_PROVIDER_ALIASES_ENV] = ",".join(
+                    sorted(target_aliases)
                 )
                 child_environment["ALK_RUNTIME_SECRET_FILE_NAMES"] = ",".join(
                     sorted(self._ephemeral_secret_file_names.get(job.job_id, set()))
@@ -801,15 +1010,9 @@ class LocalSandbox:
                 child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
 
                 async def run_stage(command: list[str]) -> int:
-                    process = await asyncio.create_subprocess_exec(
-                        *command,
-                        stdout=log_handle,
-                        stderr=asyncio.subprocess.STDOUT,
-                        start_new_session=True,
-                        env=child_environment,
-                    )
-                    self._processes[job.job_id] = process
-                    return await process.wait()
+                    nonlocal process
+                    process = _start_worker(command, log_handle=log_handle, env=child_environment)
+                    return await _worker_exit(process)
 
                 environment_up = [
                     sys.executable,
@@ -848,10 +1051,16 @@ class LocalSandbox:
                 simulation_code = 1
                 cleanup_code = 0
                 if up_code == 0:
+                    cancelled = False
                     try:
                         simulation_code = await run_stage(simulation)
+                    except asyncio.CancelledError:
+                        # The cancel handler's stop(output) brings the environment down.
+                        cancelled = True
+                        raise
                     finally:
-                        cleanup_code = await run_stage(environment_down)
+                        if not cancelled:
+                            cleanup_code = await run_stage(environment_down)
 
                 # Exit 2 is a completed suite whose submitted agent failed checks.
                 successful_execution = (
@@ -906,6 +1115,15 @@ class LocalSandbox:
                         updated_at=_now(),
                     )
                     _write_json(state_path, state)
+            except asyncio.CancelledError:
+                # One owner: the job's own task stops its worker and its environment, whoever
+                # cancelled it, and no further cancel can cut that short.
+                await _finish(
+                    asyncio.create_task(
+                        self._cleanup_cancelled(job, process, output, state_path)
+                    )
+                )
+                raise
             except Exception as exc:
                 state = _read_json(state_path)
                 state.update(
@@ -923,11 +1141,7 @@ class LocalSandbox:
                 _write_json(state_path, state)
             finally:
                 log_handle.close()
-                self._processes.pop(job.job_id, None)
-                self._tasks.pop(job.job_id, None)
-                self._ephemeral_secrets.pop(job.job_id, None)
-                self._ephemeral_secret_file_names.pop(job.job_id, None)
-                self._delete_job_secret_files(job.job_id)
+                self._release_job(job.job_id)
                 shutil.rmtree(replay_root, ignore_errors=True)
 
     def preflight(self, request: SandboxPreflightRequest) -> SandboxPreflightResponse:
@@ -1016,6 +1230,17 @@ class LocalSandbox:
             ],
         )
 
+    def _rerun_target_aliases(self, job: HarnessJob) -> frozenset[str]:
+        """The aliases this rerun's own refs carried.
+
+        If none are held, fails closed like ``target_provider_aliases``: every name the rerun
+        holds is the agent's, so nothing is promoted to the controller.
+        """
+        held = self._ephemeral_target_aliases.get(job.job_id)
+        if held is not None:
+            return held
+        return frozenset(self._ephemeral_secrets.get(job.job_id, {}))
+
     def _resolve_job_secrets(self, job: HarnessJob) -> dict[str, str]:
         """Resolve a job's refs; vault refs only from this job's own map."""
         # Read here rather than passed in, so no caller can hand the resolver a wider store.
@@ -1042,9 +1267,7 @@ class LocalSandbox:
                 raise SecretResolutionError(f"secret_reference_unavailable: {alias}")
             resolved[str(alias)] = value
         if others:
-            resolved.update(
-                resolve_worker_secrets(others, environment={**os.environ, **values})
-            )
+            resolved.update(_resolve_local_references(others, values))
         return resolved
 
     async def _execute(self, job: HarnessJob, source: Path | None) -> None:
@@ -1062,6 +1285,7 @@ class LocalSandbox:
             )
             _write_json(state_path, state)
             log_handle = (directory / "worker.log").open("ab")
+            process: subprocess.Popen | None = None
             try:
                 if source is None:
                     workspace = directory / "workspace"
@@ -1143,17 +1367,43 @@ class LocalSandbox:
                         if archived.exists():
                             shutil.rmtree(archived)
                         output.replace(archived)
+                    target_aliases = _job_target_aliases(job)
                     runtime_names = {
                         str(name)
                         for name in job.metadata.get("environment_value_names", [])
+                    } | {
+                        # The customer agent's own credentials: the agent's, never the controller's.
+                        str(alias)
+                        for alias, reference in job.agent.secret_refs.items()
+                        if _target_alias(reference)
                     }
+                    config_controller, config_runtime = _configuration_environment(
+                        job.agent.config
+                    )
+                    # The job's own values win over its connector configuration.
                     runtime_configuration = {
-                        name: value
-                        for name, value in resolved_secrets.items()
-                        if name in runtime_names
+                        **config_runtime,
+                        **{
+                            name: value
+                            for name, value in resolved_secrets.items()
+                            if name in runtime_names
+                        },
+                    }
+                    file_names = {
+                        str(name)
+                        for name in job.metadata.get("secret_file_names", [])
                     }
                     controller_configuration = {
-                        **_configuration_environment(job.agent.config),
+                        **config_controller,
+                        # The job's own values for connection names are the controller's too.
+                        **{
+                            name: value
+                            for name, value in resolved_secrets.items()
+                            if name in runtime_names
+                            and name in CONTROLLER_CONNECTION_NAMES
+                            and name not in file_names
+                            and name not in target_aliases
+                        },
                         **{
                             name: value
                             for name, value in resolved_secrets.items()
@@ -1167,8 +1417,11 @@ class LocalSandbox:
                     # The provisioner must explicitly pass customer-provided values into
                     # Dockerfile/generated runtime containers.  Persist names only; values stay
                     # in this child process environment and never enter the job or bundle.
-                    child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
+                    child_environment[RUNTIME_CONFIGURATION_NAMES_ENV] = ",".join(
                         sorted(runtime_configuration)
+                    )
+                    child_environment[TARGET_PROVIDER_ALIASES_ENV] = ",".join(
+                        sorted(target_aliases)
                     )
                     child_environment["ALK_RUNTIME_SECRET_FILE_NAMES"] = ",".join(
                         sorted(self._ephemeral_secret_file_names.get(job.job_id, set()))
@@ -1177,26 +1430,25 @@ class LocalSandbox:
                         "1" if job.execution is ExecutionMode.HOSTED else "0"
                     )
                     child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
-                    process = await asyncio.create_subprocess_exec(
-                        sys.executable,
-                        "-m",
-                        "fi.alk.harness.sandbox_worker",
-                        str(directory / "job.json"),
-                        "--source",
-                        str(source),
-                        "--output",
-                        str(output),
-                        "--status",
-                        str(directory / "result.json"),
-                        "--adjustments",
-                        str(directory / "adjustments.jsonl"),
-                        stdout=log_handle,
-                        stderr=asyncio.subprocess.STDOUT,
-                        start_new_session=True,
+                    process = _start_worker(
+                        [
+                            sys.executable,
+                            "-m",
+                            "fi.alk.harness.sandbox_worker",
+                            str(directory / "job.json"),
+                            "--source",
+                            str(source),
+                            "--output",
+                            str(output),
+                            "--status",
+                            str(directory / "result.json"),
+                            "--adjustments",
+                            str(directory / "adjustments.jsonl"),
+                        ],
+                        log_handle=log_handle,
                         env=child_environment,
                     )
-                    self._processes[job.job_id] = process
-                    return_code = await process.wait()
+                    return_code = await _worker_exit(process)
                     result = _read_json(directory / "result.json")
                     if source_fingerprint(source) != submitted_source_digest:
                         return_code = 1
@@ -1256,6 +1508,15 @@ class LocalSandbox:
                         updated_at=_now(),
                     )
                     _write_json(state_path, state)
+            except asyncio.CancelledError:
+                # One owner: the job's own task stops its worker and its environment, whoever
+                # cancelled it, and no further cancel can cut that short.
+                await _finish(
+                    asyncio.create_task(
+                        self._cleanup_cancelled(job, process, output, state_path)
+                    )
+                )
+                raise
             except SubfolderNotFound as exc:
                 state = _read_json(state_path)
                 if state.get("stage") != HarnessStage.CANCELED.value:
@@ -1289,11 +1550,7 @@ class LocalSandbox:
                 _write_json(state_path, state)
             finally:
                 log_handle.close()
-                self._processes.pop(job.job_id, None)
-                self._tasks.pop(job.job_id, None)
-                self._ephemeral_secrets.pop(job.job_id, None)
-                self._ephemeral_secret_file_names.pop(job.job_id, None)
-                self._delete_job_secret_files(job.job_id)
+                self._release_job(job.job_id)
 
     def get(self, job_id: str) -> SandboxJobResponse:
         directory = self.jobs_root / job_id
@@ -1433,38 +1690,58 @@ class LocalSandbox:
             updated_at=_now(),
         )
         _write_json(state_path, state)
-        process = self._processes.get(job_id)
-        if process and process.returncode is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), timeout=10)
-            except TimeoutError:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
         task = self._tasks.get(job_id)
         if task and not task.done():
+            # The job's own task stops its worker and environment (_cleanup_cancelled).
+            # asyncio.wait neither raises the task's cancel into this request nor re-cancels it.
             task.cancel()
-        # SIGTERM stops the worker before its async ``finally`` can reliably run.  Cancellation
-        # must therefore own the same environment boundary explicitly; otherwise every timed-out
-        # hosted job leaves its database, network and volumes behind.
-        output = self.artifacts_root / response.job.run_id
-        try:
-            await asyncio.to_thread(stop, output)
-        except ProvisionError as exc:
-            state.update(
-                detail=f"canceled; isolated environment cleanup failed: {exc}",
-                updated_at=_now(),
-            )
-            _write_json(state_path, state)
+            await asyncio.wait({task}, timeout=_CANCEL_RESPONSE_SECONDS)
+            # The job's task clears its secrets as it ends (_release_job), while it still holds
+            # the job; clearing them here could take a rerun's that has already started.
+            if not task.done():
+                # Answer now; the task carries on with its cleanup.
+                answer = self.get(job_id)
+                return answer.model_copy(
+                    update={
+                        "status": answer.status.model_copy(
+                            update={"detail": "canceled; environment cleanup still running"}
+                        )
+                    }
+                )
+            # A task that ended inside the wait cleared its secrets itself, unless it was cancelled
+            # before its own try (queued for a slot). Clear them only while it is still the job's
+            # task: a rerun that took the job in between keeps its own.
+            if self._tasks.get(job_id) in (None, task):
+                self._forget_job_secrets(job_id)
+        else:
+            # Not started, or already ended: nothing else will bring its environment down.
+            output = self.artifacts_root / response.job.run_id
+            try:
+                await asyncio.to_thread(stop, output)
+            except ProvisionError as exc:
+                state.update(
+                    detail=f"canceled; isolated environment cleanup failed: {exc}",
+                    updated_at=_now(),
+                )
+                _write_json(state_path, state)
+            # No task of the job is running, so these secrets are its last.
+            self._forget_job_secrets(job_id)
+        return self.get(job_id)
+
+    def _release_job(self, job_id: str) -> None:
+        """A job's task, ending: its entry and secrets go, unless a new run of the job (a rerun
+        after a cancel answered early) already holds them."""
+        holder = self._tasks.get(job_id)
+        if holder is not None and holder is not asyncio.current_task():
+            return
+        self._tasks.pop(job_id, None)
+        self._forget_job_secrets(job_id)
+
+    def _forget_job_secrets(self, job_id: str) -> None:
         self._ephemeral_secrets.pop(job_id, None)
         self._ephemeral_secret_file_names.pop(job_id, None)
+        self._ephemeral_target_aliases.pop(job_id, None)
         self._delete_job_secret_files(job_id)
-        return self.get(job_id)
 
     def adjust(
         self, job_id: str, request: SandboxAdjustmentRequest
@@ -1499,34 +1776,111 @@ class LocalSandbox:
         return self.get(job_id)
 
 
-def _configuration_environment(config: dict[str, Any]) -> dict[str, str]:
-    """Convert explicit, non-secret connector configuration into child env vars."""
-    result: dict[str, str] = {}
+def _configuration_environment(
+    config: dict[str, Any],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Split explicit, non-secret connector configuration into (controller, runtime) values.
+
+    Only the originators' connection names become controller variables. Every other upper-case
+    key is the submitted agent's own configuration and travels in the runtime namespace.
+    """
+    controller: dict[str, str] = {}
+    runtime: dict[str, str] = {}
     for name, value in config.items():
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", str(name)):
             continue
         if isinstance(value, bool):
-            result[str(name)] = "true" if value else "false"
+            text = "true" if value else "false"
         elif isinstance(value, (str, int, float)):
-            result[str(name)] = str(value)
-    return result
+            text = str(value)
+        else:
+            continue
+        target = controller if str(name) in CONTROLLER_CONNECTION_NAMES else runtime
+        target[str(name)] = text
+    return controller, runtime
 
 
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_RUNNER_RESERVED_ENVIRONMENT = {
-    "DOCKER_HOST",
-    "FI_API_KEY",
-    "FI_BASE_URL",
-    "FI_SECRET_KEY",
-    "HARNESS_PLATFORM_API_KEY",
-    "HARNESS_PLATFORM_SECRET_KEY",
-    "HARNESS_PLATFORM_URL",
-    "HARNESS_WEBHOOK_HOST",
-    "HARNESS_WEBHOOK_PORT",
-    "HOME",
-    "PATH",
-    "PYTHONPATH",
-}
+
+
+def _validate_secret_alias_shapes(references: dict[str, SecretRef]) -> None:
+    for alias in references:
+        if not _ENVIRONMENT_NAME.fullmatch(str(alias)):
+            raise ValueError(f"secret_reference_name_invalid: {alias}")
+
+
+def _runner_owned(name: str) -> bool:
+    """A name the runner owns, in any case: its reserved environment and the ALK_ prefix."""
+    key = str(name).strip().upper()
+    return key in _RUNNER_RESERVED_ENVIRONMENT or key.startswith("ALK_")
+
+
+_RESERVED_HINT = (
+    " (the name steers a process the runner starts, or is the runner's own; send the value "
+    "under another name and read that name in the agent)"
+)
+
+
+def _validate_controller_names(
+    config: dict[str, Any], references: dict[str, SecretRef]
+) -> None:
+    """Refuse the names of a job that would reach the controller's own environment."""
+    for name in config:
+        if _runner_owned(str(name)) or agent_value_name_reserved(str(name)):
+            raise ValueError(f"connector_config_name_reserved: {name}{_RESERVED_HINT}")
+    _validate_secret_alias_shapes(references)
+    for alias, reference in references.items():
+        # An upload alias becomes a runtime value, never a controller variable, but its name
+        # reaches Compose with a path to the customer's bytes, so a client name is refused.
+        if reference.manager == "mounted" and reference.key.startswith(
+            _SANDBOX_FILE_PREFIX
+        ):
+            if _runner_owned(alias) or client_name_reserved(alias):
+                raise ValueError(f"secret_alias_reserved: {alias}")
+            continue
+        if _target_alias(reference):
+            # The customer agent's own credential (ANTHROPIC_API_KEY, GOOGLE_API_KEY): it reaches
+            # only the agent's runtime namespace, so it takes the rule environment values take.
+            # A client-steering name is refused here, but not a customer's credential under a
+            # tool's prefix (GIT_TOKEN), which the value channels and the env file also take.
+            if _runner_owned(alias) or (
+                client_name_reserved(alias) and not tool_credential_name(alias)
+            ):
+                raise ValueError(f"secret_alias_reserved: {alias}{_RESERVED_HINT}")
+            continue
+        # A job-set base URL in the controller would steer the simulator's OpenAI client. Refused
+        # here, for controller aliases only: controller_name_reserved also guards key reads.
+        if controller_name_reserved(alias) or str(alias).strip().upper() == "OPENAI_BASE_URL":
+            raise ValueError(f"secret_alias_reserved: {alias}")
+
+
+def _job_target_aliases(job: HarnessJob) -> frozenset[str]:
+    """A submitted job's caller-sent target aliases, from its saved refs and value names."""
+    return _caller_target_aliases(
+        job.agent.secret_refs,
+        {str(name) for name in job.metadata.get("environment_value_names", [])},
+    )
+
+
+def _caller_target_aliases(
+    references: dict[str, SecretRef], environment_value_names: set[str]
+) -> frozenset[str]:
+    """The aliases the caller sent as target_provider refs.
+
+    The server mints every environment value (and upload) as a target_provider ref too, so the
+    caller's own refs are told apart by name: an alias in ``environment_value_names`` is an
+    environment value, never one of these.
+    """
+    return frozenset(
+        str(alias)
+        for alias, reference in references.items()
+        if _target_alias(reference) and str(alias) not in environment_value_names
+    )
+
+
+def _target_alias(reference: SecretRef) -> bool:
+    """A ref the platform sends for the customer's agent, never for the controller."""
+    return reference.purpose == "target_provider"
 
 
 def _validate_environment_values(
@@ -1540,8 +1894,8 @@ def _validate_environment_values(
     for name, secret in values.items():
         if not _ENVIRONMENT_NAME.fullmatch(name):
             raise ValueError(f"environment_name_invalid: {name}")
-        if name in _RUNNER_RESERVED_ENVIRONMENT or name.startswith("ALK_"):
-            raise ValueError(f"environment_name_reserved: {name}")
+        if _runner_owned(name) or agent_value_name_reserved(name):
+            raise ValueError(f"environment_name_reserved: {name}{_RESERVED_HINT}")
         value = secret.get_secret_value()
         if "\x00" in value:
             raise ValueError(f"environment_value_contains_nul: {name}")
@@ -2015,6 +2369,42 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+def _dev_mode() -> bool:
+    """True only on a developer's own laptop: no token, the flag, and a loopback address."""
+    return (
+        _sandbox_token() is None
+        and _unauthenticated_allowed()
+        and _is_loopback(os.getenv("ALK_SANDBOX_HOST", "127.0.0.1"))
+    )
+
+
+def _resolve_local_references(
+    references: dict[str, SecretRef], own_values: dict[str, str]
+) -> dict[str, str]:
+    """Resolve environment, mounted and futureagi refs.
+
+    A key that is one of this job's own values (or a claimed upload) resolves from those values
+    only. Any other key would read the server's own environment, which holds the runner's
+    credentials, so that is allowed only in local development mode and never for a name the
+    controller reserves.
+    """
+    resolved: dict[str, str] = {}
+    own: dict[str, SecretRef] = {}
+    for alias, reference in references.items():
+        if reference.key in own_values:
+            own[alias] = reference
+            continue
+        if reference.manager in {"environment", "futureagi", "mounted"} and (
+            not _dev_mode()
+            or controller_name_reserved(reference.key)
+            or reference.key.upper().startswith("GITHUB_INSTALLATION_")
+        ):
+            raise SecretResolutionError(f"secret_reference_reserved: {alias}")
+        resolved.update(resolve_worker_secrets({alias: reference}, environment=os.environ))
+    resolved.update(resolve_worker_secrets(own, environment=own_values))
+    return resolved
+
+
 def _startup_refusal(host: str, token: str | None, allow: bool) -> str | None:
     # A padded token would never match what the platform sends, so refuse it loudly
     # rather than start a server that rejects every job. These messages end up in
@@ -2070,17 +2460,46 @@ def _authorize(authorization: str | None = Header(default=None)) -> None:
 def create_app(root: Path | None = None) -> FastAPI:
     # No schema or docs pages: they skip the token check, and a closed server shows nothing to
     # a caller without one.
+    sandbox = LocalSandbox(
+        root or Path(os.getenv("ALK_SANDBOX_ROOT", "./artifacts/sandbox")),
+        max_concurrency=int(os.getenv("ALK_SANDBOX_MAX_CONCURRENCY", "2")),
+    )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        # uvicorn runs this before it re-raises SIGTERM, so every running job stops its worker
+        # and its environment before the server exits.
+        tasks = [task for task in sandbox._tasks.values() if not task.done()]
+        for task in tasks:
+            if not task.cancelling():
+                task.cancel()
+        if tasks:
+            await asyncio.wait(tasks, timeout=_CANCEL_WAIT_SECONDS)
+
     app = FastAPI(
         title="ALK local sandbox",
         version="1",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=lifespan,
     )
-    sandbox = LocalSandbox(
-        root or Path(os.getenv("ALK_SANDBOX_ROOT", "./artifacts/sandbox")),
-        max_concurrency=int(os.getenv("ALK_SANDBOX_MAX_CONCURRENCY", "2")),
-    )
+    app.state.sandbox = sandbox
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_request, exc: RequestValidationError):
+        # FastAPI's default 422 carries each error's input: a submitted value, maybe a secret.
+        # The location and message say what to fix; the value stays out.
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {key: error[key] for key in ("type", "loc", "msg") if key in error}
+                    for error in exc.errors()
+                ]
+            },
+        )
 
     @app.get("/health")
     async def health() -> dict[str, str]:

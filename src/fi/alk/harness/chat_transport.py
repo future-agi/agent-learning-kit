@@ -36,6 +36,7 @@ def create_chat_wrapper(
         include_tools=interface.include_tools,
         request_template=interface.request_template,
         response_path=interface.response_path,
+        sse=interface.sse.model_dump(mode="python") if interface.sse else None,
         setup_requests=[
             item.model_dump(mode="python") for item in interface.setup_requests
         ],

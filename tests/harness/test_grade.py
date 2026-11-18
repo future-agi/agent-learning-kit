@@ -230,46 +230,28 @@ def test_the_cap_holds_for_the_session_that_saves_too(tmp_path):
         said = asyncio.run(submit.handler({"name": "one_more", "instruction": "three"}))
         assert said.get("is_error"), can_save
         assert "2 of 2 written" in said["content"][0]["text"]
-    contract = AgentContract(
-        agent="cart", real_use_cases=["add an item", "remove an item"]
+
+
+def test_the_cap_counts_the_scenarios_already_on_disk(tmp_path):
+    """A session that starts from what is saved counts it towards the cap."""
+    import asyncio
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import scenario_tools, write_scenarios
+
+    contract = AgentContract(agent="cart", real_use_cases=["add an item", "remove an item"])
+    (tmp_path / "manifest.json").write_text("{}")
+    write_scenarios(
+        [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(2)], tmp_path
     )
-    # Above FEWEST_WORTH_DELEGATING, or the fan-out tool is not published at all.
-    server, _kept = st.scenario_tools(contract, tmp_path, tmp_path, wanted=20)
-    suite = next(spec for spec in server.tools if spec.name == "generate_suite")
 
-    asked_for: list[int] = []
+    server, kept = scenario_tools(contract, tmp_path, tmp_path, wanted=2)
+    submit = next(spec for spec in server.tools if spec.name == "submit_scenario")
+    said = asyncio.run(submit.handler({"name": "one_more", "instruction": "three"}))
 
-    async def _fake_parallel(contract, *, out, wanted, use_cases, slices, at_once):
-        asked_for.append(wanted)
-        return []
-
-    monkeypatch.setattr("fi.alk.harness.scenarios.write_in_parallel", _fake_parallel)
-    # Nothing on disk yet: the full ask goes through.
-    asyncio.run(suite.handler({"count": 20}))
-    assert asked_for == [20]
-
-    # Fourteen already written, and the model asks for twenty again: six are outstanding.
-    monkeypatch.setattr(
-        st,
-        "load_scenarios",
-        lambda _d: [
-            Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(14)
-        ],
-    )
-    monkeypatch.setattr(st, "journalled", lambda _d: [])
-    asyncio.run(suite.handler({"count": 20}))
-    assert asked_for == [20, 6]
-
-    monkeypatch.setattr(
-        st,
-        "load_scenarios",
-        lambda _d: [
-            Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(20)
-        ],
-    )
-    said = asyncio.run(suite.handler({"count": 20}))
-    assert "already holds the 20" in said["content"][0]["text"]
-    assert asked_for == [20, 6]
+    assert len(kept) == 2
+    assert said.get("is_error")
+    assert "2 of 2 written" in said["content"][0]["text"]
 
 
 def test_only_chat_can_grow_a_finished_suite(tmp_path):
@@ -489,6 +471,22 @@ def test_an_overlay_claim_is_recognised_by_its_shared_first_word():
     assert not goal("book_ride_confirmed").settles("prompt_injection")
     assert not goal("otp_verified").settles("emergency_crisis")
     assert not goal("otp_verified").settles("otp_pressure")
+
+
+def test_an_overlay_claim_by_field_or_whole_name_skips_the_first_word_guess():
+    from fi.alk.harness.catalogue import SubGoal
+
+    def goal(name, overlay=""):
+        return SubGoal(name=name, what="x", overlay=overlay)
+
+    assert goal("emergency_crisis_escalated").claims("emergency_crisis")
+    assert goal("pii_withheld", "privacy_pii").claims("privacy_pii")
+    assert goal("crisis").claims("emergency_crisis")
+    # What only the first word ties to the level settles it for the gate, but claims nothing.
+    assert goal("emergency_contact_updated").settles("emergency_crisis")
+    assert not goal("emergency_contact_updated").claims("emergency_crisis")
+    assert not goal("pii_withheld").claims("privacy_pii")
+    assert not goal("anything").claims("")
 
 
 def test_a_hosted_world_still_says_which_commit_its_tools_came_from(tmp_path):

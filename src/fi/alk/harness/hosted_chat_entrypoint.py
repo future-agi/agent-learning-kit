@@ -38,7 +38,18 @@ from .hosted_conversation import (
     load_conversation_capabilities,
 )
 from .tools import schema
-from .session import ARTIFACT, DONE, RESULT, STAGE_IDLE_TIMEOUT_SECONDS, TEXT, TOOL, Event, Stage
+from .session import (
+    ARTIFACT,
+    DONE,
+    RESULT,
+    STAGE_IDLE_TIMEOUT_SECONDS,
+    TEXT,
+    TOOL,
+    Event,
+    Stage,
+    asking_a_person,
+)
+from ..providers.secret_shapes import ChatHold
 from ..providers.agent import (
     _LETTER,
     _QUERY_OR_FRAGMENT,
@@ -63,6 +74,10 @@ _PENDING_QUESTION = ".futureagi-pending-question.json"
 _BUILD_FINISHED = ".futureagi-build-finished.json"
 _PROVIDER_PROFILE = "provider-import-profile.json"
 _JOURNAL = ".futureagi-conversation.json"
+# Each turn's ending as it was reported, usage included: kept before the turn's final
+# checkpoint, so a restart after a failed delivery replays the same ending.
+_TURN_ENDINGS = ".futureagi-turn-endings.json"
+_ENDING_OUTCOMES = frozenset({"success", "failed", "interrupted"})
 _PROVIDER_SESSIONS = ".futureagi-provider-sessions.json"
 _AUTHORING_BASIS = ".futureagi-authoring-basis.json"
 _PUBLISHED = ".futureagi-published.json"
@@ -84,11 +99,15 @@ _NEEDS_CONFIRMATION = frozenset(
         "add_rule",
         "drop_rule",
         "add_sub_goal",
+        "add_actor",
+        "drop_actor",
     }
 )
-# Removals and changes to the world or contract: each asks on its own, even after a yes to every change.
+# Removals and changes to the world, its cast or the contract: each asks on its own, even after a yes to every change.
 _ASKS_ALONE = frozenset(
     {
+        "add_actor",
+        "drop_actor",
         "drop_scenario",
         "drop_scenarios",
         "change_world",
@@ -121,6 +140,7 @@ _PUBLISHED_PARTS = (
     "scenarios",
     "scenarios.json",
     "sub_goals.json",
+    "actors.json",
     "contract.json",
     "simulator_prompt.md",
     "world.sqlite",
@@ -142,6 +162,9 @@ _WRITING_TOOLS = frozenset(
         "change_world",
         "declare_tool",
         "remember",
+        "add_actor",
+        "drop_actor",
+        "note_unresolved",
     }
 )
 
@@ -167,6 +190,11 @@ _WRITING_TOOLS = frozenset(
 # cleaned token by token, split at every whitespace; any whitespace is then a cut, and each
 # piece is cleaned the prose way too, so it splits at the same tokens and keeps its whitespace.
 #
+# The secret shapes cross whitespace, though: a password broken by a space or a line break, a
+# query on the next piece, a named value and its value, and a key block. So the cut is narrowed by
+# ChatHold (providers/secret_shapes.py): any whitespace is a cut only where none of those is
+# still open or has just closed, and the shed below asks it where it may split (TH-9500).
+#
 # The holdback is bounded. Past _HOLD_SOFT characters with no cut, what is held is shed:
 # - with a ? or # after its first URL start, the rest of the token is that URL's query. The held
 #   text is sent cleaned (the URL with its host and path), and the rest of the token is dropped
@@ -191,6 +219,13 @@ _SCHEME_TAIL = re.compile(r":/?\Z")
 class _DeltaCleaner:
     """The cleaned text of one streamed message, let out piece by piece."""
 
+    # A run of the breaks the one-URL join removes (cr3 H1, `_line_cut`).
+    _BREAK_RUN = re.compile(r"[\t\r\n]+")
+    # Where a URL's authority ends, and so its userinfo (`_line_cut`).
+    _AUTHORITY_END = re.compile(r"[/?#]")
+    # A scheme's characters, any of them first (`_learn_past`, cr3 M6).
+    _RUN_CHARS = re.compile(r"[A-Za-z0-9+.\-]*")
+
     def __init__(self) -> None:
         self.held = ""
         self.dropping = False
@@ -202,6 +237,14 @@ class _DeltaCleaner:
         # Before prose is known: a space has come after the opening began, with only whitespace
         # after it so far.
         self._spaced = False
+        # Past the soft bound, while the opening's run may still end in something other than
+        # "://" (`_learn_past`).
+        self._past: str | None = None
+        # Before prose: the joined index of a cut `_line_cut` held at 0, while the held text has
+        # only grown since (cr4 M2).
+        self._held_cut: int | None = None
+        # Where a cut may fall without splitting a secret's match (TH-9500).
+        self._hold = ChatHold()
 
     def feed(self, text: str) -> str:
         out: list[str] = []
@@ -223,19 +266,21 @@ class _DeltaCleaner:
                 return "".join(out)
             text = text[cut.start() :]
             self.dropping = False
-        last = _ANY_CUT.search(text[::-1]) if self.prose else None
-        if last is None:
-            self.held += text
-        else:
-            end = len(text) - last.start()
-            out.append(self._clean(self.held + text[:end]))
-            self.held = text[end:]
+        # TH-9500: the seam cuts where this would, at the last whitespace once the text is
+        # prose, but never into a match that is still open or has just closed: rule 1, rule 2, a
+        # named value and a key block all cross whitespace.
+        self._hold.prose = self.prose
+        end = self._hold.cut(self.held, text)
+        whole = self.held + text
+        if end:
+            out.append(self._clean(whole[:end]))
+        self.held = whole[end:]
         if len(self.held) > _HOLD_SOFT:
             out.append(self._shed())
         return "".join(out)
 
     def flush(self) -> str:
-        held, self.held, self.dropping = self.held, "", False
+        held, self.held, self.dropping, self._held_cut = self.held, "", False, None
         return self._clean(held) if held else ""
 
     def _learn(self, text: str) -> None:
@@ -252,13 +297,38 @@ class _DeltaCleaner:
                 return
             self._spaced = True
         if len(self._opening) >= _HOLD_SOFT:
+            self._learn_past(text)
             return
-        self._opening += text[: _HOLD_SOFT - len(self._opening)]
+        taken = _HOLD_SOFT - len(self._opening)
+        self._opening += text[:taken]
         run = _SCHEME_RUN.match(self._opening)
         rest = self._opening[run.end() :] if run else self._opening
         # Not a letter first, or a scheme's run followed by anything but "://".
         if run is None or (rest and not "://".startswith(rest[:3])):
             self.prose = True
+        elif len(self._opening) >= _HOLD_SOFT:
+            # The opening's run, or its "://", isn't over at the soft bound: what follows still
+            # decides, as cleaning the whole text decides it (cr3 M6). Held as one URL, a run
+            # that ends in a line break would have the URL lines after it glued onto it, and
+            # their queries read as its path.
+            self._past = rest
+            self._learn_past(text[taken:])
+
+    def _learn_past(self, text: str) -> None:
+        """Past the soft bound: the opening's run, then "://" or not (`_past` holds what
+        followed the run so far; "" while the run goes on, None once decided)."""
+        past = self._past
+        if past is None or not text:
+            return
+        if not past:
+            end = self._RUN_CHARS.match(text).end()
+            if end == len(text):
+                return
+            text = text[end:]
+        past = (past + text)[:3]
+        if not "://".startswith(past):
+            self.prose = True
+        self._past = None if self.prose or past == "://" else past
 
     def _clean(self, piece: str) -> str:
         if not self.prose:
@@ -266,37 +336,157 @@ class _DeltaCleaner:
             # is after the message's last character (no part of the stripped reply), so it is
             # kept as it came.
             body = piece.rstrip()
-            return _redact(body.translate(_URL_BREAKS)) + piece[len(body) :]
+            return self._joined_clean(body) + piece[len(body) :]
         # The space in front only keeps the cleaner from reading the piece as one URL, which
         # would drop its tabs and line breaks; the prose way keeps them, and the space comes off.
         return _redact(" " + piece)[1:]
 
+    def _line_cut(self, raw: str, joined: str, at: int) -> int:
+        """Before prose, where in the held text a cut the branches put at `at` in its joined form
+        falls: at the start of the break run before the line that holds it (cr3 H1). 0 when
+        nothing may go yet.
+
+        The branches find URL starts on the joined text, where a line is glued onto the next
+        line's scheme (`DB_PASSWORD=V` then `https://…` reads `Vhttps://`). Cut there, the name
+        would go out alone and its value be cleaned as a scheme, lower-cased. Cleaning the whole
+        text masks line starts before the join, so a cut keeps lines whole, and each piece sent is
+        masked and joined as the whole is.
+
+        Nothing is sent while 0 holds, so the held text only grows; the answer for the same `at`
+        stays 0 until a later URL start moves `at`. It is kept (`_held_cut`), so a long hold
+        isn't walked again on every delta (cr4 M2)."""
+        if at == self._held_cut:
+            return 0
+        # The break runs, found once: the walk goes back over them by index, so a line costs
+        # its own length however far the held text reaches back.
+        runs = [(found.start(), found.end()) for found in self._BREAK_RUN.finditer(raw)]
+        end, line_at, i = len(raw), len(joined), len(runs)
+        while True:
+            # Back over the lines from the end, to the one that holds `at`.
+            i -= 1
+            if i < 0:
+                self._held_cut = at
+                return 0
+            run, brk = runs[i]
+            line_at -= end - brk
+            if at >= line_at:
+                break
+            end = run
+        # A name that begins the line before, with its value on this line (`token:` then `V`), is
+        # one match: the two lines stay together. Such a value is a span found with the line
+        # before and not without it.
+        if i:
+            from ..providers.secret_shapes import line_starts
+
+            before = runs[i - 1][1]
+            stop = runs[i + 1][0] if i + 1 < len(runs) else len(raw)
+            own = {span[0] + brk - 1 for span in line_starts(raw[brk - 1 : stop])}
+            with_before = line_starts(raw[before - 1 : stop])
+            if any(
+                span[0] + before - 1 >= brk and span[0] + before - 1 not in own
+                for span in with_before
+            ):
+                line_at -= run - before
+                run = runs[i - 1][0]
+        # A URL before the cut keeps its userinfo with its host: the text after the cut, up to
+        # the next ://, may still be that userinfo (`postgres://admin:Xk9/Qp+Zr`, then `8@db…`,
+        # a rule 1b password holding a /). So while an @ comes before that :// (the last URL's
+        # own, which the cut is at or before), nothing goes. Nor does it while the text before
+        # the cut ends in a userinfo still open: an @ after a : since the last ://, with no /,
+        # ? or # between that @ and the cut (`…:P@ss/Xk9@`, then the host). The last :// is
+        # looked for in the joined text, where a scheme broken by a line break is whole again.
+        scheme = joined.rfind("://", 0, line_at)
+        # A cut at the start of a line that is only a URL's own `://` (its scheme on the line
+        # before) would send the scheme alone and leave the userinfo to be cleaned without it,
+        # so nothing goes. A known limit: an honest reply with such a line and then more than
+        # about 12 K of glued URLs reaches the hard bound and streams `[redacted]`.
+        inside = joined.rfind("://", 0, line_at + 3)
+        if inside >= 0 and line_at - 3 < inside <= line_at:
+            self._held_cut = at
+            return 0
+        if scheme >= 0:
+            following = joined.find("://", line_at)
+            sign = joined.rfind("@", scheme, line_at)
+            if "@" in joined[line_at:following] or (
+                sign > joined.find(":", scheme + 3, sign) >= 0
+                and not self._AUTHORITY_END.search(joined, sign, line_at)
+            ):
+                self._held_cut = at
+                return 0
+        return run
+
+    def _joined_clean(self, text: str) -> str:
+        """Held text before prose, cleaned: masked at its line starts, then joined, as the whole
+        text is (cr2 H1). The kinds masked go on this clean's one log line."""
+        from ..providers.agent import _line_starts_joined
+
+        found: list[str] = []
+        joined = _line_starts_joined(text, found)
+        return _redact(joined, hits=found)
+
     def _shed(self) -> str:
-        held = self.held
+        # 1. The limit: feed calls this once more than _HOLD_SOFT characters are held.
+        # 2. The split, from the seam (TH-9500): None when nothing it holds is open, so the
+        #    branches below run on all of the held text; otherwise the start of the held text's
+        #    first open match that may not be cut: a key block, or a key, whose hold starts at
+        #    its URL piece when it is in one.
+        split = self._hold.shed_cut(self.held)
+        # 6. A limit of 0: the held text opens with such a match, so nothing goes out yet.
+        if split == 0:
+            return ""
+        rest = ""
+        if split is not None:
+            self.held, rest = self.held[:split], self.held[split:]
+        # 3. The branches, run on the text before the split. Before prose they run on the
+        #    joined text, and a cut keeps lines whole (`_line_cut`, cr3 H1).
+        held = head = raw = self.held
         if not self.prose:
             if self._spaced:
-                self.held = ""
+                self.held, self._held_cut = "", None
                 return self._clean(held)
-            self.held = held = held.translate(_URL_BREAKS)
+            held = raw.translate(_URL_BREAKS)
         starts = []
-        for found in _START.finditer(held):
-            letter = _LETTER.search(held, found.start(), found.end() - 3)
-            starts.append(letter.start() if letter else found.end() - 3)
+        for start in _START.finditer(held):
+            letter = _LETTER.search(held, start.start(), start.end() - 3)
+            starts.append(letter.start() if letter else start.end() - 3)
+
+        def cut(at: int) -> tuple[str, str]:
+            # The held text before `at` (an index into `held`), cleaned, and the rest, held again.
+            if self.prose:
+                return _redact(held[:at]), held[at:]
+            if len(raw) != len(held):
+                at = self._line_cut(raw, held, at)
+            if not at:
+                return "", raw
+            # Text goes, so the held text's indexes move: a held cut no longer stands.
+            self._held_cut = None
+            return self._joined_clean(raw[:at]), raw[at:]
+
         if not starts:
             tail = _SCHEME_TAIL.search(held)
-            keep = tail.start() if tail else len(held)
-            self.held = held[keep:]
-            return _redact(held[:keep])
-        if _QUERY_OR_FRAGMENT.search(held, starts[0]):
-            self.held, self.dropping = "", True
-            return _redact(held)
-        out = ""
-        if starts[-1] > 0:
-            out = _redact(held[: starts[-1]])
-            self.held = held = held[starts[-1] :]
-        if len(held) > _HOLD_HARD:
-            self.held, self.dropping = "", True
-            out += _REDACTED
+            out, self.held = cut(tail.start() if tail else len(held))
+        elif _QUERY_OR_FRAGMENT.search(held, starts[0]):
+            out = _redact(held) if self.prose else self._joined_clean(raw)
+            self.held, self.dropping, self._held_cut = "", True, None
+        else:
+            out, self.held = "", raw
+            if starts[-1] > 0:
+                out, self.held = cut(starts[-1])
+            # The held text itself is counted, breaks too: the join drops them, but they are held,
+            # and the walk over them (`_line_cut`) is bounded by this.
+            if len(self.held) > _HOLD_HARD:
+                self.held, self.dropping, self._held_cut = "", True, None
+                out += _REDACTED
+        # 5. The drop rule. A key inside a held URL piece is never a cut point: the split above
+        #    is that piece's start or nothing. A split is a piece's start, so the token a branch
+        #    dropped ends before it, and no fragment of it is kept. When the text the branches
+        #    ran on ends in whitespace its last token is complete, so nothing is left to drop
+        #    and the next honest word is kept (r1 L6). Before prose a tab or a line break is no
+        #    token's end: the one-URL join removes it.
+        if self.prose and self.dropping and head[-1:].isspace():
+            self.dropping = False
+        # 4. The tail from the split is held again.
+        self.held += rest
         return out
 
 
@@ -500,9 +690,15 @@ class HostedChatRuntime:
         # One confirmation open at a time: the platform takes an answer to the latest only.
         self._confirming = asyncio.Lock()
         self._restart_after_turn = False
-        # The rebuild command this sandbox runs, and the spend when its turn began.
+        # Endings the coordinator state already holds, as stored: each control-only checkpoint
+        # adds only new or changed endings, not the whole history of them.
+        self._stored_endings: dict[str, str] = {}
+        self._skipped_endings: set[str] = set()
+        # The rebuild command this sandbox runs.
         self._nudge: dict[str, Any] | None = None
-        self._nudge_spent: dict[str, Any] = {}
+        # The spend when the running turn began: every turn reports what it spent with its
+        # ending, so the platform can meter a turn no build ledger covers.
+        self._turn_spent: dict[str, Any] = {}
         # The last report_update's arguments, and whether a write came after it.
         self._nudge_reported: dict[str, Any] = {}
         self._nudge_dirty = False
@@ -618,13 +814,21 @@ class HostedChatRuntime:
             ),
             hosted_prompt=self._hosted_prompt(),
             sealed=not self._control_only(),
-            # While building, the world itself (tools, data, caller prompt) can still change.
-            more_servers=self._world_servers(contract, catalogue) if world else None,
+            # While building, the world itself (tools, data, caller prompt) can still change; once built, only the cast.
+            more_servers=self._world_servers(contract, catalogue)
+            if world
+            else self._cast_servers(contract),
             catalogue=catalogue,
         )
         if self._nudge is not None:
             self._nudge_tools(stage, catalogue)
         return stage
+
+    def _cast_servers(self, contract: Any) -> dict[str, Any] | None:
+        from .world.tools import ACTOR_SERVER, actor_tools_server
+
+        server = actor_tools_server(contract, self.workspace)
+        return {ACTOR_SERVER: server} if server is not None else None
 
     def _world_servers(self, contract: Any, catalogue: Any = None) -> dict[str, Any]:
         from .build import open_stage as build_stage
@@ -768,6 +972,18 @@ class HostedChatRuntime:
 
         async def guarded(args: dict[str, Any]) -> Any:
             if self._from_platform:
+                if spec.name == "drop_actor":
+                    return {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Not done: during the build and its check the environment keeps "
+                                "the actors it lists. Give each a level in aim_for so some scenarios "
+                                "include it; removing one is for the person to ask for in the chat.",
+                            }
+                        ],
+                        "is_error": True,
+                    }
                 if spec.name in ("drop_scenarios", "drop_scenario") or (
                     spec.name in _SUBMITS and self._changes_situation(args)
                 ):
@@ -795,8 +1011,10 @@ class HostedChatRuntime:
                         spec.name,
                         {
                             "question": f"Confirm this change: {spec.name} "
-                            + json.dumps(args, sort_keys=True, default=str, indent=1),
+                            + json.dumps(args, sort_keys=True, default=str, indent=1, ensure_ascii=False),
                             "options": [_CONFIRM, "No"] if alone else [_CONFIRM, _CONFIRM_ALL, "No"],
+                            # Only an option confirms a change, so the person answers with one, never in their words.
+                            "options_only": True,
                         },
                         None,
                     )
@@ -825,7 +1043,15 @@ class HostedChatRuntime:
         """Whether a submission changes what an existing scenario tests, not how it is graded."""
         return self._changes(
             args,
-            ("instruction", "use_case", "branch", "tests", "coverage", "fixture"),
+            (
+                "instruction",
+                "use_case",
+                "branch",
+                "tests",
+                "coverage",
+                "fixture",
+                "actors",
+            ),
             whole_persona=True,
         )
 
@@ -836,7 +1062,17 @@ class HostedChatRuntime:
 
     def _changes_meaning(self, args: dict[str, Any]) -> bool:
         """Whether a submission rewrites an existing scenario's test rather than its surface."""
-        return self._changes(args, ("instruction", "use_case", "branch", "sub_goals", "solution"))
+        return self._changes(
+            args,
+            (
+                "instruction",
+                "use_case",
+                "branch",
+                "sub_goals",
+                "solution",
+                "actors",
+            ),
+        )
 
     def _changes(self, args: dict[str, Any], fields: tuple[str, ...], whole_persona: bool = False) -> bool:
         """Whether a submission changes any of these fields of an existing scenario, or who its person is.
@@ -1169,8 +1405,11 @@ class HostedChatRuntime:
         if fingerprint == self._published_fingerprint() and not force:
             return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
         from .bundle_author_v2 import reseal_scenarios
+        from .pre_run import refresh_stale
 
         try:
+            # A pre-run session written from an actor record that has since changed is written again before sealing.
+            await refresh_stale(self.workspace)
             await asyncio.to_thread(reseal_scenarios, self.workspace)
         except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
             traceback.print_exc()
@@ -1562,9 +1801,6 @@ class HostedChatRuntime:
             await self._handle_command(command)
             return
         # A rebuild turn ends this sandbox: the platform starts chat again once it lands.
-        from . import spend
-
-        self._nudge_spent = spend.snapshot()
         await self.conversation.close()
         self._nudge = dict(command.get("payload") or {})
         try:
@@ -1573,12 +1809,54 @@ class HostedChatRuntime:
             self.stopping.set()
 
     def _turn_usage(self) -> dict[str, Any]:
-        if self._nudge is None:
-            return {}
         from . import spend
         from .nudge import usage_delta
 
-        return {"usage": usage_delta(self._nudge_spent, spend.snapshot())}
+        return {"usage": usage_delta(self._turn_spent, spend.snapshot())}
+
+    def _end_turn(self, message_id: str, outcome: str) -> dict[str, Any]:
+        """The turn's ending, usage included, kept before its final checkpoint: if its
+        delivery fails, the restart replays this same ending."""
+        ending = {"command_message_id": message_id, "outcome": outcome, **self._turn_usage()}
+        endings = self._read_turn_endings()
+        endings[message_id] = ending
+        path = self.workspace / _TURN_ENDINGS
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(endings, sort_keys=True, separators=(",", ":")), encoding="utf-8"
+        )
+        temporary.replace(path)
+        return ending
+
+    def _turn_ending(self, message_id: str, **bare: Any) -> dict[str, Any]:
+        """The ending a turn kept, or a bare one for a turn that ended before endings were
+        kept."""
+        return self._read_turn_endings().get(message_id) or {
+            "command_message_id": message_id,
+            **bare,
+        }
+
+    def _read_turn_endings(self) -> dict[str, dict[str, Any]]:
+        try:
+            body = json.loads((self.workspace / _TURN_ENDINGS).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(body, dict):
+            return {}
+        endings: dict[str, dict[str, Any]] = {}
+        for key, value in body.items():
+            key = str(key)
+            if (
+                isinstance(value, dict)
+                and value.get("command_message_id") == key
+                and value.get("outcome") in _ENDING_OUTCOMES
+                and isinstance(value.get("usage", {}), dict)
+            ):
+                endings[key] = value
+            elif key not in self._skipped_endings:
+                self._skipped_endings.add(key)
+                print(f"hosted conversation skipped a malformed turn ending: {key}", flush=True)
+        return endings
 
     def _nudge_note(self) -> str:
         if self._nudge is None:
@@ -1669,7 +1947,7 @@ class HostedChatRuntime:
             await self.client.emit(
                 "turn_completed",
                 stage=self.conversation.stage_name,
-                payload={"command_message_id": message_id, "replayed": True},
+                payload={**self._turn_ending(message_id), "replayed": True},
                 acknowledge_through=sequence,
             )
             return
@@ -1678,7 +1956,7 @@ class HostedChatRuntime:
             await self.client.emit(
                 "turn_completed",
                 stage=self.conversation.stage_name,
-                payload={"command_message_id": message_id, "outcome": "failed"},
+                payload=self._turn_ending(message_id, outcome="failed"),
                 acknowledge_through=sequence,
             )
             return
@@ -1742,6 +2020,9 @@ class HostedChatRuntime:
         self._turn_acknowledged_through = sequence
         self._tool_names.clear()
         self._turn_message_id = message_id
+        from . import spend
+
+        self._turn_spent = spend.snapshot()
         await self.client.emit(
             "turn_started",
             stage=self.conversation.stage_name,
@@ -1835,6 +2116,7 @@ class HostedChatRuntime:
                     ),
                 },
             )
+            ending = self._end_turn(message_id, "interrupted")
             self._journal_unsuccessful(journal, message_id)
             checkpoint = await self._checkpoint()
             await self.client.emit(
@@ -1847,11 +2129,7 @@ class HostedChatRuntime:
                 "turn_completed",
                 stage=self.conversation.stage_name,
                 invocation_id=invocation_id,
-                payload={
-                    "command_message_id": message_id,
-                    "outcome": "interrupted",
-                    **self._turn_usage(),
-                },
+                payload=ending,
                 acknowledge_through=self._turn_acknowledged_through,
             )
             return
@@ -1905,6 +2183,7 @@ class HostedChatRuntime:
                 invocation_id=invocation_id,
                 payload={"text": final_text},
             )
+        ending = self._end_turn(message_id, "success")
         journal[message_id] = "completed"
         self._write_journal(journal)
         checkpoint = await self._checkpoint()
@@ -1918,11 +2197,7 @@ class HostedChatRuntime:
             "turn_completed",
             stage=self.conversation.stage_name,
             invocation_id=invocation_id,
-            payload={
-                "command_message_id": message_id,
-                "outcome": "success",
-                **self._turn_usage(),
-            },
+            payload=ending,
             acknowledge_through=self._turn_acknowledged_through,
         )
         if self._restart_after_turn:
@@ -1948,17 +2223,14 @@ class HostedChatRuntime:
             invocation_id=invocation_id,
             payload={"text": text, "error": error},
         )
+        ending = self._end_turn(message_id, "failed")
         self._journal_unsuccessful(journal, message_id)
         await self._checkpoint()
         await self.client.emit(
             "turn_completed",
             stage=self.conversation.stage_name,
             invocation_id=invocation_id,
-            payload={
-                "command_message_id": message_id,
-                "outcome": "failed",
-                **self._turn_usage(),
-            },
+            payload=ending,
             acknowledge_through=self._turn_acknowledged_through,
         )
 
@@ -2159,20 +2431,32 @@ class HostedChatRuntime:
             ]
         }
 
+    def _ask_reply(self, text: str, *, is_error: bool | None, from_the_cli: bool) -> Any:
+        """A reply to a question in the form its caller takes.
+
+        When the Claude CLI asks with its own question tool, this is its permission callback,
+        which must return a permission result: a deny carries the words back to the model. The
+        kit's own confirmations and other backends take a tool result."""
+        if from_the_cli and self.backend_name == "claude":
+            from claude_agent_sdk.types import PermissionResultDeny
+
+            return PermissionResultDeny(message=text)
+        reply: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
+        if is_error is not None:
+            reply["is_error"] = is_error
+        return reply
+
     async def _ask(
         self, _tool_name: str, payload: dict[str, Any], _context: Any
     ) -> Any:
-        if self._from_platform:
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Nobody answers during the build or its check. Decide it yourself from "
-                        "the agent and the contract, and say what you decided in your summary.",
-                    }
-                ]
-            }
         asked = [one for one in payload.get("questions") or [] if isinstance(one, dict)]
+        if self._from_platform:
+            return self._ask_reply(
+                "Nobody answers during the build or its check. Decide it yourself from "
+                "the agent and the contract, and say what you decided in your summary.",
+                is_error=None,
+                from_the_cli=bool(asked),
+            )
         question = str(
             payload.get("question")
             or "\n".join(str(one.get("question") or "") for one in asked if one.get("question"))
@@ -2222,52 +2506,53 @@ class HostedChatRuntime:
             "question_requested",
             message_id=message_id,
             stage=self.conversation.stage_name,
-            payload={"prompt": shown_question, "options": shown_options},
+            payload={
+                "prompt": shown_question,
+                "options": shown_options,
+                **({"options_only": True} if payload.get("options_only") else {}),
+            },
         )
-        while not self.stopping.is_set():
-            commands = await self.client.commands()
-            for command in commands:
-                command_payload = command.get("payload") or {}
-                if str(command_payload.get("reply_to") or "") != message_id:
-                    continue
-                answer = str(command_payload.get("content") or "").strip()
-                try:
-                    pending_path.unlink()
-                except FileNotFoundError:
-                    pass
-                await self._checkpoint()
-                answer_sequence = int(command["sequence"])
-                answered = answer
-                if not any(
-                    self._turn_acknowledged_through
-                    < int(queued["sequence"])
-                    < answer_sequence
-                    for queued in commands
-                ):
-                    self._turn_acknowledged_through = max(
-                        self._turn_acknowledged_through, answer_sequence
-                    )
-                if asked and self.backend_name == "claude":
-                    # The CLI's own question tool takes its answers as an allowed, rewritten input.
-                    from claude_agent_sdk.types import PermissionResultAllow
+        with asking_a_person():
+            while not self.stopping.is_set():
+                commands = await self.client.commands()
+                for command in commands:
+                    command_payload = command.get("payload") or {}
+                    if str(command_payload.get("reply_to") or "") != message_id:
+                        continue
+                    answer = str(command_payload.get("content") or "").strip()
+                    try:
+                        pending_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    await self._checkpoint()
+                    answer_sequence = int(command["sequence"])
+                    answered = answer
+                    if not any(
+                        self._turn_acknowledged_through
+                        < int(queued["sequence"])
+                        < answer_sequence
+                        for queued in commands
+                    ):
+                        self._turn_acknowledged_through = max(
+                            self._turn_acknowledged_through, answer_sequence
+                        )
+                    if asked and self.backend_name == "claude":
+                        # The CLI's own question tool takes its answers as an allowed, rewritten input.
+                        from claude_agent_sdk.types import PermissionResultAllow
 
-                    return PermissionResultAllow(
-                        updated_input={
-                            "questions": asked,
-                            "answers": {
-                                str(one.get("question") or ""): answered for one in asked
-                            },
-                        }
-                    )
-                return {
-                    "content": [{"type": "text", "text": answer}],
-                    "is_error": not bool(answer),
-                }
-            await asyncio.sleep(0.5)
-        return {
-            "content": [{"type": "text", "text": "The conversation was stopped."}],
-            "is_error": True,
-        }
+                        return PermissionResultAllow(
+                            updated_input={
+                                "questions": asked,
+                                "answers": {
+                                    str(one.get("question") or ""): answered for one in asked
+                                },
+                            }
+                        )
+                    return self._ask_reply(answer, is_error=not bool(answer), from_the_cli=False)
+                await asyncio.sleep(0.5)
+        return self._ask_reply(
+            "The conversation was stopped.", is_error=True, from_the_cli=bool(asked)
+        )
 
     def _provider_sessions_key(self) -> dict[str, str]:
         return {
@@ -2322,6 +2607,13 @@ class HostedChatRuntime:
                 path = self.workspace / name
                 if path.is_file():
                     files[name] = json.loads(path.read_text(encoding="utf-8"))
+            new_endings = {
+                key: value
+                for key, value in self._read_turn_endings().items()
+                if self._stored_endings.get(key) != json.dumps(value, sort_keys=True)
+            }
+            if new_endings:
+                files[_TURN_ENDINGS] = new_endings
             await self.client.append_session(
                 self._coordinator_state_key(),
                 [
@@ -2331,6 +2623,9 @@ class HostedChatRuntime:
                         "files": files,
                     }
                 ],
+            )
+            self._stored_endings.update(
+                {key: json.dumps(value, sort_keys=True) for key, value in new_endings.items()}
             )
             return {"control_only": True, "stored": True}
         async with self._checkpoint_lock:
@@ -2357,6 +2652,22 @@ class HostedChatRuntime:
                 temporary.replace(path)
             else:
                 path.unlink(missing_ok=True)
+        # Each entry holds only the endings added since the one before it.
+        endings: dict[str, Any] = {}
+        for entry in entries:
+            added = (entry.get("files") or {}).get(_TURN_ENDINGS)
+            if isinstance(added, dict):
+                endings.update(added)
+        path = self.workspace / _TURN_ENDINGS
+        if endings:
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(endings), encoding="utf-8")
+            temporary.replace(path)
+        else:
+            path.unlink(missing_ok=True)
+        self._stored_endings = {
+            key: json.dumps(value, sort_keys=True) for key, value in endings.items()
+        }
         self.conversation = self._conversation()
 
     def _provider_sessions(self) -> dict[str, str]:

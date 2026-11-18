@@ -9,6 +9,7 @@ model is saved exactly as before.
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import json
 import os
@@ -24,7 +25,28 @@ from fi.alk.harness.model_citation import model_problems, named_on
 from fi.alk.harness.tools import accept_contract, contract_tools
 
 MIB = 1024 * 1024
+# How long a check this file holds to "quick" may take: it takes well under a tenth of a second
+# alone, and the bound leaves room for a shared CI runner under load. A check under tracemalloc,
+# which slows Python down several times over, gets its own.
+QUICK_SECONDS = 1.0
+QUICK_SECONDS_TRACED = 5.0
+# The block-comment scans, at a quarter of what the file limit allows: the slowest takes about
+# 0.06 s on a laptop, 0.65-0.87 s was read on CI, and a closer looked for once per opener takes
+# minutes. CI has run up to about 14 times slower than a laptop, so the bound leaves that room.
+BLOCK_SCAN_SECONDS = 5.0
 FIXTURES = Path(__file__).resolve().parents[1] / "providers" / "fixtures" / "authored"
+
+
+@pytest.fixture(autouse=True)
+def _earlier_heap_frozen():
+    """Keep a full collection of the heap the tests before this one built out of this file's
+    timings: one such pass took 0.3 s inside a timed save on CI. The test's own collections still
+    count."""
+    gc.freeze()
+    try:
+        yield
+    finally:
+        gc.unfreeze()
 
 EMPTY_NAME = (
     "model: name is empty; give the model's name as written in the source, or leave model out"
@@ -72,6 +94,21 @@ def not_named(name: str, line: int, path: str) -> str:
         f"model: the name {name[:100]} is not the value written on line {line} of {path[:200]}; "
         "cite the line where it is written in quotes, or after : or = in a configuration file, "
         "or leave model out if the name is only set at run time"
+    )
+
+
+def not_a_model_line(path: str, line: int) -> str:
+    return (
+        f"model: in a .env file, cite the line whose setting names the model (such as "
+        f"OPENAI_MODEL), with the name as its value; {path} line {line} sets another setting "
+        "or another value"
+    )
+
+
+def kept_out(path: str) -> str:
+    return (
+        f"model: {path} is kept out of this session because it holds credentials; cite the line "
+        "in the agent's code or configuration the model is set on, or leave model out"
     )
 
 
@@ -143,15 +180,21 @@ def test_a_contract_without_a_model_saves_and_builds_as_before(tmp_path):
 
     assert not result.get("is_error"), result
     raw = (tmp_path / "out" / "contract.json").read_bytes()
+    # The bytes and hash dev writes for this contract, `workers` included since #226. Dev's later
+    # defaulted fields are in the dump too: each tool's `arg_units`, `returns`, `tables_read` and
+    # `tables_changed` (01d752bc, 0f11648c, e1287f3c) and `runtime.sse` (6b6f65be), all empty or
+    # null here. The merged bytes are identical to dev's own at 57b4d14a.
     assert hashlib.sha256(raw).hexdigest() == (
-        "7a61d8e863f75541c6d32c287fea02fb7a605d3b440a91f4c1b4212a3e1832b6"
+        "11c46ed8f4bddb11f2df20b73c2f22d06bdd247a186c0676dead93fd40b86a97"
     )
     assert "model" not in json.loads(raw)
     document = build_authored_agent(
         AgentContract.model_validate(json.loads(raw)).model_dump(mode="json")
     )
+    # The agent document hashed over that contract: the same dev fields, and dev's code gives the
+    # same value at 57b4d14a.
     assert document["setup_hash"] == (
-        "sh1:3854d6ecb87a1ee2890c5c16f25e854e20be84c109dc80311ad292e6f656d622"
+        "sh1:7b702f078fbe5bfb91677c29b38f6f63428c6f92acb21ba65a895b2764a20023"
     )
     assert document["model"] is None
 
@@ -290,7 +333,7 @@ def test_model_path_outside_the_source_is_refused(root, cited):
     problems, _, took = checked(root, {"name": "gpt-4o", "path": path, "line": 2})
 
     assert problems == [not_a_file(path)]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # The save's one budget
@@ -311,7 +354,7 @@ def test_model_path_spending_the_save_budget_is_refused(tmp_path, root):
     assert result.get("is_error")
     assert text_of(result) == REFUSED + str(PathLookupsSpent())
     assert not (destination / "contract.json").exists()
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 @pytest.mark.parametrize("links", [pytest.param(11, id="lookup-budget-real")])
@@ -410,7 +453,7 @@ def test_model_file_that_cannot_be_read_is_refused(root, cited):
     problems, _, took = answer[0]
 
     assert problems == [unreadable(path)]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # The cited line must be in the file
@@ -612,7 +655,7 @@ def test_a_crafted_model_file_does_not_hold_up_the_save(root, written, line, nam
     problems, _, took = checked(root, {"name": name, "path": "crafted.py", "line": line})
 
     assert problems == ([not_named(name, line, "crafted.py")] if refused else [])
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # Asking once for the prompt's lines
@@ -1012,7 +1055,7 @@ def test_a_crafted_configuration_line_does_not_hold_up_the_check(root):
     problems, _, took = checked(root, {"name": "a", "path": "crafted.yaml", "line": 1})
 
     assert problems == [not_named("a", 1, "crafted.yaml")]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # Names a setting goes by are not models, written in any case
@@ -1612,7 +1655,7 @@ def test_a_quote_of_many_pieces_does_not_hold_up_the_check(root):
     took = time.perf_counter() - started
 
     assert answer is not None
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # A prompt written with Python string prefixes holds its quote
@@ -1740,7 +1783,7 @@ def test_a_crafted_file_of_triple_quotes_does_not_hold_up_the_check(root, writte
 
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
 
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 def test_leaving_the_quote_out_is_not_asked_about(tmp_path, root):
@@ -2103,18 +2146,15 @@ def test_a_value_outside_a_block_comment_is_the_model(root, file, written, line)
     "written",
     [
         pytest.param(
-            "/*\n" * (MIB // 3 - 20) + 'const model = "gpt-4o";\n',
+            "/*\n" * (MIB // 12 - 20) + 'const model = "gpt-4o";\n',
             id="a-file-of-openers",
         ),
         pytest.param(
-            "*/ /*\n" * (MIB // 6 - 20) + 'const model = "gpt-4o";\n',
+            "*/ /*\n" * (MIB // 24 - 20) + 'const model = "gpt-4o";\n',
             id="a-file-of-closers-and-openers",
         ),
         pytest.param(
-            "/* */ " * (MIB // 6 - 20) + '"gpt-4o"\n', id="a-line-of-closed-blocks"
-        ),
-        pytest.param(
-            "<!--\n" * (MIB // 5 - 20) + 'const model = "gpt-4o";\n',
+            "<!--\n" * (MIB // 20 - 20) + 'const model = "gpt-4o";\n',
             id="a-file-of-markup-openers",
         ),
     ],
@@ -2125,7 +2165,26 @@ def test_a_crafted_file_of_block_comments_does_not_hold_up_the_check(root, writt
 
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.js", "line": line})
 
-    assert took < 0.5
+    assert took < BLOCK_SCAN_SECONDS
+
+
+def test_a_line_of_closed_blocks_takes_time_in_step_with_its_length(root):
+    # At a size a slow runner can afford, a bound on the time alone can't tell a scan that copies
+    # the rest of the line for each closer from one that doesn't (0.10 s against 0.05 s): how the
+    # time grows does. Four times the line takes about four times as long, a quadratic scan about
+    # sixteen. The runs alternate, and the fastest of each is kept, so load reaches both alike.
+    def took(blocks: int) -> float:
+        (root / "crafted.js").write_text("/* */ " * blocks + '"gpt-4o"\n', encoding="utf-8")
+        return checked(root, {"name": "gpt-4o", "path": "crafted.js", "line": 1})[2]
+
+    short: list[float] = []
+    long: list[float] = []
+    for _ in range(3):
+        short.append(took(MIB // 24 - 20))
+        long.append(took(MIB // 6 - 20))
+
+    assert min(long) < BLOCK_SCAN_SECONDS
+    assert min(long) < 8 * min(short)
 
 
 def test_lines_inside_a_block_comment_without_its_closer_are_not_scanned(
@@ -2354,7 +2413,7 @@ def test_a_quote_that_grows_when_normalised_costs_little(root):
     finally:
         tracemalloc.stop()
 
-    assert took < 0.5
+    assert took < QUICK_SECONDS_TRACED
     assert peak < 32 * MIB
 
 
@@ -2377,7 +2436,8 @@ def test_an_apostrophe_does_not_hide_a_comment(root, file, written, name):
 
     problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
 
-    assert problems == [not_named(name, 2, file)]
+    # In a .env file a line whose setting isn't a model's is refused before it is read (TH-9042).
+    assert problems == [not_a_model_line(file, 2) if file == ".env" else not_named(name, 2, file)]
 
 
 @pytest.mark.parametrize(
@@ -2429,7 +2489,7 @@ def test_a_crafted_line_of_generic_calls_does_not_hold_up_the_check(root):
 
     _, _, took = checked(root, {"name": "a", "path": "crafted.ts", "line": 1})
 
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 def test_a_crafted_line_of_apostrophes_does_not_hold_up_the_check(root):
@@ -2440,7 +2500,7 @@ def test_a_crafted_line_of_apostrophes_does_not_hold_up_the_check(root):
     problems, _, took = checked(root, {"name": "a", "path": "crafted.py", "line": 1})
 
     assert problems == [not_named("a", 1, "crafted.py")]
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 # Lines sent alone after a refusal are asked about once more before either side is given up
@@ -2514,7 +2574,7 @@ def test_a_quote_whose_start_matches_everywhere_does_not_hold_up_the_check(root)
     took = time.perf_counter() - started
 
     assert answer is not None
-    assert took < 0.5
+    assert took < QUICK_SECONDS
 
 
 def test_a_first_word_found_early_is_tried_again(tmp_path, root):
@@ -2651,15 +2711,25 @@ def test_an_elided_quote_of_a_long_prompt_holds(tmp_path, root):
     assert answer is None
 
 
-def test_a_crafted_long_word_costs_little(root):
-    from fi.alk.harness.model_citation import quote_problem
+def test_a_crafted_long_word_costs_little():
+    from fi.alk.harness.model_citation import _holds, _letters, quote_pieces
 
-    started = time.perf_counter()
-    answer = quote_problem("a " + "a" * MIB + "b", "a" * MIB, "agent.py 1-1")
-    took = time.perf_counter() - started
+    # Each false start at the first word is charged the second word it failed on: without that
+    # charge the search makes a try at every one of a million places. Counted by the searches made,
+    # not by seconds, which a loaded runner moves more than the missing charge does.
+    class Counting(str):
+        searches = 0
 
-    assert answer is not None
-    assert took < 0.25
+        def find(self, *args):
+            Counting.searches += 1
+            return super().find(*args)
+
+    pieces = quote_pieces("a " + "a" * MIB + "b")
+
+    held = _holds(Counting(_letters("a" * MIB)), pieces)
+
+    assert held is False
+    assert Counting.searches < 1_000
 
 
 # Scripts written without spaces: each character is a word
@@ -2780,18 +2850,30 @@ def test_more_comments_and_docstrings_are_not_the_model(root, file, written, lin
     assert problems == [not_named(name, line, file)]
 
 
-def test_a_crafted_file_of_one_byte_lines_and_triple_quotes_costs_little(root):
+def test_a_crafted_file_of_one_byte_lines_and_triple_quotes_costs_little(root, monkeypatch):
+    from fi.alk.harness import model_citation
+
     # Lines with no triple quote, and lines inside a block without its closing quote, are passed
-    # over without a scan.
-    (root / "crafted.py").write_text(
-        '"""\n' + "x\n" * (MIB // 4) + '"""\n' + "y\n" * (MIB // 4) + 'MODEL = "gpt-4o"\n',
-        encoding="utf-8",
-    )
-    line = 2 * (MIB // 4) + 3
+    # over without a scan. The file fits under the size limit, so it is read, not refused unread.
+    half = MIB // 4 - 20
+    written = '"""\n' + "x\n" * half + '"""\n' + "y\n" * half + 'MODEL = "gpt-4o"\n'
+    assert len(written.encode()) <= model_citation.LARGEST_MODEL_FILE
+    (root / "crafted.py").write_text(written, encoding="utf-8")
+    line = 2 * half + 3
+    scanned = []
+    real = model_citation._line_scan
 
-    _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
+    def counting(*args, **kwargs):
+        scanned.append(1)
+        return real(*args, **kwargs)
 
-    assert took < 0.25
+    monkeypatch.setattr(model_citation, "_line_scan", counting)
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": line})
+
+    assert problems == []
+    # The two triple-quote lines and the cited one, not the million between.
+    assert len(scanned) < 20
 
 
 @pytest.mark.parametrize(
@@ -2933,7 +3015,7 @@ def test_a_long_first_word_is_charged_on_every_try(root):
     took = time.perf_counter() - started
 
     assert answer is not None
-    assert took < 0.25
+    assert took < QUICK_SECONDS
 
 
 def test_a_short_unspaced_quote_is_still_searched_with_gaps(tmp_path, root):
@@ -3166,7 +3248,7 @@ def test_an_unclosed_string_of_escapes_costs_one_pass(root, quote):
 
     _, _, took = checked(root, {"name": "gpt-4o", "path": "crafted.ts", "line": 1})
 
-    assert took < 0.25
+    assert took < QUICK_SECONDS
 
 
 @pytest.mark.parametrize(
@@ -3434,13 +3516,14 @@ def test_a_pipe_is_logged_as_not_a_regular_file(tmp_path, caplog):
         pytest.param("init.lua", 'local n = a // 2; model = "gpt-4o"', "gpt-4o", id="lua-floor-division"),
         pytest.param("Makefile", "\techo a#b; MODEL=gpt-4o", "gpt-4o", id="makefile-hash-in-a-word"),
         pytest.param(".flaskenv", "URL=http://x/#a MODEL=gpt-4o", "gpt-4o", id="flaskenv-hash-in-a-word"),
-        pytest.param(".env.local", "URL=http://x/#a MODEL=gpt-4o", "gpt-4o", id="env-name-hash-in-a-word"),
         pytest.param("Dockerfile.dev", "ENV A=a#b MODEL=gpt-4o", "gpt-4o", id="dockerfile-name-hash-in-a-word"),
         pytest.param("run.bash", "echo a#b; MODEL=gpt-4o", "gpt-4o", id="bash-hash-in-a-word"),
         pytest.param("run.zsh", "echo a#b; MODEL=gpt-4o", "gpt-4o", id="zsh-hash-in-a-word"),
         pytest.param("rules.mk", "\techo a#b; MODEL=gpt-4o", "gpt-4o", id="mk-hash-in-a-word"),
         pytest.param("app.dockerfile", "ENV A=a#b MODEL=gpt-4o", "gpt-4o", id="dockerfile-suffix-hash-in-a-word"),
-        pytest.param("prod.env", "URL=http://x/#a MODEL=gpt-4o", "gpt-4o", id="env-suffix-hash-in-a-word"),
+        # prod.env is a .env file, so the name must be its line's own model setting's value (since
+        # TH-9042's second round).
+        pytest.param("prod.env", "MODEL=gpt-4o # see a#b", "gpt-4o", id="env-suffix-hash-in-a-word"),
         pytest.param("agent.mts", 'class A { #model = "gpt-4o"; }', "gpt-4o", id="mts-private-field"),
         pytest.param("agent.cts", 'this.#model = "gpt-4o";', "gpt-4o", id="cts-private-field"),
         pytest.param("agent.sc", 'val t: A#B = x; val model = "gpt-4o"', "gpt-4o", id="scala-script-type-projection"),
@@ -3470,7 +3553,6 @@ def test_more_honest_lines_after_the_settled_round(root, file, written, name):
         pytest.param("agent.json", '"model": "gpt-4o", // "gpt-4-turbo" is slower', "gpt-4-turbo", id="json-comment-after-a-value"),
         pytest.param("agent.json", '* "model": "gpt-4",', "gpt-4", id="json-block-comment-middle-line"),
         pytest.param("dockerfile_gen.py", 'MODEL = DEFAULT#"gpt-4"', "gpt-4", id="python-named-like-a-dockerfile"),
-        pytest.param(".env_loader.py", 'MODEL = DEFAULT#"gpt-4"', "gpt-4", id="python-named-like-an-env-file"),
         pytest.param("cfg.yaml", "note: the cart's total # model: 'gpt-4'", "gpt-4", id="a-word-ending-like-a-prefix"),
         pytest.param("cfg.yaml", "note: it_t's ok # model: 'gpt-4'", "gpt-4", id="an-underscore-before-a-prefix"),
         pytest.param("env.rb", "MODEL = gpt-4o", "gpt-4o", id="env-rb-is-code"),
@@ -3776,3 +3858,280 @@ def test_words_that_say_nothing_do_not_replace_the_held_quote(tmp_path, root, no
     )
 
     assert text_of(result) == REFUSED + lines_alone("agent.py 1-4", _BOOKING_QUOTE)
+
+
+# TH-9042: a model citation never reads a file on the secret list, apart from a .env file's
+# line whose setting names a model; and it never tells such a file's length or whether it exists.
+
+
+@pytest.mark.parametrize(
+    "file, written",
+    [
+        pytest.param(".pgpass", "db:5432:app:admin:changeme", id="pgpass"),
+        pytest.param("infra/prod.tfvars", 'db_password = "changeme"', id="tfvars"),
+        pytest.param("kubeconfig.yaml", "token: changeme", id="kubeconfig"),
+        pytest.param("gcp-key.json", '{"private_key": "changeme"}', id="key-json"),
+    ],
+)
+def test_a_model_citation_never_reads_a_listed_file(root, file, written):
+    target = root / file
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(f"{written}\n", encoding="utf-8")
+
+    present, contract, _ = checked(root, {"name": "changeme", "path": file, "line": 1})
+    past_the_end, _, _ = checked(root, {"name": "changeme", "path": file, "line": 9})
+    target.unlink()
+    missing, _, _ = checked(root, {"name": "changeme", "path": file, "line": 1})
+
+    assert present == past_the_end == missing == [kept_out(file)]
+    assert contract.model is not None and contract.model.name == "changeme"
+
+
+def test_a_model_citation_through_a_link_to_a_listed_file_is_refused(root):
+    (root / ".pgpass").write_text("db:5432:app:admin:changeme\n", encoding="utf-8")
+    (root / "settings.txt").symlink_to(".pgpass")
+    (root / "gone.yaml").symlink_to("kubeconfig.yaml")
+
+    linked, _, _ = checked(root, {"name": "changeme", "path": "settings.txt", "line": 1})
+    dangling, _, _ = checked(root, {"name": "changeme", "path": "gone.yaml", "line": 1})
+
+    assert linked == [kept_out("settings.txt")]
+    assert dangling == [kept_out("gone.yaml")]
+
+
+def test_a_env_file_cites_a_model_only_on_a_line_that_sets_one(root):
+    (root / ".env").write_text(
+        "DB_PASSWORD=changeme\nOPENAI_MODEL=gpt-4o\nexport LLM_MODEL=gpt-4o-mini\n", encoding="utf-8"
+    )
+
+    password, _, _ = checked(root, {"name": "changeme", "path": ".env", "line": 1})
+    model, contract, _ = checked(root, {"name": "gpt-4o", "path": ".env", "line": 2})
+    exported, _, _ = checked(root, {"name": "gpt-4o-mini", "path": ".env", "line": 3})
+    past_the_end, _, _ = checked(root, {"name": "gpt-4o", "path": ".env", "line": 40})
+
+    assert password == [not_a_model_line(".env", 1)]
+    assert model == [] and contract.model is not None and contract.model.path == ".env"
+    assert exported == []
+    assert past_the_end == ["model: line 40 is outside .env"]
+
+
+def test_a_env_line_whose_setting_is_not_a_model_is_refused_even_with_a_model_on_it(root):
+    (root / ".env.local").write_text("\nURL=http://x/#a MODEL=gpt-4o\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": ".env.local", "line": 2})
+
+    assert problems == [not_a_model_line(".env.local", 2)]
+
+
+def test_a_source_under_a_listed_folder_still_cites_its_model(tmp_path, monkeypatch):
+    source = tmp_path / ".claude" / "worktrees" / "repo"
+    source.mkdir(parents=True)
+    (source / "agent.py").write_text('MODEL = "gpt-4o"\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path / ".claude")
+
+    relative, _, _ = checked(source, {"name": "gpt-4o", "path": "agent.py", "line": 1})
+    absolute, _, _ = checked(source, {"name": "gpt-4o", "path": str(source / "agent.py"), "line": 1})
+
+    assert relative == absolute == []
+
+
+@pytest.mark.parametrize(
+    "written, name",
+    [
+        pytest.param("AZURE_OPENAI_DEPLOYMENT=gpt4o-prod", "gpt4o-prod", id="azure-deployment"),
+        pytest.param("AZURE_OPENAI_DEPLOYMENT_NAME=gpt4o-prod", "gpt4o-prod", id="azure-deployment-name"),
+        pytest.param("OPENAI_ENGINE=gpt-4o", "gpt-4o", id="engine"),
+        pytest.param("AZURE_OPENAI_ENGINE=gpt4o-prod", "gpt4o-prod", id="azure-engine"),
+        pytest.param("LLM=gpt-4o", "gpt-4o", id="llm"),
+        pytest.param("DEFAULT_LLM=gpt-4o", "gpt-4o", id="default-llm"),
+        pytest.param("export LLM_MODEL=gpt-4o", "gpt-4o", id="exported"),
+        pytest.param('OPENAI_MODEL="gpt-4o"', "gpt-4o", id="double-quoted"),
+        pytest.param("export OPENAI_MODEL='gpt-4o'  # pinned", "gpt-4o", id="single-quoted-exported"),
+        pytest.param("OPENAI_MODEL=gpt-4o # the default", "gpt-4o", id="comment-after"),
+        pytest.param('OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o}"', "gpt-4o", id="quoted-compose-default"),
+        pytest.param(
+            "CHAT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}", "gpt-4o-mini", id="another-model-setting-default"
+        ),
+    ],
+)
+def test_a_env_setting_named_for_a_model_by_any_of_its_words_is_accepted(root, written, name):
+    (root / ".env").write_text(f"{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": ".env", "line": 1})
+
+    assert problems == []
+
+
+@pytest.mark.parametrize(
+    "written, name",
+    [
+        pytest.param("VERTEX_MODEL=claude-3-5-sonnet@20240620", "claude-3-5-sonnet@20240620", id="vertex-version"),
+        pytest.param("VERTEX_MODEL=claude-3-5-sonnet-v2@latest", "claude-3-5-sonnet-v2@latest", id="vertex-latest"),
+        pytest.param("VERTEX_MODEL=mistral-large@2407", "mistral-large@2407", id="vertex-short-version"),
+        pytest.param("VERTEX_MODEL=text-bison@001", "text-bison@001", id="vertex-three-digit-version"),
+        pytest.param("VERTEX_MODEL=vertex_ai/mistral-large@2407", "vertex_ai/mistral-large@2407", id="vertex-ai-prefix"),
+        pytest.param(
+            "VERTEX_MODEL=publishers/google/models/gemini-1.0-pro@001",
+            "publishers/google/models/gemini-1.0-pro@001",
+            id="vertex-publishers-path",
+        ),
+        pytest.param(
+            "VERTEX_MODEL=projects/x/locations/y/publishers/anthropic/models/claude-3-5-sonnet@20240620",
+            "projects/x/locations/y/publishers/anthropic/models/claude-3-5-sonnet@20240620",
+            id="vertex-full-resource-path",
+        ),
+        pytest.param("BEDROCK_MODEL=anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic.claude-3-5-sonnet-20240620-v1:0", id="bedrock-colon"),
+    ],
+)
+def test_a_env_model_name_with_an_at_or_a_colon_of_its_own_is_still_accepted(root, written, name):
+    (root / ".env").write_text(f"{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": ".env", "line": 1})
+
+    assert problems == []
+
+
+def test_a_fullwidth_at_in_a_env_value_is_refused():
+    from fi.alk.harness.model_citation import _env_value_is_a_locator
+
+    assert _env_value_is_a_locator("admin\uff20llm.internal")
+    assert not _env_value_is_a_locator("claude-3-5-sonnet@20240620")
+
+
+@pytest.mark.parametrize("file", ["prod.env", "deploy/app.env", ".env.production"])
+def test_every_kind_of_env_file_takes_the_same_rule(root, file):
+    (root / file).parent.mkdir(parents=True, exist_ok=True)
+    (root / file).write_text("DB_PASSWORD=fake-guess\nOPENAI_MODEL=gpt-4o\n", encoding="utf-8")
+
+    accepted, _, _ = checked(root, {"name": "gpt-4o", "path": file, "line": 2})
+    refused, _, _ = checked(root, {"name": "fake-guess", "path": file, "line": 1})
+
+    assert accepted == []
+    assert refused == [not_a_model_line(file, 1)]
+
+
+@pytest.mark.parametrize(
+    "file, written, name",
+    [
+        pytest.param(".env", "MODEL_API_KEY=sk-fake-guess", "sk-fake-guess", id="model-key"),
+        pytest.param(".env", "LLM_TOKEN=fake-guess", "fake-guess", id="llm-token"),
+        pytest.param(".env", "OPENAI_MODEL_PASSWORD=fake-guess", "fake-guess", id="model-password"),
+        pytest.param(".env", "LLM_APIKEY=sk-fake-guess", "sk-fake-guess", id="joined-apikey"),
+        pytest.param(".env", "MODEL_ACCESSKEY=fake-guess", "fake-guess", id="joined-accesskey"),
+        pytest.param(".env", "OPENAI_MODEL_APIKEY=sk-fake-guess", "sk-fake-guess", id="model-joined-apikey"),
+        pytest.param(".env", "LLM_PASSWD=fake-guess", "fake-guess", id="joined-passwd"),
+        pytest.param(".env", "LLM_KEY=fake-guess", "fake-guess", id="part-key"),
+        pytest.param(".env", "MODEL_TOKEN=fake-guess", "fake-guess", id="part-token"),
+        pytest.param(".env", "MODEL_SECRET=fake-guess", "fake-guess", id="part-secret"),
+        pytest.param(".env", "LLM_PASS=fake-guess", "fake-guess", id="part-pass"),
+        pytest.param(".env", "LLM_PWD=fake-guess", "fake-guess", id="part-pwd"),
+        pytest.param(".env", "LLM_AUTH=fake-guess", "fake-guess", id="part-auth"),
+        pytest.param(".env", "MODEL_CREDENTIAL=fake-guess", "fake-guess", id="part-credential"),
+        pytest.param(".env", "LLM_URL=fake-guess", "fake-guess", id="part-url"),
+        pytest.param(".env", "MODEL_URI=fake-guess", "fake-guess", id="part-uri"),
+        pytest.param(".env", "LLM_DSN=fake-guess", "fake-guess", id="part-dsn"),
+        pytest.param(".env", "MODEL_URL=https://admin:fake@llm.local/v1", "https://admin:fake@llm.local/v1", id="model-url"),
+        pytest.param(".env", "MODEL_SERVER=postgres://admin:hunter2@db/app", "postgres://admin:hunter2@db/app", id="model-server-url-with-login"),
+        pytest.param(".env", "LLM_ENDPOINT=https://admin:pw@llm.internal/v1", "https://admin:pw@llm.internal/v1", id="llm-endpoint-url-with-login"),
+        pytest.param(".env", "MODEL_HOST=https://llm.internal/v1", "https://llm.internal/v1", id="url-without-login"),
+        pytest.param(".env", "MODEL_SERVER=admin:hunter2@db", "admin:hunter2@db", id="bare-login"),
+        pytest.param(".env", "LLM_ENDPOINT=gpt-4o@llm.internal", "gpt-4o@llm.internal", id="user-at-host"),
+        pytest.param(".env", "MODEL_ID=gpt-4o@evil.example", "gpt-4o@evil.example", id="model-then-host"),
+        # A version is 3 to 8 digits or lowercase `latest`, after a name with no / or :.
+        # (user@123 and fakepw@123456 look like model names and are not told
+        # apart by shape.)
+        pytest.param(".env", "MODEL_SERVER=scott/fakepw@1521", "scott/fakepw@1521", id="login-with-slash-and-port"),
+        pytest.param(".env", "MODEL_SERVER=a/b/fakepw@123456", "a/b/fakepw@123456", id="login-with-deeper-path"),
+        pytest.param(".env", "MODEL_SERVER=root@0", "root@0", id="login-one-digit-host"),
+        pytest.param(".env", "MODEL_SERVER=admin@2130706433", "admin@2130706433", id="login-decimal-ip-host"),
+        pytest.param(".env", "MODEL_SERVER=user@LATEST", "user@LATEST", id="login-uppercase-latest"),
+        pytest.param(
+            ".env",
+            "DB_ENGINE_URL=postgresql://admin:fake@db/app",
+            "postgresql://admin:fake@db/app",
+            id="database-engine-url",
+        ),
+        pytest.param(".env", "DB_ENGINE=postgresql", "postgresql", id="database-engine"),
+        pytest.param("prod.env", "URL=http://x/#a MODEL=gpt-4o", "gpt-4o", id="env-suffix-url-first"),
+        pytest.param(".env", "OPENAI_MODEL=gpt-4o OPENAI_API_KEY=sk-fakeguess1", "sk-fakeguess1", id="second-setting"),
+        pytest.param(".env", "OPENAI_MODEL=gpt-4o;OPENAI_API_KEY=sk-fakeguess1", "sk-fakeguess1", id="second-setting-semicolon"),
+        pytest.param(".env", 'OPENAI_MODEL="gpt-4o" DB_PASSWORD="fakeguess1"', "fakeguess1", id="second-setting-quoted"),
+        pytest.param(".envrc", "export LLM_MODEL=gpt-4o; export DB_PASSWORD=fakeguess1", "fakeguess1", id="envrc-second-export"),
+        pytest.param("prod.env", "MODEL_NOTE=a#b OPENAI_API_KEY=sk-fakeguess1", "sk-fakeguess1", id="hash-then-key"),
+        pytest.param(".env", 'LLM_CONFIG={"model":"gpt-4o","api_key":"sk-fakeguess1"}', "sk-fakeguess1", id="json-value"),
+        pytest.param(".env.yaml", "model: {name: gpt-4o, api_key: sk-fakeguess1}", "sk-fakeguess1", id="flow-mapping"),
+        pytest.param(".env", "MODEL_NOTE=a#b MODEL=gpt-4o", "gpt-4o", id="model-as-a-second-setting"),
+        # Named like a .env file, so it takes the .env rule (since TH-9042's second round).
+        pytest.param(".env_loader.py", 'MODEL = DEFAULT#"gpt-4"', "gpt-4", id="python-named-like-an-env-file"),
+        pytest.param(".env.yaml", "DB_PASSWORD: MODELfake123", "MODELfake123", id="colon-setting"),
+        pytest.param(".env", "MODELfake123", "MODELfake123", id="no-setting"),
+        pytest.param(".env", "OPENAI_MODEL=${DB_PASSWORD:-fakeguess1}", "fakeguess1", id="other-setting-compose-default"),
+        pytest.param(".env", 'OPENAI_MODEL="${OPENAI_API_KEY:-sk-fakeguess1}"', "sk-fakeguess1", id="quoted-other-setting-compose-default"),
+        # A braced name with a model word but a secret part is still a secret's default.
+        pytest.param(".env", "OPENAI_MODEL=${MODEL_API_KEY:-sk-fakeguess1}", "sk-fakeguess1", id="model-secret-compose-default"),
+        pytest.param(".env", "CHAT_MODEL=${llm_token:-fakeguess1}", "fakeguess1", id="lowercase-model-secret-compose-default"),
+    ],
+)
+def test_a_env_line_that_holds_a_secret_or_sets_nothing_is_refused(root, file, written, name):
+    (root / file).write_text(f"{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": 1})
+
+    assert problems == [not_a_model_line(file, 1)]
+
+
+def test_a_backup_copy_of_a_credential_file_is_refused(root):
+    (root / ".pgpass.bak").write_text("db:5432:app:admin:changeme\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "changeme", "path": ".pgpass.bak", "line": 1})
+
+    assert problems == [kept_out(".pgpass.bak")]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(["python", ".env"], id="listed-file"),
+        pytest.param(["python", "--config=.aws/credentials", "app.py"], id="listed-in-flag"),
+        pytest.param(["uv", "--directory", ".aws", "python", "credentials"], id="folder-flag"),
+    ],
+)
+def test_a_first_save_whose_runtime_names_a_listed_file_is_refused(tmp_path, root, command):
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(runtime={"language": "python", "command": command}),
+        destination,
+        source_root=root,
+    )
+
+    assert result.get("is_error"), result
+    assert "kept out of this task" in text_of(result)
+    assert not (destination / "contract.json").exists()
+
+
+def test_a_first_save_with_an_ordinary_runtime_command_is_saved(tmp_path, root):
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(runtime={"language": "python", "command": ["python", "agent.py"]}),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["runtime"]["command"] == ["python", "agent.py"]
+
+
+def test_a_first_save_whose_command_runs_inline_code_is_refused(tmp_path, root):
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(runtime={"language": "python", "command": ["python", "-Bc", "print(1)"]}),
+        destination,
+        source_root=root,
+    )
+
+    assert result.get("is_error"), result
+    assert "program as an argument" in text_of(result)
+    assert not (destination / "contract.json").exists()

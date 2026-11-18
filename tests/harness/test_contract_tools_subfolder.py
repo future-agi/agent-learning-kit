@@ -91,6 +91,22 @@ def test_no_subfolder_contract_dump_unchanged(tmp_path, repo):
         assert runtime["workdir"] == ""
 
 
+@pytest.mark.parametrize("written", ["agents/b/", "./agents/b", "../b", "/etc"])
+@pytest.mark.parametrize("subfolder", [None, "agents/a"])
+def test_a_folder_the_model_writes_itself_never_costs_a_turn(tmp_path, repo, written, subfolder):
+    # The harness records the folder; whatever the model put there is dropped, never refused.
+    result = accept_contract(
+        payload(runtime={"language": "python", "source_subfolder": written}),
+        tmp_path,
+        source_root=repo,
+        subfolder=subfolder,
+    )
+
+    assert not result.get("is_error"), result
+    runtime = _saved(tmp_path)["runtime"]
+    assert runtime.get("source_subfolder", "") == (subfolder or "")
+
+
 def test_amend_keeps_recorded_folder(tmp_path, repo):
     accept_contract(payload(), tmp_path, source_root=repo, subfolder="agents/a")
     contract = load(tmp_path)
@@ -552,12 +568,30 @@ def test_loading_refuses_flow_nesting_past_16(repo):
 
 
 @pytest.mark.parametrize("name", ["docker-compose.yml", "alk.yaml"])
-def test_deep_flow_nesting_does_not_hold_up_the_save(tmp_path, repo, name):
-    import time
+def test_deep_flow_nesting_does_not_hold_up_the_save(tmp_path, repo, name, monkeypatch):
+    from fi.alk.harness import runtime_selection
 
-    # About 4 s to read before the limit.
+    # About 4 s to read before the limit. The bound is shown by the loader's work, not the runner's
+    # clock: the scanner stops at the sixteenth open group, a handful of tokens in, however long
+    # the file is. Without the limit, a sixth of this file takes about 19,000 token fetches.
     (repo / "agents" / "a" / name).write_text(_deep_groups(400, 120_000))
-    started = time.monotonic()
+    loader = runtime_selection._BoundedLoader
+    fetch, opening = loader.fetch_more_tokens, loader.fetch_flow_collection_start
+    fetched, refused = [0], []
+
+    def counted(self):
+        fetched[0] += 1
+        return fetch(self)
+
+    def opened(self, token_class):
+        try:
+            return opening(self, token_class)
+        except runtime_selection.YamlTooLarge:
+            refused.append(self.flow_level)
+            raise
+
+    monkeypatch.setattr(loader, "fetch_more_tokens", counted)
+    monkeypatch.setattr(loader, "fetch_flow_collection_start", opened)
 
     result = accept_contract(
         payload(runtime={"language": "python"}),
@@ -566,8 +600,9 @@ def test_deep_flow_nesting_does_not_hold_up_the_save(tmp_path, repo, name):
         subfolder="agents/a",
     )
 
-    assert time.monotonic() - started < 1
     assert not result.get("is_error"), result
+    assert refused == [16]
+    assert fetched[0] < 100
 
 
 def test_loading_refuses_a_long_tag_prefix():
@@ -580,7 +615,7 @@ def test_loading_refuses_a_long_tag_prefix():
 
 
 def test_the_check_runs_off_the_loop_and_a_refusal_meanwhile_wins(tmp_path, repo, monkeypatch):
-    import time
+    import threading
 
     from fi.alk.harness import tools
     from fi.alk.harness.failure_file import FAILURE_FILE
@@ -590,38 +625,35 @@ def test_the_check_runs_off_the_loop_and_a_refusal_meanwhile_wins(tmp_path, repo
     arguments = payload(
         runtime={"language": "python"}, hard_constraints=["be polite"], data_store={"kind": "none"}
     )
+    beat = threading.Event()
+    seen: dict = {}
 
-    def slow(*args):
-        time.sleep(0.5)
+    def check_that_waits_for_the_loop(*args):
+        # Off the loop, the loop keeps beating while this waits; on it, no beat could come.
+        seen["thread"] = threading.get_ident()
+        beat.clear()
+        seen["loop_beat_meanwhile"] = beat.wait(10)
 
     async def save(during):
-        worst = [0.0]
+        seen["loop_thread"] = threading.get_ident()
         done = asyncio.Event()
 
-        async def beat():
-            last = time.perf_counter()
+        async def beating():
             while not done.is_set():
+                beat.set()
                 await asyncio.sleep(0.01)
-                now = time.perf_counter()
-                worst[0], last = max(worst[0], now - last), now
 
-        beating = asyncio.create_task(beat())
+        task = asyncio.create_task(beating())
         monkeypatch.setattr(tools, "_builds_a_sibling", during)
         result = await server.tools[0].handler(arguments)
         done.set()
-        await beating
-        return result, worst[0]
+        await task
+        return result
 
-    # The heap the tests before this one built is frozen, so a full collection of it can't land
-    # inside the save. The save's own collections still count.
-    gc.collect()
-    gc.freeze()
-    try:
-        result, worst = asyncio.run(save(slow))
-    finally:
-        gc.unfreeze()
+    result = asyncio.run(save(check_that_waits_for_the_loop))
     assert (destination / "contract.json").exists(), result
-    assert worst < 0.25
+    assert seen["thread"] != seen["loop_thread"]
+    assert seen["loop_beat_meanwhile"] is True
 
     (destination / "contract.json").unlink()
 
@@ -1051,6 +1083,8 @@ def test_a_crafted_python_file_does_not_hold_up_the_conversation(tmp_path, repo)
                 worst[0], last = max(worst[0], now - last), now
 
         beating = asyncio.create_task(beat())
+        # The scan doesn't parse the crafted file; searched as bytes, it names no browser tool, so
+        # leaving it unread doesn't cut the scan, and the reading is saved without a look.
         result = await submit(_plain("crafted"))
         done.set()
         await beating
@@ -2114,3 +2148,67 @@ def test_a_path_past_twice_the_system_limit_is_refused_before_any_lookup(monkeyp
     with pytest.raises(ValueError):
         runtime_selection.charged_path(Path("/" + "../" * 3000 + "x"))
     assert looked == []
+
+
+# TH-9042: the prompt copy never opens a file on the secret list, and never says whether one exists.
+
+_KEPT_OUT = "is kept out of this session because it holds credentials"
+
+
+def _copy(tmp_path: Path, root: Path, path: str, start: int = 1, end: int = 1) -> dict:
+    return accept_contract(
+        payload(
+            runtime={"language": "python"},
+            system_prompt_from=[{"path": path, "start_line": start, "end_line": end}],
+        ),
+        tmp_path / "out",
+        source_root=root,
+    )
+
+
+@pytest.mark.parametrize(
+    "name", [".pgpass", ".env", "prod.env", "config/secrets.yaml", "secrets.properties"]
+)
+def test_a_prompt_named_in_a_credential_file_is_refused_and_never_copied(tmp_path, repo, name):
+    # A .env file too: only a model citation may name one, never the prompt copy.
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+    (repo / name).write_text("db:5432:app:admin:fake-pass-123\n")
+
+    for start, end in ((1, 1), (1, 40)):
+        result = _copy(tmp_path, repo, name, start, end)
+        text = result["content"][0]["text"]
+        assert result.get("is_error") and _KEPT_OUT in text, result
+        assert "fake-pass-123" not in text and "which has" not in text
+    assert not (tmp_path / "out" / "contract.json").exists()
+
+
+@pytest.mark.parametrize("how", ["link", "missing", "missing-absolute", "dangling-link"])
+def test_a_credential_file_gets_one_answer_however_it_is_reached(tmp_path, repo, how):
+    if how == "link":
+        (repo / ".pgpass").write_text("db:5432:app:admin:fake-pass-123\n")
+        (repo / "prompt.md").symlink_to(".pgpass")
+        path = "prompt.md"
+    elif how == "dangling-link":
+        (repo / "prompt.md").symlink_to(".pgpass")
+        path = "prompt.md"
+    elif how == "missing-absolute":
+        path = str(repo / ".pgpass")
+    else:
+        path = ".pgpass"
+
+    result = _copy(tmp_path, repo, path)
+
+    assert result.get("is_error") and _KEPT_OUT in result["content"][0]["text"], result
+
+
+def test_a_source_under_a_listed_folder_still_copies_its_prompt(tmp_path, monkeypatch):
+    source = tmp_path / ".claude" / "worktrees" / "repo"
+    (source / "prompts").mkdir(parents=True)
+    (source / "agent.py").write_text("x = 1\n")
+    (source / "prompts" / "system.md").write_text("Be brief.\n")
+    monkeypatch.chdir(tmp_path / ".claude")
+
+    for path in ("prompts/system.md", str(source / "prompts" / "system.md")):
+        result = _copy(tmp_path, source, path)
+        assert not result.get("is_error"), (path, result)
+        assert _saved(tmp_path / "out")["system_prompt_excerpt"] == "Be brief."

@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -7,6 +8,13 @@ from fi.alk.harness.credentials import (
     RequirementKind,
     RequirementStatus,
     discover_credentials,
+)
+from fi.alk.harness.secrets import (
+    CONTROLLER_CONNECTION_NAMES,
+    client_name_reserved,
+    controller_name_reserved,
+    controller_owned_name,
+    worker_environment,
 )
 from fi.simulate.runtime.spec import SecretRef
 
@@ -623,6 +631,162 @@ def test_explicit_scan_paths_exclude_unused_optional_integrations(
     assert "retell" not in manifest.detected_connectors
 
 
+# TH-9550: which names a job may put in the sandbox controller's environment.
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # One case per prefix.
+        "ALK_SANDBOX_TOKEN",
+        "LD_AUDIT",
+        "DYLD_INSERT_LIBRARIES",
+        "PYTHONHOME",
+        "PYTHONWARNINGS",
+        "HARNESS_VOICE_RUNNER",
+        "HARNESS_PLATFORM_WORKSPACE_ID",
+        "FI_DEFAULT_MODEL",
+        "AGENTCC_CLAUDE_MODEL_ALIAS",
+        "DOCKER_CONFIG",
+        "COMPOSE_FILE",
+        "BUILDKIT_HOST",
+        "BUILDX_CONFIG",
+        "NODE_OPTIONS",
+        "SIMULATOR_X",
+        "ANTHROPIC_VERTEX_BASE_URL",
+        "GOOGLE_API_KEY",
+        "VERTEXAI_PROJECT",
+        "GIT_SSH_COMMAND",
+        "CLAUDE_CODE_ANYTHING",
+        # One case per exact name.
+        "LOCALDOMAIN",
+        "RES_OPTIONS",
+        "HOSTALIASES",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "NO_PROXY",
+        "GCONV_PATH",
+        "BASH_ENV",
+        "ENV",
+        "SSLKEYLOGFILE",
+        "OPENSSL_CONF",
+        # Anything ending _proxy, in any case.
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "wss_proxy",
+        "No_Proxy",
+        "http_proxy",
+        # Case and surrounding spaces do not bypass it.
+        "pythonpath",
+        " PYTHONPATH ",
+        "\tld_preload\n",
+        # The runner's own names, and a name only the worker allow-list holds.
+        "HARNESS_PLATFORM_URL",
+        "DOCKER_HOST",
+        "TMPDIR",
+        "CARTESIA_API_KEY",
+    ],
+)
+def test_controller_name_reserved(name):
+    assert controller_name_reserved(name)
+
+
+@pytest.mark.parametrize(
+    "name", ["LK_URL", "MY_SETTING", "OPENAI_API_KEY", "REMOTE_AGENT_ID", "VAPI_API_BASE_URL"]
+)
+def test_controller_name_not_reserved(name):
+    assert not controller_name_reserved(name)
+
+
+def test_no_controller_connection_name_is_reserved_or_inherited_from_the_host():
+    assert len(CONTROLLER_CONNECTION_NAMES) == 17
+    assert not [n for n in CONTROLLER_CONNECTION_NAMES if controller_name_reserved(n)]
+    child = worker_environment(
+        {},
+        host_environment={name: "host-value" for name in CONTROLLER_CONNECTION_NAMES},
+    )
+    assert not set(child) & CONTROLLER_CONNECTION_NAMES
+
+
+def test_worker_environment_never_lets_a_job_replace_or_add_a_host_name():
+    child = worker_environment(
+        {
+            "PYTHONPATH": "/job",
+            "HARNESS_PLATFORM_URL": "https://job.invalid",
+            "LD_PRELOAD": "/job.so",
+            "http_proxy": "http://job.invalid",
+            "NO_PROXY": "job.invalid",
+            "HOME": "/job-home",
+            "LIVEKIT_URL": "wss://job.invalid",
+        },
+        host_environment={
+            "PATH": "/bin",
+            "PYTHONPATH": "/host",
+            "HARNESS_PLATFORM_URL": "https://platform.invalid",
+            "NO_PROXY": "host.invalid",
+            "HOME": "/host-home",
+        },
+    )
+
+    assert child["PYTHONPATH"] == "/host"
+    assert child["HARNESS_PLATFORM_URL"] == "https://platform.invalid"
+    assert child["NO_PROXY"] == "host.invalid"
+    assert child["HOME"] == "/host-home"
+    assert "LD_PRELOAD" not in child
+    assert "http_proxy" not in child
+    assert child["LIVEKIT_URL"] == "wss://job.invalid"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "DOCKER_CONFIG", "COMPOSE_FILE",
+        "BUILDKIT_HOST", "BUILDX_CONFIG", "GIT_SSH_COMMAND", "CLAUDE_CODE_X",
+        "SSH_ASKPASS", "XDG_CONFIG_HOME", " ssh_askpass ", "xdg_config_home",
+        "SSH_ASKPASS_REQUIRE", "XDG_DATA_HOME",
+        "GODEBUG", "GLIBC_TUNABLES", "LOCPATH", "NLSPATH", "OPENSSL_MODULES", "OPENSSL_ENGINES",
+        "BROWSER", "PYTHONWARNINGS", "PYTHONINSPECT", "CLAUDE_CONFIG_DIR",
+        "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "DOCKER_HOST", "SSL_CERT_FILE",
+        "SSL_CERT_DIR", "NO_PROXY", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+        "LOCALDOMAIN", "RES_OPTIONS", "HOSTALIASES", "GCONV_PATH", "BASH_ENV", "ENV",
+        "OPENSSL_CONF", "SSLKEYLOGFILE", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
+        "PYTHONUSERBASE", "PYTHONBREAKPOINT", "PYTHONPLATLIBDIR", "NODE_OPTIONS",
+        "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE", "NODE_EXTRA_CA_CERTS",
+        "NODE_TLS_REJECT_UNAUTHORIZED", "PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
+        "http_proxy", "HTTPS_PROXY", "wss_proxy", "No_Proxy",
+        # Case and whitespace variants.
+        " ld_preload ", "\tnode_options\n", "pythonpath", " Http_Proxy ", "bash_env",
+    ],
+)
+def test_client_name_reserved(name):
+    assert client_name_reserved(name)
+    assert controller_name_reserved(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "HARNESS_VOICE_RUNNER", "ALK_SANDBOX_TOKEN", "AGENTCC_API_KEY", "FI_API_KEY",
+        "SIMULATOR_X", "ANTHROPIC_VERTEX_BASE_URL", "GOOGLE_API_KEY", "VERTEXAI_PROJECT",
+        "PYTHONUNBUFFERED", "NODE_ENV", "DOCKER_HOST", "HARNESS_PLATFORM_URL",
+        "CARTESIA_API_KEY", "GOOGLE_CLOUD_PROJECT", " harness_voice_runner ", "alk_x",
+    ],
+)
+def test_controller_owned_name(name):
+    assert controller_owned_name(name)
+    assert controller_name_reserved(name)
+
+
+@pytest.mark.parametrize("name", ["NODE_ENV", "PYTHONUNBUFFERED", " node_env ", "MY_SETTING", "LK_URL"])
+def test_client_name_reserved_passes_ordinary_runtime_settings(name):
+    assert not client_name_reserved(name)
+
+
+@pytest.mark.parametrize("name", ["LD_PRELOAD", "http_proxy", "GIT_SSH_COMMAND", "MY_SETTING", "LK_URL", "DEEPGRAM_API_KEY"])
+def test_controller_owned_name_leaves_client_and_neutral_names(name):
+    assert not controller_owned_name(name)
 def _agents_repo(root, files):
     for name, body in files.items():
         (root / name).parent.mkdir(parents=True, exist_ok=True)
@@ -719,6 +883,312 @@ def test_a_script_import_reaches_an_index_and_a_compiled_name(tmp_path):
     )
 
     assert _required(discover_credentials(root, agent_subfolder="agents/a"))["REAL_API_KEY"] is True
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"main": "lib/llm.js"},
+        {"main": "./lib/llm"},
+        {"exports": "./lib/llm.js"},
+        {"exports": {".": "./lib/llm.js"}},
+        # require() of a folder reads main alone: it comes first, though exports is set.
+        {"exports": "./lib/other.js", "main": "lib/llm.js"},
+        # Without a main or an index that resolves, exports is tried.
+        {"exports": "./lib/llm.js", "main": "missing.js"},
+        {"exports": "./lib/llm.js", "main": 3},
+    ],
+)
+def test_a_package_folder_is_entered_through_its_package_json(tmp_path, manifest):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/package.json": json.dumps(manifest),
+            "packages/shared/lib/llm.js": "export const key = process.env.SHARED_API_KEY;\n",
+            "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["SHARED_API_KEY"] is True
+
+
+@pytest.mark.parametrize("sub", [None, "agents/a"], ids=["whole-repo", "folder"])
+def test_a_package_main_is_required_though_exports_is_set(tmp_path, sub):
+    # Node's require() of a folder by path reads only "main"; "exports" is for a name found in
+    # node_modules. The whole-repo build and the folder build agree.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/package.json": json.dumps({"exports": "./lib/esm.mjs", "main": "lib/cjs.js"}),
+            "packages/shared/lib/esm.mjs": "export const k = process.env.ESM_API_KEY;\n",
+            "packages/shared/lib/cjs.js": "module.exports = process.env.CJS_API_KEY;\n",
+            "agents/a/index.js": "const shared = require('../../packages/shared');\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder=sub))
+
+    assert required["CJS_API_KEY"] is True
+    if sub:
+        assert required["ESM_API_KEY"] is False
+
+
+@pytest.mark.parametrize(
+    "manifest", [{"main": 3}, {"main": ["lib/llm.js"]}, {"exports": {"import": "./lib/llm.js"}}, [1], "x"]
+)
+def test_a_package_entry_that_is_not_a_string_falls_back_to_the_index(tmp_path, manifest):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/package.json": json.dumps(manifest),
+            "packages/shared/index.js": "export const key = process.env.INDEX_API_KEY;\n",
+            "packages/shared/lib/llm.js": "export const key = process.env.SHARED_API_KEY;\n",
+            "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["INDEX_API_KEY"] is True
+    assert required["SHARED_API_KEY"] is False
+
+
+def test_a_package_entry_that_does_not_resolve_falls_back_to_the_index(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/package.json": '{"main": "lib/missing.js"}',
+            "packages/shared/index.js": "export const key = process.env.INDEX_API_KEY;\n",
+            "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["INDEX_API_KEY"] is True
+
+
+@pytest.mark.parametrize("sub", [None, "agents/a"], ids=["whole-repo", "folder"])
+def test_a_package_main_that_does_not_resolve_falls_back_to_the_index_before_exports(tmp_path, sub):
+    # Node's require() of a folder by path loads its index when main is missing, and never reads
+    # exports: the whole-repo build and the folder build agree.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/package.json": json.dumps({"main": "missing.js", "exports": "./lib/llm.js"}),
+            "packages/shared/index.js": "export const key = process.env.INDEX_API_KEY;\n",
+            "packages/shared/lib/llm.js": "export const key = process.env.SHARED_API_KEY;\n",
+            "agents/a/index.js": 'const shared = require("../../packages/shared");\n',
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder=sub))
+
+    assert required["INDEX_API_KEY"] is True
+    if sub:
+        assert required["SHARED_API_KEY"] is False
+
+
+def _ts_monorepo(tmp_path, main):
+    return _agents_repo(
+        tmp_path,
+        {
+            "package.json": json.dumps({"workspaces": ["agents/*", "packages/*"]}),
+            "agents/a/package.json": json.dumps({"name": "a"}),
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps(
+                {"name": "shared", "main": main, "dependencies": {"puppeteer": "^23.0.0"}}
+            ),
+            "packages/shared/src/index.ts": (
+                "import puppeteer from 'puppeteer';\n"
+                "export const k = process.env.SHARED_API_KEY;\n"
+            ),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "main",
+    [
+        "dist/index.js",
+        "./build/index.js",
+        "out/index.js",
+        # Dileep, #225 (4598392979): the dual build, `tsc --outDir dist/cjs` from src/index.ts.
+        "dist/cjs/index.js",
+        "dist/esm/index.js",
+        # Check of 35d83711 (L1, L2): every flavour folder, tshy's `commonjs` included.
+        *(
+            f"dist/{folder}/index.js"
+            for folder in (
+                "mjs", "es", "umd", "browser", "node",
+                "commonjs", "module", "esnext", "es6", "es2015", "esm5",
+            )
+        ),
+        # Rollup's flavoured name for the same src/index.ts.
+        "dist/index.esm.js",
+        # Check of e94c4640 (L1, L2): other bundlers' flavours, and flavours stacked.
+        "dist/index.es.js",
+        "dist/index.modern.js",
+        "dist/index.bundle.js",
+        "dist/index.esm.min.js",
+        "dist/index.umd.min.js",
+    ],
+)
+def test_a_package_main_in_an_uncommitted_build_folder_is_found_in_src(tmp_path, main):
+    # Dileep, #225 (4596906756): the usual TypeScript monorepo shape. `main` points at build
+    # output that isn't committed; the code is in src/. The whole-repo build and the folder
+    # build agree, and the browser check sees what the package imports.
+    from fi.alk.harness.agent_type_check import browser_tools_in_agent
+
+    root = _ts_monorepo(tmp_path, main)
+
+    assert _required(discover_credentials(root))["SHARED_API_KEY"] is True
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["SHARED_API_KEY"] is True
+    assert "puppeteer" in browser_tools_in_agent(root, "agents/a")
+
+
+@pytest.mark.parametrize(
+    "main, source",
+    [
+        ("dist/worker.js", "src/worker.ts"),
+        ("dist/worker.mjs", "src/worker.ts"),
+        ("dist/worker.cjs", "src/worker.ts"),
+        ("dist/src/worker.js", "src/worker.ts"),
+        ("dist/cjs/worker.js", "src/worker.ts"),
+        ("dist/esm/worker.mjs", "src/worker.ts"),
+        # Dileep, #225 (4598392989): one suffix is dropped, not two.
+        ("dist/app.module.js", "src/app.module.ts"),
+        # Dileep, #225 (4599009866): tsc with rootDir `.` writes server/index.ts to
+        # dist/server/index.js; src/index.ts is another module.
+        ("dist/server/index.js", "server/index.ts"),
+        ("dist/lib/worker.js", "lib/worker.ts"),
+        # Check of 35d83711 (L2): the package's own path after a flavour folder is dropped.
+        ("dist/cjs/server/index.js", "server/index.ts"),
+    ],
+)
+def test_a_build_entry_that_is_not_the_index_finds_its_own_source(tmp_path, main, source):
+    # Change review of 646c8c96 (M1): the entry's own source, never an unrelated src/index.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": main}),
+            f"packages/shared/{source}": "export const k = process.env.WORKER_API_KEY;\n",
+            "packages/shared/src/index.ts": "export const i = process.env.INDEX_API_KEY;\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["WORKER_API_KEY"] is True
+    assert required["INDEX_API_KEY"] is False
+
+
+@pytest.mark.parametrize("main", ["dist/server/index.js", "dist/utils/worker.js"])
+def test_a_nested_build_entry_takes_no_source_from_another_folder(tmp_path, main):
+    # Dileep, #225 (4599009866): only a build flavour's folder (dist/cjs, dist/esm, ...) is
+    # dropped; dist/server/index.js never stands for src/index.ts.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": main}),
+            "packages/shared/src/index.ts": "export const i = process.env.INDEX_API_KEY;\n",
+            "packages/shared/src/worker.ts": "export const w = process.env.WORKER_API_KEY;\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["INDEX_API_KEY"] is False
+    assert required["WORKER_API_KEY"] is False
+
+
+def test_a_build_entry_with_no_source_of_its_own_takes_no_other_file(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": "dist/cjs/worker.js"}),
+            "packages/shared/src/index.ts": "export const i = process.env.INDEX_API_KEY;\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["INDEX_API_KEY"] is False
+
+
+@pytest.mark.parametrize("main", ["dist/app.module.js", "dist/esm/app.module.js"])
+def test_a_dotted_build_entry_takes_its_own_source_not_a_shorter_name(tmp_path, main):
+    # Dileep, #225 (4598392989): dist/app.module.js was looked up as src/app.ts.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": main}),
+            "packages/shared/src/app.module.ts": "export const k = process.env.MODULE_API_KEY;\n",
+            "packages/shared/src/app.ts": "export const a = process.env.APP_API_KEY;\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["MODULE_API_KEY"] is True
+    assert required["APP_API_KEY"] is False
+
+
+def test_a_dotted_build_entry_with_no_source_of_its_own_takes_no_shorter_name(tmp_path):
+    # Only a build flavour (`.esm`, `.cjs`, `.umd`, `.min`) is dropped to find the source:
+    # dist/app.module.js never stands for src/app.ts.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": "dist/app.module.js"}),
+            "packages/shared/src/app.ts": "export const a = process.env.APP_API_KEY;\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["APP_API_KEY"] is False
+
+
+@pytest.mark.parametrize(
+    "main, own, other",
+    [
+        # Check of e94c4640 (L3): the exact path comes before the dual build's folder dropped...
+        ("dist/cjs/worker.js", "src/cjs/worker.ts", "src/worker.ts"),
+        # ...and the exact name before a flavour dropped.
+        ("dist/index.esm.js", "src/index.esm.ts", "src/index.ts"),
+        # Check of 35d83711 (L2): src/ before the package's own path.
+        ("dist/server/index.js", "src/server/index.ts", "server/index.ts"),
+    ],
+)
+def test_a_build_entry_takes_its_exact_source_before_a_fallback(tmp_path, main, own, other):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": main}),
+            f"packages/shared/{own}": "export const k = process.env.OWN_API_KEY;\n",
+            f"packages/shared/{other}": "export const o = process.env.OTHER_API_KEY;\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["OWN_API_KEY"] is True
+    assert required["OTHER_API_KEY"] is False
+
+
+def test_a_build_folder_main_is_entered_through_src_index(tmp_path):
+    # Change review of 646c8c96 (L1): "main": "dist", a folder.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "agents/a/src/index.ts": "import { k } from '../../../packages/shared';\n",
+            "packages/shared/package.json": json.dumps({"name": "shared", "main": "dist"}),
+            "packages/shared/src/index.ts": "export const k = process.env.SHARED_API_KEY;\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["SHARED_API_KEY"] is True
 
 
 @pytest.mark.parametrize("make", ["link", "fifo"])
@@ -1069,3 +1539,275 @@ def test_a_walk_that_cant_parse_a_file_marks_the_manifest_truncated(tmp_path):
 
     manifest = discover_credentials(root, agent_subfolder="agents/a")
     assert manifest.truncated
+
+
+# --- LiveKit plugin api_key= handling (TH-9519) ---------------------------------------
+
+_LK_ENV = ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
+
+
+def _plugin_agent(tmp_path: Path, plugin: str, call: str, *, pre: str = "") -> None:
+    _write(
+        tmp_path,
+        "agent.py",
+        f"import os\nfrom livekit.plugins import {plugin}\n{pre}\nx = {plugin}.{call}\n",
+    )
+
+
+def _lk(tmp_path: Path, *supplied: str):
+    manifest = discover_credentials(
+        tmp_path, provided_environment=[*_LK_ENV, *supplied]
+    )
+    return manifest, _requirements(manifest)
+
+
+def _missing(tmp_path: Path, *supplied: str) -> set[str]:
+    manifest, found = _lk(tmp_path, *supplied)
+    assert manifest.ready is bool(
+        not any(r.status is RequirementStatus.MISSING for r in found.values())
+    )
+    return {
+        name for name, r in found.items() if r.status is RequirementStatus.MISSING
+    }
+
+
+@pytest.mark.parametrize("call", ["TTS()", "STT()"])
+def test_elevenlabs_plugin_asks_for_the_name_the_plugin_reads(tmp_path, call):
+    _plugin_agent(tmp_path, "elevenlabs", call)
+    _, found = _lk(tmp_path)
+    assert "ELEVENLABS_API_KEY" not in found
+    assert found["ELEVEN_API_KEY"].provider == "elevenlabs"
+    assert found["ELEVEN_API_KEY"].status is RequirementStatus.MISSING
+    manifest, _ = _lk(tmp_path, "ELEVEN_API_KEY")
+    assert manifest.ready
+
+
+def test_elevenlabs_environment_index_is_read_as_that_name_only(tmp_path):
+    _plugin_agent(
+        tmp_path, "elevenlabs", 'TTS(api_key=os.environ["ELEVENLABS_API_KEY"])'
+    )
+    assert _missing(tmp_path) == {"ELEVENLABS_API_KEY"}
+    _, found = _lk(tmp_path)
+    assert "ELEVEN_API_KEY" not in found
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].ready
+
+
+@pytest.mark.parametrize(
+    "plugin,call,read_name,own_name",
+    [
+        ("elevenlabs", 'TTS(api_key=os.getenv("ELEVENLABS_API_KEY"))', "ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
+        ("elevenlabs", 'TTS(api_key=os.environ.get("ELEVENLABS_API_KEY", ""))', "ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
+        ("deepgram", 'STT(api_key=os.getenv("MY_DEEPGRAM"))', "MY_DEEPGRAM", "DEEPGRAM_API_KEY"),
+        ("deepgram", 'STT(api_key=os.environ.get("DG_KEY", ""))', "DG_KEY", "DEEPGRAM_API_KEY"),
+        ("deepgram", 'STT(api_key=os.getenv("DG_KEY", None))', "DG_KEY", "DEEPGRAM_API_KEY"),
+        ("deepgram", 'STT(api_key=os.getenv("DG_KEY", default=""))', "DG_KEY", "DEEPGRAM_API_KEY"),
+        ("elevenlabs", 'TTS(api_key=os.getenv("ELEVENLABS_API_KEY", "your-api-key"))', "ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
+    ],
+)
+def test_a_nullable_read_passed_as_api_key_is_required_by_its_own_name(
+    tmp_path, plugin, call, read_name, own_name
+):
+    _plugin_agent(tmp_path, plugin, call)
+    assert _missing(tmp_path) == {read_name}
+    _, found = _lk(tmp_path)
+    assert own_name not in found
+    assert found[read_name].required is True
+    assert _lk(tmp_path, read_name)[0].ready
+
+
+@pytest.mark.parametrize(
+    "plugin,call",
+    [
+        ("deepgram", 'STT(api_key=os.getenv("X_KEY", "fallback-value"))'),
+        ("deepgram", 'STT(api_key=os.getenv("DG_KEY", default="fallback-value"))'),
+        ("deepgram", 'STT(api_key="literal")'),
+        ("elevenlabs", 'TTS(api_key="literal")'),
+    ],
+)
+def test_a_literal_or_defaulted_api_key_adds_no_requirement(tmp_path, plugin, call):
+    _plugin_agent(tmp_path, plugin, call)
+    manifest, found = _lk(tmp_path)
+    assert manifest.ready
+    assert not any(
+        n in found for n in ("DEEPGRAM_API_KEY", "ELEVEN_API_KEY", "ELEVENLABS_API_KEY")
+    )
+    assert not any(
+        o.startswith("sdk:") for r in found.values() for o in r.detected_from
+    )
+
+
+@pytest.mark.parametrize(
+    "call,pre",
+    [
+        ("STT(api_key=KEY)", 'KEY = os.getenv("DEEPGRAM_API_KEY")'),
+        ("STT(api_key=settings.deepgram_api_key)", ""),
+        ("STT(api_key=os.getenv('DEEPGRAM_API_KEY') or '')", ""),
+        ("STT(**opts)", ""),
+        ("STT(api_key='')", ""),
+        ('STT(api_key=os.environ["dg_key"])', ""),
+        ('STT(api_key=os.getenv("dg_key"))', ""),
+        ('STT(api_key="  ")', ""),
+    ],
+)
+def test_an_unreadable_api_key_keeps_the_plugins_own_requirement(tmp_path, call, pre):
+    _plugin_agent(tmp_path, "deepgram", call, pre=pre)
+    assert "DEEPGRAM_API_KEY" in _missing(tmp_path)
+    assert _lk(tmp_path, "DEEPGRAM_API_KEY")[0].ready
+
+
+@pytest.mark.parametrize(
+    "plugin, call, own_name",
+    [
+        ("openai", 'LLM(api_key=os.getenv("ALK_CLAUDE_GATEWAY_API_KEY"))', "OPENAI_API_KEY"),
+        ("deepgram", 'STT(api_key=os.getenv("HOST"))', "DEEPGRAM_API_KEY"),
+        ("cartesia", 'TTS(api_key=os.getenv("ALK_X"))', "CARTESIA_API_KEY"),
+        ("openai", 'realtime.RealtimeModel(api_key=os.getenv("ALK_X"))', "OPENAI_API_KEY"),
+    ],
+)
+def test_a_reserved_name_passed_as_the_key_asks_for_the_plugins_own_name(
+    tmp_path, plugin, call, own_name
+):
+    _plugin_agent(tmp_path, plugin, call)
+    _, found = _lk(tmp_path)
+    assert "ALK_CLAUDE_GATEWAY_API_KEY" not in found and "HOST" not in found
+    assert "ALK_X" not in found
+    # The customer can never supply the reserved name, and several plugins then read their own
+    # variable, so the check asks for that rather than calling the agent ready.
+    assert own_name in _missing(tmp_path)
+
+
+def test_a_bare_getenv_imported_from_os_keeps_the_plugins_own_requirement(tmp_path):
+    _write(
+        tmp_path,
+        "agent.py",
+        "from os import getenv\nfrom livekit.plugins import deepgram\n"
+        'x = deepgram.STT(api_key=getenv("DEEPGRAM_API_KEY"))\n',
+    )
+    assert "DEEPGRAM_API_KEY" in _missing(tmp_path)
+
+
+def test_elevenlabs_options_dict_is_not_ready_without_the_plugins_name(tmp_path):
+    _plugin_agent(tmp_path, "elevenlabs", "TTS(**opts)")
+    assert {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"} <= _missing(tmp_path)
+    # No api_key= is passed, so the plugin reads only its own name: the other doesn't stand in.
+    assert "ELEVEN_API_KEY" in _missing(tmp_path, "ELEVENLABS_API_KEY")
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].credential_choices == []
+
+
+@pytest.mark.parametrize(
+    "call,pre",
+    [
+        ("TTS(api_key=KEY)", 'KEY = os.getenv("ELEVENLABS_API_KEY")'),
+        ("TTS(api_key=settings.elevenlabs_api_key)", ""),
+    ],
+)
+def test_an_unreadable_elevenlabs_api_key_takes_either_name(tmp_path, call, pre):
+    # The code behind an unreadable api_key= may read either name: one is enough.
+    _plugin_agent(tmp_path, "elevenlabs", call, pre=pre)
+    assert _missing(tmp_path, "ELEVEN_API_KEY") == set()
+    assert _missing(tmp_path, "ELEVENLABS_API_KEY") == set()
+    assert _lk(tmp_path, "ELEVEN_API_KEY")[0].ready
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].ready
+    manifest, _ = _lk(tmp_path)
+    assert not manifest.ready
+    assert {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"} <= _missing(tmp_path)
+    assert [choice.options for choice in manifest.credential_choices] == [
+        [["ELEVEN_API_KEY"], ["ELEVENLABS_API_KEY"]]
+    ]
+
+
+def test_an_unreadable_elevenlabs_api_key_beside_a_strict_read_keeps_that_name(tmp_path):
+    # The code itself needs ELEVENLABS_API_KEY, so it is required whatever the plugin takes.
+    _plugin_agent(
+        tmp_path,
+        "elevenlabs",
+        "TTS(api_key=settings.elevenlabs_api_key)",
+        pre='strict = os.environ["ELEVENLABS_API_KEY"]',
+    )
+    assert _lk(tmp_path, "ELEVENLABS_API_KEY")[0].ready
+    assert "ELEVENLABS_API_KEY" in _missing(tmp_path, "ELEVEN_API_KEY")
+    assert _lk(tmp_path)[0].credential_choices == []
+
+
+def test_code_reading_the_eleven_names_is_labelled_elevenlabs(tmp_path):
+    _write(
+        tmp_path,
+        "agent.py",
+        'import os\na = os.environ["ELEVEN_API_KEY"]\nb = os.environ["ELEVENLABS_API_KEY"]\n',
+    )
+    _, found = _lk(tmp_path)
+    for name in ("ELEVEN_API_KEY", "ELEVENLABS_API_KEY"):
+        assert found[name].provider == "elevenlabs"
+        assert found[name].required is True
+
+
+@pytest.mark.parametrize("sub", [None, "agents/a"], ids=["whole-repo", "folder"])
+def test_a_workspace_member_the_agent_depends_on_is_followed_through_its_src(tmp_path, sub):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers = ["agents/a", "packages/shared"]\n',
+            "agents/a/pyproject.toml": (
+                '[project]\nname = "agent-a"\nversion = "0"\ndependencies = ["shared"]\n'
+                '[tool.uv.sources]\nshared = { workspace = true }\n'
+            ),
+            "agents/a/agent.py": "from shared.store import db\n",
+            "packages/shared/pyproject.toml": '[project]\nname = "shared"\nversion = "0"\n',
+            "packages/shared/src/shared/__init__.py": "",
+            "packages/shared/src/shared/store.py": (
+                'import os\ndb = os.environ["SHARED_DB_PASSWORD"]\n'
+            ),
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder=sub))["SHARED_DB_PASSWORD"] is True
+
+
+def test_a_sibling_agents_unreadable_elevenlabs_key_leaves_this_agent_alone(tmp_path):
+    # Agent b's constructor isn't agent a's code: it makes no choice a has to meet.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "a/agent.py": "print('a')\n",
+            "b/agent.py": (
+                "from livekit.plugins import elevenlabs\n"
+                "x = elevenlabs.TTS(api_key=settings.eleven_key)\n"
+            ),
+        },
+    )
+    manifest = discover_credentials(root, agent_subfolder="a")
+    assert manifest.ready
+    assert manifest.credential_choices == []
+    rows = {
+        item.environment_name: item.status
+        for item in manifest.requirements
+        if item.environment_name in {"ELEVEN_API_KEY", "ELEVENLABS_API_KEY"}
+    }
+    assert rows == {
+        "ELEVEN_API_KEY": RequirementStatus.OPTIONAL,
+        "ELEVENLABS_API_KEY": RequirementStatus.OPTIONAL,
+    }
+
+
+def test_imported_code_behind_the_agent_makes_the_either_name_choice(tmp_path):
+    # The agent's folder imports the code that builds the plugin: that code is the agent's own.
+    root = _agents_repo(
+        tmp_path,
+        {
+            "lib/__init__.py": "",
+            "lib/voice.py": (
+                "from livekit.plugins import elevenlabs\n"
+                "x = elevenlabs.TTS(api_key=settings.eleven_key)\n"
+            ),
+            "agents/a/agent.py": "from lib import voice\n",
+        },
+    )
+    manifest = discover_credentials(
+        root,
+        agent_subfolder="agents/a",
+        provided_environment=["ELEVEN_API_KEY", "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"],
+    )
+    assert manifest.ready
+    assert [choice.options for choice in manifest.credential_choices] == [
+        [["ELEVEN_API_KEY"], ["ELEVENLABS_API_KEY"]]
+    ]

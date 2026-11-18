@@ -295,6 +295,21 @@ class HarnessJobMetadata(BaseModel):
     model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
 
     customer_code_environment: dict[str, str] = Field(default_factory=dict)
+    # The hosts a controlled run lets the agent reach; absent when the platform does not control its egress.
+    egress_allowed_hosts: list[str] | None = None
+
+
+def routed_through_gateway(target_model: object) -> bool:
+    """True for a model name the model gateway must route, such as `vertex_ai/gemini-3.7-flash`.
+
+    The first segment is compared case-sensitively because the Agents SDK does the same: only
+    the exact prefix `openai` is stripped and sent on as a bare OpenAI name.
+    """
+    return (
+        isinstance(target_model, str)
+        and "/" in target_model
+        and target_model.partition("/")[0] != "openai"
+    )
 
 
 class HarnessJob(BaseModel):
@@ -376,6 +391,23 @@ class HarnessJob(BaseModel):
                 "values. Simulator credentials are not target credentials. A requested "
                 "provider/model must be configured through the agent's supported settings, "
                 "then verified with a real chat. Do not substitute a different provider."
+            )
+        if routed_through_gateway(target_model):
+            instructions.append(
+                "If the agent uses the OpenAI Agents SDK and passes its model as a name to "
+                "Agent(model=...) or RunConfig(model=...), give it "
+                f"the requested model written as openai/{target_model}: the SDK refuses or "
+                "reroutes a name whose first segment is not openai, and it removes openai/ and "
+                "sends the rest unchanged to its configured endpoint. A name handed to a model "
+                "object such as OpenAIChatCompletionsModel(model=...) is sent unchanged, so "
+                "leave it as the requested model. Never change the model itself. If the agent "
+                "is a Docker Compose project and its code neither calls "
+                'set_default_openai_api("chat_completions") nor hands the model to a '
+                "chat-completions model object, write in the contract's notes that when the kit "
+                "runs this Compose project as is (it does where a Compose broker is set up), "
+                "every turn on this model gets the gateway's HTTP 501 until the agent's startup "
+                'adds set_default_openai_api("chat_completions"); where the kit builds the '
+                "services from source instead, it sets this itself."
             )
         if self.require_tool_workflow:
             instructions.append(
@@ -502,6 +534,19 @@ class FailureDomain(str, Enum):
     GRADING = "grading"
     ARTIFACT = "artifact"
     PLATFORM_SYNC = "platform_sync"
+
+
+class FailureCause(str, Enum):
+    """Why a candidate failed real-runtime validation, from a closed set.
+
+    The platform passes only this value to a reader that must not see guest text, such as a
+    coding agent's key: free text from the guest can quote any case of the suite.
+    """
+
+    AGENT_EXITED_BEFORE_READY = "agent_exited_before_ready"
+    AGENT_NOT_READY_IN_TIME = "agent_not_ready_in_time"
+    CHAT_TARGET_TIMEOUT = "chat_target_timeout"
+    CHAT_TARGET_REFUSED = "chat_target_refused"
 
 
 class FailureOwner(str, Enum):
