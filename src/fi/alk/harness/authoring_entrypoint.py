@@ -440,7 +440,7 @@ def _certify_only(args: argparse.Namespace) -> int:
             "environment", f"Certify-only validation failed: {_one_line(exc)}"
         ) from exc
     if getattr(args, "prove_scenarios", False):
-        _prove_scenarios(output, getattr(args, "deadline_at", None))
+        _prove_scenarios(output, getattr(args, "deadline_at", None), agent_document=getattr(args, "agent_document", None))
     try:
         # Written before sealing: the platform's fill gate keys on the sealed certificate.
         report_path.write_text(
@@ -492,15 +492,19 @@ def _prove_only(args: argparse.Namespace) -> int:
         print(f"prove-only: {live_proof.live_summary(live)}", file=sys.stderr, flush=True)
     except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
         print(f"prove-only: live proofs not run: {redact_outbound_text(_one_line(exc))}", file=sys.stderr, flush=True)
-    prove_suite.prove_suite(output, output / SCENARIO_PROOFS, deadline_at=args.deadline_at, keys=keys)
+    prove_suite.prove_suite(
+        output, output / SCENARIO_PROOFS, deadline_at=args.deadline_at, keys=keys, agent_document=args.agent_document
+    )
     return 0
 
 
-def _prove_scenarios(output: Path, deadline_at: float | None, *, stage: str = "certify-only") -> None:
+def _prove_scenarios(
+    output: Path, deadline_at: float | None, *, stage: str = "certify-only", agent_document: Path | None = None
+) -> None:
     """Prove every scenario on this authoring tree into `SCENARIO_PROOFS`, with what the validation just played on the
     live runtime applied as `--prove-only` applies it (nothing is played again); never fails the build or certify."""
     try:
-        prove_suite.prove_suite(output, output / SCENARIO_PROOFS, deadline_at=deadline_at)
+        prove_suite.prove_suite(output, output / SCENARIO_PROOFS, deadline_at=deadline_at, agent_document=agent_document)
     except Exception as exc:  # noqa: BLE001 - a missing proofs file reads as "no new proofs"
         print(f"{stage}: scenario proofs not written: {_one_line(exc)}", file=sys.stderr, flush=True)
 
@@ -723,6 +727,13 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         "--keys",
         default=None,
         help="With --prove-only: comma-separated scenario keys to prove; default every one",
+    )
+    parser.add_argument(
+        "--agent-document",
+        type=Path,
+        default=None,
+        help="With --prove-scenarios or --prove-only: the agent version's agent.json; a case whose reference calls a "
+        "tool it lacks is not kept",
     )
     parser.add_argument(
         "--deadline-at",

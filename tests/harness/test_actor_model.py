@@ -355,3 +355,15 @@ def test_a_roles_key_names_a_file_or_nothing(raw, expected):
     from fi.alk.harness.actors import knowledge_role_key
 
     assert knowledge_role_key(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "named", ["knowledge/roles.json", "/knowledge/roles.json", "knowledge//roles.json", "knowledge/./roles.json"]
+)
+def test_the_roles_file_is_never_an_actor_s_knowledge(named):
+    from fi.alk.harness.actors import actor_rules, knowledge_file_allowed
+
+    # It names which attached files are evaluator-only: a map to the grading answers.
+    assert knowledge_file_allowed(named) is False
+    assert knowledge_file_allowed("knowledge/policy.md") is True
+    assert "knowledge/roles.json" in actor_rules()["not_knowledge"]["files"]

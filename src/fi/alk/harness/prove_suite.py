@@ -15,6 +15,8 @@ then holds only their keys, and the platform merges it over the proofs it alread
 from __future__ import annotations
 
 import argparse
+import json
+import logging
 import sys
 import time
 from collections.abc import Mapping
@@ -30,6 +32,7 @@ from .proofs import proof_entry, proof_key, unprovable_entry
 from .prove import BlockedReason, load_proof_contract, load_world_actors, prove
 from .scenario_tools import load_scenarios
 
+logger = logging.getLogger(__name__)
 EXIT_UNREADABLE = 3
 DEADLINE_MARGIN_SECONDS = 300
 INCOMPLETE_WHY = "not proved: the validation's time budget ran out before this case"
@@ -50,6 +53,20 @@ def budget_seconds(budget: float, deadline_at: float | None, now: float) -> floa
     return min(budget, deadline_at - now - DEADLINE_MARGIN_SECONDS)
 
 
+def agent_tools(document: Path | None) -> set[str] | None:
+    """The tool names of the agent version under test, from its agent document (`{"agent": {"tools": [{"name"}]}}`,
+    as the agent reading writes it). None when no document is given or it cannot be read: the check is then skipped,
+    never failed on a bad document."""
+    if document is None:
+        return None
+    try:
+        tools = json.loads(Path(document).read_text(encoding="utf-8"))["agent"]["tools"]
+        return {str(one["name"]) for one in tools}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        logger.warning("agent document not read, so no case is checked against the agent's tools: %s", type(exc).__name__)
+        return None
+
+
 def prove_suite(
     authoring: Path,
     output: Path,
@@ -57,12 +74,14 @@ def prove_suite(
     budget: float = 1200,
     deadline_at: float | None = None,
     keys: set[str] | None = None,
+    agent_document: Path | None = None,
 ) -> dict[str, dict[str, Any]]:
     scenarios = load_scenarios(authoring)
     catalogue = load_catalogue(authoring)
     contract = load_proof_contract(authoring)
     actors = load_world_actors(authoring)
     live = load_live(authoring)
+    tools = agent_tools(agent_document)
     started = time.monotonic()
     allowed = budget_seconds(budget, deadline_at, time.time())
     proofs: dict[str, ProofEntry] = {}
@@ -74,7 +93,7 @@ def prove_suite(
             proofs[key] = _incomplete()
             continue
         try:
-            proof = prove(scenario, catalogue, authoring, contract=contract, actors=actors)
+            proof = prove(scenario, catalogue, authoring, contract=contract, actors=actors, agent_tools=tools)
             if key in live:
                 # The certification just played this case on the live runtime: its gates win.
                 proof = apply_live(proof, live[key])
@@ -96,6 +115,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--budget-seconds", type=float, default=1200)
     parser.add_argument("--deadline-at", type=float, default=None)
     parser.add_argument("--keys", default=None, help="comma-separated scenario keys to prove; default every one")
+    parser.add_argument(
+        "--agent-document", type=Path, default=None, help="the agent version's agent.json; its tools bound each case"
+    )
     args = parser.parse_args(argv)
     keys = {one.strip() for one in args.keys.split(",") if one.strip()} if args.keys is not None else None
     if not args.authoring.is_dir():
@@ -103,7 +125,12 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_UNREADABLE
     try:
         prove_suite(
-            args.authoring, args.output, budget=args.budget_seconds, deadline_at=args.deadline_at, keys=keys
+            args.authoring,
+            args.output,
+            budget=args.budget_seconds,
+            deadline_at=args.deadline_at,
+            keys=keys,
+            agent_document=args.agent_document,
         )
     except OSError as exc:
         print(f"prove_suite: authoring tree not readable: {exc}", file=sys.stderr)
