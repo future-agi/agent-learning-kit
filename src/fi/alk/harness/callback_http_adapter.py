@@ -52,6 +52,22 @@ _STREAM_ANSWER_TYPES = frozenset(
     )
 )
 _STREAM_ANSWER_FIELDS = ("content", "text", "delta")
+_CHAT_ROLES = frozenset(("assistant", "user", "system", "tool", "developer", "model"))
+_REPLY_ITEM_KINDS = frozenset(
+    _TEXT_KINDS
+    + _ENVELOPE_KINDS
+    + (
+        "refusal",
+        "thinking",
+        "redacted_thinking",
+        "reasoning",
+        "reasoning_content",
+        "tool_use",
+        "server_tool_use",
+        "tool_result",
+        "image",
+    )
+)
 _MISSING = object()
 _MOST_DEPTH = 32
 
@@ -112,6 +128,73 @@ def _is_message(item: Any) -> bool:
     if kind in ("ai", "AIMessageChunk"):
         return True
     return _field(item, "role") == "assistant" and kind in (None, "message")
+
+
+def _is_agent_turn(item: Any) -> bool:
+    """A message the agent said: an assistant or model role, or an ``ai`` or assistant type."""
+    role, kind = _field(item, "role"), _field(item, "type")
+    return role in ("assistant", "model") or kind in ("ai", "AIMessageChunk", "assistant")
+
+
+def _is_reply_item(value: Any) -> bool:
+    """A message or a block by its own ``role``, ``type`` or ``thought`` flag."""
+    role = _field(value, "role")
+    kind = _field(value, "type")
+    return (
+        (isinstance(role, str) and role in _CHAT_ROLES)
+        or (isinstance(kind, str) and kind in _REPLY_ITEM_KINDS)
+        or _field(value, "thought") is True
+    )
+
+
+def _is_history_item(item: Any) -> bool:
+    """A chat message by its ``type`` or ``role``, whoever said it."""
+    role, kind = _field(item, "role"), _field(item, "type")
+    return (isinstance(kind, str) and kind in _ENVELOPE_KINDS) or (
+        isinstance(role, str) and role in _CHAT_ROLES
+    )
+
+
+def _is_block_or_message(item: Any) -> bool:
+    role, kind = _field(item, "role"), _field(item, "type")
+    if (isinstance(kind, str) and kind in _REPLY_ITEM_KINDS) or (
+        isinstance(role, str) and role in _CHAT_ROLES
+    ):
+        return True
+    # Untyped provider blocks that carry thinking: a Gemini thought part, a Bedrock reasoning block.
+    return kind is None and (
+        _field(item, "thought") is True or _field(item, "reasoningContent") is not None
+    )
+
+
+def _is_untyped_text(item: Any) -> bool:
+    return _field(item, "type") is None and isinstance(_field(item, "text"), str)
+
+
+def _stream_event_text(chunk: Any) -> Any:
+    """Answer text of a stream event; None when ``chunk`` is a message or has no ``type``.
+
+    Anthropic raw events and OpenAI Responses events carry thinking, signatures, tool input
+    and bookkeeping next to the answer. Only ``response.output_text.delta`` and a
+    ``content_block_delta`` holding a listed delta give text. A message kind (and a chunk with
+    no string ``type``) is left to the caller's key lookup. Any other typed event gives the
+    string of a listed answer type (``_stream_answer_text``), else ``""``, never its JSON.
+    """
+    kind = _field(chunk, "type")
+    if not isinstance(kind, str):
+        return None
+    if kind == "content_block_delta":
+        return _stream_event_text(_field(chunk, "delta")) or ""
+    if kind == "response.output_text.delta":
+        value = _field(chunk, "delta")
+        return value if isinstance(value, str) else ""
+    if (
+        kind == "refusal"
+        or kind in _ENVELOPE_KINDS
+        or kind.endswith(("Message", "MessageChunk"))
+    ):
+        return None
+    return _stream_answer_text(chunk)
 
 
 def _text_of(content: Any, depth: int = 0) -> str:

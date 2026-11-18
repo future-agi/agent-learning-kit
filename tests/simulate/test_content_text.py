@@ -3,9 +3,11 @@
 import ast
 import asyncio
 import json
+import logging
 import re
 from pathlib import Path
 from types import SimpleNamespace
+from types import SimpleNamespace as NS
 
 import pytest
 from text_of_cases import ANSWER, CASES, THINKING, _blocks
@@ -69,12 +71,20 @@ def test_every_copy_keeps_the_text_of_every_reply_shape(copy_name, content, expe
 GUARDED = (
     "_TEXT_KINDS",
     "_ENVELOPE_KINDS",
+    "_CHAT_ROLES",
+    "_REPLY_ITEM_KINDS",
     "_STREAM_ANSWER_TYPES",
     "_STREAM_ANSWER_FIELDS",
     "_MISSING",
     "_MOST_DEPTH",
     "_field",
     "_stream_answer_text",
+    "_is_agent_turn",
+    "_is_reply_item",
+    "_is_history_item",
+    "_is_block_or_message",
+    "_is_untyped_text",
+    "_stream_event_text",
     "_is_text_block",
     "_block_text",
     "_is_message",
@@ -579,3 +589,1029 @@ def test_a_history_with_no_assistant_message_gives_no_user_words(reply):
     result = _generic_response(reply)
     assert result.content == ""
     assert "reply_unreadable" in result.metadata
+
+
+# --- Untyped text in a reply keeps its text. ---
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (
+            {"content": [{"text": "Your order shipped today."}]},
+            "Your order shipped today.",
+        ),
+        (
+            {"content": [SimpleNamespace(text="Your order shipped today.")]},
+            "Your order shipped today.",
+        ),
+        (
+            {"content": ["Sure.", "Your order shipped today."]},
+            "Sure. Your order shipped today.",
+        ),
+        (
+            {"message": {"content": [{"text": "Sure."}, "Your order shipped today."]}},
+            "Sure. Your order shipped today.",
+        ),
+        (
+            {
+                "messages": [
+                    {"role": "assistant", "content": [{"text": "Done."}, "Really."]}
+                ]
+            },
+            "Done. Really.",
+        ),
+    ],
+    ids=[
+        "untyped-dict-in-content",
+        "untyped-object-in-content",
+        "plain-strings-in-content",
+        "untyped-dict-and-string-in-message",
+        "untyped-dict-and-string-in-state",
+    ],
+)
+def test_untyped_text_in_a_reply_keeps_its_text(reply, expected):
+    assert _generic_reply(reply) == expected
+
+
+# --- Untyped provider thinking blocks (Gemini, Bedrock, langchain-aws) never reach the reply. ---
+
+BEDROCK_REASONING = {
+    "reasoningContent": {
+        "reasoningText": {"text": "plan the reply", "signature": "sig-abc"}
+    }
+}
+
+
+AWS_REASONING = {
+    "type": "reasoning_content",
+    "reasoning_content": {"text": "plan the reply", "signature": "sig-abc"},
+}
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"content": [{"text": "plan the reply", "thought": True}]}, ""),
+        (
+            {
+                "role": "assistant",
+                "content": [
+                    BEDROCK_REASONING,
+                    {"toolUse": {"toolUseId": "t", "name": "f", "input": {}}},
+                ],
+            },
+            "",
+        ),
+        ({"output": [{"text": ANSWER}, BEDROCK_REASONING]}, ANSWER),
+        ({"content": [AWS_REASONING]}, ""),
+        (
+            {
+                "message": {
+                    "role": "model",
+                    "parts": [
+                        {"text": "plan the reply", "thought": True},
+                        {"text": ANSWER},
+                    ],
+                }
+            },
+            ANSWER,
+        ),
+    ],
+    ids=[
+        "gemini-thought-only",
+        "bedrock-reasoning-tool-turn",
+        "bedrock-text-and-reasoning-under-output",
+        "langchain-aws-reasoning-only",
+        "gemini-content-parts-in-message",
+    ],
+)
+def test_an_untyped_thinking_block_never_shows(reply, expected):
+    text = _generic_reply(reply)
+    assert text == expected
+    assert "sig-abc" not in text and "plan the reply" not in text
+
+
+# --- A single message (not a list) under a reply key keeps only its text. ---
+
+
+class _Message:  # an AIMessage-like object with model_dump
+    def __init__(self, content):
+        self.type, self.content = "ai", content
+
+    def model_dump(self):
+        return {"type": self.type, "content": self.content, "additional_kwargs": {}}
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"output": _Message(_blocks())}, ANSWER),
+        ({"response": {"role": "assistant", "content": _blocks()}}, ANSWER),
+        (
+            {"result": {"type": "message", "role": "assistant", "content": _blocks()}},
+            ANSWER,
+        ),
+        (NS(output=_Message(_blocks())), ANSWER),
+        (
+            {"result": [{"order_id": "A1", "status": "shipped"}]},
+            '[{"order_id": "A1", "status": "shipped"}]',
+        ),
+        (
+            {"data": {"name": "Ann", "role": "admin"}},
+            '{"name": "Ann", "role": "admin"}',
+        ),
+    ],
+    ids=[
+        "message-object-under-output",
+        "message-dict-under-response",
+        "responses-message-under-result",
+        "message-object-as-output-attribute",
+        "control-records-stay-json",
+        "control-record-dict-stays-json",
+    ],
+)
+def test_a_message_under_a_reply_key_never_shows_thinking(reply, expected):
+    text = _generic_reply(reply)
+    assert text == expected
+    assert "sig-abc" not in text and "plan the reply" not in text
+
+
+# --- A bare block list, a history or a stream returned by the agent keeps only the text. ---
+
+
+def _text(text):
+    return {"type": "text", "text": text}
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (_blocks(), ANSWER),
+        ([_text(ANSWER), THINKING], ANSWER),
+        ([THINKING], ""),
+        (
+            [_text("The status"), THINKING, _text("is complete.")],
+            "The status is complete.",
+        ),
+        ([{"text": "a"}, {"text": "b"}], "a b"),
+        (tuple(_blocks()), ANSWER),
+        (
+            [
+                {"role": "user", "content": "q1"},
+                {"role": "assistant", "content": "A1"},
+                {"role": "user", "content": "q2"},
+                {"role": "assistant", "content": [THINKING, _text("A2")]},
+            ],
+            "A2",
+        ),
+        (
+            [
+                NS(type="human", content="q"),
+                NS(type="ai", content="Let me check."),
+                NS(type="ai", content=_blocks()),
+            ],
+            ANSWER,
+        ),
+    ],
+    ids=[
+        "thinking-then-text",
+        "text-then-thinking",
+        "only-thinking",
+        "text-around-thinking",
+        "untyped-parts",
+        "tuple",
+        "dict-history-gives-the-last-reply-only",
+        "object-history-gives-the-last-reply-only",
+    ],
+)
+def test_a_bare_block_list_or_a_history_returned_by_the_agent_is_reduced_to_text(
+    reply, expected
+):
+    text = _generic_reply(reply)
+    assert text == expected
+    assert "sig-abc" not in text and "plan the reply" not in text
+
+
+def _agent_input():
+    return AgentInput(
+        thread_id="t",
+        execution_id="t",
+        messages=[{"role": "user", "content": "hi"}],
+        new_message={"role": "user", "content": "hi"},
+    )
+
+
+def _stream_reply(chunks):
+    class Agent:
+        def invoke(self, inputs):
+            yield from chunks
+
+    result = asyncio.run(wrap_agent(Agent()).call(_agent_input()))
+    return result.content if isinstance(result, AgentResponse) else result
+
+
+@pytest.mark.parametrize(
+    "chunks, expected",
+    [
+        (
+            [
+                NS(content=[THINKING, _text("The status ")]),
+                NS(content=[_text("is complete.")]),
+            ],
+            ANSWER,
+        ),
+        (
+            [{"content": [THINKING]}, {"delta": [_text("The status is complete.")]}],
+            ANSWER,
+        ),
+        ([{"content": "The status "}, {"content": "is complete."}], ANSWER),
+        (
+            [
+                {"message": {"role": "assistant", "content": [THINKING, _text("Hi")]}},
+                NS(output=[THINKING]),
+            ],
+            "Hi",
+        ),
+        ([{"content": {"city": "Pune"}}], '{"city": "Pune"}'),
+    ],
+    ids=[
+        "chunk-objects-with-blocks",
+        "chunk-dicts-with-blocks",
+        "string-deltas",
+        "message-chunk-and-thinking-only-chunk",
+        "record-chunk-stays-json",
+    ],
+)
+def test_a_streamed_reply_keeps_only_the_text(chunks, expected):
+    text = _stream_reply(chunks)
+    assert text == expected
+    assert "sig-abc" not in text and "plan the reply" not in text
+
+
+def _anthropic(delta):
+    return {"type": "content_block_delta", "index": 0, "delta": delta}
+
+
+_ANTHROPIC_THINKING_STREAM = [
+    {
+        "type": "message_start",
+        "message": {"id": "m", "role": "assistant", "content": []},
+    },
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+    },
+    _anthropic({"type": "thinking_delta", "thinking": "plan the reply"}),
+    _anthropic({"type": "signature_delta", "signature": "sig-abc"}),
+    {"type": "content_block_stop", "index": 0},
+    {
+        "type": "content_block_start",
+        "index": 1,
+        "content_block": {"type": "text", "text": ""},
+    },
+    _anthropic({"type": "text_delta", "text": "Hi"}),
+    _anthropic({"type": "text_delta", "text": " there"}),
+    {"type": "message_stop"},
+]
+
+
+_OPENAI_REASONING_STREAM = [
+    {"type": "response.created", "response": {"id": "r"}},
+    {"type": "response.reasoning_summary_text.delta", "delta": "plan the reply"},
+    {"type": "response.reasoning_text.delta", "delta": "plan the reply"},
+    {"type": "response.output_text.delta", "delta": "Hi"},
+    {"type": "response.output_text.delta", "delta": " there"},
+    {"type": "response.completed", "response": {"id": "r", "output": []}},
+]
+
+
+def _as_objects(chunks):
+    def convert(value):
+        if isinstance(value, dict):
+            return NS(**{key: convert(item) for key, item in value.items()})
+        return value
+
+    return [convert(chunk) for chunk in chunks]
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        _ANTHROPIC_THINKING_STREAM,
+        _OPENAI_REASONING_STREAM,
+        _as_objects(_ANTHROPIC_THINKING_STREAM),
+        _as_objects(_OPENAI_REASONING_STREAM),
+    ],
+    ids=[
+        "anthropic-events",
+        "openai-responses-events",
+        "anthropic-objects",
+        "openai-objects",
+    ],
+)
+def test_a_stream_of_provider_events_keeps_only_the_answer_text(chunks):
+    assert _stream_reply(chunks) == "Hi there"
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        {
+            "type": "content_block_start",
+            "content_block": {"type": "tool_use", "id": "t", "name": "f", "input": {}},
+        },
+        {"type": "response.completed", "response": {"id": "r"}},
+        {"type": "message_start", "message": {"id": "m", "content": []}},
+        {"type": "thinking", "thinking": "plan the reply", "signature": "sig-abc"},
+        {"type": "tool_use", "id": "t", "name": "f", "input": {}},
+        {"type": "input_json_delta", "partial_json": '{"a"'},
+    ],
+    ids=[
+        "tool-use-block-start",
+        "response-completed",
+        "message-start",
+        "thinking-block",
+        "tool-use-block",
+        "input-json-delta",
+    ],
+)
+def test_a_stream_event_with_a_non_text_type_gives_nothing(chunk):
+    assert _stream_reply([chunk]) == ""
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [{"type": "vendor.custom_event", "payload": {"secret": "SIG"}}, "Hi"],
+        [{"type": "vendor.custom_event", "delta": {"secret": "SIG"}}, "Hi"],
+        [NS(type="vendor.custom_event", content="SIG", payload={"s": "SIG"}), "Hi"],
+        [NS(type="AIMessageChunk", content=[_text("Hi")])],
+        [{"type": "message", "role": "assistant", "content": "Hi"}],
+        [{"content": "H"}, NS(text="i")],
+    ],
+    ids=[
+        "unknown-dict-event",
+        "unknown-dict-event-with-delta",
+        "unknown-object-event",
+        "langchain-chunk-type-kept",
+        "message-type-kept",
+        "untyped-chunks-kept",
+    ],
+)
+def test_a_stream_event_of_an_unknown_type_gives_nothing(chunks):
+    text = _stream_reply(chunks)
+    assert text == "Hi"
+    assert "SIG" not in text
+
+
+# --- Replies the first scoped check found leaking or lost under a reply key. ---
+
+PLAN = "plan the reply"
+
+
+def _check(reply, expected):
+    text = _generic_reply(reply)
+    assert text == expected
+    assert "sig-abc" not in text and PLAN not in text
+
+
+def _thought():
+    return NS(text=PLAN, thought=True, thought_signature="sig-abc")
+
+
+def _answer():
+    return NS(text=ANSWER, thought=None, thought_signature=None)
+
+
+def _content(role, *parts):
+    return NS(role=role, parts=list(parts))
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"output": _content("model", _thought(), _answer())}, ANSWER),
+        (NS(response=_content("model", _thought(), _answer())), ANSWER),
+        (
+            {
+                "result": {
+                    "role": "model",
+                    "parts": [
+                        {"text": PLAN, "thought": True, "thought_signature": "sig-abc"},
+                        {"text": ANSWER},
+                    ],
+                }
+            },
+            ANSWER,
+        ),
+        ({"output": _content("model", _thought())}, ""),
+        (
+            [
+                _content("user", NS(text="q", thought=None)),
+                _content("model", _thought(), _answer()),
+            ],
+            ANSWER,
+        ),
+        (
+            {"data": {"parts": [{"name": "bolt"}, {"name": "nut"}]}},
+            '{"parts": [{"name": "bolt"}, {"name": "nut"}]}',
+        ),
+    ],
+    ids=[
+        "content-object-under-output",
+        "content-object-as-attribute",
+        "content-dict-under-result",
+        "content-thought-only",
+        "history-of-content-objects",
+        "control-records-with-parts-stay-json",
+    ],
+)
+def test_a_gemini_content_keeps_only_its_answer(reply, expected):
+    _check(reply, expected)
+
+
+SCOPED_BEDROCK_REASONING = {
+    "reasoningContent": {"reasoningText": {"text": PLAN, "signature": "sig-abc"}}
+}
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (
+            {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [SCOPED_BEDROCK_REASONING, {"text": ANSWER}],
+                    }
+                },
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 3, "outputTokens": 4},
+            },
+            ANSWER,
+        ),
+        (
+            {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [SCOPED_BEDROCK_REASONING],
+                    }
+                }
+            },
+            "",
+        ),
+        (
+            {"result": {"message": "hello", "code": 200}},
+            '{"message": "hello", "code": 200}',
+        ),
+    ],
+    ids=[
+        "raw-converse-response",
+        "raw-converse-reasoning-only",
+        "control-status-message",
+    ],
+)
+def test_a_raw_bedrock_converse_response_keeps_only_its_answer(reply, expected):
+    _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"output": NS(type="AIMessageChunk", content=_blocks())}, ANSWER),
+        ({"output": {"type": "AIMessageChunk", "content": _blocks()}}, ANSWER),
+        ({"output": NS(type="AIMessageChunk", content=[THINKING])}, ""),
+    ],
+    ids=["chunk-object", "chunk-dict", "chunk-thinking-only"],
+)
+def test_a_langchain_message_chunk_keeps_only_its_answer(reply, expected):
+    _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"data": {"type": "user", "id": 42}}, ""),
+        ({"result": {"type": "message", "text": "Your order shipped"}}, ""),
+        ({"result": {"type": "tool"}}, ""),
+        ({"result": {"type": "system"}}, ""),
+        ({"output": {"type": "text", "value": "v"}}, ""),
+        ({"data": {"role": "user", "name": "n"}}, ""),
+        ({"response": {"role": "assistant", "text": "Hi there"}}, "Hi there"),
+        ({"output": {"type": "text", "text": ANSWER}}, ANSWER),
+        ({"output": {"type": "thinking", "thinking": PLAN}}, ""),
+    ],
+    ids=[
+        "user-typed-record",
+        "slack-message-record",
+        "tool-typed-record",
+        "system-typed-record",
+        "text-typed-record-without-text",
+        "user-role-record-without-content",
+        "assistant-role-record-with-text",
+        "typed-text-block-keeps-its-text",
+        "typed-thinking-block-gives-nothing",
+    ],
+)
+def test_a_message_like_record_under_a_reply_key_gives_only_its_text(reply, expected):
+    _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (
+            [{"id": 1, "text": "note A"}, {"id": 2, "text": "note B"}],
+            "note A note B",
+        ),
+        ([{"text": "a"}, {"text": "b"}], "a b"),
+        ([{"type": "tool_result", "content": "result text"}], ""),
+        ([{"text": "a"}, {"text": PLAN, "thought": True}, {"text": "b"}], "a b"),
+    ],
+    ids=[
+        "search-hits",
+        "untyped-parts",
+        "tool-result-only-is-not-text",
+        "thought-part",
+    ],
+)
+def test_untyped_text_items_of_a_bare_list_join_with_a_space(reply, expected):
+    _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (
+            {
+                "output": [
+                    NS(type="human", content="q"),
+                    NS(type="AIMessageChunk", content=_blocks()),
+                ]
+            },
+            ANSWER,
+        ),
+        (
+            {
+                "output": [
+                    {"role": "user", "parts": [{"text": "q"}]},
+                    {
+                        "role": "model",
+                        "parts": [{"text": PLAN, "thought": True}, {"text": ANSWER}],
+                    },
+                ]
+            },
+            ANSWER,
+        ),
+        (
+            {
+                "result": [
+                    {"role": "user", "content": "q1"},
+                    {"role": "assistant", "content": "A1"},
+                    {"role": "user", "content": "q2"},
+                    {"role": "assistant", "content": _blocks()},
+                ]
+            },
+            ANSWER,
+        ),
+    ],
+    ids=["langchain-history", "gemini-dict-history", "dict-history"],
+)
+def test_a_history_under_a_reply_key_gives_the_last_reply(reply, expected):
+    _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        _content("model", _thought(), _answer()),
+        {
+            "role": "model",
+            "parts": [
+                {"text": PLAN, "thought": True, "thought_signature": "sig-abc"},
+                {"text": ANSWER},
+            ],
+        },
+    ],
+    ids=["content-object-returned-raw", "content-dict-returned-raw"],
+)
+def test_a_gemini_content_returned_as_the_whole_reply_keeps_only_its_answer(reply):
+    _check(reply, ANSWER)
+
+
+def test_a_real_gemini_content_returned_as_the_whole_reply_keeps_only_its_answer():
+    types = pytest.importorskip("google.genai.types")
+    content = types.Content(
+        role="model",
+        parts=[
+            types.Part(text=PLAN, thought=True, thought_signature=b"sig-abc"),
+            types.Part(text=ANSWER),
+        ],
+    )
+    _check(content, ANSWER)
+
+
+def _dumped(kind, content):
+    return {"type": kind, "data": {"content": content}}
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"output": _dumped("ai", _blocks())}, ANSWER),
+        ({"output": _dumped("AIMessageChunk", _blocks())}, ANSWER),
+        ({"output": _dumped("assistant", _blocks())}, ANSWER),
+        (
+            {
+                "output": [
+                    _dumped("human", "q"),
+                    _dumped("ai", _blocks()),
+                ]
+            },
+            ANSWER,
+        ),
+    ],
+    ids=["ai", "ai-message-chunk", "assistant", "messages-to-dict-history"],
+)
+def test_a_langchain_message_to_dict_under_a_reply_key_keeps_only_its_answer(
+    reply, expected
+):
+    _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (
+            {"result": {"order": "A1", "parts": ["bolt", "nut"]}},
+            '{"order": "A1", "parts": ["bolt", "nut"]}',
+        ),
+        (
+            {
+                "result": {
+                    "status": "error",
+                    "code": 429,
+                    "message": {"type": "text", "text": "Rate limited"},
+                }
+            },
+            "Rate limited",
+        ),
+    ],
+    ids=["record-with-bare-string-parts", "error-record-gives-its-text-block"],
+)
+def test_a_record_with_bare_string_parts_stays_json_and_an_error_record_gives_its_text(
+    reply, expected
+):
+    _check(reply, expected)
+
+
+# --- Nested replies are read only to a fixed depth. ---
+
+BOUND = 32
+
+
+TOO_DEEP_FOR_THE_STACK = 3000
+
+
+def _namespace(name):
+    """Run one file's text_of region on its own, as a hosted adapter does (stdlib only)."""
+    path = COPIES[name]
+    match = REGION.search(path.read_text(encoding="utf-8"))
+    assert match, f"{path} has no text_of region"
+    namespace = {"Any": object}
+    exec(compile(match.group(0), str(path), "exec"), namespace)
+    return namespace
+
+
+def _message_chain(depth, leaf="x"):
+    value = leaf
+    for _ in range(depth):
+        value = {"role": "assistant", "content": value}
+    return value
+
+
+def _list_chain(depth, leaf="x"):
+    value = leaf
+    for _ in range(depth):
+        value = [{"role": "assistant", "content": value}]
+    return value
+
+
+def _state_chain(depth, leaf="x"):
+    value = {"messages": [{"role": "assistant", "content": leaf}]}
+    for _ in range(depth - 2):
+        value = {"messages": [value]}
+    return value
+
+
+def _object_chain(depth, leaf="x"):
+    value = leaf
+    for _ in range(depth):
+        value = SimpleNamespace(type="ai", content=value)
+    return value
+
+
+CHAINS = {
+    "message-dicts": _message_chain,
+    "message-lists": _list_chain,
+    "graph-states": _state_chain,
+    "message-objects": _object_chain,
+}
+
+
+COPY_NAMES = list(COPIES)
+
+
+@pytest.mark.parametrize("copy_name", COPY_NAMES)
+def test_every_copy_names_the_same_depth_bound(copy_name):
+    assert _namespace(copy_name)["_MOST_DEPTH"] == BOUND
+
+
+@pytest.mark.parametrize("chain", CHAINS, ids=list(CHAINS))
+@pytest.mark.parametrize("copy_name", COPY_NAMES)
+def test_a_nested_reply_at_the_bound_keeps_its_text(copy_name, chain):
+    assert _namespace(copy_name)["_text_of"](CHAINS[chain](BOUND)) == "x"
+
+
+@pytest.mark.parametrize("chain", CHAINS, ids=list(CHAINS))
+@pytest.mark.parametrize("copy_name", COPY_NAMES)
+def test_a_nested_reply_one_past_the_bound_gives_nothing(copy_name, chain):
+    assert _namespace(copy_name)["_text_of"](CHAINS[chain](BOUND + 1)) == ""
+
+
+@pytest.mark.parametrize("chain", CHAINS, ids=list(CHAINS))
+@pytest.mark.parametrize("copy_name", COPY_NAMES)
+def test_a_reply_nested_past_the_stack_limit_gives_nothing_and_never_raises(
+    copy_name, chain
+):
+    assert (
+        _namespace(copy_name)["_text_of"](CHAINS[chain](TOO_DEEP_FOR_THE_STACK)) == ""
+    )
+
+
+@pytest.mark.parametrize("copy_name", COPY_NAMES)
+def test_a_deep_reply_without_an_answer_never_shows_its_repr(copy_name):
+    reply = _message_chain(BOUND + 5, leaf={"type": "image", "source": "SECRET"})
+    assert "SECRET" not in _namespace(copy_name)["_text_of"](reply)
+
+
+def test_a_reply_one_past_the_bound_through_a_generic_agent_gives_nothing():
+    assert _generic_reply({"output": _list_chain(BOUND + 1)}) == ""
+
+
+# --- The frameworks probe traces only the text of a non-string AgentResponse content. ---
+
+
+def test_a_non_string_agent_response_is_normalized_and_keeps_its_fields():
+    from fi.simulate.agent.frameworks import _run_probe_case
+
+    class Agent(AgentWrapper):
+        async def call(self, input):
+            return AgentResponse.model_construct(
+                content=_blocks(),
+                tool_calls=[{"name": "lookup", "arguments": {}}],
+                artifacts=[],
+                events=[],
+            )
+
+    result = asyncio.run(
+        _run_probe_case(
+            Agent(),
+            "generic",
+            {"id": "blocks", "input": "hi"},
+            index=1,
+            trace_runtime=False,
+            contract={},
+        )
+    )
+    assert result["response"]["content"] == ANSWER
+    assert result["response"]["tool_names"] == ["lookup"]
+    payload = json.dumps(result, default=str)
+    assert "sig-abc" not in payload and "plan the reply" not in payload
+
+
+# --- A reply the kit cannot read gives an empty turn, never a printed object. ---
+
+MARK = "marker-9f3a"
+
+
+class _Printable:
+    """An object whose printed form carries a marker."""
+
+    def __repr__(self):
+        return f"<Printable {MARK}>"
+
+    __str__ = __repr__
+
+
+def _call(reply, **options):
+    class Agent:
+        def invoke(self, inputs):
+            return reply
+
+    agent_input = AgentInput(
+        thread_id="t",
+        execution_id="t",
+        messages=[{"role": "user", "content": "hi"}],
+        new_message={"role": "user", "content": "hi"},
+    )
+    result = asyncio.run(wrap_agent(Agent(), **options).call(agent_input))
+    return (
+        result if isinstance(result, AgentResponse) else AgentResponse(content=result)
+    )
+
+
+def _closed_text(reply, **options):
+    return _call(reply, **options).content
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"output": {"role": "assistant", "content": {"k": MARK}}},
+        {"role": "assistant", "content": {"k": MARK}},
+        {"output": {"type": "thinking", "content": MARK}},
+        {"type": "thinking", "thinking": MARK},
+        {"text": MARK, "thought": True},
+        {"output": NS(text=MARK, thought=True)},
+        {"output": NS(type="thinking", content=MARK)},
+    ],
+    ids=[
+        "message-with-a-record-as-content",
+        "message-returned-whole-with-a-record-as-content",
+        "thinking-block-with-content-string",
+        "thinking-block-returned-whole",
+        "thought-part-returned-whole",
+        "thought-object-under-output",
+        "typed-object-with-content",
+    ],
+)
+def test_a_block_or_message_that_is_not_answer_text_gives_nothing(reply):
+    assert MARK not in _closed_text(reply)
+
+
+def test_a_message_type_without_content_gives_nothing_and_an_error_record_gives_its_text():
+    assert _closed_text({"type": "user", "id": 1}) == ""
+    assert (
+        _closed_text(
+            {"status": "error", "message": {"type": "text", "text": "Rate limited"}}
+        )
+        == "Rate limited"
+    )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        NS(extra=MARK),
+        _Printable(),
+        {"message": _Printable()},
+        {"choices": [_Printable()]},
+        {"messages": [_Printable()]},
+        {"result": {"k": NS(x=MARK)}},
+        {"result": [NS(x=MARK)]},
+        {"data": {"k": _Printable()}},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": MARK}]},
+    ],
+    ids=[
+        "unknown-object",
+        "object-with-a-printed-form",
+        "object-under-message",
+        "object-under-choices",
+        "object-under-messages",
+        "object-nested-in-data",
+        "object-in-a-list-in-data",
+        "object-nested-under-data",
+        "choice-without-a-message",
+    ],
+)
+def test_a_value_nothing_can_read_gives_no_text(reply):
+    assert MARK not in _closed_text(reply)
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"role": "user", "name": "n"}, ""),
+        ({"order": "A1", "total": 3}, '{"order": "A1", "total": 3}'),
+        (
+            [{"order_id": "A1"}, {"order_id": "B2"}],
+            '[{"order_id": "A1"}, {"order_id": "B2"}]',
+        ),
+        (
+            {"result": {"order": "A1", "parts": ["bolt", "nut"]}},
+            '{"order": "A1", "parts": ["bolt", "nut"]}',
+        ),
+        (
+            {"result": {"message": "hello", "code": 200}},
+            '{"message": "hello", "code": 200}',
+        ),
+        (
+            {
+                "id": 7,
+                "result": {
+                    "status": "error",
+                    "note": {"type": "text", "text": "Rate limited"},
+                },
+            },
+            "Rate limited",
+        ),
+    ],
+    ids=[
+        "chat-role-without-content",
+        "plain-record-stays-json",
+        "plain-list-stays-json",
+        "bare-string-parts-stay-json",
+        "status-message-stays-json",
+        "text-block-inside-a-record-is-found",
+    ],
+)
+def test_plain_data_stays_json_and_a_message_like_value_gives_only_its_text(
+    reply, expected
+):
+    assert _closed_text(reply) == expected
+
+
+def test_output_key_goes_through_the_same_rule():
+    options = {"output_key": "out"}
+    assert (
+        _closed_text({"out": {"type": "thinking", "thinking": MARK}}, **options) == ""
+    )
+    assert _closed_text({"out": NS(extra=MARK)}, **options) == ""
+    assert _closed_text({"out": {"type": "text", "text": "Hi"}}, **options) == "Hi"
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"order": "A1", "signature": "sig-1"}, '{"order": "A1"}'),
+        ({"order": "A1", "thought_signature": "sig-1"}, '{"order": "A1"}'),
+        ({"order": "A1", "encrypted_content": "enc"}, '{"order": "A1"}'),
+        ({"order": "A1", "reasoning_content": "why"}, '{"order": "A1"}'),
+        ({"order": "A1", "reasoningContent": {"text": "why"}}, '{"order": "A1"}'),
+        (
+            {"order": "A1", "lines": [{"sku": "x", "signature": "sig-1"}]},
+            '{"order": "A1", "lines": [{"sku": "x"}]}',
+        ),
+    ],
+    ids=[
+        "signature",
+        "thought-signature",
+        "encrypted-content",
+        "reasoning-content",
+        "reasoning-content-camel",
+        "nested-signature",
+    ],
+)
+def test_the_plain_data_dump_drops_the_known_reasoning_keys(reply, expected):
+    assert _closed_text(reply) == expected
+
+
+def test_output_key_value_is_scrubbed_too():
+    assert (
+        _closed_text({"out": {"order": "A1", "signature": "s"}}, output_key="out")
+        == '{"order": "A1"}'
+    )
+
+
+def test_an_unreadable_reply_records_its_type_and_key_names_only():
+    response = _call({"type": "user", "name": MARK})
+    assert response.content == ""
+    record = response.metadata["reply_unreadable"]
+    assert record == {"type": "dict", "keys": ["name", "type"]}
+    assert MARK not in repr(record) and "user" not in repr(record)
+
+
+def test_an_unreadable_object_records_its_type_name():
+    response = _call(_Printable())
+    assert response.content == ""
+    assert response.metadata["reply_unreadable"] == {"type": "_Printable", "keys": []}
+
+
+def test_an_unreadable_reply_logs_names_only(caplog):
+    with caplog.at_level(logging.INFO, logger="fi.simulate.agent.generic"):
+        _call({"type": "user", "name": MARK})
+    lines = [r.getMessage() for r in caplog.records if "unreadable" in r.getMessage()]
+    assert len(lines) == 1
+    assert "dict" in lines[0] and "name" in lines[0] and "type" in lines[0]
+    assert MARK not in lines[0] and "user" not in lines[0]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        None,
+        {},
+        [],
+        {"content": "Hello"},
+        {"output": {"type": "text", "text": "Hello"}},
+        {"order": "A1"},
+    ],
+    ids=["none", "empty-dict", "empty-list", "text", "text-block", "plain-record"],
+)
+def test_a_reply_that_is_empty_or_was_read_records_nothing(reply):
+    assert "reply_unreadable" not in (_call(reply).metadata or {})

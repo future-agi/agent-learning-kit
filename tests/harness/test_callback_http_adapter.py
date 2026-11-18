@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import socket
@@ -283,3 +284,68 @@ def test_a_callback_that_returns_the_same_dict_twice_is_answered_the_same_and_le
         assert _ask_body(base)["content"] == "intact"
     finally:
         next(served, None)
+
+
+# --- The adapter's reply body: graph state and a returned message, loaded as a module. ---
+
+BLOCK_THINKING = {
+    "type": "thinking",
+    "thinking": "plan the reply",
+    "signature": "sig-abc",
+}
+
+
+@pytest.fixture
+def adapter_module(tmp_path, monkeypatch):
+    (tmp_path / "cb_mod.py").write_text("def reply(agent_input):\n    return ''\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("ALK_CALLBACK_ENTRYPOINT", "cb_mod:reply")
+    spec = importlib.util.spec_from_file_location("cb_adapter_module", ADAPTER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_graph_state_with_no_messages_is_an_empty_answer(adapter_module):
+    body = adapter_module._json_body({"messages": [], "status": "done"})
+    assert body == {"status": "done", "content": ""}
+
+
+def test_a_callback_message_sends_only_its_text(adapter_module):
+    message = {
+        "role": "assistant",
+        "content": [BLOCK_THINKING, {"type": "text", "text": "Done."}],
+    }
+    assert adapter_module._json_body({"message": message}) == {"content": "Done."}
+
+
+class _Model:
+    """A pydantic-like return value whose model_dump is a graph state."""
+
+    def __init__(self, state):
+        self._state = state
+
+    def model_dump(self, **_):
+        return self._state
+
+
+def test_a_model_whose_dump_is_a_graph_state_gets_the_graph_state_answer(
+    adapter_module,
+):
+    state = {
+        "messages": [
+            {"role": "user", "content": "q"},
+            {
+                "type": "ai",
+                "content": [BLOCK_THINKING, {"type": "text", "text": "Done."}],
+            },
+        ],
+        "status": "ok",
+    }
+    body = adapter_module._json_body(_Model(state))
+    assert body == {"status": "ok", "content": "Done."}
+
+
+def test_a_model_whose_dump_has_content_is_sent_as_it_is(adapter_module):
+    body = adapter_module._json_body(_Model({"content": "Hi", "state": {"a": 1}}))
+    assert body == {"content": "Hi", "state": {"a": 1}}

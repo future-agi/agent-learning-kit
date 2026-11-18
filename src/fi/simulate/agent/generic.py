@@ -16,8 +16,21 @@ from fi.simulate.environment import (
     normalize_orchestration_trace_events,
     normalize_orchestration_trace_export,
 )
-from fi.simulate.agent.content import _MOST_DEPTH, _is_message, _stream_answer_text
-from fi.simulate.agent.content import text_of as _walk_text
+from fi.simulate.agent.content import (
+    CHAT_ROLES,
+    ENVELOPE_KINDS,
+    MOST_DEPTH,
+    REPLY_ITEM_KINDS,
+    field as _field,
+    is_agent_message,
+    is_agent_turn,
+    is_block_or_message,
+    is_history_item,
+    is_reply_item,
+    is_untyped_text,
+    stream_event_text,
+    text_of as _walk_text,
+)
 from fi.simulate.agent.wrapper import (
     AgentInput,
     AgentResponse,
@@ -415,10 +428,10 @@ class GenericAgentWrapper(AgentWrapper):
             return raw
         if isinstance(raw, bytes):
             return raw.decode("utf-8", errors="replace")
-        parts = _field_of(raw, "parts")
+        parts = _field(raw, "parts")
         if isinstance(parts, (list, tuple)) and _looks_like_parts(raw, parts):
             return _answer_text(parts)
-        if not isinstance(raw, (list, tuple)) and _is_reply_item(raw):
+        if not isinstance(raw, (list, tuple)) and is_reply_item(raw):
             # The reply is itself a message or a block: only its own text rules apply, never
             # the reply keys of a record.
             mapped = _object_mapping(raw)
@@ -1292,7 +1305,7 @@ def _readable(value: Any, depth: int = 0, is_node: bool = True) -> Any:
         return value
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
-    if depth > _MOST_DEPTH:
+    if depth > MOST_DEPTH:
         return None
     if isinstance(value, (list, tuple)):
         return [_readable(item, depth + 1, False) for item in value]
@@ -1336,58 +1349,14 @@ def _content_blocks_text(value: Any) -> str:
     return _answer_text(value) if isinstance(value, (str, list, tuple)) else ""
 
 
-_REPLY_ITEM_KINDS = frozenset(
-    {
-        "text", "output_text", "refusal", "thinking", "redacted_thinking", "reasoning",
-        "tool_use", "server_tool_use", "tool_result", "image", "message",
-        "ai", "human", "tool", "system", "assistant", "user", "reasoning_content",
-        "AIMessageChunk",
-    }
-)
-_CHAT_ROLES = frozenset({"assistant", "user", "system", "tool", "developer", "model"})
-
-
-def _is_block_or_message(item: Any) -> bool:
-    get = item.get if isinstance(item, Mapping) else lambda name: getattr(item, name, None)
-    if get("type") in _REPLY_ITEM_KINDS or get("role") in _CHAT_ROLES:
-        return True
-    # Untyped provider blocks that carry thinking: a Gemini thought part, a Bedrock reasoning block.
-    return get("type") is None and (
-        get("thought") is True or get("reasoningContent") is not None
-    )
-
-
-_HISTORY_KINDS = frozenset(
-    {"message", "ai", "AIMessageChunk", "human", "tool", "system", "assistant", "user"}
-)
-
-
-def _is_reply_item(value: Any) -> bool:
-    """A message or a block by its own ``role``, ``type`` or ``thought`` flag."""
-    role = _field_of(value, "role")
-    kind = _field_of(value, "type")
-    return (
-        (isinstance(role, str) and role in _CHAT_ROLES)
-        or (isinstance(kind, str) and kind in _REPLY_ITEM_KINDS)
-        or _field_of(value, "thought") is True
-    )
-
-
-def _is_history_item(item: Any) -> bool:
-    get = (
-        item.get if isinstance(item, Mapping) else lambda name: getattr(item, name, None)
-    )
-    return get("type") in _HISTORY_KINDS or get("role") in _CHAT_ROLES
-
-
 def _is_bare_block_list(value: Any) -> bool:
     """True for a list that is one reply's content blocks, not a message history."""
     if not isinstance(value, (list, tuple)) or not value:
         return False
-    if any(isinstance(item, (str, bytes)) or _is_history_item(item) for item in value):
+    if any(isinstance(item, (str, bytes)) or is_history_item(item) for item in value):
         return False
     return any(
-        _is_block_or_message(item) or _is_untyped_text(item) for item in value
+        is_block_or_message(item) or is_untyped_text(item) for item in value
     )
 
 
@@ -1400,43 +1369,24 @@ def _list_text(items: Any) -> Optional[str]:
         return None
     if _is_bare_block_list(items):
         return _answer_text(items)
-    if any(_is_message(item) for item in items):
+    if any(is_agent_message(item) for item in items):
         return _answer_text(items)  # its history rule and depth bound apply
-    if any(_is_history_item(item) for item in items):
+    if any(is_history_item(item) for item in items):
         # Only the agent's own turn is its reply: a history of the caller's words, or of tool
         # output, has none, and never gives those words back as the answer.
-        agent_turns = [item for item in items if _is_agent_turn(item)]
+        agent_turns = [item for item in items if is_agent_turn(item)]
         return _message_content(agent_turns[-1]) if agent_turns else ""
-    if any(_is_block_or_message(item) for item in items):
+    if any(is_block_or_message(item) for item in items):
         return _answer_text(items)
     return None
 
 
-def _is_agent_turn(item: Any) -> bool:
-    """A message the agent said: an assistant or model role, or an ``ai`` or assistant type."""
-    role, kind = _field_of(item, "role"), _field_of(item, "type")
-    return role in ("assistant", "model") or kind in ("ai", "AIMessageChunk", "assistant")
-
-
-def _is_untyped_text(item: Any) -> bool:
-    get = (
-        item.get if isinstance(item, Mapping) else lambda name: getattr(item, name, None)
-    )
-    return get("type") is None and isinstance(get("text"), str)
-
-
-def _field_of(item: Any, name: str) -> Any:
-    if isinstance(item, Mapping):
-        return item.get(name)
-    return getattr(item, name, None)
-
-
 def _looks_like_parts(value: Any, parts: Any) -> bool:
     """True for a Gemini ``Content`` (a role and its parts), not a record with a ``parts`` field."""
-    if _field_of(value, "role") in _CHAT_ROLES:
+    if _field(value, "role") in CHAT_ROLES:
         return True
     return any(
-        _is_block_or_message(part) or _is_untyped_text(part) for part in parts
+        is_block_or_message(part) or is_untyped_text(part) for part in parts
     )
 
 
@@ -1454,20 +1404,20 @@ def _is_single_reply(value: Any) -> bool:
     """
     if isinstance(value, (list, tuple)):
         return False
-    kind = _field_of(value, "type")
+    kind = _field(value, "type")
     if kind is None:
-        return _is_block_or_message(value) and (
+        return is_block_or_message(value) and (
             _has_field(value, "content")
-            or _field_of(value, "thought") is True
-            or _field_of(value, "reasoningContent") is not None
+            or _field(value, "thought") is True
+            or _field(value, "reasoningContent") is not None
         )
-    if kind in _HISTORY_KINDS:
+    if kind in ENVELOPE_KINDS:
         return _has_field(value, "content")
     if kind in ("text", "output_text"):
-        return isinstance(_field_of(value, "text"), (str, dict))
+        return isinstance(_field(value, "text"), (str, dict))
     if kind == "refusal":
-        return _field_of(value, "refusal") is not None
-    return kind in _REPLY_ITEM_KINDS
+        return _field(value, "refusal") is not None
+    return kind in REPLY_ITEM_KINDS
 
 
 def _undump_message(value: Any) -> Any:
@@ -1478,26 +1428,26 @@ def _undump_message(value: Any) -> Any:
     """
     if isinstance(value, (list, tuple)):
         return [_undump_message(item) for item in value]
-    kind = _field_of(value, "type")
-    data = _field_of(value, "data")
-    if kind in _HISTORY_KINDS and isinstance(data, Mapping) and "content" in data:
+    kind = _field(value, "type")
+    data = _field(value, "data")
+    if kind in ENVELOPE_KINDS and isinstance(data, Mapping) and "content" in data:
         return {**data, "type": kind}
     return value
 
 
 def _read_reply(value: Any) -> Optional[str]:
     """Answer text of a message, a block, or a list of them; None when no reader knows the shape."""
-    parts = _field_of(value, "parts")
+    parts = _field(value, "parts")
     if isinstance(parts, (list, tuple)) and _looks_like_parts(value, parts):
         return _answer_text(parts)
     value = _undump_message(value)
-    message = _field_of(value, "message")
+    message = _field(value, "message")
     if (
         message is not None
-        and _field_of(value, "role") is None
-        and _field_of(value, "type") is None
+        and _field(value, "role") is None
+        and _field(value, "type") is None
         and (_has_field(message, "role") or _has_field(message, "content"))
-        and _is_block_or_message(message)
+        and is_block_or_message(message)
     ):
         return _message_content(message)
     if isinstance(value, (list, tuple)):
@@ -7936,50 +7886,6 @@ def _is_sync_stream(value: Any) -> bool:
     return inspect.isgenerator(value) or hasattr(value, "__next__")
 
 
-_STREAM_TEXT_TYPES = frozenset(
-    {
-        "refusal",
-        "message",
-        "ai",
-        "human",
-        "tool",
-        "system",
-        "assistant",
-        "user",
-    }
-)
-
-
-def _stream_event_text(chunk: Any) -> Optional[str]:
-    """Answer text of a provider stream event; None when ``chunk`` is not one.
-
-    Anthropic raw events and OpenAI Responses events carry thinking, signatures, tool input
-    and bookkeeping next to the answer. Only ``text_delta`` and
-    ``response.output_text.delta`` give text; a chunk whose undotted ``type`` is on the answer
-    list gives its string; any other chunk with a string ``type`` that is not a text or message
-    kind gives "", never its JSON.
-    """
-    get = (
-        chunk.get
-        if isinstance(chunk, Mapping)
-        else lambda name: getattr(chunk, name, None)
-    )
-    kind = get("type")
-    if not isinstance(kind, str):
-        return None
-    if kind == "content_block_delta":
-        delta = get("delta")
-        return _stream_event_text(delta) or ""
-    if kind == "response.output_text.delta":
-        value = get("delta")
-        return value if isinstance(value, str) else ""
-    if kind in _STREAM_TEXT_TYPES or kind.endswith(("Message", "MessageChunk")):
-        return None
-    # A chunk type of the customer's own is read only when it is on the answer list; any other
-    # typed event (provider bookkeeping, thinking, status, tool results) is not answer text.
-    return _stream_answer_text(chunk)
-
-
 def _stream_chunk_text(chunk: Any) -> str:
     if chunk is None:
         return ""
@@ -7987,7 +7893,7 @@ def _stream_chunk_text(chunk: Any) -> str:
         return chunk
     if isinstance(chunk, bytes):
         return chunk.decode("utf-8", errors="replace")
-    event_text = _stream_event_text(chunk)
+    event_text = stream_event_text(chunk)
     if event_text is not None:
         return event_text
     if isinstance(chunk, dict):
@@ -8471,11 +8377,10 @@ def _choices_content(choices: Any) -> str:
     if not choices:
         return ""
     first = choices[0]
-    get = first.get if isinstance(first, dict) else lambda name: getattr(first, name, None)
-    message = get("message") or get("delta")
+    message = _field(first, "message") or _field(first, "delta")
     if message:
         return _message_content(message)
-    text = get("text")
+    text = _field(first, "text")
     return text if isinstance(text, str) else ""
 
 
@@ -8493,10 +8398,10 @@ def _message_content(message: Any) -> str:
         return ""
     if isinstance(message, str):
         return message
-    kind = _field_of(message, "type")
+    kind = _field(message, "type")
     if isinstance(kind, str):
         return _answer_text(message)  # a typed block or message: only its own text rules
-    if _field_of(message, "thought") is True:
+    if _field(message, "thought") is True:
         return ""
     if isinstance(message, dict):
         if "content" in message and message["content"] is not None:
@@ -8554,7 +8459,7 @@ def _unreadable_stream_record(chunks: List[Any]) -> Dict[str, Any]:
     kinds = set()
     keys = set()
     for chunk in chunks:
-        kind = _field_of(chunk, "type")
+        kind = _field(chunk, "type")
         if isinstance(kind, str):
             kinds.add(kind[:64])
         mapped = _object_mapping(chunk)
@@ -8631,9 +8536,9 @@ def _message_like(node: Any) -> bool:
     if not isinstance(node, Mapping):
         return True
     role, kind = node.get("role"), node.get("type")
-    if isinstance(role, str) and role in _CHAT_ROLES:
+    if isinstance(role, str) and role in CHAT_ROLES:
         return True
-    if isinstance(kind, str) and kind in _REPLY_ITEM_KINDS:
+    if isinstance(kind, str) and kind in REPLY_ITEM_KINDS:
         return True
     if node.get("thought") is True:
         return True
@@ -8652,7 +8557,7 @@ def _is_plain_data(node: Any, depth: int = 0) -> bool:
     """Mappings, lists, strings, numbers, booleans and null with no part that looks like a message."""
     if node is None or isinstance(node, (str, bool, int, float)):
         return True
-    if depth > _MOST_DEPTH:
+    if depth > MOST_DEPTH:
         return False
     if isinstance(node, Mapping):
         return not _message_like(node) and all(
@@ -8665,7 +8570,7 @@ def _is_plain_data(node: Any, depth: int = 0) -> bool:
 
 def _found_text(node: Any, depth: int = 0) -> str:
     """Only the answer text a walk of ``node`` finds; a part is never printed whole."""
-    if depth > _MOST_DEPTH or node is None or isinstance(node, (str, bytes, bool, int, float)):
+    if depth > MOST_DEPTH or node is None or isinstance(node, (str, bytes, bool, int, float)):
         return ""
     text = _read_reply(node)
     if text is not None:
@@ -8673,18 +8578,18 @@ def _found_text(node: Any, depth: int = 0) -> str:
     if isinstance(node, (list, tuple)):
         children = list(node)
     else:
-        kind = _field_of(node, "type")
+        kind = _field(node, "type")
         if isinstance(kind, str):
             return _answer_text(node)
-        if _field_of(node, "thought") is True:
+        if _field(node, "thought") is True:
             return ""
-        if _field_of(node, "choices"):
-            return _choices_content(_field_of(node, "choices"))
-        candidates = _field_of(node, "candidates")
+        if _field(node, "choices"):
+            return _choices_content(_field(node, "choices"))
+        candidates = _field(node, "candidates")
         if isinstance(candidates, (list, tuple)) and candidates:
-            return _reply_content(_field_of(candidates[0], "content"))
-        role = _field_of(node, "role")
-        if (isinstance(role, str) and role in _CHAT_ROLES) or _has_field(node, "content") or _has_field(node, "messages"):
+            return _reply_content(_field(candidates[0], "content"))
+        role = _field(node, "role")
+        if (isinstance(role, str) and role in CHAT_ROLES) or _has_field(node, "content") or _has_field(node, "messages"):
             return _message_content(node)
         if isinstance(node, Mapping):
             children = list(node.values())
