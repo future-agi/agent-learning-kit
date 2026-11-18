@@ -1545,6 +1545,36 @@ def test_a_kit_written_runtime_reports_no_skipped_settings(
     assert provisioning.skipped_setting_names(environment) == []
 
 
+def test_a_settings_file_a_killed_worker_left_is_removed_by_stop_s_sweep(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A worker killed after writing the file never reaches its own cleanup; ``stop`` sweeps the
+    # project's private job directories, and this one is among them.
+    environment = _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+    override = provisioning._agent_settings_override(environment, "agent-runtime")
+    assert override is not None and override.parent.exists()
+
+    provisioning._remove_leftover_job_directories(environment.project)
+
+    assert not override.parent.exists()
+
+
+def test_a_setting_with_dollars_and_quotes_is_written_to_arrive_as_given(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Compose must not substitute inside the value: it reaches the agent exactly as given.
+    _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+    given = 'http://u:pa$$w"rd@proxy.invalid:3128/$HOME/${PATH}\\x'
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_HTTPS_PROXY", given)
+    environment = provisioning.ProvisionedEnvironment.load(tmp_path)
+    override = provisioning._agent_settings_override(environment, "agent-runtime")
+    try:
+        settings = json.loads(override.read_text())["services"]["agent-runtime"]["env_file"][0]
+        assert _parse_env_file(Path(settings).read_text())["HTTPS_PROXY"] == given
+    finally:
+        provisioning._remove_job_directory(override.parent)
+
+
 def test_the_agents_settings_file_is_removed_when_the_start_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
