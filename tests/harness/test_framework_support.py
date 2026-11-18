@@ -1,4 +1,4 @@
-"""The supported-frameworks list: each claim is backed by evidence that exists, in one place."""
+"""The supported-frameworks list (ADR-006): every claim backed by evidence that exists."""
 
 from __future__ import annotations
 
@@ -7,121 +7,109 @@ from pathlib import Path
 
 import pytest
 
-from fi.alk import framework_support
-from fi.alk.harness import scan_document
-from fi.alk.framework_support import FRAMEWORKS, LAYERS, STATUSES
+from fi.alk.harness import framework_support, scan_document
+from fi.alk.harness.framework_support import CHECKS, LEVELS, RESULTS
 
 REPO = Path(__file__).resolve().parents[2]
+ROWS = framework_support.load()
+SMOKE = (REPO / ".github" / "workflows" / "sdk-smoke.yml").read_text(encoding="utf-8")
 
 
-def test_the_list_covers_exactly_the_frameworks_the_reader_names() -> None:
-    named = scan_document.FRAMEWORK_NAMES[:10]
-    assert [entry.key for entry in FRAMEWORKS] == sorted(named)
+def test_every_one_of_the_ten_names_has_a_row() -> None:
+    assert sorted(row.name for row in ROWS) == sorted(
+        scan_document.FRAMEWORK_NAMES[:10]
+    )
 
 
-def test_every_layer_has_a_known_status_and_a_proven_one_has_evidence() -> None:
-    for entry in FRAMEWORKS:
-        for layer in LAYERS:
-            claim = getattr(entry, layer)
-            assert claim.status in STATUSES, (entry.key, layer)
-            if claim.status in ("proven", "partial"):
-                assert claim.evidence, (entry.key, layer, "a claim with no evidence")
-            if claim.status != "proven":
-                assert claim.note, (entry.key, layer, "say what is missing")
+def test_levels_and_checks_use_known_words() -> None:
+    for row in ROWS:
+        assert row.level in LEVELS, row.name
+        assert tuple(row.checks) == CHECKS, row.name
+        assert set(row.checks.values()) <= set(RESULTS), row.name
 
 
-def _evidence() -> list[tuple[str, str, str]]:
-    return [
-        (entry.key, layer, item)
-        for entry in FRAMEWORKS
-        for layer in LAYERS
-        for item in getattr(entry, layer).evidence
-    ]
+def test_no_row_claims_runs_with_a_check_not_passed() -> None:
+    for row in ROWS:
+        if LEVELS.index(row.level) >= LEVELS.index("runs"):
+            assert set(row.checks.values()) == {"passed"}, row.name
 
 
-@pytest.mark.parametrize(
-    "key, layer, item", _evidence(), ids=lambda value: str(value)[:80]
-)
+def test_a_check_has_a_result_only_from_a_run_on_record() -> None:
+    for row in ROWS:
+        ran = any(result != "not_run" for result in row.checks.values())
+        assert ran == (row.evidence["runs"] is not None), row.name
+
+
+def test_each_level_reached_points_at_its_evidence() -> None:
+    for row in ROWS:
+        assert row.evidence["recognised"], row.name
+        for level in LEVELS[1 : LEVELS.index(row.level) + 1]:
+            claim = row.evidence[level]
+            assert claim and claim["date"] and claim["place"], (row.name, level)
+
+
+def _places() -> list[tuple[str, str]]:
+    places = [(row.name, item) for row in ROWS for item in row.evidence["recognised"]]
+    for row in ROWS:
+        for level in LEVELS[1:]:
+            if row.evidence[level]:
+                places.append((row.name, row.evidence[level]["place"]))
+    return places
+
+
+@pytest.mark.parametrize("name, item", _places(), ids=lambda value: str(value)[:80])
 def test_every_piece_of_evidence_names_something_that_exists(
-    key: str, layer: str, item: str
+    name: str, item: str
 ) -> None:
     kind, _, target = item.partition(":")
     if kind == "test":
-        path, _, name = target.partition("::")
+        path, _, test = target.partition("::")
         source = (REPO / path).read_text(encoding="utf-8")
-        function, _, case = name.partition("[")
+        function, _, case = test.partition("[")
         assert re.search(rf"^(async )?def {function}\(", source, re.M), item
         if case:
-            # A case is named by its id, which the test file spells out.
             assert case.rstrip("]") in source, item
     elif kind == "record":
         path, _, heading = target.partition("#")
-        text = (REPO / path).read_text(encoding="utf-8")
-        assert any(
-            line.lstrip("#").strip() == heading
-            for line in text.splitlines()
+        headings = [
+            line.lstrip("#").strip()
+            for line in (REPO / path).read_text(encoding="utf-8").splitlines()
             if line.startswith("#")
-        ), item
-    elif kind == "pr":
-        assert re.fullmatch(r"future-agi/agent-learning-kit#\d+ \S+::\S+", target), item
+        ]
+        assert heading in headings, item
     else:
         pytest.fail(f"unknown evidence kind: {item}")
 
 
-def test_pending_names_the_change_it_waits_for() -> None:
-    for entry in FRAMEWORKS:
-        for layer in LAYERS:
-            claim = getattr(entry, layer)
-            if claim.status == "pending":
-                assert any(item.startswith("pr:") for item in claim.evidence), (
-                    entry.key,
-                    layer,
+def test_every_tested_version_is_a_pin_of_its_reference_or_a_ci_row() -> None:
+    for row in ROWS:
+        pins = set()
+        if row.reference:
+            for line in (
+                (REPO / row.reference / "requirements.txt").read_text().splitlines()
+            ):
+                match = re.match(
+                    r"([A-Za-z0-9_.-]+)(?:\[[^]]*\])?==(\S+)", line.strip()
                 )
+                if match:
+                    pins.add(f"{match.group(1)}=={match.group(2)}")
+        for version in row.tested_versions:
+            package, _, number = version.partition("==")
+            in_ci = version in SMOKE or (
+                f"{package}==" in SMOKE and f'"{number}"' in SMOKE
+            )
+            assert version in pins or in_ci, (row.name, version)
 
 
-def test_an_example_pin_is_the_one_its_requirements_name() -> None:
-    for entry in FRAMEWORKS:
-        if entry.example is None:
-            assert entry.example_pin is None, entry.key
+def test_the_reference_exists_and_its_python_is_the_one_stated() -> None:
+    for row in ROWS:
+        if row.reference is None:
+            assert row.python is None and not row.tested_versions, row.name
             continue
-        requirements = (REPO / entry.example / "requirements.txt").read_text(
-            encoding="utf-8"
-        )
-        pins = dict(
-            re.match(r"([A-Za-z0-9_.-]+)(?:\[[^]]*\])?==(\S+)", line).groups()
-            for line in requirements.splitlines()
-            if "==" in line
-        )
-        assert pins.get(entry.package) == entry.example_pin, entry.key
+        pinned = (REPO / row.reference / ".python-version").read_text().strip()
+        assert row.python == pinned, row.name
 
 
-def test_a_tested_version_says_where_it_ran() -> None:
-    for entry in FRAMEWORKS:
-        if entry.tested_version is None:
-            assert entry.tested_in == "", entry.key
-        else:
-            assert entry.tested_in, entry.key
-
-
-def test_the_docs_table_is_the_list() -> None:
+def test_the_docs_page_is_generated_from_the_list() -> None:
     page = (REPO / "docs" / "frameworks" / "supported.md").read_text(encoding="utf-8")
-    assert framework_support.markdown_table() in page
-
-
-def test_capabilities_carry_the_list() -> None:
-    from fi.alk.capabilities import capability_catalog
-
-    listed = capability_catalog()["framework_support"]
-    assert listed == framework_support.as_records()
-    assert {row["key"] for row in listed} == set(scan_document.FRAMEWORK_NAMES[:10])
-    assert set(listed[0]) == {
-        "key",
-        "name",
-        "package",
-        "tested_version",
-        "tested_in",
-        "example",
-        "example_pin",
-        "notes",
-        *LAYERS,
-    }
+    assert page == framework_support.markdown_page()
