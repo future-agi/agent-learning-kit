@@ -1645,7 +1645,7 @@ async def prove_on_sealed_runtime(
     until: float | None = None,
     secrets_path: Path = Path("/run/futureagi/secrets.json"),
     local_runtime: bool = False,
-) -> dict[str, dict[str, object]]:
+) -> dict[str, live_proof.LiveResult]:
     """Start the pair's sealed bundle and play its cases on it, as certification does, without
     certifying again: no compile, no setup pass, no repair. `{}` when the bundle serves no tool a
     case could be played on; the cases then keep their offline proofs."""

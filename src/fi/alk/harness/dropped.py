@@ -94,7 +94,7 @@ def save(workspace: Path, records: Mapping[str, DropRecord]) -> None:
     temporary.replace(path)
 
 
-def needs(scenario: Scenario) -> dict[str, list[str]]:
+def needs(scenario: Scenario) -> Capabilities:
     """The capabilities a scenario needs: the tools its reference solution calls and its sub-goals."""
     return {
         "tools": sorted({step.tool for step in scenario.solution if step.tool}),
@@ -104,7 +104,7 @@ def needs(scenario: Scenario) -> dict[str, list[str]]:
 
 def missing(
     needed: Mapping[str, Iterable[str]], tools: set[str], sub_goals: set[str]
-) -> dict[str, list[str]]:
+) -> Capabilities:
     """What of ``needed`` the contract's tools and the catalogue's sub-goals no longer hold."""
     return {
         "tools": sorted(one for one in needed.get("tools") or [] if one not in tools),

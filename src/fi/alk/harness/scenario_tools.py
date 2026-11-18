@@ -75,6 +75,7 @@ from .proofs import proof_key, record_proof, record_unprovable
 from .understand import load as load_contract
 from .prove import (
     NO_NEGATIVE_CONTROL,
+    Proof,
     executes,
     native_runtime,
     native_source_problem,
@@ -1503,7 +1504,7 @@ def _a_read_that_declines(scenario: Scenario, proof: Any, world_root: Path) -> b
     return not writes
 
 
-def refuses_keeping(proof: Any) -> bool:
+def refuses_keeping(proof: Proof) -> bool:
     """Whether a scenario with this proof may not be kept: its checks do not hold (unless only the live runtime can
     prove it), or the writer left a fault the lane caught. One rule for a submit and for every case a rebuild keeps."""
     return (not proof.holds and not (proof.deferred and not proof.broken)) or proof.blocked_reason() in _REFUSED_CODES

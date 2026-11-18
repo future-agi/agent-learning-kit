@@ -20,11 +20,13 @@ import os
 import sys
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from .catalogue import load_catalogue
 from .live_proof import apply_live, load_live
+from .proof_records import ProofEntry
 from .outbound import redact_outbound_text
 from .proofs import proof_entry, proof_key, unprovable_entry
 from .prove import load_proof_contract, load_world_actors, prove
@@ -35,7 +37,7 @@ DEADLINE_MARGIN_SECONDS = 300
 INCOMPLETE_WHY = "not proved: the validation's time budget ran out before this case"
 
 
-def _write(output: Path, proofs: dict[str, dict[str, Any]]) -> None:
+def _write(output: Path, proofs: Mapping[str, ProofEntry]) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(dir=output.parent, prefix=".scenario-proofs-", suffix=".json")
     try:
@@ -74,7 +76,7 @@ def prove_suite(
     live = load_live(authoring)
     started = time.monotonic()
     allowed = budget_seconds(budget, deadline_at, time.time())
-    proofs: dict[str, dict[str, Any]] = {}
+    proofs: dict[str, ProofEntry] = {}
     for scenario in scenarios:
         key = proof_key(scenario)
         if keys is not None and key not in keys:

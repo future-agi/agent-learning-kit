@@ -7,7 +7,7 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from collections.abc import Mapping
 
 from .proof_records import ProofEntry
 from .prove import Proof
@@ -16,7 +16,7 @@ from .scenario import Scenario, scenario_slug
 PROOFS = "proofs.json"
 
 
-def load_proofs(destination: Path) -> dict[str, dict[str, Any]]:
+def load_proofs(destination: Path) -> dict[str, ProofEntry]:
     path = Path(destination) / PROOFS
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -25,7 +25,7 @@ def load_proofs(destination: Path) -> dict[str, dict[str, Any]]:
     return value if isinstance(value, dict) else {}
 
 
-def _save(destination: Path, proofs: dict[str, dict[str, Any]]) -> None:
+def _save(destination: Path, proofs: Mapping[str, ProofEntry]) -> None:
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(dir=destination, prefix=".proofs-", suffix=".json")
@@ -118,7 +118,7 @@ def record_unprovable(destination: Path, scenario_key: str, why: str) -> None:
     _save(destination, proofs)
 
 
-def proof_counts(proofs: dict[str, dict[str, Any]], keys: list[str]) -> dict[str, int]:
+def proof_counts(proofs: Mapping[str, ProofEntry], keys: list[str]) -> dict[str, int]:
     """Proved, kept as written and not proved, over `keys`. A key with no proof is not proved."""
     counts = {"proved": 0, "kept_as_written": 0, "not_proved": 0}
     for key in keys:

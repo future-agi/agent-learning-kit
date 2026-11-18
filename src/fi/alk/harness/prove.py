@@ -32,7 +32,7 @@ import logging
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from .actors import load_actors
 from .catalogue import Catalogue
@@ -54,6 +54,8 @@ from .understand import load
 LANE_CODES = frozenset({"proof_deferred", "solution_assumed", "control_not_run", "judged_only"})
 # A case with no negative control at all: refused at submit, kept not proved through a rebuild.
 NO_NEGATIVE_CONTROL = "no_negative_control"
+# Decides one judged sub-goal of a control: (goal, world, calls, what was said, scenario) -> (held, explanation).
+ControlJudge = Callable[[Any, Any, list[Call], list[dict[str, str]], Any], tuple[bool | None, str]]
 
 
 @dataclass
@@ -1006,7 +1008,7 @@ def _harness_judge(goal: Any, world: Any, calls: list[Call], messages: list[dict
 
 
 def _judged_controls(
-    scenario: Scenario, catalogue: Catalogue, world_root: Path, *, judge: Any = None
+    scenario: Scenario, catalogue: Catalogue, world_root: Path, *, judge: ControlJudge | None = None
 ) -> list[ControlResult]:
     """Play each control of a judged-only case through the judge: its steps on a set-up world and its
     transcript as what was said. It fails when the judge fails a sub-goal it names. A control with no
@@ -1108,10 +1110,10 @@ def prove(
     catalogue: Catalogue,
     world_root: Path,
     *,
-    contract: Any = None,
-    actors: list | None = None,
-    judge: Any = None,
-    conflict_judge: Any = None,
+    contract: AgentContract | None = None,
+    actors: list[dict[str, Any]] | None = None,
+    judge: ControlJudge | None = None,
+    conflict_judge: Callable[[str, str], tuple[bool | None, str]] | None = None,
 ) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping.
 
@@ -1368,7 +1370,7 @@ def prove(
     return proof
 
 
-def control_broken(controls: list[dict[str, Any]]) -> list[str]:
+def control_broken(controls: list[ControlResult]) -> list[str]:
     """Each check that raised under a negative control, named with the control."""
     return [
         f"{name} (under negative control {one.get('name')})"
