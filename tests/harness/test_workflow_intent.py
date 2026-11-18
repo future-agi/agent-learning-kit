@@ -335,9 +335,52 @@ def test_generic_job_briefs_authoring_on_its_execution_limit(tmp_path):
         ("litellm/x", True),
         ("OpenAI/gpt-4o", True),
         ("/x", True),
+        # OpenAI's own model families stay on OpenAI's endpoint.
         ("gpt-4o", False),
+        ("GPT-4o", False),
+        ("o1", False),
+        ("o1-pro", False),
+        ("o3-mini", False),
+        ("o4-mini", False),
+        ("chatgpt-4o-latest", False),
+        ("text-embedding-3-small", False),
+        ("codex-mini-latest", False),
+        ("gpt-oss-120b", False),
+        ("davinci-002", False),
+        ("babbage-002", False),
+        ("whisper-1", False),
+        ("tts-1", False),
+        ("dall-e-3", False),
+        ("omni-moderation-latest", False),
+        ("computer-use-preview", False),
+        ("gpt-image-1", False),
+        ("ft:gpt-4o-mini-2024-07-18:acme::abc123", False),
+        # Every other bare name is routed by the gateway, which serves the SDK's default
+        # request style only for OpenAI's own models.
+        ("gemini-2.0-flash", True),
+        ("claude-sonnet-4-20250514", True),
+        ("Llama-3.1-8B-Instruct", True),
+        ("mistral-large-latest", True),
+        ("deepseek-chat", True),
+        ("pixtral-large-latest", True),
+        ("kimi-k2-0905-preview", True),
+        ("glm-4.6", True),
+        ("sonar-pro", True),
+        ("yi-large", True),
+        ("qwq-32b", True),
+        ("anthropic.claude-3-5-sonnet-20240620-v1:0", True),
+        ("us.anthropic.claude-sonnet-4-20250514-v1:0", True),
+        ("some-new-model", True),
+        # Surrounding whitespace doesn't change the answer.
+        (" gemini-2.0-flash", True),
+        ("\tclaude-3", True),
+        (" gpt-4o ", False),
+        # The SDK strips openai/ and sends the rest, so the rest decides.
         ("openai/gpt-4o", False),
-        ("openai/vertex_ai/x", False),
+        ("openai/gemini-2.0-flash", True),
+        ("openai/vertex_ai/x", True),
+        ("", False),
+        ("   ", False),
         (None, False),
         (42, False),
     ],
@@ -367,6 +410,52 @@ def test_routed_target_model_is_briefed_to_use_the_openai_prefix(tmp_path, targe
     assert 'set_default_openai_api("chat_completions")' in briefing
     # Whether a Compose project runs as is depends on the deployment, not the source.
     assert "when the kit runs this Compose project as is" in briefing
+
+
+@pytest.mark.parametrize(
+    ("target_model", "direct_names", "routed"),
+    [
+        ("prod-gpt4o", (), True),
+        ("prod-gpt4o", ("prod-gpt4o",), False),
+        (" prod-gpt4o ", ("prod-gpt4o",), False),
+        ("openai/prod-gpt4o", ("prod-gpt4o",), False),
+        ("prod-gpt4o", ("other-deployment",), True),
+        ("vertex_ai/gemini-3.7-flash", ("vertex_ai/gemini-3.7-flash",), True),
+    ],
+)
+def test_a_bare_name_the_job_lists_as_direct_is_not_routed(target_model, direct_names, routed):
+    from fi.alk.harness.job import routed_through_gateway
+
+    assert routed_through_gateway(target_model, direct_names) is routed
+
+
+def test_a_job_listing_its_azure_deployment_name_gets_no_gateway_briefing(tmp_path):
+    job = _job(tmp_path)
+    job.agent.config["target_model"] = "prod-gpt4o"
+    assert job.routes_target_model_through_gateway()
+    assert "OpenAI Agents SDK" in "\n".join(job.authoring_guidance())
+    job.agent.config["direct_model_names"] = ["prod-gpt4o"]
+    assert not job.routes_target_model_through_gateway()
+    assert "OpenAI Agents SDK" not in "\n".join(job.authoring_guidance())
+
+
+@pytest.mark.parametrize("direct_model_names", ["prod-gpt4o", [""], ["ok", 3], {"a": 1}])
+def test_direct_model_names_must_be_a_list_of_names(tmp_path, direct_model_names):
+    from pydantic import ValidationError
+
+    job = _job(tmp_path)
+    data = job.model_dump(mode="json")
+    data["agent"]["config"]["direct_model_names"] = direct_model_names
+    with pytest.raises(ValidationError, match="direct_model_names_must_be_a_list_of_names"):
+        HarnessJob.model_validate(data)
+
+
+def test_a_routed_openai_prefixed_name_is_briefed_without_a_second_prefix(tmp_path):
+    job = _job(tmp_path)
+    job.agent.config["target_model"] = "openai/gemini-2.0-flash"
+    briefing = "\n".join(job.authoring_guidance())
+    assert "the requested model written as openai/gemini-2.0-flash:" in briefing
+    assert "openai/openai/" not in briefing
 
 
 @pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])

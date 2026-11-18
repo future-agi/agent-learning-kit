@@ -21,7 +21,6 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .job import routed_through_gateway
 from .process_preflight import preflight_bundle
 from .runtime_selection import ComposeSelection, select_runtime
 
@@ -199,9 +198,12 @@ def compile_bundle(*, source, job, authoring, output, contract, include_scenario
         }
     if directories:
         document["x-alk-directories"] = directories
-    if routed_through_gateway(job.agent.config.get("target_model")):
-        # The Agents SDK's own trace export would send the gateway key to OpenAI.
-        _disable_agents_sdk_tracing(document["services"][selection.control_service])
+    if job.routes_target_model_through_gateway():
+        # The Agents SDK's own trace export would send the gateway key to OpenAI. No kit hook runs
+        # in any service of a Compose project run as is, and an Agents SDK agent can be an
+        # additional service, so every service gets the switch; nothing else reads it.
+        for service in document["services"].values():
+            _disable_agents_sdk_tracing(service)
     base = selection.compose_file.parent
 
     from .contract import RuntimeSecretFile
