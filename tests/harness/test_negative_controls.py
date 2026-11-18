@@ -546,7 +546,7 @@ _BUILT_GOALS = dict(
 )
 
 
-def _built(monkeypatch, tmp_path, case, *, forward=None):
+def _built(monkeypatch, tmp_path, case, *, forward=None, agent_document=None):
     """A build: its validation plays `case` on the live runtime, then the build proves its suite into the archived
     `scenario-proofs.json`, the offline pass reading service tools as assumed as it does without a runtime."""
     import json
@@ -568,7 +568,7 @@ def _built(monkeypatch, tmp_path, case, *, forward=None):
     install(monkeypatch, runtime_tools={"lookup_order", "refund_order"})
     monkeypatch.setattr(prove_suite, "load_scenarios", lambda path: [case])
     monkeypatch.setattr(prove_suite, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
-    authoring_entrypoint._prove_scenarios(tmp_path, None, stage="build")
+    authoring_entrypoint._prove_scenarios(tmp_path, None, stage="build", agent_document=agent_document)
     return json.loads((tmp_path / authoring_entrypoint.SCENARIO_PROOFS).read_text(encoding="utf-8"))["refund_case"]
 
 
@@ -760,3 +760,39 @@ def test_one_control_failing_any_one_of_the_case_s_goals_is_enough():
     proof = module.Proof(case_goals=["first", "second"], controls=[ran(["shared"]), ran(["second"])])
     assert proof.misses_case_goal is False
     assert module.Proof(case_goals=["first", "second"], controls=[ran(["shared"])]).misses_case_goal is True
+
+
+
+def _agent_document(tmp_path, tools):
+    import json
+
+    path = tmp_path / "agent.json"
+    path.write_text(json.dumps({"sdk_version": "x", "agent": {"tools": [{"name": one} for one in tools]}}))
+    return path
+
+
+def test_a_case_whose_reference_calls_a_tool_the_agent_lacks_is_never_proved(monkeypatch, tmp_path):
+    # The world's service still answers the refund, live; the agent version under test no longer has the tool.
+    document = _agent_document(tmp_path, ["lookup_order"])
+    saved = _built(monkeypatch, tmp_path, refund_case(), agent_document=document)
+
+    assert saved["live"] is True and saved["proved"] is False
+    assert saved["blocked_reason"] == "tool_not_on_agent" and saved["refused"] is True
+    assert "refund_order" in saved["why"]
+
+
+def test_a_case_the_agent_s_tools_cover_is_proved(monkeypatch, tmp_path):
+    saved = _built(monkeypatch, tmp_path, refund_case(), agent_document=_agent_document(tmp_path, ["lookup_order", "refund_order"]))
+    assert saved["proved"] is True and saved["blocked_reason"] is None
+
+
+@pytest.mark.parametrize("body", [None, "not json", '{"agent": {}}', '{"agent": {"tools": [{"label": "x"}]}}'])
+def test_a_missing_or_unreadable_agent_document_skips_the_check(tmp_path, body, caplog):
+    from fi.alk.harness.prove_suite import agent_tools
+
+    path = tmp_path / "agent.json"
+    if body is not None:
+        path.write_text(body)
+    assert agent_tools(path) is None
+    assert agent_tools(None) is None
+    assert "agent document not read" in caplog.text

@@ -33,7 +33,7 @@ import re
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Collection, Sequence
 
 from .actors import load_actors
 from .catalogue import Catalogue
@@ -72,6 +72,7 @@ class BlockedReason(str, Enum):
     NO_NEGATIVE_CONTROL = "no_negative_control"
     NEGATIVE_CONTROL_PASSED = "negative_control_passed"
     CONTROL_MISSES_CASE_GOAL = "control_misses_case_goal"
+    TOOL_NOT_ON_AGENT = "tool_not_on_agent"
     POLICY_CONFLICT = "policy_conflict"
     ANSWER_LEAKED = "answer_leaked"
     SOURCE_UNRESOLVED = "source_unresolved"
@@ -104,6 +105,7 @@ REFUSED_CODES = frozenset(
     {
         BlockedReason.NEGATIVE_CONTROL_PASSED,
         BlockedReason.CONTROL_MISSES_CASE_GOAL,
+        BlockedReason.TOOL_NOT_ON_AGENT,
         BlockedReason.NO_NEGATIVE_CONTROL,
         BlockedReason.ANSWER_LEAKED,
         BlockedReason.SOURCE_UNRESOLVED,
@@ -204,6 +206,9 @@ class Proof:
     # The sub-goals that make this case its own, not a step every case in its suite shares (`distinctive_goals`). Set
     # only where a case is written or rebuilt, so a saved proof is never re-judged by this rule on read.
     case_goals: list[str] = field(default_factory=list)
+    # Tools the reference solution calls that the agent under test does not have, read from its agent version's
+    # tools when they are known: the world's service may still answer them, but no agent could pass the case.
+    missing_tools: list[str] = field(default_factory=list)
 
     @property
     def holds(self) -> bool:
@@ -227,6 +232,7 @@ class Proof:
             and not self.deferred
             and self.controls_failed
             and not self.misses_case_goal
+            and not self.missing_tools
             and not self.leaks
             and not self.unresolved_sources
             and not self.conflicts
@@ -261,6 +267,8 @@ class Proof:
         """The first reason this proof is not proved, faults before the lane's own limits."""
         if self.proved:
             return None
+        if self.missing_tools:
+            return BlockedReason.TOOL_NOT_ON_AGENT
         if self.broken:
             return BlockedReason.BROKEN_CHECK
         if not self.deferred:
@@ -332,6 +340,12 @@ class Proof:
 
     def why(self) -> str:
         """What to fix, in the order worth fixing it."""
+        if self.missing_tools:
+            return (
+                "the reference solution calls tools this agent version does not have, so no agent could pass it:\n  - "
+                + "\n  - ".join(self.missing_tools)
+                + "\n\nRewrite the case around what this agent can do, or drop it."
+            )
         if self.deferred and not self.broken and not self.leaks and not self.unresolved_sources and not self.conflicts:
             return "DEFERRED: setup, readiness and outcome checks require the live runtime; file access declarations do not verify fixture contents."
         if self.deferred and not self.broken:
@@ -1126,13 +1140,17 @@ def prove(
     judge: ControlJudge | None = None,
     conflict_judge: Callable[[str, str], tuple[bool | None, str]] | None = None,
     case_goals: Sequence[str] = (),
+    agent_tools: Collection[str] | None = None,
 ) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping.
 
     `judge(goal, world, calls, messages, scenario) -> (held, explanation)` decides a judged-only
     case's controls; None uses the harness judge. `conflict_judge(expected, rule) -> (conflict, why)`
-    decides whether a cited rule contradicts the expected outcome; None uses the harness judge."""
+    decides whether a cited rule contradicts the expected outcome; None uses the harness judge.
+    `agent_tools` are the tools the agent version under test has, when known; None skips that check."""
     proof = Proof(case_goals=list(case_goals))
+    if agent_tools is not None:
+        proof.missing_tools = sorted({str(step.tool) for step in scenario.solution} - set(agent_tools))
     if contract is None:
         contract = load_proof_contract(world_root)
     if actors is None:

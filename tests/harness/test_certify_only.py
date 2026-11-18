@@ -1570,8 +1570,9 @@ def test_prove_only_proves_on_the_sealed_runtime_then_offline(tmp_path, monkeypa
         live_proof.write_live(tree, {"case_a": {"assumed": []}})
         return {"case_a": {"assumed": []}}
 
-    def offline(tree, output, *, deadline_at=None, keys=None, budget=1200):
+    def offline(tree, output, *, deadline_at=None, keys=None, budget=1200, agent_document=None):
         seen["offline"] = (keys, deadline_at, output, live_proof.load_live(tree))
+        seen["agent_document"] = agent_document
         return {}
 
     monkeypatch.setattr(runtime_validation, "prove_on_sealed_runtime", on_sealed_runtime)
@@ -1579,10 +1580,15 @@ def test_prove_only_proves_on_the_sealed_runtime_then_offline(tmp_path, monkeypa
     _forbid_models(monkeypatch)
 
     status = authoring_entrypoint.main(
-        _prove_only_argv(tmp_path, authoring, job_path, "--keys", "case_a", "--deadline-at", "10000")
+        _prove_only_argv(
+            tmp_path, authoring, job_path, "--keys", "case_a", "--deadline-at", "10000",
+            "--agent-document", str(tmp_path / "agent.json"),
+        )
     )
 
     assert status == 0
+    # The agent version's tools reach the offline pass, which bounds each case by them.
+    assert seen["agent_document"] == tmp_path / "agent.json"
     assert seen["live_pass"] == ({"case_a"}, 10000 - 600, {"case_b": {"assumed": []}})
     keys, deadline_at, output, live = seen["offline"]
     assert (keys, deadline_at, output) == ({"case_a"}, 10000, authoring / "scenario-proofs.json")
