@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
+from functools import cache
 from pathlib import Path
 
 import pytest
@@ -19,6 +22,9 @@ from fi.alk.harness.framework_support import (
 REPO = Path(__file__).resolve().parents[2]
 ENTRIES = framework_support.frameworks()
 SMOKE = (REPO / ".github" / "workflows" / "sdk-smoke.yml").read_text(encoding="utf-8")
+# Kit commits a real run was made on that aren't merged into this branch yet, with the PR each is
+# the head of. A pass on one of them leaves its layer pending; remove the line when the PR merges.
+UNMERGED_KITS = {"5aa31fdb30aa02260d2d006cad121991a3b3828c": "#341"}
 
 
 def test_the_schema_is_named() -> None:
@@ -45,6 +51,10 @@ def test_every_layer_uses_known_words_and_a_pending_one_says_what_it_waits_on() 
                 assert item["kind"] in EVIDENCE_KINDS, (entry["key"], layer, item)
                 if item["kind"] == "real_run":
                     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", item["date"]), item
+                    # ADR-006: each real run names the model that did the reading.
+                    assert item.get("model"), item
+                    assert item.get("result") in ("pass", "miss"), item
+                    assert re.fullmatch(r"[0-9a-f]{40}", item.get("kit", "")), item
         checks = entry["layers"]["run"]["checks"]
         assert tuple(checks) == CHECKS and set(checks.values()) <= set(RESULTS), entry[
             "key"
@@ -58,6 +68,25 @@ def test_read_and_run_are_proven_only_by_a_real_run() -> None:
             if claim["status"] == "proven":
                 kinds = {item["kind"] for item in claim["evidence"]}
                 assert kinds == {"real_run"}, (entry["key"], layer)
+                # A miss proves nothing, and nor does a pass on a kit not merged here.
+                assert any(
+                    item["result"] == "pass" and item["kit"] not in UNMERGED_KITS
+                    for item in claim["evidence"]
+                ), (entry["key"], layer)
+
+
+def test_a_pass_on_an_unmerged_kit_leaves_its_layer_pending_on_that_pr() -> None:
+    for entry in ENTRIES:
+        for layer in ("read", "run"):
+            claim = entry["layers"][layer]
+            passes = [i for i in claim["evidence"] if i.get("result") == "pass"]
+            if passes and all(i["kit"] in UNMERGED_KITS for i in passes):
+                assert claim["status"] == "pending", (entry["key"], layer)
+                for item in passes:
+                    assert UNMERGED_KITS[item["kit"]] in claim["note"], (
+                        entry["key"],
+                        layer,
+                    )
 
 
 def test_a_real_run_on_an_outside_agent_is_pending_until_the_kit_holds_a_reference() -> (
@@ -108,6 +137,40 @@ def _evidence() -> list[tuple[str, str, dict]]:
     ]
 
 
+@cache
+def _collected(path: str) -> frozenset[str]:
+    """The test ids pytest collects from one file, so a cited case must exist as a case."""
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            path,
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return frozenset(line.strip() for line in done.stdout.splitlines() if "::" in line)
+
+
+def _section(path: Path, heading: str) -> list[str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    start = next(
+        n for n, line in enumerate(lines) if line.lstrip("#").strip() == heading
+    )
+    end = next(
+        (n for n in range(start + 1, len(lines)) if lines[n].startswith("#")),
+        len(lines),
+    )
+    return [line.lstrip("- ").strip() for line in lines[start + 1 : end]]
+
+
 @pytest.mark.parametrize(
     "key, layer, item", _evidence(), ids=lambda value: str(value)[:80]
 )
@@ -121,15 +184,24 @@ def test_every_piece_of_evidence_names_something_that_exists(
         function, _, case = test.partition("[")
         assert re.search(rf"^(async )?def {function}\(", source, re.M), ref
         if case:
-            assert case.rstrip("]") in source, ref
+            assert ref in _collected(path), ref
     else:
         path, _, heading = ref.partition("#")
+        record = REPO / path
         headings = [
             line.lstrip("#").strip()
-            for line in (REPO / path).read_text(encoding="utf-8").splitlines()
+            for line in record.read_text(encoding="utf-8").splitlines()
             if line.startswith("#")
         ]
         assert heading in headings, ref
+        # The record states the result and the kit commit the entry claims.
+        assert item["kit"][:8] in record.read_text(encoding="utf-8"), ref
+        word = {"read": "Reading", "run": "Run"}[layer]
+        section = _section(record, heading)
+        assert any(
+            line == item["result"] or line.startswith(f"{word}: {item['result']}")
+            for line in section
+        ), ref
 
 
 def test_every_tested_version_is_a_pin_of_its_reference_or_a_ci_row() -> None:

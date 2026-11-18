@@ -23,6 +23,9 @@ pydantic-ai-slim 2.61.0. The reading gave tools as `import` entries from module 
 from the reading gave 3 right replies, and the trace file had the 3 tool calls with their arguments
 and results.
 
+- Reading: pass.
+- Run: miss. Four of the five checks passed; stopping wasn't recorded.
+
 ## Google ADK
 
 google-adk 2.13.0. The reading gave `adk web`; the kit replaced its interface with its own
@@ -30,14 +33,23 @@ google-adk 2.13.0. The reading gave `adk web`; the kit replaced its interface wi
 added to the example's requirements), but the transcript recorded 5 tool calls for 3: two extra
 with empty arguments. The trace file had the clean 3.
 
+- Reading: pass. No expectation was written before this reading. The 17 Nov correction in `E2E-frameworks/findings.md` found that the kit replaces an `adk web` reading's interface with its own `/run_sse` route and the port with `$PORT` per world, so ADK needs no reading fix.
+- Run: miss. Two extra tool calls with empty arguments were recorded, and stopping wasn't recorded.
+
 ## OpenAI Agents SDK
 
 openai-agents 0.24.0. The reading marked each `@function_tool` tool `unreachable`, with its module
 written from the repository root. So the run gave right replies but recorded no tool calls. #341
 fixes the reading's binding. In step 0, from a hand-written contract, all three calls were recorded.
 
+- Reading: miss. The tools were marked unreachable, with their module written from the repository root.
+- Run: miss. No tool calls were recorded.
+
 ## Deep Agents
 
 deepagents 0.7.32. The reading chose `langgraph dev`, which the agent doesn't install, so the run
 failed at start. #341 sends such an app to the kit's own graph route. In step 0 the kit's LangGraph
 adapter ran the agent from a hand-written contract, and its tool calls were recorded.
+
+- Reading: miss. It saved `langgraph dev`.
+- Run: miss. It failed at start.

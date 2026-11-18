@@ -14,7 +14,7 @@
           "evidence": [
             {
               "kind": "test",
-              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[claude_agent_sdk_agent.py]",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[claude_agent_sdk_agent.py-]",
               "date": null
             },
             {
@@ -36,7 +36,10 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-18-claude_agent_sdk.md#Result",
-              "date": "2026-11-18"
+              "date": "2026-11-18",
+              "result": "miss",
+              "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
           "note": "The 18 Nov reading missed one line: it made ANTHROPIC_MODEL and ANTHROPIC_API_KEY required, though the model has a default and the agent blanks the API key in gateway mode. Everything else matched."
@@ -76,7 +79,7 @@
           "evidence": [
             {
               "kind": "test",
-              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[crewai_agent.py]",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[crewai_agent.py-]",
               "date": null
             },
             {
@@ -93,7 +96,10 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-18-crewai.md#Result",
-              "date": "2026-11-18"
+              "date": "2026-11-18",
+              "result": "pass",
+              "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
           "note": ""
@@ -152,12 +158,18 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents",
-              "date": "2026-11-12"
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "model": "claude-sonnet (laptop gateway)"
             },
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-18-deepagents.md#Result",
-              "date": "2026-11-18"
+              "date": "2026-11-18",
+              "result": "pass",
+              "kit": "5aa31fdb30aa02260d2d006cad121991a3b3828c",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
           "note": "Read on kit PR #341's head (5aa31fdb), pending its merge: the 18 Nov reading there matched its expected contract fully (the kit's graph route). The 12 Nov reading, on the kit before #341, saved `langgraph dev`."
@@ -168,10 +180,13 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents",
-              "date": "2026-11-12"
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Waits on kit PR #341, which sends such an app to the kit's own graph route; from the 12 Nov reading it failed to start.",
+          "note": "Waits on kit PR #341 merging and a new run from a reading on it. #341 sends such an app to the kit's own graph route; from the 12 Nov reading it failed to start.",
           "checks": {
             "start": "failed",
             "two_turn": "not_run",
@@ -205,7 +220,7 @@
           "evidence": [
             {
               "kind": "test",
-              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[google_adk_agent.py]",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[google_adk_agent.py-]",
               "date": null
             },
             {
@@ -222,7 +237,10 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK",
-              "date": "2026-11-12"
+              "date": "2026-11-12",
+              "result": "pass",
+              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
           "note": ""
@@ -233,7 +251,10 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK",
-              "date": "2026-11-12"
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
           "note": "Replies were right, but the transcript recorded 5 tool calls for 3, and stopping wasn't recorded; not rechecked since.",
@@ -268,7 +289,7 @@
           "evidence": [
             {
               "kind": "test",
-              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[langchain_agent.py]",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[langchain_agent.py-]",
               "date": null
             },
             {
@@ -285,7 +306,10 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-18-langchain.md#Result",
-              "date": "2026-11-18"
+              "date": "2026-11-18",
+              "result": "pass",
+              "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
           "note": "The 18 Nov reading of an outside agent (harbor-hotels-langchain) passed against its written expectation. Waits on a reference agent in the kit, at a fixed commit, with pinned versions."
@@ -310,7 +334,8 @@
       },
       "limits": [
         "No reference agent in the kit.",
-        "The 18 Nov reading binds the tools as `check_availability.func` (the plain function inside the `@tool` object); whether the tool tracer binds `.func` is unchecked until an agent run."
+        "The 18 Nov reading binds the tools as `check_availability.func` (the plain function inside the `@tool` object); whether the tool tracer binds `.func` is unchecked until an agent run.",
+        "The offline walk (scan_walk) does not name LangChain for harbor-hotels-langchain; only the reading does."
       ]
     },
     {
@@ -326,7 +351,7 @@
           "evidence": [
             {
               "kind": "test",
-              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[langgraph_agent.py]",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[langgraph_agent.py-]",
               "date": null
             },
             {
@@ -348,7 +373,10 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-18-langgraph.md#Result",
-              "date": "2026-11-18"
+              "date": "2026-11-18",
+              "result": "miss",
+              "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
           "note": "The 18 Nov reading (of page-turner-langgraph-otel, an outside agent) left the contract's model empty, describing the provider and default model only in prose. Everything else matched."
@@ -400,7 +428,10 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-18-livekit.md#Result",
-              "date": "2026-11-18"
+              "date": "2026-11-18",
+              "result": "pass",
+              "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
           "note": "The 18 Nov reading of an outside agent (harbor-voice-livekit) passed against its written expectation. Waits on a reference agent in the kit, at a fixed commit, with pinned versions."
@@ -442,7 +473,7 @@
           "evidence": [
             {
               "kind": "test",
-              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[openai_agents_agent.py]",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[openai_agents_agent.py-]",
               "date": null
             },
             {
@@ -459,12 +490,18 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
-              "date": "2026-11-12"
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "model": "claude-sonnet (laptop gateway)"
             },
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-18-openai_agents.md#Result",
-              "date": "2026-11-18"
+              "date": "2026-11-18",
+              "result": "pass",
+              "kit": "5aa31fdb30aa02260d2d006cad121991a3b3828c",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
           "note": "Read on kit PR #341's head (5aa31fdb), pending its merge: the 18 Nov reading there matched its expected contract fully. The 12 Nov reading, on the kit before #341, described the agent but marked its tools unreachable from the repository root."
@@ -475,10 +512,13 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
-              "date": "2026-11-12"
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Waits on kit PR #341, which binds the tools; from the 12 Nov reading it replied right with no tool calls recorded.",
+          "note": "Waits on kit PR #341 merging and a new run from a reading on it. #341 binds the tools; from the 12 Nov reading it replied right with no tool calls recorded.",
           "checks": {
             "start": "passed",
             "two_turn": "passed",
@@ -559,7 +599,7 @@
           "evidence": [
             {
               "kind": "test",
-              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[pydantic_ai_agent.py]",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[pydantic_ai_agent.py-]",
               "date": null
             },
             {
@@ -576,7 +616,10 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI",
-              "date": "2026-11-12"
+              "date": "2026-11-12",
+              "result": "pass",
+              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
           "note": ""
@@ -587,7 +630,10 @@
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI",
-              "date": "2026-11-12"
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "model": "claude-sonnet (laptop gateway)"
             }
           ],
           "note": "Four of the five checks passed from its reading; stopping wasn't recorded.",
