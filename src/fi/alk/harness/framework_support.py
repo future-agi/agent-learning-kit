@@ -36,13 +36,30 @@ date in the record's name). A `real_run` item also has `model` (the reading mode
 name it), `result` (`pass` or `miss`) and `kit` (the kit commit it ran on, or null when no single
 commit holds what ran). A proven layer has evidence. Read, run and platform are proven only by a
 passing real run on a kit commit merged here that holds the reference agent: a real model on a real
-reference agent, never stand-in modules. A run on an agent outside the kit leaves its layer
+reference agent, never stand-in modules.
+
+A proof holds only while the reference folder is unchanged. A proving `real_run` item carries
+`reference_sha256`, the hash of the folder as the run used it (computed from the folder at its
+`kit` commit, and stated on its own line in the run's record), and a layer is proven only when that
+equals the folder's hash in the checkout. A pull request that changes a reference either records a
+new run of the changed folder or moves the layer to `pending`, with a note that the reference
+changed after its last reading; an earlier record is never edited to match.
+
+`reference_sha256(folder)` computes it from exactly the files git tracks in the folder, dotfiles
+such as `.python-version` included and untracked leftovers such as `__pycache__` not: for each one,
+in sorted order of its path relative to the folder (with `/`), it hashes `f` (or `l` for a link,
+whose target is hashed and not followed), the path, a NUL byte, the byte count in decimal, a NUL
+byte and the bytes. To recompute it by hand for a commit, check the commit out and run the
+function on the folder. A run on an agent outside the kit leaves its layer
 pending until the kit holds a reference agent.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +98,33 @@ def frameworks(path: Path = DATA) -> list[dict[str, Any]]:
     return load(path)["frameworks"]
 
 
+def reference_sha256(folder: Path) -> str:
+    """The hash of a reference folder's tracked files, as the module docstring describes."""
+    if not folder.is_dir():
+        raise FileNotFoundError(folder)
+    listed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=folder,
+        capture_output=True,
+        check=True,
+    ).stdout
+    paths = sorted(path for path in listed.decode("utf-8").split("\0") if path)
+    if not paths:
+        raise FileNotFoundError(f"no tracked files in {folder}")
+    digest = hashlib.sha256()
+    for path in paths:
+        file = folder / path
+        if file.is_symlink():
+            kind, data = b"l", os.readlink(file).encode("utf-8")
+        else:
+            kind, data = b"f", file.read_bytes()
+        digest.update(
+            kind + path.encode("utf-8") + b"\0" + str(len(data)).encode() + b"\0"
+        )
+        digest.update(data)
+    return digest.hexdigest()
+
+
 def level_reached(entry: dict[str, Any]) -> str | None:
     """The highest layer proven, counting only an unbroken run of proven layers from `found`."""
     reached = None
@@ -115,6 +159,11 @@ def markdown_page(path: Path = DATA) -> str:
         "- **Platform:** connected through the platform's own screens and saved as Agent and "
         "version 1.",
         "- **Versions** are the reference agent's own environment, not the kit's.",
+        (
+            "- **A proof holds only while the reference agent is unchanged:** each proving run "
+            "records the hash of the agent's folder, and a test refuses the proof once the folder "
+            "differs, until a new run."
+        ),
         "",
         "| Framework | Level | Versions | Python | Found | Read | Run | Platform "
         "| Start | Two turns | Tools bound | Evidence | Stop |",

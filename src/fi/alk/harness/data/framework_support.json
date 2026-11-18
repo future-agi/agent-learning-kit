@@ -105,7 +105,8 @@
               "date": "2026-11-18",
               "result": "pass",
               "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
-              "model": "claude-sonnet (laptop gateway)"
+              "model": "claude-sonnet (laptop gateway)",
+              "reference_sha256": "6b85b3095df38d3957aeb60dc0b7eca4cf280c381e8b06d376d669d939642c39"
             }
           ],
           "note": ""

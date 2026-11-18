@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 from functools import cache
@@ -79,6 +80,8 @@ def test_every_layer_uses_known_words_and_a_pending_one_says_what_it_waits_on() 
                     assert item["kit"] is None or re.fullmatch(
                         r"[0-9a-f]{40}", item["kit"]
                     ), item
+                    sha = item.get("reference_sha256")
+                    assert sha is None or re.fullmatch(r"[0-9a-f]{64}", sha), item
         checks = entry["layers"]["run"]["checks"]
         assert tuple(checks) == CHECKS and set(checks.values()) <= set(RESULTS), entry[
             "key"
@@ -93,18 +96,106 @@ def test_a_proven_layer_has_evidence() -> None:
                 assert claim["evidence"], (entry["key"], layer)
 
 
-def test_read_run_and_platform_are_proven_only_by_a_real_run() -> None:
+def _proves(claim: dict, folder_hash: str | None) -> bool:
+    """A pass on a merged kit, of the reference folder as it is in this checkout."""
+    return {item["kind"] for item in claim["evidence"]} == {"real_run"} and any(
+        item["result"] == "pass"
+        and item["kit"] in MERGED_KITS
+        and folder_hash is not None
+        and item.get("reference_sha256") == folder_hash
+        for item in claim["evidence"]
+    )
+
+
+def test_read_run_and_platform_are_proven_only_by_a_real_run_of_the_folder_as_it_is() -> (
+    None
+):
     for entry in ENTRIES:
         for layer in ("read", "run", "platform"):
             claim = entry["layers"][layer]
-            if claim["status"] == "proven":
-                kinds = {item["kind"] for item in claim["evidence"]}
-                assert kinds == {"real_run"}, (entry["key"], layer)
-                # A miss proves nothing, and nor does a pass on a kit not merged here.
-                assert any(
-                    item["result"] == "pass" and item["kit"] in MERGED_KITS
-                    for item in claim["evidence"]
-                ), (entry["key"], layer)
+            if claim["status"] != "proven":
+                continue
+            # An absent reference folder fails here; it does not skip.
+            assert entry["reference"], (entry["key"], layer)
+            today = framework_support.reference_sha256(REPO / entry["reference"])
+            # A miss proves nothing, nor does a pass on a kit not merged here, nor one of a
+            # folder that has changed since: that needs a new run, or the layer goes pending.
+            assert _proves(claim, today), (entry["key"], layer, today)
+
+
+def test_a_proof_with_no_hash_or_another_hash_or_a_miss_is_refused() -> None:
+    kit = next(iter(MERGED_KITS))
+    good = {
+        "kind": "real_run",
+        "result": "pass",
+        "kit": kit,
+        "reference_sha256": "a" * 64,
+    }
+    assert _proves({"evidence": [good]}, "a" * 64)
+    assert not _proves({"evidence": [good]}, "b" * 64)
+    assert not _proves({"evidence": [{**good, "reference_sha256": None}]}, "a" * 64)
+    no_field = {k: v for k, v in good.items() if k != "reference_sha256"}
+    assert not _proves({"evidence": [no_field]}, "a" * 64)
+    assert not _proves({"evidence": [{**good, "result": "miss"}]}, "a" * 64)
+    assert not _proves({"evidence": [{**good, "kit": "c" * 40}]}, "a" * 64)
+    assert not _proves({"evidence": [{**good, "kit": None}]}, "a" * 64)
+
+
+def _git(folder: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=folder, check=True, capture_output=True)
+
+
+def _tracked_copy(tmp_path: Path, reference: str) -> Path:
+    folder = tmp_path / "reference"
+    shutil.copytree(REPO / reference, folder)
+    _git(folder, "init", "-q")
+    _git(folder, "add", "-A")
+    return folder
+
+
+def test_the_folder_hash_counts_every_tracked_file_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    folder = _tracked_copy(tmp_path, "examples/harness/crewai_support")
+    before = framework_support.reference_sha256(folder)
+    assert re.fullmatch(r"[0-9a-f]{64}", before)
+
+    # Leftovers from importing or running the agent are not the folder.
+    (folder / "__pycache__").mkdir()
+    (folder / "__pycache__" / "agent.cpython-312.pyc").write_bytes(b"\0\1")
+    (folder / ".DS_Store").write_bytes(b"x")
+    assert framework_support.reference_sha256(folder) == before
+
+    # One changed byte in a tracked file (Dileep's repro: a line appended to agent.py).
+    agent = folder / "agent.py"
+    original = agent.read_bytes()
+    agent.write_bytes(original + b"\n# one more line\n")
+    assert framework_support.reference_sha256(folder) != before
+    agent.write_bytes(original)
+    assert framework_support.reference_sha256(folder) == before
+
+    # A tracked dotfile counts: removing .python-version changes the hash.
+    _git(folder, "rm", "-q", "-f", ".python-version")
+    assert framework_support.reference_sha256(folder) != before
+
+
+def test_the_folder_hash_frames_each_path_and_its_bytes(tmp_path: Path) -> None:
+    # The same bytes split differently between names must not give the same hash.
+    one, two = tmp_path / "one", tmp_path / "two"
+    for folder, files in ((one, {"a": b"bc", "d": b""}), (two, {"a": b"b", "cd": b""})):
+        folder.mkdir()
+        for name, data in files.items():
+            (folder / name).write_bytes(data)
+        _git(folder, "init", "-q")
+        _git(folder, "add", "-A")
+    assert framework_support.reference_sha256(
+        one
+    ) != framework_support.reference_sha256(two)
+
+
+def test_an_absent_reference_folder_fails(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        framework_support.reference_sha256(tmp_path / "missing")
 
 
 def test_a_pass_on_an_unmerged_kit_leaves_its_layer_pending_on_that_pr() -> None:
@@ -236,6 +327,19 @@ def test_every_piece_of_evidence_names_something_that_exists(
                 if line.startswith("- Kit:")
             ]
             assert len(kit_lines) == 1 and f"`{item['kit']}`" in kit_lines[0], ref
+        # The record states the folder's hash on its own line, and the list carries the same one.
+        hash_lines = [
+            line
+            for line in record.read_text(encoding="utf-8").splitlines()
+            if line.startswith("- Reference sha256:")
+        ]
+        if item.get("reference_sha256") is None:
+            assert hash_lines == [], ref
+        else:
+            assert len(hash_lines) == 1, ref
+            assert hash_lines[0].startswith(
+                f"- Reference sha256: `{item['reference_sha256']}`"
+            ), ref
         word = {"read": "Reading", "run": "Run"}[layer]
         section = _section(record, heading)
         assert any(

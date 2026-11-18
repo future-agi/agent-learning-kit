@@ -15,6 +15,7 @@ Generated from `src/fi/alk/harness/data/framework_support.json`; a test keeps th
 - **Run:** the agent ran from that reading, with five checks: start, a two-turn session, tool binding, evidence, stop. It is proven only when all five passed.
 - **Platform:** connected through the platform's own screens and saved as Agent and version 1.
 - **Versions** are the reference agent's own environment, not the kit's.
+- **A proof holds only while the reference agent is unchanged:** each proving run records the hash of the agent's folder, and a test refuses the proof once the folder differs, until a new run.
 
 | Framework | Level | Versions | Python | Found | Read | Run | Platform | Start | Two turns | Tools bound | Evidence | Stop |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
