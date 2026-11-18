@@ -173,3 +173,48 @@ def test_owned_output_cannot_equal_source_and_external_exclusion_preserves_sourc
     with pytest.raises(ProvisionError, match="source_fingerprint_exclusion_is_source"):
         source_fingerprint(source, exclude=source)
     assert source_fingerprint(source, exclude=tmp_path) == source_fingerprint(source)
+
+
+def _two_agents(tmp_path):
+    for name in ("a", "b"):
+        (tmp_path / "agents" / name).mkdir(parents=True)
+        (tmp_path / "agents" / name / "agent.py").write_text("x = 1\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='top'\nversion='1'\n")
+    return tmp_path
+
+
+def test_briefing_lists_only_subfolder(tmp_path):
+    root = _two_agents(tmp_path)
+
+    briefing = RepoSource("app", root, subfolder="agents/a").briefing()
+
+    assert "- agents/a/agent.py" in briefing
+    assert "agents/b/agent.py" not in briefing
+    assert "pyproject.toml" not in briefing
+    assert "The agent is the folder agents/a of this repository" in briefing
+    assert "Files above it, such as a project file, may apply to it." in briefing
+
+
+def test_briefing_says_command_is_relative_to_workdir(tmp_path):
+    briefing = RepoSource("app", _two_agents(tmp_path), subfolder="agents/a").briefing()
+
+    assert (
+        "runtime.command and workspaces are relative to runtime.workdir: the agent starts there."
+        in briefing
+    )
+    assert "written from the repository root" in briefing
+
+
+def test_briefing_on_missing_folder_says_so(tmp_path):
+    briefing = RepoSource("app", _two_agents(tmp_path), subfolder="agents/zzz").briefing()
+
+    assert "agents/zzz" in briefing and "is not in this repository" in briefing
+    assert "no description can be saved" in briefing
+    assert "agents/a/agent.py" not in briefing
+
+
+def test_briefing_without_subfolder_is_unchanged(tmp_path):
+    briefing = RepoSource("app", _two_agents(tmp_path)).briefing()
+
+    assert "agents/a/agent.py" in briefing and "agents/b/agent.py" in briefing
+    assert "The agent is the folder" not in briefing

@@ -60,8 +60,16 @@ Find, in roughly this order:
    schema, a tool array. Record the exact callable name the model would emit, not a friendly
    label.
 
-   If the agent hands work to other agents, record each one in `workers`: an `id`, the `name` the
-   app gives it, and the contract tools it holds. Every worker tool is also in `tools`.
+   If the agent hands work to other agents (a sub-agent called as a tool, a hand-off, graph nodes,
+   a crew), record each one in `workers`: an `id`, the `name` the app gives it, the contract tools
+   it holds, and `binding: separate` when its tools are reached through code of their own rather
+   than code the agents share, with `address_env` naming the environment variable that code reads
+   for its tools' base address. When the repository says a separate worker may use fewer tools than
+   its code holds, list those in `allowed_tools`; a shared worker gets none, because the world cannot
+   tell its calls apart. Every worker tool is also in `tools`. When the app runs a worker as a
+   service of its own (its own process, which the coordinator reaches over the network), set
+   `process` to the name of that process in the environment; leave it empty for a worker that runs
+   inside the app's one process.
 
 2. **Argument names and types.** Read the signature. An argument declared as a list is a
    different tool from one declared as a single value, and an environment built on the wrong one
@@ -106,8 +114,19 @@ Find, in roughly this order:
    when a record says so; and each argument whose text the agent writes itself rather than takes
    from the person or a record. `refuses`: every refusal by value or by something outside the
    call, and every refusal returned as an ordinary value rather than an error. `inputs_from`: an
-   argument whose value must come from an earlier tool's output, and that tool. Fill these for
-   every tool that has them; a writer sees nothing else.
+   argument whose value must come from an earlier tool's output, and that tool. `arg_units`: the
+   unit or format of every amount, duration, date or time argument whose name does not say it
+   (a currency's minor or major unit, seconds or milliseconds, an ISO date or a timestamp), from the
+   code that reads it, the data it holds, or what the person you work with told you. When the code or
+   its data and the person's words disagree (they name one unit, the column holds another), the code
+   wins: record what it
+   does and tell them about the mismatch. The agent, the world and every actor read the field by it,
+   so a field left without one is read three ways. `returns`: every field the tool hands back, with
+   its type and the same unit or format rule (`{"<an id field>": "string", "<an amount field>":
+   "integer, <its minor unit and currency>"}`), read from the code that builds the result or the
+   record it returns. `tables_read` and `tables_changed`: the world's tables the tool reads, and
+   the ones it adds to, changes or deletes from, read from its code. Fill these for every
+   tool that has them; a writer sees nothing else.
 
 6. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
    wording from its system prompt or its validation code. These matter: the agent under test is
@@ -115,7 +134,14 @@ Find, in roughly this order:
    often kept away from the main agent file, so search the whole source for a long instructions
    string before concluding there are none. Name where the whole prompt is written in
    `system_prompt_from`, every part it is assembled from: it is copied into the contract as written,
-   and every later stage decides what the agent should do from it.
+   and every later stage decides what the agent should do from it. If the prompt is built or
+   fetched at run time and has no lines to name, quote it in `system_prompt_excerpt`; the save
+   asks once whether lines can be named. A quote is word for word from the prompt, a sentence or
+   more, with ... where you leave text out. The lines you name are checked against your latest
+   such quote, given with them or before. Lines that don't hold it are refused, and asked about
+   once more if they come without a quote; after that, the quote is kept and the lines are
+   recorded as unconfirmed (with a quote of fewer than 16 letters, no prompt is saved; the
+   lines are recorded as unconfirmed).
 
 7. **The modality.** How this agent is run: a voice session, a text conversation, or work it
    carries out on websites or a computer. This decides how it is later run, so getting it wrong
@@ -186,7 +212,8 @@ Find, in roughly this order:
    This is not who speaks first: an outbound agent usually still greets. It decides how the
    simulated person is briefed, and briefing someone who did not dial as though they had an errand
    to raise tests nothing about how the agent opens a call it placed. Two builds of the same agent
-   can differ only in this, so quote the line you read it from in `system_prompt_excerpt`.
+   can differ only in this, so quote the line you read it from in `notes`, unless it is already in
+   the prompt you name or quote.
 
 9. **What it depends on.** Everything the agent reaches for that has to exist before it can
    work: a datastore, a service it calls over HTTP, a file it reads, a queue. Record each one,
@@ -216,6 +243,10 @@ Find, in roughly this order:
    sees the dependency path; without this mapping ALK cannot normalize it back to the semantic
    tool the agent actually chose.
 
+   Record each entry's effect: "read" when the code only reads (a lookup, a search, a list),
+   "write" when it creates, changes or deletes anything. Leave it empty only when you cannot tell;
+   an empty one counts as a write unless the endpoint is called with GET.
+
    Some tools cannot be reached at all. A framework may define them as closures inside a class,
    so there is nothing importable. **Record that plainly rather than leaving the entry blank**:
    the environment stage must stop and tell the person which runnable seam the agent needs. It
@@ -239,7 +270,9 @@ Find, in roughly this order:
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
-   startable but the simulator cannot honestly claim to have exercised it.
+   startable but the simulator cannot honestly claim to have exercised it. When the ingress is
+   HTTP, the runtime command must start the long-running web or API server the source documents
+   for it, never a terminal REPL that reads a console.
 
    If an HTTP ingress uses neither the ALK nor OpenAI envelope, do not stop and do not label it as
    one of those protocols. Read the route models, OpenAPI setup, client examples and tests, then use
@@ -301,6 +334,19 @@ Find, in roughly this order:
     scenarios and they are written later, from these sentences. Each one is something the
     agent's own text says it does; a capability stretched from a passing word or a tool name
     becomes a whole slice of scenarios testing what the agent was never built to do.
+
+16. **The model.** Record `model` only from the agent's own source: the one model the agent talks
+    to the person with. A voice agent's speech-to-text and text-to-speech models don't count. Its
+    provider is the company or service as the source names it (openai, anthropic, google, azure),
+    left out when the source doesn't say. Its name is written exactly and wholly as it appears on
+    the line you cite (openai/gpt-4o, if that is what is written); its path is relative to the
+    source root, as for the prompt's lines; its line is the 1-based line the name is written on. A name
+    or provider is made only of letters, digits and . _ : / @ -, so a name with a space in it
+    can't be recorded; leave `model` out then.
+
+    Leave `model` out when the name is only set at run time: an environment variable with no
+    default in the code, or a value fetched from elsewhere. Where the code gives an environment
+    variable a default, record the default.
 
 ## A repository may not hold one agent
 

@@ -82,6 +82,7 @@ def _entry(proof: Proof, solution_steps: int) -> dict[str, Any]:
         "policy_checks": [dict(one) for one in proof.policy_checks],
         "evidence": {name: list(kinds) for name, kinds in proof.evidence.items()},
         "blocked_reason": blocked,
+        **({"trial": proof.trial} if proof.trial else {}),
     }
 
 

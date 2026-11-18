@@ -22,7 +22,7 @@ def test_assumed_steps_are_saved_and_not_proved(monkeypatch, tmp_path):
         sub_goals=["placed"],
         negative_controls=[control("places_twice", "places the order twice", [place, place])],
     )
-    proof = module.prove(case, catalogue(placed="def check(world, calls):\n    return None if any(c.ok and c.name == 'place_order' and c.arguments.get('order_id') == 'O-10' for c in calls) else 'not placed'\n"), tmp_path)
+    proof = module.prove(case, catalogue(placed="def check(world, calls):\n    return None if any(c.ok and c.name == 'place_order' and same_id(c.arguments.get('order_id'), 'O-10') for c in calls) else 'not placed'\n"), tmp_path)
 
     record_proof(tmp_path, "refund_case", proof, solution_steps=1)
     saved = load_proofs(tmp_path)["refund_case"]
@@ -81,7 +81,7 @@ def test_holds_failures_map_to_codes():
 
 
 CALLED_ONCE = check(
-    "n = sum(1 for c in calls if c.ok and c.name == 'refund_order' and c.arguments.get('order_id') == 'O-10')\n"
+    "n = sum(1 for c in calls if c.ok and c.name == 'refund_order' and same_id(c.arguments.get('order_id'), 'O-10'))\n"
     "return None if n == 1 else f'{n} refund calls'"
 )
 

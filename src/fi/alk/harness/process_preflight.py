@@ -110,6 +110,8 @@ _SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _PLACEHOLDER = re.compile(r"\{\{([^{}]+)\}\}")
 _FIXED_PLACEHOLDERS = {"JOB_ID", "WORLD_INDEX", "WORLD_DIR", "DB_NAME"}
 _NAMED_PLACEHOLDER = re.compile(r"^(PORT|HOST)_(.+)$")
+# Mirrored from `process_runtime.WORKER_CHANNEL_PLACEHOLDER`, like the port bands below.
+_WORKER_CHANNEL_PLACEHOLDER = re.compile(r"^WORKER_CHANNEL_([A-Za-z0-9_.-]+)$")
 
 # §2a: Dockerfile-style install lines requiring root privileges have no process-copy equivalent —
 # the provisioner never runs as root and never will (§0's guest is unprivileged throughout).
@@ -459,6 +461,13 @@ def _verify_placeholder_vocabulary(manifest: EnvironmentBundleV2) -> None:
                 token = match.group(1)
                 if token in _FIXED_PLACEHOLDERS:
                     continue
+                if _WORKER_CHANNEL_PLACEHOLDER.match(token):
+                    if "tool-proxy" in known_names:
+                        continue
+                    raise PreflightError(
+                        "unknown_placeholder",
+                        f"{process.name}.environment.{key}: {{{{{token}}}}} needs this bundle's tool proxy",
+                    )
                 named = _NAMED_PLACEHOLDER.match(token)
                 if named:
                     _, name = named.groups()

@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from typing import Any
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 CATALOGUE = "sub_goals.json"
 
@@ -43,6 +43,9 @@ class SubGoal(BaseModel):
     output: str = "pass_fail"
     # Which overlay level this sub-goal is the claim for, when it is one.
     overlay: str = ""
+    # The actor this sub-goal is about, by id: not applicable on a call that actor never came into. Empty: about the
+    # agent's task alone.
+    actor: str = ""
     # The check contract; `verifier` is code, llm or both, empty settles by the check if there is one.
     reference: str = ""
     observed: str = ""
@@ -50,6 +53,21 @@ class SubGoal(BaseModel):
     comparison: str = ""
     scope: str = ""
     applicability: str = ""
+    # Whose result this checks: the task as a whole, or `worker:<id>`, one of the agent's declared workers. A worker's
+    # check is given only that worker's calls, and with none it is inconclusive: absence is never a pass.
+    subject: str = "task"
+
+    @field_validator("subject")
+    @classmethod
+    def _known_subject(cls, value: str) -> str:
+        value = (value or "task").strip()
+        if value != "task" and not (value.startswith("worker:") and value[len("worker:") :].strip()):
+            raise ValueError("subject is task or worker:<id>")
+        return value
+
+    @property
+    def worker(self) -> str:
+        return self.subject[len("worker:") :] if self.subject.startswith("worker:") else ""
 
     @property
     def both(self) -> bool:
@@ -68,19 +86,34 @@ class SubGoal(BaseModel):
     def deterministic(self) -> bool:
         return bool(self.check.strip())
 
-    def settles(self, level: str) -> bool:
-        """Whether this sub-goal is the claim an overlay level is checked by, by field or by name."""
+    def conversation_only(self) -> bool:
+        """Whether its own contract says it is settled by what was said: judged by a model alone,
+        with no check, no reference value and no observed record of the run."""
+        return (
+            not self.deterministic()
+            and self.verifier.strip().lower() == "llm"
+            and not self.reference.strip()
+            and not self.observed.strip()
+        )
+
+    def claims(self, level: str) -> bool:
+        """Whether this sub-goal is an overlay level's claim by its field, or by holding the
+        level's whole name (or being held in it): `settles` without the first-word guess."""
         wanted = (level or "").strip().lower()
         if not wanted:
             return False
         if self.overlay.strip().lower() == wanted:
             return True
         named = self.name.strip().lower()
-        if wanted in named or named in wanted:
+        return wanted in named or named in wanted
+
+    def settles(self, level: str) -> bool:
+        """Whether this sub-goal is the claim an overlay level is checked by, by field or by name."""
+        if self.claims(level):
             return True
         # A shared first word, e.g. `emergency_escalated` for `emergency_crisis`; generous on purpose.
-        first = wanted.split("_")[0]
-        return len(first) > 3 and named.split("_")[0] == first
+        first = (level or "").strip().lower().split("_")[0]
+        return len(first) > 3 and self.name.strip().lower().split("_")[0] == first
 
 
 class SuiteEval(BaseModel):
@@ -157,6 +190,11 @@ _REFUSAL_WORDS = (
     "never_",
     "no_",
 )
+
+
+def is_refusal(name: str) -> bool:
+    """Whether a sub-goal, by its name, holds when the agent did NOT do the thing."""
+    return any(word in name.lower() for word in _REFUSAL_WORDS)
 
 
 def _tests_emptiness(test: "ast.expr") -> bool:
@@ -317,7 +355,17 @@ CHECK_RULES = (
     "Compare only what something fixes for this caller: what they said, their record in the world, "
     "or a rule of the agent that names the value; a value the reference holds only because a step "
     "needed one (a category or destination the agent picks, a free-text note) is the agent's choice "
-    "and is never compared. Check the outcome, not the route: where the outcome leaves a record, "
+    "and is never compared. A value the person speaks (a date, an amount, a name) reaches the agent in "
+    "the form they said it, so compare it in one common form (a date parsed, an amount as a number), "
+    "or compare what the tool decided with it instead. Compare an identifier with `same_id(a, b)`, never as "
+    "text: it ignores separators and case and nothing else, and the proof refuses a check that fails the same id "
+    "typed without its separators. `retried_timeouts(world)`, `repeated_commits(world)` and "
+    "`committed_writes(world)` list the agent's writes from the action log: one the world timed out "
+    "on and the agent tried again, a second commit to the same record, and every committed write; pass the "
+    "check's `reference` as their second argument so a retry that rewords free text is still the same record; "
+    "whether a reply claims a change that `committed_writes` does not hold is judged, never matched "
+    "as text. Check the outcome, not the route: where the "
+    "outcome leaves a record, "
     "check the record, and otherwise accept every call that achieves it. Use `judged` for what was "
     "said and what nothing observable settles; it holds the criteria. `output` is pass_fail.\n"
 )
@@ -366,7 +414,7 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         )
     if (
         sub_goal.check.strip()
-        and any(word in sub_goal.name.lower() for word in _REFUSAL_WORDS)
+        and is_refusal(sub_goal.name)
         and not _detects_obedience(sub_goal.check)
     ):
         problems.append(
@@ -579,12 +627,30 @@ def catalogue_problems(
     return []
 
 
+def worker_subjects_note(contract: Any) -> str:
+    """For a tool that writes sub-goals: the contract's declared workers, each a subject its own checks take."""
+    ids = [str(one.id) for one in getattr(contract, "workers", None) or [] if str(one.id).strip()]
+    if not ids:
+        return ""
+    return (
+        " This agent's declared workers: "
+        + ", ".join(f"`worker:{one}`" for one in ids)
+        + ". For each one whose actions the world records, add one sub-goal with that subject checking its own work:"
+        " what it called and tried, never an outcome the world enforces for it (a refused tool, a deadline)."
+    )
+
+
 def save_catalogue(catalogue: Catalogue, destination: Path) -> Path:
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / CATALOGUE
+    body = catalogue.model_dump()
+    for goal in body.get("sub_goals") or []:
+        if goal.get("subject") == "task":
+            # A task check is written exactly as before the field existed.
+            goal.pop("subject", None)
     path.write_text(
-        json.dumps(catalogue.model_dump(), indent=2, ensure_ascii=False),
+        json.dumps(body, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
     return path

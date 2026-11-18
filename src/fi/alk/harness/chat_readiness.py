@@ -5,6 +5,7 @@ import hashlib
 import json
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -14,8 +15,23 @@ from fi.simulate.agent.wrapper import AgentInput
 
 from .chat_transport import create_chat_wrapper
 from .diagnostics import HarnessDiagnostic
-from .job import HarnessStage
+from .job import FailureCause, HarnessStage
 from .world.runtime import graded_calls, trace_row
+
+
+def _chat_target_cause(trace):
+    """The closed cause of a failed request to the agent, from the transport's own flags.
+
+    An HTTP error status is the agent answering, not a refusal: it has no cause here.
+    A failure in the tool-events stage came after the chat answered: it has no cause here either.
+    """
+    if trace.get("failure_stage") == "tool_events":
+        return None
+    if trace.get("timeout_error") is True:
+        return FailureCause.CHAT_TARGET_TIMEOUT
+    if trace.get("network_error") is True and not trace.get("status_code"):
+        return FailureCause.CHAT_TARGET_REFUSED
+    return None
 
 
 def _failure_code(trace):
@@ -23,6 +39,18 @@ def _failure_code(trace):
         return "chat_ingress_timeout"
     status = trace.get("status_code", 0)
     stage = trace.get("failure_stage")
+    stream_reason = trace.get("stream_reason")
+    if stage == "stream" and stream_reason in {
+        "sse_content_type",
+        "sse_encoding",
+    }:
+        return "chat_ingress_configuration_invalid"
+    if (
+        stage == "stream"
+        and stream_reason == "sse_incomplete"
+        and trace.get("stream_completion_path_seen") is False
+    ):
+        return "chat_ingress_configuration_invalid"
     if stage in {"setup", "http"} and status in {400, 404, 405, 415, 422}:
         return "chat_ingress_configuration_invalid"
     if status in {401, 403}:
@@ -36,6 +64,19 @@ def _failure_code(trace):
     if stage == "tool_events":
         return "chat_tool_evidence_unverified"
     return "chat_ingress_failed"
+
+
+# A worker's call the world's door refused for that worker's own limits came through its channel to the door.
+_WORKER_LIMIT_REFUSALS = frozenset({"not_permitted", "deadline_passed"})
+
+
+def _reached_world(call):
+    """Whether a recorded call reached the world: it succeeded, the world's own rule refused it, or the door refused a
+    worker's call for that worker's limits (its channel is bound; its permitted tools are the environment's design)."""
+    if call.ok:
+        return True
+    code = getattr(call, "refusal_code", "") if call.refused else ""
+    return code == "world_rule" or (code in _WORKER_LIMIT_REFUSALS and bool(getattr(call, "worker_id", "")))
 
 
 def _usable_tool_call(call):
@@ -151,7 +192,10 @@ async def probe_chat_ingress(
             )
             receipt["diagnostic"] = diagnostic.model_dump(mode="json")
             raise RuntimeValidationError(
-                "environment", diagnostic.redacted_message, diagnostics=(diagnostic,)
+                "environment",
+                diagnostic.redacted_message,
+                diagnostics=(diagnostic,),
+                cause=None if trace.get("success") else _chat_target_cause(trace),
             )
         receipt["status"] = "passed"
     except RuntimeValidationError:
@@ -241,6 +285,20 @@ def world_call_log(runtime, since=0.0):
         return [call for call in _collect_tool_trace_calls(runtime) if call.at >= since]
     except Exception:  # noqa: BLE001 - no log to read, nothing received
         return []
+
+
+def received_calls(logged, ran) -> list:
+    """What the world received: its call log, then each call the harness ran at the world that the log does not
+    already hold (a door that mirrors its calls into the log writes them there too)."""
+    unmatched = [(call.name, call.arguments) for call in logged]
+    extra = []
+    for call in ran:
+        key = (call.name, call.arguments)
+        if key in unmatched:
+            unmatched.remove(key)
+        else:
+            extra.append(call)
+    return [*logged, *extra]
 
 
 def _logged_tools(contract, runtime, bundle: Path | None = None) -> set[str]:
@@ -347,7 +405,10 @@ def record_tool_routing(
     """Which tools the qualification conversation routed to the test world, beside the tool
     certification: what readiness reads as observed routing, per tool. ``received`` is what
     the world got (its call log and the calls the harness ran there); ``reported`` is every
-    call the conversation shows, including those only the agent says it made."""
+    call the conversation shows, including those only the agent says it made. A bundle with no
+    contract names no tools, so there is nothing to record."""
+    if contract is None:
+        return
     tools, unobserved = _routing(
         contract, runtime, received=received, reported=reported, bundle=bundle
     )
@@ -512,6 +573,8 @@ that world, never a real system (tools that leave the world are never asked). A 
             # One bound for the whole request: say() may call the agent up to eight times.
             async with asyncio.timeout(request_timeout):
                 await target.say(_tool_request(tool))
+            if target.world.timed_out:
+                raise TimeoutError(f"{tool.name} outlasted the readiness request deadline")
             reported = [
                 *target.world.calls,
                 *_collect_file_tool_calls(runtime)[traced:],
@@ -526,7 +589,7 @@ that world, never a real system (tools that leave the world are never asked). A 
         tools, unobserved = _routing(
             contract,
             runtime,
-            received=[*world_call_log(runtime, since), *target.received],
+            received=received_calls(world_call_log(runtime, since), target.received),
             reported=[call for call in reported if call.name == tool.name],
             bundle=bundle,
         )
@@ -565,6 +628,9 @@ class _OnlyAsked:
         self._asked = asked
         self._deadline = deadline
         self.refused: list[str] = []
+        # The asked tool outlasted the deadline: the world's door answers the agent with an error, so the request
+        # reads this rather than the reply.
+        self.timed_out = False
 
     def __getattr__(self, name):
         return getattr(self._world, name)
@@ -592,6 +658,7 @@ class _OnlyAsked:
             worker.join(max(0.0, self._deadline - time.monotonic()))
             if worker.is_alive():
                 # The thread cannot be stopped; its late result is discarded with this world.
+                self.timed_out = True
                 raise TimeoutError(
                     f"{self._asked} outlasted the readiness request deadline"
                 )
@@ -679,12 +746,17 @@ def _save_ledger(authoring: Path, ledger: dict) -> None:
     )
 
 
+# A conversation's turns when its scenario does not say (`Scenario.max_turns`).
+_DEFAULT_TURNS = 10
+
+
 async def probe_chat_workflow(
     *,
     job,
     source: Path,
     bundle: Path,
     authoring: Path,
+    work_directory: Path,
     runtime,
     scenario,
     candidate_hash,
@@ -692,13 +764,25 @@ async def probe_chat_workflow(
     secret_values,
     redaction_values,
     timeout=300.0,
+    evidence_seam=None,
 ):
-    """Exercise a private conversation and require observed tool execution evidence."""
+    """Exercise a private conversation and require observed tool execution evidence, read from where the bundle's
+    own runs read it (`evidence_seam`), so readiness and a real run agree.
+
+    `work_directory` is the one the runtime was provisioned in, where its worlds live.
+    """
     from .authoring_runtime_validation import RuntimeValidationError
     from .call_runner import CallRunnerContext
-    from .chat_call_runner import HostedChatCallRunner
+    from .chat_call_runner import HostedChatCallRunner, _scenario_document, chat_conversation_timeout, handler_child_for
+    from .handler_child import HandlerChannel
     from .hosted_scheduler import CallAborted
 
+    # Each reply keeps the agent's own deadline (the runner applies it); the conversation gets one per turn.
+    try:
+        turns = int(_scenario_document(bundle, scenario.scenario_key).get("max_turns") or _DEFAULT_TURNS)
+    except (CallAborted, TypeError, ValueError):
+        turns = _DEFAULT_TURNS
+    timeout = chat_conversation_timeout(job, timeout, turns)
     redactions = {
         **(secret_values or {}),
         **(redaction_values or {}),
@@ -719,7 +803,7 @@ async def probe_chat_workflow(
         "artifacts": artifacts.paths,
     }
 
-    def failure(code, message):
+    def failure(code, message, cause=None):
         detail = sanitize_diagnostic(str(message), redactions)[:4000]
         if artifacts.transcript:
             detail += "\n<untrusted_transcript>\n" + artifacts.transcript[:6000] + "\n</untrusted_transcript>"
@@ -731,40 +815,52 @@ async def probe_chat_workflow(
         )
         receipt["diagnostic"] = diagnostic.model_dump(mode="json")
         return RuntimeValidationError(
-            "environment", diagnostic.redacted_message, diagnostics=(diagnostic,)
+            "environment",
+            diagnostic.redacted_message,
+            diagnostics=(diagnostic,),
+            cause=cause,
         )
 
     async def retain_interrupted_conversation(exc):
-        from .call_runner import _with_span_calls
+        from .call_runner import collect_seam_calls, declared_worker_ids
         from .outbound import ArtifactKind
 
         transcript = getattr(exc, "partial_transcript", None)
         if transcript is None:
             return
-        transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
+        transcript.calls[:] = collect_seam_calls(runtime, evidence_seam, transcript.calls)
         receipt["tool_call_count"] = len(graded_calls(transcript.calls))
         receipt["turns"] = len(transcript.exchanges)
         await artifacts.upload_artifact(transcript.artifact(), kind=ArtifactKind.TRANSCRIPT)
         if transcript.calls:
             trace = "\n".join(
-                json.dumps(trace_row(call), sort_keys=True, default=str)
+                json.dumps(trace_row(call, declared_worker_ids(bundle)), sort_keys=True, default=str)
                 for call in transcript.calls
             ).encode("utf-8")
             await artifacts.upload_artifact(trace, kind=ArtifactKind.TOOL_TRACE)
 
+    handlers = None
     try:
-        runner = HostedChatCallRunner(
-            artifacts,
-            CallRunnerContext(
-                job=job,
-                bundle_dir=bundle,
-                work_directory=folder,
-                evidence_seam=None,
-                target_provider_secret_values=secret_values,
-                attempt_number=1,
-                source_directory=source,
-            ),
+        context = CallRunnerContext(
+            job=job,
+            bundle_dir=bundle,
+            work_directory=folder,
+            evidence_seam=evidence_seam,
+            target_provider_secret_values=secret_values,
+            attempt_number=1,
+            source_directory=source,
+            readiness_probe=True,
         )
+        # Under per-user isolation the tool handlers, and the agent code they import, run in a
+        # child of their own: this process holds the capabilities and never imports that code.
+        # The child's scratch belongs with the world's, which its user can reach; this
+        # attempt's folder is the harness's alone.
+        handlers = await asyncio.to_thread(
+            handler_child_for, replace(context, work_directory=work_directory), runtime
+        )
+        if handlers is not None:
+            context = replace(context, handler_channel=HandlerChannel(handlers.sock))
+        runner = HostedChatCallRunner(artifacts, context)
         since = time.time()
         async with asyncio.timeout(timeout):
             outcome = await runner.run(scenario, runtime)
@@ -785,12 +881,24 @@ async def probe_chat_workflow(
             )
         if not graded:
             receipt["tool_evidence_status"] = "not_observed"
+        elif not any(_reached_world(call) for call in outcome.calls):
+            if requires_tool_evidence:
+                raise failure(
+                    "chat_tool_evidence_unverified",
+                    "Every tool call stopped before the world ran it: "
+                    + "; ".join(
+                        f"{call.name}: {call.refusal_code or call.error or 'failed'}"[:200]
+                        for call in outcome.calls[:5]
+                    )
+                    + ". Inspect how the agent's tools are bound to the world.",
+                )
+            receipt["tool_evidence_status"] = "never_reached_world"
         record_tool_routing(
             authoring,
             scenario.scenario_key,
             runner._contract,
             runtime,
-            received=[*world_call_log(runtime, since), *runner.received],
+            received=received_calls(world_call_log(runtime, since), runner.received),
             reported=outcome.calls,
             bundle=bundle,
         )
@@ -806,7 +914,11 @@ async def probe_chat_workflow(
         if exc.partial is not None:
             receipt["tool_call_count"] = len(graded_calls(exc.partial.calls))
             receipt["turns"] = exc.partial.turns
-        raise failure(_failure_code(artifacts.trace), str(exc)) from exc
+        raise failure(
+            _failure_code(artifacts.trace),
+            str(exc),
+            cause=_chat_target_cause(artifacts.trace),
+        ) from exc
     except asyncio.CancelledError as exc:
         receipt["status"] = "cancelled"
         await retain_interrupted_conversation(exc)
@@ -814,6 +926,8 @@ async def probe_chat_workflow(
     except Exception as exc:
         raise failure("chat_ingress_failed", str(exc)) from exc
     finally:
+        if handlers is not None:
+            handlers.close()
         path = folder / "receipt.json"
         path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
         path.chmod(0o600)

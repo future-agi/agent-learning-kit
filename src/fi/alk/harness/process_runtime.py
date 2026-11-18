@@ -26,6 +26,8 @@ logs it; a hosted caller that wants a missing user to be a typed failure instead
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -65,10 +67,14 @@ from .bundle_v2 import (
     StoreEntry,
 )
 from .diagnostics import DiagnosticLocation, HarnessDiagnostic
-from .job import FailureDomain
+from .egress_proxy import EgressProxy
+from .world_door import PostgresLog
+from .job import FailureCause, FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
+from . import containment, user_files
+from .privilege import IsolationMode, isolation_mode
 from .secrets import PROCESS_SECRET_FILE_ENVIRONMENT, target_provider_environment
 from .provider_import import (
     ProviderImportError,
@@ -112,6 +118,9 @@ class ProcessRuntimeError(RuntimeError):
     `code` alone (which cannot recover the managed/source split). `domain` is `None` only where
     the raise site genuinely cannot tell which process kind failed (a mixed-kind catch-all); such
     sites are rare and `SECTION_2F_DOMAIN` below exists as their fallback.
+
+    `cause`, when the raise site knows it, is the closed `FailureCause` a reader without access
+    to guest text gets instead of the message.
     """
 
     def __init__(
@@ -123,12 +132,14 @@ class ProcessRuntimeError(RuntimeError):
         process: str | None = None,
         domain: FailureDomain | None = None,
         diagnostics: tuple[HarnessDiagnostic, ...] = (),
+        cause: FailureCause | None = None,
     ) -> None:
         self.stage = stage
         self.code = code
         self.process = process
         self.domain = domain
         self.diagnostics = diagnostics
+        self.cause = cause
         located = f" ({process})" if process else ""
         super().__init__(f"{stage}/{code}{located}: {message}")
 
@@ -173,6 +184,9 @@ class RuntimeEndpoint(BaseModel):
     protocol: str
     address: str
     configuration_name: str | None = None
+    # Under per-user isolation, a postgres capability's address as the world's own role: what
+    # customer processes and the handler child get. `address` stays the harness's superuser.
+    tool_address: str | None = None
 
 
 class EnvironmentRuntime(BaseModel):
@@ -691,6 +705,45 @@ def _default_listener_probe(port: int) -> bool:
 class EngineCredentials:
     username: str
     password: str
+    # Postgres only: the per-job secret each world's own role password is derived from
+    # (`world_role`). Kept out of equality and repr, so it never reaches a log.
+    world_secret: str = field(default="", compare=False, repr=False)
+
+
+# Under per-user isolation the processes of a world reach its database through a role of their
+# own, never as the `harness` superuser: one group carries the table grants, sealed into the
+# baseline, and each world's login role is a member that may connect to its world's database only.
+WORLD_ROLE_GROUP = "alk_world_tools"
+
+
+def world_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
+    """World N's own database role. Its password is derived from the job's secret, so each
+    world's differs and nothing stores it."""
+    if not credentials.world_secret:
+        raise ProcessRuntimeError(
+            "render",
+            "internal_missing_credentials",
+            "a world role needs the job's world secret, and the credentials carry none",
+        )
+    name = f"alk_w{world_index}"
+    password = hmac.new(
+        credentials.world_secret.encode(), name.encode(), hashlib.sha256
+    ).hexdigest()
+    return EngineCredentials(username=name, password=password)
+
+
+def _engine_diagnostic_secrets(
+    credentials: dict[str, EngineCredentials], instances: int
+) -> dict[str, str]:
+    """Every engine password a retained log must not carry: each superuser password and, for a
+    postgres process, the password of each world role the job can provision."""
+    secrets_by_name = {name: value.password for name, value in credentials.items()}
+    for name, value in credentials.items():
+        if value.world_secret:
+            for world_index in range(instances):
+                role = world_role(value, world_index)
+                secrets_by_name[f"{name}:{role.username}"] = role.password
+    return secrets_by_name
 
 
 def generate_engine_credentials(
@@ -703,7 +756,13 @@ def generate_engine_credentials(
     """
     make_token = token or (lambda: secrets.token_urlsafe(24))
     return {
-        process.name: EngineCredentials(username="harness", password=make_token())
+        process.name: EngineCredentials(
+            username="harness",
+            password=make_token(),
+            world_secret=secrets.token_hex(32)
+            if process.engine is ManagedEngine.POSTGRES
+            else "",
+        )
         for process in manifest.processes
         if isinstance(process, ManagedProcess)
         and process.engine in (ManagedEngine.POSTGRES, ManagedEngine.RABBITMQ)
@@ -766,25 +825,43 @@ def build_endpoints(
     world_index: int,
     port_plan: PortPlan,
     credentials: dict[str, EngineCredentials],
+    world_roles: bool = False,
 ) -> dict[str, RuntimeEndpoint]:
     """§3's `endpoints` map, built fresh for one world — every declared capability gets an
     entry regardless of whether any process placeholder ever references its `configuration_name`
     (a null `configuration_name` is legal; the scheduler/simulator still read endpoints by
-    capability slug, per §3's own reader list)."""
+    capability slug, per §3's own reader list).
+
+    With `world_roles` (per-user isolation), each postgres capability also carries the world's
+    own role's address, for customer processes and the handler child."""
     endpoints: dict[str, RuntimeEndpoint] = {}
     for slug, capability in manifest.capabilities.items():
         port = port_plan.port_for(capability.service, world_index)
+        engine_credentials = credentials.get(capability.service)
         address = render_capability_address(
             capability,
             port=port,
             world_index=world_index,
-            credentials=credentials.get(capability.service),
+            credentials=engine_credentials,
         )
+        tool_address = None
+        if (
+            world_roles
+            and capability.protocol is CapabilityProtocol.POSTGRES
+            and engine_credentials is not None
+        ):
+            tool_address = render_capability_address(
+                capability,
+                port=port,
+                world_index=world_index,
+                credentials=world_role(engine_credentials, world_index),
+            )
         endpoints[slug] = RuntimeEndpoint(
             capability=slug,
             protocol=capability.protocol.value,
             address=address,
             configuration_name=capability.configuration_name,
+            tool_address=tool_address,
         )
     return endpoints
 
@@ -792,8 +869,9 @@ def build_endpoints(
 def configuration_addresses_from_endpoints(
     endpoints: dict[str, RuntimeEndpoint],
 ) -> dict[str, str]:
+    # Customer processes get the world's own role where there is one, never the superuser.
     return {
-        endpoint.configuration_name: endpoint.address
+        endpoint.configuration_name: endpoint.tool_address or endpoint.address
         for endpoint in endpoints.values()
         if endpoint.configuration_name
     }
@@ -803,6 +881,38 @@ def configuration_addresses_from_endpoints(
 
 _PLACEHOLDER = re.compile(r"\{\{([^{}]+)\}\}")
 _NAMED_PLACEHOLDER = re.compile(r"^(PORT|HOST)_(.+)$")
+# A declared worker's own channel at this world's tool proxy; see `_worker_channel`.
+WORKER_CHANNEL_PLACEHOLDER = re.compile(r"^WORKER_CHANNEL_([A-Za-z0-9_.-]+)$")
+WORKER_CHANNELS_FILE = "worker-channels.json"
+
+
+def _worker_channel(world_dir: Path, worker: str) -> str:
+    """This world's channel token for one worker, minted on first use and kept in the tool proxy's world directory,
+    which the proxy reads to tell workers apart. A sibling of `world_dir`: every process of a world shares a parent."""
+    path = world_dir.parent / "tool-proxy" / WORKER_CHANNELS_FILE
+    try:
+        channels = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        channels = {}
+    token = next((key for key, value in channels.items() if value == worker), None)
+    if token is None:
+        token = secrets.token_hex(16)
+        channels[token] = worker
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_private(path, json.dumps(channels))
+    return token
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Writes `path` readable by its owner only, given to the owner of its directory (the tool proxy's user, once its
+    world directory is made); the proxy's spawn re-owns it when the file came first."""
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    path.chmod(0o600)
+    owner = path.parent.stat()
+    if (owner.st_uid, owner.st_gid) != (os.getuid(), os.getgid()):
+        user_files.chown_no_follow(path, owner.st_uid, owner.st_gid)
 
 
 def render_template(
@@ -831,6 +941,9 @@ def render_template(
             return str(world_dir)
         if token == "DB_NAME":
             return f"w{world_index}"
+        channel = WORKER_CHANNEL_PLACEHOLDER.match(token)
+        if channel:
+            return _worker_channel(world_dir, channel.group(1))
         named = _NAMED_PLACEHOLDER.match(token)
         if named:
             kind, name = named.groups()
@@ -964,7 +1077,7 @@ def _materialize_process_secret_files(
     injected: dict[str, str],
     world_dir: Path,
     resolved_user: "pwd.struct_passwd | None",
-    chown: Callable[[Path, int, int], None],
+    chown: user_files.Chown,
 ) -> dict[str, str]:
     """Turn file-shaped target credentials into process-local files.
 
@@ -1042,6 +1155,13 @@ def _materialize_process_secret_files(
     return result
 
 
+def _declared_home(resolved_user: Any, process: SourceProcess | ManagedProcess) -> str:
+    """The home a process running as its declared user gets: that user's own, never the
+    harness's. The harness's is not its to write: uv, pip and npm keep caches there, and
+    RabbitMQ's Erlang keeps its cookie there and will not boot without it."""
+    return getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
+
+
 def _base_process_env(
     build_dir: Path,
     extra: dict[str, str] | None = None,
@@ -1107,6 +1227,14 @@ def fixed_sandbox_user_resolver(_username: str) -> "pwd.struct_passwd":
     return pwd.getpwuid(os.getuid())
 
 
+def hosted_user_resolution() -> dict[str, Any]:
+    """`ProcessRuntimeProvider`'s user settings in a hosted sandbox: each process's declared
+    user under per-user isolation, which must then resolve, else the sandbox's one fixed user."""
+    if isolation_mode() is IsolationMode.PER_USER:
+        return {"user_resolver": default_user_resolver, "require_declared_user": True}
+    return {"user_resolver": fixed_sandbox_user_resolver, "require_declared_user": False}
+
+
 def _resolve_process_user(
     user: ProcessUser,
     *,
@@ -1146,21 +1274,6 @@ def _resolve_process_user(
             user.value,
         )
     return resolved
-
-
-def _default_chown(path: Path, uid: int, gid: int) -> None:
-    # `follow_symlinks=False`: F2 copies a within-tree symlink as a link, never dereferenced —
-    # chowning through it would touch whatever it points at instead of the link itself.
-    os.chown(path, uid, gid, follow_symlinks=False)
-
-
-def _chown_tree(
-    root: Path, *, uid: int, gid: int, chown: Callable[[Path, int, int], None]
-) -> None:
-    chown(root, uid, gid)
-    for dirpath, dirnames, filenames in os.walk(root):
-        for name in (*dirnames, *filenames):
-            chown(Path(dirpath) / name, uid, gid)
 
 
 def _ensure_within(path: Path, root: Path, *, process_name: str, stage: str) -> Path:
@@ -1287,25 +1400,33 @@ _TRANSIENT_BUILD_NETWORK_MARKERS = (
 )
 
 
-def _run_build_step(
+def _as_declared_user(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """The Popen arguments for a process ALK runs on a customer's behalf.
+
+    Under per-user isolation the process gets no supplementary groups, so it inherits no group
+    access to the harness's files, and the usual umask back. One without a declared user is
+    refused, so a missed call site fails closed instead of running customer code as the harness.
+    Without isolation every process is the harness's own user, and nothing changes.
+    """
+    if isolation_mode() is not IsolationMode.PER_USER:
+        return kwargs
+    if kwargs.get("user") is None:
+        # `internal_`: every call site passes a declared user, so reaching here is a bug.
+        raise ProcessRuntimeError(
+            "spawn",
+            "internal_undeclared_user",
+            "per-user isolation is on, and this process has no declared user",
+            domain=FailureDomain.INFRASTRUCTURE,
+        )
+    return {"extra_groups": [], "umask": 0o022, **kwargs}
+
+
+def declared_user_run(
     args: Sequence[str], **kwargs: Any
 ) -> subprocess.CompletedProcess:
-    capture_output = kwargs.pop("capture_output", False)
-    timeout = kwargs.pop("timeout", None)
-    if capture_output:
-        kwargs["stdout"] = subprocess.PIPE
-        kwargs["stderr"] = subprocess.PIPE
-    process = subprocess.Popen(args, start_new_session=True, **kwargs)
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
-        raise
-    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+    """``subprocess.run`` for a process ALK runs on a customer's behalf: build steps, lifecycle
+    commands, initdb and seeds (see `_as_declared_user`). Whatever it starts stops with it."""
+    return containment.run(args, **_as_declared_user(kwargs))
 
 
 def _is_transient_build_network_failure(result: subprocess.CompletedProcess) -> bool:
@@ -1359,11 +1480,11 @@ def build_process_tree(
     *,
     source_root: Path,
     build_root: Path,
-    run: Callable[..., subprocess.CompletedProcess] = _run_build_step,
+    run: Callable[..., subprocess.CompletedProcess] = declared_user_run,
     copy: Callable[[Path, Path], None] | None = None,
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver,
     require_declared_user: bool = False,
-    chown: Callable[[Path, int, int], None] = _default_chown,
+    chown: user_files.Chown = user_files.chown_no_follow,
     build_step_timeout_seconds: float = _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS,
     build_step_network_retries: int = _DEFAULT_BUILD_STEP_NETWORK_RETRIES,
     sleep: Callable[[float], None] = time.sleep,
@@ -1462,7 +1583,7 @@ def build_process_tree(
             process=process.name,
         ) from exc
     if resolved_user is not None:
-        _chown_tree(
+        user_files.own_tree(
             build_dir, uid=resolved_user.pw_uid, gid=resolved_user.pw_gid, chown=chown
         )
     spawn_uid = resolved_user.pw_uid if resolved_user is not None else None
@@ -1471,9 +1592,7 @@ def build_process_tree(
     env = _base_process_env(build_dir, process.build_environment)
     env.update(runtime_environment)
     if resolved_user is not None:
-        # The controller commonly runs as root, but build steps run as the declared svc user.
-        # Keeping root's HOME makes uv/pip/npm probe unreadable root-owned caches.
-        env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
+        env["HOME"] = _declared_home(resolved_user, process)
     for step in process.build_commands:
         result = None
         for network_attempt in range(max(0, build_step_network_retries) + 1):
@@ -1640,6 +1759,9 @@ class PopenProcess:
     popen: subprocess.Popen
     log_path: Path
     log_thread: threading.Thread | None = field(default=None, repr=False)
+    # Under per-user isolation, the cgroup holding this process and all it started: a process
+    # that left the group through setsid() is still in it.
+    leaf: containment.Leaf | None = field(default=None, repr=False)
 
     def is_running(self) -> bool:
         return self.popen.poll() is None
@@ -1648,7 +1770,7 @@ class PopenProcess:
         if self.log_thread and self.popen.poll() is not None:
             self.log_thread.join(timeout=1)
         try:
-            return self.log_path.read_text(encoding="utf-8", errors="replace")
+            return user_files.read_text(self.log_path)
         except OSError:
             return ""
 
@@ -1664,6 +1786,10 @@ class PopenProcess:
         try:
             started = time.monotonic()
             self.popen.wait(timeout=timeout)
+            # The process is gone; nothing it started may outlive it, however it left.
+            if self.leaf is not None:
+                self.leaf.close()
+                self.leaf = None
             if self.log_thread:
                 self.log_thread.join(
                     timeout=max(0, timeout - (time.monotonic() - started))
@@ -1675,6 +1801,8 @@ class PopenProcess:
 
     def kill(self) -> None:
         self._signal_process_group(signal.SIGKILL, self.popen.kill)
+        if self.leaf is not None:
+            self.leaf.kill()
 
     def _signal_process_group(self, signum: int, fallback: Callable[[], None]) -> None:
         """Stop the complete runtime process, including launcher descendants.
@@ -1754,10 +1882,6 @@ def _prefers_interrupt(manifest: EnvironmentBundleV2, process_name: str) -> bool
     )
 
 
-def _default_log_chown(path: Path, uid: int, gid: int) -> None:
-    os.chown(path, uid, gid)
-
-
 def _copy_redacted_output(source, destination, values: dict[str, str]) -> None:
     patterns = tuple(value.encode() for value in values.values() if value)
     pending = b""
@@ -1795,11 +1919,11 @@ def default_process_runner(
     log_path: Path,
     user: int | None = None,
     group: int | None = None,
-    chown: Callable[[Path, int, int], None] = _default_log_chown,
+    chown: user_files.Chown = user_files.chown_no_follow,
     output_redactions: dict[str, str] | None = None,
 ) -> PopenProcess:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = log_path.open("wb")
+    log_file = user_files.open_log(log_path)
     if user is not None:
         # F1, p5-round1-review: the log file is created by the harness (svc-control) before the
         # child's privilege drop — the child can still WRITE through the inherited fd regardless
@@ -1811,18 +1935,17 @@ def default_process_runner(
         # hosted deployment has both or neither; a dev-box test fakes it structurally).
         chown(log_path, user, group if group is not None else -1)
     try:
-        popen = subprocess.Popen(
+        popen, leaf = containment.popen(
             list(argv),
             cwd=cwd,
             env=env,
             stdout=subprocess.PIPE if output_redactions else log_file,
             stderr=subprocess.STDOUT,
-            user=user,
-            group=group,
             # Each declared runtime process owns a process group. This is necessary for
             # deterministic reset/cleanup when the command is a launcher which forks the
             # real long-lived server (for example ``uv run`` or ``npm start``).
             start_new_session=True,
+            **_as_declared_user({"user": user, "group": group}),
         )
     except BaseException:
         log_file.close()
@@ -1837,7 +1960,7 @@ def default_process_runner(
         log_thread.start()
     else:
         log_file.close()
-    return PopenProcess(popen=popen, log_path=log_path, log_thread=log_thread)
+    return PopenProcess(popen=popen, log_path=log_path, log_thread=log_thread, leaf=leaf)
 
 
 @dataclass
@@ -2043,10 +2166,10 @@ def spawn_managed_process(
     data_dir: Path,
     credentials: EngineCredentials | None,
     runner: ProcessRunner = default_process_runner,
-    sync_run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    sync_run: Callable[..., subprocess.CompletedProcess] = declared_user_run,
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver,
     require_declared_user: bool = False,
-    chown: Callable[[Path, int, int], None] = _default_chown,
+    chown: user_files.Chown = user_files.chown_no_follow,
 ) -> SpawnedWorldProcess:
     """Spawns one managed-engine daemon. Postgres alone needs a one-time synchronous bootstrap
     (`initdb`) before the daemon can start at all — run through `sync_run`, not `runner`, since
@@ -2082,7 +2205,7 @@ def spawn_managed_process(
             # reseal) — the copy runs as the provisioner, so every file underneath stayed
             # provisioner-owned and postgres refuses to start against a data directory it does not
             # fully own.
-            _chown_tree(
+            user_files.own_tree(
                 data_dir,
                 uid=resolved_user.pw_uid,
                 gid=resolved_user.pw_gid,
@@ -2105,6 +2228,8 @@ def spawn_managed_process(
     spawn_gid = resolved_user.pw_gid if resolved_user is not None else None
 
     env = _allowlisted_ambient_env(os.environ)
+    if resolved_user is not None:
+        env["HOME"] = _declared_home(resolved_user, process)
     if process.engine is ManagedEngine.POSTGRES:
         if credentials is None:
             raise ProcessRuntimeError(
@@ -2259,8 +2384,9 @@ def spawn_source_process(
     runner: ProcessRunner = default_process_runner,
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver,
     require_declared_user: bool = False,
-    chown: Callable[[Path, int, int], None] = _default_chown,
+    chown: user_files.Chown = user_files.chown_no_follow,
     customer_code_environment: dict[str, str] | None = None,
+    egress_environment: dict[str, str] | None = None,
 ) -> SpawnedWorldProcess:
     """§2b: `run_command` "exec'd once per world with cwd `/work/build/<name>/`" — the build tree
     is read-only by convention at run time; `world_dir` (`{{WORLD_DIR}}`) is this process's own
@@ -2293,6 +2419,8 @@ def spawn_source_process(
         livekit_hook_due = (
             "HARNESS_TOOL_TRACE" in process.environment
             or "FI_WORKER_HEALTH_PORT" in process.environment
+            or "ALK_OPENAI_AGENTS_CHAT_COMPLETIONS" in process.environment
+            or "ALK_WORLD_DOOR_URL" in process.environment
         )
         mark_hook_due = "FI_SIMULATION_EXPORT" in customer_code_environment
         if livekit_hook_due or mark_hook_due:
@@ -2315,11 +2443,17 @@ def spawn_source_process(
                         _SIMULATION_MARK_SITECUSTOMIZE, encoding="utf-8"
                     )
                 sitecustomize_hook.chmod(0o444)
-        if mark_hook_due or process.environment.get("ALK_OBSERVE_FRAMEWORKS") == "1":
+        if (
+            sitecustomize_hook is not None
+            or process.environment.get("ALK_OBSERVE_FRAMEWORKS") == "1"
+        ):
             # The customer's interpreter has no `fi.alk`, so the modules sit beside the hook.
+            # The mark module carries the one copy of the hand-on to the next `sitecustomize`,
+            # so every process that gets the hook gets it.
             for module_name in (
                 "simulation_mark_bootstrap.py",
                 "simulation_worker_events.py",
+                "simulation_measure.py",
             ):
                 mark_module = world_dir / module_name
                 if not mark_module.exists():
@@ -2327,6 +2461,14 @@ def spawn_source_process(
                         Path(__file__).with_name(module_name).read_bytes()
                     )
                     mark_module.chmod(0o444)
+        if "ALK_WORLD_DOOR_URL" in process.environment:
+            # The world's door for tools the agent runs in its own process, imported by the hook above.
+            door_hook = world_dir / "in_process_door_bootstrap.py"
+            if not door_hook.exists():
+                door_hook.write_bytes(
+                    Path(__file__).with_name("in_process_door_bootstrap.py").read_bytes()
+                )
+                door_hook.chmod(0o444)
         if process.environment.get("ALK_CREWAI_TOOL_TRACE") == "1":
             observer = world_dir / "crewai_runtime_observer_bootstrap.py"
             if not observer.exists():
@@ -2338,6 +2480,13 @@ def spawn_source_process(
                 observer.chmod(0o444)
         if resolved_user is not None:
             chown(world_dir, resolved_user.pw_uid, resolved_user.pw_gid)
+            # Worker channel tokens written before this world directory was given away stay readable by its process.
+            if (world_dir / WORKER_CHANNELS_FILE).is_file():
+                chown(world_dir / WORKER_CHANNELS_FILE, resolved_user.pw_uid, resolved_user.pw_gid)
+            if isolation_mode() is IsolationMode.PER_USER:
+                # The harness's workers hold no capabilities, yet read what the process writes
+                # here (its tool-call trace) by name: they pass through, though not list it.
+                world_dir.chmod(0o711)
     except OSError as exc:
         # A hook that cannot be placed fails the spawn on purpose: a process that exports with
         # our key but without its mark is worse than a failed run.
@@ -2423,7 +2572,7 @@ def spawn_source_process(
 
             relocate_runtime_files(build_dir, runtime_dir)
             if resolved_user is not None:
-                _chown_tree(
+                user_files.own_tree(
                     runtime_dir,
                     uid=resolved_user.pw_uid,
                     gid=resolved_user.pw_gid,
@@ -2442,7 +2591,7 @@ def spawn_source_process(
     try:
         runtime_environment = prepare_runtime_environment(runtime_dir)
         if resolved_user is not None:
-            _chown_tree(
+            user_files.own_tree(
                 runtime_dir / ".alk-runtime",
                 uid=resolved_user.pw_uid,
                 gid=resolved_user.pw_gid,
@@ -2462,7 +2611,7 @@ def spawn_source_process(
             runtime_dir, process.config_files, process.directories, injected
         )
         if resolved_user is not None and (process.config_files or process.directories):
-            _chown_tree(
+            user_files.own_tree(
                 runtime_dir,
                 uid=resolved_user.pw_uid,
                 gid=resolved_user.pw_gid,
@@ -2509,8 +2658,9 @@ def spawn_source_process(
             )
         env[process.local_auth.server_environment] = token
     env = target_provider_environment(env)
+    env.update(egress_environment or {})
     if resolved_user is not None:
-        env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
+        env["HOME"] = _declared_home(resolved_user, process)
     command = list(process.run_command)
     if (
         port_plan.effective_instances > 1
@@ -2575,6 +2725,67 @@ def spawn_source_process(
 
 
 # --- filesystem layout (§0's guaranteed paths, plus one this module must invent) --------------
+
+
+def _open_for_declared_users(work_directory: Path, worlds: int) -> None:
+    """Under per-user isolation the harness's umask keeps what it creates to itself. A declared
+    user still has to reach its own build tree and world directory, so the directories above
+    them let it pass through, though not list them."""
+    for path in (
+        work_directory,
+        work_directory / "build",
+        work_directory / "worlds",
+        work_directory / "managed",
+        work_directory / "provider",  # above each world's lifecycle directory
+        *(work_directory / "worlds" / f"w{index}" for index in range(worlds)),
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o711)
+
+
+def _open_seed_files_for_declared_users(
+    manifest: EnvironmentBundleV2, bundle_dir: Path
+) -> None:
+    """Under per-user isolation a store's own user applies its migrations and seed files
+    (`psql -f` runs as it), so each declared file reads for it and the directories above the file
+    let it pass through, though not list them. The rest of the bundle, held-back cases among it,
+    stays the harness's own. A missing file is left for the seed step to report."""
+    if manifest.seed is None:
+        return
+    for store in manifest.seed.stores:
+        for relative_path in (*store.migrations, *store.seed_files):
+            path = bundle_dir / relative_path
+            if path.is_symlink() or not path.is_file():
+                continue
+            for directory in (bundle_dir / parent for parent in Path(relative_path).parents):
+                directory.chmod(directory.stat().st_mode | 0o011)
+            path.chmod(path.stat().st_mode | 0o044)
+
+
+def _require_template_world_databases(manifest: EnvironmentBundleV2) -> None:
+    """Under per-user isolation a world's processes reach its database only through the world's
+    own role, which is granted on a sealed `template_database` baseline. A postgres engine
+    provisioned any other way would leave them the superuser, so it is refused."""
+    stores = _store_by_process_name(manifest)
+    for process in manifest.processes:
+        if (
+            not isinstance(process, ManagedProcess)
+            or process.engine is not ManagedEngine.POSTGRES
+        ):
+            continue
+        store = stores.get(process.name)
+        if (
+            store is None
+            or store.baseline.strategy is not BaselineStrategy.TEMPLATE_DATABASE
+        ):
+            # `internal_`: the hosted bundle generator only writes `template_database` stores.
+            raise ProcessRuntimeError(
+                "provision",
+                "internal_world_database_unscoped",
+                f"{process.name}: per-user isolation needs a template_database store",
+                process=process.name,
+                domain=FailureDomain.INFRASTRUCTURE,
+            )
 
 
 def build_tree_dir(work_directory: Path, process_name: str) -> Path:
@@ -2804,6 +3015,9 @@ def wait_for_dependency(
     """
     processes_by_name = {process.name: process for process in manifest.processes}
     dependency = processes_by_name[dependency_name]
+    # Only the control service is the agent: a helper service (tools-api, a generated proxy)
+    # that crashes or stalls is no `agent_*` cause, so it reads unknown.
+    is_agent = dependency_name == manifest.runtime.control_service
     probes = _readiness_probes_for_process(manifest, dependency_name)
     if probes:
         port = port_plan.port_for(dependency_name, world_index)
@@ -2850,6 +3064,7 @@ def wait_for_dependency(
                         if isinstance(dependency, SourceProcess)
                         else FailureDomain.INFRASTRUCTURE
                     ),
+                    cause=FailureCause.AGENT_EXITED_BEFORE_READY if is_agent else None,
                 )
             return False
 
@@ -2866,6 +3081,7 @@ def wait_for_dependency(
                 f"{dependency_name}: readiness probe did not pass within {combined_timeout}s",
                 process=dependency_name,
                 domain=FailureDomain.INFRASTRUCTURE,
+                cause=FailureCause.AGENT_NOT_READY_IN_TIME if is_agent else None,
             ),
         )
         return
@@ -2905,6 +3121,7 @@ def wait_for_dependency(
                 f"{_output_tail(spawned.handle, spawned.local_auth_values)}",
                 process=dependency_name,
                 domain=FailureDomain.AGENT,
+                cause=FailureCause.AGENT_EXITED_BEFORE_READY if is_agent else None,
             )
         return False
 
@@ -2922,6 +3139,7 @@ def wait_for_dependency(
             f"{_output_tail(spawned.handle, spawned.local_auth_values)}",
             process=dependency_name,
             domain=FailureDomain.INFRASTRUCTURE,
+            cause=FailureCause.AGENT_NOT_READY_IN_TIME if is_agent else None,
         ),
     )
 
@@ -4116,10 +4334,13 @@ class SpawnContext:
     # The platform's per-run decision for customer code (job.json `metadata`), applied to every
     # customer process's environment as is.
     customer_code_environment: dict[str, str] = field(default_factory=dict)
+    # The hosts a controlled run allows (job.json `metadata`); None when egress is not controlled.
+    egress_allowed_hosts: tuple[str, ...] | None = None
+    egress_proxies: dict[int, EgressProxy] = field(default_factory=dict, repr=False)
     runner: ProcessRunner = default_process_runner
     # Shared by `build_process_trees`' `build_commands` steps and `spawn_managed_process`'s
     # postgres `initdb` bootstrap — both are "run one synchronous step, check its exit code."
-    sync_run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+    sync_run: Callable[..., subprocess.CompletedProcess] = declared_user_run
     prober: CapabilityProber = default_capability_prober
     copy: Callable[[Path, Path], None] | None = None
     # F1, p5-round1-review: threaded to every build/spawn call this context drives.
@@ -4128,7 +4349,7 @@ class SpawnContext:
     # instead of silently running unprivileged.
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver
     require_declared_user: bool = False
-    chown: Callable[[Path, int, int], None] = _default_chown
+    chown: user_files.Chown = user_files.chown_no_follow
     build_step_timeout_seconds: float = _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS
     # §2c/§5 store command seams (below) — defaulted so every existing `SpawnContext(...)` call
     # in P5's own tests keeps working unchanged; Phase 6 callers override them with spies.
@@ -4189,6 +4410,7 @@ def spawn_world(
         world_index=world_index,
         port_plan=context.port_plan,
         credentials=context.credentials,
+        world_roles=context.require_declared_user,
     )
     configuration_addresses = configuration_addresses_from_endpoints(endpoints)
     processes_by_name = {process.name: process for process in manifest.processes}
@@ -4247,6 +4469,11 @@ def spawn_world(
                     require_declared_user=context.require_declared_user,
                     chown=context.chown,
                     customer_code_environment=context.customer_code_environment,
+                    egress_environment=_egress_environment(
+                        context, world_index, endpoints, configuration_addresses
+                    )
+                    if process.user == ProcessUser.SVC_AGENT
+                    else None,
                 )
             handles[name] = handle
             if isinstance(process, SourceProcess) and process.started_check is not None:
@@ -4443,6 +4670,27 @@ def _datadir_copy_baseline_path(work_directory: Path, process_name: str) -> Path
         process_name=process_name,
         stage="baseline",
     )
+
+
+def sealed_seed_digest(*, host: str, port: int, credentials: EngineCredentials, dbname: str) -> dict[str, str]:
+    """The seed's records as one hash per table, read before its template is sealed; empty when they cannot be read,
+    and then trials are compared with the first trial's start instead. An install without the database driver
+    cannot read them either."""
+    try:
+        from psycopg.conninfo import make_conninfo
+
+        from .world_snapshot import digest, snapshot
+
+        return digest(
+            snapshot(
+                make_conninfo(
+                    host=host, port=port, user=credentials.username, password=credentials.password, dbname=dbname
+                )
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - only the type: a database error can carry the password
+        logger.warning("seed digest not taken: %s", type(exc).__name__)
+        return {}
 
 
 def _measure_postgres_row_counts(
@@ -4646,6 +4894,9 @@ class StoreBaselineRecord:
     inputs_digest: str
     baseline_reference: str
     row_counts: dict[str, int]
+    # The sealed seed's records as one hash per table (`world_snapshot.digest`), taken before a template closes to
+    # connections: what each trial's start is compared against. Empty when it could not be read.
+    seed_digest: dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, JsonValue]:
         return {
@@ -4656,6 +4907,7 @@ class StoreBaselineRecord:
             "inputs_digest": self.inputs_digest,
             "baseline_reference": self.baseline_reference,
             "row_counts": dict(self.row_counts),
+            "seed_digest": dict(self.seed_digest),
         }
 
 
@@ -4694,6 +4946,8 @@ class BuildOutput:
             "effective_parallelism": self.effective_parallelism,
             "degrade_reason": self.degrade_reason,
             "degrade_events": [dict(event) for event in self.degrade_events],
+            # Whether customer processes ran as their own OS users (`privilege.py`).
+            "process_isolation": isolation_mode().value,
         }
 
 
@@ -4888,6 +5142,7 @@ def _freeze_one_store(
             )
 
         row_counts: dict[str, int] = {}
+        seed_digest: dict[str, str] = {}
         baseline_reference = ""
         result_handle: SpawnedWorldProcess | None = None
         if strategy is BaselineStrategy.TEMPLATE_DATABASE:
@@ -4897,6 +5152,21 @@ def _freeze_one_store(
                     port=port,
                     credentials=credentials,
                     dbname=baseline_dbname,
+                    sql_runner=context.sql_runner,
+                    process_name=process.name,
+                )
+                # Read now: once sealed, the template takes no connections.
+                seed_digest = sealed_seed_digest(
+                    host="localhost", port=port, credentials=credentials, dbname=baseline_dbname
+                )
+            if (
+                process.engine is ManagedEngine.POSTGRES
+                and context.require_declared_user
+            ):
+                _grant_world_role_group(
+                    port=port,
+                    credentials=credentials,
+                    baseline_db=baseline_dbname,
                     sql_runner=context.sql_runner,
                     process_name=process.name,
                 )
@@ -4985,6 +5255,7 @@ def _freeze_one_store(
             inputs_digest=store.baseline.inputs_digest,
             baseline_reference=baseline_reference,
             row_counts=row_counts,
+            seed_digest=seed_digest,
         )
         return record, result_handle
     except BaseException:
@@ -5045,6 +5316,10 @@ def _seal_world_store(
             template_db=record.baseline_reference,
             sql_runner=context.sql_runner,
             process_name=process.name,
+            isolate=context.require_declared_user,
+            role=world_role(credentials, world_index)
+            if context.require_declared_user
+            else None,
         )
         return None
 
@@ -5197,6 +5472,57 @@ def _seal_world_store(
     return handle
 
 
+def _grant_world_role_group(
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+) -> None:
+    """Before the baseline is sealed: the group every world's role belongs to may read and
+    change the rows of every customer schema and create nothing, and nobody but the harness
+    connects to the cluster's own databases. Template copies carry these grants into every world.
+    """
+
+    def run(dbname: str, statement: str) -> None:
+        _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=dbname,
+            statement=statement,
+        )
+
+    group = f'"{WORLD_ROLE_GROUP}"'
+    run(
+        "postgres",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
+        f"'{WORLD_ROLE_GROUP}') THEN CREATE ROLE {group} NOLOGIN; "
+        "END IF; END $$",
+    )
+    run("postgres", "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC")
+    run("postgres", "REVOKE CONNECT ON DATABASE template1 FROM PUBLIC")
+    # Not every server version defaults to it, and a role that can create in a schema the
+    # harness's own session searches could plant something that session then runs.
+    run(baseline_db, "REVOKE CREATE ON SCHEMA public FROM PUBLIC")
+    run(
+        baseline_db,
+        "DO $$ DECLARE s text; BEGIN FOR s IN SELECT nspname FROM pg_namespace "
+        "WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' LOOP "
+        f"EXECUTE format('GRANT USAGE ON SCHEMA %I TO {group}', s); "
+        "EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I "
+        f"TO {group}', s); "
+        "EXECUTE format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I "
+        f"TO {group}', s); "
+        "END LOOP; END $$",
+    )
+
+
 def _reset_template_database(
     *,
     host: str,
@@ -5206,12 +5532,18 @@ def _reset_template_database(
     template_db: str,
     sql_runner: SqlRunner,
     process_name: str,
+    isolate: bool = False,
+    role: EngineCredentials | None = None,
 ) -> None:
     """§4.2 `template_database`: "drop + recreate the world's logical DB from the template." The
     admin connection targets `postgres` (never `world_db` itself or the template — postgres
     forbids `DROP`/`CREATE DATABASE` from inside the database being touched). Terminates other
     backends on `world_db` first — a connection lingering from that world's own just-terminated
     `source` processes is exactly what would otherwise block the `DROP`.
+
+    Under per-user isolation (`isolate`) the copy is created closed to connections, and opens only
+    after PUBLIC has lost CONNECT on it and `role` (the world's own; an authoring lane has none)
+    has gained it, so no other world's role is ever able to connect to it.
     """
     admin = dict(
         host=host,
@@ -5237,13 +5569,37 @@ def _reset_template_database(
         **admin,
         statement=f'DROP DATABASE IF EXISTS "{world_db}"',
     )
-    _call_sql(
-        sql_runner,
-        stage="reset",
-        process_name=process_name,
-        **admin,
-        statement=f'CREATE DATABASE "{world_db}" TEMPLATE "{template_db}"',
-    )
+    if not isolate:
+        _call_sql(
+            sql_runner,
+            stage="reset",
+            process_name=process_name,
+            **admin,
+            statement=f'CREATE DATABASE "{world_db}" TEMPLATE "{template_db}"',
+        )
+        return
+    statements = [
+        f'CREATE DATABASE "{world_db}" TEMPLATE "{template_db}" ALLOW_CONNECTIONS false',
+        f'REVOKE ALL ON DATABASE "{world_db}" FROM PUBLIC',
+    ]
+    if role is not None:
+        statements += [
+            "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
+            f"'{role.username}') THEN CREATE ROLE \"{role.username}\" LOGIN IN ROLE "
+            f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
+            f'ALTER ROLE "{role.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
+            f"PASSWORD '{role.password}'",
+            f'GRANT CONNECT ON DATABASE "{world_db}" TO "{role.username}"',
+        ]
+    statements.append(f'ALTER DATABASE "{world_db}" ALLOW_CONNECTIONS true')
+    for statement in statements:
+        _call_sql(
+            sql_runner,
+            stage="reset",
+            process_name=process_name,
+            **admin,
+            statement=statement,
+        )
 
 
 def _stores_reset_in_place(manifest: EnvironmentBundleV2) -> bool:
@@ -5279,6 +5635,12 @@ def _clone_or_reset_world(
     in_place = (
         keep_processes
         and bool(existing_handles)
+        # A process the harness stopped mid-trial (a worker past its deadline) comes back with a full respawn.
+        and all(
+            handle.handle.is_running()
+            for name, handle in existing_handles.items()
+            if name not in job_shared_handles
+        )
         and _stores_reset_in_place(manifest)
         and not any(
             isinstance(p, SourceProcess) and p.workspaces for p in manifest.processes
@@ -5343,6 +5705,7 @@ def _clone_or_reset_world(
                 world_index=world_index,
                 port_plan=context.port_plan,
                 credentials=context.credentials,
+                world_roles=context.require_declared_user,
             ),
         )
     return spawn_world(
@@ -5779,6 +6142,81 @@ def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
     return dict(typed.customer_code_environment)
 
 
+def _read_egress_allowed_hosts(work_directory: Path) -> tuple[str, ...] | None:
+    """The hosts a controlled run allows the agent, from `/work/job.json` `metadata.egress_allowed_hosts`; None when
+    the platform sent none (egress not controlled, or a local run). A `job.json` that cannot say, or a value that is
+    not a list of host names, fails the spawn: a controlled run never starts with its egress uncontrolled."""
+    try:
+        raw = json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise _egress_unknown(f"job.json cannot be read as JSON ({exc})") from exc
+    metadata = raw.get("metadata", {}) if isinstance(raw, dict) else None
+    if not isinstance(metadata, dict):
+        raise _egress_unknown(f"job.json {'metadata' if isinstance(raw, dict) else 'top level'} is not an object")
+    if "egress_allowed_hosts" not in metadata:
+        return None
+    try:
+        typed = HarnessJobMetadata.model_validate({"egress_allowed_hosts": metadata["egress_allowed_hosts"]})
+    except ValidationError as exc:
+        reasons = "; ".join(f"{'.'.join(map(str, one['loc']))}: {one['msg']}" for one in exc.errors())
+        reason = f"job.json metadata.egress_allowed_hosts is not a list of host names ({reasons})"
+        raise _egress_unknown(reason) from exc
+    return None if typed.egress_allowed_hosts is None else tuple(typed.egress_allowed_hosts)
+
+
+def _egress_unknown(reason: str) -> ProcessRuntimeError:
+    """The spawn failure for a run whose allowed hosts cannot be told."""
+    return ProcessRuntimeError("egress", "spawn_failed", reason, domain=FailureDomain.INFRASTRUCTURE)
+
+
+def _egress_tools_by_host(bundle_dir: Path | None) -> dict[str, str]:
+    """The contract's tools by the host of the dependency they reach, so a blocked call can name its tool."""
+    try:
+        contract = json.loads((Path(bundle_dir) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return {}
+    found: dict[str, str] = {}
+    for dependency in contract.get("dependencies") or [] if isinstance(contract, dict) else []:
+        if not isinstance(dependency, dict):
+            continue
+        host = str((dependency.get("reached") or {}).get("host") or "").strip().lower()
+        tools = [str(one) for one in dependency.get("used_by") or []]
+        if host and tools:
+            found[host] = ", ".join(tools)
+    return found
+
+
+def _egress_environment(
+    context: SpawnContext,
+    world_index: int,
+    endpoints: dict[str, RuntimeEndpoint],
+    configuration_addresses: dict[str, str],
+) -> dict[str, str] | None:
+    """The agent's proxy variables in a controlled run: this world's refusing proxy, started once per world and
+    logging to the world's action log, with every host of the environment's own processes left off it and let through
+    by it, for a client that ignores `NO_PROXY`."""
+    if context.egress_allowed_hosts is None:
+        return None
+    hosts = {urlsplit(address).hostname or "" for address in configuration_addresses.values() if "://" in address}
+    proxy = context.egress_proxies.get(world_index)
+    if proxy is None:
+        database = next((one for one in endpoints.values() if one.protocol == "postgres"), None)
+        if database is None and not context.egress_proxies:
+            logger.warning(
+                "egress: the world has no postgres endpoint to hold its action log; calls outside the test world "
+                "are refused but not recorded"
+            )
+        proxy = EgressProxy(
+            (*context.egress_allowed_hosts, *sorted(one for one in hosts if one)),
+            PostgresLog(database.address) if database is not None else None,
+            _egress_tools_by_host(context.bundle_dir),
+        )
+        context.egress_proxies[world_index] = proxy
+    return proxy.environment(sorted(hosts))
+
+
 def _read_job_secret_purposes(work_directory: Path) -> dict[str, str]:
     """§0.2/§4.1: `/work/job.json` is the provisioner's own configuration source — `agent.
     secret_refs` (§1: `{alias: {manager, key, version, purpose}}`) is where each alias's REAL
@@ -5932,7 +6370,7 @@ class ProcessRuntimeProvider:
         self,
         *,
         runner: ProcessRunner = default_process_runner,
-        sync_run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+        sync_run: Callable[..., subprocess.CompletedProcess] = declared_user_run,
         prober: CapabilityProber = default_capability_prober,
         sql_runner: SqlRunner = default_sql_runner,
         redis_runner: RedisCommandRunner = default_redis_command_runner,
@@ -5944,7 +6382,7 @@ class ProcessRuntimeProvider:
         user_resolver: Callable[
             [str], "pwd.struct_passwd | None"
         ] = default_user_resolver,
-        chown: Callable[[Path, int, int], None] = _default_chown,
+        chown: user_files.Chown = user_files.chown_no_follow,
         build_step_timeout_seconds: float = _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS,
         token: Callable[[], str] | None = None,
         secrets_path: Path = Path("/run/futureagi/secrets.json"),
@@ -6261,9 +6699,7 @@ class ProcessRuntimeProvider:
                 / "process.log"
             )
             try:
-                return process_name, log_path.read_text(
-                    encoding="utf-8", errors="replace"
-                )
+                return process_name, user_files.read_text(log_path)
             except OSError:
                 pass
         return process_name, ""
@@ -6384,6 +6820,10 @@ class ProcessRuntimeProvider:
     ) -> list[EnvironmentRuntime]:
         bundle_digest = bundle.digest
         requested = instances
+        if isolation_mode() is IsolationMode.PER_USER:
+            _require_template_world_databases(bundle)
+            _open_for_declared_users(work_directory, instances)
+            _open_seed_files_for_declared_users(bundle, bundle_dir)
         # C2 §1 rule 4's crisp trichotomy, keyed on WHICH branch runs. FIRST BUILD and DIGEST
         # REBUILD both take the first-call branch (plan + scan run, stage-5 catches ARMED);
         # RECONCILE takes the else branch (carry the first plan forward, catches NOT armed).
@@ -6403,6 +6843,9 @@ class ProcessRuntimeProvider:
                 # the secrets unlink — this is a re-sealed bundle, not a new job identity, so the
                 # in-memory secret map must survive it).
                 self._teardown_processes_and_directories(work_directory)
+                if isolation_mode() is IsolationMode.PER_USER:
+                    # The teardown removed the directories opened above.
+                    _open_for_declared_users(work_directory, instances)
             if not self._secrets_loaded:
                 # C2 §4 item 1: HOISTED to BEFORE plan_ports (stage 2 needs the resolved values).
                 # B3 / §0.3: loaded and the file deleted BEFORE any customer process starts.
@@ -6467,9 +6910,9 @@ class ProcessRuntimeProvider:
             # First call for this job identity, or the bundle changed underneath it (§2c: a
             # digest mismatch forces a rebuild) — build once, seed+freeze once, gate once.
             credentials = generate_engine_credentials(bundle, token=self._token)
-            self._diagnostic_engine_secrets = {
-                name: value.password for name, value in credentials.items()
-            }
+            self._diagnostic_engine_secrets = _engine_diagnostic_secrets(
+                credentials, ceiling
+            )
             self._diagnostic_work_directory = work_directory
             job_id = _read_job_id(work_directory)
             context = SpawnContext(
@@ -6483,6 +6926,7 @@ class ProcessRuntimeProvider:
                 customer_code_environment=_read_customer_code_environment(
                     work_directory
                 ),
+                egress_allowed_hosts=_read_egress_allowed_hosts(work_directory),
                 runner=self._runner,
                 sync_run=self._sync_run,
                 prober=self._prober,
@@ -6777,37 +7221,42 @@ class ProcessRuntimeProvider:
             or datetime.fromtimestamp(time.time() + 7200, tz=timezone.utc),
         )
         context_path = lifecycle_directory / "context.json"
-        context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
-        context_path.chmod(0o600)
         secret_values = {
             name: self._secret_values.get(name, "") for name in spec.required_secrets
         }
-        invocation = build_lifecycle_invocation(
-            command=spec.provision,
-            # Lifecycle code and its per-process dependency installation live in the immutable
-            # build tree. The world scratch directory contains only writable runtime state, so
-            # using it as cwd makes a repository command such as `python provider_target.py`
-            # fail before it can contact the provider.
-            source_directory=build_tree_dir(self._context.work_directory, process_name),
-            lifecycle_directory=lifecycle_directory,
-            context_path=context_path,
-            context=context,
-            required_secret_values=secret_values,
-            output_relative_path=spec.output,
-        )
         try:
+            # Inside the try: the lifecycle user owns its folder and what it holds from the
+            # first provision on, and an entry it swapped for a link or a folder is the
+            # environment's failure.
+            with user_files.open_log(context_path) as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(context.model_dump_json(indent=2).encode("utf-8"))
+            invocation = build_lifecycle_invocation(
+                command=spec.provision,
+                # Lifecycle code and its per-process dependency installation live in the
+                # immutable build tree. The world scratch directory contains only writable
+                # runtime state, so using it as cwd makes a repository command such as
+                # `python provider_target.py` fail before it can contact the provider.
+                source_directory=build_tree_dir(self._context.work_directory, process_name),
+                lifecycle_directory=lifecycle_directory,
+                context_path=context_path,
+                context=context,
+                required_secret_values=secret_values,
+                output_relative_path=spec.output,
+            )
+            uid, gid = self._lifecycle_user(process, lifecycle_directory)
             provision_log_path = lifecycle_directory / "provision.log"
             returncode = run_lifecycle_invocation(
                 invocation,
                 log_path=provision_log_path,
                 run=self._sync_run,
+                user=uid,
+                group=gid,
             )
             if returncode != 0:
                 diagnostic = ""
                 try:
-                    diagnostic = provision_log_path.read_text(encoding="utf-8")[
-                        -4000:
-                    ].strip()
+                    diagnostic = user_files.read_text(provision_log_path)[-4000:].strip()
                 except OSError:
                     pass
                 raise ProviderLifecycleError(
@@ -6818,8 +7267,9 @@ class ProcessRuntimeProvider:
                 invocation.output_path,
                 context=context,
                 secret_values=secret_values,
+                beneath=lifecycle_directory,
             )
-        except ProviderLifecycleError as exc:
+        except (ProviderLifecycleError, OSError) as exc:
             raise ProcessRuntimeError(
                 "provider_lifecycle",
                 "spawn_failed",
@@ -6889,6 +7339,32 @@ class ProcessRuntimeProvider:
         runtime.metadata["provider_target_kind"] = receipt.target.kind
         runtime.metadata["provider_import_source_target_id"] = spec.source_target_id
 
+    def _lifecycle_user(
+        self, process: SourceProcess, lifecycle_directory: Path
+    ) -> tuple[int | None, int | None]:
+        """A lifecycle command is the repository's code: it runs as the process's declared user,
+        as its build and its run do. It writes its receipt into ``lifecycle_directory``, so that
+        user owns the directory and everything in it, at any depth: an output may sit under
+        nested folders the harness made with its own private umask."""
+        assert self._context is not None
+        resolved = _resolve_process_user(
+            process.user,
+            resolver=self._context.user_resolver,
+            require=self._context.require_declared_user,
+            process_name=process.name,
+            stage="provider_lifecycle",
+            domain=FailureDomain.ENVIRONMENT,
+        )
+        if resolved is None:
+            return None, None
+        user_files.own_tree(
+            lifecycle_directory,
+            uid=resolved.pw_uid,
+            gid=resolved.pw_gid,
+            chown=self._context.chown,
+        )
+        return resolved.pw_uid, resolved.pw_gid
+
     def _destroy_provider_target(self, world_index: int) -> None:
         receipt = self._provider_receipts.pop(world_index, None)
         context = self._provider_contexts.pop(world_index, None)
@@ -6917,24 +7393,32 @@ class ProcessRuntimeProvider:
         lifecycle_directory = (
             self._context.work_directory / "provider" / f"w{world_index}"
         )
-        invocation = build_lifecycle_invocation(
-            command=spec.destroy,
-            source_directory=build_tree_dir(self._context.work_directory, process_name),
-            lifecycle_directory=lifecycle_directory,
-            context_path=lifecycle_directory / "context.json",
-            context=context,
-            required_secret_values={
-                name: self._secret_values.get(name, "")
-                for name in spec.required_secrets
-            },
-            output_relative_path=spec.output,
-            receipt_path=lifecycle_directory / spec.output,
+        process = next(
+            entry for entry in self._manifest.processes if entry.name == process_name
         )
         try:
+            # Inside the try: teardown goes on to stop the world's processes whatever the
+            # lifecycle user left in its folder.
+            invocation = build_lifecycle_invocation(
+                command=spec.destroy,
+                source_directory=build_tree_dir(self._context.work_directory, process_name),
+                lifecycle_directory=lifecycle_directory,
+                context_path=lifecycle_directory / "context.json",
+                context=context,
+                required_secret_values={
+                    name: self._secret_values.get(name, "")
+                    for name in spec.required_secrets
+                },
+                output_relative_path=spec.output,
+                receipt_path=lifecycle_directory / spec.output,
+            )
+            uid, gid = self._lifecycle_user(process, lifecycle_directory)
             returncode = run_lifecycle_invocation(
                 invocation,
                 log_path=lifecycle_directory / "destroy.log",
                 run=self._sync_run,
+                user=uid,
+                group=gid,
             )
             if returncode != 0:
                 logger.error(
@@ -6942,7 +7426,9 @@ class ProcessRuntimeProvider:
                     world_index,
                     returncode,
                 )
-        except ProviderLifecycleError as exc:
+        except (ProviderLifecycleError, OSError) as exc:
+            # OSError: what the lifecycle user left where the harness writes its log or hands
+            # the folder over (a folder named destroy.log, say).
             logger.error("provider cleanup failed for world %s: %s", world_index, exc)
 
     def _ensure_world(self, world_index: int) -> None:
@@ -7072,13 +7558,13 @@ class ProcessRuntimeProvider:
             self._context.work_directory, world_index, control
         )
 
-        def _fill(value: str) -> str:
+        def _fill(value: str, directory: Path = world_dir) -> str:
             return (
                 value.replace(
                     "{{JOB_ID}}", self._context.dispatch_id or self._context.job_id
                 )
                 .replace("{{WORLD_INDEX}}", str(world_index))
-                .replace("{{WORLD_DIR}}", str(world_dir))
+                .replace("{{WORLD_DIR}}", str(directory))
             )
 
         agent_name = env.get("LIVEKIT_AGENT_NAME")
@@ -7094,6 +7580,21 @@ class ProcessRuntimeProvider:
         trace = env.get("HARNESS_TOOL_TRACE")
         if trace:
             metadata["tool_trace_path"] = _fill(trace)
+        else:
+            # An older bundle traces the calls in its tools service, not its control service: read them there.
+            tracer = next(
+                (
+                    one
+                    for one in self._manifest.processes
+                    if (getattr(one, "environment", None) or {}).get("HARNESS_TOOL_TRACE")
+                ),
+                None,
+            )
+            if tracer is not None:
+                metadata["tool_trace_path"] = _fill(
+                    tracer.environment["HARNESS_TOOL_TRACE"],
+                    world_scratch_dir(self._context.work_directory, world_index, tracer.name),
+                )
         return metadata
 
     def _drop_world_shared_databases(self, world_index: int) -> None:
@@ -7232,6 +7733,21 @@ class ProcessRuntimeProvider:
 
         await asyncio.to_thread(self._reset_sync, runtime, keep_processes)
 
+    async def stop_process(self, runtime: EnvironmentRuntime, process_name: str) -> bool:
+        """End one of this world's own processes mid-trial (a worker the app serves alone, past its deadline). The
+        world's next reset starts it again. False when the world has no such process of its own: a job-shared engine
+        is never stopped for one world."""
+        import asyncio
+
+        return await asyncio.to_thread(self._stop_process_sync, runtime, process_name)
+
+    def _stop_process_sync(self, runtime: EnvironmentRuntime, process_name: str) -> bool:
+        handle = (self._world_handles.get(runtime.world_index) or {}).get(process_name)
+        if handle is None or process_name in self._job_shared_handles:
+            return False
+        _terminate_and_wait(handle.handle)
+        return True
+
     def _reset_sync(
         self, runtime: EnvironmentRuntime, keep_processes: bool = False
     ) -> None:
@@ -7352,6 +7868,7 @@ class ProcessRuntimeProvider:
             or credentials is None
         ):
             return None
+        # A lane is the harness's alone: no world role may connect to it.
         _reset_template_database(
             host="localhost",
             port=context.port_plan.port_for(process_name, runtime.world_index),
@@ -7360,13 +7877,18 @@ class ProcessRuntimeProvider:
             template_db=record.baseline_reference,
             sql_runner=context.sql_runner,
             process_name=process_name,
+            isolate=context.require_declared_user,
         )
         address = urlsplit(endpoint.address)._replace(path=f"/{name}").geturl()
         return runtime.model_copy(
             update={
                 "endpoints": {
                     **runtime.endpoints,
-                    key: endpoint.model_copy(update={"address": address}),
+                    # The world role's address would still name the world's database: a handler
+                    # child on a lane has none, and fails closed.
+                    key: endpoint.model_copy(
+                        update={"address": address, "tool_address": None}
+                    ),
                 }
             }
         )
@@ -7433,6 +7955,9 @@ class ProcessRuntimeProvider:
         if self._context:
             self._context.local_auth_values.clear()
             self._context.local_auth_redactions.clear()
+            for proxy in self._context.egress_proxies.values():
+                proxy.close()
+            self._context.egress_proxies.clear()
         for runtime in self._runtimes.values():
             runtime._local_auth_values.clear()
         self._job_shared_handles = {}
@@ -7544,6 +8069,11 @@ class ProcessRuntimeProvider:
             context.work_directory, process_name, world_index=None
         )
         credentials = context.credentials.get(process_name)
+        dead = self._job_shared_handles.get(process_name)
+        if dead is not None:
+            # The engine's leader is gone, its own backends may not be: stop all it started
+            # before a new one takes the same data directory and port.
+            _terminate_and_wait(dead.handle)
         try:
             new_handle = spawn_managed_process(
                 process,
@@ -7575,6 +8105,10 @@ class ProcessRuntimeProvider:
                             template_db=record.baseline_reference,
                             sql_runner=context.sql_runner,
                             process_name=process_name,
+                            isolate=context.require_declared_user,
+                            role=world_role(live_credentials, world_index)
+                            if context.require_declared_user
+                            else None,
                         )
                     # Q7, p6-review-r3: the loop above just reset EVERY tracked world's database —
                     # demote every world other than the one the caller is already reconciling so

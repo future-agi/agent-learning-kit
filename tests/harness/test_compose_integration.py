@@ -422,3 +422,66 @@ def test_compose_bundle_seals_declared_source_exclusions(
     )
 
     assert manifest.metadata["context_excludes"] == ["tests/**"]
+
+
+def test_compose_bundle_seals_the_door_outcome_before_worker_limits(
+    tmp_path, monkeypatch, resolved_compose_images
+):
+    from fi.alk.harness import call_runner
+    from fi.alk.harness.bundle_author_v2 import EnvironmentPlanV2, door_outcome
+    from fi.alk.harness.compose_integration import compile_bundle
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "compose.yaml").write_text(
+        "services:\n  app:\n    image: example/chat:1\n    ports: ['3000:3000']\n"
+    )
+    runtime = {
+        "execution": "compose",
+        "compose_file": "compose.yaml",
+        "service": "app",
+        "interface": {
+            "kind": "http",
+            "protocol": "json_template",
+            "port": 3000,
+            "path": "/chat",
+            "request_template": {"message": "{{new_message_content}}"},
+        },
+    }
+    authoring = tmp_path / "authoring"
+    (authoring / "scenarios" / "budgeted").mkdir(parents=True)
+    (authoring / "scenarios" / "budgeted" / "scenario.json").write_text(
+        json.dumps({"worker_budget_seconds": {"reader": 5}})
+    )
+    contract = {"modality": "chat", "runtime": runtime, "workers": [{"id": "reader"}]}
+    (authoring / "contract.json").write_text(json.dumps(contract))
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "compose",
+            "run_id": "compose",
+            "execution": "local",
+            "source": {"kind": "local_repository", "local_path": str(source)},
+            "agent": {"connector": "auto"},
+            "scenario_count": 1,
+        }
+    )
+    monkeypatch.setenv("ALK_TRUSTED_COMPOSE_SOCKET", "/private/alk/docker.sock")
+    seal = call_runner.write_worker_limits
+    door_first = []
+
+    def write_worker_limits(bundle_dir):
+        door_first.append((bundle_dir / "door.json").is_file())
+        seal(bundle_dir)
+
+    monkeypatch.setattr(call_runner, "write_worker_limits", write_worker_limits)
+
+    compile_bundle(
+        source=source, job=job, authoring=authoring, output=tmp_path / "bundle", contract=contract
+    )
+
+    # The same outcome a native build seals for a plan with no door of the world's, written before the hold.
+    no_door = EnvironmentPlanV2(packaging="compose", control_service=None, processes=(), capabilities={}, readiness=())
+    assert json.loads((tmp_path / "bundle" / "door.json").read_text()) == door_outcome(no_door, contract)
+    assert door_first == [True]
+    sealed = json.loads((tmp_path / "bundle" / "worker-limits.json").read_text())["scenarios"]["budgeted"]
+    assert (sealed["held"], sealed["cause"], sealed["unheld_workers"]) == (True, "no_tool_proxy", ["reader"])

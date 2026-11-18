@@ -19,8 +19,11 @@ from types import SimpleNamespace
 from typing import Any, Callable
 from unittest import mock
 
+from platform_failure_rules import assert_platform_reads
+
 from fi.alk.harness import hosted_entrypoint as he
 from fi.alk.harness import outbound as ob
+from fi.alk.harness import scenario_source as scenario_source_module
 from fi.alk.harness.bundle_v2 import (
     BUNDLE_V2_SCHEMA_VERSION,
     EnvironmentBundleV2,
@@ -3193,6 +3196,44 @@ def test_receipt_failure_message_is_capped_like_the_terminal_message() -> None:
     asyncio.run(scenario())
 
 
+def _receipt_reason_sent(reason: str, *, extra_secret_values: tuple[str, ...] = ()) -> str:
+    async def scenario() -> str:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport, extra_secret_values=extra_secret_values)
+        await adapter.receipt(
+            ResultReceipt(
+                scenario_key="s1",
+                scenario_id="platform-s1",
+                scenario_attempt=1,
+                world_index=0,
+                status="passed",
+                sub_goals=(),
+                evaluations=(),
+                call=None,
+                failure=None,
+                reason=reason,
+            )
+        )
+        return transport.receipts[("job-1", "s1")]["reason"]
+
+    return asyncio.run(scenario())
+
+
+def test_a_receipt_note_with_a_secret_across_the_platform_s_limit_never_sends_part_of_it() -> None:
+    secret = "sk-live-" + "q" * 40
+    sent = _receipt_reason_sent("did not reach the agent: " + "r" * 455 + secret, extra_secret_values=(secret,))
+
+    assert len(sent) <= he._RECEIPT_REASON_MAX_CHARS
+    assert "sk-live-" not in sent and "qqqq" not in sent
+
+
+def test_a_receipt_note_whose_url_credentials_grow_when_masked_still_fits_the_platform_s_limit() -> None:
+    sent = _receipt_reason_sent("did not reach the agent: " + "s://u:p@h " * 47)
+
+    assert len(sent) <= he._RECEIPT_REASON_MAX_CHARS and sent.endswith("…[truncated]")
+    assert ":p@" not in sent and "s://u:***@h" in sent
+
+
 def test_cancel_before_provision_skips_provisioning_entirely() -> None:
     # The pre-provision cancel checkpoint (`hosted_entrypoint.py:1342` area) had no
     # test driving a cancel signal written BEFORE `run_job` starts -- disabling all three
@@ -3578,9 +3619,15 @@ def test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window() -> 
     # `emit_skipped_receipts`/`receipt()` push with `deadline=None` -- a degraded-but-alive
     # events channel could previously retry every skipped scenario's receipt for the full
     # `RetryPolicy` budget regardless of how much of the flush window was already spent, well past
-    # the point the gateway tears the sandbox down. A tiny window plus a slow
-    # `emit_skipped_receipts` reproduces the shape without a real multi-second stall dominating the
-    # suite: `asyncio.wait_for`'s own cancellation cuts the sleep short well before it would run out.
+    # the point the gateway tears the sandbox down. Here `emit_skipped_receipts` never finishes on
+    # its own (the stall stands in for the receipt push), so the run can end only when the flush
+    # window's `wait_for` cancels it. The test checks the bound itself, not elapsed time: a spy on
+    # `wait_for` records the `timeout` the code passes with `emit_skipped_receipts`, and that must
+    # be the REMAINING window -- `deadline - now`, where the deadline is the arm time plus the
+    # window and the terminal's own flush has already run since arming. So the tightest true bound
+    # is `0 < timeout < window`: `None`, a padded timeout, or the full window (which would not
+    # shrink as the window is spent) all fail, whatever the runner's speed. The outer guard turns
+    # a missing bound into a failure rather than a hang.
     async def scenario() -> None:
         scenarios = [
             FakeScenario("first", "platform-first", [FakeSubGoal("holds", True)]),
@@ -3589,27 +3636,47 @@ def test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window() -> 
         harness = _build_harness(
             scenarios=scenarios, cancel_on_scenario="first", instances=1
         )
-        harness.deps.flush_window_seconds = 0.2
+        harness.deps.flush_window_seconds = 2.0
 
         original_emit = HostedScheduler.emit_skipped_receipts
+        never = asyncio.Event()
+        stall: dict[str, float] = {}
+        bounds: list[float | None] = []
+        real_wait_for = asyncio.wait_for
 
-        async def slow_emit(self: HostedScheduler, result: RunResult) -> None:
-            await asyncio.sleep(2.0)
-            await original_emit(self, result)
+        async def stalled_emit(self: HostedScheduler, result: RunResult) -> None:
+            try:
+                await never.wait()
+            except asyncio.CancelledError:
+                stall["cut"] = time.monotonic()
+                raise  # swallowing the cancel would break the bound under test
 
-        HostedScheduler.emit_skipped_receipts = slow_emit  # type: ignore[method-assign]
-        started = time.monotonic()
+        async def spying_wait_for(aw: Any, timeout: float | None = None) -> Any:
+            # `he.asyncio` is the shared asyncio module, so this also sees the outer guard below;
+            # record only the call that wraps the stalled receipts.
+            code = getattr(aw, "cr_code", None)
+            if code is stalled_emit.__code__:
+                bounds.append(timeout)
+            return await real_wait_for(aw, timeout=timeout)
+
+        HostedScheduler.emit_skipped_receipts = stalled_emit  # type: ignore[method-assign]
         try:
-            code = await he.run_job(
-                harness.job_path, harness.source, harness.output, deps=harness.deps
-            )
+            try:
+                with mock.patch.object(he.asyncio, "wait_for", spying_wait_for):
+                    code = await real_wait_for(
+                        he.run_job(
+                            harness.job_path,
+                            harness.source,
+                            harness.output,
+                            deps=harness.deps,
+                        ),
+                        timeout=30.0,
+                    )
+            except asyncio.TimeoutError:
+                pytest.fail("the post-terminal wire block was not bounded by the flush window")
         finally:
             HostedScheduler.emit_skipped_receipts = original_emit
-        elapsed = time.monotonic() - started
 
-        assert elapsed < 1.5, (
-            f"post-terminal wire block was not bounded: {elapsed:.2f}s"
-        )
         assert (
             code == he.EXIT_OK
         )  # the terminal was already delivered before the window ran out
@@ -3621,9 +3688,15 @@ def test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window() -> 
             key[1]: body["status"] for key, body in harness.transport.receipts.items()
         }
         assert statuses.get("first") == "passed"
-        assert (
-            "second" not in statuses
-        )  # window ran out before the skipped receipt could go
+
+        assert "cut" in stall, "the stalled receipts were never cancelled"
+        window = harness.deps.flush_window_seconds
+        # Exactly one bounded wait, and its timeout is the remaining window: positive, and
+        # strictly under the full window because the terminal flush ran after the window armed.
+        assert len(bounds) == 1, bounds
+        bound = bounds[0]
+        assert bound is not None, "the receipts wait was given no timeout"
+        assert 0 < bound < window, (bound, window)
 
         assert (
             harness.provisioner.closed is True
@@ -4391,6 +4464,7 @@ def test_the_persona_s_pace_reaches_the_speech_provider(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
@@ -4423,6 +4497,7 @@ def test_a_provider_with_no_speed_setting_is_left_alone(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
@@ -4458,6 +4533,7 @@ def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     monkeypatch.setattr(
@@ -4742,6 +4818,7 @@ def test_the_callers_voice_speaks_their_language(monkeypatch):
 
     from fi.alk.harness.simulator_voice import simulator_definition
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
@@ -4827,6 +4904,7 @@ def test_the_persona_s_emotion_reaches_the_speech_provider(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
@@ -4857,6 +4935,7 @@ def test_a_persona_with_no_recognised_emotion_sends_no_emotion_key(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
@@ -5231,3 +5310,497 @@ def test_hosted_compose_uses_broker_and_observation_world(monkeypatch):
     assert selected == ["broker", "observation"]
     assert harness.provisioner.provision_calls == 1
     assert harness.provisioner.closed
+
+
+def test_a_scenario_start_reaches_the_platform_as_the_call_starts() -> None:
+    """Not held for the receipt: a call the person stops mid-way is known to be in flight while its seal is waited on."""
+    transport = FakeTransport()
+    adapter = _build_adapter(transport)
+    asyncio.run(adapter.scenario_started(scenario_key="s1", world_index=0, scenario_attempt=1))
+    assert [record["type"] for record in transport.event_records] == ["scenario_started"]
+
+
+def test_bad_subfolder_fails_terminal_before_compose(monkeypatch):
+    from fi.alk.harness.source_folder import subfolder_not_found
+
+    harness = _build_harness(scenarios=[])
+    job = _job().model_copy(
+        update={
+            "source": RepositorySource(
+                kind=SourceKind.GITHUB,
+                repository="org/repo",
+                visibility=SourceVisibility.PUBLIC,
+                commit_sha="a" * 40,
+                subfolder="agents/missing",
+            )
+        }
+    )
+    _write_job(harness.job_path, job)
+    started: list[str] = []
+    monkeypatch.setattr(
+        he, "initialize_hosted_compose", lambda job, source: started.append("compose")
+    )
+
+    assert _run(harness) == he.EXIT_OK
+
+    assert started == []
+    assert harness.provisioner.provision_calls == 0
+    terminal = harness.transport.terminal_events()
+    assert len(terminal) == 1
+    assert terminal[0]["payload"]["failure"] == {
+        "domain": "agent",
+        "stage": "acquiring_source",
+        "code": "subfolder_not_found",
+        "message": subfolder_not_found("agents/missing").message,
+        "retryable": False,
+        "details": {"subfolder": "agents/missing"},
+    }
+    assert_platform_reads(terminal[0]["payload"]["failure"])
+
+
+def test_subfolder_on_a_non_github_source_fails_terminal_not_crashed(monkeypatch):
+    harness = _build_harness(scenarios=[])
+    body = json.loads(_job().model_dump_json())
+    body["source"] = {"kind": "archive", "archive_artifact_id": "art-1", "subfolder": "agents/a"}
+    harness.job_path.write_text(json.dumps(body), encoding="utf-8")
+    started: list[str] = []
+    monkeypatch.setattr(
+        he, "initialize_hosted_compose", lambda job, source: started.append("compose")
+    )
+
+    assert _run(harness) == he.EXIT_OK
+
+    assert started == []
+    assert harness.provisioner.provision_calls == 0
+    [terminal] = harness.transport.terminal_events()
+    failure = terminal["payload"]["failure"]
+    assert failure["domain"] == "agent"
+    assert failure["stage"] == "acquiring_source"
+    assert failure["code"] == "subfolder_requires_github_source"
+    assert "GitHub" in failure["message"]
+    assert failure["retryable"] is False
+    assert failure["details"] == {"subfolder": "agents/a"}
+    assert_platform_reads(failure)
+
+
+def test_other_malformed_job_still_exits_crashed():
+    harness = _build_harness(scenarios=[])
+    body = json.loads(_job().model_dump_json())
+    body["source"] = {"kind": "archive", "subfolder": ""}  # no locator: not this reason
+    harness.job_path.write_text(json.dumps(body), encoding="utf-8")
+
+    assert _run(harness) == he.EXIT_CRASHED
+    assert harness.transport.terminal_events() == []
+
+
+def test_a_job_malformed_otherwise_too_still_exits_crashed():
+    # The folder on a non-GitHub source is reported only when it's the job's one fault.
+    harness = _build_harness(scenarios=[])
+    body = json.loads(_job().model_dump_json())
+    body["source"] = {"kind": "archive", "archive_artifact_id": "art-1", "subfolder": "agents/a"}
+    body.pop("job_id")
+    harness.job_path.write_text(json.dumps(body), encoding="utf-8")
+
+    assert _run(harness) == he.EXIT_CRASHED
+    assert harness.transport.terminal_events() == []
+
+
+def test_a_local_job_with_a_folder_on_another_source_still_exits_crashed():
+    # load_job's own check, that the job is hosted, sits outside the model: a job failing it
+    # is malformed otherwise too, so the folder isn't reported.
+    harness = _build_harness(scenarios=[])
+    body = json.loads(_job().model_dump_json())
+    body["source"] = {"kind": "archive", "archive_artifact_id": "art-1", "subfolder": "agents/a"}
+    body["execution"] = "local"
+    harness.job_path.write_text(json.dumps(body), encoding="utf-8")
+
+    assert _run(harness) == he.EXIT_CRASHED
+    assert harness.transport.terminal_events() == []
+
+
+def _harness_with_a_packaged_agent(
+    packaged_main: bytes = b"from crewai import Crew\nCrew()\n",
+    source_origin: str = "bundle",
+) -> Harness:
+    real_body = _base_manifest_body
+
+    def packaged_body() -> dict[str, Any]:
+        body = real_body()
+        body["processes"][1]["working_directory"] = "generated/source/agent"
+        body["processes"][1]["source_origin"] = source_origin
+        return body
+
+    files = {
+        **_scenario_doc_files(
+            "passing",
+            scenario_key="passing",
+            scenario_id="platform-passing",
+            sub_goals=["holds"],
+            checks={"holds": "def check(world, calls):\n    return None\n"},
+        ),
+        "contract.json": json.dumps({"agent": "crew-bot", "tools": []}).encode("utf-8"),
+        "generated/source/agent/main.py": packaged_main,
+    }
+    with mock.patch.dict(globals(), {"_base_manifest_body": packaged_body}):
+        return _build_harness(
+            scenarios=[],
+            instances=1,
+            use_default_scenario_source=True,
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
+                bundle_dir, files
+            ),
+        )
+
+
+def _folder_build(harness: Harness, subfolder: str = "agents/a") -> None:
+    """Make ``harness`` a build of the folder ``subfolder``; its saved contract names no folder."""
+    (harness.source / subfolder).mkdir(parents=True)
+    (harness.source / subfolder / "main.py").write_text("x = 1\n", encoding="utf-8")
+    body = json.loads(harness.job_path.read_text(encoding="utf-8"))
+    body["source"]["subfolder"] = subfolder
+    harness.job_path.write_text(json.dumps(body), encoding="utf-8")
+
+
+def _failed_document_terminal(harness: Harness) -> dict[str, Any]:
+    assert _run(harness) == he.EXIT_OK
+    assert [body for _, body in harness.transport.scenarios_calls if "agent" in body] == []
+    [terminal] = harness.transport.terminal_events()
+    return terminal["payload"]["failure"]
+
+
+def test_a_folder_build_whose_document_fails_fails_with_the_builds_own_code() -> None:
+    harness = _harness_with_a_packaged_agent()
+    _folder_build(harness)
+
+    failure = _failed_document_terminal(harness)
+
+    assert failure["domain"] == "agent"
+    assert failure["code"] == "agent_invalid"
+    assert failure["stage"] == "validating_scenarios"
+    assert "agent_invalid" in failure["message"]
+    assert_platform_reads(failure)
+
+
+def test_a_folder_build_whose_document_raises_otherwise_fails_agent_document_failed() -> None:
+    harness = _harness_with_a_packaged_agent()
+    _folder_build(harness)
+
+    with mock.patch.object(
+        scenario_source_module, "authored_agent_document", side_effect=RuntimeError("boom /secret")
+    ):
+        failure = _failed_document_terminal(harness)
+
+    assert failure["domain"] == "agent"
+    assert failure["code"] == "agent_document_failed"
+    assert "secret" not in failure["message"]
+    assert_platform_reads(failure)
+
+
+def test_a_build_without_a_folder_keeps_going_without_the_document() -> None:
+    harness = _harness_with_a_packaged_agent()
+    with mock.patch.object(
+        scenario_source_module, "authored_agent_document", side_effect=RuntimeError("boom")
+    ):
+        assert _run(harness) == he.EXIT_OK
+
+    assert [body for _, body in harness.transport.scenarios_calls if "agent" in body] == []
+    assert harness.transport.scenarios_calls
+    assert not any(
+        event["payload"].get("failure") for event in harness.transport.terminal_events()
+    )
+
+
+def _posted_framework(harness: Harness) -> dict[str, Any]:
+    [document] = [
+        body["agent"]["agent"]
+        for _, body in harness.transport.scenarios_calls
+        if "agent" in body
+    ]
+    return document["extension"]["framework"]
+
+
+def _install_crewai(package_dir: Path) -> None:
+    dist_info = (
+        package_dir
+        / ".venv"
+        / "lib"
+        / "python3.12"
+        / "site-packages"
+        / "crewai-0.86.0.dist-info"
+    )
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_bytes(
+        b"Metadata-Version: 2.1\nName: crewai\nVersion: 0.86.0\n"
+    )
+
+
+def _framework_log_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("framework")
+    ]
+
+
+def test_run_job_gives_bundle_source_its_folders(caplog) -> None:
+    async def scenario() -> None:
+        harness = _harness_with_a_packaged_agent()
+        _install_crewai(harness.work / "build" / "agent")
+
+        with mock.patch.object(
+            he, "framework_folders_for", wraps=he.framework_folders_for
+        ) as folders_for:
+            code = await he.run_job(
+                harness.job_path, harness.source, harness.output, deps=harness.deps
+            )
+
+        assert code == he.EXIT_OK
+        assert _posted_framework(harness) == {"name": "crewai", "version": "0.86.0"}
+        assert folders_for.call_args.kwargs["source"] == harness.source
+        lines = _framework_log_lines(caplog)
+        assert any("name=crewai" in line for line in lines)
+        assert not any("0.86.0" in line for line in lines)
+
+    with caplog.at_level("INFO", logger="fi.alk.harness"):
+        asyncio.run(scenario())
+
+
+def test_run_job_gives_repository_source_its_folders(caplog) -> None:
+    async def scenario() -> None:
+        # The crew only in `source`: scanning the bundle's copy would find none.
+        harness = _harness_with_a_packaged_agent(
+            packaged_main=b"print('plain')\n", source_origin="repository"
+        )
+        agent = harness.source / "generated" / "source" / "agent"
+        agent.mkdir(parents=True)
+        (agent / "main.py").write_text(
+            "from crewai import Crew\nCrew()\n", encoding="utf-8"
+        )
+        _install_crewai(harness.work / "build" / "agent")
+
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+
+        assert code == he.EXIT_OK
+        assert _posted_framework(harness) == {"name": "crewai", "version": "0.86.0"}
+
+    with caplog.at_level("INFO", logger="fi.alk.harness"):
+        asyncio.run(scenario())
+
+
+def test_folder_step_failure_keeps_the_run_going(caplog) -> None:
+    secret = "/customer/private/path"
+
+    async def scenario() -> None:
+        # The crew only in `source`, and a version where each wrong fallback would read
+        # one: the fallback is the source, with no build tree.
+        harness = _harness_with_a_packaged_agent(packaged_main=b"print('plain')\n")
+        (harness.source / "main.py").write_text(
+            "from crewai import Crew\nCrew()\n", encoding="utf-8"
+        )
+        _install_crewai(harness.work / "build" / "agent")
+        _install_crewai(harness.work)
+
+        with mock.patch.object(
+            he, "framework_folders_for", side_effect=RuntimeError(secret)
+        ):
+            code = await he.run_job(
+                harness.job_path, harness.source, harness.output, deps=harness.deps
+            )
+
+        assert code == he.EXIT_OK
+        assert _posted_framework(harness) == {"name": "crewai", "version": None}
+        assert len(harness.transport.terminal_events()) == 1
+        lines = _framework_log_lines(caplog)
+        assert any("class=RuntimeError" in line for line in lines)
+        assert not any(secret in line for line in lines)
+
+    with caplog.at_level("INFO", logger="fi.alk.harness"):
+        asyncio.run(scenario())
+
+
+# -- TH-9491: URL credentials never reach the judge or the job's events -------------------------
+
+_TH9491_URL = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"
+
+
+@pytest.mark.parametrize("where", ["job_prompt", "excerpt", "summary", "rule"])
+def test_the_judge_text_loses_url_credentials_wherever_the_url_is(
+    tmp_path: Path, where: str
+) -> None:
+    """B4: the job's own prompt, the excerpt, the summary or a rule."""
+    said = f"Post to {_TH9491_URL} after."
+    body = {
+        "system_prompt_excerpt": said if where == "excerpt" else "Take orders.",
+        "one_liner": said if where == "summary" else "Takes orders",
+        "hard_constraints": [said if where == "rule" else "Be brief"],
+    }
+    (tmp_path / "contract.json").write_text(json.dumps(body), encoding="utf-8")
+    config = {"target_system_prompt": said} if where == "job_prompt" else {}
+    job = SimpleNamespace(agent=SimpleNamespace(config=config))
+
+    text = he._agent_instructions(job, tmp_path)
+
+    assert "Post to https://hooks.example/v1 after." in text
+    assert "hunter2" not in text and "sk-1" not in text
+
+
+def test_activity_events_in_the_job_response_lose_url_credentials(tmp_path, monkeypatch):
+    """B16 (plan v5.1 §W8a): harness.activity events, which /v1/jobs/{id} returns."""
+    from fi.alk.harness import cli
+    from fi.alk.harness.session import Event
+
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+
+    async def reading(_args):
+        cli._render_observable(
+            Event(
+                kind="tool",
+                text=f"grep found: hook = '{_TH9491_URL}'",
+                tool="grep",
+                detail={"stage": "understand", "target": _TH9491_URL, "path": "agent.py"},
+            )
+        )
+        return 78
+
+    monkeypatch.setattr(cli, "_understand", reading)
+    monkeypatch.setattr("fi.alk.harness.provision.stop", lambda _: None)
+    monkeypatch.setattr(cli, "_AUTO_EVENT_SINK", None)
+    args = SimpleNamespace(
+        path=str(source),
+        out=str(output),
+        name="fixture",
+        kind="repo",
+        count=2,
+        model=None,
+        authoring_only=True,
+        job=HarnessJob(
+            job_id="events",
+            run_id="events",
+            execution="local",
+            source={"kind": "local_repository", "local_path": str(source)},
+            agent={"connector": "auto"},
+            scenario_count=2,
+            metadata={"generic_harness_v1": True},
+        ),
+        runtime_readiness=None,
+    )
+
+    assert asyncio.run(cli._auto(args)) == 78
+
+    events = (output / "harness-events.jsonl").read_text(encoding="utf-8")
+    [activity] = [
+        json.loads(line)
+        for line in events.splitlines()
+        if json.loads(line).get("type") == "harness.activity"
+    ]
+    payload = activity["payload"]
+    assert payload["text"] == "grep found: hook = 'https://hooks.example/v1"
+    assert payload["detail"] == {"target": "https://hooks.example/v1", "path": "agent.py"}
+    assert "hunter2" not in events and "sk-1" not in events
+
+
+def test_the_activity_printed_to_stdout_loses_url_credentials(capsys, monkeypatch):
+    """Change review r1, A-H1: the platform keeps the tail of the guest's stdout."""
+    from fi.alk.harness import cli
+    from fi.alk.harness.session import Event
+
+    monkeypatch.setattr(cli, "_AUTO_EVENT_SINK", None)
+    cli._render_observable(
+        Event(kind="tool", tool="grep", detail={"stage": "understand", "target": _TH9491_URL})
+    )
+    cli._render_observable(
+        Event(kind="result", text=f"agent.py:3: hook = {_TH9491_URL}\nagent.py:4: ok")
+    )
+    cli._render_observable(Event(kind="text", text=f"The agent posts to {_TH9491_URL} after."))
+
+    printed = capsys.readouterr().out
+    assert "hunter2" not in printed and "bot:" not in printed
+    assert "sk-1" not in printed and "key=" not in printed and "frag" not in printed
+    assert "  [grep https://hooks.example/v1" in printed
+    assert "  > agent.py:3: hook = https://hooks.example/v1\n  > agent.py:4: ok" in printed
+    assert "The agent posts to https://hooks.example/v1 after." in printed
+
+
+def test_the_job_masks_every_value_in_spans_but_the_platform_settings(
+    monkeypatch,
+) -> None:
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from fi.alk.harness import observability
+
+    harness = _build_harness(
+        scenarios=[
+            FakeScenario("passing", "platform-passing", [FakeSubGoal("holds", True)])
+        ]
+    )
+    harness.deps.secrets_path.write_text(
+        json.dumps(
+            {
+                "CUSTOMER_DSN": "customer-dsn-value-1234567890",
+                "OPENAI_API_KEY": "sk-customer-FAKE-AAAA2222",
+                "GOOGLE_CLOUD_PROJECT": "cust-gcp-proj-fake-778899",
+            }
+        ),
+        encoding="utf-8",
+    )
+    harness.deps.simulator_secrets_path = harness.tmp / "simulator-secrets.json"
+    # The gateway's values: credentials among models and the Observe project, one name the customer
+    # also declared, and a value under a name not on the settings list.
+    harness.deps.simulator_secrets_path.write_text(
+        json.dumps(
+            {
+                "AGENTCC_API_KEY": "agentcc-key-1234567890",
+                "OPENAI_API_KEY": "sk-platform-FAKE-BBBB2222",
+                "SIP_OUTBOUND_FROM_NUMBER": "+15550109988",
+                "ALK_HARNESS_MODEL": "vertex_ai/claude-sonnet-4-5",
+                "SIMULATOR_LLM_MODEL": "gemini-2.5-flash-lite",
+                "FI_HARNESS_PROJECT": "hosted-harness-prod",
+                "GOOGLE_CLOUD_PROJECT": "platform-project-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    handed: list[tuple[str, ...]] = []
+
+    def begin(job_id, run_id, context=None, secret_values=()):
+        handed.append(tuple(secret_values))
+
+    monkeypatch.setattr(observability, "begin", begin)
+
+    with mock.patch.dict(os.environ):
+        assert _run(harness) == he.EXIT_OK
+
+    assert len(handed) == 1
+    memory = InMemorySpanExporter()
+    provider = TracerProvider(
+        resource=Resource({"project_name": "hosted-harness-prod"})
+    )
+    provider.add_span_processor(SimpleSpanProcessor(memory))
+    with provider.get_tracer("test").start_as_current_span(
+        "llm",
+        attributes={
+            "gen_ai.request.model": "vertex_ai/claude-sonnet-4-5",
+            "llm.model_name": "gemini-2.5-flash-lite",
+            "input.value": "a agentcc-key-1234567890 b customer-dsn-value-1234567890 "
+            "c sk-customer-FAKE-AAAA2222 d cust-gcp-proj-fake-778899 "
+            "e sk-platform-FAKE-BBBB2222 f +15550109988",
+        },
+    ):
+        pass
+    sink = InMemorySpanExporter()
+    observability._CleaningExporter(sink, handed[0]).export(memory.get_finished_spans())
+
+    (copy,) = sink.get_finished_spans()
+    assert copy.attributes["gen_ai.request.model"] == "vertex_ai/claude-sonnet-4-5"
+    assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
+    assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
+    assert copy.attributes["input.value"] == "a *** b *** c *** d *** e *** f ***"

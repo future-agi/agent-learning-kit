@@ -219,6 +219,7 @@ def _hosted(tmp_path: Path, monkeypatch, argv: list[str]) -> int:
     monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", tmp_path / "none.json")
     monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
     monkeypatch.setattr(entrypoint, "_TARGET_SECRETS_PATH", tmp_path / "target.json")
+    monkeypatch.setattr(entrypoint, "_FAILURE_CAUSE_PATH", tmp_path / "cause.json")
     return entrypoint.main(argv)
 
 
@@ -1033,6 +1034,53 @@ def test_certify_only_runs_the_real_runtime_gate_without_a_model(
     assert json.loads((authoring / ARTIFACT).read_text())["status"] == "not_applicable"
 
 
+@pytest.mark.parametrize(
+    "failure,cause",
+    [("agent_crashed", "agent_exited_before_ready"), ("chat_timed_out", "chat_target_timeout")],
+)
+def test_certify_only_rejection_records_the_closed_cause_and_no_guest_text(
+    tmp_path, monkeypatch, failure, cause
+) -> None:
+    """Through the real runtime gate and repair loop: the cause survives, the text stays out."""
+    from fi.alk.harness import chat_readiness, process_runtime
+    from fi.alk.harness.job import FailureCause, FailureDomain
+
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    _forbid_models(monkeypatch)
+    _real_runtime(tmp_path, monkeypatch, state={}, authoring=authoring)
+    guest_text = "RuntimeError: HELD-BACK CASE"
+    if failure == "agent_crashed":
+
+        async def provision(self, *args, **kwargs):
+            raise process_runtime.ProcessRuntimeError(
+                "depends_on",
+                "spawn_failed",
+                f"agent: exited before started_check passed\n{guest_text}",
+                process="agent",
+                domain=FailureDomain.AGENT,
+                cause=FailureCause.AGENT_EXITED_BEFORE_READY,
+            )
+
+        monkeypatch.setattr(process_runtime.ProcessRuntimeProvider, "provision", provision)
+    else:
+
+        async def ingress(**_kwargs):
+            raise RuntimeValidationError(
+                "environment", guest_text, cause=FailureCause.CHAT_TARGET_TIMEOUT
+            )
+
+        monkeypatch.setattr(chat_readiness, "probe_chat_ingress", ingress)
+
+    assert (
+        _hosted(tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle"))
+        == 78
+    )
+
+    recorded = (tmp_path / "cause.json").read_text()
+    assert json.loads(recorded) == {"cause": cause}
+    assert "HELD-BACK" not in recorded
+
+
 def test_certify_only_refuses_to_author_invariants_for_a_live_world_with_data(
     tmp_path, monkeypatch, capsys
 ) -> None:
@@ -1606,3 +1654,126 @@ def test_prove_on_sealed_runtime_starts_nothing_without_a_tool_server(tmp_path, 
 
     monkeypatch.setattr(runtime_validation, "_runtime_provider", no_provider)
     assert asyncio.run(runtime_validation.prove_on_sealed_runtime(_job(1), tmp_path, authoring)) == {}
+
+
+def _subfolder_certify(tmp_path: Path, subfolder: str, recorded: str | None):
+    """An assembled environment whose repository holds two agents, saved through the real save."""
+    from fi.alk.harness.job import RepositorySource, SourceKind, SourceVisibility
+    from fi.alk.harness.tools import accept_contract
+
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    for name in ("a", "b"):
+        (source / "agents" / name).mkdir(parents=True)
+        (source / "agents" / name / "agent.py").write_text("print('ok')\n")
+    if recorded is not None:
+        saved = accept_contract(
+            {
+                "agent": "pair",
+                "real_use_cases": ["order"],
+                "tools": [{"name": "add", "args": ["item_id"]}],
+            },
+            authoring,
+            source_root=source,
+            subfolder=recorded,
+        )
+        assert not saved.get("is_error")
+    job = _job(1).model_copy(
+        update={
+            "source": RepositorySource(
+                kind=SourceKind.GITHUB,
+                repository="acme/agents",
+                commit_sha="a" * 40,
+                visibility=SourceVisibility.PUBLIC,
+                subfolder=subfolder,
+            )
+        }
+    )
+    job_path.write_text(job.model_dump_json(indent=2), encoding="utf-8")
+    return source, authoring, job_path
+
+
+def _written_failure(authoring: Path) -> dict:
+    return json.loads((authoring / "failure.json").read_text())
+
+
+def test_bad_subfolder_writes_failure(tmp_path, monkeypatch) -> None:
+    source, authoring, job_path = _subfolder_certify(tmp_path, "agents/missing", None)
+    opened = _forbid_models(monkeypatch)
+    calls: list[str] = []
+    _use_validator(monkeypatch, _certifying_validate(calls))
+
+    code = _hosted(
+        tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle")
+    )
+
+    assert code == 78
+    failure = _written_failure(authoring)
+    assert (failure["domain"], failure["stage"], failure["code"], failure["retryable"]) == (
+        "agent",
+        "acquiring_source",
+        "subfolder_not_found",
+        False,
+    )
+    assert calls == [] and opened == []
+
+
+def test_contract_from_another_folder_writes_failure(tmp_path, monkeypatch) -> None:
+    source, authoring, job_path = _subfolder_certify(tmp_path, "agents/b", "agents/a")
+    calls: list[str] = []
+    _use_validator(monkeypatch, _certifying_validate(calls))
+
+    code = _hosted(
+        tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle")
+    )
+
+    assert code == 78
+    failure = _written_failure(authoring)
+    assert failure["code"] == "subfolder_not_found"
+    assert failure["details"] == {"subfolder": "agents/b", "built_from": "agents/a"}
+    assert calls == []
+
+
+@pytest.mark.parametrize("runtime", ["absent", "null"])
+def test_contract_without_runtime_writes_failure(tmp_path, monkeypatch, runtime) -> None:
+    source, authoring, job_path = _subfolder_certify(tmp_path, "agents/a", None)
+    contract = json.loads((authoring / "contract.json").read_text())
+    contract.pop("runtime", None)
+    if runtime == "null":
+        contract["runtime"] = None
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    calls: list[str] = []
+    _use_validator(monkeypatch, _certifying_validate(calls))
+
+    code = _hosted(
+        tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle")
+    )
+
+    assert code == 78
+    failure = _written_failure(authoring)
+    assert failure["code"] == "subfolder_not_found"
+    assert failure["details"] == {"subfolder": "agents/a", "built_from": ""}
+    assert calls == []
+
+
+def test_matching_folder_passes(tmp_path, monkeypatch) -> None:
+    source, authoring, job_path = _subfolder_certify(tmp_path, "agents/a", "agents/a")
+    reached: list[str] = []
+
+    async def validated(*args, **kwargs):
+        reached.append("validate")
+
+    monkeypatch.setattr(runtime_validation, "validate_and_repair", validated)
+    monkeypatch.setattr(
+        authoring_entrypoint, "_prepare_source_data_invariants", lambda *args: []
+    )
+    monkeypatch.setattr(
+        bundle_author, "_reuse_certified_bundle", lambda **kwargs: object()
+    )
+
+    code = _hosted(
+        tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle")
+    )
+
+    assert code == 0
+    assert reached == ["validate"]
+    assert not (authoring / "failure.json").exists()

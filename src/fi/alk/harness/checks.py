@@ -25,10 +25,13 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
+from .actors import is_pre_run
 from .world.runtime import Call, GeneratedWorld
+from .world_door import AGENT, is_committed, is_read, logged_as, named_alike, row_arguments, same_write
 
 
 @dataclass
@@ -77,6 +80,158 @@ def takes_reference(checker: object) -> bool:
         return False
 
 
+def check_reads(checker: object) -> tuple[str, ...]:
+    """The evidence a check reads, from its own code: `world_state` when it reads the world, `tool_calls` when it
+    reads the agent's calls or the world's action log (`world.events`). A check whose code cannot be read is taken to
+    read both."""
+    both = ("world_state", "tool_calls")
+    source = checker if isinstance(checker, str) else getattr(checker, "_alk_source", None)
+    if not source:
+        return both
+    try:
+        body = ast.parse(source).body
+    except SyntaxError:
+        return both
+    entry = getattr(checker, "_alk_entry", "check")
+    function = next(
+        (node for node in body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == entry),
+        None,
+    )
+    if function is None:
+        return both
+    params = [one.arg for one in function.args.args]
+    world, calls = (params + ["", ""])[:2]
+    names = [node.id for node in ast.walk(function) if isinstance(node, ast.Name)]
+    used = set(names)
+    log_reads = sum(
+        1
+        for node in ast.walk(function)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "events"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == world
+    )
+    reads_log = log_reads > 0
+    receivers = sum(
+        1
+        for node in ast.walk(function)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == world
+    )
+    if world and names.count(world) > receivers:
+        # The world handed to a helper or another name: what that reads is not followed, so it may read either.
+        return both
+    out = []
+    # The world read for anything but its action log is its state.
+    if world and names.count(world) > log_reads:
+        out.append("world_state")
+    if (calls and calls in used) or reads_log:
+        out.append("tool_calls")
+    return tuple(out)
+
+
+_ID_NOISE = re.compile(r"[\s\-_.:/#]")
+
+
+def same_id(first: Any, second: Any) -> bool:
+    """Whether two identifiers name the same record however they were typed or spoken.
+
+    Only separators and case are ignored, so a different number is still different."""
+    if first is None or second is None:
+        return False
+    mine, theirs = _ID_NOISE.sub("", str(first)).casefold(), _ID_NOISE.sub("", str(second)).casefold()
+    # An empty id names no record, so it never matches, not even another empty one.
+    return bool(mine) and mine == theirs
+
+
+# What the action log says of a call the world timed out on: refused before its commit, or committed with the answer
+# lost (`world_door._faulted`).
+TIMED_OUT = ("timeout_before_commit", "response_lost")
+
+
+def _agent_writes(world: Any) -> list[Mapping[str, Any]]:
+    """The agent's attempts to change the world this trial, in the order the world saw them."""
+    return [
+        row
+        for row in world.events(actor_id=AGENT)
+        if not is_read(row) and not is_pre_run(row.get("idempotency_key"))
+    ]
+
+
+def _fixed(reference: Sequence[Mapping[str, Any]], action: str) -> set[str]:
+    """The arguments the reference fixes for this action: a check's reference keeps only those of each step."""
+    return {
+        field
+        for step in reference or ()
+        if named_alike(action, str(step.get("tool") or ""))
+        for field in step.get("arguments") or {}
+    }
+
+
+def _repeats(first: Mapping[str, Any], later: Mapping[str, Any], reference: Sequence[Mapping[str, Any]]) -> bool:
+    """The same write of one record, as duplicate commits read it: rewording free text is still the same write."""
+    action = logged_as(first)
+    return logged_as(later) == action and same_write(first, later, _fixed(reference, action))
+
+
+def _pair(first: Mapping[str, Any], later: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "action": logged_as(first),
+        "arguments": row_arguments(first.get("arguments")),
+        "first_action_id": first.get("action_id"),
+        "later_action_id": later.get("action_id"),
+        "later_outcome": later.get("outcome"),
+    }
+
+
+def retried_timeouts(world: Any, reference: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
+    """Each write of the agent's the world timed out on that the agent then attempted again on the same record."""
+    rows = _agent_writes(world)
+    found = []
+    for index, first in enumerate(rows):
+        if first.get("error") not in TIMED_OUT:
+            continue
+        retry = next((later for later in rows[index + 1 :] if _repeats(first, later, reference)), None)
+        if retry is not None:
+            found.append(_pair(first, retry))
+    return found
+
+
+def repeated_commits(world: Any, reference: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
+    """Each write of the agent's the world committed again on the same record: one entry per extra commit."""
+    committed = [row for row in _agent_writes(world) if is_committed(row)]
+    found = []
+    for index, later in enumerate(committed):
+        first = next((row for row in committed[:index] if _repeats(row, later, reference)), None)
+        if first is not None:
+            found.append(_pair(first, later))
+    return found
+
+
+def committed_writes(world: Any) -> list[dict[str, Any]]:
+    """The agent's writes the world committed. None means any change the reply reports never happened."""
+    return [
+        {"action": logged_as(row), "arguments": row_arguments(row.get("arguments")), "action_id": row.get("action_id")}
+        for row in _agent_writes(world)
+        if is_committed(row)
+    ]
+
+
+# Read-only helpers every check is given beside `world` and `calls`.
+CHECK_HELPERS = {
+    "same_id": same_id,
+    "retried_timeouts": retried_timeouts,
+    "repeated_commits": repeated_commits,
+    "committed_writes": committed_writes,
+}
+
+
+def check_namespace() -> dict[str, Any]:
+    """The names every check is given when it runs, wherever it runs (authoring, a hosted trial's phase worker, an
+    injected local world): the helpers authoring tells checks to use, such as ``same_id``. One set, so a check that
+    proves while authoring never fails on a name a trial does not give it."""
+    return dict(CHECK_HELPERS)
+
+
 def run_check(
     source: str,
     world: GeneratedWorld,
@@ -86,7 +241,7 @@ def run_check(
     reference: Sequence[dict[str, Any]] = (),
 ) -> Outcome:
     """Execute one check against what the run left behind, with the reference when it takes one."""
-    namespace: dict[str, Any] = {}
+    namespace = check_namespace()
     try:
         exec(compile(source, f"<check:{name}>", "exec"), namespace)
     except Exception as failed:
@@ -151,7 +306,7 @@ def run_world_check(
     """
     import inspect
 
-    namespace: dict[str, Any] = {}
+    namespace = check_namespace()
     try:
         exec(compile(source, f"<world-check:{name}>", "exec"), namespace)
     except Exception as failed:

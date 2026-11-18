@@ -1,0 +1,4 @@
+pydantic-ai-slim[openai,anthropic]==1.0.10
+# pydantic-ai 1.0 imports opentelemetry._events, which OpenTelemetry 1.39 removed, and Anthropic SDK names that 0.70 removed.
+opentelemetry-api==1.38.0
+anthropic==0.69.0
