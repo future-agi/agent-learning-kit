@@ -760,7 +760,7 @@ def _install_declared_python_tools() -> None:
         import weakref
 
         tool = None
-        for candidate in (5, 4):  # never the debugger, coverage or profiler ids
+        for candidate in (4, 3):  # unassigned by PEP 669; 0-2 and 5 are reserved
             try:
                 if monitoring.get_tool(candidate) is not None:
                     continue

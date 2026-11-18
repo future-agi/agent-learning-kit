@@ -1516,14 +1516,14 @@ def test_a_taken_tool_id_falls_back_to_the_profile_path(
     trace, env = _trace_environment(
         tmp_path, [{"name": "t", "module": "agent", "callable": "t"}]
     )
-    # The tracer under another module name, behind a sitecustomize that takes ids 5 and 4 first.
+    # The tracer under another module name, behind a sitecustomize that takes ids 4 and 3 first.
     (tmp_path / "tracer_under_test.py").write_text(
         (tmp_path / "sitecustomize.py").read_text()
     )
     (tmp_path / "sitecustomize.py").write_text(
         "import sys\n"
-        "sys.monitoring.use_tool_id(5, 'other-a')\n"
-        "sys.monitoring.use_tool_id(4, 'other-b')\n"
+        "sys.monitoring.use_tool_id(4, 'other-a')\n"
+        "sys.monitoring.use_tool_id(3, 'other-b')\n"
         "import tracer_under_test\n"
     )
     result = subprocess.run(
@@ -1539,6 +1539,29 @@ def test_a_taken_tool_id_falls_back_to_the_profile_path(
     assert [(r["name"], r["arguments"], r["output"]) for r in _records(trace)] == [
         ("t", {"x": "A"}, "A")
     ]
+
+
+def test_the_tracer_never_takes_the_reserved_optimizer_id(
+    tmp_path: Path, mechanism: str
+) -> None:
+    if mechanism != "monitoring":
+        pytest.skip("the id is only claimed on the monitoring path")
+    (tmp_path / "agent.py").write_text("def t(x):\n    return x\n")
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "t", "module": "agent", "callable": "t"}]
+    )
+    result = subprocess.run(
+        [
+            _TRACED_PYTHON,
+            "-c",
+            "import sys, agent\n"
+            "agent.t('A')\n"
+            "print(sys.monitoring.get_tool(5), sys.monitoring.OPTIMIZER_ID)\n"
+            "print([i for i in range(6) if sys.monitoring.get_tool(i) == 'alk-tool-trace'])\n",
+        ],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert result.stdout.splitlines() == ["None 5", "[4]"]
 
 
 def test_a_tool_called_on_a_thread_is_recorded(tmp_path: Path) -> None:
