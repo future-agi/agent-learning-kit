@@ -218,7 +218,7 @@ def test_compiler_rejects_secret_binding_without_target_reference(tmp_path, purp
     (source / "compose.yaml").write_text("services:\n  app:\n    image: example/app\n")
     refs = {"ADC": SimpleNamespace(purpose=purpose)} if purpose else {}
     job = SimpleNamespace(
-        agent=SimpleNamespace(secret_refs=refs),
+        agent=SimpleNamespace(secret_refs=refs, config={}),
         public_material_admissions=[], public_test_fixture_admissions=[],
     )
     contract = {
