@@ -1384,11 +1384,27 @@ def _is_single_reply(value: Any) -> bool:
     return kind in _REPLY_ITEM_KINDS
 
 
+def _undump_message(value: Any) -> Any:
+    """A LangChain ``message_to_dict`` item as the flat message it dumps, else the value itself.
+
+    ``{"type": "ai", "data": {"content": [...]}}`` becomes ``{"type": "ai", "content": [...]}``;
+    a list is unwrapped item by item, so a ``messages_to_dict`` history reads as a history.
+    """
+    if isinstance(value, (list, tuple)):
+        return [_undump_message(item) for item in value]
+    kind = _field_of(value, "type")
+    data = _field_of(value, "data")
+    if kind in _HISTORY_KINDS and isinstance(data, Mapping) and "content" in data:
+        return {**data, "type": kind}
+    return value
+
+
 def _reply_text(value: Any) -> str:
     """Answer text for a message, a block, or a list of them, else the stringified value."""
     parts = _field_of(value, "parts")
     if isinstance(parts, (list, tuple)) and _looks_like_parts(value, parts):
         return text_of(parts)
+    value = _undump_message(value)
     message = _field_of(value, "message")
     if message is not None and _is_block_or_message(message):
         return _message_content(message)

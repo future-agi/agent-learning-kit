@@ -260,3 +260,31 @@ def test_a_real_gemini_content_returned_as_the_whole_reply_keeps_only_its_answer
         ],
     )
     _check(content, ANSWER)
+
+
+def _dumped(kind, content):
+    return {"type": kind, "data": {"content": content}}
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"output": _dumped("ai", _blocks())}, ANSWER),
+        ({"output": _dumped("AIMessageChunk", _blocks())}, ANSWER),
+        ({"output": _dumped("assistant", _blocks())}, ANSWER),
+        (
+            {
+                "output": [
+                    _dumped("human", "q"),
+                    _dumped("ai", _blocks()),
+                ]
+            },
+            ANSWER,
+        ),
+    ],
+    ids=["ai", "ai-message-chunk", "assistant", "messages-to-dict-history"],
+)
+def test_a_langchain_message_to_dict_under_a_reply_key_keeps_only_its_answer(
+    reply, expected
+):
+    _check(reply, expected)
