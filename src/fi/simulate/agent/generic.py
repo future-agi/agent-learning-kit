@@ -8547,11 +8547,44 @@ def _stringify(value: Any) -> str:
     return _plain_json(plain) or _found_text(plain)
 
 
+_REASONING_KEYS = frozenset(
+    {"thought_signature", "signature", "encrypted_content", "reasoning_content", "reasoningContent"}
+)
+_REASONING_ITEM_KINDS = frozenset({"thinking", "redacted_thinking", "reasoning", "reasoning_content"})
+
+
+def _scrubbed(node: Any) -> Any:
+    """Plain data without reasoning items or the keys that carry reasoning or its signature.
+
+    A second line only: a value that looks like a message never reaches the dump, and a list of
+    keys cannot name every provider's next field.
+    """
+    if isinstance(node, Mapping):
+        return {
+            key: _scrubbed(item)
+            for key, item in node.items()
+            if key not in _REASONING_KEYS
+        }
+    if isinstance(node, (list, tuple)):
+        return [
+            _scrubbed(item)
+            for item in node
+            if not (
+                isinstance(item, Mapping)
+                and (
+                    (isinstance(item.get("type"), str) and item["type"] in _REASONING_ITEM_KINDS)
+                    or item.get("thought") is True
+                )
+            )
+        ]
+    return node
+
+
 def _plain_json(value: Any) -> str:
     """JSON for plain data in which no part looks like a message, else nothing."""
     plain = _plain_value(value)
     if isinstance(plain, (dict, list, tuple)) and _is_plain_data(plain):
-        return json.dumps(plain)
+        return json.dumps(_scrubbed(plain))
     return ""
 
 

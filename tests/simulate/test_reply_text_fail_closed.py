@@ -126,3 +126,33 @@ def test_output_key_goes_through_the_same_rule():
     assert _text({"out": {"type": "thinking", "thinking": MARK}}, **options) == ""
     assert _text({"out": NS(extra=MARK)}, **options) == ""
     assert _text({"out": {"type": "text", "text": "Hi"}}, **options) == "Hi"
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ({"order": "A1", "signature": "sig-1"}, '{"order": "A1"}'),
+        ({"order": "A1", "thought_signature": "sig-1"}, '{"order": "A1"}'),
+        ({"order": "A1", "encrypted_content": "enc"}, '{"order": "A1"}'),
+        ({"order": "A1", "reasoning_content": "why"}, '{"order": "A1"}'),
+        ({"order": "A1", "reasoningContent": {"text": "why"}}, '{"order": "A1"}'),
+        (
+            {"order": "A1", "lines": [{"sku": "x", "signature": "sig-1"}]},
+            '{"order": "A1", "lines": [{"sku": "x"}]}',
+        ),
+    ],
+    ids=[
+        "signature",
+        "thought-signature",
+        "encrypted-content",
+        "reasoning-content",
+        "reasoning-content-camel",
+        "nested-signature",
+    ],
+)
+def test_the_plain_data_dump_drops_the_known_reasoning_keys(reply, expected):
+    assert _text(reply) == expected
+
+
+def test_output_key_value_is_scrubbed_too():
+    assert _text({"out": {"order": "A1", "signature": "s"}}, output_key="out") == '{"order": "A1"}'
