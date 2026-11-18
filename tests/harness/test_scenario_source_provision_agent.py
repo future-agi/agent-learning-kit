@@ -265,9 +265,10 @@ def test_no_subfolder_setup_hash_is_pinned(tmp_path: Path) -> None:
     # The value dev's build gives this contract (with `workers`, since #226, and each tool's
     # empty `arg_units`, `returns`, `tables_read` and `tables_changed` since 01d752bc, 0f11648c and
     # e1287f3c): a build without a folder sends the same document as dev's, with no `source` in it.
+    # It also carries `runtime.tool_service` (null): without that field the value is dev's, sh1:bcdc593f335d... .
     assert (
         payload["agent"]["agent"]["setup_hash"]
-        == "sh1:bcdc593f335df95cc744c79a7225dc336263aabddd1a3a11c672be456333dad4"
+        == "sh1:9628ccbae5fd719268694b622b35c798f91b9e1a003dffdc6fc2f8f9272237c7"
     )
 
 
