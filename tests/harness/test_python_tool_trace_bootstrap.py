@@ -694,6 +694,71 @@ def test_a_closed_generator_that_is_still_held_never_lands_on_the_next_call(
             assert after_close in ([], [closed])
 
 
+STREAM_TOOL = "def stream_rows(n):\n    for i in range(n):\n        yield i\n    return 'done'\n"
+
+
+def test_a_generator_tool_call_scans_for_its_owner_only_where_a_bare_close_fires_nothing(
+    tmp_path: Path, mechanism: str
+) -> None:
+    """`gc.get_referrers` walks every tracked object, so it is the cost of a generator tool call
+    that grows with the agent's heap. The tracer probes its own tool id once, when it is
+    installed, for whether closing a generator paused at a bare `yield` fires an event, and looks
+    for the owner only where it does not and the frame cannot name its generator."""
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path looks for a generator's owner")
+    (tmp_path / "agent.py").write_text(STREAM_TOOL)
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "stream_rows", "module": "agent", "callable": "stream_rows"}]
+    )
+    result = subprocess.run(
+        [
+            _TRACED_PYTHON,
+            "-c",
+            "import gc, sys, sitecustomize, agent\n"
+            "scans = []\n"
+            "real = gc.get_referrers\n"
+            "gc.get_referrers = lambda *a: scans.append(1) or real(*a)\n"
+            "assert list(agent.stream_rows(3)) == [0, 1, 2]\n"
+            "g = agent.stream_rows(3); next(g); g.close()\n"
+            "print(getattr(sitecustomize, '_TOOL_TRACE_NEEDS_OWNER', 'unset'), len(scans), *sys.version_info[:3])\n",
+        ],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    needs, scans, *version = result.stdout.split()
+    version = tuple(map(int, version))
+    if version == (3, 12, 3):
+        # This release fires nothing for a close at a bare `yield`, and its frames name no generator.
+        assert (needs, int(scans) > 0) == ("True", True)
+    elif version >= (3, 14):
+        assert (needs, scans) == ("False", "0")
+    elif needs == "False":
+        assert scans == "0"
+    else:
+        assert int(scans) > 0
+    # The close is recorded either way: by the event, or by the owner when it is let go.
+    assert [r["output"] for r in _records(trace)][0] == "done"
+
+
+def test_a_failed_probe_means_the_owner_is_needed(tmp_path: Path, mechanism: str) -> None:
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path looks for a generator's owner")
+    (tmp_path / "agent.py").write_text(STREAM_TOOL)
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "stream_rows", "module": "agent", "callable": "stream_rows"}]
+    )
+    # A hook that raises for the probe's own events must not stop the tracer from installing.
+    source = (tmp_path / "sitecustomize.py").read_text().replace(
+        "g = probe(); next(g); g.close()", "raise RuntimeError('probe failed')"
+    )
+    assert "probe failed" in source
+    (tmp_path / "sitecustomize.py").write_text(source)
+    result = subprocess.run(
+        [_TRACED_PYTHON, "-c", "import sitecustomize\nprint(sitecustomize._TOOL_TRACE_NEEDS_OWNER)\n"],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert result.stdout.strip() == "True"
+
+
 ASYNC_TOOLS = (
     "import asyncio\n"
     "async def inner():\n    await asyncio.sleep(10)\n"

@@ -53,6 +53,9 @@ from typing import Any
 # Which mechanism observes the tools in this process: "monitoring" (sys.monitoring, Python 3.12+)
 # or "profile" (the profile function, the fallback). Set once the install has chosen.
 _TOOL_TRACE_MECHANISM: str | None = None
+# Whether the monitoring tracer needs a generator's owner to see it closed at a bare `yield`:
+# True where closing one fires no event on this interpreter (or the probe could not tell).
+_TOOL_TRACE_NEEDS_OWNER: bool | None = None
 
 # A declared tool's trace line is kept under this size by cutting its values, never the line.
 _MAX_RECORD_CHARS = 10000
@@ -752,6 +755,7 @@ def _install_declared_python_tools() -> None:
         is switched off at its first start, so the agent's own code runs at full speed. No
         audit-hook re-arm is needed here: a monitoring tool is not a per-thread hook that
         CPython drops when a call under it raises."""
+        global _TOOL_TRACE_NEEDS_OWNER
         monitoring = getattr(sys, "monitoring", None)
         if monitoring is None:
             return False
@@ -869,11 +873,19 @@ def _install_declared_python_tools() -> None:
                 except Exception:  # noqa: BLE001
                     arguments = None
                 owner = None
-                if code.co_flags & generator_flag:
-                    generator = next(
-                        (o for o in gc.get_referrers(frame) if isinstance(o, types.GeneratorType)),
-                        None,
-                    )
+                if needs_owner and code.co_flags & generator_flag:
+                    # The frame names its generator on 3.14; elsewhere `gc.get_referrers` walks
+                    # every tracked object, which is why it runs only where a close is not seen.
+                    generator = getattr(frame, "f_generator", None)
+                    if generator is None:
+                        generator = next(
+                            (
+                                o
+                                for o in gc.get_referrers(frame)
+                                if isinstance(o, types.GeneratorType)
+                            ),
+                            None,
+                        )
                     if generator is not None:
                         owner = weakref.ref(
                             generator, lambda _ref, frame_id=id(frame): dropped(frame_id)
@@ -939,6 +951,35 @@ def _install_declared_python_tools() -> None:
                     finish(frame, "the tool raised an exception", True)
             except Exception:  # noqa: BLE001 - observation must never reach the agent's call
                 pass
+
+        # Whether a generator paused at a bare `yield` that is closed fires PY_UNWIND or PY_THROW
+        # depends on the release (3.12.3 and 3.13.3 fire nothing), so ask this interpreter once,
+        # on this tool id before it is armed. Where it fires nothing the owner is needed; any
+        # doubt, a failed probe included, means the same.
+        needs_owner = True
+        try:
+            probe_fired: list[bool] = []
+
+            def probe() -> Any:
+                yield
+
+            probe_code = probe.__code__
+
+            def probe_event(code: Any, offset: int, exception: BaseException) -> None:
+                if code is probe_code:
+                    probe_fired.append(True)
+
+            monitoring.register_callback(tool, events.PY_UNWIND, probe_event)
+            monitoring.register_callback(tool, events.PY_THROW, probe_event)
+            monitoring.set_events(tool, events.PY_UNWIND | events.PY_THROW)
+            try:
+                g = probe(); next(g); g.close()
+            finally:
+                monitoring.set_events(tool, 0)
+            needs_owner = not probe_fired
+        except Exception:  # noqa: BLE001 - a failed probe means the owner is needed
+            needs_owner = True
+        _TOOL_TRACE_NEEDS_OWNER = needs_owner
 
         try:
             monitoring.register_callback(tool, events.PY_START, on_start)
