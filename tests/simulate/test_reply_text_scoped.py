@@ -130,25 +130,13 @@ def test_a_langchain_message_chunk_keeps_only_its_answer(reply, expected):
 @pytest.mark.parametrize(
     "reply, expected",
     [
-        ({"data": {"type": "user", "id": 42}}, '{"type": "user", "id": 42}'),
-        (
-            {"result": {"type": "message", "text": "Your order shipped"}},
-            '{"type": "message", "text": "Your order shipped"}',
-        ),
-        ({"result": {"type": "tool"}}, '{"type": "tool"}'),
-        ({"result": {"type": "system"}}, '{"type": "system"}'),
-        (
-            {"output": {"type": "text", "value": "v"}},
-            '{"type": "text", "value": "v"}',
-        ),
-        (
-            {"data": {"role": "user", "name": "n"}},
-            '{"role": "user", "name": "n"}',
-        ),
-        (
-            {"response": {"role": "assistant", "text": "Hi there"}},
-            '{"role": "assistant", "text": "Hi there"}',
-        ),
+        ({"data": {"type": "user", "id": 42}}, ""),
+        ({"result": {"type": "message", "text": "Your order shipped"}}, ""),
+        ({"result": {"type": "tool"}}, ""),
+        ({"result": {"type": "system"}}, ""),
+        ({"output": {"type": "text", "value": "v"}}, ""),
+        ({"data": {"role": "user", "name": "n"}}, ""),
+        ({"response": {"role": "assistant", "text": "Hi there"}}, "Hi there"),
         ({"output": {"type": "text", "text": ANSWER}}, ANSWER),
         ({"output": {"type": "thinking", "thinking": PLAN}}, ""),
     ],
@@ -164,7 +152,7 @@ def test_a_langchain_message_chunk_keeps_only_its_answer(reply, expected):
         "typed-thinking-block-gives-nothing",
     ],
 )
-def test_a_record_under_a_reply_key_stays_json(reply, expected):
+def test_a_message_like_record_under_a_reply_key_gives_only_its_text(reply, expected):
     _check(reply, expected)
 
 
@@ -305,10 +293,10 @@ def test_a_langchain_message_to_dict_under_a_reply_key_keeps_only_its_answer(
                     "message": {"type": "text", "text": "Rate limited"},
                 }
             },
-            '{"status": "error", "code": 429, "message": {"type": "text", "text": "Rate limited"}}',
+            "Rate limited",
         ),
     ],
-    ids=["record-with-bare-string-parts", "error-record-with-a-text-block-message"],
+    ids=["record-with-bare-string-parts", "error-record-gives-its-text-block"],
 )
-def test_a_record_that_only_resembles_a_reply_stays_json(reply, expected):
+def test_a_record_with_bare_string_parts_stays_json_and_an_error_record_gives_its_text(reply, expected):
     _check(reply, expected)

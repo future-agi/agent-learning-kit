@@ -449,12 +449,12 @@ class GenericAgentWrapper(AgentWrapper):
             return _last_message_content(getattr(raw, "messages"))
         if isinstance(raw, (list, tuple)):
             text = _list_text(raw)
-            return _last_message_content(raw) if text is None else text
+            return _stringify(raw) if text is None else text
         realtime_text = _realtime_last_text(raw)
         if realtime_text:
             return realtime_text
 
-        return str(raw)
+        return _stringify(raw)
 
     def _extract_tool_calls(self, raw: Any) -> Optional[List[Dict[str, Any]]]:
         tool_calls = _extract_list_field(
@@ -8466,9 +8466,12 @@ def _choices_content(choices: Any) -> str:
     if not choices:
         return ""
     first = choices[0]
-    if isinstance(first, dict):
-        return _message_content(first.get("message") or first.get("delta") or first)
-    return _message_content(getattr(first, "message", None) or getattr(first, "delta", None) or first)
+    get = first.get if isinstance(first, dict) else lambda name: getattr(first, name, None)
+    message = get("message") or get("delta")
+    if message:
+        return _message_content(message)
+    text = get("text")
+    return text if isinstance(text, str) else ""
 
 
 def _last_message_content(messages: Any) -> str:
@@ -8508,7 +8511,7 @@ def _message_content(message: Any) -> str:
         parts = getattr(message, "parts", None)
         if isinstance(parts, (list, tuple)):
             return _answer_text(parts)
-    return _stringify(message)
+    return _plain_json(message)
 
 
 def _content_text(content: Any) -> str:
@@ -8525,14 +8528,104 @@ def _content_text(content: Any) -> str:
 
 
 def _stringify(value: Any) -> str:
+    """Text for a value no reader recognised: the one last resort.
+
+    A string, a number or a boolean as it is. Plain data (mappings, lists, strings, numbers,
+    booleans, null) in which no part looks like a message goes out as JSON. A value in which
+    some part does is walked and only the answer text it holds goes out. Anything else, an
+    object of any other kind, gives nothing: an object's printed form is never a reply.
+    """
+    if value is None:
+        return ""
     if isinstance(value, str):
         return value
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
+    if isinstance(value, (bool, int, float)):
+        return str(value)
     plain = _plain_value(value)
-    if isinstance(plain, (dict, list, tuple)):
-        return json.dumps(plain, default=str)
-    return str(value)
+    return _plain_json(plain) or _found_text(plain)
+
+
+def _plain_json(value: Any) -> str:
+    """JSON for plain data in which no part looks like a message, else nothing."""
+    plain = _plain_value(value)
+    if isinstance(plain, (dict, list, tuple)) and _is_plain_data(plain):
+        return json.dumps(plain)
+    return ""
+
+
+def _message_like(node: Any) -> bool:
+    """True when a part looks like a message or a content block (or cannot be told)."""
+    if not isinstance(node, Mapping):
+        return True
+    role, kind = node.get("role"), node.get("type")
+    if isinstance(role, str) and role in _CHAT_ROLES:
+        return True
+    if isinstance(kind, str) and kind in _REPLY_ITEM_KINDS:
+        return True
+    if node.get("thought") is True:
+        return True
+    if any(key in node for key in ("content", "candidates", "choices", "messages")):
+        return True
+    if "parts" in node:
+        parts = node["parts"]
+        # A list of bare strings or of records with no text is a record's own field.
+        if not isinstance(parts, (list, tuple)) or _looks_like_parts(node, parts):
+            return True
+    data = node.get("data")
+    return isinstance(data, Mapping) and "content" in data
+
+
+def _is_plain_data(node: Any, depth: int = 0) -> bool:
+    """Mappings, lists, strings, numbers, booleans and null with no part that looks like a message."""
+    if node is None or isinstance(node, (str, bool, int, float)):
+        return True
+    if depth > _MOST_DEPTH:
+        return False
+    if isinstance(node, Mapping):
+        return not _message_like(node) and all(
+            _is_plain_data(item, depth + 1) for item in node.values()
+        )
+    if isinstance(node, (list, tuple)):
+        return all(_is_plain_data(item, depth + 1) for item in node)
+    return False
+
+
+def _found_text(node: Any, depth: int = 0) -> str:
+    """Only the answer text a walk of ``node`` finds; a part is never printed whole."""
+    if depth > _MOST_DEPTH or node is None or isinstance(node, (str, bytes, bool, int, float)):
+        return ""
+    text = _read_reply(node)
+    if text is not None:
+        return text
+    if isinstance(node, (list, tuple)):
+        children = list(node)
+    else:
+        kind = _field_of(node, "type")
+        if isinstance(kind, str):
+            return _answer_text(node)
+        if _field_of(node, "thought") is True:
+            return ""
+        if _field_of(node, "choices"):
+            return _choices_content(_field_of(node, "choices"))
+        candidates = _field_of(node, "candidates")
+        if isinstance(candidates, (list, tuple)) and candidates:
+            return _reply_content(_field_of(candidates[0], "content"))
+        role = _field_of(node, "role")
+        if (isinstance(role, str) and role in _CHAT_ROLES) or _has_field(node, "content") or _has_field(node, "messages"):
+            return _message_content(node)
+        if isinstance(node, Mapping):
+            children = list(node.values())
+        else:
+            children = list(getattr(node, "__dict__", {}).values())
+    pieces = (_found_text(child, depth + 1) for child in children)
+    return " ".join(piece for piece in pieces if piece)
+
+
+def _reply_content(content: Any) -> str:
+    text = _read_reply(content)
+    return "" if text is None else text
 
 
 def _model_to_dict(value: Any) -> Dict[str, Any]:
