@@ -222,3 +222,86 @@ def test_an_error_fault_keeps_its_status_and_message_and_refuses_a_status_that_i
         Fault(action="orders.refund", mode="error", status=200)
     with pytest.raises(ValidationError):
         Fault(action="orders.refund", mode="explode")
+
+
+# --- attached files' roles (`knowledge/roles.json`, TH-8919) ------------------------------------------------------
+
+
+def _attach(root, roles, **files):
+    from fi.alk.harness.actors import KNOWLEDGE_ROLES
+
+    (root / "knowledge").mkdir(exist_ok=True)
+    for name, text in files.items():
+        (root / "knowledge" / name).write_text(text, encoding="utf-8")
+    (root / KNOWLEDGE_ROLES).write_text(roles if isinstance(roles, str) else json.dumps(roles), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "roles",
+    [None, "{not json", json.dumps(["knowledge/answers.md"]), json.dumps({"knowledge/policy.md": "policy"})],
+    ids=["no-roles-file", "invalid-json", "not-an-object", "no-evaluator-only-file"],
+)
+def test_without_evaluator_only_files_the_rules_seal_exactly_as_before(tmp_path, roles):
+    from fi.alk.harness.actors import EVALUATOR_ONLY
+
+    if roles is not None:
+        _attach(tmp_path, roles, **{"policy.md": "Refunds within 14 days."})
+    write_actor_rules(tmp_path)
+
+    assert json.loads((tmp_path / ACTOR_RULES_FILE).read_text())["evaluator_only"] == EVALUATOR_ONLY
+
+
+def test_an_evaluator_only_attached_file_is_sealed_among_what_only_the_grader_reads(tmp_path):
+    from fi.alk.harness.actors import EVALUATOR_ONLY
+
+    _attach(
+        tmp_path,
+        {
+            "knowledge/answers.md": "evaluator_only",
+            "knowledge/policy.md": "policy",
+            "knowledge/orders.csv": "seed_records",
+        },
+        **{"answers.md": "Refund 18.00", "policy.md": "Refunds within 14 days.", "orders.csv": "id\nO-1\n"},
+    )
+    write_actor_rules(tmp_path)
+
+    files = json.loads((tmp_path / ACTOR_RULES_FILE).read_text())["evaluator_only"]["files"]
+    assert files == [*EVALUATOR_ONLY["files"], "answers.md"]
+
+
+def test_an_unknown_role_is_refused_naming_the_file_and_the_role(tmp_path):
+    from fi.alk.harness.actors import ActorList, KnowledgeRolesError, save_actors
+
+    _attach(tmp_path, {"knowledge/answers.md": "secret"}, **{"answers.md": "Refund 18.00"})
+
+    with pytest.raises(KnowledgeRolesError, match="knowledge/answers.md has role 'secret'"):
+        write_actor_rules(tmp_path)
+    with pytest.raises(KnowledgeRolesError):
+        save_actors(tmp_path, ActorList())
+
+
+def test_a_role_for_a_path_outside_knowledge_is_left_out_with_a_warning(tmp_path, caplog):
+    from fi.alk.harness.actors import EVALUATOR_ONLY
+
+    _attach(tmp_path, {"answers.md": "evaluator_only", "knowledge/../answers.md": "evaluator_only"})
+    write_actor_rules(tmp_path)
+
+    assert json.loads((tmp_path / ACTOR_RULES_FILE).read_text())["evaluator_only"] == EVALUATOR_ONLY
+    assert sum("not a file under knowledge/" in one.getMessage() for one in caplog.records) == 2
+
+
+def test_an_actor_is_never_given_an_evaluator_only_attached_file(tmp_path):
+    from fi.alk.harness.actors import ActorList, read_knowledge, save_actors
+
+    _attach(
+        tmp_path,
+        {"knowledge/answers.md": "evaluator_only", "knowledge/policy.md": "policy"},
+        **{"answers.md": "Refund 18.00", "policy.md": "Refunds within 14 days."},
+    )
+    asked = [{"kind": "files", "paths": ["knowledge/answers.md", "knowledge/policy.md"]}]
+
+    [read] = read_knowledge(asked, tmp_path)
+    assert [one["path"] for one in read["read"]] == ["knowledge/policy.md"]
+    listing = ActorList.model_validate({"actors": [{**_PARTNER, "knowledge": asked}]})
+    with pytest.raises(ValueError, match="knowledge/answers.md"):
+        save_actors(tmp_path, listing)

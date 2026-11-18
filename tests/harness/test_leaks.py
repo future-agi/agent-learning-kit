@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from fi.alk.harness.catalogue import Catalogue, SubGoal
@@ -154,3 +155,17 @@ def test_solution_amount_written_either_way_or_nested_is_a_leak():
 
     assert [one.excerpt for one in leaks(short, catalogue, None, WORLD)] == ["37.5", "37.5"]
     assert [one.excerpt for one in leaks(nested, catalogue, None, WORLD)] == ["sku 889", "sku 889"]
+
+
+def test_visible_text_repeating_an_evaluator_only_attached_file_leaks(tmp_path):
+    from fi.alk.harness.actors import KNOWLEDGE_ROLES
+
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "knowledge" / "answers.md").write_text("The right refund for this order is eighteen pounds exactly.", encoding="utf-8")
+    case = _case(instruction="I want my refund; the right refund for this order is eighteen pounds exactly.")
+    catalogue = _catalogue(refund_once={"what": "one refund"})
+
+    assert leaks(case, catalogue, world_root=tmp_path) == []
+    (tmp_path / KNOWLEDGE_ROLES).write_text(json.dumps({"knowledge/answers.md": "evaluator_only"}), encoding="utf-8")
+    [leak] = leaks(case, catalogue, world_root=tmp_path)
+    assert leak.grader_field == "evaluator_only:knowledge/answers.md"

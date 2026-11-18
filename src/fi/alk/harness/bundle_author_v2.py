@@ -34,6 +34,7 @@ from .actors import (
     ACTOR_RULES_FILE,
     ACTORS_FILE,
     actors_seed,
+    evaluator_only_paths,
     load_actors,
     write_actor_rules,
 )
@@ -4302,9 +4303,12 @@ def author_bundle_v2(
             adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
             if (authoring_root / ACTORS_FILE).is_file():
                 shutil.copy2(authoring_root / ACTORS_FILE, temporary / ACTORS_FILE)
-                # Only with actors, so a bundle without them seals exactly as before.
-                write_actor_rules(temporary, config=job.agent.config)
-                adopted_catalogue += [ACTORS_FILE, ACTOR_RULES_FILE]
+                adopted_catalogue.append(ACTORS_FILE)
+            # Only with actors or evaluator-only attached files, so a bundle with neither seals exactly as before. The
+            # rules name the evaluator-only files, which the platform keeps from the agent and every actor.
+            if (authoring_root / ACTORS_FILE).is_file() or evaluator_only_paths(authoring_root, strict=True):
+                write_actor_rules(temporary, config=job.agent.config, roles_root=authoring_root)
+                adopted_catalogue.append(ACTOR_RULES_FILE)
         adopted_chat_files = _copy_chat_authoring(
             authoring_root, temporary, include_simulator=include_scenarios
         )

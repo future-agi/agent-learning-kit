@@ -9,7 +9,6 @@ that the world does not hold, or a sub-goal's multi-word name. Whether the agent
 from __future__ import annotations
 
 import ast
-import json
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -178,22 +177,17 @@ def _in_world(literal: str, world_text: list[str]) -> bool:
 
 
 def _evaluator_only_texts(world_root: Path | None) -> list[tuple[str, str]]:
+    """The text of each attached file only the evaluator may read (`knowledge/roles.json`), as grader material."""
     if world_root is None:
         return []
-    try:
-        document = json.loads((Path(world_root) / "actors.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    rules = document.get("rules") if isinstance(document, dict) else None
-    names = ((rules or {}).get("evaluator_only") or {}).get("files") or []
+    from .actors import evaluator_only_paths
+
     texts = []
-    for name in names:
-        for candidate in (Path(world_root) / "knowledge" / str(name), Path(world_root) / str(name)):
-            try:
-                texts.append((f"evaluator_only:{name}", candidate.read_text(encoding="utf-8")))
-                break
-            except (OSError, UnicodeDecodeError):
-                continue
+    for path in evaluator_only_paths(Path(world_root)):
+        try:
+            texts.append((f"evaluator_only:{path}", (Path(world_root) / path).read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
     return texts
 
 
