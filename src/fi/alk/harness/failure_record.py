@@ -99,7 +99,7 @@ def _own_text(exc: BaseException) -> str:
 def _domain(
     phase: str, typed: tuple[str, str, str | None, str] | None, codes: set[str]
 ) -> str:
-    """The same rule the platform applied to the log, from the error itself."""
+    """Whose failure this is, decided here from the error itself: the one rule, which the platform reads as `domain`."""
     if phase != "runtime" or typed is None:
         return "agent"
     _stage, code, process, _detail = typed
