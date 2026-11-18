@@ -1,3 +1,4 @@
+import os
 import re
 import copy
 import time
@@ -16,7 +17,7 @@ from fi.evals.templates import (
 )
 from fi.evals.protect_input_adapter import ProtectInputAdapter
 from fi.utils.routes import Routes
-from fi.utils.utils import get_keys_from_env, get_base_url_from_env
+from fi.utils.utils import get_base_url_from_env
 from fi.utils.errors import InvalidAuthError, SDKException, InvalidValueType, MissingRequiredKey
 from pydantic import ValidationError  
 
@@ -37,10 +38,10 @@ class Protect:
         Args:
             evaluator: Instance of Evaluator to use for evaluations. If None, creates a new one.
         """
-        env_api_key, env_secret_key = get_keys_from_env() 
-        fi_api_key = env_api_key or fi_api_key
-        fi_secret_key = env_secret_key or fi_secret_key
-        fi_base_url = get_base_url_from_env() or fi_base_url
+        # Keys / base URL passed in code win; the environment is only a fallback.
+        fi_api_key = fi_api_key or os.getenv("FI_API_KEY")
+        fi_secret_key = fi_secret_key or os.getenv("FI_SECRET_KEY")
+        fi_base_url = fi_base_url or get_base_url_from_env()
         if not fi_api_key or not fi_secret_key:
             raise InvalidAuthError("API key or secret key is missing for Protect initialization.")
         
