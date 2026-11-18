@@ -15,7 +15,8 @@ from fi.simulate.environment import (
     normalize_orchestration_trace_events,
     normalize_orchestration_trace_export,
 )
-from fi.simulate.agent.content import _is_message, text_of
+from fi.simulate.agent.content import _MOST_DEPTH, _is_message
+from fi.simulate.agent.content import text_of as _walk_text
 from fi.simulate.agent.wrapper import (
     AgentInput,
     AgentResponse,
@@ -399,7 +400,12 @@ class GenericAgentWrapper(AgentWrapper):
             return raw.decode("utf-8", errors="replace")
         parts = _field_of(raw, "parts")
         if isinstance(parts, (list, tuple)) and _looks_like_parts(raw, parts):
-            return text_of(parts)
+            return _answer_text(parts)
+        if not isinstance(raw, (list, tuple)) and _is_reply_item(raw):
+            # The reply is itself a message or a block: only its own text rules apply, never
+            # the reply keys of a record.
+            mapped = _object_mapping(raw)
+            return _message_content(raw if mapped is None else mapped)
 
         raw_mapping = _object_mapping(raw)
         if raw_mapping is not None:
@@ -1249,8 +1255,68 @@ def _content_blocks(value: Any) -> List[Dict[str, Any]]:
     return _list_of_mappings(value)
 
 
+_WALKED_TEXT_FIELDS = ("type", "role", "content", "text", "thought", "refusal", "messages")
+
+
+def _present(node: Any, name: str) -> tuple:
+    if isinstance(node, Mapping):
+        return (name in node, node.get(name))
+    return (hasattr(node, name), getattr(node, name, None))
+
+
+def _readable(value: Any, depth: int = 0, is_node: bool = True) -> Any:
+    """``value`` cut down to what ``text_of`` reads, with nothing it would print whole.
+
+    ``text_of`` ends in ``str(content)`` for a node that has no string ``type`` and no
+    ``content``. That tail is shared with the hosted adapters, so it is closed here: such a node
+    is replaced by None (no text), and fields ``text_of`` never reads are left out.
+    """
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if depth > _MOST_DEPTH:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [_readable(item, depth + 1, False) for item in value]
+    if not isinstance(value, Mapping) and _object_mapping(value) is not None:
+        value = _object_mapping(value)
+    kept: Dict[str, Any] = {}
+    for name in _WALKED_TEXT_FIELDS:
+        present, field = _present(value, name)
+        if not present:
+            continue
+        if name in ("type", "role"):
+            if field is not None:
+                kept[name] = field if isinstance(field, str) else "unknown"
+        elif name == "content":
+            kept[name] = _readable(field, depth + 1, True)
+        elif name == "messages":
+            if isinstance(field, (list, tuple)) and field:
+                items = [_readable(item, depth + 1, False) for item in field[:-1]]
+                kept[name] = [*items, _readable(field[-1], depth + 1, True)]
+        elif name == "text":
+            if isinstance(field, str):
+                kept[name] = field
+            elif isinstance(field, Mapping) and isinstance(field.get("value"), str):
+                kept[name] = {"value": field["value"]}
+        elif name == "thought":
+            if field is True:
+                kept[name] = True
+        elif isinstance(field, str):
+            kept[name] = field
+    if is_node and not isinstance(kept.get("type"), str) and "content" not in kept and not kept.get("messages"):
+        return None
+    return kept
+
+
+def _answer_text(value: Any) -> str:
+    """The one way text leaves a message, a content block, or a list of them."""
+    return _walk_text(_readable(value))
+
+
 def _content_blocks_text(value: Any) -> str:
-    return text_of(value) if isinstance(value, (str, list, tuple)) else ""
+    return _answer_text(value) if isinstance(value, (str, list, tuple)) else ""
 
 
 _REPLY_ITEM_KINDS = frozenset(
@@ -1277,6 +1343,17 @@ def _is_block_or_message(item: Any) -> bool:
 _HISTORY_KINDS = frozenset(
     {"message", "ai", "AIMessageChunk", "human", "tool", "system", "assistant", "user"}
 )
+
+
+def _is_reply_item(value: Any) -> bool:
+    """A message or a block by its own ``role``, ``type`` or ``thought`` flag."""
+    role = _field_of(value, "role")
+    kind = _field_of(value, "type")
+    return (
+        (isinstance(role, str) and role in _CHAT_ROLES)
+        or (isinstance(kind, str) and kind in _REPLY_ITEM_KINDS)
+        or _field_of(value, "thought") is True
+    )
 
 
 def _is_history_item(item: Any) -> bool:
@@ -1307,11 +1384,11 @@ def _list_text(items: Any) -> Optional[str]:
     if _is_bare_block_list(items):
         return _bare_blocks_text(items)
     if any(_is_message(item) for item in items):
-        return text_of(items)  # its history rule and depth bound apply
+        return _answer_text(items)  # its history rule and depth bound apply
     if any(_is_history_item(item) for item in items):
         return _last_message_content(items)
     if any(_is_block_or_message(item) for item in items):
-        return text_of(items)
+        return _answer_text(items)
     return None
 
 
@@ -1333,7 +1410,7 @@ def _bare_blocks_text(items: Any) -> str:
             if _field_of(item, "thought") is not True
         )
         return " ".join(piece for piece in pieces if isinstance(piece, str) and piece)
-    return text_of(items)
+    return _answer_text(items)
 
 
 def _is_untyped_text(item: Any) -> bool:
@@ -1403,11 +1480,11 @@ def _undump_message(value: Any) -> Any:
     return value
 
 
-def _reply_text(value: Any) -> str:
-    """Answer text for a message, a block, or a list of them, else the stringified value."""
+def _read_reply(value: Any) -> Optional[str]:
+    """Answer text of a message, a block, or a list of them; None when no reader knows the shape."""
     parts = _field_of(value, "parts")
     if isinstance(parts, (list, tuple)) and _looks_like_parts(value, parts):
-        return text_of(parts)
+        return _answer_text(parts)
     value = _undump_message(value)
     message = _field_of(value, "message")
     if (
@@ -1419,11 +1496,16 @@ def _reply_text(value: Any) -> str:
     ):
         return _message_content(message)
     if isinstance(value, (list, tuple)):
-        text = _list_text(value)
-        return _stringify(value) if text is None else text
+        return _list_text(value)
     if _is_single_reply(value):
-        return text_of(value)
-    return _stringify(value)
+        return _answer_text(value)
+    return None
+
+
+def _reply_text(value: Any) -> str:
+    """Answer text for a message, a block, or a list of them, else the stringified value."""
+    text = _read_reply(value)
+    return _stringify(value) if text is None else text
 
 
 def _list_of_mappings(value: Any) -> List[Dict[str, Any]]:
@@ -8403,25 +8485,43 @@ def _message_content(message: Any) -> str:
         return ""
     if isinstance(message, str):
         return message
+    kind = _field_of(message, "type")
+    if isinstance(kind, str):
+        return _answer_text(message)  # a typed block or message: only its own text rules
+    if _field_of(message, "thought") is True:
+        return ""
     if isinstance(message, dict):
         if "content" in message and message["content"] is not None:
-            block_text = _content_blocks_text(message["content"])
-            if block_text:
-                return block_text
-            return _reply_text(message["content"])
+            return _content_text(message["content"])
         if "text" in message and message["text"] is not None:
-            return _stringify(message["text"])
+            return _answer_text([message])
         if "parts" in message:
-            return text_of(message["parts"])
-    for attr in ("content", "text"):
-        if hasattr(message, attr):
-            value = getattr(message, attr)
-            if value is not None:
-                return _reply_text(value)
-    parts = getattr(message, "parts", None)
-    if isinstance(parts, (list, tuple)):
-        return text_of(parts)
-    return str(message)
+            return _answer_text(message["parts"])
+    else:
+        for attr in ("content", "text"):
+            if hasattr(message, attr):
+                value = getattr(message, attr)
+                if value is not None:
+                    if attr == "text":
+                        return _answer_text([message])
+                    return _content_text(value)
+        parts = getattr(message, "parts", None)
+        if isinstance(parts, (list, tuple)):
+            return _answer_text(parts)
+    return _stringify(message)
+
+
+def _content_text(content: Any) -> str:
+    """Text of a message's ``content``: a string, blocks, or a nested message; never a record."""
+    block_text = _content_blocks_text(content)
+    if block_text:
+        return block_text
+    text = _read_reply(content)
+    if text is not None:
+        return text
+    if isinstance(content, (bool, int, float)):
+        return str(content)
+    return ""
 
 
 def _stringify(value: Any) -> str:
