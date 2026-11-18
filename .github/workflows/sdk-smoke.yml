@@ -104,10 +104,8 @@ jobs:
         # six in tests/test_harness.py fail on dev 70fc43bd as they do here (recorded in the
         # older-findings register). (The run is one folded line, so they are named here rather
         # than beside each --deselect.)
-        # The newest row has no LiveKit, so it leaves out the two files that import it.
         run: >-
           python -m pytest -q
-          ${{ matrix.dependencies == 'newest' && '--ignore=tests/runtime/test_livekit_engine.py --ignore=tests/test_acceptance_regressions.py' || '' }}
           tests/runtime/test_livekit_engine.py
           tests/runtime/test_manifest_engine_dispatch.py
           tests/test_acceptance_regressions.py
