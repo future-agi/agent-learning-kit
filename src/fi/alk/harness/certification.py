@@ -80,14 +80,9 @@ class CertificationRuntime(BaseModel):
         # A certificate made before these were recorded keeps its fingerprint and format.
         data = handler(self)
         if isinstance(data, dict):
-            if self.harness_version is None:
-                data.pop("harness_version", None)
-            if not self.frameworks:
-                data.pop("frameworks", None)
-            if self.process_isolation is None:
-                data.pop("process_isolation", None)
-            if self.door_user is None:
-                data.pop("door_user", None)
+            for name in ("harness_version", "frameworks", "process_isolation", "door_user"):
+                if not getattr(self, name):
+                    data.pop(name, None)
         return data
 
 

@@ -721,10 +721,6 @@ _NOT_FRAMEWORKS = frozenset({"opentelemetry-api"})
 _FRAMEWORKS_READ_SECONDS = 20
 
 
-def _distribution_name(name: str) -> str:
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
 def installed_frameworks(source: Path | None = None) -> dict[str, str]:
     """The agent framework distributions installed in the agent's environment, by version.
 
@@ -735,7 +731,7 @@ def installed_frameworks(source: Path | None = None) -> dict[str, str]:
     ones.
     """
     wanted = {
-        _distribution_name(name)
+        canonicalize_name(name)
         for name, _ in FRAMEWORK_INSTRUMENTORS
         if name not in _NOT_FRAMEWORKS
     }
@@ -751,19 +747,17 @@ def installed_frameworks(source: Path | None = None) -> dict[str, str]:
     )
     if paths:
         for distribution in importlib.metadata.distributions(path=paths):
-            name = _distribution_name(distribution.metadata["Name"] or "")
+            name = canonicalize_name(distribution.metadata["Name"] or "")
             if name in wanted:
                 found.setdefault(name, distribution.version)
         return dict(sorted(found.items()))
     wanted = _declared(source, wanted)
     if not wanted:
         return {}
+    # The interpreter's distributions as they name themselves; their names are compared here.
     script = (
-        "import importlib.metadata as m, json, re\n"
-        "n = lambda s: re.sub(r'[-_.]+', '-', s).lower()\n"
-        f"w = {sorted(wanted)!r}\n"
-        "print(json.dumps({n(d.metadata['Name']): d.version for d in m.distributions()"
-        " if d.metadata['Name'] and n(d.metadata['Name']) in w}))\n"
+        "import importlib.metadata as m, json\n"
+        "print(json.dumps({d.metadata['Name']: d.version for d in m.distributions() if d.metadata['Name']}))\n"
     )
     try:
         completed = subprocess.run(
@@ -778,11 +772,10 @@ def installed_frameworks(source: Path | None = None) -> dict[str, str]:
         return {}
     if not isinstance(read, dict):
         return {}
-    return {
-        str(name): str(version)
-        for name, version in sorted(read.items())
-        if name in wanted and version
-    }
+    for name, version in read.items():
+        if canonicalize_name(str(name)) in wanted and version:
+            found.setdefault(canonicalize_name(str(name)), str(version))
+    return dict(sorted(found.items()))
 
 
 _DEPENDENCY_FILES = ("requirements*.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile")
@@ -799,7 +792,7 @@ def _declared(source: Path | None, wanted: set[str]) -> set[str]:
                 text += path.read_text(encoding="utf-8", errors="replace")[:200_000].lower() + "\n"
             except OSError:
                 continue
-    named = {_distribution_name(token) for token in re.findall(r"[a-z0-9][a-z0-9._-]*", text)}
+    named = {canonicalize_name(token) for token in re.findall(r"[a-z0-9][a-z0-9._-]*", text)}
     return wanted & named
 
 

@@ -89,6 +89,7 @@ def _execute(
                 )
         except Exception as unlogged:  # noqa: BLE001 - the log must never change the tool's response
             logger.warning("call log not written: %s", type(unlogged).__name__)
+            logger.debug("the failure in full", exc_info=True)
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         with trace_path.open("a", encoding="utf-8") as trace:
             trace.write(

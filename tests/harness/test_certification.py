@@ -561,13 +561,12 @@ def test_the_interpreter_counts_only_the_frameworks_the_agent_declares(
 
     from fi.alk.harness import generated_runtime
 
-    # The interpreter the agent is installed into also holds the harness's own dependencies.
-    installed = {"claude-agent-sdk": "0.2.156", "google-adk": "2.7.1", "crewai": "0.80.0"}
+    # The interpreter the agent is installed into also holds the harness's own dependencies, each named as its
+    # distribution spells itself.
+    installed = {"claude-agent-sdk": "0.2.156", "google_adk": "2.7.1", "CrewAI": "0.80.0"}
 
     def run(command, **_kwargs):
-        listed = json.loads(command[2].split("w = ", 1)[1].split("\n", 1)[0].replace("'", '"'))
-        found = {name: version for name, version in installed.items() if name in listed}
-        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(found), stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(installed), stderr="")
 
     monkeypatch.setattr(generated_runtime.subprocess, "run", run)
     (tmp_path / "requirements.txt").write_text("crewai==0.80.0\nrequests\n", encoding="utf-8")
@@ -577,3 +576,28 @@ def test_the_interpreter_counts_only_the_frameworks_the_agent_declares(
     (tmp_path / "requirements.txt").write_text("requests\n", encoding="utf-8")
     assert generated_runtime.installed_frameworks(tmp_path) == {}
     assert generated_runtime.installed_frameworks(None) == {}
+
+
+@pytest.mark.parametrize(("choices", "said"), [([{"message": {"content": "ready"}}], "passed"), ([], "failed")])
+def test_judge_reachable_asks_one_short_question_through_the_judge_s_own_request(
+    monkeypatch: pytest.MonkeyPatch, choices, said
+) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness import judge
+
+    sent = {}
+
+    def post(url, *, headers, json, timeout):
+        sent.update(url=url, body=json, timeout=timeout)
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"choices": choices, "usage": {}})
+
+    monkeypatch.setattr(
+        judge,
+        "provider_env",
+        lambda model: {"ANTHROPIC_BASE_URL": "http://gateway", "ANTHROPIC_AUTH_TOKEN": "k", "ANTHROPIC_MODEL": "m"},
+    )
+    monkeypatch.setattr(judge.requests, "post", post)
+
+    assert judge.judge_reachable(timeout=1) == said
+    assert (sent["url"], sent["timeout"], sent["body"]["max_tokens"]) == ("http://gateway/v1/chat/completions", 1, 5)

@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import fi.alk
 
-from . import bundle_v2, call_runner, failure_record, hosted_entrypoint, judge, live_proof
+from . import bundle_v2, call_runner, failure_record, hosted_entrypoint, judge, live_proof, tool_routing
 from .contract import AgentContract
 from .catalogue import load_catalogue
 from .certification import CheckStatus
@@ -1300,13 +1300,7 @@ async def validate_once(
                     _chat_target_timeout_seconds,
                     agent_chat_timeout_seconds,
                 )
-                from .chat_readiness import (
-                    probe_chat_ingress,
-                    probe_chat_workflow,
-                    record_tool_routing,
-                    request_uncovered_tools,
-                    world_call_log,
-                )
+                from .chat_readiness import probe_chat_ingress, probe_chat_workflow
 
                 chat_ingress = CheckStatus.NOT_APPLICABLE
                 interface = contract.runtime.interface if contract.runtime else None
@@ -1346,18 +1340,6 @@ async def validate_once(
                             redaction_values=redaction_values,
                             evidence_seam=manifest.runtime.evidence_seam,
                         )
-                        await request_uncovered_tools(
-                            interface=interface,
-                            endpoint=endpoint.address,
-                            runtime=runtime,
-                            contract=contract,
-                            authoring=authoring,
-                            bundle=bundle,
-                            source=source,
-                            secret_values=target_secret_values,
-                            candidate_hash=_generic_candidate_hash(source, authoring),
-                            local_auth_values=getattr(runtime, "_local_auth_values", None),
-                        )
                     else:
                         since = time.time()
                         await probe_chat_ingress(
@@ -1380,28 +1362,30 @@ async def validate_once(
                             called = call_runner.collect_file_tool_calls(runtime)
                         except Exception as unread:  # noqa: BLE001 - no trace, nothing observed
                             logger.warning("agent's tool trace not read: %s", type(unread).__name__)
+                            logger.debug("the failure in full", exc_info=True)
                             called = ()
-                        record_tool_routing(
+                        tool_routing.record_tool_routing(
                             authoring,
                             representative.scenario_key,
                             contract,
                             runtime,
-                            received=world_call_log(runtime, since),
+                            received=tool_routing.world_call_log(runtime, since),
                             reported=called,
                             bundle=bundle,
                         )
-                        await request_uncovered_tools(
-                            interface=interface,
-                            endpoint=endpoint.address,
-                            runtime=runtime,
-                            contract=contract,
-                            authoring=authoring,
-                            bundle=bundle,
-                            source=source,
-                            secret_values=target_secret_values,
-                            candidate_hash=_generic_candidate_hash(source, authoring),
-                            local_auth_values=getattr(runtime, "_local_auth_values", None),
-                        )
+                    # Whichever conversation qualified the agent, each tool it did not show is asked once.
+                    await tool_routing.request_uncovered_tools(
+                        interface=interface,
+                        endpoint=endpoint.address,
+                        runtime=runtime,
+                        contract=contract,
+                        authoring=authoring,
+                        bundle=bundle,
+                        source=source,
+                        secret_values=target_secret_values,
+                        candidate_hash=_generic_candidate_hash(source, authoring),
+                        local_auth_values=getattr(runtime, "_local_auth_values", None),
+                    )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"
             await provider.reset(runtime, work_directory=work)
