@@ -1133,7 +1133,7 @@ def test_private_github_submission_becomes_hosted_job(tmp_path):
     assert "token" not in json.dumps(job).lower()
 
 
-def test_a_github_submission_without_a_commit_sha_is_refused_at_intake(tmp_path):
+def test_a_github_submission_without_a_commit_sha_is_refused_with_its_code(tmp_path):
     # A GitHub job runs hosted, and a hosted GitHub job needs the commit it checks out. Without
     # one the route used to fail building the job (a 500 with no reason); it says why now.
     client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
@@ -1172,8 +1172,7 @@ def test_a_location_that_is_not_a_github_repository_is_refused_for_that_without_
     "sha",
     ["   ", "abc1234", "z" * 40, "a" * 39, "a" * 41, " " + "a" * 40, "a" * 40 + "\n"],
 )
-def test_a_commit_sha_that_is_not_forty_hex_characters_is_refused_at_intake(tmp_path, sha):
-    # The job refuses it too, but only while it is being built: a 500 with no reason.
+def test_a_commit_sha_that_is_not_forty_hex_characters_is_refused_with_its_code(tmp_path, sha):
     client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
 
     response = client.post(
@@ -1242,6 +1241,14 @@ def _local_source(tmp_path, monkeypatch):
 def test_every_job_model_code_is_classified_once():
     # A new refusal in job.py can't ship without saying whose it is: the caller's to fix, or
     # this sandbox's own configuration.
+    import fi.alk.harness.job as job_module
+
+    text = Path(job_module.__file__).read_text()
+    # Every refusal is a ValueError opening with its code, so the list above sees it.
+    assert len(re.findall(r"raise ValueError\(", text)) == len(
+        re.findall(r'raise ValueError\(\s*f?"[a-z0-9_]+', text)
+    )
+    assert not re.search(r"PydanticCustomError|raise (?!ValueError\()", text)
     codes = set(_job_model_codes())
     submission, configuration = set(refusals.SUBMISSION), set(refusals.CONFIGURATION)
 
@@ -2237,6 +2244,41 @@ def test_hosted_submit_names_its_own_values_platform_vault(hosted_sandbox, sourc
     assert "value-never-persist" not in persisted
     assert "credential-never-persist" not in persisted
     assert claimed_path not in persisted
+
+
+def test_a_refused_job_leaves_its_uploaded_credential_for_the_corrected_resubmit(
+    hosted_sandbox, monkeypatch
+):
+    # The refusal is the caller's to fix; fixing it must not need the credential uploaded
+    # again, so the claim on it is undone rather than the file deleted.
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
+    build = sandbox_server.HarnessJob
+    refusals_left = [_refusal("execution_manifest_invalid")]
+
+    class _RefusesOnce(build):
+        def __init__(self, **kwargs):
+            if refusals_left:
+                raise refusals_left.pop()
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", _RefusesOnce)
+
+    async def submit_twice():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        request = LocalSandboxRequest(
+            source_id=source_id, secret_refs={"GOOD": _ref("mounted", upload)}
+        )
+        with pytest.raises(JobRefused, match="execution_manifest_invalid"):
+            sandbox.submit(request)
+        return sandbox.submit(request)
+
+    submitted = asyncio.run(submit_twice())
+
+    claimed = sandbox.secret_files_root / "jobs" / submitted.job.job_id / "GOOD"
+    assert claimed.read_bytes() == b"credential-body"
+    assert not any((sandbox.secret_files_root / "pending").iterdir())
 
 
 def test_hosted_submit_still_refuses_a_mounted_server_key(hosted_sandbox):

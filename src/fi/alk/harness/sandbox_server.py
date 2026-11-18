@@ -516,6 +516,25 @@ class LocalSandbox:
             raise
         return claimed, names
 
+    def _return_job_secret_files(
+        self, job_id: str, references: dict[str, SecretRef]
+    ) -> None:
+        """Undo ``_claim_secret_files`` for a job that was refused: each upload goes back to
+        pending/ under its own id, so the caller can fix the request and send it again. The
+        upload keeps its original age, so the pending TTL still applies."""
+        job_root = self.secret_files_root / "jobs" / job_id
+        for environment_name, reference in references.items():
+            match = re.fullmatch(
+                r"ALK_SECRET_FILE_([0-9A-F]{32})_[0-9A-F]{12}", reference.key
+            )
+            claimed = job_root / environment_name
+            if reference.manager != "mounted" or match is None or not claimed.is_file():
+                continue
+            identifier = str(uuid.UUID(hex=match.group(1).lower()))
+            pending = self.secret_files_root / "pending" / identifier
+            claimed.chmod(0o600)
+            claimed.replace(pending)
+
     def _delete_job_secret_files(self, job_id: str) -> None:
         shutil.rmtree(self.secret_files_root / "jobs" / job_id, ignore_errors=True)
 
@@ -803,7 +822,10 @@ class LocalSandbox:
                     "controller_token": _CONTROLLER_TOKEN,
                 },
             )
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, JobRefused):
+                # The caller fixes the request and sends it again, with the same uploads.
+                self._return_job_secret_files(identifier, request.secret_refs)
             self._delete_job_secret_files(identifier)
             shutil.rmtree(self.jobs_root / identifier, ignore_errors=True)
             raise
