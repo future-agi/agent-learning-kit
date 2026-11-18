@@ -539,3 +539,43 @@ def test_untyped_text_blocks_join_with_a_space_wherever_they_sit(reply):
 def test_stream_chunks_join_with_nothing_whatever_the_untyped_rule_is():
     chunks = [{"text": "Your order "}, {"text": "shipped."}]
     assert _generic_stream(chunks).content == "Your order shipped."
+
+
+def _generic_response(reply):
+    class Agent:
+        def invoke(self, inputs):
+            return reply
+
+    agent_input = AgentInput(
+        thread_id="t",
+        execution_id="t",
+        messages=[{"role": "user", "content": "hi"}],
+        new_message={"role": "user", "content": "hi"},
+    )
+    return asyncio.run(wrap_agent(Agent()).call(agent_input))
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"result": [{"role": "user", "content": "where is my order"}]},
+        {"output": [{"role": "user", "content": "where is my order"}]},
+        [{"role": "user", "content": "where is my order"}],
+        [
+            {"role": "user", "content": "where is my order"},
+            {"role": "tool", "content": "TOOL-1"},
+        ],
+        {"result": [SimpleNamespace(type="human", content="where is my order")]},
+    ],
+    ids=[
+        "result-key",
+        "output-key",
+        "bare-list",
+        "user-then-tool",
+        "human-object",
+    ],
+)
+def test_a_history_with_no_assistant_message_gives_no_user_words(reply):
+    result = _generic_response(reply)
+    assert result.content == ""
+    assert "reply_unreadable" in result.metadata

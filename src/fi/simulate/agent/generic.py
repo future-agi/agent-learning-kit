@@ -1403,10 +1403,19 @@ def _list_text(items: Any) -> Optional[str]:
     if any(_is_message(item) for item in items):
         return _answer_text(items)  # its history rule and depth bound apply
     if any(_is_history_item(item) for item in items):
-        return _last_message_content(items)
+        # Only the agent's own turn is its reply: a history of the caller's words, or of tool
+        # output, has none, and never gives those words back as the answer.
+        agent_turns = [item for item in items if _is_agent_turn(item)]
+        return _message_content(agent_turns[-1]) if agent_turns else ""
     if any(_is_block_or_message(item) for item in items):
         return _answer_text(items)
     return None
+
+
+def _is_agent_turn(item: Any) -> bool:
+    """A message the agent said: an assistant or model role, or an ``ai`` or assistant type."""
+    role, kind = _field_of(item, "role"), _field_of(item, "type")
+    return role in ("assistant", "model") or kind in ("ai", "AIMessageChunk", "assistant")
 
 
 def _is_untyped_text(item: Any) -> bool:
