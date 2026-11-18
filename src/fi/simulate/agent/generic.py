@@ -1405,7 +1405,13 @@ def _reply_text(value: Any) -> str:
         return text_of(parts)
     value = _undump_message(value)
     message = _field_of(value, "message")
-    if message is not None and _is_block_or_message(message):
+    if (
+        message is not None
+        and _field_of(value, "role") is None
+        and _field_of(value, "type") is None
+        and (_has_field(message, "role") or _has_field(message, "content"))
+        and _is_block_or_message(message)
+    ):
         return _message_content(message)
     if isinstance(value, (list, tuple)):
         text = _list_text(value)
