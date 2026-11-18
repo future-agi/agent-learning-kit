@@ -200,9 +200,9 @@ jobs:
   kit-tests:
     # The engine, dispatch, acceptance and harness suites, split out of clean-install, where they
     # took 8.5 to 11.5 of its 15 minutes and cancelled runs at random. Same install and SDK pin
-    # as clean-install's.
+    # as clean-install's. 40 minutes: a run takes 20 to 22.
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -68,69 +69,79 @@ class _Published(Exception):
     pass
 
 
-def test_a_given_image_is_published_without_the_checkouts_commit(script, monkeypatch):
-    # Dileep's repro: an image built at commit A, published from a checkout at commit B.
-    published: dict = {}
+@pytest.fixture
+def template_envs(monkeypatch):
+    """The environment main() gives the E2B template, through a stand-in for the e2b SDK whose
+    build stops the run."""
+    seen: list[dict[str, str]] = []
 
-    def publish(**kwargs):
-        published.update(kwargs)
-        raise _Published
+    class Template:
+        def from_image(self, image, **kwargs):
+            return self
 
+        def set_envs(self, envs):
+            seen.append(dict(envs))
+            return self
+
+        def set_user(self, user):
+            return self
+
+        def set_workdir(self, workdir):
+            return self
+
+        @staticmethod
+        def build(template, **kwargs):
+            raise _Published
+
+    monkeypatch.setitem(sys.modules, "e2b", SimpleNamespace(Template=Template))
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    return seen
+
+
+def _run(script, monkeypatch, *argv: str, status: str = "") -> None:
     monkeypatch.setattr(
-        script, "_git", lambda repo, *args: CLEAN if args[0] == "rev-parse" else ""
+        script, "_git", lambda repo, *args: CLEAN if args[0] == "rev-parse" else status
     )
-    monkeypatch.setattr(script, "publish_e2b_template", publish)
+    monkeypatch.setattr(sys, "argv", ["e2b-template.py", *argv])
+    with pytest.raises(_Published):
+        script.main()
+
+
+def test_a_given_image_is_published_without_the_checkouts_commit(
+    script, monkeypatch, template_envs
+):
+    # An image built at commit A, published from a checkout at commit B.
     monkeypatch.setattr(
         script,
         "build_and_push_image",
         lambda **kwargs: pytest.fail("no image is built"),
     )
-    monkeypatch.setenv("E2B_API_KEY", "test-key")
-    digest = "a" * 64
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["e2b-template.py", "--image-reference", f"example/alk@sha256:{digest}"],
-    )
 
-    with pytest.raises(_Published):
-        script.main()
+    _run(script, monkeypatch, "--image-reference", "example/alk@sha256:" + "a" * 64)
 
-    assert published["image_revision"] is None
-    assert published["source_revision"] == CLEAN
+    assert template_envs == [dict(script.HOSTED_RUNTIME_ENV)]
 
 
-@pytest.mark.parametrize("dirty", [False, True])
+@pytest.mark.parametrize("dirty", [False, True], ids=["clean", "dirty"])
 def test_an_image_built_here_is_published_with_the_revision_it_was_built_with(
-    script, monkeypatch, dirty
+    script, monkeypatch, template_envs, dirty
 ):
     built: dict = {}
-    published: dict = {}
 
     def build(**kwargs):
         built.update(kwargs)
         return script.PublishedImage(tag="example/alk:t", digest="sha256:" + "b" * 64)
 
-    def publish(**kwargs):
-        published.update(kwargs)
-        raise _Published
-
-    status = " M src/fi/alk/harness/seed_contract.py" if dirty else ""
-    monkeypatch.setattr(
-        script, "_git", lambda repo, *args: CLEAN if args[0] == "rev-parse" else status
-    )
     monkeypatch.setattr(script, "build_and_push_image", build)
-    monkeypatch.setattr(script, "publish_e2b_template", publish)
-    monkeypatch.setenv("E2B_API_KEY", "test-key")
-    monkeypatch.setattr(
-        sys, "argv", ["e2b-template.py", *(["--allow-dirty"] if dirty else [])]
+
+    _run(
+        script,
+        monkeypatch,
+        *(["--allow-dirty"] if dirty else []),
+        status=" M src/fi/alk/harness/seed_contract.py" if dirty else "",
     )
 
-    with pytest.raises(_Published):
-        script.main()
-
-    # The template's id is the one the image was built with, and a dirty build records none.
-    assert built["source_revision"] == published["image_revision"]
-    assert _recorded(monkeypatch, published["image_revision"]) == (
-        "" if dirty else CLEAN
-    )
+    (envs,) = template_envs
+    assert envs["ALK_BUILD_ID"] == built["source_revision"]
+    # A dirty build records no build.
+    assert _recorded(monkeypatch, envs["ALK_BUILD_ID"]) == ("" if dirty else CLEAN)

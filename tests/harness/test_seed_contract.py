@@ -210,7 +210,10 @@ def test_a_reading_made_without_a_build_id_records_an_empty_one(monkeypatch):
 @pytest.mark.parametrize(
     ("given", "kept"),
     [
-        ("ABCDEF0123456789abcdef0123456789ABCDEF01", "abcdef0123456789abcdef0123456789abcdef01"),
+        (
+            "ABCDEF0123456789abcdef0123456789ABCDEF01",
+            "abcdef0123456789abcdef0123456789abcdef01",
+        ),
         ("abc1234", "abc1234"),
         ("abc123", ""),
         ("a" * 41, ""),
@@ -219,7 +222,16 @@ def test_a_reading_made_without_a_build_id_records_an_empty_one(monkeypatch):
         ("abc1234\n", ""),
         ("", ""),
     ],
-    ids=["lowercased", "seven_hex", "too_short", "too_long", "odd_text", "non_hex", "newline", "empty"],
+    ids=[
+        "lowercased",
+        "seven_hex",
+        "too_short",
+        "too_long",
+        "odd_text",
+        "non_hex",
+        "newline",
+        "empty",
+    ],
 )
 def test_the_build_id_is_stored_only_when_it_is_a_commit_hash(monkeypatch, given, kept):
     monkeypatch.setenv("ALK_BUILD_ID", given)
@@ -294,7 +306,8 @@ def test_the_record_never_reaches_the_agent_document(tmp_path):
     text = (reading / "agent.json").read_text(encoding="utf-8")
     assert RECORD_KEY not in text
     saved = json.loads((reading / "contract.json").read_text(encoding="utf-8"))
-    assert {k: v for k, v in saved[RECORD_KEY].items() if k != "made_by"} == record_for(job)
+    stored = {k: v for k, v in saved[RECORD_KEY].items() if k != "made_by"}
+    assert stored == record_for(job)
     contract = AgentContract.model_validate(saved).model_dump(mode="json")
     framework = detect_framework(source / FOLDER, repo_root=source, package_dir=None)
     assert json.loads(text)["agent"] == build_authored_agent(
@@ -351,6 +364,24 @@ def test_a_reading_that_only_fits_without_made_by_still_gets_its_record():
     assert "made_by" not in stored
     assert stored == record_for(job)
     assert saved == seed_contract._splice(raw, record_for(job), empty=False)
+
+
+def test_a_reading_that_lands_on_the_cap_with_made_by_keeps_made_by(monkeypatch):
+    monkeypatch.setenv("ALK_BUILD_ID", "abc1234")
+    job = _job()
+    base = json.dumps(CONTRACT).encode()
+    full = {**record_for(job), "made_by": seed_contract._made_by()}
+    # Padded so the record with made_by lands exactly on the cap.
+    raw = base + b" " * (
+        SEED_LIMIT_BYTES - len(seed_contract._splice(base, full, empty=False))
+    )
+    assert len(seed_contract._splice(raw, full, empty=False)) == SEED_LIMIT_BYTES
+
+    saved = with_record(job, raw)
+
+    assert saved is not None
+    assert len(saved) == SEED_LIMIT_BYTES
+    assert json.loads(saved)[RECORD_KEY]["made_by"]["build_id"] == "abc1234"
 
 
 def test_a_reading_over_the_cap_even_without_made_by_keeps_no_record():
