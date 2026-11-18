@@ -453,11 +453,34 @@ TRIAL_TABLES_DDL = (
     TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, TRIAL_STARTED_DDL,
     WORKER_STOPS_DDL, WORKER_RUNS_DDL,
 )
-_TRIAL_TABLE_COLUMNS = {
-    "_alk_trial_faults": ("id", "faults", "worker_deadline_at", "worker_deadlines", "sealed_at", "started_at"),
-    "_alk_worker_stops": ("worker", "process", "at", "reason"),
-    "_alk_worker_runs": ("worker", "at"),
-}
+
+
+def ddl_columns(*statements: str) -> dict[str, tuple[str, ...]]:
+    """The columns each table has once ``statements`` (`CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`, as
+    this module writes them) have run, read from the statements themselves so no list is kept beside them."""
+    columns: dict[str, list[str]] = {}
+    for statement in (one.strip() for text in statements for one in text.split(";") if one.strip()):
+        created = re.match(r"CREATE TABLE IF NOT EXISTS (\w+)\s*\((.*)\)\s*$", statement, re.S)
+        if created:
+            depth, part, parts = 0, "", []
+            for char in created.group(2):
+                depth += {"(": 1, ")": -1}.get(char, 0)
+                if char == "," and depth == 0:
+                    parts.append(part)
+                    part = ""
+                else:
+                    part += char
+            parts.append(part)
+            names = [one.split()[0] for one in parts if one.split() and one.split()[0].upper() not in _TABLE_CONSTRAINTS]
+            columns.setdefault(created.group(1), []).extend(names)
+            continue
+        for table, column in re.findall(r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+)", statement):
+            columns.setdefault(table, []).append(column)
+    return {table: tuple(names) for table, names in columns.items()}
+
+
+_TABLE_CONSTRAINTS = frozenset({"PRIMARY", "UNIQUE", "CONSTRAINT", "FOREIGN", "CHECK", "EXCLUDE"})
+_TRIAL_TABLE_COLUMNS = ddl_columns(*TRIAL_TABLES_DDL)
 
 
 def _tables_made(connection: Any, tables: Mapping[str, Sequence[str]]) -> bool:
@@ -1429,7 +1452,7 @@ _KEYS_DDL = (
     "(actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (actor_id, idempotency_key));"
     "ALTER TABLE _alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
 )
-_KEYS_COLUMNS = {"_alk_action_keys": ("actor_id", "idempotency_key", "state", "response")}
+_KEYS_COLUMNS = ddl_columns(_KEYS_DDL)
 # Every per-trial table, made with the world's seed so it is in the sealed template before any role is granted rights.
 HARNESS_TABLES_DDL = (*TRIAL_TABLES_DDL, _KEYS_DDL)
 

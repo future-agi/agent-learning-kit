@@ -1583,3 +1583,16 @@ def test_a_fault_the_scenario_wrote_and_a_missing_approval_keep_their_own_words(
     assert json.loads(held.answer()) == {"detail": "approval required"}
     assert in_process_door._held(held)["detail"] == "approval required"
     assert not _EVALUATION_WORDS.search(held.detail)
+
+
+def test_the_tables_columns_are_read_from_the_statements_that_make_them():
+    from fi.alk.harness.world_door import TRIAL_TABLES_DDL, ddl_columns
+
+    made = ddl_columns(*TRIAL_TABLES_DDL, "ALTER TABLE _alk_worker_runs ADD COLUMN IF NOT EXISTS note TEXT")
+
+    assert made["_alk_trial_faults"] == ("id", "faults", "worker_deadline_at", "worker_deadlines", "sealed_at", "started_at")
+    # A column added to a statement is a column the check waits for: no list beside the statements to forget.
+    assert made["_alk_worker_runs"] == ("worker", "at", "note")
+    assert ddl_columns(
+        "CREATE TABLE IF NOT EXISTS t (a TEXT NOT NULL, b TEXT, PRIMARY KEY (a, b));ALTER TABLE t ADD COLUMN IF NOT EXISTS c JSONB"
+    ) == {"t": ("a", "b", "c")}

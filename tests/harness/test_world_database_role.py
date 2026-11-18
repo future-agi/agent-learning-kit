@@ -778,3 +778,17 @@ def test_a_seed_that_escalates_fails_the_build_against_a_real_server(planted, un
     finally:
         run(baseline, undo)
         run("postgres", f'DROP DATABASE IF EXISTS "{baseline}"')
+
+
+def test_a_seed_refusal_says_what_to_change():
+    def run(**kwargs):
+        return [["role sneaky is a superuser or can create roles"]] if kwargs["dbname"] == "postgres" else []
+
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        pr._refuse_seed_escalation(
+            port=5432, credentials=pr.EngineCredentials("harness", "pw"), baseline_db="b", sql_runner=run,
+            process_name="db",
+        )
+
+    said = str(raised.value)
+    assert "role sneaky is a superuser" in said and "Change the seed so it gives no role SUPERUSER" in said
