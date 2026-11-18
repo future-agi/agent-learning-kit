@@ -1315,6 +1315,7 @@ class HostedChatCallRunner:
             sealed_without_door,
             unenforced_deadline_notices,
             unmeasured_reasons,
+            worker_stop_outcomes,
         )
 
         if door_sees_tools:
@@ -1335,14 +1336,24 @@ class HostedChatCallRunner:
             # The agent runs its own tools where no door stands: World changes says so, never "no change".
             world_record = dict(NOT_RECORDED)
         unenforced: list[dict[str, str]] = []
+        stopped_notices: list[dict[str, Any]] = []
         if proxied:
             # Off the loop: the seal may wait on a worker's stop under way, and other calls share this loop.
-            stopped = await asyncio.to_thread(read_worker_stops, runtime)
+            stops = await asyncio.to_thread(read_worker_stops, runtime, trial_started)
+            stopped = [one for one in stops or [] if one.get("reason") == "deadline_passed"]
             if stopped:
                 # Workers whose own process the harness ended past their deadline.
                 world_record["stopped_workers"] = stopped
+            if stops is None:
+                # Whether any worker was stopped is not known: never read as "none was".
+                world_record["stopped_workers_unreadable"] = True
             # A listed worker the door inside the agent could not stop at its deadline, each with why.
-            unenforced = await asyncio.to_thread(deadlines_not_enforced, runtime, document, self._context.bundle_dir)
+            unenforced = await asyncio.to_thread(
+                deadlines_not_enforced, runtime, document, self._context.bundle_dir, trial_started
+            )
+            stopped_notices, ran_on = worker_stop_outcomes(stops, document, self._context.bundle_dir)
+            held = {one["worker"] for one in unenforced}
+            unenforced = [*unenforced, *(one for one in ran_on if one["worker"] not in held)]
             if unenforced:
                 world_record["unenforced_deadlines"] = unenforced
 
@@ -1358,7 +1369,11 @@ class HostedChatCallRunner:
             # harness stopped, and those it could not, are still said.
             world_record = {
                 **SEALED_WITHOUT_DOOR,
-                **{key: world_record[key] for key in ("stopped_workers", "unenforced_deadlines") if key in world_record},
+                **{
+                    key: world_record[key]
+                    for key in ("stopped_workers", "stopped_workers_unreadable", "unenforced_deadlines")
+                    if key in world_record
+                },
             }
         if world_record is not None:
             transcript.world_actors = world_record
@@ -1406,7 +1421,7 @@ class HostedChatCallRunner:
         # A separate worker that reached the world on the shared address: said, and held from its own checks.
         said += channel_bypass_notices(transcript.calls, self._context.bundle_dir)
         # Such a worker's own checks are not graded; the rest of the trial is.
-        said += unenforced_deadline_notices(unenforced)
+        said += unenforced_deadline_notices(unenforced) + stopped_notices
         said += repeated_untimed_notices(transcript.calls) + hand_off_notices(runtime)
         if said:
             transcript.notices = said

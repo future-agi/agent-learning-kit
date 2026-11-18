@@ -611,6 +611,34 @@ def test_a_worker_past_its_deadline_is_stopped_and_its_stop_kept(monkeypatch):
     assert ("/worker_stop_end", {"id": "s1", "stopped": True}, 1) in asked
 
 
+def test_a_worker_already_past_its_deadline_never_runs_even_with_no_await(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    asked, ran = [], []
+
+    def post(path, body):
+        asked.append(path)
+        if path == "/worker_deadline":
+            return {"remaining": 0}
+        if path == "/worker_stop":
+            return {"stop": True, "id": "s1"}
+        return {"kept": body.get("stopped") is True}
+
+    monkeypatch.setattr(bootstrap, "_post", post)
+
+    async def run(starting_agent):
+        # No suspension point: scheduled first, it would finish before any stop.
+        ran.append(starting_agent.name)
+        return "completed"
+
+    stopping = bootstrap.stop_at_deadline(run, "starting_agent", {"Writer": "writer"})
+    with pytest.raises(bootstrap.WorkerStopped):
+        asyncio.run(stopping(SimpleNamespace(name="Writer")))
+    assert ran == []
+    assert asked == ["/worker_deadline", "/worker_stop", "/worker_stop_end"]
+
+
 def test_a_worker_whose_stop_the_seal_refused_runs_on_and_is_never_cancelled(monkeypatch):
     import asyncio
     from types import SimpleNamespace

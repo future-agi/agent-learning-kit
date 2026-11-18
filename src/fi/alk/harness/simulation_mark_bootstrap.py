@@ -553,6 +553,13 @@ def _keep_agents_processors() -> None:
     cls.set_processors = wrapper
 
 
+def _livekit_own(tracer) -> bool:
+    """A span of LiveKit's own session telemetry (recorded on a provider of its own when LiveKit Cloud observability is
+    on): never part of the app's work, so an app run opened under it is still the top of the app's work."""
+    scope = getattr(tracer, "_instrumentation_scope", None) or getattr(tracer, "instrumentation_info", None)
+    return str(getattr(scope, "name", "") or "").startswith(_LIVEKIT_TRACERS)
+
+
 def _patch_tracer(module, path, tool_trace) -> None:
     cls = module.Tracer
     original = cls.start_span
@@ -576,7 +583,7 @@ def _patch_tracer(module, path, tool_trace) -> None:
             if call and span.is_recording():
                 span.set_attribute(_CALL_KEY, call)
                 _restamp_at_end(span, call)
-            if tools is not None and span.is_recording():
+            if tools is not None and span.is_recording() and not _livekit_own(self):
                 tools.started(span)
         except Exception:
             pass

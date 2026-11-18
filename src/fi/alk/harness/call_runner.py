@@ -47,7 +47,7 @@ import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection, Iterable, Mapping, Protocol, Sequence
 
 from fi import agentcc, simulate
 from fi.simulate.runtime import (
@@ -71,6 +71,7 @@ from fi.simulate.simulation.call_actors import (
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_acts, world_summary
 from .actor_meter import ActorMeter
 from .world_door import (
+    NOT_STOPPED,
     APPROVAL_REQUIRED,
     APPROVAL_UNKNOWN,
     DOOR_FILE,
@@ -1309,11 +1310,23 @@ def contract_worker_names(bundle_dir: Any) -> dict[str, str]:
     """Each contract worker's id and the name its framework gives it, from the sealed contract."""
     if bundle_dir is None:
         return {}
-    return {
+    named = {
         str(one["id"]): str(one.get("name") or "")
         for one in _bundle_contract(Path(bundle_dir)).get("workers") or []
         if isinstance(one, Mapping) and one.get("id") and one.get("name")
     }
+    # A name two workers share names neither: their calls are matched by id alone, never guessed to one of them.
+    shared = _shared_names(named.values())
+    return {worker: name for worker, name in named.items() if _tool_key(name) not in shared}
+
+
+def _shared_names(names: Iterable[str]) -> set[str]:
+    """The worker names, as calls spell them, that more than one worker has."""
+    seen: dict[str, int] = {}
+    for one in names:
+        key = _tool_key(one)
+        seen[key] = seen.get(key, 0) + 1
+    return {key for key, count in seen.items() if key and count > 1}
 
 
 def collect_seam_calls(
@@ -1916,33 +1929,71 @@ def read_trial_deadlines(address: str) -> tuple[float | None, dict[str, float]]:
 _SEAL_LOCK_TIMEOUT = "60s"
 
 
-def read_worker_stops(runtime: EnvironmentRuntime) -> list[dict[str, Any]]:
-    """The workers the harness stopped in this trial, in the order it stopped them; empty when it stopped none. Read
-    once, at the seal: it first marks the trial sealed, after any stop under way, so no worker is stopped later."""
+def read_worker_stops(runtime: EnvironmentRuntime, since: float | None = None) -> list[dict[str, Any]] | None:
+    """The stops the harness claimed in this trial (each `reason`: `deadline_passed`, or `not_stopped` for a run that
+    went on past its cancel), in order; empty when it claimed none. Read once, at the seal: it first marks the trial
+    sealed, after any stop under way, so no worker is stopped later. A stop from before `since` (an earlier trial's,
+    left by a clear that failed) is never this trial's. None when the seal or the read did not complete: whether a
+    worker was stopped is then not known, never "none"."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
         return []
     try:
         import psycopg
+        from psycopg import errors
 
         with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
             connection.execute(f"SET lock_timeout = '{_SEAL_LOCK_TIMEOUT}'")
             try:
                 # No DDL here: an ALTER would lock the table, and the row lock is what orders a stop and the seal.
                 connection.execute("UPDATE _alk_trial_faults SET sealed_at = %s WHERE id = 1", (time.time(),))
-            except psycopg.Error:
+            except (errors.UndefinedTable, errors.UndefinedColumn):
                 # No trial row this harness wrote (it adds the column with the row): no stop can be claimed either.
                 pass
             rows = connection.execute(
                 "SELECT worker, process, at, reason FROM _alk_worker_stops ORDER BY at ASC"
             ).fetchall()
-    except Exception:  # noqa: BLE001 - no stops read is no stops sealed, never a failed call
-        return []
-    return [{"worker": worker, "process": process, "at": at, "reason": reason} for worker, process, at, reason in rows]
+    except Exception as exc:  # noqa: BLE001 - a seal that timed out on a stop under way, or a world out of reach
+        logger.warning("worker stops could not be sealed: %s", type(exc).__name__)
+        return None
+    return [
+        {"worker": worker, "process": process, "at": at, "reason": reason}
+        for worker, process, at, reason in rows
+        if since is None or not isinstance(at, (int, float)) or at >= since
+    ]
 
 
-def read_worker_runs(runtime: EnvironmentRuntime) -> set[str] | None:
-    """The workers the in-process door saw run as a task of their own in this trial; None when they could not be read."""
+WORKER_STOPPED_AT_DEADLINE = "worker_stopped_at_deadline"
+
+
+def worker_stop_outcomes(
+    stops: list[dict[str, Any]] | None, document: Mapping[str, Any], bundle_dir: Path | str | None
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """What the seal's stops mean for grading: a notice naming each worker the harness stopped at its deadline (its
+    own checks read partial), and each worker whose deadline did not hold (`unenforced_deadline_notices`): one that
+    ran on past its cancel, or, when the stops could not be read, every worker this trial gave a deadline."""
+    if stops is None:
+        named = sorted(worker_deadlines(document))
+        due = (sorted(declared_worker_ids(bundle_dir).values()) if worker_deadline(document) is not None else []) or named
+        return [], [
+            {"worker": one, "reason": "whether the harness stopped it at its deadline could not be read"} for one in due
+        ]
+    stopped = sorted({str(one["worker"]) for one in stops if one.get("reason") == "deadline_passed"})
+    ran_on = sorted({str(one["worker"]) for one in stops if one.get("reason") == NOT_STOPPED})
+    notices = (
+        [{
+            "code": WORKER_STOPPED_AT_DEADLINE,
+            "message": "Stopped at their deadline: " + ", ".join(stopped) + ". Their own checks read partial.",
+            "workers": stopped,
+        }]
+        if stopped
+        else []
+    )
+    return notices, [{"worker": one, "reason": "it kept running after its cancel"} for one in ran_on]
+
+def read_worker_runs(runtime: EnvironmentRuntime, since: float | None = None) -> set[str] | None:
+    """The workers the in-process door saw run as a task of their own in this trial (a run marked before `since`, an
+    earlier trial's left by a clear that failed, is not this trial's); None when they could not be read."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
         return None
@@ -1951,7 +2002,12 @@ def read_worker_runs(runtime: EnvironmentRuntime) -> set[str] | None:
         import psycopg
 
         with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
-            return {str(one) for (one,) in connection.execute("SELECT worker FROM _alk_worker_runs").fetchall()}
+            rows = connection.execute("SELECT worker, at FROM _alk_worker_runs").fetchall()
+        return {
+            str(worker)
+            for worker, at in rows
+            if since is None or not isinstance(at, (int, float)) or at >= since
+        }
 
     try:
         return _on_trial_tables(database.address, read)
@@ -2303,7 +2359,10 @@ _NOT_ITS_OWN_TASK = (
 
 
 def deadlines_not_enforced(
-    runtime: EnvironmentRuntime, document: Mapping[str, Any], bundle_dir: Path | str | None
+    runtime: EnvironmentRuntime,
+    document: Mapping[str, Any],
+    bundle_dir: Path | str | None,
+    since: float | None = None,
 ) -> list[dict[str, str]]:
     """Each worker the door inside the agent was told it runs whose deadline in this trial it could not hold, with why;
     empty on any other door, or when no deadline names such a worker. Decided at run time from the door's hook, since
@@ -2311,7 +2370,7 @@ def deadlines_not_enforced(
     due = _in_process_deadline_workers(document, bundle_dir)
     if not due:
         return []
-    ran = read_worker_runs(runtime)
+    ran = read_worker_runs(runtime, since)
     reason = _NOT_ITS_OWN_TASK if ran is not None else "the runs the world's door inside the agent saw could not be read"
     return [{"worker": one, "reason": reason} for one in due if one not in (ran or set())]
 
@@ -2398,7 +2457,9 @@ def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | st
     # Decided per scenario: only a limit on a worker this scenario relies on holds its trial.
     relied = _workers_relied_on(document, bundle_dir)
     separate = {str(one.get("id")) for one in workers if one.get("binding") == "separate"}
-    late = ({one for one in named if one not in separate} | (ids if everyone and not separate else set())) & relied
+    # Every budgeted worker the world cannot tell apart: one deadline for all reaches the shared workers beside any
+    # separate one, whose calls the world cannot stop at it.
+    late = ({one for one in named if one not in separate} | ((ids - separate) if everyone else set())) & relied
     tools = {
         str(one.get("id")) for one in workers if one.get("binding") != "separate" and one.get("allowed_tools")
     } & scenario_worker_subjects(document, bundle_dir)
@@ -3012,12 +3073,14 @@ def declared_worker_ids(bundle_dir: Path | str | None) -> dict[str, str]:
         body = json.loads((Path(bundle_dir) / "contract.json").read_text(encoding="utf-8")) if bundle_dir else {}
     except (OSError, ValueError):
         return {}
-    workers = body.get("workers") if isinstance(body, dict) else None
-    return {
-        str(one["name"]): str(one["id"])
-        for one in workers or []
+    workers = [
+        one
+        for one in (body.get("workers") if isinstance(body, dict) else None) or []
         if isinstance(one, dict) and str(one.get("name") or "").strip() and one.get("id")
-    }
+    ]
+    # A name two workers share is no worker's: an event under it stays undeclared rather than guessed.
+    shared = _shared_names(str(one["name"]) for one in workers)
+    return {str(one["name"]): str(one["id"]) for one in workers if _tool_key(str(one["name"])) not in shared}
 
 
 def _call_id(call: Call) -> str:
@@ -4580,8 +4643,15 @@ class CallRunnerImpl:
         # A separate worker that reached the world on the shared address: said, and held from its own checks.
         bypassed = channel_bypass_notices(calls, self._context.bundle_dir)
         # A listed worker the door inside the agent could not stop at its deadline: recorded, and held from its checks.
-        unenforced = await asyncio.to_thread(deadlines_not_enforced, runtime, document or {}, self._context.bundle_dir)
-        bypassed += unenforced_deadline_notices(unenforced)
+        unenforced = await asyncio.to_thread(
+            deadlines_not_enforced, runtime, document or {}, self._context.bundle_dir, started_at.timestamp()
+        )
+        # Off the loop: the seal may wait on a worker's stop under way, and other calls share this loop.
+        stops = await asyncio.to_thread(read_worker_stops, runtime, started_at.timestamp())
+        stopped_notices, ran_on = worker_stop_outcomes(stops, document or {}, self._context.bundle_dir)
+        held = {one["worker"] for one in unenforced}
+        unenforced = [*unenforced, *(one for one in ran_on if one["worker"] not in held)]
+        bypassed += unenforced_deadline_notices(unenforced) + stopped_notices
         if calls:
             workers = declared_worker_ids(self._context.bundle_dir)
             tool_trace = "\n".join(
@@ -4627,8 +4697,7 @@ class CallRunnerImpl:
                         "summary": summary,
                         "events": took_part.get("call_actor_events") or [],
                     }
-                # Off the loop: the seal may wait on a worker's stop under way, and other calls share this loop.
-                stopped = await asyncio.to_thread(read_worker_stops, runtime)
+                stopped = [one for one in stops or [] if one.get("reason") == "deadline_passed"]
                 if door_seen and sealed_without_door(runtime.endpoints, calls, action_log):
                     # Sealed with no world door, the agent's calls reached none: what it changed is unknown.
                     transcript_document["world_actors"] = dict(SEALED_WITHOUT_DOOR)
@@ -4655,6 +4724,9 @@ class CallRunnerImpl:
                 if stopped:
                     # Workers whose own process the harness ended past their deadline.
                     transcript_document["world_actors"]["stopped_workers"] = stopped
+                if stops is None:
+                    # Whether any worker was stopped is not known: never read as "none was".
+                    transcript_document["world_actors"]["stopped_workers_unreadable"] = True
                 if unenforced:
                     # Workers whose deadline the door could not stop them at, each with why.
                     transcript_document["world_actors"]["unenforced_deadlines"] = unenforced

@@ -474,6 +474,10 @@ def worker_due(own: object, trial: object) -> float | None:
     return min(times) if times else None
 
 
+# A worker past its deadline whose run did not end at its cancel: not held to its deadline.
+NOT_STOPPED = "not_stopped"
+
+
 def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[], bool]) -> bool:
     """End this worker's run with `stop` and keep that it ended, unless the call has already sealed its stops: the
     trial's row stays locked from the check to the record, so the seal (`read_worker_stops`) waits for a stop under
@@ -494,14 +498,15 @@ def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[]
                 due = worker_due(named.get(worker), row[1])
                 if due is None or time.time() <= due:
                     return False
-                if not stop():
-                    return False
+                stopped = stop()
+                # Kept either way: a worker that ran on past its cancel was not held to its deadline, and grading must
+                # know that as surely as it knows a stop.
                 connection.execute(
                     "INSERT INTO _alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
                     "ON CONFLICT (worker) DO NOTHING",
-                    (worker, process, time.time(), "deadline_passed"),
+                    (worker, process, time.time(), "deadline_passed" if stopped else NOT_STOPPED),
                 )
-        return True
+                return stopped
 
     return bool(_on_trial_tables(address, claim))
 

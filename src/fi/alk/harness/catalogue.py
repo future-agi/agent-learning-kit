@@ -635,7 +635,8 @@ def worker_subjects_note(contract: Any) -> str:
     return (
         " This agent's declared workers: "
         + ", ".join(f"`worker:{one}`" for one in ids)
-        + ". For each one whose actions the world records, add one sub-goal with that subject checking its own work."
+        + ". For each one whose actions the world records, add one sub-goal with that subject checking its own work:"
+        " what it called and tried, never an outcome the world enforces for it (a refused tool, a deadline)."
     )
 
 

@@ -2168,6 +2168,35 @@ def test_the_first_agent_in_an_openai_agents_run_hands_off_at_the_top_level(
     ]
 
 
+@pytest.mark.parametrize(
+    "livekit_tracer",
+    [
+        # LiveKit Cloud observability on: LiveKit records on a provider of its own.
+        'from opentelemetry.sdk.trace import TracerProvider as _Own\nlivekit = _Own().get_tracer("livekit-agents")',
+        # The process set a global provider, which LiveKit's tracer then records on.
+        'livekit = trace.get_tracer("livekit-agents")',
+    ],
+)
+def test_a_voice_turn_run_inside_livekit_s_own_recorded_spans_hands_off_at_the_top_level(
+    tmp_path: Path, livekit_tracer: str
+) -> None:
+    """A voice agent answering a turn inside LiveKit's `llm_node`, with LiveKit's session spans recorded: the app's run
+    opens under them. Those spans are LiveKit's, never the app's, so the run's first agent still hands off at the top,
+    as the same app does over chat."""
+    voice = """
+""" + livekit_tracer + """
+session = livekit.start_span("agent_session")
+turn_node = livekit.start_span("llm_node", context=set_span_in_context(session))
+with trace.use_span(turn_node):
+""" + "\n".join("    " + line for line in _OPENAI_AGENTS_RUN.replace("LATER", "").splitlines())
+    voice = voice.replace("    from opentelemetry.trace import set_span_in_context", "    pass")
+    voice = "from opentelemetry.trace import set_span_in_context\n" + voice + "\nturn_node.end()\nsession.end()\n"
+    _run(tmp_path, voice)
+    assert _placed(_sealed(tmp_path)) == [
+        ("ask_research", "delegated", "Lead", "observed", ""),
+    ]
+
+
 def test_a_later_agent_in_the_same_run_without_a_recorded_transfer_stays_unknown(
     tmp_path: Path,
 ) -> None:

@@ -365,6 +365,14 @@ def stop_at_deadline(run: Any, agent_argument: str, named: dict[str, str], unnam
         remaining = (answer or {}).get("remaining")
         if isinstance(remaining, bool) or not isinstance(remaining, (int, float)):
             return await run(*args, **kwargs)
+        if remaining <= 0:
+            # Already past its deadline: the stop is claimed before the run is scheduled, so a run with no await in it
+            # never finishes first. Nothing ran, so it is stopped.
+            claim = await asyncio.to_thread(_post, "/worker_stop", {"worker": worker}) or {}
+            if claim.get("stop") is not True:
+                return await run(*args, **kwargs)
+            await asyncio.to_thread(_post, "/worker_stop_end", {"id": claim.get("id"), "stopped": True})
+            raise WorkerStopped(f"{worker} was stopped at its deadline")
         task = asyncio.ensure_future(run(*args, **kwargs))
         try:
             done, _ = await asyncio.wait({task}, timeout=remaining)

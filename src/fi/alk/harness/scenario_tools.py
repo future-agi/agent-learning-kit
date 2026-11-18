@@ -31,7 +31,7 @@ from fi.simulate.simulation.call_actors import (
 
 from .backends import tool, tool_server
 
-from .amend import add_rule, drop_rule, fix_tool, widen
+from .amend import add_rule, drop_rule, fix_tool, set_worker_tools, widen
 from .background_noise import place_for, places
 from .call_actor import (
     CallActorList,
@@ -2811,6 +2811,23 @@ def scenario_tools(
         return _ok(said) if done else _err(said)
 
     @tool(
+        "set_worker_tools",
+        "Change which of the agent's tools one participant (a contract worker, by id) may use; the test world "
+        "refuses the rest for it. The only way to let a participant use a tool, or stop it: amend_contract and "
+        "fix_tool change what a tool accepts or does, never who may use it. Say why.",
+        schema({"worker": str, "allowed_tools": list, "why": str}, ["worker", "allowed_tools", "why"]),
+    )
+    async def set_worker_tools_tool(args: dict[str, Any]) -> dict[str, Any]:
+        done, said = set_worker_tools(
+            contract,
+            world_root,
+            worker=str(args.get("worker") or ""),
+            allowed_tools=[str(one) for one in (args.get("allowed_tools") or [])],
+            why=str(args.get("why") or ""),
+        )
+        return _ok(said) if done else _err(said)
+
+    @tool(
         "add_rule",
         "Give the agent a hard rule its source did not state, when asked for one. It is told to "
         "the agent under test and graded, so this changes what is being tested. Say why.",
@@ -3452,6 +3469,7 @@ def scenario_tools(
             submit_scenario,
             edit_scenario,
             amend_contract,
+            set_worker_tools_tool,
             add_rule_tool,
             drop_rule_tool,
             fix_tool_tool,
@@ -3474,6 +3492,7 @@ _ALWAYS = (
     "submit_scenario",
     "edit_scenario",
     "amend_contract",
+    "set_worker_tools",
     "add_rule",
     "drop_rule",
     "fix_tool",

@@ -4728,13 +4728,13 @@ def test_job_tool_requirement_uses_observed_calls(required, with_calls, expected
     asyncio.run(scenario())
 
 
-def _run_with_friend(monkeypatch, summary, sub_goals) -> hs.ResultReceipt:
+def _run_with_friend(monkeypatch, summary, sub_goals, duplicates=()) -> hs.ResultReceipt:
 
     async def scenario() -> hs.ResultReceipt:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
-        outcome = replace(_call_outcome(), call_actors=(summary,) if summary else ())
+        outcome = replace(_call_outcome(), call_actors=(summary,) if summary else (), duplicates=duplicates)
         scheduler = hs.HostedScheduler(
             pool=pool,
             world_factory=FakeWorldFactory(),
@@ -4791,6 +4791,22 @@ def test_a_call_its_call_actor_never_reached_is_graded_with_the_actor_noted(
     assert (failed.status, failed.failure) == ("failed", None)
     assert [one.verdict for one in failed.sub_goals] == ["fail"]
     assert failed.reason == f"did not reach the agent: {why}"
+
+
+def test_a_duplicate_commit_beside_an_actor_note_keeps_both_reasons_and_no_failure(monkeypatch) -> None:
+    """The platform refuses a passed or failed receipt carrying a failure, and a refused result reads skipped: a double
+    refund must fail the agent with why in its reason, and the actor's note beside it."""
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(),
+        [FakeSubGoal("booked", lambda w, c: None)],
+        duplicates=({"action": "orders.issue_refund", "name": "issue_refund"},),
+    )
+    assert (receipt.status, receipt.failure) == ("failed", None)
+    assert receipt.reason == (
+        "did not reach the agent: Rowan (not_delivered); "
+        "The agent repeated issue_refund after its answer was lost, and the world committed it twice."
+    )
 
 
 def test_a_fault_after_an_actor_never_reached_the_agent_keeps_the_note_beside_the_fault(monkeypatch) -> None:
@@ -5018,6 +5034,30 @@ def test_a_worker_that_passed_its_deadline_has_its_own_checks_inconclusive_and_t
     assert refund.reason == "Inconclusive: worker refund passed its deadline, so its result is partial"
 
 
+def test_a_worker_stopped_at_its_deadline_reads_partial_even_with_no_later_refusal() -> None:
+    """One successful call, then stopped mid-computation: no refusal follows, but the seal says it was stopped, so its
+    own checks read partial, never a pass or a fail."""
+    from dataclasses import replace
+
+    from fi.alk.harness.call_runner import WORKER_STOPPED_AT_DEADLINE
+
+    calls = (hs.Call(name="issue_refund", arguments={}, worker_id="refund"),)
+    outcome = replace(
+        _call_outcome(turns=2, calls=calls),
+        notices=({"code": WORKER_STOPPED_AT_DEADLINE, "workers": ["refund"]},),
+    )
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_done", lambda w, c: None, worker="refund"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        outcome,
+    )
+    refund, task = receipt.sub_goals
+    assert (refund.verdict, task.verdict) == ("inconclusive", "pass")
+    assert refund.reason == "Inconclusive: worker refund passed its deadline, so its result is partial"
+
+
 def test_a_worker_s_check_is_graded_on_the_calls_its_framework_names_it_by() -> None:
     """Spans carry the framework's name for a worker, not the contract id: its check still reads its own calls."""
     calls = (
@@ -5122,7 +5162,7 @@ def test_a_listed_worker_the_in_process_door_cannot_stop_has_its_deadline_not_en
     # Listed for the door, so the trial is placed rather than held.
     assert cr.limits_not_held(document, tmp_path) == []
     # The door's hook never saw the worker run as a task of its own (a hand-off): its deadline is not enforced.
-    monkeypatch.setattr(cr, "read_worker_runs", lambda _runtime: set())
+    monkeypatch.setattr(cr, "read_worker_runs", lambda _runtime, _since=None: set())
     [record] = cr.deadlines_not_enforced(object(), document, tmp_path)
     assert record["worker"] == "refund" and "task of its own" in record["reason"]
     outcome = replace(
@@ -5352,9 +5392,9 @@ def test_a_duplicate_commit_fails_the_scenario(monkeypatch) -> None:
     )
     passing = [FakeSubGoal("refunded", lambda w, c: None)]
     receipt, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=duplicated)
-    assert receipt.status == "failed"
-    assert receipt.failure is not None and receipt.failure.code == "duplicate_commit"
-    assert receipt.failure.message == (
+    # Failed, with why in its reason: a graded receipt carrying a failure is refused by the platform.
+    assert receipt.status == "failed" and receipt.failure is None
+    assert receipt.reason == (
         "The agent repeated issue_refund after its answer was lost, and the world committed it twice."
     )
     clean, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=_call_outcome(turns=2))

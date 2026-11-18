@@ -10638,6 +10638,21 @@ def test_both_stages_tools_for_sub_goals_name_the_declared_workers_as_subjects(t
     for text in descriptions():
         assert "declared workers: `worker:refund`, `worker:order_lookup`" in text
         assert "add one sub-goal with that subject" in text
+        assert "never an outcome the world enforces for it" in text
+
+
+def test_a_worker_s_checks_judge_its_own_behaviour_never_what_the_world_enforces():
+    """Refusing a tool a worker may not use and stopping it at its deadline are the world's; a worker check that
+    reads them holds for every agent. Every stage that writes worker checks says so."""
+    from fi.alk.harness.config import load_skill
+
+    writing = " ".join(load_skill("write-scenarios", preamble=False).split())
+    assert "A worker sub-goal judges what that worker itself did, never an outcome the world already guarantees." in (
+        writing
+    )
+    assert "worker sub-goal that holds only when no such write reached the world" not in writing
+    building = " ".join(load_skill("build-environment", preamble=False).split())
+    assert "never an outcome the world enforces for it (a refused tool, a deadline)" in building
 
 
 def test_the_build_skill_asks_for_a_worker_s_own_check_when_the_contract_lists_workers():

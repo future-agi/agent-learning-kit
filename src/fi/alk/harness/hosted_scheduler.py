@@ -2667,7 +2667,12 @@ class HostedScheduler:
                            reason=note,
  )
 
-        from .call_runner import WORKER_CHANNEL_BYPASSED, WORKER_DEADLINE_NOT_ENFORCED, is_worker_call
+        from .call_runner import (
+            WORKER_CHANNEL_BYPASSED,
+            WORKER_DEADLINE_NOT_ENFORCED,
+            WORKER_STOPPED_AT_DEADLINE,
+            is_worker_call,
+        )
 
         # A separate worker that reached the world without its own channel: its limits were not held for those calls,
         # so its own checks are not graded and the task's are, as the multi-agent plan's bypass decision (D5) set.
@@ -2683,6 +2688,14 @@ class HostedScheduler:
             str(worker)
             for one in call_outcome.notices
             if isinstance(one, dict) and one.get("code") == WORKER_DEADLINE_NOT_ENFORCED
+            for worker in one.get("workers") or ()
+        }
+        # A worker the harness stopped at its deadline: its own work was cut short, so its own checks read partial,
+        # whether or not a later call of it was refused.
+        stopped = {
+            str(worker)
+            for one in call_outcome.notices
+            if isinstance(one, dict) and one.get("code") == WORKER_STOPPED_AT_DEADLINE
             for worker in one.get("workers") or ()
         }
         worker_names = self._worker_names
@@ -2718,7 +2731,7 @@ class HostedScheduler:
                 f"worker {worker} made no tool call the world recorded"
                 if not lane
                 else f"worker {worker} passed its deadline, so its result is partial"
-                if any(getattr(one, "refusal_code", "") == "deadline_passed" for one in lane)
+                if worker in stopped or any(getattr(one, "refusal_code", "") == "deadline_passed" for one in lane)
                 else f"the world could not read the limits of worker {worker}"
                 if any(getattr(one, "refusal_code", "") == LIMITS_UNREADABLE for one in lane)
                 else ""
@@ -2980,12 +2993,12 @@ class HostedScheduler:
             )
         else:
             status = "passed"
-        failure = None
         if call_outcome.duplicates:
             # The world applied a write twice after the agent's answer was lost: a failure of the agent's, whatever
-            # the sub-goals say.
+            # the sub-goals say. A graded receipt carries no `failure` (that is an errored run's), so why is its reason,
+            # beside any note on the trial.
             status = "failed"
-            failure = _failure("duplicate_commit", duplicate_reason(call_outcome.duplicates))
+            note = "; ".join(one for one in (note, duplicate_reason(call_outcome.duplicates)) if one)
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,
@@ -2995,7 +3008,7 @@ class HostedScheduler:
             sub_goals=tuple(sub_goal_results),
             evaluations=(),
             call=self._call_summary(call_outcome),
-            failure=failure,
+            failure=None,
             reason=note,
         )
 

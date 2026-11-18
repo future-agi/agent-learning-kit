@@ -1537,6 +1537,8 @@ def test_six_supported_shapes_produce_preflight_clean_bundle(
     loaded = load_bundle_v2(output)
     assert loaded.digest == first.digest
     assert loaded.metadata["packaging"] == packaging
+    # A build says it is one, so the platform never takes its seal for a chat's reseal.
+    assert loaded.metadata["sealed_from"] == "build"
     assert loaded.provenance.source_digest
     if connector == "livekit":
         control = next(

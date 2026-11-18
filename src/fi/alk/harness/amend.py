@@ -348,6 +348,53 @@ def drop_tool_references(contract: AgentContract) -> list[str]:
     return dropped
 
 
+def set_worker_tools(
+    contract: AgentContract, destination: Path, *, worker: str, allowed_tools: list[str], why: str
+) -> tuple[bool, str]:
+    """Change which of the agent's tools one participant may use.
+
+    The test world refuses every other tool for that participant, so this is the only way a request such as "let
+    both of them update an order" changes what is tested: a description or an argument's values never do. A tool the
+    participant's code calls but the contract did not list for it is added to what it holds, so it may be allowed.
+    """
+    found = next((one for one in contract.workers if one.id == worker), None)
+    if found is None:
+        return False, (
+            f"{worker!r} is not one of this agent's participants. They are: "
+            f"{', '.join(one.id for one in contract.workers) or 'none'}"
+        )
+    if not why.strip():
+        return False, "say why: an unexplained change to what a participant may use is indistinguishable from a guess"
+    wanted = list(dict.fromkeys(one.strip() for one in allowed_tools if one.strip()))
+    if not wanted:
+        return False, "name at least one tool it may use"
+    unknown = sorted(set(wanted) - contract.tool_names())
+    if unknown:
+        return False, (
+            f"{', '.join(unknown)} is not a tool this agent has. It has: {', '.join(sorted(contract.tool_names()))}"
+        )
+    was_tools, was_allowed = list(found.tools), list(found.allowed_tools)
+    held = [*found.tools, *(one for one in wanted if one not in found.tools)]
+    # Allowed every tool it holds: no list, so the participant is never limited to a set that misses a later tool.
+    allowed = [] if set(wanted) == set(held) else wanted
+    if held == was_tools and set(allowed) == set(was_allowed):
+        return False, f"{worker} may already use {', '.join(wanted)}"
+    found.tools, found.allowed_tools = held, allowed
+    contract.amendments.append(f"{worker} may use {', '.join(wanted)}: {why.strip()}")
+    problems = validate_contract(contract)
+    if problems:
+        found.tools, found.allowed_tools = was_tools, was_allowed
+        contract.amendments.pop()
+        return False, "the amended contract would not be valid: " + "; ".join(problems)
+    _persist(contract, destination)
+    refused = sorted(set(held) - set(wanted))
+    return True, (
+        f"{worker} may now use {', '.join(wanted)}"
+        + (f"; the test world refuses its {', '.join(refused)}" if refused else "")
+        + ". The change takes effect in the next saved version."
+    )
+
+
 def _persist(contract: AgentContract, destination: Path) -> None:
     """Save the contract the stage is holding. Its free text is cleaned in place as it is saved,
     so the stage goes on working from what was saved."""

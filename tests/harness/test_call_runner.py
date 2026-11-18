@@ -3589,12 +3589,27 @@ def test_a_deadline_only_scenario_on_a_shared_worker_with_allowed_tools_is_not_h
         {"id": "reader", "binding": "shared", "tools": ["read"], "allowed_tools": ["read"]}]}))
     (tmp_path / "generated" / "tool-proxy").mkdir(parents=True)
     (tmp_path / "generated" / "tool-proxy" / "door.json").write_text(json.dumps({"worker_deadlines": "per_worker"}))
-    # One deadline for all is held beside the separate writer; no sub-goal judges the reader's permitted tools.
-    assert cr._limits_not_held_cause({"worker_budget_seconds": 30}, tmp_path) == ("", "", [])
-    assert cr.limits_not_held({"worker_budget_seconds": 30}, tmp_path) == []
+    # One deadline for all reaches the shared reader too, whose calls the world cannot tell apart: held for the
+    # deadline, never for its permitted tools, which no sub-goal judges.
+    assert cr._limits_not_held_cause({"worker_budget_seconds": 30}, tmp_path) == (
+        "A worker deadline", "shared_worker", ["reader"])
     # A deadline naming the shared reader is held for the deadline, not for its permitted tools.
     assert cr._limits_not_held_cause({"worker_budget_seconds": {"reader": 5}}, tmp_path) == (
         "A worker deadline", "shared_worker", ["reader"])
+
+
+def test_one_deadline_for_all_holds_a_relied_on_shared_worker_even_beside_a_separate_one(tmp_path):
+    """A scalar budget, a separate writer and a shared reader the scenario judges: the reader's calls cannot be told
+    from the coordinator's, so the deadline cannot be held for it and the scenario is held, naming the reader."""
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"},
+        {"id": "reader", "binding": "shared", "tools": ["read"]}]}))
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
+        {"name": "reader_answered", "subject": "worker:reader"}]}))
+    (tmp_path / "generated" / "tool-proxy").mkdir(parents=True)
+    (tmp_path / "generated" / "tool-proxy" / "door.json").write_text(json.dumps({"worker_deadlines": "per_worker"}))
+    document = {"worker_budget_seconds": 30, "sub_goals": ["reader_answered"]}
+    assert cr._limits_not_held_cause(document, tmp_path) == ("A worker deadline", "shared_worker", ["reader"])
 
 
 def test_the_bundle_seals_each_worker_s_limited_flag_and_what_each_scenario_relies_on(tmp_path):
@@ -3672,7 +3687,7 @@ def test_each_held_scenario_seals_the_workers_whose_limits_the_build_cannot_hold
     documents = {
         # The separate writer's deadline holds; the shared reader's deadline and permitted tools do not.
         "both_budgets": {"worker_budget_seconds": {"writer": 5, "reader": 5}, "sub_goals": ["reader_refused"]},
-        # One deadline for all holds beside a separate worker, and no sub-goal judges the reader's permitted tools.
+        # One deadline for all reaches every shared worker the scenario relies on, beside a separate one too.
         "one_for_all": {"worker_budget_seconds": 30, "sub_goals": ["idle_said"]},
         # About a worker with no limits, and the task: nothing relied on, nothing listed.
         "no_limits": {"sub_goals": ["idle_said", "task_done"]},
@@ -3684,7 +3699,7 @@ def test_each_held_scenario_seals_the_workers_whose_limits_the_build_cannot_hold
     sealed = json.loads((tmp_path / cr.WORKER_LIMITS_FILE).read_text())["scenarios"]
     assert {key: (one["held"], one["unheld_workers"]) for key, one in sealed.items()} == {
         "both_budgets": (True, ["reader"]),
-        "one_for_all": (False, []),
+        "one_for_all": (True, ["idle", "reader"]),
         "no_limits": (False, []),
     }
     # The list is the runner's own rule, not a second one.
@@ -5006,3 +5021,18 @@ def test_a_hold_read_whose_thread_cannot_start_is_tried_again(monkeypatch) -> No
     assert check() is None and check() is None
     # Each check tries again: a failed start never leaves the read marked as under way.
     assert len(starts) == 2
+
+
+def test_two_workers_sharing_a_display_name_are_never_told_apart_by_it(tmp_path):
+    """Two workers both named "Assistant": a call under that name belongs to neither by name, so the trace leaves it
+    undeclared and neither worker's checks read it; their contract ids still match."""
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "billing", "name": "Assistant"}, {"id": "shipping", "name": "Assistant"}, {"id": "refund", "name": "Refunds"}]}))
+    assert cr.declared_worker_ids(tmp_path) == {"Refunds": "refund"}
+    names = cr.contract_worker_names(tmp_path)
+    assert names == {"refund": "Refunds"}
+    by_name = Call(name="lookup", arguments={}, worker_id="Assistant")
+    assert not cr.is_worker_call(by_name, "billing", names.get("billing", ""))
+    assert not cr.is_worker_call(by_name, "shipping", names.get("shipping", ""))
+    by_id = Call(name="lookup", arguments={}, worker_id="shipping")
+    assert cr.is_worker_call(by_id, "shipping", names.get("shipping", ""))

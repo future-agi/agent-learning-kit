@@ -282,3 +282,88 @@ def test_a_trial_s_start_changes_no_schema_after_the_world_s_first(monkeypatch) 
     # Schema changes take the table's lock a stop under way holds: never again at a later trial's start.
     assert first and not [one for one in statements if one.lstrip().upper().startswith(("ALTER", "CREATE"))]
 
+
+
+def test_a_worker_that_ran_on_past_its_cancel_is_recorded_as_not_stopped(
+    world_database,
+) -> None:
+    """Its run did not end at its cancel: the claim says so, and the seal keeps it as not held to its deadline."""
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    assert (
+        world_door.claim_worker_stop(
+            world_database, "refund", "refund-worker", lambda: False
+        )
+        is False
+    )
+    assert [
+        (row["worker"], row["reason"])
+        for row in call_runner.read_worker_stops(_runtime())
+    ] == [("refund", world_door.NOT_STOPPED)]
+
+
+def test_a_stop_left_by_an_earlier_trial_is_never_this_trial_s(world_database) -> None:
+    """The clear before this trial failed and an earlier trial's stop is still in the table: the seal, reading from
+    this trial's start, never publishes it."""
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    assert (
+        world_door.claim_worker_stop(
+            world_database, "refund", "refund-worker", lambda: True
+        )
+        is True
+    )
+    this_trial_started = time.time() + 1
+    assert call_runner.read_worker_stops(_runtime(), this_trial_started) == []
+
+
+def test_a_seal_that_times_out_on_a_stop_under_way_says_the_stops_are_not_known(
+    world_database, monkeypatch
+) -> None:
+    """The seal waits on the trial's row while a stop is under way; when it times out, the stops are unknown (None),
+    never an empty list a later commit could contradict."""
+    monkeypatch.setattr(call_runner, "_SEAL_LOCK_TIMEOUT", "200ms")
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    inside = threading.Event()
+
+    def slow_stop() -> bool:
+        inside.set()
+        time.sleep(1.5)
+        return True
+
+    thread = threading.Thread(
+        target=lambda: world_door.claim_worker_stop(
+            world_database, "refund", "refund-worker", slow_stop
+        )
+    )
+    thread.start()
+    assert inside.wait(5)
+    sealed = call_runner.read_worker_stops(_runtime())
+    thread.join(5)
+    assert sealed is None
+
+
+def test_what_the_seal_s_stops_mean_for_grading() -> None:
+    document = {"worker_budget_seconds": {"refund": 5}}
+    notices, ran_on = call_runner.worker_stop_outcomes(
+        [
+            {"worker": "refund", "reason": "deadline_passed"},
+            {"worker": "lookup", "reason": world_door.NOT_STOPPED},
+        ],
+        document,
+        None,
+    )
+    assert [(one["code"], one["workers"]) for one in notices] == [
+        (call_runner.WORKER_STOPPED_AT_DEADLINE, ["refund"])
+    ]
+    assert [one["worker"] for one in ran_on] == ["lookup"]
+    # Stops not known: every worker this trial gave a deadline is not shown held.
+    notices, ran_on = call_runner.worker_stop_outcomes(None, document, None)
+    assert notices == [] and [one["worker"] for one in ran_on] == ["refund"]
+
+
+def test_a_run_marked_by_an_earlier_trial_is_never_this_trial_s(world_database) -> None:
+    """A run of the worker marked in an earlier trial, left by a clear that failed: never read as this trial's, so
+    its deadline is never taken as held because of it."""
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    world_door.mark_worker_run(world_database, "refund")
+    assert call_runner.read_worker_runs(_runtime()) == {"refund"}
+    assert call_runner.read_worker_runs(_runtime(), time.time() + 1) == set()

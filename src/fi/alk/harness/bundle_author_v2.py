@@ -4411,6 +4411,8 @@ def author_bundle_v2(
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
+                # A build's seal, told apart from a chat's reseal, which stamps the tree it sealed from instead.
+                "sealed_from": BUILD_SEAL,
                 **(
                     {"source_tool_trace_version": _SOURCE_TOOL_TRACE_VERSION}
                     if _uses_source_tool_trace(plan.processes)
@@ -4726,6 +4728,10 @@ def _carry_contract(
 
 # What a reseal carries from the authoring folders into the bundle.
 RESEAL_INPUTS = ("contract.json", CATALOGUE, "world.sqlite")
+
+
+# What a build stamps as `sealed_from`; a reseal stamps the digest of the tree it sealed from.
+BUILD_SEAL = "build"
 
 
 def sealed_from(authoring: Path) -> str:
