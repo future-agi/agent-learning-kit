@@ -16,18 +16,25 @@ doctor_checks:
 opt_in_lane: false
 ---
 
-# The Simulation Spine — One Spec, One Runner
+# Run one simulation spec with one runner
 
 > **Twin:** [`examples/sdk_spec_runner_quickstart.py`](../../examples/sdk_spec_runner_quickstart.py)
 > · offline, no credentials.
 > For the full end-to-end tour (real LLM, voice, platform submit, custom
 > worlds) see [`examples/agent_learning_sdk_demo_v2.ipynb`](../../examples/agent_learning_sdk_demo_v2.ipynb).
 
-Under the manifest and CLI surfaces, every simulation — chat, voice, or a
-custom world — runs through **one** spine: a frozen `SimulationSpec` fed to
-**one** `SimulationRunner`. Providers, environments, and agent kinds are
-registry entries, not hardcoded branches. This page runs the smallest version of
-that spine directly, so the moving parts are visible.
+The spec-based simulation runtime accepts a frozen `SimulationSpec` through
+`SimulationRunner`. Environment plugins and endpoint/simulator profiles use
+registries. This page exercises that runtime directly; it is not the same
+executor as the source-authoring harness's `HarnessExecutor`, and does not
+establish whole-harness or bundle portability. See
+[environment authoring and extension contracts](environment-authoring.md).
+
+The example is checkout-only; installing the wheel does not install `examples/`.
+A custom environment's `run` currently returns a legacy `TestReport`, which the
+runner converts into a `SimulationReport`. The
+[registry test](../../tests/runtime/test_registry.py) demonstrates this with a
+dummy plugin and no provider calls.
 
 | Piece | In the SDK | You supply |
 | --- | --- | --- |
@@ -35,7 +42,7 @@ that spine directly, so the moving parts are visible.
 | **Target** | an ActorSource (`system_prompt` \| callable \| `factory` \| `http` \| `framework`), or any object with `.call()` | drop in your agent |
 | **Scenario** | personas + situations + desired outcomes | describe the test |
 | **Contract** | a frozen `SimulationSpec` tying the three together | declarative, secret-free |
-| **Runner** | one `SimulationRunner` — same spine for chat and voice | `.run(spec, target=...)` |
+| **Runner** | one `SimulationRunner`, same spine for chat and voice | `.run(spec, target=...)` |
 
 ## 1. Install and check
 
@@ -43,7 +50,7 @@ that spine directly, so the moving parts are visible.
 git clone https://github.com/future-agi/agent-learning-kit
 cd agent-learning-kit
 uv sync                     # or: pip install -e .
-uv run agent-learn doctor   # status: passed
+uv run agent-learn doctor   # inspect import/consolidation status; not a live readiness test
 ```
 
 ## 2. Run the smallest simulation
@@ -90,19 +97,25 @@ asyncio.run(main())
 The backing twin is the same run, writing the finished report to a path:
 
 ```bash
+export AGENT_LEARNING_SYNC=local
+export AGENT_LEARNING_LEDGER_PATH="$PWD/artifacts/spec-runner-ledger"
 python examples/sdk_spec_runner_quickstart.py artifacts/spec-and-runner.json
-python -c "import json; p=json.load(open('artifacts/spec-and-runner.json')); assert 'COMPLETED' in p['status']; print('ok')"
+python -c "import json; p=json.load(open('artifacts/spec-and-runner.json')); assert 'COMPLETED' in p['status']; assert p['transcript']; print('ok')"
 ```
 
+The twin writes a compact summary, not the full runtime report or the CLI
+`agent-learning.run.v1` envelope. `COMPLETED` is an execution status, not a quality
+verdict. Use the [evaluation guide](../eval/overview.md) to score real evidence.
+
 Every adapter slot accepts the enum (`S.EnvironmentAdapters.CHAT`) **or** the
-plain string it equals (`"chat"`) — same `spec_hash`. Enums give you
+plain string it equals (`"chat"`), same `spec_hash`. Enums give you
 autocomplete and typo-safety for the built-ins; custom registered names stay
 plain strings.
 
 ## 3. Drop in your own agent
 
 `EchoAgent` was passed straight to the runner. Every other way you'd hand the
-kit an agent is an ActorSource resolved through one registry — you declare what
+kit an agent is an ActorSource resolved through one registry, you declare what
 you have, you never edit the engine:
 
 ```python
@@ -113,7 +126,7 @@ S.get_profile("framework").resolve_target({"target": "mypkg:graph"})   # LangGra
 ```
 
 Code-loading kinds (`factory`, `import_object`, `framework`, callable) carry
-`runs_caller_code == True` and are deny-by-default in hosted runs — locally they
+`runs_caller_code == True` and are deny-by-default in hosted runs, locally they
 resolve in-process, hosted they route through the sandbox. `http` and
 `system_prompt` are the hosted-safe kinds. Check with
 `S.get_profile("http").runs_caller_code`.
@@ -123,12 +136,12 @@ resolve in-process, hosted they route through the sandbox. `http` and
 | Task | Spec + Runner API |
 | --- | --- |
 | Real-LLM chat | `SimulationRunner().run(spec, target=your_llm_object)` |
-| Voice (Vapi / Retell / WebRTC) | `SimulationRunner().run(voice_spec)` — see the v2 notebook §7 |
+| Voice (Vapi / Retell / WebRTC) | `SimulationRunner().run(voice_spec)`, see the v2 notebook §7 |
 | Score a run | `evaluate_agent_report(report.to_legacy())` |
 | Register your own world | `@register_environment("name")` |
-| Submit to the platform | `result_sink=FutureAGIResultSink(...)` |
+| Submit results to an existing Future AGI run | `result_sink=FutureAGIResultSink(...)`. The sink does not create or wait for a hosted Environment job. |
 
 - Full runnable tour: [`examples/agent_learning_sdk_demo_v2.ipynb`](../../examples/agent_learning_sdk_demo_v2.ipynb).
-- The older manifest/CLI front door: [`first-run.md`](first-run.md) — same
+- The older manifest/CLI front door: [`first-run.md`](first-run.md), same
   concepts, assembled into a `SimulationSpec` underneath.
 - Frameworks as targets: [`simulate-any-framework.md`](simulate-any-framework.md).

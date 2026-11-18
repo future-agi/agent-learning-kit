@@ -180,6 +180,14 @@ jobs:
         run: python -m pip install .
       - name: Run doctor
         run: agent-learn doctor --quiet
+      - name: Run the public environment plugin example outside the checkout
+        shell: bash
+        run: |
+          example_root="$(mktemp -d)"
+          cp examples/sdk_environment_plugin.py "$example_root/"
+          cd "$example_root"
+          python sdk_environment_plugin.py result.json
+          python -c "import json; p=json.load(open('result.json')); assert p['status']=='RunStatus.COMPLETED'; assert p['environment']=='order_status_world'"
       - name: Run local text simulation
         env:
           AGENT_LEARNING_RUN_EXAMPLE_KEY: smoke

@@ -12,11 +12,23 @@ doctor_checks:
 opt_in_lane: false
 ---
 
-# Cookbook Index
+# Cookbook index
 
 > Pick a row (what stage you're at) or a column (what you care about). Every
-> cell links real pages; empty cells render as `—`, never invented pages. A
+> cell links real pages; empty cells render as `None`, never invented pages. A
 > page may appear in at most two cells.
+
+## Toolchain route and libraries
+
+[Install and offline first success](../../README.md#first-success-deterministic-and-credential-free)
+→ [inspect/evaluate evidence](../eval/overview.md)
+→ [source-based environment authoring](../simulate/environment-authoring.md)
+→ [choose a supported execution seam](../simulate/environment-authoring.md#supported-extension-seams).
+Authoring is model-backed and opt-in; it is not part of the offline fixture.
+
+The [library inventory](../../LIBRARIES.md) covers the public facades and included
+engines, reference harness, Studio, benchmarks, loss/practice, episodes,
+telemetry, TypeScript boundaries and external dependencies.
 
 ## The matrix (stage × objective)
 
@@ -31,7 +43,7 @@ opt_in_lane: false
 Notes on placement: red-team pages live in the simulate and evaluate rows
 because red-teaming rides the `simulate` and `evals` engines; the promote row
 holds the pages whose output is a regression baseline you keep
-(`promote-to-regression` appears under both capability and safety — same page,
+(`promote-to-regression` appears under both capability and safety, same page,
 two reasons to need it).
 
 ## By layer (literature vocabulary → kit surface)
@@ -41,7 +53,7 @@ two reasons to need it).
 | memory | [optimize/memory-targets](../optimize/memory-targets.md) · [simulate/memory](../simulate/memory.md) |
 | skills / tools | [prove/actions](../prove/actions.md) · [redteam/first-campaign](../redteam/first-campaign.md) |
 | protocol | [frameworks/mcp](../frameworks/mcp.md) · [frameworks/a2a](../frameworks/a2a.md) · [frameworks/openenv](../frameworks/openenv.md) |
-| harness | [prove/release-check-in-your-ci](../prove/release-check-in-your-ci.md) · [quickstart/golden-path-ci](../quickstart/golden-path-ci.md) |
+| harness | [environment authoring and seams](../simulate/environment-authoring.md) · [reference harness](../../src/fi/alk/harness/README.md) |
 
 ## By framework
 
@@ -62,14 +74,14 @@ two reasons to need it).
 
 ## Indexes and reference
 
-These pages carry `backing: []` — they catalog the corpus rather than run it,
+These pages carry `backing: []`, they catalog the corpus rather than run it,
 so they sit outside the matrix:
 
-- [Landing page](../index.md) — the spine, golden paths, and the compact mirror of this matrix.
-- This page — the full 2-axis index.
-- [reference/artifacts.md](../reference/artifacts.md) — the closed artifact-kind catalog.
-- [reference/cli.md](../reference/cli.md) — the `agent-learn` command surface.
-- [reference/configure.md](../reference/configure.md) — API key semantics, offline vs platform.
+- [Landing page](../index.md), the spine, golden paths, and the compact mirror of this matrix.
+- This page, the full 2-axis index.
+- [reference/artifacts.md](../reference/artifacts.md), the closed artifact-kind catalog.
+- [reference/cli.md](../reference/cli.md), the `agent-learn` command surface.
+- [reference/configure.md](../reference/configure.md), API key semantics, offline vs platform.
 
 ## How to read a page
 

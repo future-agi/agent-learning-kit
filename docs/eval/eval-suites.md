@@ -23,40 +23,51 @@ opt_in_lane: false
 > · emits `agent-learning.eval.v1` · offline, no credentials.
 > A coding agent can complete this page from the frontmatter alone.
 
+For the larger map of the facade, the included engine, execution modes, harness
+grading, loss, and benchmarks, start with the [Evaluation guide](overview.md).
+The recipe below assumes a **checkout**: pip installation alone does not install
+`examples/`. Its echo provider is offline; arbitrary suites are not.
+
 ## 1. What you are testing
 
 That a fixed set of prompts, run through a named provider, still satisfies
-your assertions. A suite file has four parts — `providers`, `prompts`,
-`tests`, and an optional threshold — and `examples/eval_suite.json` is the
-minimal complete instance: one `echo` provider, one `{{question}}` prompt
-template, one test with a `contains` assertion. The `version` field is the
-artifact kind the run will emit, `agent-learning.eval.v1`.
+your assertions. A suite file has four parts, `providers`, `prompts`,
+`tests`, and an optional threshold, and `examples/eval_suite.json` is the
+minimal declaration: one `echo` provider, one `{{question}}` prompt template,
+and one test with a `contains` assertion. The `version` field is the artifact
+kind the run emits, `agent-learning.eval.v1`.
 
 The failure class is behavioral drift: a prompt edit, a provider swap, or a
 template variable change that silently alters what your users see. Suites
-catch it because the assertions are declarative — `contains`,
-`not_contains` — and the run is reproducible: the echo provider returns its
+catch it because the assertions are declarative, `contains`,
+`not_contains`, and the run is reproducible: the echo provider returns its
 input deterministically, so the example suite passes or fails for reasons
 entirely inside the file.
 
 Suites also scale past string checks. The `artifact` provider type (see
 `examples/artifact_task_eval_suite.json`) reads fields out of a saved run
 artifact by path, so the same test/assert grammar can interrogate metric
-averages and environment state from a real run — that pattern gets its own
+averages and environment state from a real run, that pattern gets its own
 treatment in [artifact evals](artifact-evals.md). The covering gate for this
 page's twin executes that artifact-backed suite end-to-end on every
 release-check, which is what admits this page.
 
 ## 2. Run it
 
-CLI — validate the shape first, then execute:
+CLI, validate the shape first, then execute:
 
 ```bash
+export AGENT_LEARNING_SYNC=local
+export AGENT_LEARNING_LEDGER_PATH="$PWD/artifacts/eval-suite-ledger"
 agent-learn eval examples/eval_suite.json --dry-run
 agent-learn eval examples/eval_suite.json --output artifacts/eval-suite.json
 ```
 
-SDK — the same operation:
+`--dry-run` checks suite shape without executing providers; its successful status
+is validation, not a measured quality verdict. Telemetry local mode does not
+prevent a different suite from calling a model or HTTP service.
+
+SDK, the same operation:
 
 ```python
 from fi.alk import evals
@@ -67,24 +78,25 @@ result = evals.run_eval_suite_file("examples/eval_suite.json")
 
 To build a suite in code instead of JSON, use
 `evals.build_eval_suite_manifest(name=..., providers=..., prompts=...,
-tests=..., threshold=...)` — `examples/sdk_eval_suite.py` is a complete
+tests=..., threshold=...)`, `examples/sdk_eval_suite.py` is a complete
 scripted builder (it expects `AGENT_LEARNING_SDK_EVAL_SUITE_KEY` in the
 environment before it will run). `--output` also accepts `.xml` (JUnit) and
-`.sarif` paths, and `--markdown` writes a human report — the same artifact,
+`.sarif` paths, and `--markdown` writes a human report, the same artifact,
 three renderings.
 
 ## 3. What you built
 
-Postcondition (machine-checkable — same check the docs gate enforces):
+Postcondition (machine-checkable, same check the docs gate enforces):
 
 ```bash
 python -c "import json; p=json.load(open('artifacts/eval-suite.json')); assert p['kind']=='agent-learning.eval.v1', p['kind']; print('ok')"
 ```
 
-The artifact records every test with its rendered prompt, provider output,
-per-assertion verdicts, an aggregate score against the suite threshold, and
-an `exit_code` — `agent-learn eval` returns it as the process exit code, so
-the suite is CI-ready with no wrapper script.
+The artifact records the evaluation summary, aggregate score, suite threshold,
+and an `exit_code`. When the runner emits cases, it also records their rendered
+prompts, provider outputs, and assertion verdicts. Inspect the case and assertion
+counts before using the artifact as a CI quality gate. `agent-learn eval` returns
+the artifact exit code as the process exit code.
 
 ## 4. When it fails
 
@@ -102,5 +114,5 @@ checks: `examples/sdk_eval_suite.py` builds exactly that wrapper with
 `required_capabilities.commands` so the runner refuses to silently skip it.
 From there, `agent-learn release-check` re-executes the suite on every cut.
 When the suite guards a fix you shipped, pin the passing artifact as a
-baseline (`agent-learn baseline`) and compare future runs against it — the
+baseline (`agent-learn baseline`) and compare future runs against it, the
 regression lifecycle is the same one the simulate track uses.

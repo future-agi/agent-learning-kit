@@ -1,4 +1,4 @@
-# Agent Learning Kit Development Boundary
+# Agent Learning Kit development boundary
 
 `agent-learning-kit` is the public SDK and code home for agent simulation,
 evaluation, red teaming, and optimization.
@@ -6,8 +6,9 @@ evaluation, red teaming, and optimization.
 All new public SDK work should land here first:
 
 - Public Python imports belong under `fi.alk.*`.
-- Public TypeScript package work belongs under `typescript/agent-learning-kit`
-  and publishes as `@future-agi/agent-learning-kit`.
+- Public TypeScript package work belongs under `typescript/agent-learning-kit`,
+  whose declared package name is `@future-agi/agent-learning-kit`. Workspace
+  exports are not evidence of npm publication or Python harness parity.
 - Public CLI commands belong under `agent-learn`.
 - Public examples and cookbooks should use `agent-learning-kit` install commands.
 - Runtime implementation should live under this repo, either in
@@ -22,9 +23,10 @@ All new public SDK work should land here first:
 `ai-evaluation` is an active engine for this release, not legacy history. Its
 Python runtime must be present under `src/fi/evals`, and its TypeScript SDK
 source must be present under `typescript/agent-learning-kit/src`.
-`agent-learn release-check` compares those source trees with
-the ai-evaluation source inventory (maintained in the internal-docs repo) so missing ai-evaluation
-files fail the v1 release gate.
+Use the public [library inventory](LIBRARIES.md), [package manifest](pyproject.toml),
+source trees and tests as the consolidation references. Keep evaluation, runtime,
+harness and contained-library documentation in this repository alongside the
+code; consumers should not need an out-of-repository inventory.
 
 The older `simulate-sdk` and `agent-opt` repositories are source/history during
 the migration. New runtime code should be moved into `agent-learning-kit`, not
@@ -51,6 +53,25 @@ When moving an existing surface:
    repository as the source path.
 5. Update public docs/examples to use `agent-learning-kit`.
 6. Only then simplify or hide the older engine-level surface.
+
+## Match the check to the claim
+
+ALK has six verification levels. Use the narrowest level that proves the claim,
+and report the commit and command with the result.
+
+| Level | Command or CI job | What it proves | What it does not prove |
+| --- | --- | --- | --- |
+| Documentation and links | `python scripts/generate_docs_index.py --check`; `uv run pytest -q tests/test_config_and_facades.py -k docs_executability` | Page metadata, backing references, licensed claims, and the generated index match the checkout. Review or a link checker must still inspect local Markdown links. | Imports, simulation execution, providers, the harness, and hosted images. A documentation build is not full simulation-engine validation. |
+| Credential-free workflow | `uv run pytest -q tests/test_init_golden_paths.py -k 'run and offline'` | The scaffolded `run` preset executes without provider or Future AGI credentials and writes the expected artifact. | A test that only removes credentials does not prove that the process attempted no network connection. Use the network-denied wheel smoke as the release evidence for the stronger offline claim. |
+| Runtime and harness | `uv run pytest -q tests/runtime/test_registry.py`; `scripts/harness-stability-gate.sh` | The simulation registry contract and the supported harness unit and integration set pass in the checkout. Set `RUN_INTEGRATION=1` for the sealed-bundle restart check. | Wheel contents, a hosted interpreter, or a live provider. |
+| Installed wheel | The `clean-install` job in `.github/workflows/sdk-smoke.yml` | `pip install .` builds and installs the wheel, the public commands and imports load, and documented local examples run outside repository import paths. | The published PyPI file, hosted runtime, or credentialed providers. |
+| Hosted interpreter | The `sdk-build` and `template-publish` jobs in `.github/workflows/publish-pypi.yml` | `sdk-build` imports `fi.simulate.hosted.child_entrypoint` and `fi.alk.harness` from the wheel. The approved template job certifies the current hosted venv on Python 3.12.3. | Production deployment or all provider integrations. The Python 3.13 SDK-smoke job runs tracer subprocesses only; it does not certify the hosted venv on 3.13. Save the template reference, Python version, ALK version, commit, command, and result. |
+| Credentialed provider | `AGENT_LEARNING_LIVE_CREDENTIALED=1 uv run pytest -q -m live_credentialed tests/live` with the credentials named by the selected test | The named provider and lane worked with the tested account, model, region, and package versions. | Other providers, models, regions, or a future run. These tests can spend money and send test data. |
+
+Keep documentation, offline, wheel, hosted, and provider results separate in a
+release report. A green result applies only to the command, revision, and lane
+that produced it.
+
 # Release pipeline
 
 One GitHub Actions workflow, `Release` (`.github/workflows/publish-pypi.yml`), runs
