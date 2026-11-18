@@ -5,6 +5,7 @@ import hmac
 from io import BytesIO
 import json
 import os
+from pathlib import Path
 import re
 import signal
 import subprocess
@@ -20,6 +21,7 @@ from fi.alk.harness import call_runner, config, local_certified_runtime, process
 from fi.alk.harness.bundle_v2 import ProcessUser, SourceProcess
 from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.sandbox_server import (
+    JobRefused,
     LocalSandbox,
     LocalSandboxRequest,
     SandboxAdjustmentRequest,
@@ -1084,6 +1086,11 @@ def test_public_github_branch_url_populates_job_ref(tmp_path):
         if "hosted_isolation_must_be_dedicated_vm" in str(exc):
             raise _AwaitingDedicatedIsolation from exc
         raise
+    if (
+        response.status_code == 422
+        and "hosted_isolation_must_be_dedicated_vm" in response.text
+    ):
+        raise _AwaitingDedicatedIsolation
 
     assert response.status_code == 200
     source = response.json()["job"]["source"]
@@ -1113,6 +1120,11 @@ def test_private_github_submission_becomes_hosted_job(tmp_path):
         if "hosted_isolation_must_be_dedicated_vm" in str(exc):
             raise _AwaitingDedicatedIsolation from exc
         raise
+    if (
+        response.status_code == 422
+        and "hosted_isolation_must_be_dedicated_vm" in response.text
+    ):
+        raise _AwaitingDedicatedIsolation
 
     assert response.status_code == 200
     job = response.json()["job"]
@@ -1189,6 +1201,95 @@ def test_a_reserved_name_is_reported_before_the_missing_commit(tmp_path, extra, 
     assert response.status_code == 422
     assert reason in response.text
     assert "github_commit_sha_required" not in response.text
+
+
+def _job_model_codes():
+    """Every refusal code job.py raises, read from its source: a new one is covered too."""
+    import fi.alk.harness.job as job_module
+
+    text = Path(job_module.__file__).read_text()
+    heads = re.findall(r'raise ValueError\(\s*f?"([a-z0-9_]+)', text)
+    return sorted(set(heads))
+
+
+def _refusal(code):
+    """A real pydantic ValidationError carrying ``code``, as a job.py validator raises it."""
+    from pydantic import BaseModel as _Model, model_validator as _after
+
+    class _Refuses(_Model):
+        note: str = ""
+
+        @_after(mode="after")
+        def _refuse(self):
+            raise ValueError(code)
+
+    try:
+        _Refuses(note="submitted-secret-value")
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("the model did not refuse")
+
+
+def _local_source(tmp_path, monkeypatch):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    monkeypatch.setattr(LocalSandbox, "_execute", _idle_execute)
+    return source
+
+
+@pytest.mark.parametrize("code", _job_model_codes())
+def test_a_job_model_refusal_is_a_cleaned_422_naming_its_code(tmp_path, monkeypatch, code):
+    # Built inside the route, the job model's ValidationError used to be a bare 500, which
+    # the platform reads as "sandbox unavailable". It is the caller's refusal, with its reason.
+    source = _local_source(tmp_path, monkeypatch)
+
+    def refuse(*_args, **_kwargs):
+        raise _refusal(code)
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", refuse)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"source_path": str(source)})
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert [entry["msg"] for entry in detail] == [f"Value error, {code}"]
+    # The shape of FastAPI's own 422 here, minus anything that can carry a submitted value.
+    assert all(set(entry) == {"type", "loc", "msg"} for entry in detail)
+    assert detail[0]["loc"] == ["body"]
+    assert "submitted-secret-value" not in response.text
+    # Nothing of the refused job is left behind.
+    assert not any((tmp_path / "state" / "jobs").glob("*/job.json"))
+
+
+def test_a_real_job_model_refusal_reaches_the_caller_as_a_422(tmp_path):
+    # A GitHub job runs hosted, and submit doesn't yet give it the isolation a hosted job
+    # needs: HarnessJob refuses it, and the caller is told so.
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs",
+        json={"github_repository": "acme/agent", "github_commit_sha": "a" * 40},
+    )
+
+    assert response.status_code == 422
+    assert "hosted_isolation_must_be_dedicated_vm" in response.text
+
+
+def test_an_unexpected_failure_building_the_job_is_still_a_500(tmp_path, monkeypatch):
+    source = _local_source(tmp_path, monkeypatch)
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("not a refusal")
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", broken)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"source_path": str(source)})
+
+    assert response.status_code == 500
+    assert "not a refusal" not in response.text
 
 
 def test_job_submission_requires_exactly_one_source(tmp_path):
@@ -2075,7 +2176,7 @@ def test_hosted_submit_still_refuses_a_mounted_server_key(hosted_sandbox):
         source_id = await _upload_archive(sandbox)
         upload = await _upload_credential(sandbox, "GOOD")
         with pytest.raises(
-            ValidationError, match="hosted_secret_manager_unsupported: OTHER_VALUE"
+            JobRefused, match="hosted_secret_manager_unsupported: OTHER_VALUE"
         ):
             sandbox.submit(
                 LocalSandboxRequest(
@@ -2414,6 +2515,11 @@ def test_hosted_github_route_accepts_a_submitted_value(tmp_path, monkeypatch):
         if "hosted_isolation_must_be_dedicated_vm" in str(exc):
             raise _AwaitingDedicatedIsolation from exc
         raise
+    if (
+        response.status_code == 422
+        and "hosted_isolation_must_be_dedicated_vm" in response.text
+    ):
+        raise _AwaitingDedicatedIsolation
 
     assert response.status_code == 200
     job = response.json()["job"]

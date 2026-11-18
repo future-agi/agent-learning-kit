@@ -39,7 +39,7 @@ from fastapi import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
 
 from fi.simulate.runtime.spec import SecretRef
 
@@ -87,6 +87,22 @@ from .source_folder import SubfolderNotFound, agent_folder, subfolder_not_found
 _CONTROLLER_TOKEN = uuid.uuid4().hex
 _SANDBOX_JOB_PREFIX = "ALK_JOB_"
 _SANDBOX_FILE_PREFIX = "ALK_SECRET_FILE_"
+
+
+class JobRefused(Exception):
+    """The job model refused a submission: a 422 to the caller, in the shape of the route's
+    own 422, one entry per error with its code in ``msg``. ``loc`` points at the body, as the
+    job model's own field names mean nothing to the caller, and no ``input`` or ``ctx`` is
+    kept, since either can carry a submitted value."""
+
+    def __init__(self, error: ValidationError):
+        self.detail = [
+            {"type": item["type"], "loc": ["body"], "msg": item["msg"]}
+            for item in error.errors(
+                include_url=False, include_input=False, include_context=False
+            )
+        ]
+        super().__init__("; ".join(entry["msg"] for entry in self.detail))
 
 
 class LocalSandboxRequest(BaseModel):
@@ -141,28 +157,7 @@ class LocalSandboxRequest(BaseModel):
                 )
         _validate_environment_values(self.environment_values, self.secret_refs)
         _validate_controller_names(self.connector_config, self.secret_refs)
-        if self.github_repository:
-            self._check_commit_sha()
         return self
-
-    def _check_commit_sha(self) -> None:
-        """A GitHub job runs hosted, and HarnessJob refuses a hosted GitHub job without the
-        commit it checks out, or with one that isn't 40 hex characters. Refuse here, by name,
-        rather than fail building the job.
-
-        Checked last, so a reserved name is reported first, and only for a location that is a
-        GitHub repository: submit refuses any other location for what it is (a 400), which
-        would otherwise show only once a commit was added."""
-        try:
-            parse_github_location(self.github_repository)
-        except ValueError:
-            return
-        if not self.github_commit_sha:
-            raise ValueError("github_commit_sha_required")
-        sha = self.github_commit_sha.lower()
-        # The same rule as HarnessJob's: no trimming, so what passes here is what it accepts.
-        if len(sha) != 40 or any(char not in "0123456789abcdef" for char in sha):
-            raise ValueError("github_commit_sha_invalid")
 
 
 class SandboxPreflightRequest(BaseModel):
@@ -705,65 +700,69 @@ class LocalSandbox:
             job_refs, mounted_values, secret_file_names = self._job_secret_refs(
                 identifier, request, hosted=hosted
             )
-            source_spec = (
-                RepositorySource(kind=SourceKind.PROVIDER)
-                if request.provider_only
-                else RepositorySource(
-                    kind=SourceKind.ARCHIVE,
-                    archive_artifact_id=request.source_id,
+            try:
+                source_spec = (
+                    RepositorySource(kind=SourceKind.PROVIDER)
+                    if request.provider_only
+                    else RepositorySource(
+                        kind=SourceKind.ARCHIVE,
+                        archive_artifact_id=request.source_id,
+                    )
+                    if request.source_id
+                    else RepositorySource(
+                        kind=SourceKind.LOCAL_REPOSITORY, local_path=str(source)
+                    )
+                    if source
+                    else RepositorySource(
+                        kind=SourceKind.GITHUB,
+                        repository=github_repository,
+                        ref=(github_location.ref if github_location else None)
+                        or request.github_ref,
+                        commit_sha=request.github_commit_sha,
+                        visibility=request.github_visibility,
+                        installation_id=request.github_installation_id,
+                        subfolder=request.github_subfolder,
+                    )
                 )
-                if request.source_id
-                else RepositorySource(
-                    kind=SourceKind.LOCAL_REPOSITORY, local_path=str(source)
-                )
-                if source
-                else RepositorySource(
-                    kind=SourceKind.GITHUB,
-                    repository=github_repository,
-                    ref=(github_location.ref if github_location else None)
-                    or request.github_ref,
-                    commit_sha=request.github_commit_sha,
-                    visibility=request.github_visibility,
-                    installation_id=request.github_installation_id,
-                    subfolder=request.github_subfolder,
-                )
-            )
-            job = HarnessJob(
-                job_id=identifier,
-                run_id=run_id,
-                execution=ExecutionMode.HOSTED if hosted else ExecutionMode.LOCAL,
-                source=source_spec,
-                agent=AgentConnection(
-                    connector=request.connector,
-                    mode=request.connector_mode,
-                    config=request.connector_config,
-                    secret_refs=job_refs,
-                ),
-                scenario_count=request.scenario_count,
-                seed=request.seed,
-                artifacts=HarnessArtifactPolicy(
-                    level="full", allow_bundle_download=True
-                ),
-                platform_run_id=request.platform_run_id,
-                metadata={
-                    **request.metadata,
-                    "agent_name": request.agent_name
-                    or (
-                        _uploaded_source_name(source)
-                        if request.source_id and source
-                        else source.name
-                        if source
-                        else str(github_repository).split("/")[-1]
+                job = HarnessJob(
+                    job_id=identifier,
+                    run_id=run_id,
+                    execution=ExecutionMode.HOSTED if hosted else ExecutionMode.LOCAL,
+                    source=source_spec,
+                    agent=AgentConnection(
+                        connector=request.connector,
+                        mode=request.connector_mode,
+                        config=request.connector_config,
+                        secret_refs=job_refs,
                     ),
-                    "source_kind": source_spec.kind.value,
-                    # Both dotenv values and credential-file paths are runtime configuration. Only
-                    # their names are persisted; values and provider-local paths remain ephemeral.
-                    "environment_value_names": sorted(
-                        {*request.environment_values, *secret_file_names}
+                    scenario_count=request.scenario_count,
+                    seed=request.seed,
+                    artifacts=HarnessArtifactPolicy(
+                        level="full", allow_bundle_download=True
                     ),
-                    "secret_file_names": sorted(secret_file_names),
-                },
-            )
+                    platform_run_id=request.platform_run_id,
+                    metadata={
+                        **request.metadata,
+                        "agent_name": request.agent_name
+                        or (
+                            _uploaded_source_name(source)
+                            if request.source_id and source
+                            else source.name
+                            if source
+                            else str(github_repository).split("/")[-1]
+                        ),
+                        "source_kind": source_spec.kind.value,
+                        # Both dotenv values and credential-file paths are runtime configuration. Only
+                        # their names are persisted; values and provider-local paths remain ephemeral.
+                        "environment_value_names": sorted(
+                            {*request.environment_values, *secret_file_names}
+                        ),
+                        "secret_file_names": sorted(secret_file_names),
+                    },
+                )
+            except ValidationError as exc:
+                # The job model refused what was submitted: the caller's 422, not a 500.
+                raise JobRefused(exc) from None
             directory = self.jobs_root / identifier
             directory.mkdir()
             if request.provider_only:
@@ -2507,6 +2506,10 @@ def create_app(root: Path | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.sandbox = sandbox
+
+    @app.exception_handler(JobRefused)
+    async def job_refused(_request, exc: JobRefused):
+        return JSONResponse(status_code=422, content={"detail": exc.detail})
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request, exc: RequestValidationError):
