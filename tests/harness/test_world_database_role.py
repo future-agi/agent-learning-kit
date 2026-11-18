@@ -21,6 +21,7 @@ import test_process_runtime as runtime_tests
 
 from fi.alk.harness import process_runtime as pr
 from fi.alk.harness.bundle_v2 import BaselineStrategy
+from fi.alk.harness.world_roles import seed_escalation_queries
 
 _CREDENTIALS = pr.EngineCredentials("harness", "pw", world_secret="job-secret")
 
@@ -495,7 +496,7 @@ def test_the_baseline_takes_the_harness_tables_from_the_agent_only_with_a_door(t
 
 def test_a_seed_that_left_a_way_to_more_rights_fails_the_build(tmp_path: Path):
     manifest = runtime_tests._manifest()
-    spy = runtime_tests.SqlSpy(answers={pr._SEED_ESCALATION_CODE: [("event trigger planted",)]})
+    spy = runtime_tests.SqlSpy(answers={seed_escalation_queries(pr.WORLD_ROLE_GROUP)[1]: [("event trigger planted",)]})
     context = runtime_tests._spawn_context(
         manifest, bundle_dir=tmp_path, sql_runner=spy, sync_run=runtime_tests._fake_sync_run,
         work_directory=tmp_path,

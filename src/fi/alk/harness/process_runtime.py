@@ -67,6 +67,17 @@ from .bundle_v2 import (
     StoreEntry,
 )
 from .diagnostics import DiagnosticLocation, HarnessDiagnostic
+from .world_roles import (
+    DOOR_ROLE_GROUP,
+    DOOR_TABLE_RIGHTS,
+    HARNESS_ONLY_TABLES,
+    WORLD_DOOR_DATABASE_URL,
+    door_role_name,
+    has_world_door,
+    seed_escalation_queries,
+    seed_escalation_reason,
+    world_role_name,
+)
 from .egress_proxy import EgressProxy
 from .world_door import PostgresLog
 from .job import FailureCause, FailureDomain
@@ -716,29 +727,8 @@ class EngineCredentials:
 # own, never as the `harness` superuser: one group carries the table grants, sealed into the
 # baseline, and each world's login role is a member that may connect to its world's database only.
 WORLD_ROLE_GROUP = "alk_world_tools"
-# The world's door (`svc-door`) reaches the database through a role of its own, in this group: a member of the world
-# group, so it changes the world's rows as the agent's tools do, and the only one with rights on the harness's tables.
-DOOR_ROLE_GROUP = "alk_door"
-# Each world's own login role, and its door's, named by the world's index after these.
-WORLD_ROLE_PREFIX = "alk_w"
-DOOR_ROLE_PREFIX = "alk_d"
-# The door's address, rendered only into the door's own processes.
-WORLD_DOOR_DATABASE_URL = "WORLD_DOOR_DATABASE_URL"
 # The capability whose door address `WORLD_DOOR_DATABASE_URL` is.
 _WORLD_DATABASE_URL = "WORLD_DATABASE_URL"
-# The harness's tables in a world database, and what the door may do on each. The agent's own tools have no right on
-# any of them: they hold the call log grading reads, who may do what, and this trial's faults.
-DOOR_TABLE_RIGHTS = {
-    "_alk_tool_trace": "SELECT, INSERT",
-    "_alk_action_keys": "SELECT, INSERT, UPDATE, DELETE",
-    "_alk_actors": "SELECT",
-    # A worker stop locks this trial's row, which takes UPDATE.
-    "_alk_trial_faults": "SELECT, UPDATE",
-    # A stop or a run replaces a row an earlier trial left.
-    "_alk_worker_stops": "SELECT, INSERT, UPDATE",
-    "_alk_worker_runs": "SELECT, INSERT, UPDATE",
-}
-_HARNESS_ONLY_TABLES = ("harness_seed_sentinel",)
 
 
 def _derived_role(credentials: EngineCredentials, name: str) -> EngineCredentials:
@@ -757,17 +747,12 @@ def _derived_role(credentials: EngineCredentials, name: str) -> EngineCredential
 def world_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
     """World N's own database role. Its password is derived from the job's secret, so each
     world's differs and nothing stores it."""
-    return _derived_role(credentials, f"{WORLD_ROLE_PREFIX}{world_index}")
+    return _derived_role(credentials, world_role_name(world_index))
 
 
 def door_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
     """World N's door's own database role, derived the same way as the world's."""
-    return _derived_role(credentials, f"{DOOR_ROLE_PREFIX}{world_index}")
-
-
-def has_world_door(manifest: EnvironmentBundleV2) -> bool:
-    """Whether this bundle runs its world's door as `svc-door`; a bundle sealed before it keeps one role per world."""
-    return any(process.user is ProcessUser.SVC_DOOR for process in manifest.processes)
+    return _derived_role(credentials, door_role_name(world_index))
 
 
 def _engine_diagnostic_secrets(
@@ -5545,34 +5530,6 @@ def _seal_world_store(
     return handle
 
 
-# Our roles, made after the seed: one the seed made or changed is planted.
-_OUR_ROLE = (
-    f"(r.rolname IN ('{WORLD_ROLE_GROUP}', '{DOOR_ROLE_GROUP}') "
-    f"OR r.rolname ~ '^({WORLD_ROLE_PREFIX}|{DOOR_ROLE_PREFIX})[0-9]+$')"
-)
-# What the seed may not leave behind, cluster-wide: a role besides the harness that is a superuser or
-# can make roles; one of our roles with an attribute it never gets, or in a group it never joins.
-_SEED_ESCALATION_ROLES = (
-    "SELECT 'role ' || rolname || ' is a superuser or can create roles' FROM pg_roles "
-    "WHERE (rolsuper OR rolcreaterole) AND rolname <> current_user "
-    "UNION ALL SELECT 'role ' || r.rolname || ' has an attribute the harness never gives it' "
-    f"FROM pg_roles r WHERE {_OUR_ROLE} "
-    "AND (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls) "
-    "UNION ALL SELECT 'role ' || r.rolname || ' is a member of ' || g.rolname "
-    "FROM pg_auth_members a JOIN pg_roles r ON r.oid = a.member JOIN pg_roles g ON g.oid = a.roleid "
-    f"WHERE {_OUR_ROLE} AND NOT ("
-    f"(g.rolname = '{WORLD_ROLE_GROUP}' AND (r.rolname ~ '^{WORLD_ROLE_PREFIX}[0-9]+$' OR r.rolname = '{DOOR_ROLE_GROUP}')) "
-    f"OR (g.rolname = '{DOOR_ROLE_GROUP}' AND r.rolname ~ '^{DOOR_ROLE_PREFIX}[0-9]+$'))"
-)
-# And in each database: code that runs as its owner whoever calls it, or on any DDL.
-_SEED_ESCALATION_CODE = (
-    "SELECT 'event trigger ' || evtname FROM pg_event_trigger "
-    "UNION ALL SELECT 'security definer function ' || p.oid::regprocedure::text "
-    "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
-    "WHERE p.prosecdef AND n.nspname NOT IN ('pg_catalog', 'information_schema')"
-)
-
-
 def _refuse_seed_escalation(
     *,
     port: int,
@@ -5583,12 +5540,9 @@ def _refuse_seed_escalation(
 ) -> None:
     """After the seed, which runs as the superuser: the build fails when the seed left a way to
     act with more rights than a world's role has, before any world is made from it."""
+    roles, code = seed_escalation_queries(WORLD_ROLE_GROUP)
     found: list[str] = []
-    for dbname, statement in (
-        ("postgres", _SEED_ESCALATION_ROLES),
-        ("postgres", _SEED_ESCALATION_CODE),
-        (baseline_db, _SEED_ESCALATION_CODE),
-    ):
+    for dbname, statement in (("postgres", roles), ("postgres", code), (baseline_db, code)):
         rows = _call_sql(
             sql_runner,
             stage="baseline",
@@ -5606,11 +5560,7 @@ def _refuse_seed_escalation(
         raise ProcessRuntimeError(
             "baseline",
             "seed_failed",
-            f"{process_name}: the seed gave rights no world may have: "
-            + "; ".join(sorted(set(found)))
-            + ". Change the seed so it gives no role SUPERUSER, CREATEROLE, CREATEDB, REPLICATION or BYPASSRLS, puts "
-            "no role in another, leaves the harness's roles as they are, and defines no event trigger or SECURITY "
-            "DEFINER function.",
+            seed_escalation_reason(process_name, found),
             process=process_name,
             domain=FailureDomain.ENVIRONMENT,
         )
@@ -5678,7 +5628,7 @@ def _grant_world_role_group(
         f"'{DOOR_ROLE_GROUP}') THEN CREATE ROLE {door_group} NOLOGIN IN ROLE {group}; "
         "END IF; END $$",
     )
-    tables = [*DOOR_TABLE_RIGHTS, *_HARNESS_ONLY_TABLES]
+    tables = [*DOOR_TABLE_RIGHTS, *HARNESS_ONLY_TABLES]
     names = ", ".join(f"'{table}'" for table in tables)
     # The tables and the sequences behind their columns (the log's id): nobody but the harness and the door.
     run(
