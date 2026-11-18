@@ -316,6 +316,7 @@ jobs:
           tests/harness/test_outbound.py
           tests/harness/test_contract_writer.py
           tests/harness/test_framework_detection.py
+          tests/harness/test_framework_support.py
           tests/harness/test_openai_agents_reference.py
           tests/harness/test_hosted_entrypoint.py
           tests/harness/test_hosted_entrypoint_provision_retry.py
