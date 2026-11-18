@@ -122,5 +122,6 @@ def test_capabilities_carry_the_list() -> None:
         "tested_in",
         "example",
         "example_pin",
+        "notes",
         *LAYERS,
     }

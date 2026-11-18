@@ -1,0 +1,376 @@
+{
+  "schema_version": 1,
+  "about": "The frameworks the harness can take an agent from, and what is proven for each. Edited by hand; see src/fi/alk/framework_support.py for what each field means.",
+  "frameworks": [
+    {
+      "key": "claude_agent_sdk",
+      "name": "Claude Agent SDK",
+      "package": "claude-agent-sdk",
+      "tested_version": "0.2.174",
+      "tested_in": "sdk-smoke clean-install, the step that installs the example's pin",
+      "example": "examples/harness/claude_agent_sdk_support",
+      "example_pin": "0.2.174",
+      "notes": "",
+      "found": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[claude_agent_sdk_agent.py]",
+          "test:tests/harness/test_framework_detection.py::test_every_framework_is_detected[claude_code_sdk]",
+          "test:tests/harness/test_claude_agent_sdk_reference.py::test_example_is_detected_as_the_claude_agent_sdk"
+        ],
+        "note": ""
+      },
+      "read": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "No real reading by the model is recorded."
+      },
+      "built": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_claude_agent_sdk_reference.py::test_build_runs_the_callback_bridge_with_the_generic_tool_tracer"
+        ],
+        "note": ""
+      },
+      "run": {
+        "status": "partial",
+        "evidence": [
+          "test:tests/harness/test_claude_agent_sdk_reference.py::test_the_real_cli_runs_two_turns_and_only_the_plain_tools_are_traced"
+        ],
+        "note": "The real SDK and its bundled CLI, against a local stub of the model API. No run from a reading is recorded."
+      }
+    },
+    {
+      "key": "crewai",
+      "name": "CrewAI",
+      "package": "crewai",
+      "tested_version": null,
+      "tested_in": "",
+      "example": "examples/harness/crewai_support",
+      "example_pin": "1.15.33",
+      "notes": "",
+      "found": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[crewai_agent.py]",
+          "test:tests/harness/test_crewai_reference.py::test_example_is_detected_as_crewai"
+        ],
+        "note": ""
+      },
+      "read": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "No real reading by the model is recorded."
+      },
+      "built": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_crewai_reference.py::test_build_runs_the_callback_bridge_with_the_generic_tool_tracer"
+        ],
+        "note": ""
+      },
+      "run": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "Only against a stand-in CrewAI; the real package has not run in the kit's tests."
+      }
+    },
+    {
+      "key": "deepagents",
+      "name": "Deep Agents",
+      "package": "deepagents",
+      "tested_version": "0.7.32",
+      "tested_in": "the 12 Nov local runs (record)",
+      "example": "examples/harness/deep_agents_support",
+      "example_pin": "0.7.32",
+      "notes": "",
+      "found": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_framework_detection.py::test_every_framework_is_detected[deepagents]",
+          "test:tests/harness/test_deep_agents_reference.py::test_example_is_detected_as_deep_agents"
+        ],
+        "note": ""
+      },
+      "read": {
+        "status": "pending",
+        "evidence": [
+          "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents",
+          "pr:future-agi/agent-learning-kit#341 tests/harness/test_reading_replay.py::test_the_deep_agents_reading_changes_as_designed",
+          "pr:future-agi/agent-learning-kit#341 tests/harness/test_reading_routes.py::test_the_12_nov_deep_agents_reading_takes_the_graph_route"
+        ],
+        "note": "The 12 Nov reading chose `langgraph dev`, which the agent doesn't install. #341 sends it to the kit's graph route; not merged."
+      },
+      "built": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_deep_agents_reference.py::test_build_runs_the_graph_with_the_langgraph_adapter_and_binds_the_tool_tracer"
+        ],
+        "note": ""
+      },
+      "run": {
+        "status": "pending",
+        "evidence": [
+          "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents",
+          "pr:future-agi/agent-learning-kit#341 tests/harness/test_reading_routes.py::test_the_12_nov_deep_agents_reading_takes_the_graph_route"
+        ],
+        "note": "From its reading it failed at start until #341. From a hand-written contract the kit's LangGraph adapter ran it with tool calls recorded."
+      }
+    },
+    {
+      "key": "google_adk",
+      "name": "Google ADK",
+      "package": "google-adk",
+      "tested_version": "2.13.0",
+      "tested_in": "the 12 Nov local runs (record)",
+      "example": "examples/harness/google_adk_support",
+      "example_pin": "2.13.0",
+      "notes": "The example pins google-adk 2.13.0, outside the kit's own google-adk>=2.7.1,<2.8; the reading and run above used 2.13.0 in the example's environment. The kit's range is held by OpenTelemetry (google-adk below 2.14 allows at most 1.42.1).",
+      "found": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[google_adk_agent.py]",
+          "test:tests/harness/test_google_adk_reference.py::test_example_is_detected_as_an_adk_app"
+        ],
+        "note": ""
+      },
+      "read": {
+        "status": "proven",
+        "evidence": [
+          "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK"
+        ],
+        "note": ""
+      },
+      "built": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_google_adk_reference.py::test_build_runs_adks_own_server_and_binds_the_tool_tracer"
+        ],
+        "note": ""
+      },
+      "run": {
+        "status": "partial",
+        "evidence": [
+          "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK",
+          "test:tests/harness/test_google_adk_reference.py::test_tools_run_by_adk_are_traced_once_each"
+        ],
+        "note": "A local run from its reading gave right replies, but the transcript recorded two extra tool calls with empty arguments. No hosted run is recorded."
+      }
+    },
+    {
+      "key": "langchain",
+      "name": "LangChain",
+      "package": "langchain-core",
+      "tested_version": null,
+      "tested_in": "",
+      "example": null,
+      "example_pin": null,
+      "notes": "",
+      "found": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[langchain_agent.py]",
+          "test:tests/harness/test_agent_scan.py::test_a_langchain_chat_model_needs_no_ai_step"
+        ],
+        "note": ""
+      },
+      "read": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "No real reading by the model is recorded."
+      },
+      "built": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "No test builds it from a hand-written contract."
+      },
+      "run": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "No LangChain agent has run in the kit's tests."
+      }
+    },
+    {
+      "key": "langgraph",
+      "name": "LangGraph",
+      "package": "langgraph",
+      "tested_version": null,
+      "tested_in": "",
+      "example": null,
+      "example_pin": null,
+      "notes": "",
+      "found": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[langgraph_agent.py]",
+          "test:tests/harness/test_framework_detection.py::test_every_framework_is_detected[langgraph_star]",
+          "test:tests/harness/test_agent_reading.py::test_the_framework_is_a_builds_shape[langgraph]"
+        ],
+        "note": ""
+      },
+      "read": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "No real reading by the model is recorded."
+      },
+      "built": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "No test builds it from a hand-written contract."
+      },
+      "run": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "Only the kit's LangGraph adapter against a stand-in graph. Deep Agents, built on LangGraph, is listed on its own."
+      }
+    },
+    {
+      "key": "livekit",
+      "name": "LiveKit Agents",
+      "package": "livekit-agents",
+      "tested_version": null,
+      "tested_in": "",
+      "example": null,
+      "example_pin": null,
+      "notes": "",
+      "found": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_framework_detection.py::test_every_framework_is_detected[livekit]"
+        ],
+        "note": ""
+      },
+      "read": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "No real reading by the model is recorded."
+      },
+      "built": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "No test builds it from a hand-written contract."
+      },
+      "run": {
+        "status": "partial",
+        "evidence": [
+          "record:src/fi/alk/harness/IMPLEMENTATION_AND_VALIDATION_STATUS.md#Real voice-agent validation"
+        ],
+        "note": "15 real calls on three livekit/agents examples (Aug 2026); the record doesn't give the livekit-agents version. The call engine's own tests import 1.8.3 but run no agent. No run from a reading is recorded."
+      }
+    },
+    {
+      "key": "openai_agents",
+      "name": "OpenAI Agents SDK",
+      "package": "openai-agents",
+      "tested_version": "0.24.0",
+      "tested_in": "the 12 Nov local runs (record); the kit's hook also runs on 0.18.3 and 0.20.0 in sdk-smoke",
+      "example": "examples/harness/openai_agents_support",
+      "example_pin": "0.24.0",
+      "notes": "",
+      "found": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[openai_agents_agent.py]",
+          "test:tests/harness/test_openai_agents_reference.py::test_example_is_detected_as_the_sdk_agent"
+        ],
+        "note": ""
+      },
+      "read": {
+        "status": "pending",
+        "evidence": [
+          "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
+          "pr:future-agi/agent-learning-kit#341 tests/harness/test_reading_replay.py::test_the_agents_sdk_reading_changes_as_designed",
+          "pr:future-agi/agent-learning-kit#341 tests/harness/test_reading_routes.py::test_the_12_nov_agents_sdk_reading_binds_its_three_tools"
+        ],
+        "note": "The 12 Nov reading marked its tools unreachable. #341 binds them; not merged."
+      },
+      "built": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_openai_agents_reference.py::test_build_runs_the_callback_bridge_and_binds_the_tool_tracer"
+        ],
+        "note": ""
+      },
+      "run": {
+        "status": "pending",
+        "evidence": [
+          "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
+          "pr:future-agi/agent-learning-kit#341 tests/harness/test_reading_routes.py::test_the_12_nov_agents_sdk_reading_binds_its_three_tools",
+          "test:tests/harness/test_python_tool_trace_bootstrap.py::test_real_openai_agents_sdk_is_on_chat_completions_with_the_mark"
+        ],
+        "note": "From its reading it gave right replies with no tool evidence until #341."
+      }
+    },
+    {
+      "key": "pipecat",
+      "name": "Pipecat",
+      "package": "pipecat-ai",
+      "tested_version": null,
+      "tested_in": "",
+      "example": null,
+      "example_pin": null,
+      "notes": "",
+      "found": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_framework_detection.py::test_every_framework_is_detected[pipecat]"
+        ],
+        "note": ""
+      },
+      "read": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "No real reading by the model is recorded."
+      },
+      "built": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "No test builds it from a hand-written contract."
+      },
+      "run": {
+        "status": "not_proven",
+        "evidence": [],
+        "note": "Only the kit's opt-in local Pipecat lane. Hosted Pipecat runs are TH-8871, on hold."
+      }
+    },
+    {
+      "key": "pydantic_ai",
+      "name": "Pydantic AI",
+      "package": "pydantic-ai-slim",
+      "tested_version": "2.61.0",
+      "tested_in": "the 12 Nov local runs (record)",
+      "example": "examples/harness/pydantic_ai_support",
+      "example_pin": "2.61.0",
+      "notes": "",
+      "found": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[pydantic_ai_agent.py]",
+          "test:tests/harness/test_pydantic_ai_reference.py::test_example_is_detected_as_pydantic_ai"
+        ],
+        "note": ""
+      },
+      "read": {
+        "status": "proven",
+        "evidence": [
+          "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI"
+        ],
+        "note": ""
+      },
+      "built": {
+        "status": "proven",
+        "evidence": [
+          "test:tests/harness/test_pydantic_ai_reference.py::test_build_runs_the_callback_bridge_and_binds_the_tool_tracer"
+        ],
+        "note": ""
+      },
+      "run": {
+        "status": "partial",
+        "evidence": [
+          "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI"
+        ],
+        "note": "A local run from its reading: right replies and its tool calls recorded. No hosted run is recorded."
+      }
+    }
+  ]
+}
