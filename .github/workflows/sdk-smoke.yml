@@ -51,7 +51,11 @@ jobs:
       - name: Install the kit
         run: python -m pip install . pytest
       - name: Run the finding, reading and agent-document tests on Python 3.12.3
+        shell: bash
+        # A skip hides a test from the 3.12.3 check. The only ones allowed are the container's
+        # own: it runs as root, which reads a mode-000 folder, on a case-sensitive disk.
         run: >-
+          set -o pipefail;
           python -m pytest -q -rs
           tests/harness/test_agent_scan.py
           tests/harness/test_scan_walk.py
@@ -66,10 +70,12 @@ jobs:
           tests/harness/test_authoring_entrypoint_find_agents.py
           tests/harness/test_python_source_codecs.py
           tests/harness/test_newer_python_syntax.py
-          tests/harness/test_newer_python_syntax.py
           tests/harness/test_source_tool_evidence.py
           tests/harness/test_instrumentation_evidence.py
           tests/harness/test_agent_type_refusal.py
+          | tee pytest.out;
+          ! grep '^SKIPPED' pytest.out
+          | grep -v -e 'root reads a mode-000' -e "case-sensitive disk can't spell"
 
   clean-install:
     # Install, doctor, the local simulation and the suites that need their own SDK versions. The

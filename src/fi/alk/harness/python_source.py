@@ -561,11 +561,24 @@ def parsed(text: str) -> ast.Module | None:
     (``RecursionError``); either says no more about the file than a syntax error does. Nor does
     text holding a long run of combining marks, which the parser would take seconds to fold.
     """
+    tree = parsed_or_syntax_error(text)
+    return tree if isinstance(tree, ast.Module) else None
+
+
+def parsed_or_syntax_error(text: str) -> ast.Module | SyntaxError | None:
+    """As ``parsed``, but a file that is only not this Python's syntax gives its ``SyntaxError``.
+
+    That file may be another Python's (ADR-011), so a caller can still search its lines. A file
+    that runs the parser out of stack or holds a long run of combining marks gives None: such a
+    file is crafted, and counts for nothing.
+    """
     if _runs_marks(text):
         return None
     try:
         return ast.parse(text)
-    except (SyntaxError, ValueError, RecursionError, MemoryError):
+    except SyntaxError as exc:
+        return exc
+    except (ValueError, RecursionError, MemoryError):
         return None
 
 
@@ -613,25 +626,36 @@ def _marks_in(char: str) -> tuple[bool, int]:
 KIT_PYTHON = "3.12"
 _TEMPLATE_PREFIXES = frozenset({"t", "tr", "rt"})
 _NOT_AGENT_CODE = frozenset({"tests", "test", "node_modules", "site-packages", "venv", "__pycache__"})
-_UNPARSED_LISTED = 20
+_UNPARSED_LISTED = 50
+# The walk reads the agent's whole code, so it has a total of its own: the scans' 256 KB would
+# stop it inside an ordinary agent of 80 modules. Each file is still at most 128 KB.
+_UNPARSED_WALK_TOTAL = 4 * 1024 * 1024
 
 
-def newer_syntax(text: str) -> tuple[str, str] | None:
+def newer_syntax(
+    text: str, *, budget: TokenBudget | None = None, line: int | None = None
+) -> tuple[str, str] | None:
     """``(python, construct)`` for a 3.13 or 3.14 construct in ``text``, or None.
 
     Read from the tokens, which 3.12 still makes for these files: a type parameter default
     (3.13, ``class Box[T=int]``), a template string (3.14, ``t'...'``) and an except clause
     naming several exceptions without parentheses (3.14). The newest one found is named.
+
+    Given ``line``, where 3.12's parser stopped, a construct must sit on it: otherwise the file
+    stops for something else first (``print "hi"`` in Python 2), and no newer Python reads it
+    either. Given ``budget``, the scan's tokenizing is charged to it, and None is the answer
+    once it runs out: a crafted line costs the tokenizer the square of its length.
     """
     try:
-        tokens = [
-            token
-            for token in tokenize.generate_tokens(io.StringIO(text).readline)
-            if token.type not in (tokenize.NL, tokenize.COMMENT)
-        ]
+        if budget is None:
+            raw = list(tokenize.generate_tokens(io.StringIO(text).readline))
+        elif not budget.spend(text) or (raw := budget.tokens(text)) is None:
+            return None
     except (tokenize.TokenError, SyntaxError, ValueError):
         return None
+    tokens = [token for token in raw if token.type not in (tokenize.NL, tokenize.COMMENT)]
     found: list[tuple[str, str]] = []
+    lines: set[int] = set()
     for index, token in enumerate(tokens):
         after = tokens[index + 1] if index + 1 < len(tokens) else None
         if (
@@ -652,13 +676,17 @@ def newer_syntax(text: str) -> tuple[str, str] | None:
             and _type_parameter_default(tokens, index + 1)
         ):
             found.append(("3.13", "a type parameter default"))
+        else:
+            continue
+        lines.add(token.start[0])
+    if line is not None and line not in lines:
+        return None
     return max(found, default=None)
 
 
 def _bare_except_list(tokens: list[tokenize.TokenInfo], start: int) -> bool:
-    """An except clause's exceptions, up to its colon, listed with a comma and no parentheses."""
-    if start >= len(tokens) or tokens[start].string == "(":
-        return False
+    """An except clause's exceptions, up to its colon, listed with a comma and no parentheses
+    around the list: ``except (KeyError), ValueError:`` is one."""
     depth = 0
     for token in tokens[start:]:
         if token.type in (tokenize.NEWLINE, tokenize.ENDMARKER):
@@ -697,52 +725,121 @@ def _type_parameter_default(tokens: list[tokenize.TokenInfo], start: int) -> boo
     return False
 
 
-def unparsed_python_files(source: Path, subfolder: str | None = None) -> list[dict[str, object]]:
-    """The agent's Python files the kit's own Python can't parse, each with why.
+def unparsed_note(
+    source: Path, subfolder: str | None = None, tool_modules: Iterable[str] = ()
+) -> dict[str, object]:
+    """What the agent document says about the agent's Python files the kit's own Python can't
+    parse: ``{}`` when every one parses, so the document is then the one it always was.
 
-    The agent's files are its folder's ``.py`` files, past tests, virtual environments and hidden
-    folders, as the tool evidence reads them. Each entry is ``{"path", "python", "reason"}``:
-    ``python`` is the version a newer construct needs, or None for a plain syntax error. At most
-    ``_UNPARSED_LISTED`` are listed, under the scan's parse budget.
+    The agent's files are the ones its readers read: its folder's ``.py`` files, past tests,
+    virtual environments and hidden folders; with a folder named, also the code it reaches
+    outside it (which the tracing and credential checks read) and the modules ``tool_modules``
+    name, found as the tool check finds them (the folder, its ``src``, the root, the root's
+    ``src``).
+
+    ``unparsed`` lists each as ``{"path", "python", "reason"}``: ``python`` is the version a
+    newer construct needs, or ``""`` for a plain syntax error. Nothing in it is the customer's
+    own text but a path the platform's path rule admits, so the parser's message, which can
+    repeat the file's code, is left out (ADR-011). ``unparsed_truncated`` is set when the list
+    may not be every such file: past ``_UNPARSED_LISTED`` of them, a path outside the rule, a
+    file too large or too deep to parse, or files past the walk's parse budget.
     """
+    from .scan_walk import fits_path_rule
     from .source_folder import SubfolderNotFound, agent_folder
 
     root = source.resolve()
     try:
         base = agent_folder(root, subfolder) if subfolder else root
+        paths = _agent_files(root, base, subfolder, tool_modules)
     except SubfolderNotFound:
-        return []
-    budget = ParseBudget()
-    listed: list[dict[str, object]] = []
-    for path in sorted(base.rglob("*.py")):
-        parts = path.relative_to(root).parts[:-1]
-        if any(part.startswith(".") or part in _NOT_AGENT_CODE for part in parts):
-            continue
+        return {}
+    budget = ParseBudget(_UNPARSED_WALK_TOTAL)
+    naming = TokenBudget()
+    listed: list[dict[str, str]] = []
+    cut = False
+    for path in paths:
         text = read_module(path)
-        if text is None or _runs_marks(text):
+        if text is None:
+            cut = cut or _too_large(path)
             continue
         if not budget.spend(text):
+            cut = True
             break
-        try:
-            ast.parse(text)
-        except SyntaxError as exc:
-            name = path.relative_to(root).as_posix()
-            newer = newer_syntax(text)
-            if newer is not None:
-                python, construct = newer
-                reason = (
-                    f"{name} uses {construct}, which needs Python {python}; the kit reads "
-                    f"source with Python {KIT_PYTHON}, so this file was not read"
-                )
-            else:
-                python = None
-                reason = (
-                    f"{name} doesn't parse on Python {KIT_PYTHON} "
-                    f"(line {exc.lineno}: {exc.msg}), so this file was not read"
-                )
-            listed.append({"path": name, "python": python, "reason": reason})
-            if len(listed) >= _UNPARSED_LISTED:
-                break
-        except (ValueError, RecursionError, MemoryError):
+        tree = parsed_or_syntax_error(text)
+        if tree is None:
+            # Too deep for the parser, or crafted: not checked.
+            cut = True
             continue
-    return listed
+        if not isinstance(tree, SyntaxError):
+            continue
+        name = path.relative_to(root).as_posix()
+        if len(listed) >= _UNPARSED_LISTED or not fits_path_rule(name):
+            cut = True
+            continue
+        newer = newer_syntax(text, budget=naming, line=tree.lineno)
+        if newer is not None:
+            python, construct = newer
+            reason = (
+                f"{name} uses {construct}, which needs Python {python}; the kit reads "
+                f"source with Python {KIT_PYTHON}, so this file was not read"
+            )
+        else:
+            python = ""
+            reason = (
+                f"{name} doesn't parse on Python {KIT_PYTHON} (line {tree.lineno}), "
+                "so this file was not read"
+            )
+        listed.append({"path": name, "python": python, "reason": reason})
+    if not listed and not cut:
+        return {}
+    return {"unparsed": listed, **({"unparsed_truncated": True} if cut else {})}
+
+
+def _agent_files(
+    root: Path, base: Path, subfolder: str | None, tool_modules: Iterable[str]
+) -> list[Path]:
+    """The ``.py`` files the agent's readers read, each once: its folder's first, in order."""
+    found = [
+        path
+        for path in sorted(base.rglob("*.py"))
+        if not any(
+            part.startswith(".") or part in _NOT_AGENT_CODE
+            for part in path.relative_to(root).parts[:-1]
+        )
+    ]
+    if subfolder:
+        from .agent_type_check import code_the_agent_reaches
+        from .source_folder import SubfolderNotFound
+
+        try:
+            extra = set(code_the_agent_reaches(root, subfolder))
+        except SubfolderNotFound:
+            raise
+        except Exception:
+            # The note never costs the reading: the folder's own files are still walked.
+            logger.warning("unparsed note: code the agent reaches not found", exc_info=True)
+            extra = set()
+        bases = [base, base / "src", root, root / "src"]
+        for module in tool_modules:
+            if not module or not all(part.isidentifier() for part in module.split(".")):
+                continue
+            relative = Path(*module.split("."))
+            for one in bases:
+                for candidate in (relative.with_suffix(".py"), relative / "__init__.py"):
+                    if (one / candidate).is_file():
+                        extra.add(one / candidate)
+        seen = set(found)
+        for path in sorted(extra):
+            resolved = path.resolve()
+            if resolved.suffix == ".py" and resolved not in seen and resolved.is_relative_to(root):
+                seen.add(resolved)
+                found.append(resolved)
+    return found
+
+
+def _too_large(path: Path) -> bool:
+    """A regular file the walk didn't read for its size alone: a link or a pipe is never read."""
+    try:
+        return path.is_file() and not path.is_symlink() and path.stat().st_size > LARGEST_PARSED_MODULE
+    except OSError:
+        return False

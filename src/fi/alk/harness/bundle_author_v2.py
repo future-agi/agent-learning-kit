@@ -1771,6 +1771,9 @@ def _reads_port_from_environment(root: Path) -> bool:
     return False
 
 
+_MODULE_LEVEL_CALLBACK = re.compile(r"^(?:async[ \t]+)?def[ \t]+agent_callback\b", re.MULTILINE)
+
+
 def _discover_callback_entrypoint(root: Path) -> str | None:
     """Return the repository's unique module-level ``agent_callback``, if present.
 
@@ -1784,15 +1787,18 @@ def _discover_callback_entrypoint(root: Path) -> str | None:
         relative = path.relative_to(root)
         if any(part in _IGNORED_ARTIFACT_PARTS for part in relative.parts):
             continue
+        text = path.read_text(encoding="utf-8", errors="replace")
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+            defines = any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "agent_callback"
+                for node in ast.parse(text).body
+            )
         except SyntaxError:
-            continue
-        if any(
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "agent_callback"
-            for node in tree.body
-        ):
+            # A module the kit's own Python can't parse may still hold the callback: a ``def``
+            # at the start of a line is a module-level one (ADR-011).
+            defines = _MODULE_LEVEL_CALLBACK.search(text) is not None
+        if defines:
             module = ".".join(relative.with_suffix("").parts)
             candidates.append(f"{module}:agent_callback")
     if not candidates:

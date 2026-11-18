@@ -423,6 +423,24 @@ def test_an_agent_the_kits_python_reads_whole_has_no_unparsed_list(tmp_path, mod
     assert "unparsed" not in agent["agent"]["extension"].get("source", {})
 
 
+def test_an_agent_the_kits_python_reads_whole_gets_the_document_it_got_before(tmp_path, model):
+    # The platform keeps one description per version and refuses a second, different one, so a
+    # reading with nothing unparsed writes the very bytes it wrote before TH-8802 (ADR-011,
+    # condition 2).
+    _repo(tmp_path)
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    output = tmp_path / "reading"
+    written = (output / "agent.json").read_bytes()
+    framework = json.loads(written)["agent"]["extension"].get("framework")
+    before = scenario_source.authored_agent_document(
+        (output / "contract.json").read_text(encoding="utf-8"), subfolder=None, framework=framework
+    )
+    assert written == json.dumps(before, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
 def test_with_no_folder_named_the_framework_comes_from_the_contracts_folder(tmp_path, model):
     source = _repo(tmp_path)
     shutil.copy(EXAMPLES / "llamaindex_agent.py", source / SUPPORT)
