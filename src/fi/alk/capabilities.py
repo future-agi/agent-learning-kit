@@ -4,6 +4,7 @@ import copy
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from . import framework_support
 from ._schema import AGENT_LEARNING_CLI_SCHEMA_VERSION, normalize_public_payload
 
 AGENT_LEARNING_CAPABILITIES_KIND = "agent-learning.capabilities.v1"
@@ -241,6 +242,8 @@ def capability_catalog(
         "capabilities": capabilities,
         "consolidation": _consolidation_metadata(),
         "provider_capabilities": provider_capabilities(),
+        # What the harness can take an agent from, with what is proven for each and its evidence.
+        "framework_support": framework_support.as_records(),
         "research_sources": copy.deepcopy(RESEARCH_SOURCES),
         "summary": {
             "artifact_count": len(artifacts),
