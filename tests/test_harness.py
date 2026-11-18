@@ -9573,46 +9573,16 @@ def test_an_old_contract_gains_the_new_tool_fields_through_fix_tool(tmp_path):
     )
 
 
-def test_new_case_without_sources_is_refused(tmp_path):
-    from fi.alk.harness.scenario_tools import NO_SOURCES, accept_scenario
+def test_a_new_case_that_cites_nothing_is_kept(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
-    said = accept_scenario(_delta(sources=[]), world_root=root, catalogue=catalogue, kept=kept, require_sources=True)
-    assert said.get("is_error") and NO_SOURCES in said["content"][0]["text"]
-    assert kept == []
-    blank = [{"kind": "assumption", "quote": "  ", "supports": ""}]
-    said = accept_scenario(_delta(sources=blank), world_root=root, catalogue=catalogue, kept=kept, require_sources=True)
-    assert said.get("is_error") and NO_SOURCES in said["content"][0]["text"]
 
-    assumed = [{"kind": "assumption", "quote": "Customers order one item at a time.", "supports": "one Big Mac"}]
-    said = accept_scenario(
-        _delta(sources=assumed), world_root=root, catalogue=catalogue, kept=kept, require_sources=True
-    )
+    said = accept_scenario(_delta(sources=[]), world_root=root, catalogue=catalogue, kept=kept)
+
     assert not said.get("is_error"), said
-
-
-def test_unchanged_legacy_case_without_sources_saves(tmp_path):
-    from fi.alk.harness.scenario_tools import NO_SOURCES, accept_scenario
-
-    root, _contract, catalogue = _built_environment(tmp_path)
-    kept = []
-    # Written before sources were required.
-    assert not accept_scenario(_delta(sources=[]), world_root=root, catalogue=catalogue, kept=kept).get("is_error")
-    key = kept[0].scenario_key
-
-    same = accept_scenario(
-        _delta(scenario_key=key, sources=[]), world_root=root, catalogue=catalogue, kept=kept, require_sources=True
-    )
-    assert not same.get("is_error"), same
-    edited = accept_scenario(
-        _delta(scenario_key=key, instruction="Order one Big Mac, please.", sources=[]),
-        world_root=root,
-        catalogue=catalogue,
-        kept=kept,
-        require_sources=True,
-    )
-    assert edited.get("is_error") and NO_SOURCES in edited["content"][0]["text"]
+    assert [one.sources for one in kept] == [[]]
 
 
 # --- the prove lane at submit -------------------------------------------------------------------

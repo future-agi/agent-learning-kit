@@ -822,9 +822,9 @@ Each scenario lists `sources`: where each of its requirements comes from. Kinds 
 `rule:<n>`, quote the rule's exact words), `file` (ref `file:<path>`, quote the file exactly),
 `chat_message` (ref `chat:<id>`), `evidence_case` (ref `evidence:<id>`), `requirement` (the person's
 own words in `quote`) and `assumption` (anything you decided yourself). A citation that does not
-resolve is refused, so quote exactly. A new or changed scenario with no sources is refused: for any
-requirement you cannot cite, add an `assumption` source whose `quote` says what you assumed and whose
-`supports` names the part of the case it covers, rather than citing a source that does not say it.
+resolve is refused, so quote exactly. For any requirement you cannot cite, add an `assumption` source
+whose `quote` says what you assumed and whose `supports` names the part of the case it covers, rather
+than citing a source that does not say it. A scenario that cites nothing is kept, and shown as assumed.
 
 ## Must-pass cases
 

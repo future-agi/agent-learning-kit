@@ -1678,20 +1678,6 @@ def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-NO_SOURCES = "Cite where this case comes from, or add an assumption source that says what you assumed."
-
-
-def _unchanged(scenario: Scenario, payload: dict[str, Any], kept: list[Scenario]) -> bool:
-    """Whether a saved scenario with this key (else this name) already holds exactly this content."""
-    named = str(payload.get("scenario_key") or "").strip()
-    previous = next((one for one in kept if named and one.scenario_key == named), None) or next(
-        (one for one in kept if one.name == scenario.name), None
-    )
-    if previous is None:
-        return False
-    return previous.model_dump(exclude={"scenario_key"}) == scenario.model_dump(exclude={"scenario_key"})
-
-
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -1710,16 +1696,10 @@ def accept_scenario(
     tools: set[str] | None = None,
     used: set[str] | None = None,
     renaming: bool = False,
-    require_sources: bool = False,
     service_tools: set[str] | None = None,
     read_tools: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
-
-    ``require_sources`` refuses a new or changed scenario that cites nothing: a requirement the
-    writer cannot cite is written as an ``assumption`` source, never left as a silent default. A
-    resubmission identical to the saved scenario (a case written before sources were required) is
-    exempt.
 
     ``renaming`` keeps a proved scenario under a new name without proving it again: what it tests
     is unchanged. ``used`` is every key the environment has given a scenario, so a new one never
@@ -1815,10 +1795,6 @@ def accept_scenario(
             finally:
                 trial.close()
 
-        # An assumption that writes down nothing it assumed cites nothing either.
-        cited = [one for one in scenario.sources if one.kind != "assumption" or (one.quote or one.supports).strip()]
-        if require_sources and not cited and not _unchanged(scenario, payload, kept):
-            problems.append(NO_SOURCES)
         # A single call is decided once the proof shows what it does: a read that leaves the world as it was is a
         # refusal (the agent checks, then declines); anything else is still refused.
         single_call = hollow_scenario_problems(scenario)
@@ -2858,7 +2834,6 @@ def scenario_tools(
             call_actor_list=load_call_actors(destination),
             tools=set(contract.tool_names()),
             used=used,
-            require_sources=True,
             service_tools=_service_tools(contract),
             read_tools=_read_tools(contract),
         )
