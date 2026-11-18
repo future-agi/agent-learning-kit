@@ -32,6 +32,7 @@ from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, wor
 from .scenarios import writer_worker
 from .session import Stage
 from .tools import schema
+from .proofs import proof_key, record_proof
 
 BUILDER = "builder"
 KNOWLEDGE_SERVER = "knowledge"
@@ -163,7 +164,6 @@ def suite_server(
 ) -> ToolServer:
     """Whole-suite operations the single-scenario tools would take one call per scenario to do."""
     from .catalogue import load_catalogue
-    from .proofs import proof_key, record_proof
     from .prove import prove
     from .scenario_tools import write_scenarios
 

@@ -24,7 +24,8 @@ from typing import TYPE_CHECKING
 
 import fi.alk
 
-from . import call_runner, failure_record, judge
+from . import bundle_v2, call_runner, failure_record, hosted_entrypoint, judge, live_proof
+from .contract import AgentContract
 from .catalogue import load_catalogue
 from .certification import CheckStatus
 from .generated_runtime import installed_frameworks
@@ -1504,10 +1505,8 @@ async def validate_once(
             if not readiness_only:
                 # While the stack is up, play each case's reference and controls through the
                 # service-backed and MCP Toolbox tools for real; never fails validation.
-                from .live_proof import prove_live
-
                 try:
-                    live = await prove_live(
+                    live = await live_proof.prove_live(
                         authoring=authoring,
                         contract=AgentContract.model_validate_json(
                             (bundle / "contract.json").read_text(encoding="utf-8")
@@ -1665,14 +1664,12 @@ async def prove_on_sealed_runtime(
     """Start the pair's sealed bundle and play its cases on it, as certification does, without
     certifying again: no compile, no setup pass, no repair. `{}` when the bundle serves no tool a
     case could be played on; the cases then keep their offline proofs."""
-    from .bundle_v2 import RuntimeKindV2, load_bundle_v2
-    from .contract import AgentContract
-    from .hosted_entrypoint import ProcessWorldFactory
-    from .live_proof import MCP_TOOLBOX, TOOL_PROXY, prove_live
-
     bundle = authoring / "environment-bundle"
-    manifest = load_bundle_v2(bundle)
-    if manifest.runtime.kind is RuntimeKindV2.COMPOSE or not {TOOL_PROXY, MCP_TOOLBOX} & set(manifest.capabilities):
+    manifest = bundle_v2.load_bundle_v2(bundle)
+    if manifest.runtime.kind is bundle_v2.RuntimeKindV2.COMPOSE or not {
+        live_proof.TOOL_PROXY,
+        live_proof.MCP_TOOLBOX,
+    } & set(manifest.capabilities):
         return {}
     contract = AgentContract.model_validate_json((bundle / "contract.json").read_text(encoding="utf-8"))
     generic = bool(isinstance(getattr(job, "metadata", None), dict) and job.metadata.get("generic_harness_v1") is True)
@@ -1684,12 +1681,12 @@ async def prove_on_sealed_runtime(
             runtimes = await provider.provision(
                 manifest, source=source, bundle_dir=bundle, work_directory=work, instances=1
             )
-            return await prove_live(
+            return await live_proof.prove_live(
                 authoring=authoring,
                 contract=contract,
                 runtime=runtimes[0],
                 provider=provider,
-                factory=ProcessWorldFactory(work, bundle),
+                factory=hosted_entrypoint.ProcessWorldFactory(work, bundle),
                 work=work,
                 seed=job.seed or 0,
                 keys=keys,

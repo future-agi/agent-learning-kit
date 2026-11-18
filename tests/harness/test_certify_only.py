@@ -1600,8 +1600,7 @@ def _sealed_tree(tmp_path: Path, monkeypatch, capabilities: dict, kind=None) -> 
 
 
 def test_prove_on_sealed_runtime_plays_the_cases_on_the_started_bundle(tmp_path, monkeypatch):
-    from fi.alk.harness import hosted_entrypoint, live_proof, scenario_tools
-    from fi.alk.harness import catalogue as catalogue_module
+    from fi.alk.harness import hosted_entrypoint, live_proof
 
     from test_negative_controls import Stack
     from proof_world import REFUND_CATALOGUE, catalogue, refund_case
@@ -1622,8 +1621,8 @@ def test_prove_on_sealed_runtime_plays_the_cases_on_the_started_bundle(tmp_path,
     stack.provision, stack.close = provision, close
     monkeypatch.setattr(runtime_validation, "_runtime_provider", lambda *args, **kwargs: stack)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", lambda work, bundle: stack)
-    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: [refund_case()])
-    monkeypatch.setattr(catalogue_module, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [refund_case()])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
     monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
 
     results = asyncio.run(

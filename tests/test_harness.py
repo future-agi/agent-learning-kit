@@ -9615,7 +9615,7 @@ def test_unchanged_legacy_case_without_sources_saves(tmp_path):
     assert edited.get("is_error") and NO_SOURCES in edited["content"][0]["text"]
 
 
-# --- the prove lane at submit (TH-8918 W2, SC J3, SC-1, SC-2) --------------------------------
+# --- the prove lane at submit -------------------------------------------------------------------
 
 
 def _submit(tmp_path, **overrides):

@@ -23,6 +23,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .catalogue import load_catalogue
+from .live_proof import apply_live, load_live
+from .proofs import proof_entry, proof_key, unprovable_entry
+from .prove import load_proof_contract, load_world_actors, prove
+from .scenario_tools import load_scenarios
+
 EXIT_UNREADABLE = 3
 DEADLINE_MARGIN_SECONDS = 300
 INCOMPLETE_WHY = "not proved: the validation's time budget ran out before this case"
@@ -42,8 +48,6 @@ def _write(output: Path, proofs: dict[str, dict[str, Any]]) -> None:
 
 
 def _incomplete() -> dict[str, Any]:
-    from .proofs import unprovable_entry
-
     return unprovable_entry(INCOMPLETE_WHY, blocked_reason="validation_incomplete")
 
 
@@ -62,12 +66,6 @@ def prove_suite(
     deadline_at: float | None = None,
     keys: set[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    from .catalogue import load_catalogue
-    from .proofs import proof_entry, proof_key, unprovable_entry
-    from .live_proof import apply_live, load_live
-    from .prove import load_world_actors, load_proof_contract, prove
-    from .scenario_tools import load_scenarios
-
     scenarios = load_scenarios(authoring)
     catalogue = load_catalogue(authoring)
     contract = load_proof_contract(authoring)

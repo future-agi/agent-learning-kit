@@ -84,7 +84,7 @@ class NegativeControl(BaseModel):
     """A wrong behaviour written for this task, played like a solution; the checks must fail it."""
 
     name: str  # slug, unique within the scenario
-    why: str  # one sentence: the wrong behaviour, e.g. "refunds the order twice"
+    why: str  # one sentence: the wrong behaviour, e.g. "does the action twice"
     steps: list[Step] = Field(default_factory=list)  # the wrong trajectory
     must_fail: list[str] = Field(default_factory=list)  # sub-goals that must fail; empty = any check
     # What the wrong agent says, as [{role: "user" | "assistant", content}]: the judge reads it with

@@ -57,6 +57,11 @@ from ..providers.agent import (
     _URL_BREAKS,
     _redact,
 )
+from .understand import load as load_contract
+from .catalogue import load_catalogue
+from .proofs import load_proofs, proof_counts, proof_key
+from . import bundle_author_v2
+from .dropped import restore_note
 
 _NUMBERS = {"type": "array", "items": {"type": "integer"}}
 _RANGES = {
@@ -633,7 +638,6 @@ class HostedChatRuntime:
     async def _open_builder(self, *, resume: bool = True) -> Stage:
         from .builder import BUILDER
         from .poc_guest_booking import guest_booking_policy_job
-        from .understand import load as load_contract
 
         policy_job = guest_booking_policy_job(self.job)
         # A reading the platform handed this build is used before anything opens.
@@ -701,7 +705,6 @@ class HostedChatRuntime:
 
     def _open_built(self, contract: Any, overview: Any, policy_job: Any) -> Stage:
         from .builder import environment_brief, open_builder
-        from .catalogue import load_catalogue
         from .nudge import ENVIRONMENT
         from .poc_guest_booking import guest_booking_pin_scenario_problem
 
@@ -843,7 +846,6 @@ class HostedChatRuntime:
 
     def _what_exists(self) -> tuple[bool, bool]:
         """Whether the workspace has a contract, and a world: what the harness's tools follow."""
-        from .understand import load as load_contract
         from .world.snapshot import saved as world_saved
 
         return load_contract(self.workspace) is not None, bool(world_saved(self.workspace))
@@ -964,8 +966,6 @@ class HostedChatRuntime:
         )
 
     def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
-        from .catalogue import load_catalogue
-
         return any(one.name == args.get("name") for one in load_catalogue(self.workspace).sub_goals)
 
     def _changes_meaning(self, args: dict[str, Any]) -> bool:
@@ -1189,9 +1189,7 @@ class HostedChatRuntime:
         )
         async def finish_build(args: dict[str, Any]) -> dict[str, Any]:
             from .builder import suite_health
-            from .proofs import load_proofs, proof_counts, proof_key
             from .scenario_tools import load_scenarios
-            from .understand import load as load_contract
 
             contract = load_contract(self.workspace)
             has_contract, has_world = self._what_exists()
@@ -1320,7 +1318,6 @@ class HostedChatRuntime:
         fingerprint = self._environment_fingerprint()
         if fingerprint == self._published_fingerprint() and not force:
             return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
-        from .bundle_author_v2 import reseal_scenarios, scenario_seal_problems
         from .pre_run import refresh_stale
 
         # A scenario a run could not load is left out of the seal (it keeps its last sealed
@@ -1329,13 +1326,14 @@ class HostedChatRuntime:
             # A pre-run session written from an actor record that has since changed is written again before sealing.
             await refresh_stale(self.workspace)
             try:
-                problems = await asyncio.to_thread(scenario_seal_problems, self.workspace)
-            except Exception:  # noqa: BLE001 - an unreadable tree is the reseal's to report
+                problems = await asyncio.to_thread(bundle_author_v2.scenario_seal_problems, self.workspace)
+            except Exception as exc:  # noqa: BLE001 - an unreadable tree is the reseal's to report
+                print(f"scenario seal problems not read: {type(exc).__name__}", file=sys.stderr, flush=True)
                 problems = {}
             if problems:
-                await asyncio.to_thread(reseal_scenarios, self.workspace, skip=set(problems))
+                await asyncio.to_thread(bundle_author_v2.reseal_scenarios, self.workspace, skip=set(problems))
             else:
-                await asyncio.to_thread(reseal_scenarios, self.workspace)
+                await asyncio.to_thread(bundle_author_v2.reseal_scenarios, self.workspace)
         except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
             traceback.print_exc()
             return {
@@ -1651,7 +1649,6 @@ class HostedChatRuntime:
         done for whatever exists and has not had it yet, so a restart in between loses nothing."""
         from .cli import after_contract, after_world
         from .job import HarnessJob
-        from .understand import load as load_contract
 
         has_contract, has_world = self._what_exists()
         try:
@@ -1832,10 +1829,6 @@ class HostedChatRuntime:
 
     def _restore_note(self) -> str:
         """The line on dropped scenarios this suite rebuild restores, or ""."""
-        from .catalogue import load_catalogue
-        from .dropped import restore_note
-        from .understand import load as load_contract
-
         try:
             return restore_note(
                 self.workspace,

@@ -22,8 +22,28 @@ import os
 import random
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from . import authoring_runtime_validation
+from .catalogue import load_catalogue
+from .catalogue import Catalogue
+from .checks import Outcome, reference_of, run_check
+from .contract import AgentContract
+from .folder import apply_setup, check_ready
+from .proof_records import CheckRecord, ControlResult, LiveResult
+from .proofs import proof_key
+from .prove import Proof
+from .prove import checks_for, control_broken, executes, play_reference_step
+from .scenario_tools import load_scenarios
+from .scenario import Scenario, Step
+from .world.handle import MCP_ROUTE, mcp_request
+from .world.runtime import Call
+
+if TYPE_CHECKING:
+    from .hosted_entrypoint import ProcessWorldFactory
+    from .process_runtime import EnvironmentRuntime, ProcessRuntimeProvider, RuntimeEndpoint
 
 logger = logging.getLogger(__name__)
 
@@ -35,15 +55,15 @@ IN_PROCESS_MODES = ("import", "construct")
 
 
 def service_endpoints(
-    contract: Any, endpoints: dict[str, Any], toolbox_tools: set[str] | frozenset[str] = frozenset()
+    contract: AgentContract,
+    endpoints: Mapping[str, RuntimeEndpoint],
+    toolbox_tools: set[str] | frozenset[str] = frozenset(),
 ) -> dict[str, str]:
     """Contract tool -> route a live proof plays it on: the path behind the tool proxy for an entry whose mode is
     `service`, else `MCP_ROUTE` for a tool in `toolbox_tools` (what the MCP Toolbox serves) that the contract does not
     place in the agent's own process.
 
     Empty when neither server is up: nothing could be played."""
-    from .world.handle import MCP_ROUTE
-
     endpoints = endpoints or {}
     bound: dict[str, str] = {}
     for name in contract.tool_names():
@@ -56,10 +76,8 @@ def service_endpoints(
     return bound
 
 
-def served_by_toolbox(endpoints: dict[str, Any]) -> set[str]:
+def served_by_toolbox(endpoints: Mapping[str, RuntimeEndpoint]) -> set[str]:
     """The tool names the runtime's MCP Toolbox lists; empty when it has none or cannot be listed."""
-    from .world.handle import mcp_request
-
     if MCP_TOOLBOX not in (endpoints or {}):
         return set()
     try:
@@ -71,23 +89,17 @@ def served_by_toolbox(endpoints: dict[str, Any]) -> set[str]:
     return {str(tool["name"]) for tool in tools or [] if isinstance(tool, dict) and tool.get("name")}
 
 
-def _address(endpoint: Any) -> str:
+def _address(endpoint: RuntimeEndpoint | str) -> str:
     return str(getattr(endpoint, "address", endpoint) or "")
 
 
-def _outcomes(scenario: Any, catalogue: Any, world: Any, calls: list[Any]) -> list[Any]:
-    from .checks import reference_of, run_check
-    from .prove import checks_for
-
+def _outcomes(scenario: Scenario, catalogue: Catalogue, world: Any, calls: list[Call]) -> list[Outcome]:
     reference = reference_of(scenario.solution)
     return [run_check(source, world, calls, name=name, reference=reference) for name, source in checks_for(scenario, catalogue)]
 
 
-def _play(scenario: Any, world: Any, steps: list[Any]) -> tuple[list[Any], list[str], list[str]]:
+def _play(scenario: Scenario, world: Any, steps: list[Step]) -> tuple[list[Call], list[str], list[str]]:
     """Set up, play `steps`, and say which ran unbound (assumed) and which were refused."""
-    from .folder import apply_setup, check_ready
-    from .prove import executes, play_reference_step
-
     applied = apply_setup(scenario, world)
     if not applied.ok:
         raise RuntimeError(f"setup: {applied.said}")
@@ -105,35 +117,30 @@ def _play(scenario: Any, world: Any, steps: list[Any]) -> tuple[list[Any], list[
 
 
 def _digest(world: Any) -> str | None:
-    from .authoring_runtime_validation import world_state_digest
-
     try:
-        return world_state_digest(world)
-    except Exception:  # noqa: BLE001 - an unreadable state compares as different
+        return authoring_runtime_validation.world_state_digest(world)
+    except Exception as exc:  # noqa: BLE001 - an unreadable state compares as different
+        logger.info("live proof: world state not read: %s", type(exc).__name__)
         return None
 
 
 async def prove_live(
     *,
     authoring: Path,
-    contract: Any,
-    runtime: Any,
-    provider: Any,
-    factory: Any,
+    contract: AgentContract,
+    runtime: EnvironmentRuntime,
+    provider: ProcessRuntimeProvider,
+    factory: ProcessWorldFactory,
     work: Path,
     seed: int = 0,
     keys: set[str] | None = None,
     until: float | None = None,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, LiveResult]:
     """Play each case's reference, an empty run and its controls on the live runtime; write and
     return `{scenario_key: live result}`. Returns {} when no tool is bound to a running server.
 
     `keys` plays only those cases. No case starts once `until` (epoch seconds) has passed: a case not
     reached keeps its offline proof."""
-    from .catalogue import load_catalogue
-    from .proofs import proof_key
-    from .scenario_tools import load_scenarios
-
     bound = service_endpoints(contract, runtime.endpoints, served_by_toolbox(runtime.endpoints))
     if not bound:
         return {}
@@ -141,7 +148,7 @@ async def prove_live(
     toolbox = _address(runtime.endpoints.get(MCP_TOOLBOX, ""))
     scenarios = load_scenarios(authoring)
     catalogue = load_catalogue(authoring)
-    results: dict[str, dict[str, Any]] = {}
+    results: dict[str, LiveResult] = {}
 
     async def fresh() -> Any:
         await provider.reset(runtime, work_directory=work)
@@ -169,7 +176,7 @@ async def prove_live(
             nothing_calls, _, _ = await asyncio.to_thread(_play, scenario, world, [])
             with_nothing = await asyncio.to_thread(_outcomes, scenario, catalogue, world, nothing_calls)
             untouched = await asyncio.to_thread(_digest, world)
-            controls = []
+            controls: list[ControlResult] = []
             for control in scenario.negative_controls:
                 try:
                     world = await fresh()
@@ -210,7 +217,7 @@ async def prove_live(
     return results
 
 
-def write_live(authoring: Path, results: dict[str, dict[str, Any]]) -> None:
+def write_live(authoring: Path, results: Mapping[str, LiveResult]) -> None:
     """Merge `results` into the live proofs file by key, so other keys keep theirs."""
     path = Path(authoring) / LIVE_PROOFS
     merged = {**load_live(authoring), **results}
@@ -234,7 +241,8 @@ def forget_live(authoring: Path, keys: set[str] | None) -> None:
     write_live(authoring, kept)
 
 
-def load_live(authoring: Path) -> dict[str, dict[str, Any]]:
+def load_live(authoring: Path) -> dict[str, LiveResult]:
+    """The live results by key, as `write_live` wrote them; none when the file is absent or unreadable."""
     try:
         value = json.loads((Path(authoring) / LIVE_PROOFS).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -242,15 +250,12 @@ def load_live(authoring: Path) -> dict[str, dict[str, Any]]:
     return value if isinstance(value, dict) else {}
 
 
-def apply_live(proof: Any, live: dict[str, Any]) -> Any:
+def apply_live(proof: Proof, live: LiveResult) -> Proof:
     """The offline proof with its gates replaced by what the live runtime showed.
 
     Leaks, sources and rule checks stay the offline proof's; readiness, the reference, the empty run
     and the controls come from the live run, which is the stronger evidence."""
-    from .checks import Outcome
-    from .prove import control_broken
-
-    def outcomes(rows: list[dict[str, Any]]) -> list[Any]:
+    def outcomes(rows: list[CheckRecord]) -> list[Outcome]:
         return [Outcome(row["name"], bool(row["held"]), str(row.get("said") or ""), broken=bool(row.get("broken"))) for row in rows]
 
     proof.deferred = False

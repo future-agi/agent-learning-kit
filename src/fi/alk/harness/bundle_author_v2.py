@@ -110,6 +110,7 @@ from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manife
 from .provider_import import ProviderImportSpec
 from .world.tools import _binding
 from .world_door import DOOR_CAPABILITIES, DOOR_FILE, method_action, world_action
+from .scenario_source import declared_tool_names, deterministic_names, load_one
 
 
 class BundleAuthorError(RuntimeError):
@@ -4594,8 +4595,6 @@ def author_bundle_v2(
 def scenario_seal_problems(authoring: str | Path) -> dict[str, str]:
     """Each scenario folder a run could not load, by key, with the first line of why. Loaded one
     folder at a time, the way a run loads them, so one broken case does not hide the rest."""
-    from .scenario_source import declared_tool_names, deterministic_names, load_one
-
     root = Path(authoring)
     folders = sorted(path for path in (root / "scenarios").iterdir() if path.is_dir()) if (root / "scenarios").is_dir() else []
     if not folders:

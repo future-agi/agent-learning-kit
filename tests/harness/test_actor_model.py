@@ -224,7 +224,7 @@ def test_an_error_fault_keeps_its_status_and_message_and_refuses_a_status_that_i
         Fault(action="orders.refund", mode="explode")
 
 
-# --- attached files' roles (`knowledge/roles.json`, TH-8919) ------------------------------------------------------
+# --- attached files' roles (`knowledge/roles.json`) ---------------------------------------------------------------
 
 
 def _attach(root, roles, **files):

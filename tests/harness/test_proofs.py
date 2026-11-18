@@ -220,7 +220,7 @@ def test_a_deferred_proof_gives_the_reason_it_is_blocked_for_not_an_unrun_gate()
 
 
 def test_an_agent_bound_tool_with_a_state_check_is_kept_as_written_not_unsolvable(monkeypatch, tmp_path):
-    # Review B4: the refund tool runs inside the agent, so its step never changes the world the state check reads.
+    # The refund tool runs inside the agent, so its step never changes the world the state check reads.
     install(monkeypatch, runtime_tools={"refund_order"})
     proof = module.prove(refund_case(), catalogue(**REFUND_CATALOGUE), tmp_path, contract=None, actors=[])
 

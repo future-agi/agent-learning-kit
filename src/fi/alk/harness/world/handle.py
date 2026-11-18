@@ -10,12 +10,16 @@ message naming what it did wrong rather than a `KeyError` or a driver traceback 
 
 from __future__ import annotations
 
+import json
 import random
+import time
 from pathlib import Path
 from . import files
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
+
+import requests
 
 from .errors import (
     WorldQueryRejected,
@@ -369,10 +373,6 @@ class HostedWorld(HttpObservationHandle):
         """POST `arguments` as JSON to `endpoint` behind the bundle's tool proxy, which forwards it to
         the agent's own tools service and records the call. The same wire format a provisioned
         world uses for a submitted service. An `MCP_ROUTE` endpoint is a `tools/call` to the MCP Toolbox."""
-        import json
-        import time
-
-        import requests
 
         if endpoint.startswith(MCP_ROUTE):
             return self._forward_mcp(endpoint[len(MCP_ROUTE):], arguments, record_as=record_as, record=record)
@@ -400,8 +400,6 @@ class HostedWorld(HttpObservationHandle):
         self, tool: str, arguments: Mapping[str, Any] | None, *, record_as: str, record: bool
     ) -> Call:
         """Call `tool` on the bundle's MCP Toolbox, the server the agent's own toolbox client reaches."""
-        import time
-
         if not self._mcp_toolbox:
             raise WorldUnavailable(f"no MCP Toolbox is bound to this world, so {tool} cannot be played")
         args = dict(arguments or {})
@@ -674,8 +672,6 @@ class ReadOnlyWorld(HttpObservationHandle):
 def mcp_request(address: str, method: str, params: Mapping[str, Any], *, timeout: float = 30.0) -> dict[str, Any]:
     """One JSON-RPC request to the stateless, JSON-answering MCP server at `address` (the bundle's MCP Toolbox), as
     its parsed response. A transport failure or a non-JSON answer raises `requests.RequestException` or `ValueError`."""
-    import requests
-
     response = requests.post(
         f"{address.rstrip('/')}/mcp/",
         json={"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params)},
@@ -692,9 +688,6 @@ def mcp_tool_call(address: str, tool: str, arguments: Mapping[str, Any]) -> tupl
     """`(ok, result, error, refused)` of one `tools/call`. A tool error or a JSON-RPC error is a refusal, as an
     HTTP 4xx is behind the tool proxy; a server that cannot be reached is a failure, not a refusal. The result is the
     tool's text content, parsed as JSON where it is JSON."""
-    import json
-
-    import requests
 
     try:
         body = mcp_request(address, "tools/call", {"name": tool, "arguments": dict(arguments)})

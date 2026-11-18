@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import ast
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
+from .actors import evaluator_only_paths
 from .catalogue import Catalogue
+from .contract import AgentContract
+from .proof_records import LeakRecord
+from .scenario import Scenario
 
 SHINGLE = 8
 EXCERPT = 120
@@ -47,8 +52,8 @@ class Leak:
     grader_field: str
     excerpt: str
 
-    def as_dict(self) -> dict[str, str]:
-        return asdict(self)
+    def as_dict(self) -> LeakRecord:
+        return LeakRecord(who=self.who, field=self.field, grader_field=self.grader_field, excerpt=self.excerpt)
 
 
 def normalise(text: str) -> str:
@@ -129,7 +134,7 @@ def _check_literals(source: str) -> set[str]:
     return found
 
 
-def _solution_literals(scenario: Any) -> set[str]:
+def _solution_literals(scenario: Scenario) -> set[str]:
     """Argument values of the reference steps a caller would not know: strings with a digit or 3+
     tokens, and decimal numbers. Values the caller already holds are dropped by the caller."""
     found: set[str] = set()
@@ -180,7 +185,6 @@ def _evaluator_only_texts(world_root: Path | None) -> list[tuple[str, str]]:
     """The text of each attached file only the evaluator may read (`knowledge/roles.json`), as grader material."""
     if world_root is None:
         return []
-    from .actors import evaluator_only_paths
 
     texts = []
     for path in evaluator_only_paths(Path(world_root)):
@@ -191,7 +195,7 @@ def _evaluator_only_texts(world_root: Path | None) -> list[tuple[str, str]]:
     return texts
 
 
-def _takes_part(scenario: Any, actor: dict[str, Any]) -> bool:
+def _takes_part(scenario: Scenario, actor: Mapping[str, Any]) -> bool:
     actor_id = actor.get("id")
     start = getattr(scenario, "starts_with", None)
     if isinstance(start, dict) and start.get("actor") == actor_id:
@@ -200,11 +204,11 @@ def _takes_part(scenario: Any, actor: dict[str, Any]) -> bool:
 
 
 def leaks(
-    scenario: Any,
+    scenario: Scenario,
     catalogue: Catalogue,
-    contract: Any = None,
-    world_state: Any = None,
-    actors: list[dict[str, Any]] | None = None,
+    contract: AgentContract | None = None,
+    world_state: Mapping[str, Any] | None = None,
+    actors: Sequence[Mapping[str, Any]] | None = None,
     *,
     world_root: Path | None = None,
 ) -> list[Leak]:

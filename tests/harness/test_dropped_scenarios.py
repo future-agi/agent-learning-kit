@@ -362,7 +362,7 @@ def test_editing_a_restored_scenario_is_not_refused(tmp_path):
     assert said == ""
 
 
-# A restored scenario comes back only once proved again, in this rebuild (TH-8754 D2).
+# A restored scenario comes back only once proved again, in this rebuild.
 
 
 def _restore_with(tmp_path, monkeypatch, proof_for):
@@ -391,7 +391,7 @@ def test_a_restored_scenario_without_a_negative_control_is_not_restored(tmp_path
     assert "no negative control" in dropped.load(root)["cancels-a-booking"]["restore_failed"]
 
 
-# Review B4: the cancel tool runs inside the agent, so its assumed step leaves the world the state check reads unchanged
+# The cancel tool runs inside the agent, so its assumed step leaves the world the state check reads unchanged
 # (solvable reads False) and the control could not run either.
 _NOT_RUN = [{"name": "wrong", "why": "cancels twice", "failed": None, "held": [], "assumed": ["cancel_booking"]}]
 
