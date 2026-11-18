@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import random
 import re
@@ -17,10 +18,12 @@ import shutil
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .job import FailureCause
     from .source_model import SourceModel
     from .world_ir import WorldIR
 
@@ -183,6 +186,21 @@ def _write_runtime_evidence(
         )
 
     contract = authoring / "contract.json"
+    from .contract import AgentContract
+    from .proofs import load_proofs
+    from .tool_certification import compare_declared_tables
+
+    proofs = load_proofs(authoring)
+    try:
+        declared = AgentContract.model_validate_json(contract.read_text(encoding="utf-8")) if proofs else None
+    except (OSError, ValueError):
+        declared = None
+    if declared is not None:
+        tool_report, skipped = compare_declared_tables(tool_report, declared, proofs)
+        if skipped:
+            limitations.append(
+                "declared tables were not compared for proof runs no one tool wrote in: " + "; ".join(skipped)
+            )
     scenarios = authoring / "scenarios"
     if not scenarios.exists():
         scenarios = authoring / "scenario"
@@ -591,6 +609,30 @@ def _repair_guidance(diagnostics) -> str:
     return "\n".join(rendered)[:12000]
 
 
+def _mask_diagnostics(diagnostics, masks):
+    """The typed diagnostics as the repair step may see them: message and references masked
+    against the source's listed files (before any cut). With no masks (the walk failed), the codes
+    only."""
+    from .process_diagnostics import mask_source_secrets
+
+    if masks is None:
+        return tuple(
+            item.model_copy(update={"redacted_message": "withheld", "evidence_refs": ()})
+            for item in diagnostics
+        )
+    return tuple(
+        item.model_copy(
+            update={
+                "redacted_message": mask_source_secrets(item.redacted_message, masks),
+                "evidence_refs": tuple(
+                    mask_source_secrets(reference, masks) for reference in item.evidence_refs
+                ),
+            }
+        )
+        for item in diagnostics
+    )
+
+
 def _needs_runtime_plan_repair(diagnostics) -> bool:
     """Route execution construction failures away from world-data authoring."""
 
@@ -610,9 +652,18 @@ def _needs_runtime_plan_repair(diagnostics) -> bool:
 
 
 class RuntimeValidationError(RuntimeError):
-    def __init__(self, phase: str, detail: str, *, diagnostics=()):
+    def __init__(
+        self,
+        phase: str,
+        detail: str,
+        *,
+        diagnostics=(),
+        cause: FailureCause | None = None,
+    ):
         self.phase = phase
         self.diagnostics = tuple(diagnostics)
+        # The closed reason a reader without access to guest text gets; None when unknown.
+        self.cause = cause
         self.process_evidence = ""
         self.target_process_evidence = ""
         super().__init__(detail)
@@ -658,6 +709,7 @@ async def _probe_runtime_readiness(
 ):
     from .chat_call_runner import _tools, _chat_target_timeout_seconds
     from .chat_readiness import probe_chat_ingress
+    from .process_runtime import ProcessRuntimeError
 
     interface = contract.runtime.interface if contract.runtime else None
     endpoint = runtime.endpoints.get("target_http")
@@ -701,7 +753,10 @@ async def _probe_runtime_readiness(
                 raise
             except Exception as exc:
                 raise RuntimeValidationError(
-                    "environment", f"Readiness reset failed: {exc}"
+                    "environment",
+                    f"Readiness reset failed: {exc}",
+                    diagnostics=tuple(getattr(exc, "diagnostics", ())),
+                    cause=exc.cause if isinstance(exc, ProcessRuntimeError) else None,
                 ) from exc
             receipt["reset"] = "equivalent" if compare_baseline else "restarted"
         receipt["status"] = "passed"
@@ -736,9 +791,10 @@ async def validate_once(
     from .job import ProviderExecutionMode, SourceKind
     from .process_preflight import preflight_bundle
     from .process_runtime import (
+        ProcessRuntimeError,
         ProcessRuntimeProvider,
         default_user_resolver,
-        fixed_sandbox_user_resolver,
+        hosted_user_resolution,
     )
     from .scenario_source import does_nothing, load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
@@ -851,14 +907,13 @@ async def validate_once(
             secrets_path=secrets,
             secret_purpose_map=job_secret_purposes(job),
             # A local parity run shares the host/container process namespace and must resolve
-            # the same unprivileged identities installed in its image. E2B, however, launches
-            # the guest as one fixed OS identity and does not grant setuid/chown capabilities.
-            user_resolver=(
-                default_user_resolver
+            # the same unprivileged identities installed in its image. A hosted sandbox runs
+            # each declared user only when the platform granted per-user isolation.
+            **(
+                {"user_resolver": default_user_resolver, "require_declared_user": False}
                 if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
-                else fixed_sandbox_user_resolver
+                else hosted_user_resolution()
             ),
-            require_declared_user=False,
             public_url_resolver=(
                 None
                 if capabilities is None
@@ -887,6 +942,11 @@ async def validate_once(
         phase = "runtime"
         try:
             bundle = work / "bundle"
+            if not readiness_only:
+                # A pre-run session written from an actor record that has since changed is written again first.
+                from .pre_run import refresh_stale
+
+                await refresh_stale(authoring)
             manifest = await asyncio.to_thread(
                 author_bundle_v2,
                 source=source,
@@ -939,15 +999,20 @@ async def validate_once(
             world_isolation = None
             if generic:
                 from .action_certification import certify_actions
+                from .bundle_author_v2 import _runtime_component
+                from .source_folder import contract_folder
 
                 contract = AgentContract.model_validate_json(
                     (bundle / "contract.json").read_text(encoding="utf-8")
                 )
+                folder = contract_folder(contract)
                 tool_report = certify_tool_inventory(
                     contract,
                     bundle,
                     external_provider=provider_owned_tools,
-                    source=source,
+                    # What the agent's install can import: its folder, or the project above
+                    # it, shared code included. A tool outside that is not this agent's.
+                    source=_runtime_component(source.resolve(), folder) if folder else source,
                 )
                 rejected = {
                     item.tool: item.reason
@@ -1211,7 +1276,7 @@ async def validate_once(
                     if getattr(representative, "requires_tool_evidence", False):
                         await probe_chat_workflow(
                             job=job, source=source, bundle=bundle, authoring=authoring,
-                            runtime=runtime, scenario=representative,
+                            work_directory=work, runtime=runtime, scenario=representative,
                             candidate_hash=_generic_candidate_hash(source, authoring),
                             bundle_digest=manifest.digest,
                             secret_values=target_secret_values,
@@ -1372,6 +1437,7 @@ async def validate_once(
                     str(exc), extra_secret_values=secret_values
                 ),
                 diagnostics=exc.diagnostics,
+                cause=exc.cause,
             )
             raise validation_error from None
         except Exception as exc:
@@ -1384,6 +1450,7 @@ async def validate_once(
                     f"{type(exc).__name__}: {exc}", extra_secret_values=secret_values
                 ),
                 diagnostics=tuple(getattr(exc, "diagnostics", ())),
+                cause=exc.cause if isinstance(exc, ProcessRuntimeError) else None,
             )
             raise validation_error from None
         finally:
@@ -1393,8 +1460,12 @@ async def validate_once(
                 from .process_diagnostics import retained_process_evidence
 
                 try:
+                    # The listed files in the agent's source, walked once a run (and only when
+                    # it fails), masked out of every log the repair model reads. If the walk
+                    # itself fails, no log goes to the model.
+                    source_masks = await _source_masks(source)
                     validation_error.process_evidence = retained_process_evidence(
-                        process_logs, logs_before, redaction_values
+                        process_logs, logs_before, redaction_values, masks=source_masks
                     )
                     control_service = (
                         getattr(manifest.runtime, "control_service", None)
@@ -1403,10 +1474,58 @@ async def validate_once(
                     if control_service:
                         validation_error.target_process_evidence = retained_process_evidence(
                             process_logs, logs_before, redaction_values,
-                            process_name=control_service,
+                            process_name=control_service, masks=source_masks,
                         )
-                except OSError:
-                    pass
+                except _SourceMasksUnavailable:
+                    pass  # logged where the walk failed
+                except OSError as exc:
+                    logger.warning(
+                        "process evidence withheld from the repair (%s)",
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+
+
+logger = logging.getLogger(__name__)
+
+
+class _SourceMasksUnavailable(OSError):
+    """The source's listed files could not be walked for masks; logged once, where it failed."""
+
+
+# One walk per validate_and_repair run, failure included: the repair never changes the source.
+_SOURCE_MASKS: ContextVar[dict[str, frozenset[str] | None] | None] = ContextVar(
+    "alk_source_masks", default=None
+)
+
+
+async def _source_masks(source: Path) -> frozenset[str]:
+    """The masks of the source's listed files. Raises _SourceMasksUnavailable if the walk fails,
+    and the callers then withhold the evidence."""
+    from . import process_diagnostics
+
+    cache = _SOURCE_MASKS.get()
+    key = str(Path(source).resolve())
+    if cache is not None and key in cache:
+        found = cache[key]
+        if found is None:
+            raise _SourceMasksUnavailable("source secret masks unavailable")
+        return found
+    try:
+        masks = await asyncio.to_thread(process_diagnostics.source_secret_masks, source)
+    except Exception as exc:
+        logger.warning(
+            "the source's listed files could not be masked (%s); the repair gets no "
+            "diagnostic evidence",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        if cache is not None:
+            cache[key] = None
+        raise _SourceMasksUnavailable("source secret masks unavailable") from None
+    if cache is not None:
+        cache[key] = masks
+    return masks
 
 
 def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
@@ -1423,6 +1542,27 @@ def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
         return []
 
 
+def _promote_data_store(contract, authoring: Path, candidate_dir: Path) -> int:
+    """Copy only ``data_store`` from a candidate reading onto the saved contract, and save it.
+
+    Returns 0 when it was promoted, 1 when the candidate has none to give.
+    """
+    from .contract import AgentContract, write_contract
+
+    candidate_path = candidate_dir / "contract.json"
+    if not candidate_path.is_file():
+        return 1
+    candidate = AgentContract.model_validate_json(
+        candidate_path.read_text(encoding="utf-8")
+    )
+    if candidate.data_store is None or not candidate.data_store.kind.strip():
+        return 1
+    payload = contract.model_dump()
+    payload["data_store"] = candidate.data_store.model_dump()
+    write_contract(AgentContract.model_validate(payload), authoring)
+    return 0
+
+
 async def validate_and_repair(
     job,
     source: Path,
@@ -1435,6 +1575,33 @@ async def validate_and_repair(
     readiness_only: bool = False,
 ) -> None:
     """Two repairs per phase; environment repairs cannot exhaust setup's budget."""
+    token = _SOURCE_MASKS.set({})
+    try:
+        await _validate_and_repair(
+            job,
+            source,
+            authoring,
+            validate=validate,
+            repair=repair,
+            controller=controller,
+            sleeper=sleeper,
+            readiness_only=readiness_only,
+        )
+    finally:
+        _SOURCE_MASKS.reset(token)
+
+
+async def _validate_and_repair(
+    job,
+    source: Path,
+    authoring: Path,
+    *,
+    validate,
+    repair,
+    controller,
+    sleeper,
+    readiness_only: bool,
+) -> None:
     from .job import HarnessJob
 
     base_guidance = (
@@ -1482,6 +1649,16 @@ async def validate_and_repair(
                     )
                     if contract.data_store is not None:
                         return 1
+                    # The contract can quote the source, so it is masked like the guidance, and
+                    # left out if the masks can't be built.
+                    contract_masks = await source_masks_or_none()
+                    contract_text = (
+                        "(withheld)"
+                        if contract_masks is None
+                        else mask_source_secrets(
+                            contract.model_dump_json(indent=2), contract_masks
+                        )
+                    )
                     with tempfile.TemporaryDirectory(
                         prefix="alk-storage-repair-"
                     ) as candidate_dir:
@@ -1500,29 +1677,16 @@ async def validate_and_repair(
                                         "Record explicit filesystem, in_memory, none, or database storage "
                                         "only when source supports it. Do not invent a schema or change "
                                         "source behavior. Only data_store will be promoted. Current contract:\n"
-                                        + contract.model_dump_json(indent=2)
+                                        + contract_text
                                     ),
                                 ],
                             )
                         )
-                        candidate_path = Path(candidate_dir) / "contract.json"
-                        if status != 0 or not candidate_path.is_file():
+                        if status != 0:
                             return 1
-                        candidate = AgentContract.model_validate_json(
-                            candidate_path.read_text(encoding="utf-8")
+                        return _promote_data_store(
+                            contract, authoring, Path(candidate_dir)
                         )
-                        if (
-                            candidate.data_store is None
-                            or not candidate.data_store.kind.strip()
-                        ):
-                            return 1
-                        payload = contract.model_dump()
-                        payload["data_store"] = candidate.data_store.model_dump()
-                        repaired = AgentContract.model_validate(payload)
-                        contract_path.write_text(
-                            repaired.model_dump_json(indent=2) + "\n", encoding="utf-8"
-                        )
-                    return 0
                 if generic and _needs_runtime_plan_repair(_active_repair_diagnostics):
                     from .contract import AgentContract
                     from .runtime_repair import request_runtime_plan_patch
@@ -1586,6 +1750,27 @@ async def validate_and_repair(
                     job=job,
                 )
             )
+
+    # Every text the repair step gets can echo process output (logs and diagnostics alike), so
+    # all of it is masked against the contents of the source's listed files on the way in. If the
+    # masks can't be built, the repair gets the standing instructions without the evidence.
+    from .process_diagnostics import mask_source_secrets
+
+    _unmasked_repair = repair
+
+    async def source_masks_or_none():
+        try:
+            return await _source_masks(source)
+        except _SourceMasksUnavailable:
+            return None
+
+    async def repair(phase, guidance, *more, **options):
+        masks = await source_masks_or_none()
+        if masks is None:
+            guidance = "The diagnostic evidence was withheld.\n\n" + base_guidance
+        else:
+            guidance = mask_source_secrets(guidance, masks)
+        return await _unmasked_repair(phase, guidance, *more, **options)
 
     _active_repair_diagnostics = ()
     if generic:
@@ -1685,11 +1870,16 @@ async def validate_and_repair(
                     if decision.action is RepairAction.PATCH_SCENARIOS
                     else "environment"
                 )
+                # Masked before anything is cut or handed on: the guidance text and the typed
+                # diagnostics both reach the model.
+                repair_diagnostics = _mask_diagnostics(
+                    diagnostics, await source_masks_or_none()
+                )
                 guidance = (
                     "Apply one constrained repair using submitted source evidence only. "
                     "Do not modify source, disable constraints, weaken checks, drop scenarios, "
                     "or invent services/tools. Resolve this complete, redacted diagnostic set:\n"
-                    + _repair_guidance(diagnostics)
+                    + _repair_guidance(repair_diagnostics)
                     + "\n\n"
                     + base_guidance
                 )
@@ -1705,7 +1895,7 @@ async def validate_and_repair(
                         + exc.target_process_evidence
                         + "\n</untrusted_current_target_process_logs>"
                     )
-                _active_repair_diagnostics = diagnostics
+                _active_repair_diagnostics = repair_diagnostics
                 scenarios_before = None
                 if repair_phase == "scenarios":
                     from .scenario_tools import load_scenarios
@@ -1909,12 +2099,16 @@ async def validate_and_repair(
             if exc.phase not in repairs or repairs[exc.phase] >= 2:
                 raise
             repairs[exc.phase] += 1
+            masks = await source_masks_or_none()
+            detail = (
+                "withheld" if masks is None else mask_source_secrets(str(exc), masks)[:4000]
+            )
             guidance = (
                 "Actual hosted runtime validation failed. Repair the generated environment/data "
                 "or scenario setup using the submitted source as authority. Do not modify source, "
                 "disable database constraints, weaken checks or ready conditions, drop scenarios, "
                 "or replace tools with invented implementations. Preserve scenario count and intent. "
-                f"Diagnostic: {str(exc)[:4000]}" + "\n\n" + base_guidance
+                f"Diagnostic: {detail}" + "\n\n" + base_guidance
             )
             if await repair(exc.phase, guidance):
                 raise

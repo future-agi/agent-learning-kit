@@ -30,6 +30,13 @@ import yaml
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import Version
 
+from .actors import (
+    ACTOR_RULES_FILE,
+    ACTORS_FILE,
+    actors_seed,
+    load_actors,
+    write_actor_rules,
+)
 from .bundle import CapabilityProtocol
 from .catalogue import CATALOGUE
 from .bundle_v2 import (
@@ -73,9 +80,19 @@ from .generated_runtime import (
 )
 from .credentials import assess_configuration, discover_credentials
 from .secrets import process_secret_environment_names
-from .runtime_selection import ComposeSelection, select_runtime
+from .runtime_selection import ComposeSelection, bounded_yaml_load, select_runtime
+from .agent_type_check import EXIT_REFUSED
+from .source_folder import (
+    SubfolderNotFound,
+    agent_folder,
+    bind_runtime,
+    recorded_folder,
+    recorded_root,
+    refuse_unusable_folder,
+    saved_runtime,
+)
 from .job import HarnessJob
-from .job import ProviderExecutionMode, SourceKind
+from .job import ProviderExecutionMode, SourceKind, routed_through_gateway
 from .process_preflight import preflight_bundle
 from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
@@ -132,6 +149,29 @@ class EnvironmentPlanV2:
 
 _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
 _CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
+# The world's action log: every action the door saw, who took it and what came of it.
+_TOOL_TRACE_DDL = (
+    "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+    "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+    "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL, "
+    "action_id text NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text), "
+    "actor_id text NOT NULL DEFAULT 'agent', worker_id text, parent_event_id text, "
+    "outcome text NOT NULL DEFAULT 'committed', refusal text, refusal_code text, "
+    "on_behalf_of text, idempotency_key text, action text);\n"
+    # The columns a prebuilt world's own tool server writes, so one row carries both sets; `action` (the world action in
+    # full) for a table made before it was recorded.
+    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS action text, ADD COLUMN IF NOT EXISTS agent_tool text, "
+    "ADD COLUMN IF NOT EXISTS provider_call_id text, ADD COLUMN IF NOT EXISTS tool_call_id text, "
+    "ADD COLUMN IF NOT EXISTS status text, ADD COLUMN IF NOT EXISTS effect text, "
+    # How each call was made and the scenario's fault the door applied on it.
+    "ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb;\n"
+)
+
+
+def _action_log_seed(authoring: Path) -> str:
+    """The world's full action log, and who may do what in it, so World changes can be shown on every trial. An older
+    bundle keeps the table it was seeded with; the door writes either shape."""
+    return _TOOL_TRACE_DDL + actors_seed(load_actors(authoring))
 
 
 def _catalog_image(image: str) -> tuple[str, str]:
@@ -797,7 +837,9 @@ def _documented_ddl_statements(sql: str) -> list[str]:
     return statements
 
 
-def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
+def _documented_source_schemas(
+    source: Path, folder: str = ""
+) -> list[_SourceSchemaArtifact]:
     """Use the first README's SQL fences without adopting duplicate alternatives.
 
     This is source-owned executable evidence, not model-authored schema. The first declaration
@@ -805,7 +847,7 @@ def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
     alternative local and cloud recipes that redeclare the same table.
     """
 
-    for readme in sorted(source.glob("README*.md")):
+    for readme in sorted((source / folder if folder else source).glob("README*.md")):
         text = readme.read_text(encoding="utf-8", errors="replace")
         artifacts: list[_SourceSchemaArtifact] = []
         declared_tables: set[str] = set()
@@ -856,7 +898,9 @@ def _compose_source_schema_paths(
         selected = select_runtime(
             source,
             runtime or {},
-            public_environment=_declared_runtime_environment(source),
+            public_environment=_declared_runtime_environment(
+                recorded_root(source, runtime)
+            ),
         )
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
@@ -906,8 +950,11 @@ def _source_schema_paths(
     """
 
     candidates = _compose_source_schema_paths(source, (contract or {}).get("runtime"))
+    folder = recorded_folder((contract or {}).get("runtime"))
     for conventional in ("db/schema.sql", "schema.sql"):
-        path = _contained_source_path(source, conventional)
+        path = _contained_source_path(
+            source, f"{folder}/{conventional}" if folder else conventional
+        )
         if path is not None and path.is_file():
             candidates.append(path)
 
@@ -948,7 +995,9 @@ def _source_schema_artifacts(
             )
             for path in paths
         ]
-    return _documented_source_schemas(source)
+    return _documented_source_schemas(
+        source, recorded_folder((contract or {}).get("runtime"))
+    )
 
 
 def _only_this_database(action: int, *_args: object) -> int:
@@ -1149,6 +1198,9 @@ _SECRET_ENVIRONMENT_NAME = re.compile(
 )
 
 
+_LARGEST_RUNTIME_MANIFEST = 1024 * 1024
+
+
 def _declared_runtime_environment(source: Path) -> dict[str, str]:
     """Load public, non-secret process defaults declared by the repository.
 
@@ -1162,7 +1214,12 @@ def _declared_runtime_environment(source: Path) -> dict[str, str]:
     if not path.is_file():
         return {}
     try:
-        body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        # Read, not stat: a link to a file such as /proc/self/pagemap has size 0 and no end.
+        with path.open("rb") as manifest:
+            raw = manifest.read(_LARGEST_RUNTIME_MANIFEST + 1)
+        if len(raw) > _LARGEST_RUNTIME_MANIFEST:
+            raise BundleAuthorError("runtime_manifest_invalid: alk.yaml is larger than 1 MiB")
+        body = bounded_yaml_load(raw.decode("utf-8")) or {}
     except (OSError, yaml.YAMLError) as exc:
         raise BundleAuthorError(f"runtime_manifest_invalid: {exc}") from exc
     if not isinstance(body, dict):
@@ -1260,6 +1317,7 @@ def _plan_python(
     version: str = "",
     requirements_files: list[str] | None = None,
     context_excludes: tuple[str, ...] = (),
+    run_folder: Path | None = None,
 ) -> SourceProcess:
     if (
         run_override
@@ -1273,7 +1331,11 @@ def _plan_python(
         raise BundleAuthorError(
             f"runtime_language_unsupported: {name} requires a non-Python installer"
         )
-    if not run_override and entry is not None and not (root / entry).is_file():
+    if (
+        not run_override
+        and entry is not None
+        and not ((run_folder or root) / entry).is_file()
+    ):
         raise BundleAuthorError(f"runtime_entrypoint_missing: {name}:{entry}")
     source, component = source.resolve(), root.resolve()
     root = python_workspace_root(source, component)
@@ -1371,9 +1433,30 @@ def _plan_python(
             run = [".venv/bin/python", *([entry] if entry is not None else [])]
         commands.append(supplemental_requirements_command(".venv/bin/python", requirements))
         commands.append(["uv", "pip", "check", "--python", ".venv/bin/python"])
+    run = run_override or run
+    run_component = member
+    if run_folder is not None:
+        run_component = run_folder.resolve().relative_to(root)
+        # The run command starts in this folder, which has no environment of its own; the
+        # workspace root's is linked in unless that is where it already starts. Only a build
+        # command creates that environment.
+        if commands and run_component not in {Path("."), member}:
+            commands.append(
+                [
+                    "ln",
+                    "-s",
+                    "../" * len(run_component.parts) + ".venv",
+                    (run_component / ".venv").as_posix(),
+                ]
+            )
     return process.model_copy(
-        update={"build_commands": commands, "run_command": run_override or run, "source_component": member.as_posix()}
+        update={
+            "build_commands": commands,
+            "run_command": run,
+            "source_component": run_component.as_posix(),
+        }
     )
+
 
 def _python_component_command(
     *, source: Path, component: Path, process: SourceProcess
@@ -1580,7 +1663,10 @@ def _docker_python(root: Path) -> str:
     return f"python{candidate}"
 
 
-def _dockerfile_run(root: Path) -> list[str] | None:
+def _dockerfile_run(root: Path, project: Path | None = None) -> list[str] | None:
+    # ``project`` is where dependencies are installed when that isn't the folder holding the
+    # Dockerfile, because the launcher differs between a requirements file and a uv project.
+    project = project or root
     dockerfile = root / "Dockerfile"
     if not dockerfile.is_file():
         return None
@@ -1607,12 +1693,12 @@ def _dockerfile_run(root: Path) -> list[str] | None:
     ):
         raise BundleAuthorError(f"dockerfile_command_invalid: {dockerfile}")
     if argv[0] == "python":
-        argv[0] = ".venv/bin/python" if (root / "requirements.txt").is_file() else "uv"
+        argv[0] = ".venv/bin/python" if (project / "requirements.txt").is_file() else "uv"
         if argv[0] == "uv":
             argv[1:1] = ["run", "--no-sync", "python"]
     elif (
         argv[0] in {"uvicorn", "gunicorn", "flask"}
-        and (root / "requirements.txt").is_file()
+        and (project / "requirements.txt").is_file()
     ):
         argv[0] = f".venv/bin/{argv[0]}"
     return argv
@@ -1786,17 +1872,24 @@ def _subprocess_adapter_source() -> str:
     )
 
 
-def _discovered_python_component(root: Path) -> tuple[Path, str]:
+def _discovered_python_component(
+    root: Path, search: Path | None = None
+) -> tuple[Path, str]:
+    """The project holding the one ``agent.py`` under ``search`` (default ``root``) and the
+    entry. Under a folder named for the agent, the entry is relative to that folder."""
+    base = search or root
     candidates = sorted(
         path
-        for path in root.glob("**/agent.py")
+        for path in base.glob("**/agent.py")
         if not any(
             part in _IGNORED_ARTIFACT_PARTS
-            for part in path.relative_to(root).parts[:-1]
+            for part in path.relative_to(base).parts[:-1]
         )
     )
     if len(candidates) != 1:
         raise BundleAuthorError("component_ambiguous: expected exactly one agent.py")
+    if search is not None:
+        return _install_root_for(root, search, candidates[0])
     component = candidates[0].parent
     # An entrypoint directory is not necessarily its Python project root. Preserve
     # the nearest enclosing manifest and its sibling packages instead of flattening
@@ -1810,6 +1903,25 @@ def _discovered_python_component(root: Path) -> tuple[Path, str]:
             component = parent
             break
     return component, candidates[0].relative_to(component).as_posix()
+
+
+def _install_root_for(root: Path, run_folder: Path, found: Path) -> tuple[Path, str]:
+    """Where a file found under the run folder installs from, and the file relative to the folder.
+
+    A process can't start above its own project, so a project below the run folder is refused.
+    """
+    for parent in found.parents:
+        if not parent.is_relative_to(root):
+            break
+        if any((parent / name).is_file() for name in ("pyproject.toml", "requirements.txt")):
+            if parent != run_folder and parent.is_relative_to(run_folder):
+                where = parent.relative_to(root).as_posix()
+                raise BundleAuthorError(
+                    f"runtime_workdir_nested_project: {found.relative_to(root).as_posix()} has "
+                    f"its own project at {where}; set runtime.workdir to {where}"
+                )
+            return parent, found.relative_to(run_folder).as_posix()
+    return run_folder, found.relative_to(run_folder).as_posix()
 
 
 def _runtime_component(root: Path, configured_workdir: str) -> Path:
@@ -1956,7 +2068,28 @@ def _managed_world_db() -> ManagedProcess:
     )
 
 
-def _tool_proxy_process() -> SourceProcess:
+def declared_read_actions(tool_entrypoints: list[dict[str, Any]] | None) -> list[str]:
+    """The world actions the contract declares read-only, by route: what the tool proxy logs as reads whatever the
+    method the agent calls them with."""
+    return sorted(
+        {
+            route.replace("/", ".")
+            for entry in tool_entrypoints or []
+            if isinstance(entry, dict)
+            and entry.get("effect") == "read"
+            and (route := str(entry.get("endpoint") or "").strip("/"))
+        }
+    )
+
+
+def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
+    environment = {
+        "PORT": "{{PORT_tool-proxy}}",
+        "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
+        "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+    }
+    if read_actions:
+        environment["READ_ACTIONS"] = ",".join(read_actions)
     return SourceProcess(
         name="tool-proxy",
         working_directory="generated/tool-proxy",
@@ -1964,14 +2097,189 @@ def _tool_proxy_process() -> SourceProcess:
         # The ALK interpreter carries the proxy's dependencies in both local and
         # hosted runtimes; its path is not necessarily /opt/alk-venv.
         run_command=[sys.executable, "proxy.py"],
-        environment={
-            "PORT": "{{PORT_tool-proxy}}",
-            "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
-            "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
-        },
+        environment=environment,
         started_check=StartedCheck(port=True, timeout_seconds=180),
         user=ProcessUser.SVC_TOOLS,
         depends_on=["tools-api", "world-db"],
+    )
+
+
+# The world's door for tools the agent runs in its own process (`in_process_door.py`).
+WORLD_DOOR_PROCESS = "world-door"
+
+
+def in_process_door_bindings(
+    tool_entrypoints: list[dict[str, Any]] | None, language: str = "python"
+) -> list[dict[str, str]]:
+    """The contract tools a Python agent runs in its own process that the world's door can stand in front of: a
+    module-level callable (`import`) or a method on an object the agent builds (`construct`). A tool in a tools
+    service already has the proxy; one with no runnable seam has nothing to wrap."""
+    if str(language or "python").strip().lower() not in {"", "python", "py"}:
+        return []
+    bound = []
+    for raw in tool_entrypoints or []:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            entry = ToolEntry.model_validate(raw)
+        except ValueError:
+            continue
+        if entry.mode in {"import", "construct"} and entry.module and entry.callable:
+            bound.append({"name": entry.tool, "module": entry.module, "callable": entry.callable})
+    return bound
+
+
+_SCRIPT_RUN = r"(?<![^\s'\"])((?:\S*/)?python[0-9.]*)\s+({stem})\.py(?=[\s'\"]|$)"
+
+
+def run_bound_script_as_module(
+    command: list[str], bound: list[dict[str, str]], environment: dict[str, str] | None = None
+) -> list[str]:
+    """`python agent.py` as `python -m agent` when `agent` holds bound tools, so the door's import hook reaches them.
+    Only where the two start the same; any other command is returned as it is."""
+    if (environment or {}).get("PYTHONSAFEPATH"):
+        return list(command)
+    # `test` ships with Python though the list leaves it out.
+    reserved = set(sys.stdlib_module_names) | set(sys.builtin_module_names) | {"test"}
+    stems = {
+        item["module"] for item in bound if item["module"].isidentifier() and item["module"] not in reserved
+    }
+    command = list(command)
+    for index, part in enumerate(command[:-1]):
+        script = command[index + 1]
+        if Path(part).name.startswith("python") and script.endswith(".py") and script[:-3] in stems:
+            return [*command[: index + 1], "-m", script[:-3], *command[index + 2 :]]
+    if len(command) >= 3 and Path(command[0]).name in {"sh", "bash"} and command[1] == "-c":
+        for stem in sorted(stems):
+            shelled = re.sub(_SCRIPT_RUN.format(stem=re.escape(stem)), rf"\1 -m {stem}", command[2])
+            if shelled != command[2]:
+                return [*command[:2], shelled, *command[3:]]
+    return command
+
+
+DOOR_UNREACHED_SCRIPT = "the agent is started as a script, so the world's door cannot reach the tools it defines"
+
+
+def _modules_started_as_scripts(command: Sequence[str], bound: list[dict[str, str]]) -> set[str]:
+    """The bound modules the command starts by their file path: run as `__main__`, never imported, out of the door's
+    reach."""
+    parts = list(command)
+    if len(parts) >= 3 and Path(parts[0]).name in {"sh", "bash"} and parts[1] == "-c":
+        try:
+            parts = [*parts[:2], *shlex.split(parts[2])]
+        except ValueError:
+            parts = [*parts[:2], *parts[2].split()]
+    started = set()
+    for part in parts:
+        if not part.endswith(".py"):
+            continue
+        dotted = part[:-3].lstrip("./").replace("/", ".")
+        started.update(
+            item["module"] for item in bound if dotted == item["module"] or dotted.endswith("." + item["module"])
+        )
+    return started
+
+
+def door_unreached_tools(
+    processes: Sequence[Any], control_service: str, tool_entrypoints: list[dict[str, Any]] | None, language: str
+) -> dict[str, str]:
+    """The in-process tools the world's door is bound to but cannot reach, by tool name, with why. Empty when the
+    bundle has no door."""
+    if not any(getattr(process, "name", None) == WORLD_DOOR_PROCESS for process in processes):
+        return {}
+    bound = in_process_door_bindings(tool_entrypoints, language)
+    for process in processes:
+        if isinstance(process, SourceProcess) and process.name == control_service:
+            scripts = _modules_started_as_scripts(process.run_command, bound)
+            return {item["name"]: DOOR_UNREACHED_SCRIPT for item in bound if item["module"] in scripts}
+    return {}
+
+
+def with_door_unreached(contract: dict[str, Any], unreached: dict[str, str]) -> dict[str, Any]:
+    """The contract with each tool entry saying whether the door is bound to it but out of reach (`door_unreached`)."""
+    entries = []
+    for entry in contract.get("tool_entrypoints") or []:
+        if isinstance(entry, dict):
+            entry = {key: value for key, value in entry.items() if key != "door_unreached"}
+            if unreached.get(str(entry.get("tool") or "")):
+                entry["door_unreached"] = unreached[str(entry["tool"])]
+        entries.append(entry)
+    return {**contract, "tool_entrypoints": entries} if "tool_entrypoints" in contract else dict(contract)
+
+
+def declared_read_tools(tool_entrypoints: list[dict[str, Any]] | None) -> list[str]:
+    """The tools the contract declares read-only, by name: what the in-process door logs as reads."""
+    return sorted(
+        {
+            str(entry.get("tool"))
+            for entry in tool_entrypoints or []
+            if isinstance(entry, dict) and entry.get("effect") == "read" and entry.get("tool")
+        }
+    )
+
+
+def _world_door_process(read_tools: list[str]) -> SourceProcess:
+    environment = {
+        "PORT": "{{PORT_world-door}}",
+        "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+    }
+    if read_tools:
+        environment["READ_ACTIONS"] = ",".join(read_tools)
+    return SourceProcess(
+        name=WORLD_DOOR_PROCESS,
+        working_directory="generated/world-door",
+        source_origin="bundle",
+        run_command=[sys.executable, "server.py"],
+        environment=environment,
+        started_check=StartedCheck(port=True, timeout_seconds=180),
+        user=ProcessUser.SVC_TOOLS,
+        depends_on=["world-db"],
+    )
+
+
+def with_in_process_door(
+    plan: EnvironmentPlanV2, tool_entrypoints: list[dict[str, Any]] | None, language: str = "python"
+) -> EnvironmentPlanV2:
+    """The plan with the world's door in front of the tools the agent runs in its own process: a door process on the
+    world's database, its address and the bound tools in the agent's environment, and the agent started after it. A
+    plan whose tools sit behind the tool proxy, with no world database or nothing to bind, is returned as it is."""
+    names = {process.name for process in plan.processes}
+    bound = in_process_door_bindings(tool_entrypoints, language)
+    if (
+        not bound
+        or not plan.control_service
+        or "tool-proxy" in names
+        or WORLD_DOOR_PROCESS in names
+        or "world-db" not in names
+    ):
+        return plan
+    processes: list[ManagedProcess | SourceProcess] = []
+    for process in plan.processes:
+        if isinstance(process, SourceProcess) and process.name == plan.control_service:
+            environment = {**process.environment, "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}"}
+            # Its own list: the tool trace's bindings also turn on its call records, which this process may not keep.
+            environment["ALK_WORLD_DOOR_BINDINGS"] = json.dumps(bound, sort_keys=True)
+            depends = [*process.depends_on, *([] if WORLD_DOOR_PROCESS in process.depends_on else [WORLD_DOOR_PROCESS])]
+            run = run_bound_script_as_module(process.run_command, bound, process.environment)
+            process = process.model_copy(update={"environment": environment, "depends_on": depends, "run_command": run})
+        processes.append(process)
+    processes.append(_world_door_process(declared_read_tools(tool_entrypoints)))
+    return replace(
+        plan,
+        processes=tuple(processes),
+        capabilities={
+            **plan.capabilities,
+            "world_door": CapabilityV2(
+                protocol=CapabilityProtocol.HTTP,
+                service=WORLD_DOOR_PROCESS,
+                container_port=8080,
+                configuration_name="ALK_WORLD_DOOR_URL",
+            ),
+        },
+        readiness=(
+            *plan.readiness,
+            ReadinessProbeV2(capability="world_door", path="/health", timeout_seconds=180),
+        ),
     )
 
 
@@ -2196,6 +2504,22 @@ def _compose_environment(service: dict[str, Any]) -> dict[str, str]:
     return {}
 
 
+def _agent_scope(
+    root: Path, subfolder: str | None, runtime: dict[str, Any] | None
+) -> tuple[dict[str, Any] | None, Path, Path]:
+    """The runtime bound to the agent's folder, the folder, and where the process starts.
+
+    With no subfolder nothing is bound and both folders are the repository root.
+    """
+    if not subfolder:
+        return runtime, root, root
+    try:
+        bound = dict(bind_runtime(runtime, root, subfolder) or {})
+        return bound, agent_folder(root, subfolder), (root / bound["workdir"]).resolve()
+    except (ValueError, SubfolderNotFound) as exc:
+        raise BundleAuthorError(str(exc)) from exc
+
+
 def resolve_environment_plan(
     source: str | Path,
     job: HarnessJob,
@@ -2210,6 +2534,10 @@ def resolve_environment_plan(
     root = Path(source).resolve()
     if not root.is_dir():
         raise BundleAuthorError(f"source_unavailable: {root}")
+    subfolder = job.source.subfolder
+    contract_runtime, agent_root, run_folder = _agent_scope(
+        root, subfolder, contract_runtime
+    )
     connector = job.agent.connector.lower()
     if job.agent.mode is ProviderExecutionMode.ENVIRONMENT_BACKED:
         declaration = load_provider_manifest(
@@ -2233,7 +2561,7 @@ def resolve_environment_plan(
         reference.purpose == SecretPurpose.TARGET_PROVIDER.value
         for reference in job.agent.secret_refs.values()
     )
-    declared_runtime_environment = _declared_runtime_environment(root)
+    declared_runtime_environment = _declared_runtime_environment(agent_root)
     try:
         runtime_model = Runtime.model_validate(
             {
@@ -2365,7 +2693,13 @@ def resolve_environment_plan(
     # The repository's exec-form Dockerfile CMD is an explicit source-owned declaration; use it
     # before falling back to a guessed agent.py entrypoint. This works for any HTTP framework.
     if not runtime_command and interface.get("kind") == "http" and not compose:
-        runtime_command = _dockerfile_run(root) or []
+        runtime_command = (
+            _dockerfile_run(
+                run_folder,
+                project=_runtime_component(root, runtime_workdir) if subfolder else None,
+            )
+            or []
+        )
     interface_port = interface.get("port")
     interface_health_path = str(interface.get("health_path") or "/health")
 
@@ -2485,6 +2819,11 @@ def resolve_environment_plan(
                 environment["TOOLS_API_URL"] = "{{TOOLS_API_URL}}"
             if service_name == control_name:
                 environment = {**declared_runtime_environment, **environment}
+                if routed_through_gateway(job.agent.config.get("target_model")):
+                    # Read at start-up by the shared sitecustomize hook.
+                    environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
+                    # Off until the hook has kept the SDK's export local; it then turns it on.
+                    _sdk_tracing_off_until_the_hook(environment)
             if is_livekit and service_name == control_name:
                 environment.setdefault(
                     "LIVEKIT_AGENT_NAME",
@@ -2636,7 +2975,7 @@ def resolve_environment_plan(
                     )
                 )
         if "tools-api" in source_services:
-            processes.append(_tool_proxy_process())
+            processes.append(_tool_proxy_process(declared_read_actions(tool_entrypoints)))
             # The target must not become eligible to start until the evidence proxy is ready.
             # Depending only on the upstream tools process leaves a race where the agent starts
             # with TOOLS_API_URL pointing at a port that has not been bound yet.
@@ -2671,10 +3010,10 @@ def resolve_environment_plan(
         discovered_callback = (
             None
             if is_livekit or (runtime_model.execution == "native" and runtime_command)
-            else _discover_callback_entrypoint(root)
+            else _discover_callback_entrypoint(run_folder)
         )
         graph_entrypoint = (
-            _langgraph_entrypoint(root)
+            _langgraph_entrypoint(run_folder)
             if not is_livekit and contract_modality == "chat" and not runtime_command
             else None
         )
@@ -2710,7 +3049,8 @@ def resolve_environment_plan(
                 (
                     item
                     for item in runtime_command
-                    if item.endswith(".py") and (component / item).is_file()
+                    if item.endswith(".py")
+                    and ((run_folder if subfolder else component) / item).is_file()
                 ),
                 "agent.py",
             )
@@ -2720,16 +3060,20 @@ def resolve_environment_plan(
             and not runtime_command
             and contract_interface_kind == "http"
             and runtime_workdir.strip()
+            # The folder the agent is named for is the default workdir, not a chosen one.
+            and not (subfolder and run_folder == agent_root)
         ):
             raise BundleAuthorError(
                 "runtime_http_command_missing: set runtime.command to the source-declared "
                 "native HTTP server command and runtime.workdir to its working directory; "
                 "an internal agent.py is not evidence of an HTTP server"
             )
-        elif not is_callback and not (root / entry).is_file():
-            component, entry = _discovered_python_component(root)
+        elif not is_callback and not (run_folder / entry).is_file():
+            component, entry = _discovered_python_component(
+                root, search=run_folder if subfolder else None
+            )
         else:
-            component = root
+            component = _runtime_component(root, runtime_workdir) if subfolder else root
         control_name = "agent"
         port = None if is_livekit else int(interface_port or 8080)
         environment = (
@@ -2747,9 +3091,21 @@ def resolve_environment_plan(
         )
         if port is not None and not is_livekit:
             environment["PORT"] = f"{{{{PORT_{control_name}}}}}"
+        if routed_through_gateway(job.agent.config.get("target_model")):
+            # Read at start-up by the shared sitecustomize hook.
+            # The SDK's tracing is off until the kit's hook has kept its export from reaching
+            # OpenAI; the hook then turns it back on, so the kit's span observation runs. A
+            # process the hook never reaches (python -I, a shell around it) keeps it off.
+            environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
+            _sdk_tracing_off_until_the_hook(environment)
         callback_entrypoint = (
-            discovered_callback or _callback_entrypoint(root) if is_callback else None
+            discovered_callback or _callback_entrypoint(run_folder)
+            if is_callback
+            else None
         )
+        if subfolder and callback_entrypoint:
+            module = callback_entrypoint.partition(":")[0].replace(".", "/")
+            _install_root_for(root, run_folder, run_folder / f"{module}.py")
         if is_graph:
             environment.update(
                 {
@@ -2770,7 +3126,12 @@ def resolve_environment_plan(
             root,
             language=runtime_model.language,
             name=control_name,
-            root=root if is_callback else component,
+            # Bun walks up to its own package root, so it starts from the run folder.
+            root=(
+                (run_folder if is_bun_runtime else component)
+                if subfolder
+                else root if is_callback else component
+            ),
             entry=None if is_callback or is_command_adapter or is_graph else entry,
             control=True,
             needs_secrets=needs_target_secrets,
@@ -2785,8 +3146,14 @@ def resolve_environment_plan(
             run_override=(
                 None
                 if is_callback or is_command_adapter or is_graph
-                else runtime_command or _dockerfile_run(component)
+                else runtime_command
+                or (
+                    _dockerfile_run(run_folder, project=component)
+                    if subfolder
+                    else _dockerfile_run(component)
+                )
             ),
+            run_folder=run_folder if subfolder and not is_bun_runtime else None,
         )
         if is_graph:
             python_command = process.run_command
@@ -2847,7 +3214,7 @@ def resolve_environment_plan(
             }
             # Only a Dockerfile CMD carries the subcommand today, so a repository without one
             # starts `agent.py` bare and never reaches the registration this check waits for.
-            if _hands_off_to_livekit_cli(component, entry) and not (
+            if _hands_off_to_livekit_cli(run_folder if subfolder else component, entry) and not (
                 set(process.run_command) & _LIVEKIT_WORKER_SUBCOMMANDS
             ):
                 update["run_command"] = [*process.run_command, "start"]
@@ -2859,7 +3226,9 @@ def resolve_environment_plan(
         if not is_bun_runtime:
             process = _python_component_command(
                 source=root,
-                component=root if is_callback else component,
+                component=(
+                    run_folder if subfolder else root if is_callback else component
+                ),
                 process=process,
             )
         resources = {}
@@ -2921,13 +3290,13 @@ def resolve_environment_plan(
             )
         packaging = (
             "dockerfile"
-            if (root / "Dockerfile").is_file()
+            if (run_folder / "Dockerfile").is_file()
             else "generated_bun"
             if is_bun_runtime
             else "generated_python"
         )
 
-    toolbox = _mcp_toolbox_definition(root)
+    toolbox = _mcp_toolbox_definition(agent_root)
     if toolbox is not None and control_name:
         processes.append(_mcp_toolbox_process())
         rewritten: list[ManagedProcess | SourceProcess] = []
@@ -3079,6 +3448,19 @@ def resolve_environment_plan(
     )
 
 
+def _sdk_tracing_off_until_the_hook(environment: dict[str, str]) -> None:
+    """Turn the Agents SDK's tracing off for a gateway-routed process. The marker tells the kit's
+    hook the switch is the kit's to turn back on once the SDK's export is local; a customer's own
+    switch, already on, stays theirs."""
+    # The SDK reads "1" and "true" (any case) as off.
+    if str(environment.get("OPENAI_AGENTS_DISABLE_TRACING", "")).strip().lower() not in {
+        "1",
+        "true",
+    }:
+        environment["ALK_SDK_TRACING_OFF_BY_KIT"] = "1"
+    environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
+
+
 def _source_tool_trace_environment(
     source: Path, runtime: Runtime, entries: list[dict[str, Any]]
 ) -> dict[str, str]:
@@ -3191,6 +3573,9 @@ def _package_process_sources(
         workspace_required = [
             (prefix / path).as_posix() for path in map(Path, required)
         ]
+        if exclusion_runtime.source_subfolder:
+            # The prefix is the run folder, not the folder the dependencies install from.
+            workspace_required.append("requirements.txt")
         exclusions = _context_excludes(
             component,
             workspace_runtime,
@@ -3376,6 +3761,36 @@ def _source_tool_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]
     return bindings
 
 
+def _with_door_bindings(
+    processes: list[Any] | tuple[Any, ...],
+    *,
+    control_service: str,
+    tool_entrypoints: list[dict[str, Any]] | None,
+    language: str,
+) -> list[Any]:
+    """A resealed plan's door kept in step with the contract: the agent's bound tools and the door's read tools. A
+    plan with no world door is returned as it is."""
+    if not any(getattr(process, "name", None) == WORLD_DOOR_PROCESS for process in processes):
+        return list(processes)
+    bound = in_process_door_bindings(tool_entrypoints, language)
+    read_tools = declared_read_tools(tool_entrypoints)
+    updated = []
+    for process in processes:
+        if isinstance(process, SourceProcess) and process.name == control_service:
+            environment = {key: value for key, value in process.environment.items() if key != "ALK_WORLD_DOOR_BINDINGS"}
+            if bound:
+                environment["ALK_WORLD_DOOR_BINDINGS"] = json.dumps(bound, sort_keys=True)
+            run = run_bound_script_as_module(process.run_command, bound, process.environment)
+            process = process.model_copy(update={"environment": environment, "run_command": run})
+        elif isinstance(process, SourceProcess) and process.name == WORLD_DOOR_PROCESS:
+            environment = {key: value for key, value in process.environment.items() if key != "READ_ACTIONS"}
+            if read_tools:
+                environment["READ_ACTIONS"] = ",".join(read_tools)
+            process = process.model_copy(update={"environment": environment})
+        updated.append(process)
+    return updated
+
+
 def _with_source_tool_trace(
     processes: list[Any] | tuple[Any, ...],
     *,
@@ -3448,6 +3863,8 @@ def author_bundle_v2(
     contract_interface_kind: str | None = None
     contract_body: dict[str, Any] = {}
     runtime: dict[str, Any] = {}
+    subfolder = job.source.subfolder
+    agent_root = run_folder = source_root
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -3461,6 +3878,11 @@ def author_bundle_v2(
         contract_modality = str(contract_body.get("modality") or "").strip().lower()
         runtime = contract_body.get("runtime")
         runtime = runtime if isinstance(runtime, dict) else {}
+        if subfolder:
+            runtime, agent_root, run_folder = _agent_scope(
+                source_root, subfolder, runtime
+            )
+            contract_body = {**contract_body, "runtime": runtime}
         interface = runtime.get("interface") if isinstance(runtime, dict) else None
         if isinstance(interface, dict):
             contract_interface_kind = str(interface.get("kind") or "").strip().lower()
@@ -3478,7 +3900,7 @@ def author_bundle_v2(
                 contract_interface_kind = "http"
         elif (
             contract_modality == "chat"
-            and _discover_callback_entrypoint(source_root) is not None
+            and _discover_callback_entrypoint(run_folder) is not None
         ):
             # The callback is a deterministic source property.  Do not let a stochastic
             # authoring omission make the compiled adapter unreachable at call time: the
@@ -3498,7 +3920,7 @@ def author_bundle_v2(
             contract_modality == "chat"
             and not isinstance(interface, dict)
             and not runtime.get("command")
-            and _langgraph_entrypoint(source_root) is not None
+            and _langgraph_entrypoint(run_folder) is not None
         ):
             runtime = dict(runtime)
             runtime["interface"] = {
@@ -3535,7 +3957,7 @@ def author_bundle_v2(
             contract_modality == "chat"
             and contract_interface_kind == "callable"
             and runtime.get("command")
-            and _discover_callback_entrypoint(source_root) is None
+            and _discover_callback_entrypoint(run_folder) is None
         ):
             raise BundleAuthorError(
                 "generated_runtime_entrypoint_ambiguous: callable interface requires a "
@@ -3576,11 +3998,26 @@ def author_bundle_v2(
                 bindings=trace_bindings,
             ),
         )
+    plan = with_in_process_door(
+        plan,
+        contract_body.get("tool_entrypoints"),
+        str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+    )
+    if contract_body:
+        contract_body = with_door_unreached(
+            contract_body,
+            door_unreached_tools(
+                plan.processes,
+                plan.control_service or "",
+                contract_body.get("tool_entrypoints"),
+                str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+            ),
+        )
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
     }
-    provided_environment.update(_declared_runtime_environment(source_root))
+    provided_environment.update(_declared_runtime_environment(agent_root))
     for process in plan.processes:
         provided_environment.update(
             str(name).upper() for name in (getattr(process, "environment", None) or {})
@@ -3589,14 +4026,26 @@ def author_bundle_v2(
         source_root,
         secret_refs=job.agent.secret_refs,
         provided_environment=provided_environment,
+        # What ships: each process's working directory, as with no folder (a uv workspace member
+        # ships from the workspace root, with the shared code it imports), and with a folder its
+        # install root too. agent_subfolder still says which keys are the agent's own.
         scan_paths={
-            str(getattr(process, "working_directory", ".") or ".")
-            for process in plan.processes
-            if isinstance(process, SourceProcess)
+            *(
+                str(getattr(process, "working_directory", ".") or ".")
+                for process in plan.processes
+                if isinstance(process, SourceProcess)
+            ),
+            *(
+                (_runtime_component(source_root, subfolder).relative_to(source_root).as_posix(),)
+                if subfolder
+                else ()
+            ),
         },
         # Match preflight: a template documents possible integrations, not every
         # credential needed by the selected generic-runtime path.
         template_secrets_required=job.metadata.get("generic_harness_v1") is not True,
+        agent_subfolder=subfolder or None,
+        agent_compose_file=str(runtime.get("compose_file") or "") or None,
     )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(
@@ -3613,6 +4062,11 @@ def author_bundle_v2(
         if include_scenarios:
             _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
             adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
+            if (authoring_root / ACTORS_FILE).is_file():
+                shutil.copy2(authoring_root / ACTORS_FILE, temporary / ACTORS_FILE)
+                # Only with actors, so a bundle without them seals exactly as before.
+                write_actor_rules(temporary, config=job.agent.config)
+                adopted_catalogue += [ACTORS_FILE, ACTOR_RULES_FILE]
         adopted_chat_files = _copy_chat_authoring(
             authoring_root, temporary, include_simulator=include_scenarios
         )
@@ -3631,8 +4085,20 @@ def author_bundle_v2(
                 Path(__file__).with_name("tool_trace_proxy.py"),
                 generated / "proxy.py",
             )
+            # The proxy is one surface of the world's door, which it imports from beside it.
+            shutil.copy2(
+                Path(__file__).with_name("world_door.py"),
+                generated / "world_door.py",
+            )
+        if any(process.name == WORLD_DOOR_PROCESS for process in plan.processes):
+            generated = temporary / "generated" / WORLD_DOOR_PROCESS
+            generated.mkdir(parents=True)
+            shutil.copy2(Path(__file__).with_name("in_process_door.py"), generated / "server.py")
+            # The door's rules, and the trial faults the tool proxy reads, beside it.
+            shutil.copy2(Path(__file__).with_name("world_door.py"), generated / "world_door.py")
+            shutil.copy2(Path(__file__).with_name("tool_trace_proxy.py"), generated / "tool_trace_proxy.py")
         if any(process.name == "mcp-toolbox" for process in plan.processes):
-            toolbox = _mcp_toolbox_definition(source_root)
+            toolbox = _mcp_toolbox_definition(agent_root)
             if toolbox is None:
                 raise BundleAuthorError("mcp_toolbox_definition_missing")
             _, definition = toolbox
@@ -3651,9 +4117,7 @@ def author_bundle_v2(
         prefix = (
             "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
             "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
-            "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
-            "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
-            "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+            + _action_log_seed(authoring_root)
         )
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:
@@ -4091,6 +4555,15 @@ def _carry_contract(
     built = (sealed.get("runtime") or {}).get("interface")
     if built is not None and _interface(authored) != _interface(sealed):
         body = {**authored, "runtime": {**(authored.get("runtime") or {}), "interface": built}}
+    runtime = body.get("runtime") if isinstance(body.get("runtime"), dict) else {}
+    language = str(runtime.get("language") or "python")
+    control_service = manifest.runtime.control_service or ""
+    door_bound = _with_door_bindings(
+        processes, control_service=control_service, tool_entrypoints=body.get("tool_entrypoints"), language=language
+    )
+    body = with_door_unreached(
+        body, door_unreached_tools(door_bound, control_service, body.get("tool_entrypoints"), language)
+    )
     sealed_path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if body == sealed:
         return True, processes, metadata
@@ -4127,6 +4600,12 @@ def _carry_contract(
             metadata["source_tool_trace_version"] = _SOURCE_TOOL_TRACE_VERSION
         else:
             metadata.pop("source_tool_trace_version", None)
+    processes = _with_door_bindings(
+        processes,
+        control_service=manifest.runtime.control_service or "",
+        tool_entrypoints=body.get("tool_entrypoints"),
+        language=str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+    )
     return True, processes, metadata
 
 
@@ -4325,9 +4804,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--authoring", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
+    job = _load_job(args.job)
+    if refuse_unusable_folder(
+        args.source.resolve(),
+        job.source.subfolder,
+        args.authoring.resolve(),
+        saved_runtime(args.authoring),
+    ):
+        return EXIT_REFUSED
     author_bundle_v2(
         source=args.source,
-        job=_load_job(args.job),
+        job=job,
         authoring=args.authoring,
         output=args.output,
     )
@@ -4338,13 +4825,69 @@ if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
 
 
+# A table as a schema names it: bare or quoted, with an optional bare or quoted schema.
+_SQL_TABLE = r'(?:"?[A-Za-z_]\w*"?\s*\.\s*)?"?([A-Za-z_]\w*)"?'
+# Where a column's type ends in its definition: at its first default or constraint.
+_COLUMN_TYPE_END = re.compile(
+    r"\s(?:DEFAULT|NOT|NULL|PRIMARY|REFERENCES|CHECK|UNIQUE|CONSTRAINT|COLLATE|GENERATED)\b",
+    re.IGNORECASE,
+)
+# Table-level clauses that sit among the column definitions.
+_NOT_COLUMNS = ("PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT")
+
+
+def _sql_code(text: str) -> str:
+    """``text`` without its comments, and with each string literal emptied to ``''``, so a
+    quote, comma, parenthesis or ``--`` inside a default never reads as SQL."""
+    out: list[str] = []
+    at = 0
+    while at < len(text):
+        if text[at] == "'":
+            end = at + 1
+            while end < len(text) and not (
+                text[end] == "'" and text[end + 1 : end + 2] != "'"
+            ):
+                end += 2 if text[end : end + 2] == "''" else 1
+            out.append("''")
+            at = end + 1
+        elif text.startswith("--", at):
+            end = text.find("\n", at)
+            at = len(text) if end < 0 else end
+        elif text.startswith("/*", at):
+            end = text.find("*/", at + 2)
+            out.append(" ")
+            at = len(text) if end < 0 else end + 2
+        else:
+            out.append(text[at])
+            at += 1
+    return "".join(out)
+
+
+def _column_kind(definition: str) -> str | None:
+    """What a column definition declares, as the gates read it: ``boolean``, ``text[]`` (any
+    array), ``jsonb`` or ``json``. Read off the type alone, never its default or constraints,
+    so ``jsonb DEFAULT '[]'`` is JSON and ``jsonb[]`` an array."""
+    kind = _COLUMN_TYPE_END.split(" " + definition.strip(), maxsplit=1)[0].strip().upper()
+    if kind.startswith("BOOL"):
+        return "boolean"
+    if "[" in kind or kind.startswith("ARRAY") or kind.endswith(" ARRAY"):
+        return "text[]"
+    if kind.startswith("JSONB"):
+        return "jsonb"
+    if kind.startswith("JSON"):
+        return "json"
+    return None
+
+
 def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
-    """Column declarations read off the agent's own schema, keyed by table and column."""
+    """Column declarations read off the agent's own schema, keyed by table and column: those
+    of each ``CREATE TABLE`` and each ``ALTER TABLE ... ADD COLUMN``. A schema-qualified
+    table is keyed by its own name, as the world names it."""
     declared: dict[tuple[str, str], str] = {}
     for path in paths:
-        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        sql = _sql_code(path.read_text(encoding="utf-8"))
         for found in re.finditer(
-            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s*\(',
+            rf"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?{_SQL_TABLE}\s*\(",
             sql,
             re.IGNORECASE,
         ):
@@ -4353,24 +4896,44 @@ def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
                 depth += (sql[at] == "(") - (sql[at] == ")")
                 at += 1
             for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
-                words = part.strip().split()
-                if len(words) < 2:
+                words = part.strip().split(None, 1)
+                if len(words) < 2 or words[0].strip('"').upper() in _NOT_COLUMNS:
                     continue
-                name = words[0].strip('"')
-                if name.upper() in (
-                    "PRIMARY",
-                    "FOREIGN",
-                    "UNIQUE",
-                    "CHECK",
-                    "CONSTRAINT",
-                ):
+                if kind := _column_kind(words[1]):
+                    declared[(found.group(1).lower(), words[0].strip('"').lower())] = kind
+        for found in re.finditer(
+            rf"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?{_SQL_TABLE}\s+([^;]*)",
+            sql,
+            re.IGNORECASE,
+        ):
+            for part in re.split(r",(?![^()]*\))", found.group(2)):
+                added = re.match(
+                    r'\s*ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s+(.+)',
+                    part,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                if not added or added.group(1).upper() in _NOT_COLUMNS:
                     continue
-                kind = words[1].upper()
-                rest = " ".join(words[1:]).upper()
-                if kind.startswith("BOOL"):
-                    declared[(found.group(1).lower(), name.lower())] = "boolean"
-                elif "[]" in rest or kind.startswith("ARRAY"):
-                    declared[(found.group(1).lower(), name.lower())] = "text[]"
-                elif kind.startswith("JSONB"):
-                    declared[(found.group(1).lower(), name.lower())] = "jsonb"
+                if kind := _column_kind(added.group(2)):
+                    declared[(found.group(1).lower(), added.group(1).lower())] = kind
     return declared
+
+
+def declared_json_columns(
+    source: Path | str | None, *, contract: dict[str, Any] | None = None
+) -> set[tuple[str, str]]:
+    """The ``(table, column)`` pairs the agent's own schema declares JSON or JSONB.
+
+    These are the types the validation seed imports against (``inspect_postgres`` on the same
+    schema), known here before any database exists, so a world can be checked where it is
+    written. Empty when the source declares no schema file, for example when its tables exist
+    only in ORM migrations.
+    """
+    if not source:
+        return set()
+    try:
+        declared = _schema_column_types(_source_schema_paths(Path(source), contract=contract))
+    except (OSError, ValueError, BundleAuthorError):
+        # A missing or unreadable schema is reported where the bundle is compiled.
+        return set()
+    return {key for key, kind in declared.items() if kind in ("json", "jsonb")}

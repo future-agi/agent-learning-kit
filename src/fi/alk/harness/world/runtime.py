@@ -107,6 +107,39 @@ def settled(value: Any) -> Any:
         return pool.submit(asyncio.run, value).result()
 
 
+_ARGUMENTS_PARAMETER = {"args", "arguments", "params", "payload", "body", "data", "request", "input", "kwargs_dict"}
+
+
+def call_agent_tool(fn: Any, args: Mapping[str, Any], db: Any, *, state: bool = False) -> Any:
+    """Call one of the agent's own tool functions the way its signature expects: keywords, or a route-style
+    ``(db, args)``, or the arguments dict alone."""
+    import inspect
+
+    arguments = dict(args)
+    if state:
+        return fn(db.state, **arguments)
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return fn(**arguments)
+    try:
+        signature.bind(**arguments)
+        return fn(**arguments)
+    except TypeError:
+        pass
+    positional = [
+        one
+        for one in signature.parameters.values()
+        if one.kind in (one.POSITIONAL_ONLY, one.POSITIONAL_OR_KEYWORD) and one.name not in ("self", "cls")
+    ]
+    if len(positional) == 2 and positional[1].name in _ARGUMENTS_PARAMETER:
+        # The store's own connection when it has one, which is what such a function was written against.
+        return fn(getattr(getattr(db, "store", None), "connection", db), arguments)
+    if len(positional) == 1 and positional[0].name in _ARGUMENTS_PARAMETER:
+        return fn(arguments)
+    return fn(**arguments)
+
+
 def _is_refusal(raised: BaseException, refusal_signature: str = "") -> bool:
     """Whether an exception is the world saying no, rather than the world falling over.
 
@@ -156,10 +189,13 @@ class Call:
     worker_label: str = ""
     task_id: str = ""
     task_label: str = ""
+    # Why a refused call was refused: "world_rule" when the tool ran and said no, otherwise what stopped it first.
+    refusal_code: str = ""
     # The worker this call handed work to, when the call is a hand-off, and when that worker returned.
     delegated_to: str = ""
     ended_at: float = 0.0
-    # The runtime's own ids for the event (`event_id`, `parent_event_id`, `started_event_id`), as it reported them.
+    # The runtime's own ids for the event (`event_id`, `parent_event_id`, `started_event_id`) and the call (`call_id`,
+    # `tool_call_id`), as it reported them.
     runtime_ids: dict[str, str] = field(default_factory=dict)
     # A worker's run the runtime reported in place of a tool call: kept in the trace, never graded.
     handoff: bool = False
@@ -172,6 +208,8 @@ class Call:
     # Part of the arguments or the result was left out to keep the record bounded.
     input_omitted: bool = False
     output_omitted: bool = False
+    # The world committed it, but the answer never reached the agent.
+    answer_lost: bool = False
 
 
 def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -198,7 +236,7 @@ def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-_RUNTIME_ID_FIELDS = ("event_id", "parent_event_id", "started_event_id")
+_RUNTIME_ID_FIELDS = ("event_id", "parent_event_id", "started_event_id", "call_id", "tool_call_id")
 
 
 def runtime_ids(record: dict[str, Any]) -> dict[str, str]:
@@ -271,7 +309,7 @@ def trace_row(call: Call) -> dict[str, Any]:
         **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
         **{
             key: True
-            for key in ("input_omitted", "output_omitted")
+            for key in ("input_omitted", "output_omitted", "answer_lost")
             if getattr(call, key)
         },
         **_worker_event(call),
@@ -293,6 +331,9 @@ class GeneratedWorld(EnvironmentAdapter):
     # Where the agent's own code lives, so a handler that binds to one of its tools can import
     # it. Empty when the world implements the tools itself.
     source_root: str = ""
+    # The folder of that repository the agent lives in, kept so every process that reaches the
+    # code puts the same folder first.
+    source_subfolder: str = ""
     # The agent's own in-memory state, for tools that take it as an argument instead of
     # connecting to anything. Held opaquely: their code gives it shape.
     state_object: Any = None
@@ -311,6 +352,7 @@ class GeneratedWorld(EnvironmentAdapter):
         self.tools = copy.deepcopy(type(self).tools)
         self.handlers = dict(type(self).handlers)
         self.state_object = copy.deepcopy(type(self).state_object)
+        self.source_subfolder = ""
         self.database = str(database)
         # Where this agent's records live. Given rather than assumed, because the harness
         # writes statements in whatever the agent's own store speaks and they have to reach
@@ -340,7 +382,7 @@ class GeneratedWorld(EnvironmentAdapter):
             )
         return found
 
-    def reach(self, source_root: str) -> None:
+    def reach(self, source_root: str, subfolder: str = "") -> None:
         """Make the agent's own code importable, so a binding can call it rather than copy it.
 
         Two directories go on the path, not one. An agent pointed at flatly is imported from where
@@ -353,11 +395,24 @@ class GeneratedWorld(EnvironmentAdapter):
 
         The package root is found the way Python finds it: walk up while each directory is itself
         a package, and stop at the first that is not.
+
+        Each directory goes in at the front, so the agent's own folder, when it has one, is
+        added last to come first: a module of the agent's is found by its flat name before a
+        same-named module elsewhere in the repository. A call without a folder keeps the one
+        already set.
         """
         import sys
 
         self.source_root = str(source_root or "")
-        for path in self._import_roots(self.source_root):
+        if subfolder:
+            self.source_subfolder = subfolder
+        roots = self._import_roots(self.source_root)
+        if self.source_root and self.source_subfolder:
+            # Reversed, since each goes in at the front: the folder itself must end up first.
+            roots += reversed(
+                self._import_roots(str(Path(self.source_root) / self.source_subfolder))
+            )
+        for path in roots:
             if path not in sys.path:
                 sys.path.insert(0, path)
 
@@ -429,6 +484,7 @@ class GeneratedWorld(EnvironmentAdapter):
                     arguments=args,
                     ok=False,
                     refused=True,
+                    refusal_code="unknown_tool",
                     error=(
                         f"no such tool {name!r}; this agent has "
                         f"{', '.join(sorted(self.handlers)) or 'none'}"
@@ -451,6 +507,7 @@ class GeneratedWorld(EnvironmentAdapter):
                         arguments=args,
                         ok=False,
                         refused=True,
+                        refusal_code="world_rule",
                         error=str(raised),
                     )
                 )
@@ -476,6 +533,7 @@ class GeneratedWorld(EnvironmentAdapter):
                     result=value,
                     ok=False,
                     refused=True,
+                    refusal_code="world_rule",
                     error=str(value)[:400],
                 )
             )

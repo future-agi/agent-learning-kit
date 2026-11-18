@@ -12,7 +12,9 @@ pytest-asyncio.
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 from fi.alk.harness import call_runner as cr
@@ -125,18 +127,16 @@ def _runner() -> cr.CallRunnerImpl:
     runner = cr.CallRunnerImpl.__new__(cr.CallRunnerImpl)
     runner._adapter = None  # never touched: no calls, no result
     runner._collect_calls = lambda runtime: ()  # instance override
-    runner._context = SimpleNamespace(usage_reporter=None, evidence_seam=None)
+    # A bundle with no tool-trace seam and no actors: the trial never reads the world's door.
+    runner._context = SimpleNamespace(
+        evidence_seam=None, bundle_dir=Path(tempfile.mkdtemp()), usage_reporter=None
+    )
     return runner
 
 
 def _report(*, status: TestCaseStatus, code: str | None) -> SimpleNamespace:
     failure = (
-        SimpleNamespace(
-            code=code,
-            message="dispatch not acked",
-            details=None,
-            stage=SimpleNamespace(value="call"),
-        )
+        SimpleNamespace(code=code, message="dispatch not acked", details={}, stage=SimpleNamespace(value="dispatch"))
         if code
         else None
     )
@@ -157,7 +157,7 @@ def _translate(report: SimpleNamespace) -> CallAborted:
         asyncio.run(
             runner._translate_report(
                 report,
-                runtime=object(),
+                runtime=SimpleNamespace(endpoints={}),
                 scenario_key="k1",
                 started_at=datetime.now(timezone.utc),
             )

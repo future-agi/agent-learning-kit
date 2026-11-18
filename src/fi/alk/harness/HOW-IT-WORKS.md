@@ -65,7 +65,7 @@ calls `submit_contract`.
 
 | Field | Why it matters |
 |---|---|
-| `tools[]` — name, `args`, `arg_types`, `arg_values`, description | The agent's action space. `arg_values` are the real permitted values — the menu, the enum, the lookup |
+| `tools[]` — name, `args`, `arg_types`, `arg_values`, `arg_units`, description | The agent's action space. `arg_values` are the real permitted values — the menu, the enum, the lookup |
 | `hard_constraints[]` | Rules the agent must follow. Told to the agent under test, and graded by the judge |
 | `base_environment` | Its real starting data, reproduced row for row |
 | `real_use_cases[]` | What it is actually for |
@@ -80,10 +80,11 @@ conversation**, so the model corrects and resubmits rather than a bad contract l
 
 A browser reading gets one second look first, naming any browser, crawling or
 computer-use tool the code check found in the source. So does a chat or voice reading of source
-where the check found one. The next submission stands: a browser answer is refused to
+where the check found one, or where the check stopped before reading all of it. The next
+submission stands: a browser answer is refused to
 `failure.json` and the build exits 78, and a chat or voice answer is saved. The look gives a value
 to send back, which only tells apart calls in one model message: those run before the model reads
-any result. The rule and its state are `SecondLook` in `agent_type_check.py`. A browser answer to a chat or voice look is refused at once, since that look said browser stops the build. When calls in one message run one after another, or together once the first scan is done, a later call is taken as the answer before the model has read the look.
+any result. The rule and its state are `SecondLook` in `agent_type_check.py`. A browser answer to a chat or voice look is refused at once, since that look said browser stops the build. When calls in one message run one after another, or together once the first scan is done, a later call is taken as the answer before the model has read the look. Once an answer with the value has come back, a later browser answer without it gets a look again, so answers that keep switching cost turns, up to the reading's turn limit (70, or 140 for a generic job read unattended), never a refusal without a look.
 
 **How it is changed later** (`amend.py`). The contract is not frozen, but every change is
 recorded with a reason in `amendments[]`, so months later you can still tell what came from the
