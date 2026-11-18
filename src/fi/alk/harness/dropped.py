@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypedDict
 
 from .contract import AgentContract
+from .json_file import write_json_atomic
 from .proof_records import ProofEntry
+from .proofs import utc_stamp
 from .prove import NO_NEGATIVE_CONTROL
 from .scenario import Scenario, scenario_slug
 
@@ -79,22 +80,10 @@ def save(workspace: Path, records: Mapping[str, DropRecord]) -> None:
     if not records:
         path.unlink(missing_ok=True)
         return
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(
-        json.dumps(
-            {
-                "format": FORMAT,
-                "scenarios": {key: dict(records[key]) for key in sorted(records)},
-            },
-            indent=2,
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+    write_json_atomic(path, {"format": FORMAT, "scenarios": dict(records)})
 
 
-def needs(scenario: Scenario) -> dict[str, list[str]]:
+def needs(scenario: Scenario) -> Capabilities:
     """The capabilities a scenario needs: the tools its reference solution calls and its sub-goals."""
     return {
         "tools": sorted({step.tool for step in scenario.solution if step.tool}),
@@ -104,7 +93,7 @@ def needs(scenario: Scenario) -> dict[str, list[str]]:
 
 def missing(
     needed: Mapping[str, Iterable[str]], tools: set[str], sub_goals: set[str]
-) -> dict[str, list[str]]:
+) -> Capabilities:
     """What of ``needed`` the contract's tools and the catalogue's sub-goals no longer hold."""
     return {
         "tools": sorted(one for one in needed.get("tools") or [] if one not in tools),
@@ -247,7 +236,7 @@ def restore(
         names[scenario.name] = key
         records[key].pop("restore_failed", None)
         # A restore counts only on a proof made after it, against this rebuild's agent and catalogue.
-        records[key]["restored_at"] = _now()
+        records[key]["restored_at"] = utc_stamp()
         restored[key] = dict(records[key])
     for key, why in refused.items():
         records[key]["restore_failed"] = why
@@ -256,16 +245,11 @@ def restore(
     return restored, refused
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
 def _unproved(record: DropRecord, proof: ProofEntry | None) -> str:
     """Why a restored scenario's proof does not bring it back, or "" when it does: proved, or kept as written
     because this lane could not run a step. Only a proof made since the restore counts."""
     since = str(record.get("restored_at") or "")
-    # Compared as text: both stamps are UTC to the second in one fixed form (`_now` here and in `proofs`), which sorts
-    # as the times do. A stamp in any other form would need parsing first.
+    # Compared as text: both are `utc_stamp`s, which sort as the times do.
     if not proof or str(proof.get("proved_at") or "") < since:
         return "not proved again in this rebuild"
     if proof.get("proved") is True or proof.get("kept_as_written") is True:

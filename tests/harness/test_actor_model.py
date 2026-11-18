@@ -289,8 +289,7 @@ def test_an_unknown_role_is_kept_hidden_with_a_warning_and_saving_carries_on(tmp
 def test_a_role_for_a_path_outside_knowledge_is_left_out_with_a_warning(tmp_path, caplog):
     from fi.alk.harness.actors import EVALUATOR_ONLY
 
-    # Keys are read exactly as written, as the platform reads them: a padded or `./` key names no file on either side.
-    outside = ["answers.md", "knowledge/../answers.md", " knowledge/answers.md", "./knowledge/answers.md"]
+    outside = ["answers.md", "knowledge/../answers.md", "./answers.md", "knowledge/roles.json"]
     _attach(tmp_path, dict.fromkeys(outside, "evaluator_only"), **{"answers.md": "Refund 18.00"})
     write_actor_rules(tmp_path)
 
@@ -313,3 +312,19 @@ def test_an_actor_is_never_given_an_evaluator_only_attached_file(tmp_path):
     listing = ActorList.model_validate({"actors": [{**_PARTNER, "knowledge": asked}]})
     with pytest.raises(ValueError, match="knowledge/answers.md"):
         save_actors(tmp_path, listing)
+
+
+@pytest.mark.parametrize("key", ["./knowledge/answers.md", " knowledge/answers.md ", "knowledge/answers.md"])
+def test_a_role_key_with_a_leading_dot_slash_or_padding_still_keeps_the_file_from_actors(tmp_path, key):
+    from fi.alk.harness.actors import EVALUATOR_ONLY, KNOWLEDGE_ROLE_KEYS, read_knowledge
+
+    _attach(tmp_path, {key: "evaluator_only"}, **{"answers.md": "Refund 18.00", "policy.md": "Refunds within 14 days."})
+    write_actor_rules(tmp_path)
+
+    rules = json.loads((tmp_path / ACTOR_RULES_FILE).read_text())
+    assert rules["evaluator_only"]["files"] == [*EVALUATOR_ONLY["files"], "answers.md"]
+    # The rule is sealed for every other reader of the roles file.
+    assert rules["knowledge_roles"] == KNOWLEDGE_ROLE_KEYS
+    asked = [{"kind": "files", "paths": ["knowledge/answers.md", "knowledge/policy.md"]}]
+    [read] = read_knowledge(asked, tmp_path)
+    assert [one["path"] for one in read["read"]] == ["knowledge/policy.md"]

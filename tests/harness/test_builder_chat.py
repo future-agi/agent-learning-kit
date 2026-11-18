@@ -2214,10 +2214,8 @@ def test_a_suite_rebuild_can_add_a_scenario(tmp_path, monkeypatch):
     }
 
 
-def test_the_builder_s_submit_refuses_a_new_case_that_cites_nothing(tmp_path, monkeypatch):
+def test_the_builder_s_submit_keeps_a_new_case_that_cites_nothing(tmp_path, monkeypatch):
     from test_nudge_turn import _scenario
-
-    from fi.alk.harness.scenario_tools import NO_SOURCES
 
     seen: dict = {}
 
@@ -2227,7 +2225,7 @@ def test_the_builder_s_submit_refuses_a_new_case_that_cites_nothing(tmp_path, mo
 
     _rebuild(tmp_path, monkeypatch, "suite", act)
 
-    assert seen["added"].get("is_error") and NO_SOURCES in seen["added"]["content"][0]["text"]
+    assert not seen["added"].get("is_error"), seen["added"]
 
 
 def test_a_replayed_rebuild_commits_the_workspace_holding_its_result(
@@ -2593,46 +2591,15 @@ def test_finished_turn_appends_code_counts(tmp_path):
     )
 
 
-def test_overclaim_gets_a_correction(tmp_path):
+def test_a_reply_is_followed_by_the_counts_written_by_code_whatever_it_claims(tmp_path):
     runtime, workspace = _finished_runtime(tmp_path)
     counts = {"proved": 3, "kept_as_written": 9, "not_proved": 0}
-    (workspace / ".futureagi-build-finished.json").write_text(
-        json.dumps({"proofs": counts}), encoding="utf-8"
-    )
+    (workspace / ".futureagi-build-finished.json").write_text(json.dumps({"proofs": counts}), encoding="utf-8")
 
     text = runtime._close_with_proof_counts("All 12 scenarios proved.", None)
 
-    assert text.endswith("Correction: only 3 of 12 scenarios are proved.")
-    assert "Proof counts: 3 proved, 9 kept as written, 0 not proved." in text
-    from fi.alk.harness.hosted_chat_entrypoint import _proof_claim_mismatch
-
-    assert (
-        _proof_claim_mismatch("12 scenarios are proved.", counts)
-        == "Correction: only 3 of 12 scenarios are proved."
-    )
-    assert (
-        _proof_claim_mismatch("Every case is proved against the agent.", counts)
-        is not None
-    )
-
-
-def test_exact_claim_gets_no_correction():
-    from fi.alk.harness.hosted_chat_entrypoint import _proof_claim_mismatch
-
-    counts = {"proved": 3, "kept_as_written": 8, "not_proved": 1}
-    assert (
-        _proof_claim_mismatch(
-            "3 scenarios proved, 8 kept as written, 1 not proved.", counts
-        )
-        is None
-    )
-    assert _proof_claim_mismatch("Not all of them are proved yet.", counts) is None
-    assert (
-        _proof_claim_mismatch(
-            "All 4 proved.", {"proved": 4, "kept_as_written": 0, "not_proved": 0}
-        )
-        is None
-    )
+    # The reply is never parsed; the counts that follow it are the proofs'.
+    assert text == "All 12 scenarios proved.\n\nProof counts: 3 proved, 9 kept as written, 0 not proved."
 
 
 def test_one_broken_scenario_does_not_block_the_save(tmp_path, monkeypatch):

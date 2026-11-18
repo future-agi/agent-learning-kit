@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from fi.alk.harness import call_runner, chat_call_runner, chat_readiness
-from fi.alk.harness.chat_readiness import TOOL_ROUTING, record_tool_routing
+from fi.alk.harness import call_runner, chat_call_runner, tool_routing
+from fi.alk.harness.tool_routing import TOOL_ROUTING, record_tool_routing
 from fi.alk.harness.contract import AgentContract
 from fi.alk.harness.world.runtime import Call
 
@@ -200,7 +200,7 @@ def _requests(
             )
 
     monkeypatch.setattr(
-        chat_readiness, "create_chat_wrapper", lambda *a, **k: Wrapper()
+        tool_routing, "create_chat_wrapper", lambda *a, **k: Wrapper()
     )
     monkeypatch.setattr(chat_call_runner, "tool_world", lambda *a, **k: _World())
     monkeypatch.setattr(
@@ -218,7 +218,7 @@ def _requests(
         reported=[_call("lookup_order")],
     )
     asyncio.run(
-        chat_readiness.request_uncovered_tools(
+        tool_routing.request_uncovered_tools(
             interface=None,
             endpoint="http://agent",
             runtime=runtime,
@@ -310,7 +310,7 @@ def test_no_request_is_sent_once_the_time_is_spent(tmp_path, monkeypatch):
 
 
 def test_the_request_names_the_tool_and_an_example_from_its_contract():
-    text = chat_readiness._tool_request(_contract().tools[0])
+    text = tool_routing._tool_request(_contract().tools[0])
 
     assert (
         "lookup_order" in text
@@ -333,7 +333,7 @@ def test_an_argument_without_an_example_takes_a_plain_value_of_its_type():
         }
     ).tools[0]
 
-    assert "item_id=1, note='test'" in chat_readiness._tool_request(tool)
+    assert "item_id=1, note='test'" in tool_routing._tool_request(tool)
 
 
 def test_a_later_attempt_of_the_check_reuses_the_answers_and_stays_within_the_limit(
@@ -384,14 +384,14 @@ def test_one_request_stays_within_the_budget_however_many_times_the_agent_is_cal
                 metadata={},
             )
 
-    monkeypatch.setattr(chat_readiness, "create_chat_wrapper", lambda *a, **k: Slow())
+    monkeypatch.setattr(tool_routing, "create_chat_wrapper", lambda *a, **k: Slow())
     monkeypatch.setattr(chat_call_runner, "tool_world", lambda *a, **k: _World())
     monkeypatch.setattr(call_runner, "collect_file_tool_calls", lambda runtime: ())
     monkeypatch.setattr(call_runner, "collect_tool_trace_calls", lambda runtime: ())
     record_tool_routing(tmp_path, "s-1", _contract(), PROXIED, received=[], reported=[])
     started = time.monotonic()
     asyncio.run(
-        chat_readiness.request_uncovered_tools(
+        tool_routing.request_uncovered_tools(
             interface=None,
             endpoint="http://agent",
             runtime=PROXIED,
@@ -434,14 +434,14 @@ def test_a_request_runs_only_the_asked_tool_at_the_world(tmp_path, monkeypatch):
                 )
             return SimpleNamespace(content="done", tool_calls=[], tool_responses=[], metadata={})
 
-    monkeypatch.setattr(chat_readiness, "create_chat_wrapper", lambda *a, **k: Agent())
+    monkeypatch.setattr(tool_routing, "create_chat_wrapper", lambda *a, **k: Agent())
     monkeypatch.setattr(chat_call_runner, "tool_world", lambda *a, **k: world)
     monkeypatch.setattr(call_runner, "collect_file_tool_calls", lambda runtime: ())
     monkeypatch.setattr(call_runner, "collect_tool_trace_calls", lambda runtime: ())
     record_tool_routing(tmp_path, "s-1", _contract(), PROXIED, received=[], reported=[])
 
     asyncio.run(
-        chat_readiness.request_uncovered_tools(
+        tool_routing.request_uncovered_tools(
             interface=None,
             endpoint="http://agent",
             runtime=PROXIED,
@@ -602,7 +602,7 @@ def test_a_blocking_tool_handler_cannot_outlast_the_request_deadline(
                 content="done", tool_calls=calls, tool_responses=[], metadata={}
             )
 
-    monkeypatch.setattr(chat_readiness, "create_chat_wrapper", lambda *a, **k: Agent())
+    monkeypatch.setattr(tool_routing, "create_chat_wrapper", lambda *a, **k: Agent())
     monkeypatch.setattr(chat_call_runner, "tool_world", lambda *a, **k: Blocking())
     monkeypatch.setattr(call_runner, "collect_file_tool_calls", lambda runtime: ())
     monkeypatch.setattr(call_runner, "collect_tool_trace_calls", lambda runtime: ())
@@ -616,7 +616,7 @@ def test_a_blocking_tool_handler_cannot_outlast_the_request_deadline(
     )
     started = time.monotonic()
     asyncio.run(
-        chat_readiness.request_uncovered_tools(
+        tool_routing.request_uncovered_tools(
             interface=None,
             endpoint="http://agent",
             runtime=PROXIED,
@@ -698,13 +698,13 @@ def test_a_call_the_door_also_wrote_to_the_world_log_is_counted_once():
         Call(name="track_parcel", arguments={}, at=11.0),
     ]
 
-    received = chat_readiness.received_calls(logged, ran)
+    received = tool_routing.received_calls(logged, ran)
 
     assert [one.name for one in received] == ["lookup_order", "track_parcel"]
     # No log at all (a world whose door keeps its log in memory): every call the harness ran counts.
-    assert [one.name for one in chat_readiness.received_calls([], ran)] == ["lookup_order", "track_parcel"]
+    assert [one.name for one in tool_routing.received_calls([], ran)] == ["lookup_order", "track_parcel"]
     # Two identical calls in both are still two calls.
-    assert len(chat_readiness.received_calls(logged * 2, ran[:1] * 2)) == 2
+    assert len(tool_routing.received_calls(logged * 2, ran[:1] * 2)) == 2
 
 
 def test_a_bundle_without_a_contract_records_no_routing(tmp_path):

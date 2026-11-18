@@ -27,35 +27,86 @@ Only a scenario that clears all three is kept. That is the green light.
 from __future__ import annotations
 
 import ast
-import asyncio
 import json
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from .actors import load_actors
 from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
-from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
 from .folder import apply_setup, check_ready
-from .scenario import Scenario
-from .world.runtime import Call, GeneratedWorld
-from .world.snapshot import read_manifest, restore
 from .grounding import policy_conflicts, resolve_sources, unresolved
 from .judge import judge_sub_goal
 from .leaks import leaks
+from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
+from .scenario import NegativeControl, Scenario
 from .understand import load
-
+from .world.runtime import Call, GeneratedWorld, settled
+from .world.snapshot import read_manifest, restore
 
 # The lane could not execute something; the case runs labelled "kept as written", never as proved.
 # "judged_only": only a judge grades the case and no control has shown the judge fails a wrong behaviour.
-LANE_CODES = frozenset({"proof_deferred", "solution_assumed", "control_not_run", "judged_only"})
+class BlockedReason(str, Enum):
+    """Why a proof is not proved, as `blocked_reason` says it and the proof record keeps it."""
+
+    BROKEN_CHECK = "broken_check"
+    NOT_READY = "not_ready"
+    NOT_SOLVABLE = "not_solvable"
+    VACUOUS = "vacuous"
+    WEAK_CHECK = "weak_check"
+    CREDITS_FAILED_ATTEMPT = "credits_failed_attempt"
+    TOO_STRICT = "too_strict"
+    UNCHECKED = "unchecked"
+    NO_NEGATIVE_CONTROL = "no_negative_control"
+    NEGATIVE_CONTROL_PASSED = "negative_control_passed"
+    POLICY_CONFLICT = "policy_conflict"
+    ANSWER_LEAKED = "answer_leaked"
+    SOURCE_UNRESOLVED = "source_unresolved"
+    PROOF_DEFERRED = "proof_deferred"
+    SOLUTION_ASSUMED = "solution_assumed"
+    CONTROL_NOT_RUN = "control_not_run"
+    JUDGED_ONLY = "judged_only"
+    VALIDATION_INCOMPLETE = "validation_incomplete"
+
+    def __str__(self) -> str:
+        return self.value
+
+
+# Not proved only because this lane could not execute something: the case is kept as written.
+LANE_CODES = frozenset(
+    {
+        BlockedReason.PROOF_DEFERRED,
+        BlockedReason.SOLUTION_ASSUMED,
+        BlockedReason.CONTROL_NOT_RUN,
+        BlockedReason.JUDGED_ONLY,
+    }
+)
 # A case with no negative control at all: refused at submit, kept not proved through a rebuild.
-NO_NEGATIVE_CONTROL = "no_negative_control"
+NO_NEGATIVE_CONTROL = BlockedReason.NO_NEGATIVE_CONTROL
+# A writer's fault: the scenario is not kept. The lane codes (an unbound tool) are kept and labelled.
+REFUSED_CODES = frozenset(
+    {
+        BlockedReason.NEGATIVE_CONTROL_PASSED,
+        BlockedReason.NO_NEGATIVE_CONTROL,
+        BlockedReason.ANSWER_LEAKED,
+        BlockedReason.SOURCE_UNRESOLVED,
+    }
+)
+
+
+def refuses_keeping(proof: Proof) -> bool:
+    """Whether a scenario with this proof may not be kept: its checks do not hold (unless only the live runtime can
+    prove it), or the writer left a fault the lane caught. One rule for a submit and for every case a rebuild keeps."""
+    return (not proof.holds and not (proof.deferred and not proof.broken)) or proof.blocked_reason() in REFUSED_CODES
+
+
+# Decides one judged sub-goal of a control: (goal, world, calls, what was said, scenario) -> (held, explanation).
+ControlJudge = Callable[[Any, Any, list[Call], list[dict[str, str]], Any], tuple[bool | None, str]]
 
 
 @dataclass
@@ -139,18 +190,12 @@ class Proof:
     # The reference solution's trial, for comparing tools' declared tables with what changed: the calls the world took
     # in order, the tables that ended different from the start, and why it cannot say which tool changed them.
     trial: dict[str, Any] = field(default_factory=dict)
+    # Checks the reference failed only because a step it took was assumed: each reads the world alone, which an
+    # assumed step never changes (`excused_by_assumed_steps`).
+    excused: list[str] = field(default_factory=list)
 
     @property
     def holds(self) -> bool:
-        if self.assumed:
-            # The solution never ran, so the gates read from its run (solvable, failed attempts, too strict,
-            # unchecked) are no evidence either way; the gates on the untouched world still are.
-            return (
-                self.ready
-                and not self.vacuous
-                and (self.outcome == "no_change" or not self.weak)
-                and not self.broken
-            )
         return (
             self.ready
             and self.solvable
@@ -180,50 +225,49 @@ class Proof:
         """Not proved only because this lane could not execute something; nothing that ran failed."""
         return not self.proved and self.blocked_reason() in LANE_CODES
 
-    def blocked_reason(self) -> str | None:
+    def blocked_reason(self) -> BlockedReason | None:
         """The first reason this proof is not proved, faults before the lane's own limits."""
         if self.proved:
             return None
         if self.broken:
-            return "broken_check"
+            return BlockedReason.BROKEN_CHECK
         if not self.deferred:
             # A deferred proof returns before any gate runs, so its gates read unset, not failed.
             if not self.ready:
-                return "not_ready"
-            # With steps assumed, the gates read from the solution's run are skipped: it never ran (`holds`).
-            if not self.solvable and not self.assumed:
-                return "not_solvable"
+                return BlockedReason.NOT_READY
+            if not self.solvable:
+                return BlockedReason.NOT_SOLVABLE
             if self.vacuous:
-                return "vacuous"
+                return BlockedReason.VACUOUS
             if self.weak and self.outcome == "change":
-                return "weak_check"
-            if self.failed_attempts and not self.assumed:
-                return "credits_failed_attempt"
-            if self.too_strict and not self.assumed:
-                return "too_strict"
-            if self.unchecked and not self.assumed:
-                return "unchecked"
+                return BlockedReason.WEAK_CHECK
+            if self.failed_attempts:
+                return BlockedReason.CREDITS_FAILED_ATTEMPT
+            if self.too_strict:
+                return BlockedReason.TOO_STRICT
+            if self.unchecked:
+                return BlockedReason.UNCHECKED
             if not self.judged_only:
                 if not self.controls:
                     return NO_NEGATIVE_CONTROL
                 if any(one.get("failed") is False for one in self.ran_controls):
-                    return "negative_control_passed"
+                    return BlockedReason.NEGATIVE_CONTROL_PASSED
             elif any(one.get("failed") is False for one in self.judged_controls):
-                return "negative_control_passed"
+                return BlockedReason.NEGATIVE_CONTROL_PASSED
         if self.conflicts:
-            return "policy_conflict"
+            return BlockedReason.POLICY_CONFLICT
         if self.leaks:
-            return "answer_leaked"
+            return BlockedReason.ANSWER_LEAKED
         if self.unresolved_sources:
-            return "source_unresolved"
+            return BlockedReason.SOURCE_UNRESOLVED
         if self.deferred:
-            return "proof_deferred"
+            return BlockedReason.PROOF_DEFERRED
         if self.assumed:
-            return "solution_assumed"
+            return BlockedReason.SOLUTION_ASSUMED
         if self.controls and not self.ran_controls and not self.judged_only:
-            return "control_not_run"
+            return BlockedReason.CONTROL_NOT_RUN
         if self.judged_only and not self.controls_failed:
-            return "judged_only"
+            return BlockedReason.JUDGED_ONLY
         return None
 
     def gates(self) -> dict[str, bool]:
@@ -242,7 +286,7 @@ class Proof:
                 f"{one['ref'] or 'rule'} \"{one['rule']}\": {one['why'] or 'contradicted'}" for one in self.conflicts
             )
         if self.leaks:
-            return "what the caller or the agent sees gives the answer away:\n  - " + "\n  - ".join(
+            return "what the simulated person or the agent sees gives the answer away:\n  - " + "\n  - ".join(
                 f"{one['who']}: {one['field']} repeats \"{one['excerpt']}\" from {one['grader_field']}"
                 for one in self.leaks
             )
@@ -272,7 +316,7 @@ class Proof:
             return "these checks are broken, not failing:\n  - " + "\n  - ".join(
                 self.broken
             )
-        if not self.solvable and not self.assumed:
+        if not self.solvable:
             failed = [one for one in self.with_solution if not one.held]
             said = "\n  - ".join(f"{one.name}: {one.said}" for one in failed)
             refusals = (
@@ -302,7 +346,7 @@ class Proof:
                 "        if any(c.ok for c in tried): return 'it succeeded'\n"
                 "        return None"
             )
-        if self.unchecked and not self.assumed:
+        if self.unchecked:
             return (
                 "these values are marked fixed, yet every check still passes when the agent gets "
                 "them wrong:\n  - "
@@ -311,7 +355,7 @@ class Proof:
                 "compare it, or take it out of `fixed` if only what is said settles it or the agent words it "
                 "itself (a reason, a note, a message), which no check compares as text."
             )
-        if self.too_strict and not self.assumed:
+        if self.too_strict:
             return (
                 "these checks fail an agent that does every fixed thing right but makes its own "
                 "choice, for an argument this scenario does not mark fixed, a way its "
@@ -321,7 +365,7 @@ class Proof:
                 "rule of the agent fixes. Check the outcome instead, or mark the argument fixed "
                 "if one of those really fixes it."
             )
-        if self.failed_attempts and not self.assumed:
+        if self.failed_attempts:
             return (
                 "these checks award credit when every tool attempt crashes without changing "
                 "the world or returning a result:\n  - "
@@ -357,17 +401,31 @@ class Proof:
             )
         if fault := self._source_faults():
             return fault
-        if self.judged_only and not self.controls_failed:
-            return JUDGED_ONLY_TEXT
-        if self.controls and not self.ran_controls:
-            return "no negative control could run here: " + ", ".join(
-                f"{one['name']} ({', '.join(one.get('assumed') or [])})" for one in self.controls
-            )
+        # The lane's own limits, in `blocked_reason`'s order.
         if self.assumed:
             return "kept as written: these tools have no endpoint here, so their solution steps never ran: " + ", ".join(
                 self.assumed
             )
+        if self.controls and not self.ran_controls and not self.judged_only:
+            return "no negative control could run here: " + ", ".join(
+                f"{one['name']} ({', '.join(one.get('assumed') or [])})" for one in self.controls
+            )
+        if self.judged_only and not self.controls_failed:
+            return JUDGED_ONLY_TEXT
         return "holds"
+
+
+def excused_by_assumed_steps(proof: Proof) -> list[str]:
+    """The checks the reference failed that are no evidence, because a step was assumed: an assumed step never ran,
+    so the world never changed, and a check that reads only the world cannot pass. A check that reads the calls is
+    evidence either way, and with nothing assumed every failure counts."""
+    if not proof.assumed:
+        return []
+    return sorted(
+        one.name
+        for one in proof.with_solution
+        if not one.held and not one.broken and proof.evidence.get(one.name) == ["world_state"]
+    )
 
 
 def check_evidence(source: str) -> list[str]:
@@ -735,8 +793,8 @@ def workspace_fixture_problems(
     """Check fixture structure; only live readiness can verify target file contents."""
     if not bindings:
         return ["file fixtures require a declared runtime.workspaces binding"]
-    from .world.files import relative_parts
     from .world.errors import WorldUsageError
+    from .world.files import relative_parts
 
     writes = False
     reads = False
@@ -971,20 +1029,22 @@ def _controls(
             outcomes = [run_check(source, world, calls, name=name, reference=reference) for name, source in checks]
         finally:
             world.close()
-        named = set(control.must_fail) or {name for name, _ in checks}
-        held = [one.name for one in outcomes if one.held]
-        played.append(
-            {
-                "name": control.name,
-                "why": control.why,
-                # A check that raised under the control is broken, not failing: no evidence.
-                "failed": any(not one.held and not one.broken for one in outcomes if one.name in named),
-                "held": held,
-                "broken": [one.name for one in outcomes if one.broken and one.name in named],
-                "assumed": assumed,
-            }
-        )
+        played.append(played_control(control, outcomes, assumed))
     return played
+
+
+def played_control(control: NegativeControl, outcomes: Sequence[Outcome], assumed: list[str]) -> ControlResult:
+    """A control as played: it fails when a check it names (every check when it names none) fails. A check that raised
+    under it is broken, not failing: no evidence. With no outcomes it was not played."""
+    named = set(control.must_fail) or {one.name for one in outcomes}
+    return {
+        "name": control.name,
+        "why": control.why,
+        "failed": any(not one.held and not one.broken for one in outcomes if one.name in named) if outcomes else None,
+        "held": [one.name for one in outcomes if one.held],
+        "broken": [one.name for one in outcomes if one.broken and one.name in named],
+        "assumed": assumed,
+    }
 
 
 JUDGED_ONLY_TEXT = (
@@ -995,15 +1055,11 @@ JUDGED_ONLY_TEXT = (
 def _harness_judge(goal: Any, world: Any, calls: list[Call], messages: list[dict[str, str]], scenario: Any) -> Any:
     """The harness judge on one sub-goal, run on its own loop so it works from sync and async callers."""
 
-    def decide() -> Any:
-        return asyncio.run(judge_sub_goal(goal, world, calls, messages=messages, scenario=scenario))
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(decide).result()
+    return settled(judge_sub_goal(goal, world, calls, messages=messages, scenario=scenario))
 
 
 def _judged_controls(
-    scenario: Scenario, catalogue: Catalogue, world_root: Path, *, judge: Any = None
+    scenario: Scenario, catalogue: Catalogue, world_root: Path, *, judge: ControlJudge | None = None
 ) -> list[ControlResult]:
     """Play each control of a judged-only case through the judge: its steps on a set-up world and its
     transcript as what was said. It fails when the judge fails a sub-goal it names. A control with no
@@ -1105,10 +1161,10 @@ def prove(
     catalogue: Catalogue,
     world_root: Path,
     *,
-    contract: Any = None,
-    actors: list | None = None,
-    judge: Any = None,
-    conflict_judge: Any = None,
+    contract: AgentContract | None = None,
+    actors: list[dict[str, Any]] | None = None,
+    judge: ControlJudge | None = None,
+    conflict_judge: Callable[[str, str], tuple[bool | None, str]] | None = None,
 ) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping.
 
@@ -1198,6 +1254,7 @@ def prove(
         ]
         passing = {one.name for one in proof.with_solution if one.held}
         held = [(name, source) for name, source in checks if name in passing]
+        proof.excused = excused_by_assumed_steps(proof)
         right_state = _end_state(world)
         played = [call.name for call in calls if call.ok and not call.refused]
         others = len(world.calls) - len(calls) if right_state is not None else 0
@@ -1267,6 +1324,10 @@ def prove(
         finally:
             alt_world.close()
     for label, steps, corrected in _with_one_wrong(scenario) if held else ():
+        if proof.excused and label.split(".", 1)[0] in assumed:
+            # A wrong value on an assumed step never reaches the world, so the excused checks that would notice it
+            # cannot: no evidence that nothing checks it.
+            continue
         wrong_world, wrong_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=steps)
         try:
             # Only a value a later step sets again, leaving the right end state, is a corrected draft
@@ -1281,7 +1342,7 @@ def prove(
             wrong_world.close()
     proof.refused = refused
     proof.broken = [one.name for one in proof.with_solution if one.broken]
-    proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken
+    proof.solvable = all(one.held or one.name in proof.excused for one in proof.with_solution) and not proof.broken
 
     # Gate 3: do those same checks fail when nothing is done?
     untouched, nothing, _, _ = _run(scenario, world_root, with_solution=False)
@@ -1360,7 +1421,7 @@ def prove(
     return proof
 
 
-def control_broken(controls: list[dict[str, Any]]) -> list[str]:
+def control_broken(controls: list[ControlResult]) -> list[str]:
     """Each check that raised under a negative control, named with the control."""
     return [
         f"{name} (under negative control {one.get('name')})"

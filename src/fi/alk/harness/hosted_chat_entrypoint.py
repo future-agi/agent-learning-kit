@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
-import traceback
 import json
 import os
 import re
@@ -11,6 +10,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 import uuid
 from collections.abc import Awaitable
 from contextlib import suppress
@@ -18,6 +18,16 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from ..providers.agent import (
+    _LETTER,
+    _QUERY_OR_FRAGMENT,
+    _REDACTED,
+    _START,
+    _URL_BREAKS,
+    _redact,
+)
+from . import bundle_author_v2
+from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
 from .backends import (
     ASK_TOOL,
     ConversationSession,
@@ -26,10 +36,10 @@ from .backends import (
     tool,
     tool_server,
 )
-from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
-from .failure_file import FAILURE_FILE
-from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
+from .catalogue import load_catalogue
 from .chat_policy import EffectiveChatPolicy, apply_chat_policy, load_chat_policy
+from .dropped import restore_note
+from .failure_file import FAILURE_FILE
 from .hosted_conversation import (
     _UNAVAILABLE_BUDGET_SECONDS,
     ConversationClient,
@@ -37,7 +47,7 @@ from .hosted_conversation import (
     PlatformSessionStore,
     load_conversation_capabilities,
 )
-from .tools import schema
+from .proofs import load_proofs, proof_counts, proof_key
 from .session import (
     ARTIFACT,
     DONE,
@@ -49,19 +59,9 @@ from .session import (
     Stage,
     asking_a_person,
 )
-from ..providers.agent import (
-    _LETTER,
-    _QUERY_OR_FRAGMENT,
-    _REDACTED,
-    _START,
-    _URL_BREAKS,
-    _redact,
-)
+from .tools import schema
+from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 from .understand import load as load_contract
-from .catalogue import load_catalogue
-from .proofs import load_proofs, proof_counts, proof_key
-from . import bundle_author_v2
-from .dropped import restore_note
 
 _NUMBERS = {"type": "array", "items": {"type": "integer"}}
 _RANGES = {
@@ -102,51 +102,15 @@ def _proof_summary(proofs: dict[str, dict[str, Any]], keys: list[str], counts: d
         f"{counts['proved']} proved, {kept}, {unproved}. Report exactly these counts; call only the "
         f"{counts['proved']} proved scenarios proved."
     )
-_NUMBER_PROVED = re.compile(
-    r"\b(\d+)\s+((?:[A-Za-z-]+\s+){0,2})proved\b", re.IGNORECASE
-)
-_ALL_PROVED = re.compile(r"\b(?:all|every)\b[^.]{0,40}\bproved\b", re.IGNORECASE)
-
-
-def _proof_claim_mismatch(text: str, counts: dict[str, int]) -> str | None:
-    """A correction when the reply claims more scenarios proved than the proofs hold, else None."""
-    proved = int(counts.get("proved") or 0)
-    total = (
-        proved
-        + int(counts.get("kept_as_written") or 0)
-        + int(counts.get("not_proved") or 0)
-    )
-    claims = [
-        int(match.group(1))
-        for match in _NUMBER_PROVED.finditer(text)
-        if not re.search(r"\b(?:not|un)", match.group(2), re.IGNORECASE)
-    ]
-    overclaimed = any(claim != proved for claim in claims) or (
-        proved < total
-        and any(
-            not re.search(
-                r"\bnot\b",
-                text[max(0, match.start() - 12) : match.start()],
-                re.IGNORECASE,
-            )
-            for match in _ALL_PROVED.finditer(text)
-        )
-    )
-    return (
-        f"Correction: only {proved} of {total} scenarios are proved."
-        if overclaimed
-        else None
-    )
 
 
 def _with_proof_counts(text: str, counts: dict[str, int]) -> str:
-    """The closing reply with the proof counts written by code, and a correction if the reply overclaims."""
-    correction = _proof_claim_mismatch(text, counts)
+    """The closing reply with the proof counts written by code: whatever the reply says, these are the counts."""
     line = (
         f"Proof counts: {int(counts.get('proved') or 0)} proved, {int(counts.get('kept_as_written') or 0)} kept as "
         f"written, {int(counts.get('not_proved') or 0)} not proved."
     )
-    return "\n\n".join(part for part in (text, line, correction) if part)
+    return "\n\n".join(part for part in (text, line) if part)
 
 
 _PROVIDER_PROFILE = "provider-import-profile.json"

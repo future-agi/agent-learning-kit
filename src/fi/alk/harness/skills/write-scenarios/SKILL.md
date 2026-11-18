@@ -822,9 +822,9 @@ Each scenario lists `sources`: where each of its requirements comes from. Kinds 
 `rule:<n>`, quote the rule's exact words), `file` (ref `file:<path>`, quote the file exactly),
 `chat_message` (ref `chat:<id>`), `evidence_case` (ref `evidence:<id>`), `requirement` (the person's
 own words in `quote`) and `assumption` (anything you decided yourself). A citation that does not
-resolve is refused, so quote exactly. A new or changed scenario with no sources is refused: for any
-requirement you cannot cite, add an `assumption` source whose `quote` says what you assumed and whose
-`supports` names the part of the case it covers, rather than citing a source that does not say it.
+resolve is refused, so quote exactly. For any requirement you cannot cite, add an `assumption` source
+whose `quote` says what you assumed and whose `supports` names the part of the case it covers, rather
+than citing a source that does not say it. A scenario that cites nothing is kept, and shown as assumed.
 
 ## Must-pass cases
 
@@ -837,8 +837,8 @@ The grader-only material is each sub-goal's `what`, `judged`, `reference`, `veri
 `comparison`, the values a check compares against that the world does not hold, `tests`, each
 negative control's `why`, and every file only the evaluator reads. None of it may appear in what the
 simulated person or the agent is given: the instruction, the variables, the persona, its opening
-message, or an actor's brief and knowledge. A scenario that repeats eight words of a sub-goal, a
-multi-word sub-goal name or a computed expected value in those fields is refused with the excerpt.
+message, or an actor's brief and knowledge. A scenario whose visible text restates grader-only material
+(a sub-goal's words or name, or a value a check expects) is refused with the excerpt.
 On a conversational agent, the opening message must not repeat the instruction either: the
 instruction is the simulated person's, never the agent's.
 

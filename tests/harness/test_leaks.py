@@ -113,9 +113,6 @@ def _step(tool, **arguments):
 
 
 def test_solution_argument_in_the_opening_is_a_leak():
-    from fi.alk.harness.leaks import GRADER_ONLY_FIELDS
-
-    assert "scenario.solution (argument values)" in GRADER_ONLY_FIELDS
     catalogue = _catalogue(refund_once={"what": "The agent refunds the order."})
     case = _case(
         "Ask for your money back.",

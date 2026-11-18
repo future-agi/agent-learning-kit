@@ -216,7 +216,7 @@ def test_a_deferred_proof_gives_the_reason_it_is_blocked_for_not_an_unrun_gate()
     proof = Proof(deferred=True, leaks=leaked)
 
     assert proof.blocked_reason() == "answer_leaked"
-    assert proof.why().startswith("what the caller or the agent sees gives the answer away")
+    assert proof.why().startswith("what the simulated person or the agent sees gives the answer away")
 
 
 def test_an_agent_bound_tool_with_a_state_check_is_kept_as_written_not_unsolvable(monkeypatch, tmp_path):
@@ -230,6 +230,7 @@ def test_an_agent_bound_tool_with_a_state_check_is_kept_as_written_not_unsolvabl
     assert proof.assumed == ["refund_order"] and proof.holds is True
     assert (saved["blocked_reason"], saved["kept_as_written"], saved["proved"]) == ("solution_assumed", True, False)
     assert saved["why"].startswith("kept as written")
+    assert saved["excused"] == ["refund_once"]
 
 
 def test_an_assumed_case_still_reads_its_faults(monkeypatch, tmp_path):
@@ -243,3 +244,53 @@ def test_an_assumed_case_still_reads_its_faults(monkeypatch, tmp_path):
 
     assert leaked.blocked_reason() == "answer_leaked" and leaked.kept_as_written is False
     assert uncontrolled.blocked_reason() == "no_negative_control" and uncontrolled.why().startswith("no negative control")
+
+
+def test_a_call_check_failing_on_a_tool_that_ran_is_a_fault_even_with_a_step_assumed(monkeypatch, tmp_path):
+    # The refund runs inside the agent (assumed); the lookup ran, and the check of its call fails.
+    install(monkeypatch, runtime_tools={"refund_order"})
+    wrong_lookup = check(
+        "return None if any(c.name == 'lookup_order' and c.ok and c.arguments.get('order_id') == 'O-99' for c in calls) "
+        "else 'O-99 never looked up'"
+    )
+    proof = module.prove(
+        refund_case(), catalogue(refund_once=REFUND_CATALOGUE["refund_once"], looked_up=wrong_lookup), tmp_path,
+        contract=None, actors=[],
+    )
+
+    assert proof.assumed == ["refund_order"]
+    # The world-only refund check is excused; the failed call check is not.
+    assert proof.excused == ["refund_once"]
+    assert (proof.solvable, proof.blocked_reason(), proof.kept_as_written) == (False, "not_solvable", False)
+
+
+def test_the_refusal_table_quotes_the_reason_each_refused_proof_gives():
+    from pathlib import Path
+
+    import fi.alk.harness as harness
+
+    table = (Path(harness.__file__).parent / "skills/write-scenarios/references/refusals.md").read_text(encoding="utf-8")
+    quoted = [line.split("`")[1] for line in table.splitlines() if line.startswith("| `")]
+    passed_control = [{"name": "wrong", "why": "does it wrong", "failed": False, "held": ["x"], "assumed": []}]
+    leak = [{"who": "simulated person", "field": "instruction", "grader_field": "tests", "excerpt": "e"}]
+    source = [{"kind": "rule", "ref": "rule:0", "resolved": False, "problem": "p"}]
+    refused = [
+        Proof(ready=True, solvable=True, vacuous=False, controls=[]),
+        Proof(ready=True, solvable=True, vacuous=False, controls=passed_control),
+        Proof(ready=True, solvable=True, vacuous=False, controls=RAN, leaks=leak),
+        Proof(ready=True, solvable=True, vacuous=False, controls=RAN, sources=source),
+    ]
+
+    for proof in refused:
+        said = proof.why()
+        assert any(said.startswith(one) for one in quoted), said
+
+
+def test_each_saved_proof_says_whether_a_submit_refuses_it(tmp_path):
+    record_proof(tmp_path, "uncontrolled", Proof(ready=True, solvable=True, vacuous=False, controls=[]))
+    record_proof(tmp_path, "assumed", Proof(ready=True, solvable=True, vacuous=False, assumed=["x"], controls=RAN))
+    record_unprovable(tmp_path, "crashed", "ValueError")
+
+    saved = load_proofs(tmp_path)
+
+    assert {key: one["refused"] for key, one in saved.items()} == {"uncontrolled": True, "assumed": False, "crashed": True}

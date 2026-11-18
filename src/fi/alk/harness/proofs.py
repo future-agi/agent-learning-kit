@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
+from .json_file import write_json_atomic
 from .proof_records import ProofEntry
-from .prove import Proof
+from .prove import BlockedReason, Proof, refuses_keeping
 from .scenario import Scenario, scenario_slug
 
 PROOFS = "proofs.json"
 
 
-def load_proofs(destination: Path) -> dict[str, dict[str, Any]]:
+def load_proofs(destination: Path) -> dict[str, ProofEntry]:
     path = Path(destination) / PROOFS
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -25,21 +24,12 @@ def load_proofs(destination: Path) -> dict[str, dict[str, Any]]:
     return value if isinstance(value, dict) else {}
 
 
-def _save(destination: Path, proofs: dict[str, dict[str, Any]]) -> None:
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    handle, temporary = tempfile.mkstemp(dir=destination, prefix=".proofs-", suffix=".json")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            json.dump(proofs, out, indent=2, sort_keys=True, ensure_ascii=False)
-        os.chmod(temporary, 0o644)
-        os.replace(temporary, destination / PROOFS)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+def _save(destination: Path, proofs: Mapping[str, ProofEntry]) -> None:
+    write_json_atomic(Path(destination) / PROOFS, proofs)
 
 
-def _now() -> str:
+def utc_stamp() -> str:
+    """Now, in UTC to the second and one fixed form, so two stamps compare as text the way the times do."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
@@ -50,17 +40,7 @@ def proof_key(scenario: Scenario) -> str:
 
 def proof_entry(proof: Proof, solution_steps: int) -> ProofEntry:
     blocked = proof.blocked_reason()
-    if proof.proved:
-        why = ""
-    elif not proof.holds:
-        why = proof.why()
-    elif proof.assumed and blocked == "solution_assumed":
-        why = (
-            "kept as written: these tools have no endpoint here, so their solution steps never ran: "
-            + ", ".join(proof.assumed)
-        )
-    else:
-        why = proof.why()
+    why = "" if proof.proved else proof.why()
     return {
         "format": 2,
         "holds": proof.holds,
@@ -70,7 +50,7 @@ def proof_entry(proof: Proof, solution_steps: int) -> ProofEntry:
         "solvable": proof.solvable,
         "not_vacuous": not proof.vacuous,
         "why": why,
-        "proved_at": _now(),
+        "proved_at": utc_stamp(),
         "assumed": list(proof.assumed),
         "solution_steps": solution_steps,
         "deferred": proof.deferred,
@@ -81,7 +61,9 @@ def proof_entry(proof: Proof, solution_steps: int) -> ProofEntry:
         "sources": [dict(one) for one in proof.sources],
         "policy_checks": [dict(one) for one in proof.policy_checks],
         "evidence": {name: list(kinds) for name, kinds in proof.evidence.items()},
+        "excused": list(proof.excused),
         "blocked_reason": blocked,
+        "refused": refuses_keeping(proof),
         **({"trial": proof.trial} if proof.trial else {}),
     }
 
@@ -93,7 +75,7 @@ def record_proof(destination: Path, scenario_key: str, proof: Proof, *, solution
     _save(destination, proofs)
 
 
-def unprovable_entry(why: str, blocked_reason: str = "broken_check") -> ProofEntry:
+def unprovable_entry(why: str, blocked_reason: BlockedReason = BlockedReason.BROKEN_CHECK) -> ProofEntry:
     return {
         "format": 2,
         "holds": False,
@@ -103,7 +85,7 @@ def unprovable_entry(why: str, blocked_reason: str = "broken_check") -> ProofEnt
         "solvable": False,
         "not_vacuous": False,
         "why": why,
-        "proved_at": _now(),
+        "proved_at": utc_stamp(),
         "assumed": [],
         "solution_steps": 0,
         "deferred": False,
@@ -114,7 +96,9 @@ def unprovable_entry(why: str, blocked_reason: str = "broken_check") -> ProofEnt
         "sources": [],
         "policy_checks": [],
         "evidence": {},
+        "excused": [],
         "blocked_reason": blocked_reason,
+        "refused": True,
     }
 
 
@@ -125,7 +109,7 @@ def record_unprovable(destination: Path, scenario_key: str, why: str) -> None:
     _save(destination, proofs)
 
 
-def proof_counts(proofs: dict[str, dict[str, Any]], keys: list[str]) -> dict[str, int]:
+def proof_counts(proofs: Mapping[str, ProofEntry], keys: list[str]) -> dict[str, int]:
     """Proved, kept as written and not proved, over `keys`. A key with no proof is not proved."""
     counts = {"proved": 0, "kept_as_written": 0, "not_proved": 0}
     for key in keys:

@@ -32,9 +32,9 @@ from .catalogue import (
 from .contract import validate_contract
 from .outbound import _redact_validation_error
 from .proofs import load_proofs, record_proof, record_unprovable
-from .prove import NO_NEGATIVE_CONTROL, prepared, prove
+from .prove import NO_NEGATIVE_CONTROL, prepared, prove, refuses_keeping
 from .scenario import Scenario, scenario_slug
-from .scenario_tools import load_scenarios, refuses_keeping, write_scenarios
+from .scenario_tools import load_scenarios, write_scenarios
 from .seed_rows import missing_seed_rows
 from .source_data_invariants import (
     ARTIFACT,

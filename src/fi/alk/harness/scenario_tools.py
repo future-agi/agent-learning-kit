@@ -72,8 +72,10 @@ from .folder import (
 )
 from .checks import reference_of, run_check
 from .proofs import proof_key, record_proof, record_unprovable
+from .understand import load as load_contract
 from .prove import (
-    NO_NEGATIVE_CONTROL,
+    BlockedReason,
+    refuses_keeping,
     executes,
     native_runtime,
     native_source_problem,
@@ -1479,36 +1481,6 @@ def _controls_the_contract_refuses(scenario: Scenario, world_root: Path) -> list
     ]
 
 
-# A writer's fault: the scenario is not kept. The lane codes (an unbound tool) are kept and labelled.
-_REFUSED_CODES = frozenset({"negative_control_passed", NO_NEGATIVE_CONTROL, "answer_leaked", "source_unresolved"})
-
-
-def _a_read_that_declines(scenario: Scenario, proof: Any, world_root: Path) -> bool:
-    """Whether a one-call reference is a refusal: its call ran, left the world exactly as doing nothing does, and its
-    tool is not one the contract says writes."""
-    if proof.outcome != "no_change" or len(scenario.solution) != 1:
-        return False
-    tool = scenario.solution[0].tool
-    try:
-        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        contract = {}
-    writes = any(
-        isinstance(one, dict) and one.get("name") == tool and str(one.get("effects") or "").strip()
-        for one in contract.get("tools") or []
-    ) or any(
-        isinstance(one, dict) and one.get("tool") == tool and one.get("effect") == "write"
-        for one in contract.get("tool_entrypoints") or []
-    )
-    return not writes
-
-
-def refuses_keeping(proof: Any) -> bool:
-    """Whether a scenario with this proof may not be kept: its checks do not hold (unless only the live runtime can
-    prove it), or the writer left a fault the lane caught. One rule for a submit and for every case a rebuild keeps."""
-    return (not proof.holds and not (proof.deferred and not proof.broken)) or proof.blocked_reason() in _REFUSED_CODES
-
-
 def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions: str) -> list[str]:
     """Fixed text values whose stated source (caller, record or a quoted rule) does not contain them."""
 
@@ -1678,18 +1650,23 @@ def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-NO_SOURCES = "Cite where this case comes from, or add an assumption source that says what you assumed."
-
-
-def _unchanged(scenario: Scenario, payload: dict[str, Any], kept: list[Scenario]) -> bool:
-    """Whether a saved scenario with this key (else this name) already holds exactly this content."""
-    named = str(payload.get("scenario_key") or "").strip()
-    previous = next((one for one in kept if named and one.scenario_key == named), None) or next(
-        (one for one in kept if one.name == scenario.name), None
-    )
-    if previous is None:
+def _a_read_that_declines(scenario: Scenario, proof: Any, world_root: Path) -> bool:
+    """Whether a one-call reference is a refusal: its call ran, left the world exactly as doing nothing does, and its
+    tool is not one the contract says writes."""
+    if proof.outcome != "no_change" or len(scenario.solution) != 1:
         return False
-    return previous.model_dump(exclude={"scenario_key"}) == scenario.model_dump(exclude={"scenario_key"})
+    tool = scenario.solution[0].tool
+    try:
+        contract = load_contract(world_root)
+    except (OSError, ValueError):
+        contract = None
+    if contract is None:
+        return True
+    spec = next((one for one in contract.tools if one.name == tool), None)
+    # A tool the door would log as a write (`_read_tools`), or one whose contract names what it changes.
+    routed = {entry.tool for entry in contract.tool_entrypoints}
+    writes = bool(spec and spec.effects.strip()) or (tool in routed and tool not in _read_tools(contract))
+    return not writes
 
 
 def accept_scenario(
@@ -1710,16 +1687,10 @@ def accept_scenario(
     tools: set[str] | None = None,
     used: set[str] | None = None,
     renaming: bool = False,
-    require_sources: bool = False,
     service_tools: set[str] | None = None,
     read_tools: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
-
-    ``require_sources`` refuses a new or changed scenario that cites nothing: a requirement the
-    writer cannot cite is written as an ``assumption`` source, never left as a silent default. A
-    resubmission identical to the saved scenario (a case written before sources were required) is
-    exempt.
 
     ``renaming`` keeps a proved scenario under a new name without proving it again: what it tests
     is unchanged. ``used`` is every key the environment has given a scenario, so a new one never
@@ -1815,10 +1786,6 @@ def accept_scenario(
             finally:
                 trial.close()
 
-        # An assumption that writes down nothing it assumed cites nothing either.
-        cited = [one for one in scenario.sources if one.kind != "assumption" or (one.quote or one.supports).strip()]
-        if require_sources and not cited and not _unchanged(scenario, payload, kept):
-            problems.append(NO_SOURCES)
         # A single call is decided once the proof shows what it does: a read that leaves the world as it was is a
         # refusal (the agent checks, then declines); anything else is still refused.
         single_call = hollow_scenario_problems(scenario)
@@ -1940,13 +1907,13 @@ def accept_scenario(
         if proof is not None and proof.unplayed
         else ""
     )
-    if proof is not None and proof.blocked_reason() == "control_not_run":
+    if proof is not None and proof.blocked_reason() == BlockedReason.CONTROL_NOT_RUN:
         unproved += (
             "\nNOT PROVED: no negative control could run here, because these tools have no endpoint: "
             + ", ".join(sorted({tool for one in proof.controls for tool in one.get("assumed") or []}))
             + ". It is kept as written; the checks were never shown to fail a wrong behaviour."
         )
-    if proof is not None and proof.blocked_reason() == "judged_only":
+    if proof is not None and proof.blocked_reason() == BlockedReason.JUDGED_ONLY:
         unproved += (
             f"\nNOT PROVED: {proof.why()} Give each negative control a `transcript` of the wrong behaviour as said; "
             "the judge must fail it."
@@ -2858,7 +2825,6 @@ def scenario_tools(
             call_actor_list=load_call_actors(destination),
             tools=set(contract.tool_names()),
             used=used,
-            require_sources=True,
             service_tools=_service_tools(contract),
             read_tools=_read_tools(contract),
         )

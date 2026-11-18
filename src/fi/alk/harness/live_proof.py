@@ -18,32 +18,41 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import random
-import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import authoring_runtime_validation
-from .catalogue import load_catalogue
-from .catalogue import Catalogue
+from .catalogue import Catalogue, load_catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
 from .folder import apply_setup, check_ready
+from .json_file import write_json_atomic
+from .outbound import redact_outbound_text
 from .proof_records import CheckRecord, ControlResult, LiveResult
 from .proofs import proof_key
-from .prove import Proof
-from .prove import checks_for, control_broken, executes, play_reference_step
-from .scenario_tools import load_scenarios
+from .prove import (
+    Proof,
+    checks_for,
+    control_broken,
+    executes,
+    play_reference_step,
+    played_control,
+)
 from .scenario import Scenario, Step
+from .scenario_tools import load_scenarios
 from .world.handle import MCP_ROUTE, mcp_request
+from .world.snapshot import world_state_digest
 from .world.runtime import Call
 
 if TYPE_CHECKING:
     from .hosted_entrypoint import ProcessWorldFactory
-    from .process_runtime import EnvironmentRuntime, ProcessRuntimeProvider, RuntimeEndpoint
+    from .process_runtime import (
+        EnvironmentRuntime,
+        ProcessRuntimeProvider,
+        RuntimeEndpoint,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +127,7 @@ def _play(scenario: Scenario, world: Any, steps: list[Step]) -> tuple[list[Call]
 
 def _digest(world: Any) -> str | None:
     try:
-        return authoring_runtime_validation.world_state_digest(world)
+        return world_state_digest(world)
     except Exception as exc:  # noqa: BLE001 - an unreadable state compares as different
         logger.info("live proof: world state not read: %s", type(exc).__name__)
         return None
@@ -185,24 +194,12 @@ async def prove_live(
                 except Exception as exc:  # noqa: BLE001 - a control that cannot be played is no evidence, the case still is
                     controls.append(
                         {"name": control.name, "why": control.why, "failed": None, "held": [], "assumed": [],
-                         "error": f"{type(exc).__name__}: {exc}"[:300]}
+                         "error": redact_outbound_text(f"{type(exc).__name__}: {exc}")[:300]}
                     )
                     continue
-                named = set(control.must_fail) or {one.name for one in outcomes}
-                controls.append(
-                    {
-                        "name": control.name,
-                        "why": control.why,
-                        "failed": any(not one.held and not one.broken for one in outcomes if one.name in named)
-                        if outcomes
-                        else None,
-                        "held": [one.name for one in outcomes if one.held],
-                        "broken": [one.name for one in outcomes if one.broken and one.name in named],
-                        "assumed": control_assumed,
-                    }
-                )
+                controls.append(played_control(control, outcomes, control_assumed))
         except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play keeps its offline proof
-            logger.warning("live proof skipped for %s: %s: %s", key, type(exc).__name__, exc)
+            logger.warning("live proof skipped for %s: %s", key, redact_outbound_text(f"{type(exc).__name__}: {exc}"))
             continue
         results[key] = {
             "assumed": assumed,
@@ -219,16 +216,7 @@ async def prove_live(
 
 def write_live(authoring: Path, results: Mapping[str, LiveResult]) -> None:
     """Merge `results` into the live proofs file by key, so other keys keep theirs."""
-    path = Path(authoring) / LIVE_PROOFS
-    merged = {**load_live(authoring), **results}
-    handle, temporary = tempfile.mkstemp(dir=Path(authoring), prefix=".live-proofs-", suffix=".json")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            json.dump(merged, out, indent=2, sort_keys=True, default=str)
-        os.replace(temporary, path)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+    write_json_atomic(Path(authoring) / LIVE_PROOFS, {**load_live(authoring), **results})
 
 
 def forget_live(authoring: Path, keys: set[str] | None) -> None:

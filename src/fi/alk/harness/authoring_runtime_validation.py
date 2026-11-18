@@ -24,8 +24,19 @@ from typing import TYPE_CHECKING
 
 import fi.alk
 
-from . import bundle_v2, call_runner, failure_record, hosted_entrypoint, judge, live_proof
+from . import (
+    bundle_v2,
+    call_runner,
+    failure_record,
+    hosted_entrypoint,
+    judge,
+    live_proof,
+    outbound,
+    process_runtime,
+    tool_routing,
+)
 from .contract import AgentContract
+from .world.snapshot import world_state_digest
 from .catalogue import load_catalogue
 from .certification import CheckStatus
 from .generated_runtime import installed_frameworks
@@ -274,52 +285,6 @@ def _database_lanes() -> int:
     )
     quota = _cgroup_cpu_quota()
     return max(1, min(cpus, int(quota)) if quota else cpus)
-
-
-def world_state_digest(world) -> str:
-    """Return a value-level baseline fingerprint without persisting world contents."""
-
-    state = world.read_only().state()
-    canonical = {
-        table: sorted(
-            rows,
-            key=lambda row: json.dumps(
-                row,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                default=str,
-            ),
-        )
-        for table, rows in sorted(state.items())
-    }
-    workspace_snapshot = getattr(world, "_workspace_snapshot", None)
-    if workspace_snapshot is not None:
-        workspaces = workspace_snapshot()
-        if workspaces:
-            canonical = {
-                "database": canonical,
-                "workspaces": {
-                    name: {
-                        path: {
-                            "mode": entry.mode,
-                            "digest": hashlib.sha256(entry.data).hexdigest()
-                            if entry.data is not None
-                            else None,
-                        }
-                        for path, entry in sorted(entries.items())
-                    }
-                    for name, entries in sorted(workspaces.items())
-                },
-            }
-    encoded = json.dumps(
-        canonical,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        default=str,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _freeze_certified_bundle(bundle: Path, authoring: Path) -> None:
@@ -843,31 +808,23 @@ def _prepare_runtime_work(job, work: Path, secrets_path: Path, *, local_runtime:
 
 def _runtime_provider(job, secrets: Path, authoring: Path, *, local_runtime: bool, generic: bool):
     """The process runtime provider validation starts the bundle with."""
-    from . import outbound
-    from .hosted_entrypoint import resolve_hosted_public_url, job_secret_purposes
-    from .process_runtime import (
-        ProcessRuntimeProvider,
-        default_user_resolver,
-        hosted_user_resolution,
-    )
-
     capabilities = None if local_runtime else outbound.load_capabilities(unlink=False)
     transport = outbound.RequestsTransport()
-    return ProcessRuntimeProvider(
+    return process_runtime.ProcessRuntimeProvider(
         secrets_path=secrets,
-        secret_purpose_map=job_secret_purposes(job),
+        secret_purpose_map=hosted_entrypoint.job_secret_purposes(job),
         # A local parity run shares the host/container process namespace and must resolve
         # the same unprivileged identities installed in its image. A hosted sandbox runs
         # each declared user only when the platform granted per-user isolation.
         **(
-            {"user_resolver": default_user_resolver, "require_declared_user": False}
+            {"user_resolver": process_runtime.default_user_resolver, "require_declared_user": False}
             if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
-            else hosted_user_resolution()
+            else process_runtime.hosted_user_resolution()
         ),
         public_url_resolver=(
             None
             if capabilities is None
-            else lambda port, ttl: resolve_hosted_public_url(
+            else lambda port, ttl: hosted_entrypoint.resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl
             )
         ),
@@ -888,7 +845,6 @@ async def validate_once(
     review=None,
     readiness_only: bool = False,
 ) -> int:
-    from . import outbound
     from .bundle_author_v2 import author_bundle_v2
     from .compose_integration import enabled as compose_enabled
     from .hosted_compose_bootstrap import initialize_hosted_compose
@@ -1300,13 +1256,7 @@ async def validate_once(
                     _chat_target_timeout_seconds,
                     agent_chat_timeout_seconds,
                 )
-                from .chat_readiness import (
-                    probe_chat_ingress,
-                    probe_chat_workflow,
-                    record_tool_routing,
-                    request_uncovered_tools,
-                    world_call_log,
-                )
+                from .chat_readiness import probe_chat_ingress, probe_chat_workflow
 
                 chat_ingress = CheckStatus.NOT_APPLICABLE
                 interface = contract.runtime.interface if contract.runtime else None
@@ -1346,18 +1296,6 @@ async def validate_once(
                             redaction_values=redaction_values,
                             evidence_seam=manifest.runtime.evidence_seam,
                         )
-                        await request_uncovered_tools(
-                            interface=interface,
-                            endpoint=endpoint.address,
-                            runtime=runtime,
-                            contract=contract,
-                            authoring=authoring,
-                            bundle=bundle,
-                            source=source,
-                            secret_values=target_secret_values,
-                            candidate_hash=_generic_candidate_hash(source, authoring),
-                            local_auth_values=getattr(runtime, "_local_auth_values", None),
-                        )
                     else:
                         since = time.time()
                         await probe_chat_ingress(
@@ -1380,28 +1318,30 @@ async def validate_once(
                             called = call_runner.collect_file_tool_calls(runtime)
                         except Exception as unread:  # noqa: BLE001 - no trace, nothing observed
                             logger.warning("agent's tool trace not read: %s", type(unread).__name__)
+                            logger.debug("the failure in full", exc_info=True)
                             called = ()
-                        record_tool_routing(
+                        tool_routing.record_tool_routing(
                             authoring,
                             representative.scenario_key,
                             contract,
                             runtime,
-                            received=world_call_log(runtime, since),
+                            received=tool_routing.world_call_log(runtime, since),
                             reported=called,
                             bundle=bundle,
                         )
-                        await request_uncovered_tools(
-                            interface=interface,
-                            endpoint=endpoint.address,
-                            runtime=runtime,
-                            contract=contract,
-                            authoring=authoring,
-                            bundle=bundle,
-                            source=source,
-                            secret_values=target_secret_values,
-                            candidate_hash=_generic_candidate_hash(source, authoring),
-                            local_auth_values=getattr(runtime, "_local_auth_values", None),
-                        )
+                    # Whichever conversation qualified the agent, each tool it did not show is asked once.
+                    await tool_routing.request_uncovered_tools(
+                        interface=interface,
+                        endpoint=endpoint.address,
+                        runtime=runtime,
+                        contract=contract,
+                        authoring=authoring,
+                        bundle=bundle,
+                        source=source,
+                        secret_values=target_secret_values,
+                        candidate_hash=_generic_candidate_hash(source, authoring),
+                        local_auth_values=getattr(runtime, "_local_auth_values", None),
+                    )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"
             await provider.reset(runtime, work_directory=work)
@@ -1520,7 +1460,7 @@ async def validate_once(
                     if live:
                         print(f"runtime validation: proved {len(live)} cases on the live runtime", flush=True)
                 except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
-                    print(f"runtime validation: live proofs not run: {type(exc).__name__}: {exc}", flush=True)
+                    print(f"runtime validation: live proofs not run: {outbound.redact_outbound_text(f'{type(exc).__name__}: {exc}')}", flush=True)
             if generic:
                 await provider.reset(runtime, work_directory=work)
                 reset_world = await factory.create(
@@ -1660,7 +1600,7 @@ async def prove_on_sealed_runtime(
     until: float | None = None,
     secrets_path: Path = Path("/run/futureagi/secrets.json"),
     local_runtime: bool = False,
-) -> dict[str, dict[str, object]]:
+) -> dict[str, live_proof.LiveResult]:
     """Start the pair's sealed bundle and play its cases on it, as certification does, without
     certifying again: no compile, no setup pass, no repair. `{}` when the bundle serves no tool a
     case could be played on; the cases then keep their offline proofs."""

@@ -92,3 +92,16 @@ def test_a_proof_says_whether_the_live_runtime_made_it(monkeypatch, tmp_path):
     proofs = prove_suite(tmp_path, tmp_path / "proofs.json")
     assert proofs["live"]["live"] is True and proofs["live"]["blocked_reason"] == "not_solvable"
     assert proofs["offline"]["live"] is False and proofs["offline"]["proved"] is True
+
+
+def test_a_crash_s_reason_is_written_without_the_secrets_in_it(monkeypatch, tmp_path):
+    install(monkeypatch)
+    _suite(monkeypatch, [refund_case(name="one", scenario_key="one")])
+
+    def crashes(*args, **kwargs):
+        raise RuntimeError("could not connect to postgresql://admin:hunter2@db:5432/world")
+
+    monkeypatch.setattr(suite_module, "prove", crashes)
+    proofs = prove_suite(tmp_path, tmp_path / "proofs.json")
+
+    assert "hunter2" not in proofs["one"]["why"] and "postgresql://admin:" in proofs["one"]["why"]

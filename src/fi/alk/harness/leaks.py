@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .actors import evaluator_only_paths
@@ -23,26 +23,6 @@ from .scenario import Scenario
 
 SHINGLE = 8
 EXCERPT = 120
-
-# Fields only the grader reads. Importable by the runtime-boundary probe so both name one list.
-GRADER_ONLY_FIELDS = (
-    "sub_goal.what",
-    "sub_goal.judged",
-    "sub_goal.reference",
-    "sub_goal.verifier",
-    "sub_goal.comparison",
-    "sub_goal.check (compared literals)",
-    "scenario.tests",
-    "scenario.negative_controls",
-    "scenario.solution (argument values)",
-    "evaluator_only files",
-)
-# What each audience is given.
-VISIBLE_FIELDS = {
-    "simulated person": ("instruction", "variables", "persona"),
-    "tested agent": ("instruction (when not conversational)", "persona.initial_message", "variables (opening message)"),
-    "actor": ("actor instructions", "actor knowledge"),
-}
 
 
 @dataclass
@@ -135,8 +115,8 @@ def _check_literals(source: str) -> set[str]:
 
 
 def _solution_literals(scenario: Scenario) -> set[str]:
-    """Argument values of the reference steps a caller would not know: strings with a digit or 3+
-    tokens, and decimal numbers. Values the caller already holds are dropped by the caller."""
+    """Argument values of the reference steps the simulated person would not know: strings with a digit or 3+
+    tokens, and decimal numbers. Values the simulated person already holds are dropped by the reader."""
     found: set[str] = set()
 
     def visit(value: Any) -> None:
@@ -243,15 +223,15 @@ def leaks(
     variables = getattr(scenario, "variables", None) or {}
     instruction = str(getattr(scenario, "instruction", "") or "")
     initial = str((persona_values or {}).get("initial_message") or "")
-    # The caller's own facts (their variables, persona, instruction and the records the world holds)
+    # The simulated person's own facts (their variables, persona, instruction and the records the world holds)
     # are theirs to say; any other value the reference sends is the answer.
-    caller_text = [instruction, *_strings(variables)]
-    caller_text += [
+    person_text = [instruction, *_strings(variables)]
+    person_text += [
         text for key, value in (persona_values or {}).items() if key != "initial_message" for text in _strings(value)
     ]
     if rule_b:
-        caller_text += world_text
-    answers = {one for one in _solution_literals(scenario) if not _in_world(one, caller_text)}
+        person_text += world_text
+    answers = {one for one in _solution_literals(scenario) if not _in_world(one, person_text)}
     visible: list[tuple[str, str, str]] = [("simulated person", "instruction", instruction)]
     visible += [("simulated person", f"variables.{key}", text) for key, value in variables.items() for text in _strings(value)]
     visible += [

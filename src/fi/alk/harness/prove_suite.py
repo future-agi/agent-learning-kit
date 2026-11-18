@@ -15,18 +15,19 @@ then holds only their keys, and the platform merges it over the proofs it alread
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import sys
-import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from .catalogue import load_catalogue
+from .json_file import write_json_atomic
 from .live_proof import apply_live, load_live
+from .outbound import redact_outbound_text
+from .proof_records import ProofEntry
 from .proofs import proof_entry, proof_key, unprovable_entry
-from .prove import load_proof_contract, load_world_actors, prove
+from .prove import BlockedReason, load_proof_contract, load_world_actors, prove
 from .scenario_tools import load_scenarios
 
 EXIT_UNREADABLE = 3
@@ -34,21 +35,12 @@ DEADLINE_MARGIN_SECONDS = 300
 INCOMPLETE_WHY = "not proved: the validation's time budget ran out before this case"
 
 
-def _write(output: Path, proofs: dict[str, dict[str, Any]]) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    handle, temporary = tempfile.mkstemp(dir=output.parent, prefix=".scenario-proofs-", suffix=".json")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            json.dump(proofs, out, indent=2, sort_keys=True, ensure_ascii=False)
-        os.chmod(temporary, 0o644)
-        os.replace(temporary, output)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+def _write(output: Path, proofs: Mapping[str, ProofEntry]) -> None:
+    write_json_atomic(output, proofs)
 
 
 def _incomplete() -> dict[str, Any]:
-    return unprovable_entry(INCOMPLETE_WHY, blocked_reason="validation_incomplete")
+    return unprovable_entry(INCOMPLETE_WHY, blocked_reason=BlockedReason.VALIDATION_INCOMPLETE)
 
 
 def budget_seconds(budget: float, deadline_at: float | None, now: float) -> float:
@@ -73,7 +65,7 @@ def prove_suite(
     live = load_live(authoring)
     started = time.monotonic()
     allowed = budget_seconds(budget, deadline_at, time.time())
-    proofs: dict[str, dict[str, Any]] = {}
+    proofs: dict[str, ProofEntry] = {}
     for scenario in scenarios:
         key = proof_key(scenario)
         if keys is not None and key not in keys:
@@ -87,7 +79,7 @@ def prove_suite(
                 # The certification just played this case on the live runtime: its gates win.
                 proof = apply_live(proof, live[key])
         except Exception as exc:  # noqa: BLE001 - a case that cannot be proved is recorded, never fatal
-            first = (str(exc).splitlines() or [""])[0][:200]
+            first = (redact_outbound_text(str(exc)).splitlines() or [""])[0][:200]
             proofs[key] = unprovable_entry(f"{type(exc).__name__}: {first}".rstrip(": "))
         else:
             # `live`: its gates are what the live runtime showed, not what was recorded without running.
