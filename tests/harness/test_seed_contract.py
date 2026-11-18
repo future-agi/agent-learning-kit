@@ -183,11 +183,14 @@ def _made_by_now() -> dict:
 
 def test_a_reading_records_the_kit_version_and_build_that_made_it(monkeypatch):
     monkeypatch.setenv("ALK_BUILD_ID", "abc123def456")
+    from importlib.metadata import version
+
     from fi.alk import __version__
 
     saved = with_record(_job(), json.dumps(CONTRACT).encode())
 
     assert saved is not None
+    assert __version__ == version("agent-learning-kit")
     assert json.loads(saved)[RECORD_KEY]["made_by"] == {
         "kit_version": __version__,
         "build_id": "abc123def456",

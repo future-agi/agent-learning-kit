@@ -163,6 +163,8 @@ def record_for(job: HarnessJob) -> dict[str, Any] | None:
 
 
 def _kit_version() -> str:
+    """The installed package's version (its metadata), not pyproject's: a release bump made on
+    main never reaches dev's constant."""
     from .. import __version__
 
     return str(__version__)
