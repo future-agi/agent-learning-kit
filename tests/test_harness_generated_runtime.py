@@ -1794,6 +1794,23 @@ def test_an_admitted_value_compose_also_reads_is_skipped_and_named(
     assert "canary" not in logged
 
 
+def test_an_environment_record_with_a_field_this_kit_does_not_know_still_loads(
+    tmp_path: Path,
+) -> None:
+    # A newer kit may add fields to environment.json (a template rolled back reads one that a
+    # newer kit wrote); this kit keeps the fields it knows and ignores the rest.
+    environment = _compose_environment(tmp_path, runtime_configuration_names=["MY_KEY"])
+    destination = tmp_path / "session"
+    environment.save(destination)
+    record = json.loads(destination.joinpath(provisioning.MANIFEST).read_text())
+    record["a_field_from_a_newer_kit"] = ["anything"]
+    destination.joinpath(provisioning.MANIFEST).write_text(json.dumps(record))
+
+    loaded = provisioning.ProvisionedEnvironment.load(destination)
+
+    assert loaded == environment
+
+
 def test_provision_records_the_settings_it_skipped_for_the_jobs_result(
     tmp_path: Path, monkeypatch
 ) -> None:

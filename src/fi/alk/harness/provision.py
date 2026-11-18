@@ -25,7 +25,7 @@ import sys
 import tempfile
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 from urllib import error as urllib_error
@@ -140,7 +140,11 @@ class ProvisionedEnvironment:
         target = Path(destination) / MANIFEST
         if not target.exists():
             return None
-        return cls(**json.loads(target.read_text(encoding="utf-8")))
+        record = json.loads(target.read_text(encoding="utf-8"))
+        # Keep the fields this kit knows: a newer kit may have written more (a rolled-back
+        # template reading a newer kit's record), and that must not stop the job.
+        known = {item.name for item in fields(cls)}
+        return cls(**{key: value for key, value in record.items() if key in known})
 
 
 def compose_file(source: str | Path) -> Path | None:
