@@ -1397,6 +1397,14 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, _READS + " (the native validation record)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_bytes"): (
         1, _READS + " (a validation record)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "record_tool_routing"): (
+        1, _READS + " (the tool routing observations)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "request_uncovered_tools"): (
+        1, _READS + " (the tool requests ledger and the routing observations)"),
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "record"): (
+        2, _READS + " (the check's failure record, failure_record.record)"),
+    ("fi.alk.harness.hosted_agent_reading", "_read", "write_text"): (
+        1, _READS + " (the agent reading's document, agent.json)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_text"): (
         2, _READS + " (validation records)"),
     ("fi.alk.harness.bundle_author_v2", "_reuse_certified_bundle", "Path.rename"): (
