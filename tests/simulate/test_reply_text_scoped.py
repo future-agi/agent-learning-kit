@@ -230,3 +230,33 @@ def test_untyped_text_items_of_a_bare_list_join_with_a_space(reply, expected):
 )
 def test_a_history_under_a_reply_key_gives_the_last_reply(reply, expected):
     _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        _content("model", _thought(), _answer()),
+        {
+            "role": "model",
+            "parts": [
+                {"text": PLAN, "thought": True, "thought_signature": "sig-abc"},
+                {"text": ANSWER},
+            ],
+        },
+    ],
+    ids=["content-object-returned-raw", "content-dict-returned-raw"],
+)
+def test_a_gemini_content_returned_as_the_whole_reply_keeps_only_its_answer(reply):
+    _check(reply, ANSWER)
+
+
+def test_a_real_gemini_content_returned_as_the_whole_reply_keeps_only_its_answer():
+    types = pytest.importorskip("google.genai.types")
+    content = types.Content(
+        role="model",
+        parts=[
+            types.Part(text=PLAN, thought=True, thought_signature=b"sig-abc"),
+            types.Part(text=ANSWER),
+        ],
+    )
+    _check(content, ANSWER)

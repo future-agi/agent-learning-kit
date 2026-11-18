@@ -397,6 +397,9 @@ class GenericAgentWrapper(AgentWrapper):
             return raw
         if isinstance(raw, bytes):
             return raw.decode("utf-8", errors="replace")
+        parts = _field_of(raw, "parts")
+        if isinstance(parts, (list, tuple)) and _looks_like_parts(raw, parts):
+            return text_of(parts)
 
         raw_mapping = _object_mapping(raw)
         if raw_mapping is not None:
