@@ -111,6 +111,14 @@ class ProcessUser(str, Enum):
     SVC_AGENT = "svc-agent"
     SVC_TOOLS = "svc-tools"
     SVC_DATA = "svc-data"
+    # The world's door (its tool proxy, in-process door and MCP Toolbox): kept apart from the agent's own tool
+    # services, so they cannot read its environment or its database role.
+    SVC_DOOR = "svc-door"
+
+
+# The processes the bundle author adds as the world's door, run as `svc-door`; a bundle sealed before it ran them as
+# `svc-tools`.
+DOOR_PROCESSES = frozenset({"tool-proxy", "world-door", "mcp-toolbox"})
 
 
 class SecretPurpose(str, Enum):
@@ -580,6 +588,12 @@ class EnvironmentBundleV2(BaseModel):
                     expected_user = ProcessUser.SVC_AGENT
                 else:
                     expected_user = ProcessUser.SVC_TOOLS
+                if (
+                    process.user is ProcessUser.SVC_DOOR
+                    and getattr(process, "source_origin", None) == "bundle"
+                    and process.name in DOOR_PROCESSES
+                ):
+                    continue
                 if process.user is not expected_user:
                     raise ValueError(
                         f"user_assignment_invalid: {process.name} must be "
@@ -813,6 +827,7 @@ __all__ = [
     "ManagedEngine",
     "ManagedProcess",
     "ProcessKind",
+    "DOOR_PROCESSES",
     "ProcessUser",
     "ReadinessProbeV2",
     "RuntimeKindV2",

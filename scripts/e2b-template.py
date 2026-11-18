@@ -319,7 +319,8 @@ def _base_checks(catalog: dict[str, Any], *, compose_profile: bool = False) -> l
                 'test "$(id -u svc-control)" = 2000 && '
                 'test "$(id -u svc-agent)" = 2001 && '
                 'test "$(id -u svc-tools)" = 2002 && '
-                'test "$(id -u svc-data)" = 2003'
+                'test "$(id -u svc-data)" = 2003 && '
+                'test "$(id -u svc-door)" = 2004'
             ),
         ),
         (

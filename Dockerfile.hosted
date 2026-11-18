@@ -84,6 +84,8 @@ RUN groupadd --gid 2000 svc-control \
     && useradd --uid 2002 --gid 2002 --create-home --shell /usr/sbin/nologin svc-tools \
     && groupadd --gid 2003 svc-data \
     && useradd --uid 2003 --gid 2003 --create-home --shell /usr/sbin/nologin svc-data \
+    && groupadd --gid 2004 svc-door \
+    && useradd --uid 2004 --gid 2004 --create-home --shell /usr/sbin/nologin svc-door \
     && echo 'svc-control:100000:65536' >> /etc/subuid \
     && echo 'svc-control:100000:65536' >> /etc/subgid \
     && install -d -o svc-control -g svc-control -m 0755 /work /work/artifacts \

@@ -577,3 +577,20 @@ def test_a_workspace_bundle_runs_setup_ready_and_check_under_per_user_isolation(
     assert report["root_mode"] == "0o700"
     assert report["results"] == {"setup": None, "ready": True, "check": "from child"}
     assert report["file_owner_is_agent"]
+
+
+def test_every_declared_process_user_exists_in_the_images_and_the_template_checks_it():
+    """A bundle that declares a user the image lacks fails to spawn under per-user isolation, so each user the bundle
+    may declare (the world's door's `svc-door` included) is made in both images and checked by the template build."""
+    from fi.alk.harness.bundle_v2 import ProcessUser
+
+    root = Path(__file__).resolve().parents[2]
+    uids = {"svc-agent": 2001, "svc-tools": 2002, "svc-data": 2003, "svc-door": 2004}
+    assert {one.value for one in ProcessUser} == set(uids)
+    template = (root / "scripts" / "e2b-template.py").read_text()
+    for image in ("Dockerfile.hosted", "Dockerfile.sandbox"):
+        dockerfile = (root / image).read_text()
+        for user, uid in uids.items():
+            assert f"useradd --uid {uid} --gid {uid} --create-home --shell /usr/sbin/nologin {user}" in dockerfile
+    for user, uid in uids.items():
+        assert f'test "$(id -u {user})" = {uid}' in template

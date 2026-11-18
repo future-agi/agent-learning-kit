@@ -477,10 +477,12 @@ def test_a_worker_s_allowed_action_reaches_the_world_through_its_channel_and_nam
 def test_a_worker_s_action_outside_its_allow_list_is_refused_before_the_world(worker_proxy):
     url, rows = worker_proxy
     status, payload = _post(url, "/w/c-lookup/records/approve", {"deal": "1"})
-    assert (status, payload) == (403, {"detail": "records.approve is not permitted for order_lookup"})
+    # The agent hears a plain word; why is kept in the log row, which grading reads.
+    assert (status, payload) == (403, {"detail": "forbidden"})
     assert _World.seen == []
     [row] = rows()
     assert (row["worker_id"], row["outcome"], row["refusal_code"]) == ("order_lookup", "refused", "not_permitted")
+    assert row["refusal"] == "records.approve is not permitted for order_lookup"
 
 
 def test_a_worker_s_request_for_a_route_that_is_no_world_action_is_refused_before_the_world(worker_proxy):
@@ -655,3 +657,19 @@ def test_the_proxy_reads_its_sealed_routes_strictly(tmp_path, monkeypatch):
     actions.write_text("{not json")
     with pytest.raises(ValueError):
         proxy._sealed_routes()
+
+
+def test_an_agent_s_write_held_on_faults_that_cannot_be_read_hears_only_that_it_is_unavailable(proxy, store):
+    import psycopg
+
+    url, rows = proxy
+    with psycopg.connect(store.dsn(), autocommit=True) as connection:
+        connection.execute("CREATE VIEW _alk_trial_faults AS SELECT 1 AS id, to_jsonb(1 / 0) AS faults, 1::text AS xmin")
+    try:
+        assert _post(url, "/ok", {"item": "1"}) == (503, {"detail": "unavailable"})
+    finally:
+        with psycopg.connect(store.dsn(), autocommit=True) as connection:
+            connection.execute("DROP VIEW _alk_trial_faults")
+    assert _World.seen == []
+    [row] = rows()
+    assert (row["outcome"], row["refusal_code"]) == ("faulted", "faults_unknown")

@@ -274,7 +274,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(outcome.status, {"detail": "tool_upstream_unavailable"})
             return
         if outcome.outcome == "faulted" and outcome.body is None:
-            self._reply(outcome.status, {"detail": "tool_upstream_unavailable" if outcome.status == 502 else outcome.reason})
+            self._reply(outcome.status, {"detail": "tool_upstream_unavailable" if outcome.status == 502 else outcome.detail})
             return
         content = outcome.answer()
         self.send_response(outcome.status)

@@ -232,7 +232,7 @@ def _decided(outcome: Outcome | None) -> bool:
 def _held(outcome: Outcome) -> dict[str, Any]:
     """What the agent's tool says instead of running, from the scenario's fault the door applied."""
     fault = outcome.fault or {}
-    detail = outcome.reason or outcome.outcome
+    detail = outcome.detail
     if outcome.body is not None:
         try:
             detail = str(json.loads(outcome.body).get("detail") or detail)

@@ -187,6 +187,8 @@ class RuntimeEndpoint(BaseModel):
     # Under per-user isolation, a postgres capability's address as the world's own role: what
     # customer processes and the handler child get. `address` stays the harness's superuser.
     tool_address: str | None = None
+    # Under per-user isolation, the address as the world's door's own role, for the door's processes only.
+    door_address: str | None = None
 
 
 class EnvironmentRuntime(BaseModel):
@@ -714,22 +716,55 @@ class EngineCredentials:
 # own, never as the `harness` superuser: one group carries the table grants, sealed into the
 # baseline, and each world's login role is a member that may connect to its world's database only.
 WORLD_ROLE_GROUP = "alk_world_tools"
+# The world's door (`svc-door`) reaches the database through a role of its own, in this group: a member of the world
+# group, so it changes the world's rows as the agent's tools do, and the only one with rights on the harness's tables.
+DOOR_ROLE_GROUP = "alk_door"
+# The door's address, rendered only into the door's own processes.
+WORLD_DOOR_DATABASE_URL = "WORLD_DOOR_DATABASE_URL"
+# The capability whose door address `WORLD_DOOR_DATABASE_URL` is.
+_WORLD_DATABASE_URL = "WORLD_DATABASE_URL"
+# The harness's tables in a world database, and what the door may do on each. The agent's own tools have no right on
+# any of them: they hold the call log grading reads, who may do what, and this trial's faults.
+DOOR_TABLE_RIGHTS = {
+    "_alk_tool_trace": "SELECT, INSERT",
+    "_alk_action_keys": "SELECT, INSERT, UPDATE, DELETE",
+    "_alk_actors": "SELECT",
+    # A worker stop locks this trial's row, which takes UPDATE.
+    "_alk_trial_faults": "SELECT, UPDATE",
+    # A stop or a run replaces a row an earlier trial left.
+    "_alk_worker_stops": "SELECT, INSERT, UPDATE",
+    "_alk_worker_runs": "SELECT, INSERT, UPDATE",
+}
+_HARNESS_ONLY_TABLES = ("harness_seed_sentinel",)
 
 
-def world_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
-    """World N's own database role. Its password is derived from the job's secret, so each
-    world's differs and nothing stores it."""
+def _derived_role(credentials: EngineCredentials, name: str) -> EngineCredentials:
     if not credentials.world_secret:
         raise ProcessRuntimeError(
             "render",
             "internal_missing_credentials",
             "a world role needs the job's world secret, and the credentials carry none",
         )
-    name = f"alk_w{world_index}"
     password = hmac.new(
         credentials.world_secret.encode(), name.encode(), hashlib.sha256
     ).hexdigest()
     return EngineCredentials(username=name, password=password)
+
+
+def world_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
+    """World N's own database role. Its password is derived from the job's secret, so each
+    world's differs and nothing stores it."""
+    return _derived_role(credentials, f"alk_w{world_index}")
+
+
+def door_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
+    """World N's door's own database role, derived the same way as the world's."""
+    return _derived_role(credentials, f"alk_d{world_index}")
+
+
+def has_world_door(manifest: EnvironmentBundleV2) -> bool:
+    """Whether this bundle runs its world's door as `svc-door`; a bundle sealed before it keeps one role per world."""
+    return any(process.user is ProcessUser.SVC_DOOR for process in manifest.processes)
 
 
 def _engine_diagnostic_secrets(
@@ -741,8 +776,8 @@ def _engine_diagnostic_secrets(
     for name, value in credentials.items():
         if value.world_secret:
             for world_index in range(instances):
-                role = world_role(value, world_index)
-                secrets_by_name[f"{name}:{role.username}"] = role.password
+                for role in (world_role(value, world_index), door_role(value, world_index)):
+                    secrets_by_name[f"{name}:{role.username}"] = role.password
     return secrets_by_name
 
 
@@ -835,6 +870,7 @@ def build_endpoints(
     With `world_roles` (per-user isolation), each postgres capability also carries the world's
     own role's address, for customer processes and the handler child."""
     endpoints: dict[str, RuntimeEndpoint] = {}
+    door = world_roles and has_world_door(manifest)
     for slug, capability in manifest.capabilities.items():
         port = port_plan.port_for(capability.service, world_index)
         engine_credentials = credentials.get(capability.service)
@@ -856,12 +892,21 @@ def build_endpoints(
                 world_index=world_index,
                 credentials=world_role(engine_credentials, world_index),
             )
+        door_address = None
+        if door and tool_address is not None:
+            door_address = render_capability_address(
+                capability,
+                port=port,
+                world_index=world_index,
+                credentials=door_role(engine_credentials, world_index),
+            )
         endpoints[slug] = RuntimeEndpoint(
             capability=slug,
             protocol=capability.protocol.value,
             address=address,
             configuration_name=capability.configuration_name,
             tool_address=tool_address,
+            door_address=door_address,
         )
     return endpoints
 
@@ -869,12 +914,19 @@ def build_endpoints(
 def configuration_addresses_from_endpoints(
     endpoints: dict[str, RuntimeEndpoint],
 ) -> dict[str, str]:
-    # Customer processes get the world's own role where there is one, never the superuser.
-    return {
+    # Customer processes get the world's own role where there is one, never the superuser. The door's address goes
+    # only to the door's processes (`render_environment`).
+    addresses = {
         endpoint.configuration_name: endpoint.tool_address or endpoint.address
         for endpoint in endpoints.values()
         if endpoint.configuration_name
     }
+    for endpoint in endpoints.values():
+        if endpoint.configuration_name == _WORLD_DATABASE_URL:
+            addresses[WORLD_DOOR_DATABASE_URL] = (
+                endpoint.door_address or endpoint.tool_address or endpoint.address
+            )
+    return addresses
 
 
 # --- §2b placeholder renderer ------------------------------------------------------------------
@@ -981,6 +1033,12 @@ def render_environment(
 ) -> dict[str, str]:
     """`build_environment` is deliberately excluded — §2b: it "takes NO placeholders at all," so
     it is merged raw by the env builders below, never passed through this renderer."""
+    if process.user is not ProcessUser.SVC_DOOR:
+        configuration_addresses = {
+            name: address
+            for name, address in configuration_addresses.items()
+            if name != WORLD_DOOR_DATABASE_URL
+        }
     return {
         key: render_template(
             value,
@@ -5140,6 +5198,14 @@ def _freeze_one_store(
                 process=process.name,
                 domain=FailureDomain.ENVIRONMENT,
             )
+        if process.engine is ManagedEngine.POSTGRES:
+            _refuse_seed_escalation(
+                port=port,
+                credentials=credentials,
+                baseline_db=baseline_dbname,
+                sql_runner=context.sql_runner,
+                process_name=process.name,
+            )
 
         row_counts: dict[str, int] = {}
         seed_digest: dict[str, str] = {}
@@ -5169,6 +5235,7 @@ def _freeze_one_store(
                     baseline_db=baseline_dbname,
                     sql_runner=context.sql_runner,
                     process_name=process.name,
+                    door=has_world_door(manifest),
                 )
             # Sealed: marked a TEMPLATE and closed to new connections, so nothing can write into
             # it after this — "the sealed post-migrate+seed datastore state" (glossary, "Baseline").
@@ -5319,6 +5386,9 @@ def _seal_world_store(
             isolate=context.require_declared_user,
             role=world_role(credentials, world_index)
             if context.require_declared_user
+            else None,
+            door=door_role(credentials, world_index)
+            if context.require_declared_user and has_world_door(manifest)
             else None,
         )
         return None
@@ -5472,7 +5542,34 @@ def _seal_world_store(
     return handle
 
 
-def _grant_world_role_group(
+# Our roles, made after the seed: one the seed made or changed is planted.
+_OUR_ROLE = (
+    f"(r.rolname IN ('{WORLD_ROLE_GROUP}', '{DOOR_ROLE_GROUP}') OR r.rolname ~ '^alk_[wd][0-9]+$')"
+)
+# What the seed may not leave behind, cluster-wide: a role besides the harness that is a superuser or
+# can make roles; one of our roles with an attribute it never gets, or in a group it never joins.
+_SEED_ESCALATION_ROLES = (
+    "SELECT 'role ' || rolname || ' is a superuser or can create roles' FROM pg_roles "
+    "WHERE (rolsuper OR rolcreaterole) AND rolname <> current_user "
+    "UNION ALL SELECT 'role ' || r.rolname || ' has an attribute the harness never gives it' "
+    f"FROM pg_roles r WHERE {_OUR_ROLE} "
+    "AND (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls) "
+    "UNION ALL SELECT 'role ' || r.rolname || ' is a member of ' || g.rolname "
+    "FROM pg_auth_members a JOIN pg_roles r ON r.oid = a.member JOIN pg_roles g ON g.oid = a.roleid "
+    f"WHERE {_OUR_ROLE} AND NOT ("
+    f"(g.rolname = '{WORLD_ROLE_GROUP}' AND (r.rolname ~ '^alk_w[0-9]+$' OR r.rolname = '{DOOR_ROLE_GROUP}')) "
+    f"OR (g.rolname = '{DOOR_ROLE_GROUP}' AND r.rolname ~ '^alk_d[0-9]+$'))"
+)
+# And in each database: code that runs as its owner whoever calls it, or on any DDL.
+_SEED_ESCALATION_CODE = (
+    "SELECT 'event trigger ' || evtname FROM pg_event_trigger "
+    "UNION ALL SELECT 'security definer function ' || p.oid::regprocedure::text "
+    "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+    "WHERE p.prosecdef AND n.nspname NOT IN ('pg_catalog', 'information_schema')"
+)
+
+
+def _refuse_seed_escalation(
     *,
     port: int,
     credentials: EngineCredentials,
@@ -5480,9 +5577,52 @@ def _grant_world_role_group(
     sql_runner: SqlRunner,
     process_name: str,
 ) -> None:
+    """After the seed, which runs as the superuser: the build fails when the seed left a way to
+    act with more rights than a world's role has, before any world is made from it."""
+    found: list[str] = []
+    for dbname, statement in (
+        ("postgres", _SEED_ESCALATION_ROLES),
+        ("postgres", _SEED_ESCALATION_CODE),
+        (baseline_db, _SEED_ESCALATION_CODE),
+    ):
+        rows = _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=dbname,
+            statement=statement,
+            read_only=True,
+        )
+        found += [str(row[0]) for row in rows or [] if row]
+    if found:
+        raise ProcessRuntimeError(
+            "baseline",
+            "seed_failed",
+            f"{process_name}: the seed gave rights no world may have: " + "; ".join(sorted(set(found))),
+            process=process_name,
+            domain=FailureDomain.ENVIRONMENT,
+        )
+
+
+def _grant_world_role_group(
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+    door: bool = False,
+) -> None:
     """Before the baseline is sealed: the group every world's role belongs to may read and
     change the rows of every customer schema and create nothing, and nobody but the harness
     connects to the cluster's own databases. Template copies carry these grants into every world.
+
+    With a `door` (a bundle that runs its world's door as `svc-door`), the harness's tables are
+    taken from the world group and given to the door's group, with only the rights the door uses.
     """
 
     def run(dbname: str, statement: str) -> None:
@@ -5521,6 +5661,40 @@ def _grant_world_role_group(
         f"TO {group}', s); "
         "END LOOP; END $$",
     )
+    if not door:
+        return
+    door_group = f'"{DOOR_ROLE_GROUP}"'
+    run(
+        "postgres",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
+        f"'{DOOR_ROLE_GROUP}') THEN CREATE ROLE {door_group} NOLOGIN IN ROLE {group}; "
+        "END IF; END $$",
+    )
+    tables = [*DOOR_TABLE_RIGHTS, *_HARNESS_ONLY_TABLES]
+    names = ", ".join(f"'{table}'" for table in tables)
+    # The tables and the sequences behind their columns (the log's id): nobody but the harness and the door.
+    run(
+        baseline_db,
+        "DO $$ DECLARE r regclass; BEGIN FOR r IN SELECT c.oid::regclass FROM pg_class c "
+        f"WHERE c.oid IN (SELECT to_regclass(t) FROM unnest(ARRAY[{names}]) AS t) "
+        "OR c.oid IN (SELECT d.objid FROM pg_depend d WHERE d.classid = 'pg_class'::regclass "
+        f"AND d.refobjid IN (SELECT to_regclass(t) FROM unnest(ARRAY[{names}]) AS t) "
+        "AND d.deptype IN ('a', 'i')) LOOP "
+        f"EXECUTE format('REVOKE ALL ON %s FROM PUBLIC, {group}', r); "
+        "END LOOP; END $$",
+    )
+    for table, rights in DOOR_TABLE_RIGHTS.items():
+        run(
+            baseline_db,
+            f"DO $$ BEGIN IF to_regclass('{table}') IS NOT NULL THEN "
+            f"GRANT {rights} ON {table} TO {door_group}; END IF; END $$",
+        )
+    run(
+        baseline_db,
+        "DO $$ DECLARE q text := pg_get_serial_sequence('_alk_tool_trace', 'id'); BEGIN "
+        f"IF q IS NOT NULL THEN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO {door_group}', q); "
+        "END IF; END $$",
+    )
 
 
 def _reset_template_database(
@@ -5534,6 +5708,7 @@ def _reset_template_database(
     process_name: str,
     isolate: bool = False,
     role: EngineCredentials | None = None,
+    door: EngineCredentials | None = None,
 ) -> None:
     """§4.2 `template_database`: "drop + recreate the world's logical DB from the template." The
     admin connection targets `postgres` (never `world_db` itself or the template — postgres
@@ -5543,7 +5718,8 @@ def _reset_template_database(
 
     Under per-user isolation (`isolate`) the copy is created closed to connections, and opens only
     after PUBLIC has lost CONNECT on it and `role` (the world's own; an authoring lane has none)
-    has gained it, so no other world's role is ever able to connect to it.
+    has gained it, so no other world's role is ever able to connect to it. The world's `door` role
+    (a bundle that runs its door as `svc-door`) is let in the same way.
     """
     admin = dict(
         host=host,
@@ -5590,6 +5766,15 @@ def _reset_template_database(
             f'ALTER ROLE "{role.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
             f"PASSWORD '{role.password}'",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{role.username}"',
+        ]
+    if role is not None and door is not None:
+        statements += [
+            "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
+            f"'{door.username}') THEN CREATE ROLE \"{door.username}\" LOGIN IN ROLE "
+            f'"{DOOR_ROLE_GROUP}"; END IF; END $$',
+            f'ALTER ROLE "{door.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
+            f"PASSWORD '{door.password}'",
+            f'GRANT CONNECT ON DATABASE "{world_db}" TO "{door.username}"',
         ]
     statements.append(f'ALTER DATABASE "{world_db}" ALLOW_CONNECTIONS true')
     for statement in statements:
@@ -7887,7 +8072,7 @@ class ProcessRuntimeProvider:
                     # The world role's address would still name the world's database: a handler
                     # child on a lane has none, and fails closed.
                     key: endpoint.model_copy(
-                        update={"address": address, "tool_address": None}
+                        update={"address": address, "tool_address": None, "door_address": None}
                     ),
                 }
             }

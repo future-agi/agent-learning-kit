@@ -540,6 +540,30 @@ def test_a_non_control_source_process_claiming_svc_agent_is_rejected() -> None:
         EnvironmentBundleV2.model_validate(manifest)
 
 
+def test_the_world_s_door_runs_as_its_own_user_and_nothing_else_may() -> None:
+    door = {**TOOLS_API_PROCESS_EXAMPLE, "name": "tool-proxy", "source_origin": "bundle", "user": "svc-door"}
+    processes = [POSTGRES_PROCESS_EXAMPLE, TOOLS_API_PROCESS_EXAMPLE, AGENT_PROCESS_EXAMPLE, door]
+    loaded = EnvironmentBundleV2.model_validate({**FULL_MANIFEST_EXAMPLE, "processes": processes})
+    assert {process.name: process.user.value for process in loaded.processes}["tool-proxy"] == "svc-door"
+    # A bundle sealed before the door had a user of its own still loads.
+    EnvironmentBundleV2.model_validate(
+        {**FULL_MANIFEST_EXAMPLE, "processes": [*processes[:3], {**door, "user": "svc-tools"}]}
+    )
+    for refused in (
+        {**TOOLS_API_PROCESS_EXAMPLE, "user": "svc-door"},
+        # The customer's own process, named like the door, is not the door.
+        {**door, "source_origin": "repository"},
+    ):
+        with pytest.raises(ValidationError, match="user_assignment_invalid"):
+            EnvironmentBundleV2.model_validate(
+                {
+                    **FULL_MANIFEST_EXAMPLE,
+                    "processes": [POSTGRES_PROCESS_EXAMPLE, AGENT_PROCESS_EXAMPLE, refused]
+                    + ([TOOLS_API_PROCESS_EXAMPLE] if refused["name"] != "tools-api" else []),
+                }
+            )
+
+
 def test_a_managed_engine_with_a_non_svc_data_user_is_rejected() -> None:
     manifest = {
         **FULL_MANIFEST_EXAMPLE,
