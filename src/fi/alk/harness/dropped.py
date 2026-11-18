@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -208,6 +209,8 @@ def restore(
         keys.add(key)
         names[scenario.name] = key
         records[key].pop("restore_failed", None)
+        # A restore counts only on a proof made after it, against this rebuild's agent and catalogue.
+        records[key]["restored_at"] = _now()
         restored[key] = dict(records[key])
     for key, why in refused.items():
         records[key]["restore_failed"] = why
@@ -216,20 +219,39 @@ def restore(
     return restored, refused
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _unproved(record: Mapping[str, Any], proof: Mapping[str, Any] | None) -> str:
+    """Why a restored scenario's proof does not bring it back, or "" when it does: proved, or kept as written
+    because this lane could not run a step. Only a proof made since the restore counts."""
+    since = str(record.get("restored_at") or "")
+    if not proof or str(proof.get("proved_at") or "") < since:
+        return "not proved again in this rebuild"
+    if proof.get("proved") is True or proof.get("kept_as_written") is True:
+        return ""
+    if proof.get("blocked_reason") == "no_negative_control":
+        return "no negative control: write one that does the task wrong and fails its checks"
+    return "could not be proved again: " + str(proof.get("why") or proof.get("blocked_reason") or "not proved")
+
+
 def finish_restore(
     workspace: Path,
     restored: Mapping[str, Mapping[str, Any]],
     problems: list[dict[str, Any]],
     present: set[str],
+    proofs: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, Any]]]:
     """Settle what this rebuild restored: (restored, failed, the gate's other problems).
 
     ``restored`` is each restored scenario's record as ``restore`` returned it, so settling again
-    after a later report decides from the same records. A restored scenario the gate proved, or
-    left for the live runtime to prove as it leaves any other, is in the suite again and its record
-    goes. One with a problem, or no longer in the suite, stays dropped with the reason; its problem
-    is reported as a failed restore instead of failing the rebuild. The caller removes the failed
-    ones from the suite.
+    after a later report decides from the same records. A restored scenario whose proof since the
+    restore (``proofs``, by key) is proved, or kept as written because this lane could not run a
+    step, is in the suite again and its record goes; it is listed with which. One with a problem,
+    with no proof since the restore, with a proof that did not hold (a missing negative control
+    included), or no longer in the suite, stays dropped with the reason; it is reported as a failed
+    restore instead of failing the rebuild. The caller removes the failed ones from the suite.
     """
     records = load(workspace)
     why_by_key = {
@@ -241,12 +263,20 @@ def finish_restore(
     failed: list[dict[str, str]] = []
     for key in sorted(restored):
         record = dict(restored[key])
+        proof = (proofs or {}).get(key)
         if key in why_by_key:
             why = "could not be proved again: " + why_by_key[key]
         elif key not in present:
             why = "dropped again in this rebuild"
+        elif proofs is not None and (why := _unproved(record, proof)):
+            pass
         else:
-            done.append({"key": key, "name": str(record.get("name") or key)})
+            row = {"key": key, "name": str(record.get("name") or key)}
+            if proof is not None:
+                row["proof"] = "proved" if proof.get("proved") is True else "kept_as_written"
+                if row["proof"] == "kept_as_written":
+                    row["why"] = str(proof.get("why") or "")
+            done.append(row)
             records.pop(key, None)
             continue
         records[key] = {**record, "restore_failed": why}
@@ -300,6 +330,7 @@ def restore_note(workspace: Path, contract: Any, sub_goals: set[str]) -> str:
     if not keys:
         return ""
     changes = []
+    uncontrolled = []
     for key in keys:
         try:
             scenario = Scenario.model_validate(records[key]["content"])
@@ -308,11 +339,19 @@ def restore_note(workspace: Path, contract: Any, sub_goals: set[str]) -> str:
         said = argument_changes(scenario, contract)
         if said:
             changes.append(f"{key}: " + "; ".join(said))
+        if not scenario.negative_controls:
+            uncontrolled.append(key)
     return (
         "\n\nRestored, because what they need is back (same key, their last content): "
         + ", ".join(keys)
         + ". Keep each as it was; change a step only where its tool or arguments changed"
         + (" (" + " | ".join(changes) + ")" if changes else "")
+        + (
+            ". These have no negative control, and a restored scenario comes back only once proved: write each "
+            "one's own (the task done wrong, which its checks must fail): " + ", ".join(uncontrolled)
+            if uncontrolled
+            else ""
+        )
         + ", then prove them like any other scenario. One that cannot be proved goes back to "
         "dropped and is listed with the reason; never drop or rename one to pass."
     )

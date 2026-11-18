@@ -835,7 +835,7 @@ def _settle_drops(
     failed: list[dict] = []
     if restored:
         done, failed, problems = drops.finish_restore(
-            workspace, restored, problems, present
+            workspace, restored, problems, present, load_proofs(workspace)
         )
         out = {one["key"] for one in failed}
         if out & present:

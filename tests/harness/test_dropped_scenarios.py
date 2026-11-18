@@ -18,6 +18,8 @@ from fi.alk.harness.scenario import Scenario
 from fi.alk.harness.scenario_tools import load_scenarios, write_scenarios
 
 CANCELS = ("cancels-a-booking", "cancels-after-a-change", "cancels-the-only-booking")
+# A negative control the lane ran and the checks failed: what a proved scenario carries.
+_RAN = [{"name": "wrong", "why": "does it wrong", "failed": True, "held": [], "assumed": []}]
 _CHECK = "def check(world, calls):\n    return None\n"
 
 
@@ -110,7 +112,7 @@ def _result(root: Path) -> dict:
 @pytest.fixture(autouse=True)
 def _proved(monkeypatch):
     monkeypatch.setattr(
-        nudge, "prove", lambda *_args: Proof(ready=True, solvable=True, vacuous=False)
+        nudge, "prove", lambda *_args: Proof(ready=True, solvable=True, vacuous=False, controls=_RAN)
     )
 
 
@@ -232,7 +234,7 @@ def test_restored_scenarios_are_proved_like_any_other(tmp_path, monkeypatch):
 
     def prove(scenario, *_args):
         proved.append(scenario.scenario_key)
-        return Proof(ready=True, solvable=True, vacuous=False)
+        return Proof(ready=True, solvable=True, vacuous=False, controls=_RAN)
 
     monkeypatch.setattr(nudge, "prove", prove)
     server, _, _ = _suite_turn(root, "v7", "v4")
@@ -289,7 +291,7 @@ def test_a_restore_that_cannot_be_proved_stays_dropped_and_is_listed_with_why(
     def prove(scenario, *_args):
         if scenario.scenario_key == "cancels-the-only-booking":
             return Proof(ready=True, solvable=False, vacuous=False)
-        return Proof(ready=True, solvable=True, vacuous=False)
+        return Proof(ready=True, solvable=True, vacuous=False, controls=_RAN)
 
     monkeypatch.setattr(nudge, "prove", prove)
     server, kept, _ = _suite_turn(root, "v7", "v4")
@@ -358,3 +360,68 @@ def test_editing_a_restored_scenario_is_not_refused(tmp_path):
     )
 
     assert said == ""
+
+
+# A restored scenario comes back only once proved again, in this rebuild (TH-8754 D2).
+
+
+def _restore_with(tmp_path, monkeypatch, proof_for):
+    root = _drop_cancels(_v4(tmp_path))
+    _environment(root, cancel=True)
+    monkeypatch.setattr(nudge, "prove", lambda scenario, *_args: proof_for(scenario.scenario_key))
+    server, kept, _ = _suite_turn(root, "v7", "v4")
+    said = _call(server, "report_update", {"changed": True, "notes": "restored"})
+    assert not said.get("is_error"), said
+    return root, kept, _result(root)
+
+
+def test_a_restored_scenario_without_a_negative_control_is_not_restored(tmp_path, monkeypatch):
+    def proof_for(key):
+        controls = [] if key == "cancels-a-booking" else _RAN
+        return Proof(ready=True, solvable=True, vacuous=False, controls=controls)
+
+    root, kept, result = _restore_with(tmp_path, monkeypatch, proof_for)
+
+    assert [one["key"] for one in result["restored"]] == ["cancels-after-a-change", "cancels-the-only-booking"]
+    assert all(one["proof"] == "proved" for one in result["restored"])
+    [failed] = result["restore_failed"]
+    assert failed["key"] == "cancels-a-booking" and failed["why"].startswith("no negative control")
+    assert "cancels-a-booking" not in {one.scenario_key for one in load_scenarios(root)}
+    assert "cancels-a-booking" not in {one.scenario_key for one in kept}
+    assert dropped.load(root)["cancels-a-booking"]["restore_failed"].startswith("no negative control")
+
+
+def test_a_restored_scenario_the_lane_could_not_run_is_restored_as_kept_as_written(tmp_path, monkeypatch):
+    def proof_for(key):
+        return Proof(ready=True, solvable=True, vacuous=False, assumed=["cancel_booking"], controls=_RAN)
+
+    _root, _kept, result = _restore_with(tmp_path, monkeypatch, proof_for)
+
+    assert [one["key"] for one in result["restored"]] == sorted(CANCELS)
+    assert {one["proof"] for one in result["restored"]} == {"kept_as_written"}
+    assert all("kept as written" in one["why"] for one in result["restored"])
+
+
+def test_a_proof_from_before_the_restore_does_not_bring_it_back(tmp_path):
+    record = {"name": "cancels", "restored_at": "2026-11-18T10:00:00Z"}
+    earlier = {"proved": True, "proved_at": "2026-11-18T09:59:59Z"}
+    later = {**earlier, "proved_at": "2026-11-18T10:00:01Z"}
+
+    done, failed, _ = dropped.finish_restore(tmp_path, {"k": record}, [], {"k"}, {"k": earlier})
+    assert done == [] and failed == [{"key": "k", "why": "not proved again in this rebuild"}]
+    done, failed, _ = dropped.finish_restore(tmp_path, {"k": record}, [], {"k"}, {})
+    assert done == [] and failed[0]["why"] == "not proved again in this rebuild"
+    done, failed, _ = dropped.finish_restore(tmp_path, {"k": record}, [], {"k"}, {"k": later})
+    assert failed == [] and done == [{"key": "k", "name": "cancels", "proof": "proved"}]
+
+
+def test_the_rebuild_message_asks_for_a_control_for_each_restored_scenario_without_one(tmp_path):
+    root = _drop_cancels(_v4(tmp_path))
+    _environment(root, cancel=True)
+    contract = AgentContract.model_validate_json((root / "contract.json").read_text())
+
+    said = dropped.restore_note(root, contract, load_catalogue(root).names())
+
+    assert "no negative control" in said
+    for key in CANCELS:
+        assert key in said.split("no negative control", 1)[1]
