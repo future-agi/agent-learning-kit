@@ -36,6 +36,7 @@ from . import (
     tool_routing,
 )
 from .contract import AgentContract
+from .world.snapshot import world_state_digest
 from .catalogue import load_catalogue
 from .certification import CheckStatus
 from .generated_runtime import installed_frameworks
@@ -284,52 +285,6 @@ def _database_lanes() -> int:
     )
     quota = _cgroup_cpu_quota()
     return max(1, min(cpus, int(quota)) if quota else cpus)
-
-
-def world_state_digest(world) -> str:
-    """Return a value-level baseline fingerprint without persisting world contents."""
-
-    state = world.read_only().state()
-    canonical = {
-        table: sorted(
-            rows,
-            key=lambda row: json.dumps(
-                row,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                default=str,
-            ),
-        )
-        for table, rows in sorted(state.items())
-    }
-    workspace_snapshot = getattr(world, "_workspace_snapshot", None)
-    if workspace_snapshot is not None:
-        workspaces = workspace_snapshot()
-        if workspaces:
-            canonical = {
-                "database": canonical,
-                "workspaces": {
-                    name: {
-                        path: {
-                            "mode": entry.mode,
-                            "digest": hashlib.sha256(entry.data).hexdigest()
-                            if entry.data is not None
-                            else None,
-                        }
-                        for path, entry in sorted(entries.items())
-                    }
-                    for name, entries in sorted(workspaces.items())
-                },
-            }
-    encoded = json.dumps(
-        canonical,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        default=str,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _freeze_certified_bundle(bundle: Path, authoring: Path) -> None:

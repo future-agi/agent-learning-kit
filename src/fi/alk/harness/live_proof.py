@@ -24,7 +24,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import authoring_runtime_validation
 from .catalogue import Catalogue, load_catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
@@ -44,6 +43,7 @@ from .prove import (
 from .scenario import Scenario, Step
 from .scenario_tools import load_scenarios
 from .world.handle import MCP_ROUTE, mcp_request
+from .world.snapshot import world_state_digest
 from .world.runtime import Call
 
 if TYPE_CHECKING:
@@ -127,7 +127,7 @@ def _play(scenario: Scenario, world: Any, steps: list[Step]) -> tuple[list[Call]
 
 def _digest(world: Any) -> str | None:
     try:
-        return authoring_runtime_validation.world_state_digest(world)
+        return world_state_digest(world)
     except Exception as exc:  # noqa: BLE001 - an unreadable state compares as different
         logger.info("live proof: world state not read: %s", type(exc).__name__)
         return None

@@ -11,6 +11,7 @@ starting point instead of drifting toward whichever scenario was written last.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -360,3 +361,49 @@ def apply_overlay(world: GeneratedWorld, overlay: Mapping[str, Any] | None) -> i
             written += 1
     world.connection.commit()
     return written
+
+
+def world_state_digest(world) -> str:
+    """Return a value-level baseline fingerprint without persisting world contents."""
+
+    state = world.read_only().state()
+    canonical = {
+        table: sorted(
+            rows,
+            key=lambda row: json.dumps(
+                row,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                default=str,
+            ),
+        )
+        for table, rows in sorted(state.items())
+    }
+    workspace_snapshot = getattr(world, "_workspace_snapshot", None)
+    if workspace_snapshot is not None:
+        workspaces = workspace_snapshot()
+        if workspaces:
+            canonical = {
+                "database": canonical,
+                "workspaces": {
+                    name: {
+                        path: {
+                            "mode": entry.mode,
+                            "digest": hashlib.sha256(entry.data).hexdigest()
+                            if entry.data is not None
+                            else None,
+                        }
+                        for path, entry in sorted(entries.items())
+                    }
+                    for name, entries in sorted(workspaces.items())
+                },
+            }
+    encoded = json.dumps(
+        canonical,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
