@@ -1564,6 +1564,22 @@ def test_the_tracer_never_takes_the_reserved_optimizer_id(
     assert result.stdout.splitlines() == ["None 5", "[4]"]
 
 
+def test_a_list_the_tool_mutates_is_recorded_as_it_was_passed(
+    tmp_path: Path, mechanism: str
+) -> None:
+    if mechanism != "monitoring":
+        pytest.skip("the profile path reads the arguments when the call ends")
+    records = _run_agent(
+        tmp_path,
+        "def t(xs, opts):\n    xs.append(9)\n    opts['seen'] = True\n    return len(xs)\n",
+        ["t"],
+        "import agent\nagent.t([1], {'a': 1})\n",
+    )
+    assert [(r["arguments"], r["output"]) for r in records] == [
+        ({"xs": [1], "opts": {"a": 1}}, 2)
+    ]
+
+
 def test_a_tool_called_on_a_thread_is_recorded(tmp_path: Path) -> None:
     records = _run_agent(
         tmp_path,

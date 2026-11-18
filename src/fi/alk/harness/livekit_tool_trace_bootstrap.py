@@ -845,7 +845,8 @@ def _install_declared_python_tools() -> None:
                     monitoring.set_local_events(tool, code, events.PY_RETURN)
                     armed.add(code)
                 try:
-                    arguments = collect_arguments(frame)
+                    # Encoded now, so a list or dict the tool mutates is recorded as passed.
+                    arguments = json.loads(json.dumps(collect_arguments(frame), default=_text))
                 except Exception:  # noqa: BLE001
                     arguments = None
                 owner = None
