@@ -63,15 +63,15 @@ def prove_suite(
     keys: set[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     from .catalogue import load_catalogue
-    from .proofs import _entry, proof_key, unprovable_entry
+    from .proofs import proof_entry, proof_key, unprovable_entry
     from .live_proof import apply_live, load_live
-    from .prove import _load_actors, _load_contract, prove
+    from .prove import load_world_actors, load_proof_contract, prove
     from .scenario_tools import load_scenarios
 
     scenarios = load_scenarios(authoring)
     catalogue = load_catalogue(authoring)
-    contract = _load_contract(authoring)
-    actors = _load_actors(authoring)
+    contract = load_proof_contract(authoring)
+    actors = load_world_actors(authoring)
     live = load_live(authoring)
     started = time.monotonic()
     allowed = budget_seconds(budget, deadline_at, time.time())
@@ -93,7 +93,7 @@ def prove_suite(
             proofs[key] = unprovable_entry(f"{type(exc).__name__}: {first}".rstrip(": "))
         else:
             # `live`: its gates are what the live runtime showed, not what was recorded without running.
-            proofs[key] = {**_entry(proof, len(scenario.solution)), "live": key in live}
+            proofs[key] = {**proof_entry(proof, len(scenario.solution)), "live": key in live}
         _write(output, proofs)
     _write(output, proofs)
     return proofs

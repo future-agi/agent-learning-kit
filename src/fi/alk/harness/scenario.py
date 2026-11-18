@@ -248,7 +248,7 @@ class Persona(BaseModel):
         return "\n".join(parts)
 
 
-def _slug(name: str) -> str:
+def scenario_slug(name: str) -> str:
     """An ASCII key for ``name``, safe to send as a header value.
 
     Falls back to a digest rather than an empty string: an empty key would collapse every
@@ -288,7 +288,7 @@ def with_unique_keys(
     out: list[Scenario] = []
     for one in scenarios:
         if not one.scenario_key or one.scenario_key in keys:
-            key = unused_key(one.scenario_key or _slug(one.name), held | keys)
+            key = unused_key(one.scenario_key or scenario_slug(one.name), held | keys)
             one = one.model_copy(update={"scenario_key": key})
             held.add(key)
         keys.add(one.scenario_key)
@@ -448,7 +448,7 @@ class Scenario(BaseModel):
     @model_validator(mode="after")
     def _identify(self) -> "Scenario":
         if not self.scenario_key:
-            self.scenario_key = _slug(self.name)
+            self.scenario_key = scenario_slug(self.name)
         if self.background_noise == "":
             level = str((self.coverage or {}).get("interface") or "").strip().lower()
             # A real caller is somewhere; only a quiet level is heard in the clear.
@@ -644,7 +644,7 @@ def validate_scenario(
             "no tests line: say in one line what this scenario is trying to find out, in words "
             "the report can carry"
         )
-    elif _slug(scenario.tests) == _slug(scenario.name):
+    elif scenario_slug(scenario.tests) == scenario_slug(scenario.name):
         problems.append(
             "tests just restates the name: say what this scenario is trying to find out instead"
         )

@@ -3880,7 +3880,7 @@ def _copy_sub_goal_catalogue(authoring: Path, staging: Path) -> list[str]:
     """Put the sub-goal catalogue beside the scenarios that name its entries.
 
     Scenarios reference sub-goals by name only, so without the catalogue a description, a judged
-    sub-goal's claim and `_deterministic_names` all come back empty, each silently. A warning
+    sub-goal's claim and `deterministic_names` all come back empty, each silently. A warning
     rather than an error, since failing the run is worse than the degraded reporting.
     """
     catalogue = authoring / CATALOGUE
@@ -4594,18 +4594,18 @@ def author_bundle_v2(
 def scenario_seal_problems(authoring: str | Path) -> dict[str, str]:
     """Each scenario folder a run could not load, by key, with the first line of why. Loaded one
     folder at a time, the way a run loads them, so one broken case does not hide the rest."""
-    from .scenario_source import _declared_tool_names, _deterministic_names, _load_one
+    from .scenario_source import declared_tool_names, deterministic_names, load_one
 
     root = Path(authoring)
     folders = sorted(path for path in (root / "scenarios").iterdir() if path.is_dir()) if (root / "scenarios").is_dir() else []
     if not folders:
         return {}
-    settled_in_code = _deterministic_names(root)
-    declared_tools = _declared_tool_names(root)
+    settled_in_code = deterministic_names(root)
+    declared_tools = declared_tool_names(root)
     problems: dict[str, str] = {}
     for folder in folders:
         try:
-            _load_one(folder, settled_in_code=settled_in_code, declared_tools=declared_tools, defer_execution=False)
+            load_one(folder, settled_in_code=settled_in_code, declared_tools=declared_tools, defer_execution=False)
         except Exception as exc:  # noqa: BLE001 - every reason a run would refuse this folder
             problems[_folder_key(folder)] = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:300]
     return problems

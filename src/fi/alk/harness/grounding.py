@@ -99,7 +99,7 @@ _CONFLICT_PROMPT = (
 def _harness_conflict_judge(expected: str, rule: str) -> tuple[bool | None, str]:
     """One forced judge call at temperature 0: (conflict, why). None when no judge can run here."""
     from .backends import tool
-    from .judge import NoGateway, _complete
+    from .judge import NoGateway, chat_completion
     from .tools import schema
 
     @tool(
@@ -112,7 +112,7 @@ def _harness_conflict_judge(expected: str, rule: str) -> tuple[bool | None, str]
 
     conversation = [{"role": "user", "content": _CONFLICT_PROMPT.format(expected=expected, rule=rule)}]
     try:
-        message = _complete(conversation, [decide], True, temperature=0)
+        message = chat_completion(conversation, [decide], True, temperature=0)
     except NoGateway:
         return None, ""
     for call in message.get("tool_calls") or []:

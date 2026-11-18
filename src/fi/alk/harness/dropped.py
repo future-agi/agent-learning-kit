@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .prove import NO_NEGATIVE_CONTROL
-from .scenario import Scenario, _slug
+from .scenario import Scenario, scenario_slug
 
 DROPPED = "dropped.json"
 FORMAT = 1
@@ -312,7 +312,7 @@ def submit_refusal(
     one is already in the suite, so submitting it again is an edit and is allowed.
     """
     name = str(payload.get("name") or "").strip()
-    key = str(payload.get("scenario_key") or "").strip() or _slug(name)
+    key = str(payload.get("scenario_key") or "").strip() or scenario_slug(name)
     if key in present:
         return ""
     record = load(workspace).get(key)

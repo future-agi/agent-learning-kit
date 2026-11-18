@@ -387,7 +387,7 @@ def check_evidence(source: str) -> list[str]:
     return found
 
 
-def _checks_for(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str]]:
+def checks_for(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str]]:
     """The deterministic checks this scenario is graded by, in catalogue order."""
     chosen: list[tuple[str, str]] = []
     for name in scenario.sub_goals:
@@ -715,7 +715,7 @@ def _file_calls(tree: ast.AST) -> list[ast.Call]:
 
 def workspace_fixture(scenario: Scenario, catalogue: Catalogue) -> bool:
     sources = [scenario.setup_code, scenario.ready_code]
-    sources.extend(source for _, source in _checks_for(scenario, catalogue))
+    sources.extend(source for _, source in checks_for(scenario, catalogue))
     for source in sources:
         try:
             if _file_calls(ast.parse(source)):
@@ -738,7 +738,7 @@ def workspace_fixture_problems(
     reads = False
     problems = []
     sources = [("setup", scenario.setup_code), ("ready", scenario.ready_code)]
-    sources.extend(("check", source) for _, source in _checks_for(scenario, catalogue))
+    sources.extend(("check", source) for _, source in checks_for(scenario, catalogue))
     for entry, source in sources:
         if not source.strip():
             continue
@@ -1081,7 +1081,7 @@ def _base_state(world_root: Path) -> Any:
         world.close()
 
 
-def _load_contract(world_root: Path) -> Any:
+def load_proof_contract(world_root: Path) -> Any:
     try:
         from .understand import load
 
@@ -1090,7 +1090,7 @@ def _load_contract(world_root: Path) -> Any:
         return None
 
 
-def _load_actors(world_root: Path) -> list[dict[str, Any]]:
+def load_world_actors(world_root: Path) -> list[dict[str, Any]]:
     try:
         from .actors import load_actors  # type: ignore[import-not-found]
     except ImportError:
@@ -1122,9 +1122,9 @@ def prove(
 
     proof = Proof()
     if contract is None:
-        contract = _load_contract(world_root)
+        contract = load_proof_contract(world_root)
     if actors is None:
-        actors = _load_actors(world_root)
+        actors = load_world_actors(world_root)
     # Before any gate or early return, so a leak or a false citation is reported whatever the gates say.
     world_state = None if native_runtime(world_root) else _base_state(world_root)
     proof.leaks = [
@@ -1134,7 +1134,7 @@ def prove(
     proof.sources = resolve_sources(scenario, contract, world_root)
     rules = [str(one) for one in (getattr(contract, "hard_constraints", None) or [])] if contract is not None else []
     proof.policy_checks = policy_conflicts(scenario, catalogue, rules, world_root, judge=conflict_judge) if rules else []
-    checks = _checks_for(scenario, catalogue)
+    checks = checks_for(scenario, catalogue)
     proof.evidence = {name: check_evidence(source) for name, source in checks}
     if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
         proof.deferred = True

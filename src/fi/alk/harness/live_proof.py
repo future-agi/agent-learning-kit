@@ -77,10 +77,10 @@ def _address(endpoint: Any) -> str:
 
 def _outcomes(scenario: Any, catalogue: Any, world: Any, calls: list[Any]) -> list[Any]:
     from .checks import reference_of, run_check
-    from .prove import _checks_for
+    from .prove import checks_for
 
     reference = reference_of(scenario.solution)
-    return [run_check(source, world, calls, name=name, reference=reference) for name, source in _checks_for(scenario, catalogue)]
+    return [run_check(source, world, calls, name=name, reference=reference) for name, source in checks_for(scenario, catalogue)]
 
 
 def _play(scenario: Any, world: Any, steps: list[Any]) -> tuple[list[Any], list[str], list[str]]:
@@ -105,10 +105,10 @@ def _play(scenario: Any, world: Any, steps: list[Any]) -> tuple[list[Any], list[
 
 
 def _digest(world: Any) -> str | None:
-    from .authoring_runtime_validation import _world_state_digest
+    from .authoring_runtime_validation import world_state_digest
 
     try:
-        return _world_state_digest(world)
+        return world_state_digest(world)
     except Exception:  # noqa: BLE001 - an unreadable state compares as different
         return None
 

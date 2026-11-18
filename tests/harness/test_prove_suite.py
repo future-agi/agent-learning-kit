@@ -16,8 +16,8 @@ from proof_world import REFUND_CATALOGUE, catalogue, install, refund_case
 def _suite(monkeypatch, cases):
     monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: cases)
     monkeypatch.setattr(catalogue_module, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
-    monkeypatch.setattr(module, "_load_contract", lambda root: None)
-    monkeypatch.setattr(module, "_load_actors", lambda root: [])
+    monkeypatch.setattr(module, "load_proof_contract", lambda root: None)
+    monkeypatch.setattr(module, "load_world_actors", lambda root: [])
 
 
 def test_writes_every_key_and_survives_one_crash(monkeypatch, tmp_path):

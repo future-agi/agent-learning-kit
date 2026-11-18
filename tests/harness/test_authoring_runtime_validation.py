@@ -1651,7 +1651,7 @@ def _validate_with_stubs(tmp_path, monkeypatch, *, runtime=None, certified=None)
     for module, name, value in (
         (authoring_runtime_validation, "_database_lanes", lambda: 3),
         (authoring_runtime_validation, "_world_isolation_status", lambda output: None),
-        (authoring_runtime_validation, "_world_state_digest", lambda world: "baseline"),
+        (authoring_runtime_validation, "world_state_digest", lambda world: "baseline"),
         (
             authoring_runtime_validation,
             "_GeneratedWorldActionAdapter",

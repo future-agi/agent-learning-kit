@@ -43,12 +43,12 @@ def _now() -> str:
 
 def proof_key(scenario: Any) -> str:
     """The key every proof of a scenario is saved under."""
-    from .scenario import _slug
+    from .scenario import scenario_slug
 
-    return getattr(scenario, "scenario_key", "") or _slug(scenario.name)
+    return getattr(scenario, "scenario_key", "") or scenario_slug(scenario.name)
 
 
-def _entry(proof: Proof, solution_steps: int) -> dict[str, Any]:
+def proof_entry(proof: Proof, solution_steps: int) -> dict[str, Any]:
     blocked = proof.blocked_reason()
     if proof.proved:
         why = ""
@@ -89,7 +89,7 @@ def _entry(proof: Proof, solution_steps: int) -> dict[str, Any]:
 def record_proof(destination: Path, scenario_key: str, proof: Proof, *, solution_steps: int = 0) -> None:
     """Save one scenario's proof, replacing its earlier one: what held, what ran and what was assumed."""
     proofs = load_proofs(destination)
-    proofs[scenario_key] = _entry(proof, solution_steps)
+    proofs[scenario_key] = proof_entry(proof, solution_steps)
     _save(destination, proofs)
 
 

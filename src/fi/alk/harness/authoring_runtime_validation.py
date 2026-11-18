@@ -275,7 +275,7 @@ def _database_lanes() -> int:
     return max(1, min(cpus, int(quota)) if quota else cpus)
 
 
-def _world_state_digest(world) -> str:
+def world_state_digest(world) -> str:
     """Return a value-level baseline fingerprint without persisting world contents."""
 
     state = world.read_only().state()
@@ -746,7 +746,7 @@ class _GeneratedWorldActionAdapter:
         )
 
     def checkpoint(self) -> str:
-        return _world_state_digest(self.world)
+        return world_state_digest(self.world)
 
     def reset(self) -> None:
         self.world.revert(self.baseline)
@@ -767,7 +767,7 @@ async def _probe_runtime_readiness(
             "runtime", "generated_runtime_plan_invalid: unsupported chat ingress"
         )
     baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
-    baseline_digest = _world_state_digest(baseline) if compare_baseline else None
+    baseline_digest = world_state_digest(baseline) if compare_baseline else None
     receipt = {
         "status": "failed",
         "candidate_hash": _generic_candidate_hash(source, authoring),
@@ -794,7 +794,7 @@ async def _probe_runtime_readiness(
                 await provider.reset(runtime, work_directory=work)
                 if compare_baseline:
                     restored = await factory.create(runtime, rng=random.Random(job.seed or 0))
-                    if _world_state_digest(restored) != baseline_digest:
+                    if world_state_digest(restored) != baseline_digest:
                         raise RuntimeValidationError(
                             "environment", "Readiness reset did not restore the baseline"
                         )
@@ -843,7 +843,7 @@ def _prepare_runtime_work(job, work: Path, secrets_path: Path, *, local_runtime:
 def _runtime_provider(job, secrets: Path, authoring: Path, *, local_runtime: bool, generic: bool):
     """The process runtime provider validation starts the bundle with."""
     from . import outbound
-    from .hosted_entrypoint import _resolve_hosted_public_url, job_secret_purposes
+    from .hosted_entrypoint import resolve_hosted_public_url, job_secret_purposes
     from .process_runtime import (
         ProcessRuntimeProvider,
         default_user_resolver,
@@ -866,7 +866,7 @@ def _runtime_provider(job, secrets: Path, authoring: Path, *, local_runtime: boo
         public_url_resolver=(
             None
             if capabilities is None
-            else lambda port, ttl: _resolve_hosted_public_url(
+            else lambda port, ttl: resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl
             )
         ),
@@ -1202,7 +1202,7 @@ async def validate_once(
                     )
                 world = await factory.create(against, rng=random.Random(job.seed or 0))
                 if generic and not external_provider:
-                    current_digest = _world_state_digest(world)
+                    current_digest = world_state_digest(world)
                     if baseline_state_digest is None:
                         baseline_state_digest = current_digest
                     elif current_digest != baseline_state_digest:
@@ -1473,7 +1473,7 @@ async def validate_once(
             if generic:
                 # A scenario that already passed against this exact baseline, bundle and
                 # invariants passes again, so a repair re-checks only what failed or changed.
-                baseline_state_digest = _world_state_digest(baseline)
+                baseline_state_digest = world_state_digest(baseline)
                 passed_path = authoring / "generic-harness" / "setup-checks-passed.json"
                 passed = (
                     set(json.loads(passed_path.read_text(encoding="utf-8")))
@@ -1529,7 +1529,7 @@ async def validate_once(
                 )
                 if (
                     baseline_state_digest is None
-                    or _world_state_digest(reset_world) != baseline_state_digest
+                    or world_state_digest(reset_world) != baseline_state_digest
                 ):
                     raise RuntimeValidationError(
                         "environment",
