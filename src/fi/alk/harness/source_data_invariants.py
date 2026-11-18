@@ -12,23 +12,29 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import threading
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from .backends import SessionSpec, tool, tool_server
+from .backends.files import secret_text
 from .config import chosen_model
 from .contract import AgentContract, is_data_free_conversation
 from .session import Stage
+from .source_folder import agent_scope, in_agent_scope, saved_folder
+from .source_model import is_harness_table
 
 ARTIFACT = "source-data-invariants.json"
 BATCHES = "generic-harness/source-data-review-batches.json"
 _SUFFIXES = {".py", ".sql", ".ts", ".js", ".go", ".rs", ".java"}
-_EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build"}
+_EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 
 
-def source_files(root: Path) -> dict[str, Path]:
+def source_files(root: Path, folder: str = "") -> dict[str, Path]:
+    """The source files a check may cite; with a folder, those a sibling folder doesn't own."""
     root = root.resolve()
+    scope = agent_scope(root, folder)
     return {
         path.relative_to(root).as_posix(): path
         for path in sorted(root.rglob("*"))
@@ -39,6 +45,12 @@ def source_files(root: Path) -> dict[str, Path]:
             for part in path.relative_to(root).parts
         )
         and path.resolve().is_relative_to(root)
+        # A link named like code can lead to a credential file; judged where it resolves (TH-9042).
+        and not secret_text(path.resolve().relative_to(root).as_posix())
+        and (
+            scope is None
+            or in_agent_scope(PurePosixPath(path.relative_to(root).as_posix()), scope)
+        )
     }
 
 
@@ -136,6 +148,33 @@ def violations_in_ir(world, checks: list[dict]) -> list[str]:
     return failures
 
 
+_ANY = re.compile(r"=\s*ANY\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)", re.IGNORECASE)
+_LITERAL = re.compile(r"('(?:[^']|'')*')")
+
+
+def sqlite_dialect(sql: str) -> str:
+    """Postgres invariant SQL as SQLite can run it on a saved world, where arrays are JSON.
+
+    Rewrites ILIKE, ``= ANY(array)``, ``::`` casts, ``~`` and ``!~`` (REGEXP, see
+    ``sqlite_regexp``), ``btrim`` and the empty array literal; SQLite refuses anything else.
+    """
+    sql = sql.replace("'{}'", "'[]'")
+    sql = _ANY.sub(r"IN (SELECT value FROM json_each(\1))", sql)
+    parts = _LITERAL.split(sql)
+    for index in range(0, len(parts), 2):
+        part = re.sub(r"\bILIKE\b", "LIKE", parts[index], flags=re.IGNORECASE)
+        part = re.sub(r"::\s*\w+(?:\[\])?", "", part)
+        part = part.replace("!~", " NOT REGEXP ")
+        part = re.sub(r"(?<![<>])~", " REGEXP ", part)
+        parts[index] = re.sub(r"\bbtrim\s*\(", "trim(", part, flags=re.IGNORECASE)
+    return "".join(parts)
+
+
+def sqlite_regexp(pattern: str, value: object) -> bool:
+    """SQLite's REGEXP function, for ``sqlite_dialect``'s ``~``."""
+    return value is not None and re.search(pattern, str(value)) is not None
+
+
 def _first_rows(rows: list, *, most: int = 3, width: int = 60) -> str:
     """A few violating rows, each value trimmed."""
     shown = []
@@ -145,6 +184,43 @@ def _first_rows(rows: list, *, most: int = 3, width: int = 60) -> str:
             "{" + ", ".join(f"{key}: {str(value)[:width]}" for key, value in values) + "}"
         )
     return ": " + "; ".join(shown) if shown else ""
+
+
+def source_lines(files: dict[str, Path]) -> list[str]:
+    return [
+        line
+        for path in files.values()
+        for line in path.read_bytes().decode("utf-8", "replace").splitlines()
+    ]
+
+
+def submitted_rows(rows: list, lines: list[str]) -> list:
+    """Violating rows that are the submitted source's own data: intended cases.
+
+    A row is submitted when it has two or more strings (4+ characters) and all of them occur
+    on one source line, so a generated row or a reused id with a changed value is not."""
+    found = []
+    for row in rows:
+        values = [
+            value
+            for value in (row.values() if isinstance(row, dict) else row)
+            if isinstance(value, str) and len(value) >= 4
+        ]
+        if len(values) >= 2 and any(
+            all(value in line for value in values) for line in lines
+        ):
+            found.append(row)
+    return found
+
+
+async def _submitted(world, check: dict, lines: list[str]) -> list:
+    try:
+        rows = await asyncio.wait_for(
+            asyncio.to_thread(world.query, check["violations_sql"]), timeout=15
+        )
+    except Exception:
+        return []
+    return submitted_rows(rows, lines)
 
 
 async def check_invariants(
@@ -207,10 +283,47 @@ def probe_local_service(services: dict[str, str], args: dict):
 
 logger = logging.getLogger(__name__)
 
+
+def prune_invariant_scopes(authoring: Path) -> list[str]:
+    """Narrow saved invariant scopes to the scenarios on disk; return the checks dropped.
+
+    A check whose whole scope left the suite is dropped: an empty scope means every scenario.
+    """
+    artifact = authoring / ARTIFACT
+    if not artifact.is_file():
+        return []
+    body = json.loads(artifact.read_text())
+    checks = body.get("checks")
+    if not isinstance(checks, list) or not checks:
+        return []
+    present = set()
+    for path in (authoring / "scenarios").glob("*/scenario.json"):
+        scenario = json.loads(path.read_text())
+        present.add(
+            str(
+                scenario.get("scenario_key") or scenario.get("name") or path.parent.name
+            )
+        )
+    kept, dropped = [], []
+    for check in checks:
+        scope = list(check.get("scenarios") or [])
+        if not scope:
+            kept.append(check)
+            continue
+        narrowed = [name for name in scope if name in present]
+        if narrowed:
+            kept.append({**check, "scenarios": narrowed})
+        else:
+            dropped.append(str(check.get("name", "")))
+    if kept != checks:
+        artifact.write_text(json.dumps({**body, "checks": kept}, indent=2) + "\n")
+    return dropped
+
+
 async def author_invariants(
-    source: Path, authoring: Path, world, *, endpoints=None
+    source: Path, authoring: Path, world, *, endpoints=None, reuse_only: bool = False
 ) -> list[dict]:
-    files = source_files(source)
+    files = source_files(source, saved_folder(authoring))
     scenarios = {}
     for path in sorted((authoring / "scenarios").glob("*/scenario.json")):
         body = json.loads(path.read_text())
@@ -219,29 +332,28 @@ async def author_invariants(
             raise ValueError(f"Duplicate scenario key: {key}")
         scenarios[key] = path
     artifact = authoring / ARTIFACT
-    # Do not manufacture SQL data merely to satisfy a SQL-review gate. A graph may have
-    # rich in-process state and tools yet no relational store for a SELECT invariant to
-    # examine. Require the observed runtime world to be empty as well as the contract's
-    # explicit in-process/no-data declaration; tool execution is certified separately.
+    unavailable = "Certify-only: no saved source-data invariant review to reuse"
+    # A non-relational declaration is insufficient on its own: even empty business
+    # tables require SQL review. Private application state is not certified here.
     contract_path = authoring / "contract.json"
     if contract_path.is_file():
         contract = AgentContract.model_validate_json(contract_path.read_text())
-        in_process_store = bool(
-            contract.data_store
-            and contract.data_store.kind.strip().lower() == "in_process"
+        store_kind = (
+            contract.data_store.kind.strip().lower() if contract.data_store else ""
         )
-        if is_data_free_conversation(contract) or in_process_store:
+        non_relational_store = store_kind in {"in_process", "none", "filesystem"}
+        if is_data_free_conversation(contract) or non_relational_store:
             state = await asyncio.to_thread(world.state)
-            business_tables = set(state) - {
-                "harness_seed_sentinel",
-                "_alk_tool_trace",
-            }
+            business_tables = {name for name in state if not is_harness_table(name)}
             if not business_tables:
                 evidence = {
                     "status": "not_applicable",
                     "reason": (
                         "In-process agent state has no runtime SQL business tables"
-                        if in_process_store
+                        if store_kind == "in_process"
+                        else "Declared non-relational store has no runtime SQL business tables; "
+                        "private application state is not certified"
+                        if non_relational_store
                         else "No custom tools, data-store seam, dependencies or runtime business tables"
                     ),
                     "checks": [],
@@ -260,6 +372,10 @@ async def author_invariants(
                     )
                 artifact.write_text(json.dumps(evidence, indent=2) + "\n")
                 return []
+            unavailable = (
+                "Certify-only: the live world has business tables, so the data-free "
+                "source review no longer applies and invariants must be authored again"
+            )
     if artifact.exists():
         checks = json.loads(artifact.read_text())["checks"]
         if not isinstance(checks, list) or not checks:
@@ -274,6 +390,10 @@ async def author_invariants(
                     "Repair removed a scenario covered by a saved invariant"
                 )
         return checks
+    if reuse_only:
+        from .authoring_runtime_validation import RuntimeValidationError
+
+        raise RuntimeValidationError("environment", unavailable)
 
     world_key = world_digest(authoring)
     hashes = {key: scenario_digest(path.parent) for key, path in scenarios.items()}
@@ -298,6 +418,18 @@ async def author_invariants(
         earlier=earlier,
     )
     result = _merge(batches, hashes)
+    lines = source_lines(files)
+    intended = [
+        check["name"]
+        for check in result
+        if not check["scenarios"] and await _submitted(world, check, lines)
+    ]
+    if intended:
+        logger.warning(
+            "dropping universal checks the submitted source data violates: %s",
+            ", ".join(intended),
+        )
+        result = [check for check in result if check["name"] not in intended]
     if not result:
         raise ValueError(
             "Source data invariant review declared no executable check, so nothing was certified"
@@ -446,7 +578,7 @@ async def review_while_writing(
     the world's checks. Records go to the batches file keyed by world and scenario content, and
     validation reviews only what they do not cover. Returns True as soon as the world itself
     changes, False once the build has finished and what was saved has been reviewed."""
-    files = source_files(source)
+    files = source_files(source, saved_folder(authoring))
     services = local_services(endpoints)
     size = _setting("ALK_INVARIANT_REVIEW_SHARE", 25)
     count = min(_setting("ALK_INVARIANT_REVIEW_CONCURRENCY", 16), max(1, -(-expected // size)))
@@ -628,6 +760,7 @@ async def _review_session(
     probes = []
     saved = False
     declared: list[str] = []
+    lines = source_lines(files)
 
     def reply(value):
         return {"content": [{"type": "text", "text": json.dumps(value, default=str)}]}
@@ -776,6 +909,16 @@ async def _review_session(
             rows = await asyncio.wait_for(
                 asyncio.to_thread(world.query, check["violations_sql"]), 15
             )
+            seeded = [] if check["scenarios"] else submitted_rows(rows, lines)
+            if seeded:
+                return reply(
+                    {
+                        "error": "The submitted source's own data violates this check, so "
+                        "those rows are intended cases, not an invariant. Exclude them in "
+                        "the WHERE clause or declare only relationships the submitted data "
+                        "satisfies" + _first_rows(seeded)
+                    }
+                )
             checks[check["name"]] = check
             declared.append(check["name"])
             return reply(
@@ -832,7 +975,9 @@ async def _review_session(
         "values returned by one tool and consumed by another, supported discriminators and "
         "required companion records. Do not infer a relationship from column names alone. "
         "Preserve legitimate optional/null/external references and intentionally negative cases; "
-        "do not require all business requests to succeed. Quote exact supporting source. "
+        "do not require all business requests to succeed. Rows present verbatim in the "
+        "submitted seed or source data are intended cases, never violations to repair. "
+        "Quote exact supporting source. "
         "Use probe_dependency against actual local source services to check lookups and raw "
         "API arguments. Read /openapi.json if available and source otherwise. This is a "
         "throwaway world reset after review; effects do not become seed data. Follow values "

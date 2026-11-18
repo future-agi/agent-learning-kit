@@ -40,7 +40,7 @@ from .config import (
 from .contract import AgentContract
 from .job import HarnessJob
 from .poc_guest_booking import guest_booking_pin_guidance, guest_booking_pin_scenario_problem
-from .scenario import Scenario, voicemail_enabled
+from .scenario import Scenario, used_keys, voicemail_enabled, with_unique_keys
 from .scenario_tools import (
     SCENARIO_SERVER,
     TOOL_NAMES,
@@ -192,6 +192,9 @@ def writer_worker(
                 "  - an instruction that is a circumstance the person is living through, not a "
                 "script of lines to say or of how to react to what the agent does: never when they "
                 "give in, cooperate, acknowledge or hang up\n"
+                "  - where an actor is included, an instruction for them that names no moment, event or "
+                "turn, since the trigger alone decides when, and only voices a concern of their own, never "
+                "asking for, setting a condition on, confirming or deciding the person's request\n"
                 "  - a setup that makes true whatever the instruction presumes, and a ready "
                 "check that proves it\n"
                 "  - a solution worked out with try_calls first, so the gates are not where you "
@@ -780,6 +783,9 @@ def brief_for(
         "  - an instruction that is a circumstance the person is living through, not a script "
         "of lines to say or of how to react to what the agent does: never when they give in, "
         "cooperate, acknowledge or hang up\n"
+        "  - where an actor is included, an instruction for them that names no moment, event or "
+        "turn, since the trigger alone decides when, and only voices a concern of their own, never "
+        "asking for, setting a condition on, confirming or deciding the person's request\n"
         "  - a whole task with something at stake for the person\n"
         "  - a person who does not know everything: they know their own situation and what they "
         "want, not the product's terms, where things are, what is possible, or what the system "
@@ -906,7 +912,9 @@ async def _write_slice(
     return list(kept)
 
 
-def merged(written: list[list[Scenario]]) -> list[Scenario]:
+def merged(
+    written: list[list[Scenario]], used: set[str] | None = None
+) -> list[Scenario]:
     """One suite out of several writers, with folder-name collisions renamed rather than dropped.
 
     Asking for twenty scenarios has to return twenty. Two scenarios may legitimately share a use
@@ -931,7 +939,8 @@ def merged(written: list[list[Scenario]]) -> list[Scenario]:
                 logger.info("renamed a duplicate folder name to %s", one.name)
             taken.add(one.name)
             suite.append(one)
-    return suite
+    # A key names one scenario, so a repeat, even one already saved, gets its own.
+    return with_unique_keys(suite, used)
 
 
 def _suite_summary(suite: list[Scenario]) -> str:
@@ -1131,7 +1140,7 @@ async def write_in_parallel(
         *(guarded(one, allocation, index) for index, one in enumerate(allocation)),
         return_exceptions=False,
     )
-    proved = merged([load_scenarios(destination), *written])
+    proved = merged([load_scenarios(destination), *written], used_keys(destination))
     # What a writer proved but never handed back, because its session died after proving it. Matched
     # by name so a scenario already in hand is not added twice under a numbered name.
     recovered = [
@@ -1147,7 +1156,7 @@ async def write_in_parallel(
         )
         if on_event:
             on_event({"type": "recovered", "kept": len(recovered)})
-    suite = merged([proved, recovered])
+    suite = merged([proved, recovered], used_keys(destination))
 
     # Read the whole thing and fill what nobody covered. Bounded, because a reviewer asked
     # twice will always find something smaller to say.
@@ -1182,7 +1191,7 @@ async def write_in_parallel(
             return_exceptions=False,
         )
         before = len(suite)
-        suite = merged([suite, *more])
+        suite = merged([suite, *more], used_keys(destination))
         allocation = [*allocation, *missing]
         if len(suite) == before:
             break

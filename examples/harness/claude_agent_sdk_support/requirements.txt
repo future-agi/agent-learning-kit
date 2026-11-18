@@ -1,0 +1,2 @@
+claude-agent-sdk==0.2.174
+agent-simulate==0.1.3

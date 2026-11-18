@@ -4,10 +4,36 @@ from __future__ import annotations
 
 import random
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 from .diagnostics import HarnessDiagnostic, RepairOwner
+from .job import HarnessStage
+
+
+SETUP_INVESTIGATION = "investigate source-declared runtime setup; cause unproven"
+
+
+def is_chat_setup_investigation(diagnostics) -> bool:
+    return (
+        bool(diagnostics)
+        and {item.code for item in diagnostics}
+        in ({"chat_ingress_failed"}, {"credential_missing"}, {"chat_tool_evidence_unverified"})
+        and all(
+            item.code in {"chat_ingress_failed", "credential_missing", "chat_tool_evidence_unverified"}
+            and item.component == "chat_ingress"
+            and item.stage is HarnessStage.CONNECTING_AGENT
+            and item.owner is RepairOwner.SOURCE
+            for item in diagnostics
+        )
+    )
 
 
 class RepairAction(str, Enum):
@@ -20,6 +46,7 @@ class RepairAction(str, Enum):
 
 
 class RepairPhase(str, Enum):
+    RUNTIME = "runtime"
     ENVIRONMENT = "environment"
     SCENARIOS = "scenarios"
 
@@ -28,6 +55,7 @@ class RepairBudgets(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     compiler_candidates: int = Field(default=3, ge=0, le=10)
+    runtime_patches: int = Field(default=8, ge=0, le=10)
     environment_patches: int = Field(default=4, ge=0, le=10)
     scenario_patches: int = Field(default=2, ge=0, le=10)
     infrastructure_retries_per_candidate: int = Field(default=2, ge=0, le=5)
@@ -81,8 +109,18 @@ class RepairHistory(BaseModel):
     decisions: tuple[RepairDecision, ...]
     results: tuple[RepairAttemptResult, ...]
     compiler_candidates_used: int
+    runtime_patches_used: int = 0
     environment_patches_used: int
     scenario_patches_used: int
+
+    @model_serializer(mode="wrap")
+    def _without_unrecorded_runtime_patches(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        data = handler(self)
+        if "runtime_patches_used" not in self.model_fields_set:
+            data.pop("runtime_patches_used", None)
+        return data
 
 
 class RepairController:
@@ -97,6 +135,7 @@ class RepairController:
         self.budgets = budgets or RepairBudgets()
         self._rng = rng or random.Random()
         self._compiler_candidates = 0
+        self._runtime_patches = 0
         self._environment_patches = 0
         self._scenario_patches = 0
         self._infrastructure_retries: dict[str, int] = {}
@@ -110,6 +149,7 @@ class RepairController:
             decisions=tuple(self._history),
             results=tuple(self._results),
             compiler_candidates_used=self._compiler_candidates,
+            runtime_patches_used=self._runtime_patches,
             environment_patches_used=self._environment_patches,
             scenario_patches_used=self._scenario_patches,
         )
@@ -200,6 +240,30 @@ class RepairController:
                 diagnostics,
             )
 
+        if (
+            observation.phase is RepairPhase.ENVIRONMENT
+            and is_chat_setup_investigation(diagnostics)
+            and self._environment_patches < self.budgets.environment_patches
+            and (
+                observation.candidate_hash,
+                tuple(sorted({d.fingerprint for d in diagnostics})),
+            )
+            not in self._repair_signatures
+        ):
+            self._environment_patches += 1
+            self._repair_signatures.add(
+                (
+                    observation.candidate_hash,
+                    tuple(sorted({d.fingerprint for d in diagnostics})),
+                )
+            )
+            return self._decision(
+                observation,
+                RepairAction.PATCH_ENVIRONMENT,
+                SETUP_INVESTIGATION,
+                diagnostics,
+            )
+
         blocking = tuple(
             diagnostic
             for diagnostic in diagnostics
@@ -234,10 +298,15 @@ class RepairController:
                     in {"process_dependency_timeout", "tool_endpoint_unreachable"}
                     for diagnostic in infrastructure
                 )
-                if (
-                    runtime_repairable
-                    and observation.phase is RepairPhase.ENVIRONMENT
-                    and self._environment_patches < self.budgets.environment_patches
+                if runtime_repairable and (
+                    (
+                        observation.phase is RepairPhase.RUNTIME
+                        and self._runtime_patches < self.budgets.runtime_patches
+                    )
+                    or (
+                        observation.phase is RepairPhase.ENVIRONMENT
+                        and self._environment_patches < self.budgets.environment_patches
+                    )
                 ):
                     fingerprints = tuple(
                         sorted({item.fingerprint for item in infrastructure})
@@ -245,7 +314,10 @@ class RepairController:
                     signature = (observation.candidate_hash, fingerprints)
                     if signature not in self._repair_signatures:
                         self._repair_signatures.add(signature)
-                        self._environment_patches += 1
+                        if observation.phase is RepairPhase.RUNTIME:
+                            self._runtime_patches += 1
+                        else:
+                            self._environment_patches += 1
                         return self._decision(
                             observation,
                             RepairAction.PATCH_ENVIRONMENT,
@@ -322,6 +394,16 @@ class RepairController:
                     )
                 self._scenario_patches += 1
                 action = RepairAction.PATCH_SCENARIOS
+            elif observation.phase is RepairPhase.RUNTIME:
+                if self._runtime_patches >= self.budgets.runtime_patches:
+                    return self._decision(
+                        observation,
+                        RepairAction.REJECT,
+                        "runtime patch budget exhausted",
+                        authoring,
+                    )
+                self._runtime_patches += 1
+                action = RepairAction.PATCH_ENVIRONMENT
             else:
                 if self._environment_patches >= self.budgets.environment_patches:
                     return self._decision(

@@ -10,7 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from .diagnostics import HarnessDiagnostic
 from .repair_controller import RepairHistory
@@ -73,12 +73,26 @@ class CertificationChecks(BaseModel):
     static: CheckStatus = CheckStatus.NOT_RUN
     schema_and_seed: CheckStatus = CheckStatus.NOT_RUN
     processes: CheckStatus = CheckStatus.NOT_RUN
+    chat_ingress: CheckStatus = CheckStatus.NOT_RUN
     source_invariants: CheckStatus = CheckStatus.NOT_RUN
     scenario_setup_ready: str = "0/0"
     tool_contract: str = "0/0"
     action_behavior: str = "0/0"
     reset_equivalence: CheckStatus = CheckStatus.NOT_RUN
     world_isolation: CheckStatus = CheckStatus.NOT_RUN
+
+    @property
+    def records_chat_ingress(self) -> bool:
+        """False for a certificate made before chat readiness was certified."""
+        return "chat_ingress" in self.model_fields_set
+
+    @model_serializer(mode="wrap")
+    def _without_unrecorded_chat_ingress(self, handler: Any) -> Any:
+        # Keeps such a certificate's fingerprint and format when it is read and reissued.
+        data = handler(self)
+        if not self.records_chat_ingress and isinstance(data, dict):
+            data.pop("chat_ingress", None)
+        return data
 
 
 class RuntimeValidationEvidence(BaseModel):
@@ -176,11 +190,32 @@ class CertificationGateError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
+def requires_chat_ingress(job, bundle_dir: Path) -> bool:
+    from .contract import AgentContract
+    from .job import ProviderExecutionMode, SourceKind
+
+    if (
+        job.source.kind is SourceKind.PROVIDER
+        and job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+    ):
+        return False
+    try:
+        contract = AgentContract.model_validate_json(
+            (bundle_dir / "contract.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        raise CertificationGateError(
+            "certification_invalid", "certified contract is unavailable"
+        ) from exc
+    return contract.modality != "voice"
+
+
 def verify_runtime_certification(
     path: Path,
     *,
     bundle_digest: str,
     source_digest: str,
+    chat_ingress_required: bool = True,
 ) -> HarnessCertification:
     """Fail closed unless a tamper-evident certificate matches the execution bundle."""
 
@@ -214,11 +249,20 @@ def verify_runtime_certification(
     # Every Level 1-3 prerequisite is fail-closed.  A validator may record PASSED for a
     # capability that is vacuously satisfied (for example schema_and_seed on a data-free
     # agent), but it may not dispatch while the check is merely NOT_RUN.
+    # A certificate made before chat readiness was certified carries no chat_ingress check;
+    # the environments it certified keep running.
+    chat_ingress = (
+        {"chat_ingress": certificate.checks.chat_ingress}
+        if certificate.checks.records_chat_ingress
+        else {}
+    )
     required = {
         "static": certificate.checks.static,
         "processes": certificate.checks.processes,
+        **(chat_ingress if chat_ingress_required else {}),
     }
     required_or_not_applicable = {
+        **chat_ingress,
         "schema_and_seed": certificate.checks.schema_and_seed,
         "source_invariants": certificate.checks.source_invariants,
         "reset_equivalence": certificate.checks.reset_equivalence,

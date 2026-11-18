@@ -28,6 +28,7 @@ import os
 import random
 import re
 import signal
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -35,9 +36,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
+from pydantic import ValidationError
+
+from ..providers.agent import _redact
 from . import observability
 from . import outbound as ob
-from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, load_bundle_v2
+from . import user_files
+from .actors import ACTOR_RULES_FILE, ACTORS_FILE
+from .backends import GOOGLE_ADK_APPROVAL_ENV
+from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
+from .compose_broker import BrokerError, ComposeBrokerClient
+from .framework_detection import FrameworkFolders, framework_folders_for
+from .hosted_compose_bootstrap import initialize_hosted_compose
+from .source_folder import folder_failure, non_github_folder_failure
+from .world.observation import ObservationWorldFactory
 from .call_runner import CallRunnerContext, CallRunnerImpl
 from .hosted_scheduler import (
     CallOutcome,
@@ -56,21 +68,24 @@ from .job import (
     ExecutionMode,
     FailureDomain,
     HarnessArtifactPolicy,
+    HarnessFailure,
     HarnessJob,
     HarnessStage,
 )
+from .privilege import IsolationMode, IsolationUnavailable, establish_isolation, isolation_mode
 from .process_preflight import PreflightError, preflight_bundle
 from .process_runtime import (
     SECTION_2F_DOMAIN,
     EnvironmentRuntime,
     ProcessRuntimeError,
     ProcessRuntimeProvider,
-    fixed_sandbox_user_resolver,
     RuntimeEndpoint,
+    hosted_user_resolution,
 )
 from .judge import judge_sub_goal as _judge_sub_goal
 from .joint_judge import judge_sub_goals_jointly as _judge_sub_goals_jointly
 from .scenario_source import (
+    AgentDocumentFailed,
     BundleScenarioSource,
     ScenarioDocumentInvalid,
     bundle_has_scenarios,
@@ -189,6 +204,7 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_BACKGROUND_NOISE",
         "ALK_BACKGROUND_NOISE_CATALOG",
         "ALK_HARNESS",
+        GOOGLE_ADK_APPROVAL_ENV,
         "ALK_VOICEMAIL_SCENARIOS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
@@ -241,6 +257,17 @@ def load_job(job_path: Path) -> HarnessJob:
     if job.execution is not ExecutionMode.HOSTED:
         raise ValueError("hosted_entrypoint_requires_hosted_job")
     return job
+
+
+def _read_raw_job_failure(job_path: Path, error: ValidationError) -> HarnessFailure | None:
+    try:
+        raw = json.loads(job_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    # load_job's own check, outside the model: a job that isn't hosted is malformed otherwise too.
+    if not isinstance(raw, dict) or raw.get("execution") != ExecutionMode.HOSTED.value:
+        return None
+    return non_github_folder_failure(error, raw)
 
 
 def resolve_parallelism(job: HarnessJob) -> int:
@@ -468,6 +495,19 @@ class DefaultBundleSource:
         return manifest, bundle_dir
 
 
+def close_actor_files(bundle_dir: Path, *, chown: user_files.Chown = user_files.chown_no_follow) -> None:
+    """Under per-user isolation, the bundle's actor files become the harness's own, mode 0600: actors act in the
+    harness's process, which still reads them, and no customer process can. Without it nothing changes."""
+    if isolation_mode() is not IsolationMode.PER_USER:
+        return
+    for name in (ACTORS_FILE, ACTOR_RULES_FILE):
+        path = bundle_dir / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        chown(path, os.geteuid(), os.getegid())
+        path.chmod(0o600)
+
+
 # =================================================================================================
 # Scenario source -- generation is a separate contract (in review, not available here); the
 # pre-allocation CALL is this module's (ScenariosClient below). Injectable for the same reason as
@@ -566,6 +606,29 @@ def _find_postgres_endpoint(runtime: EnvironmentRuntime) -> RuntimeEndpoint:
         f"world {runtime.world_index}: no postgres-protocol endpoint in {sorted(runtime.endpoints)} "
         "-- §2e's no_sql_store rule should make this unreachable"
     )
+
+
+def _framework_folders(
+    job: HarnessJob,
+    manifest: EnvironmentBundleV2,
+    *,
+    source: Path,
+    bundle_dir: Path,
+    work_directory: Path,
+) -> FrameworkFolders:
+    # Called outside the `try` around `build`: an exception here would end the run with no
+    # terminal event, and all that is at stake is a label.
+    try:
+        return framework_folders_for(
+            job,
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=work_directory,
+        )
+    except Exception as exc:
+        logger.warning("framework folders failed: class=%s", type(exc).__name__)
+        return FrameworkFolders(source, source, None)
 
 
 def load_build_output(work_directory: Path) -> dict[str, Any]:
@@ -671,16 +734,28 @@ class ProcessWorldFactory:
     a container's own lifecycle, matching a hosted world where `ProcessRuntimeProvider` already
     owns the postgres process."""
 
-    def __init__(self, work_directory: Path) -> None:
+    def __init__(self, work_directory: Path, bundle_dir: Path | None = None) -> None:
+        from .world.observation import load_observations
+
         self._work_directory = work_directory
+        self._observations = load_observations(bundle_dir)
 
     async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> World:
+        from .world.observation import http_endpoints
+
         endpoint = _find_postgres_endpoint(runtime)
         build_output = await asyncio.to_thread(load_build_output, self._work_directory)
         row_counts = row_counts_for_capability(build_output, endpoint.capability)
         store = AttachedPostgresStore(endpoint.address)
         return await asyncio.to_thread(
-            HostedWorld, store, runtime.world_index, rng, row_counts
+            HostedWorld,
+            store,
+            runtime.world_index,
+            rng,
+            row_counts,
+            workspace_roots=runtime.metadata.get("workspace_roots", {}),
+            endpoints=http_endpoints(runtime),
+            observations=self._observations,
         )
 
 
@@ -731,12 +806,17 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
         if excerpt and not prompt:
             parts.append(excerpt)
         summary = str(body.get("one_liner") or "").strip()
-        rules = [str(rule).strip() for rule in body.get("hard_constraints") or [] if str(rule).strip()]
+        rules = [
+            str(rule).strip()
+            for rule in body.get("hard_constraints") or []
+            if str(rule).strip()
+        ]
         if summary:
             parts.append(f"Summary: {summary}")
         if rules:
             parts.append("Rules:\n- " + "\n- ".join(rules))
-    return "\n\n".join(parts)
+    # The whole text, once: the job's own prompt, the summary and the rules may each hold a URL.
+    return _redact("\n\n".join(parts))
 
 
 def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:
@@ -1041,11 +1121,15 @@ _TERMINAL_FAILURE_MESSAGE_MAX_CHARS = 4096  # an unbounded `failure.message` can
 # that self-truncates. 4KB is ample for a diagnostic message.
 
 
-def _cap_failure_message(message: str) -> str:
-    if len(message) <= _TERMINAL_FAILURE_MESSAGE_MAX_CHARS:
+# The platform keeps a receipt's `reason` to 500 characters.
+_RECEIPT_REASON_MAX_CHARS = 500
+
+
+def _cap_failure_message(message: str, limit: int = _TERMINAL_FAILURE_MESSAGE_MAX_CHARS) -> str:
+    if len(message) <= limit:
         return message
     marker = "…[truncated]"
-    return message[: _TERMINAL_FAILURE_MESSAGE_MAX_CHARS - len(marker)] + marker
+    return message[: limit - len(marker)] + marker
 
 
 # guest-side mirror of outbound-channels.md's artifact level table (Channel 3) -- no module
@@ -1061,6 +1145,7 @@ _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]]
             ob.ArtifactKind.TRACE,
             ob.ArtifactKind.TOOL_TRACE,
             ob.ArtifactKind.TRANSCRIPT,
+            ob.ArtifactKind.WORLD_STATE,
             ob.ArtifactKind.OTHER,
         }
     ),
@@ -1079,6 +1164,14 @@ _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]]
     # this adapter should never see it for a hosted job; forbid everything as a defensive default.
     ArtifactLevel.LOCAL_ONLY: frozenset(ob.ArtifactKind),
 }
+
+# The platform refuses a complete manifest that does not name an acknowledged artifact of each kind.
+_MANIFEST_REQUIRED_KINDS = frozenset(
+    {ob.ArtifactKind.BUILD, ob.ArtifactKind.RESULT, ob.ArtifactKind.LOG}
+)
+# Post-terminal best-effort work (pool teardown, process-log uploads) stops this share of the
+# flush window before its end, so the final drain and the artifact manifest always get a turn.
+_MANIFEST_RESERVE_FRACTION = 0.25
 
 
 class OutboundAdapter:
@@ -1264,6 +1357,17 @@ class OutboundAdapter:
         if self._flush_window_start is None:
             return None
         return self._flush_window_start + self._flush_window_seconds
+
+    def best_effort_deadline(self) -> float | None:
+        """The end of the flush-window share that best-effort work may spend. The remainder is
+        reserved for the final drain and the artifact manifest."""
+        deadline = self.deadline()
+        if deadline is None:
+            return None
+        return deadline - self._flush_window_seconds * _MANIFEST_RESERVE_FRACTION
+
+    def _acknowledged(self, entry: dict[str, Any]) -> bool:
+        return entry["artifact_id"].removeprefix("sha256:") in self._uploaded_digests
 
     def _record_channel_error(self, exc: Exception) -> None:
         if isinstance(exc, ob.HostedFencedError):
@@ -1554,14 +1658,17 @@ class OutboundAdapter:
             scenario_attempt=receipt.scenario_attempt,
             world_index=receipt.world_index,
             status=receipt.status,
-            sub_goals=[
-                {"name": g.name, "held": g.held, "reason": g.reason, "judged": g.judged}
-                for g in receipt.sub_goals
-            ],
+            sub_goals=[sub_goal_wire(g) for g in receipt.sub_goals],
             evaluations=[_evaluation_wire(e) for e in receipt.evaluations],
             call=call,
             failure=failure,
             extra_secret_values=self._extra_secret_values,
+            # Redacted whole, then capped, as `failure.message` is.
+            reason=_cap_failure_message(
+                ob.redact_outbound_text(receipt.reason, self._extra_secret_values), _RECEIPT_REASON_MAX_CHARS
+            )
+            if receipt.reason is not None
+            else None,
         )
         self._persist_offline_json(Path("receipts") / f"{wire['digest']}.json", wire)
         push_result = await asyncio.to_thread(
@@ -1668,14 +1775,28 @@ class OutboundAdapter:
     ) -> bool:
         if self.is_fenced:
             return False
-        wire = ob.build_artifact_manifest(
+        build = functools.partial(
+            ob.build_artifact_manifest,
             job_id=self._capabilities.job_id,
             attempt_id=self._capabilities.attempt_id,
             attempt_number=self._capabilities.attempt_number,
-            entries=list(self._manifest_entries),
             complete=complete,
         )
-        self._persist_offline_json(Path("manifest.json"), wire)
+        entries = list(self._manifest_entries)
+        # The offline mirror names every artifact: the platform's replay ingests each mirrored
+        # artifact before it ingests this manifest. The wire copy names only artifacts the
+        # platform acknowledged -- one unacknowledged entry makes it refuse the whole manifest
+        # (422 `artifact_unknown`), and the attempt with it.
+        self._persist_offline_json(Path("manifest.json"), build(entries=entries))
+        if complete:
+            await self._reupload_required_artifacts(entries, deadline=deadline)
+        acknowledged = [entry for entry in entries if self._acknowledged(entry)]
+        if len(acknowledged) < len(entries):
+            logger.warning(
+                "artifact manifest omits %d unacknowledged artifact(s)",
+                len(entries) - len(acknowledged),
+            )
+        wire = build(entries=acknowledged)
         result = await asyncio.to_thread(
             self._guarded,
             lambda: self._artifacts.push_manifest(wire, deadline=deadline),
@@ -1691,6 +1812,30 @@ class OutboundAdapter:
             )
             return False
         return True
+
+    async def _reupload_required_artifacts(
+        self, entries: list[dict[str, Any]], *, deadline: float | None
+    ) -> None:
+        """Give each required kind that has no acknowledged artifact one more upload, from the
+        offline mirror. A complete manifest without that kind is refused."""
+        acknowledged_kinds = {
+            entry["kind"] for entry in entries if self._acknowledged(entry)
+        }
+        for entry in entries:
+            kind = ob.ArtifactKind(entry["kind"])
+            if kind not in _MANIFEST_REQUIRED_KINDS or kind.value in acknowledged_kinds:
+                continue
+            digest = entry["artifact_id"].removeprefix("sha256:")
+            try:
+                data = (self._spool.root / "artifacts" / f"{digest}.bin").read_bytes()
+            except OSError:
+                continue
+            if hashlib.sha256(data).hexdigest() != digest:
+                continue
+            if await self.upload_artifact(
+                data, kind=kind, scenario_key=entry["scenario_key"], deadline=deadline
+            ):
+                acknowledged_kinds.add(kind.value)
 
     async def ensure_terminal_artifacts(
         self,
@@ -1818,6 +1963,19 @@ class OutboundAdapter:
                 break
         await self.push_manifest(complete=complete, deadline=deadline)
         return self.is_fenced
+
+
+def sub_goal_wire(goal: Any) -> dict[str, Any]:
+    """One sub-goal as the receipt carries it. `verdict` is always given when there is one (`unmeasured`,
+    `inconclusive`, `not_applicable`, `pass`, `fail`), so the platform never reads it from the reason's wording."""
+    return {
+        "name": goal.name,
+        "held": goal.held,
+        "reason": goal.reason,
+        "judged": goal.judged,
+        **({"verdict": goal.verdict} if goal.verdict else {}),
+        **({"evidence": list(goal.evidence)} if getattr(goal, "evidence", ()) else {}),
+    }
 
 
 def _evaluation_wire(evaluation: Any) -> dict[str, Any]:
@@ -1964,13 +2122,13 @@ class HostedEntrypointDeps:
     # Daytona forces the sandbox to a fixed non-root user (svc-control) and ignores os_user
     # overrides, so the guest cannot setuid/chown to the bundle's svc-agent/svc-tools/svc-data
     # users -- every process runs uniformly as svc-control. The bundle may still DECLARE those
-    # users (the model validates them); they are simply not enforced at runtime here.
+    # users (the model validates them); they are enforced only where the platform granted
+    # per-user isolation (`privilege.py`).
     build_provider: Callable[
         [ob.HostedCapabilities, ob.Transport], WorldProvisioner
     ] = field(
         default=lambda capabilities, transport: ProcessRuntimeProvider(
-            user_resolver=fixed_sandbox_user_resolver,
-            require_declared_user=False,
+            **hosted_user_resolution(),
             public_url_resolver=lambda port, ttl: _resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl
             ),
@@ -1991,7 +2149,7 @@ class HostedEntrypointDeps:
             )
         )
     )
-    build_world_factory: Callable[[Path], WorldFactory] = field(
+    build_world_factory: Callable[[Path, Path], WorldFactory] = field(
         default=ProcessWorldFactory
     )
     retry_policy: Callable[[], ob.RetryPolicy] = field(default=lambda: ob.RetryPolicy())
@@ -2167,6 +2325,19 @@ async def run_job(
     )
     scenarios_client.configure_offline_control(events_spool.root / "control")
 
+    # Read once, at boot: the runtime deletes secrets.json on its first provision().
+    customer_secret_values = deps.peek_secret_values()
+    declared_secret_values = (
+        *customer_secret_values,
+        *tuple(simulator_secret_values.values()),
+    )
+    # Spans: the customer's values go whole (no names come with them here). The simulator channel
+    # goes whole too, apart from the platform settings named in NON_SECRET_SETTINGS, which a span
+    # keeps.
+    span_secret_values = (
+        *customer_secret_values,
+        *observability.declared_values(simulator_secret_values),
+    )
     adapter = OutboundAdapter(
         capabilities,
         events_spool=events_spool,
@@ -2174,10 +2345,7 @@ async def run_job(
         results_client=results_client,
         artifacts_client=artifacts_client,
         channel_state=channel_state,
-        extra_secret_values=(
-            *deps.peek_secret_values(),
-            *tuple(simulator_secret_values.values()),
-        ),
+        extra_secret_values=declared_secret_values,
         clock=deps.clock,
         flush_window_seconds=deps.flush_window_seconds,
     )
@@ -2201,7 +2369,9 @@ async def run_job(
     async def _bounded_close() -> None:
         if pool is None:
             return
-        remaining = adapter.deadline()
+        # Teardown is best-effort: it never spends the share of the window reserved for the
+        # manifest. The finally backstop below waits for whatever teardown is still running.
+        remaining = adapter.best_effort_deadline()
         if remaining is None:
             await pool.close()
             return
@@ -2210,10 +2380,8 @@ async def run_job(
             await asyncio.wait_for(pool.close(), timeout=timeout)
         except asyncio.TimeoutError:
             logger.warning(
-                "pool.close() did not finish within the remaining flush window (%.1fs); "
-                "WorldPool already latches itself closed on entry to close(), so the top-level "
-                "finally's own pool.close() call cannot retry the teardown -- the provisioner may "
-                "be left not fully torn down until close()'s latch ordering changes",
+                "pool.close() did not finish within its share of the flush window (%.1fs); "
+                "teardown continues in the background and the run_job finally waits for it",
                 timeout,
             )
 
@@ -2306,8 +2474,19 @@ async def run_job(
             return EXIT_FENCED
         # the exit code comes from drain()'s own post-hoc fence check (deadline computed AFTER
         # emit_terminal, which is what arms the flush window), never a stale pre-drain read.
-        fenced = await adapter.drain(deadline=adapter.deadline(), complete=complete)
+        await adapter.flush_terminal(deadline=adapter.deadline())
         await _bounded_close()
+        from .process_diagnostics import upload_process_logs
+
+        try:
+            await upload_process_logs(
+                work_directory / "diagnostics",
+                adapter,
+                deadline=adapter.best_effort_deadline(),
+            )
+        except Exception:
+            logger.exception("process diagnostic upload failed")
+        fenced = await adapter.drain(deadline=adapter.deadline(), complete=complete)
         if fenced:
             return EXIT_FENCED
         # §0.6 v1.14: the terminal was decided but the final drain could not flush it (the events
@@ -2329,25 +2508,47 @@ async def run_job(
         )
 
     async def _fail(
-        *, domain: FailureDomain, fail_stage: HarnessStage, code: str, message: str
+        *,
+        domain: FailureDomain,
+        fail_stage: HarnessStage,
+        code: str,
+        message: str,
+        retryable: bool | None = None,
+        details: dict | None = None,
     ) -> int:
         # routed through `_finish` -- terminal event first, pool close (bounded) after, for
         # every pre-run failure branch too, not just the post-run ones `_finish` already covered.
-        return await _finish(
-            HarnessStage.FAILED,
-            failure={
-                "domain": domain.value,
-                "stage": fail_stage.value,
-                "code": code,
-                "message": message,
-            },
-            complete=True,
-        )
+        failure: dict[str, Any] = {
+            "domain": domain.value,
+            "stage": fail_stage.value,
+            "code": code,
+            "message": message,
+        }
+        if retryable is not None:
+            failure["retryable"] = retryable
+        if details is not None:
+            failure["details"] = details
+        return await _finish(HarnessStage.FAILED, failure=failure, complete=True)
 
     try:
         # 1 (cont'd). job.json (§0.2).
         try:
             job = load_job(job_path)
+        except ValidationError as exc:
+            # One malformed job is reported: a folder named on a source that isn't GitHub. The
+            # rest of the job isn't trusted -- only that reason and the folder are read from it.
+            unusable = _read_raw_job_failure(job_path, exc)
+            if unusable is None:
+                logger.error("job.json invalid: %s", exc)
+                return EXIT_CRASHED
+            return await _fail(
+                domain=unusable.domain,
+                fail_stage=unusable.stage,
+                code=unusable.code,
+                message=unusable.message,
+                retryable=unusable.retryable,
+                details=unusable.details,
+            )
         except Exception as exc:  # noqa: BLE001 - a malformed job.json has no typed error to catch
             # EXIT_CRASHED (not a FAILED terminal) even though a channel now exists -- a
             # malformed job.json means `job.seed`/`job.agent`/etc are not trustworthy enough to
@@ -2355,8 +2556,34 @@ async def run_job(
             logger.error("job.json invalid: %s", exc)
             return EXIT_CRASHED
 
+        if (unusable := folder_failure(source, job.source.subfolder)) is not None:
+            return await _fail(
+                domain=unusable.domain,
+                fail_stage=unusable.stage,
+                code=unusable.code,
+                message=unusable.message,
+                retryable=unusable.retryable,
+                details=unusable.details,
+            )
+
+        try:
+            broker_socket = await asyncio.to_thread(initialize_hosted_compose, job, source)
+        except BrokerError as exc:
+            return await _fail(
+                domain=FailureDomain.ENVIRONMENT,
+                fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                code="compose_bootstrap_failed",
+                message=str(exc),
+            )
+        if broker_socket is not None:
+            os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)
+
+        # Spans are a channel out too (span_secret_values says which values they replace).
         observability.begin(
-            job.job_id, job.run_id, (job.metadata or {}).get("telemetry")
+            job.job_id,
+            job.run_id,
+            (job.metadata or {}).get("telemetry"),
+            secret_values=span_secret_values,
         )
 
         if job.seed is None:
@@ -2405,11 +2632,13 @@ async def run_job(
                 code=exc.code,
                 message=exc.message,
             )
+        close_actor_files(bundle_dir)
 
         if (manifest.metadata or {}).get("generic_harness") == "v1":
             from .certification import (
                 CertificationGateError,
                 verify_runtime_certification,
+                requires_chat_ingress,
             )
 
             try:
@@ -2418,6 +2647,7 @@ async def run_job(
                     work_directory / "runtime-validation.json",
                     bundle_digest=manifest.digest,
                     source_digest=manifest.provenance.source_digest,
+                    chat_ingress_required=requires_chat_ingress(job, bundle_dir),
                 )
             except CertificationGateError as exc:
                 return await _fail(
@@ -2449,6 +2679,7 @@ async def run_job(
                 manifest,
                 parallelism=parallelism,
                 secret_refs=secret_purposes,
+                allow_compose=broker_socket is not None,
             )
         except PreflightError as exc:
             return await _fail(
@@ -2462,12 +2693,11 @@ async def run_job(
         if cancel_requested():
             return await _canceled()
 
-        # 4/5. Provision -- ProcessRuntimeProvider, hosted lane never passes
-        # require_declared_user=False (the provider defaults it True on its own; the local lane's
-        # opt-out is a construction-site concern, not this module's). §4.5b's provider mutex is
-        # `WorldPool`'s own `_provider_lock` now (mutation-verified: it serializes
-        # provision/reset/close/healthy under one lock) -- wired directly, no extra wrapper.
-        provider = deps.build_provider(capabilities, transport)
+        provider = (
+            ComposeBrokerClient(broker_socket)
+            if manifest.runtime.kind is RuntimeKindV2.COMPOSE and broker_socket is not None
+            else deps.build_provider(capabilities, transport)
+        )
         pool = WorldPool(
             provider,
             bundle=manifest,
@@ -2606,7 +2836,11 @@ async def run_job(
         # pre-allocation CLIENT (ScenariosClient) is.
         adapter.stage_changed(HarnessStage.VALIDATING_SCENARIOS)
         await adapter.aflush_events()
-        world_factory = deps.build_world_factory(work_directory)
+        world_factory = (
+            ObservationWorldFactory(bundle_dir)
+            if manifest.runtime.kind is RuntimeKindV2.COMPOSE
+            else deps.build_world_factory(work_directory, bundle_dir)
+        )
         # An injected `ScenarioSource` (every test, every future caller) always wins -- the real
         # bundle-reading adapter (scenario_source.py) only steps in when the default
         # `NotWiredScenarioSource` is still in place AND the bundle actually carries a `scenarios/`
@@ -2617,7 +2851,15 @@ async def run_job(
         if isinstance(scenario_source, NotWiredScenarioSource) and bundle_has_scenarios(
             bundle_dir
         ):
-            scenario_source = BundleScenarioSource()
+            scenario_source = BundleScenarioSource(
+                framework_folders=_framework_folders(
+                    job,
+                    manifest,
+                    source=source,
+                    bundle_dir=bundle_dir,
+                    work_directory=work_directory,
+                )
+            )
         try:
             scenarios = await scenario_source.build(
                 job,
@@ -2653,6 +2895,18 @@ async def run_job(
                 fail_stage=HarnessStage.VALIDATING_SCENARIOS,
                 code="scenario_preallocation_failed",
                 message=str(exc),
+            )
+        except AgentDocumentFailed as exc:
+            # A folder build whose agent document could not be made fails with the real error: the
+            # platform gets a terminal failure and no document, not a registration without one.
+            if adapter.is_fenced:
+                await _bounded_close()
+                return EXIT_FENCED
+            return await _fail(
+                domain=FailureDomain.AGENT,
+                fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code=exc.code,
+                message=exc.message,
             )
         except ScenarioDocumentInvalid as exc:
             # A scenario document that will not even compile is a generation-stage content defect
@@ -2717,6 +2971,7 @@ async def run_job(
             call_runner=call_runner,
             outbound=adapter,
             job_seed=job_seed,
+            require_tool_workflow=job.require_tool_workflow,
             cancel_requested=cancel_requested,
             judge=functools.partial(
                 _judge_sub_goal, agent_instructions=_agent_instructions(job, bundle_dir)
@@ -2792,6 +3047,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", required=True, type=Path, help="/work/artifacts")
     args = parser.parse_args(argv)
+    try:
+        establish_isolation()
+    except IsolationUnavailable as exc:
+        # Infrastructure, not the agent: the platform retries within its attempt budget.
+        print(f"IsolationUnavailable: {exc}", file=sys.stderr, flush=True)
+        return EXIT_CRASHED
     try:
         return asyncio.run(run_job(args.job, args.source, args.output))
     finally:
