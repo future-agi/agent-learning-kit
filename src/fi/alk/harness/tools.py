@@ -500,8 +500,6 @@ def _checked_against_source(
     stage_ended("runtime", None)
     if problems:
         return _problems(problems, arrived)
-    if runtime is not None and source_root is not None and runtime.required_environment:
-        runtime = _without_defaulted(runtime, source_root, subfolder, reached)
     if instrumentation is None:
         # With a folder, what it imports from elsewhere is read too, as the other scans do.
         instrumentation = (
@@ -513,32 +511,6 @@ def _checked_against_source(
             else detect_instrumentation(source_root)
         )
     return contract.model_copy(update={"instrumentation": instrumentation, "runtime": runtime})
-
-
-def _without_defaulted(
-    runtime: Runtime, source_root: Path, subfolder: str | None, reached: list[Path] | None
-) -> Runtime:
-    """The runtime without the required names the agent's own code reads only with a default:
-    the agent runs without them, so nobody is asked for one (TH-10401). With a folder, the code
-    it reaches elsewhere is read too, so a read there without a default keeps the name."""
-    from .environment_defaults import defaulted_names
-
-    if subfolder:
-        folder = agent_folder(source_root, subfolder)
-        elsewhere = code_the_agent_reaches(source_root, subfolder) if reached is None else reached
-    else:
-        folder, elsewhere = source_root, []
-    defaulted = defaulted_names(folder, elsewhere)
-    if not defaulted:
-        return runtime
-    return runtime.model_copy(
-        update={
-            "required_environment": {
-                process: [name for name in names if name not in defaulted]
-                for process, names in runtime.required_environment.items()
-            }
-        }
-    )
 
 
 def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
@@ -919,10 +891,12 @@ def contract_tools(
                     ". _ : / @ - only), and the file (relative to "
                     "the source root) and line the name is written on. One model; a voice agent's "
                     "speech-to-text and text-to-speech models don't count. When the environment can "
-                    "override the name (os.getenv(\"MODEL\", \"gpt-4o-mini\"), or a default chosen by "
-                    "which provider's key is set), record the default the source writes, on its "
-                    "line; with more than one, the one its first branch picks. Leave model out only "
-                    "when the source writes no name at all.",
+                    "override the name (a default in os.getenv(\"MODEL\", \"gpt-4o-mini\"), or one "
+                    "chosen by which provider's key is set), record the default in effect when the "
+                    "agent starts with nothing overridden, on its line: not one reassigned later "
+                    "or in unused code. When which key is set picks among defaults, record the one "
+                    "the code checks for first. Leave model out when no name the source writes "
+                    "takes effect.",
                 },
                 "hard_constraints": {
                     "type": "array",
@@ -1431,7 +1405,7 @@ def contract_tools(
                                 "items": {"type": "string"},
                                 "uniqueItems": True,
                             },
-                            "description": "Required environment names by selected process name. Native control process is agent. No values. A name read with a default in the code is not required (os.getenv(\"PORT\", \"8080\"), os.environ.get(\"MODEL\") or \"gpt-4o-mini\"): leave it out. A default of \"\" or None is no default.",
+                            "description": "Required environment names by selected process name. Native control process is agent. No values.",
                         },
                         "compose_file": {
                             "type": "string",
