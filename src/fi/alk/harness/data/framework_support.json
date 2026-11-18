@@ -147,7 +147,7 @@
           "note": ""
         },
         "read": {
-          "status": "proven",
+          "status": "pending",
           "evidence": [
             {
               "kind": "real_run",
@@ -160,7 +160,7 @@
               "date": "2026-11-18"
             }
           ],
-          "note": "The 12 Nov reading described the agent but saved `langgraph dev`. The 18 Nov reading on kit PR #341's head matched its expected contract fully (the kit's graph route)."
+          "note": "Read on kit PR #341's head (5aa31fdb), pending its merge: the 18 Nov reading there matched its expected contract fully (the kit's graph route). The 12 Nov reading, on the kit before #341, saved `langgraph dev`."
         },
         "run": {
           "status": "pending",
@@ -280,7 +280,7 @@
           "note": ""
         },
         "read": {
-          "status": "proven",
+          "status": "pending",
           "evidence": [
             {
               "kind": "real_run",
@@ -288,7 +288,7 @@
               "date": "2026-11-18"
             }
           ],
-          "note": "Read from an outside agent (harbor-hotels-langchain): the kit has no LangChain reference agent."
+          "note": "The 18 Nov reading of an outside agent (harbor-hotels-langchain) passed against its written expectation. Waits on a reference agent in the kit, at a fixed commit, with pinned versions."
         },
         "run": {
           "status": "not_proven",
@@ -395,7 +395,7 @@
           "note": ""
         },
         "read": {
-          "status": "proven",
+          "status": "pending",
           "evidence": [
             {
               "kind": "real_run",
@@ -403,7 +403,7 @@
               "date": "2026-11-18"
             }
           ],
-          "note": "Read from an outside agent (harbor-voice-livekit): the kit has no LiveKit reference agent."
+          "note": "The 18 Nov reading of an outside agent (harbor-voice-livekit) passed against its written expectation. Waits on a reference agent in the kit, at a fixed commit, with pinned versions."
         },
         "run": {
           "status": "not_proven",
@@ -454,7 +454,7 @@
           "note": ""
         },
         "read": {
-          "status": "proven",
+          "status": "pending",
           "evidence": [
             {
               "kind": "real_run",
@@ -467,7 +467,7 @@
               "date": "2026-11-18"
             }
           ],
-          "note": "The 12 Nov reading described the agent but marked its tools unreachable from the repository root. The 18 Nov reading on kit PR #341's head matched its expected contract fully."
+          "note": "Read on kit PR #341's head (5aa31fdb), pending its merge: the 18 Nov reading there matched its expected contract fully. The 12 Nov reading, on the kit before #341, described the agent but marked its tools unreachable from the repository root."
         },
         "run": {
           "status": "pending",

@@ -60,6 +60,22 @@ def test_read_and_run_are_proven_only_by_a_real_run() -> None:
                 assert kinds == {"real_run"}, (entry["key"], layer)
 
 
+def test_a_real_run_on_an_outside_agent_is_pending_until_the_kit_holds_a_reference() -> (
+    None
+):
+    for entry in ENTRIES:
+        if entry["reference"] is not None:
+            continue
+        for layer in ("read", "run"):
+            claim = entry["layers"][layer]
+            assert claim["status"] != "proven", (entry["key"], layer)
+            if claim["status"] == "pending":
+                assert "a reference agent in the kit" in claim["note"], (
+                    entry["key"],
+                    layer,
+                )
+
+
 def test_found_is_proven_by_tests() -> None:
     for entry in ENTRIES:
         found = entry["layers"]["found"]
