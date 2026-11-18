@@ -596,3 +596,35 @@ def test_a_build_s_case_whose_control_did_not_run_is_not_proved(monkeypatch, tmp
     saved = _built(monkeypatch, tmp_path, case)
     assert saved["live"] is True and saved["controls"][0]["ran"] is False and saved["controls"][0]["failed"] is None
     assert saved["proved"] is False and saved["blocked_reason"] == "control_not_run"
+
+
+def test_a_later_validation_attempt_never_inherits_an_earlier_attempt_s_verdict(monkeypatch, tmp_path):
+    from fi.alk.harness import authoring_runtime_validation as validation
+
+    cases = {"now": refund_case()}
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [cases["now"]])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    contract = _contract({"lookup_order": "service", "refund_order": "service"})
+
+    def attempt():
+        stack = Stack()
+        return asyncio.run(
+            validation.play_this_attempt(
+                authoring=tmp_path, contract=contract, runtime=stack, provider=stack, factory=stack, work=tmp_path, seed=0
+            )
+        )
+
+    # Attempt 1 plays the case on the live runtime.
+    attempt()
+    assert "refund_case" in live_proof.load_live(tmp_path)
+
+    # A repair rewrites it to use a tool the runtime does not serve, so attempt 2 cannot play it.
+    place = {"tool": "place_order", "arguments": {"order_id": "O-10"}}
+    cases["now"] = scenario(
+        [place], sub_goals=["refund_once"], negative_controls=[control("twice", "places two", [place, place])]
+    )
+    attempt()
+
+    # Its proof is then the offline one, never attempt 1's verdict on the case as it was.
+    assert "refund_case" not in live_proof.load_live(tmp_path)
