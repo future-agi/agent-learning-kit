@@ -119,7 +119,11 @@ def _is_message(item: Any) -> bool:
 def _is_agent_turn(item: Any) -> bool:
     """A message the agent said: an assistant or model role, or an ``ai`` or assistant type."""
     role, kind = _field(item, "role"), _field(item, "type")
-    return role in ("assistant", "model") or kind in ("ai", "AIMessageChunk", "assistant")
+    return role in ("assistant", "model") or kind in (
+        "ai",
+        "AIMessageChunk",
+        "assistant",
+    )
 
 
 def _is_reply_item(value: Any) -> bool:

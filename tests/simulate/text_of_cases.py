@@ -163,7 +163,11 @@ CASES += [
         [{"text": "a", "thought": False}, NS(text="b", thought=False)],
         "a b",
     ),
-    ("untyped-text-no-thought-kept", [{"text": "a"}, NS(text="b", thought=None)], "a b"),
+    (
+        "untyped-text-no-thought-kept",
+        [{"text": "a"}, NS(text="b", thought=None)],
+        "a b",
+    ),
 ]
 
 CASES += [
