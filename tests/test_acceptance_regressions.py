@@ -8,6 +8,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+# Its LiveKit model and engine imports below need the livekit extra; without it, skip the file.
+pytest.importorskip("livekit")
+
 from fi.alk._paths import project_root
 from fi.alk.studio import _generate
 from fi.simulate.agent.definition import (
