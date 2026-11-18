@@ -3,6 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import pytest
+
+# Its voice runs start the LiveKit engine, which needs the livekit extra; without it, skip the file.
+pytest.importorskip("livekit")
+
 from fi.simulate.hosted.child_entrypoint import _build_voice_spec
 from fi.simulate.hosted.job import RunnerMode, StartRunnerJob, VoiceRunConfig
 from fi.simulate.registry import environment_registry
