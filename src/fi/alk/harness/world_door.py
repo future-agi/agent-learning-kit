@@ -500,11 +500,14 @@ def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[]
                     return False
                 stopped = stop()
                 # Kept either way: a worker that ran on past its cancel was not held to its deadline, and grading must
-                # know that as surely as it knows a stop.
+                # know that as surely as it knows a stop. A row already there (an earlier trial's, left by a clear that
+                # failed) is replaced with this stop's time, so this trial's seal reads it; a run that once ran on is
+                # never turned into a stop.
                 connection.execute(
                     "INSERT INTO _alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
-                    "ON CONFLICT (worker) DO NOTHING",
-                    (worker, process, time.time(), "deadline_passed" if stopped else NOT_STOPPED),
+                    "ON CONFLICT (worker) DO UPDATE SET process = EXCLUDED.process, at = EXCLUDED.at, reason = CASE "
+                    "WHEN _alk_worker_stops.reason = %s THEN _alk_worker_stops.reason ELSE EXCLUDED.reason END",
+                    (worker, process, time.time(), "deadline_passed" if stopped else NOT_STOPPED, NOT_STOPPED),
                 )
                 return stopped
 
@@ -518,7 +521,9 @@ def mark_worker_run(address: str, worker: str) -> None:
     def mark() -> None:
         with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
             connection.execute(
-                "INSERT INTO _alk_worker_runs (worker, at) VALUES (%s, %s) ON CONFLICT (worker) DO NOTHING",
+                # An earlier trial's row, left by a clear that failed, takes this run's time, so this trial reads it.
+                "INSERT INTO _alk_worker_runs (worker, at) VALUES (%s, %s) "
+                "ON CONFLICT (worker) DO UPDATE SET at = EXCLUDED.at",
                 (worker, time.time()),
             )
 

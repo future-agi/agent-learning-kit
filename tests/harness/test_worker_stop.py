@@ -315,6 +315,23 @@ def test_a_stop_left_by_an_earlier_trial_is_never_this_trial_s(world_database) -
     assert call_runner.read_worker_stops(_runtime(), this_trial_started) == []
 
 
+def test_a_worker_that_runs_on_in_a_trial_after_a_failed_clear_is_never_read_as_held(world_database) -> None:
+    """Trial 1 stopped refund; the clear before trial 2 failed, so its row stays. In trial 2 refund passes its deadline
+    again and ignores the cancel: that is this trial's, read as not held, never dropped against the old row."""
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    assert world_door.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is True
+    world_door.mark_worker_run(world_database, "refund")
+    trial_two = time.time() + 0.01
+    time.sleep(0.02)
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    assert world_door.claim_worker_stop(world_database, "refund", "refund-worker", lambda: False) is False
+    world_door.mark_worker_run(world_database, "refund")
+    assert [
+        (row["worker"], row["reason"]) for row in call_runner.read_worker_stops(_runtime(), trial_two)
+    ] == [("refund", world_door.NOT_STOPPED)]
+    assert call_runner.read_worker_runs(_runtime(), trial_two) == {"refund"}
+
+
 def test_a_seal_that_times_out_on_a_stop_under_way_says_the_stops_are_not_known(
     world_database, monkeypatch
 ) -> None:

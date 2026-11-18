@@ -294,7 +294,7 @@ def worker_stop(worker: str) -> dict[str, Any]:
     def stop() -> bool:
         one.inside = True
         one.claimed.set()
-        # Unreported in time: the run is taken as not ended, and nothing is kept.
+        # Unreported in time: the run is taken as not ended, and kept as not stopped (not held to its deadline).
         one.ended.wait(DECIDE_SECONDS)
         return one.stopped
 

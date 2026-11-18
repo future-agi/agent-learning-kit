@@ -2813,8 +2813,9 @@ def scenario_tools(
     @tool(
         "set_worker_tools",
         "Change which of the agent's tools one participant (a contract worker, by id) may use; the test world "
-        "refuses the rest for it. The only way to let a participant use a tool, or stop it: amend_contract and "
-        "fix_tool change what a tool accepts or does, never who may use it. Say why.",
+        "refuses the rest for it. Only when the person asks: it widens or narrows what is tested by their say, not by "
+        "what the source shows, and is recorded as an amendment. The only way to let a participant use a tool, or stop "
+        "it: amend_contract and fix_tool change what a tool accepts or does, never who may use it. Say why.",
         schema({"worker": str, "allowed_tools": list, "why": str}, ["worker", "allowed_tools", "why"]),
     )
     async def set_worker_tools_tool(args: dict[str, Any]) -> dict[str, Any]:
