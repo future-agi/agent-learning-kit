@@ -1733,15 +1733,17 @@ def test_a_jobs_proxy_and_export_settings_reach_only_the_env_file(
     assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in call.env
     assert call.job.values["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://canary.invalid"
 
-    # A proxy reaches neither: the job fails naming it, before Compose runs.
+    # A proxy reaches neither: it is skipped, and Compose still runs.
     proxies = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
     _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(proxies))
     for name in proxies:
         monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", _PROXY_AND_EXPORT[name] or "x")
     environment = _compose_environment(tmp_path, runtime_configuration_names=proxies)
-    with pytest.raises(provisioning.ProvisionError, match="compose_value_name_reserved"):
-        provisioning._run(environment, "up")
-    assert len(calls) == 1
+    provisioning._run(environment, "up")
+    assert len(calls) == 2
+    for name in proxies:
+        assert name not in calls[1].env, name
+        assert name not in calls[1].job.values, name
 
 
 def test_a_customers_tool_credential_reaches_the_env_file(tmp_path: Path, monkeypatch) -> None:
@@ -1763,27 +1765,93 @@ def test_a_customers_tool_credential_reaches_the_env_file(tmp_path: Path, monkey
     assert "DOCKER_CONFIG" not in job.values
 
 
-def test_an_admitted_value_compose_cannot_carry_fails_the_job_by_name(
-    tmp_path: Path, monkeypatch
+def test_an_admitted_value_compose_also_reads_is_skipped_and_named(
+    tmp_path: Path, monkeypatch, caplog
 ) -> None:
-    # Intake admits a proxy, CA bundle or locale name as the agent's own setting (the local
-    # runtime hands it over), but a Compose service can't get it under its own name. The job fails
-    # naming it, before Compose runs, never drops it silently (Dileep, #337).
-    names = ["HTTPS_PROXY", "SSL_CERT_FILE", "LANG", "MY_KEY"]
+    # Intake admits a proxy, CA bundle or locale name as the agent's own setting, but Compose
+    # reads the same names for itself. Until the value can go to the agent's own service
+    # (a later change), it is skipped as before #337, and the skip is named: the job runs, it
+    # does not fail (Dileep, #348).
+    names = ["HTTPS_PROXY", "SSL_CERT_FILE", "LANG", "LC_ALL", "NO_PROXY", "REQUESTS_CA_BUNDLE", "MY_KEY"]
     _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(names))
     for name in names:
         monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", f"{name.lower()}-canary")
     calls = _record_compose(monkeypatch)
     environment = _compose_environment(tmp_path, runtime_configuration_names=names)
 
-    with pytest.raises(provisioning.ProvisionError) as refused:
+    with caplog.at_level("WARNING"):
         provisioning._run(environment, "up")
 
-    message = str(refused.value)
-    assert message.startswith("compose_value_name_reserved: HTTPS_PROXY, LANG, SSL_CERT_FILE")
-    assert "MY_KEY" not in message
-    assert "canary" not in message
-    assert calls == []
+    assert len(calls) == 1
+    assert calls[0].job.values["MY_KEY"] == "my_key-canary"
+    skipped = ["HTTPS_PROXY", "LANG", "LC_ALL", "NO_PROXY", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"]
+    for name in skipped:
+        assert name not in calls[0].job.values, name
+        assert name not in calls[0].env, name
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert all(name in logged for name in skipped)
+    assert "MY_KEY" not in logged
+    assert "canary" not in logged
+
+
+def test_an_environment_record_with_a_field_this_kit_does_not_know_still_loads(
+    tmp_path: Path,
+) -> None:
+    # A newer kit may add fields to environment.json (a template rolled back reads one that a
+    # newer kit wrote); this kit keeps the fields it knows and ignores the rest.
+    environment = _compose_environment(tmp_path, runtime_configuration_names=["MY_KEY"])
+    destination = tmp_path / "session"
+    environment.save(destination)
+    record = json.loads(destination.joinpath(provisioning.MANIFEST).read_text())
+    record["a_field_from_a_newer_kit"] = ["anything"]
+    destination.joinpath(provisioning.MANIFEST).write_text(json.dumps(record))
+
+    loaded = provisioning.ProvisionedEnvironment.load(destination)
+
+    assert loaded == environment
+
+
+def test_provision_records_the_settings_it_skipped_for_the_jobs_result(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The owner sees the skip in the job's result, not only in a log they can't read.
+    source = tmp_path / "agent"
+    session = tmp_path / "session"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    source.joinpath("agent.py").write_text("print('ready')\n")
+    names = ["LANG", "MY_KEY", "NO_PROXY"]
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(names))
+    for name in names:
+        monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", f"{name.lower()}-canary")
+    monkeypatch.setattr(
+        provisioning, "_contract_runtime_configuration_names", lambda _contract: names
+    )
+
+    def run(_environment, *arguments, **_kwargs):
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(
+                {
+                    "services": {
+                        "agent-runtime": {
+                            "profiles": ["harness-runtime"],
+                            "build": {
+                                "context": str(session / "generated-runtime-context"),
+                                "dockerfile": GENERATED_DOCKERFILE,
+                            },
+                        }
+                    }
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    environment = provisioning.provision(source, session, _contract())
+
+    assert environment.skipped_setting_names == ["LANG", "NO_PROXY"]
+    saved = json.loads(session.joinpath("environment.json").read_text())
+    assert saved["skipped_setting_names"] == ["LANG", "NO_PROXY"]
+    assert "canary" not in session.joinpath("environment.json").read_text()
 
 def _failing_unlink(monkeypatch, inside: str):
     """Make removing any file under a directory whose name holds ``inside`` fail."""
