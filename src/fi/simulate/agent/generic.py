@@ -1349,8 +1349,7 @@ def _looks_like_parts(value: Any, parts: Any) -> bool:
     if _field_of(value, "role") in _CHAT_ROLES:
         return True
     return any(
-        isinstance(part, str) or _is_block_or_message(part) or _is_untyped_text(part)
-        for part in parts
+        _is_block_or_message(part) or _is_untyped_text(part) for part in parts
     )
 
 

@@ -288,3 +288,17 @@ def test_a_langchain_message_to_dict_under_a_reply_key_keeps_only_its_answer(
     reply, expected
 ):
     _check(reply, expected)
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (
+            {"result": {"order": "A1", "parts": ["bolt", "nut"]}},
+            '{"order": "A1", "parts": ["bolt", "nut"]}',
+        ),
+    ],
+    ids=["record-with-bare-string-parts"],
+)
+def test_a_record_that_only_resembles_a_reply_stays_json(reply, expected):
+    _check(reply, expected)
