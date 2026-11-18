@@ -628,3 +628,49 @@ def test_a_later_validation_attempt_never_inherits_an_earlier_attempt_s_verdict(
 
     # Its proof is then the offline one, never attempt 1's verdict on the case as it was.
     assert "refund_case" not in live_proof.load_live(tmp_path)
+
+
+class _LoggedWorld(ServiceWorld):
+    """A live world whose tool proxy logs every call, a read included, in the harness's call log table."""
+
+    def forward(self, endpoint, arguments=None, *, record_as="", record=True) -> Call:
+        self.store.setdefault("_alk_tool_trace", []).append({"name": endpoint, "arguments": dict(arguments or {})})
+        return super().forward(endpoint, arguments, record_as=record_as, record=record)
+
+    def read_only(self):
+        return self
+
+
+class _LoggedStack(Stack):
+    async def create(self, runtime, *, rng) -> ServiceWorld:
+        world = _LoggedWorld(self.store)
+        self.worlds.append(world)
+        return world
+
+
+def test_the_outcome_is_whether_the_reference_changed_the_world_not_its_call_log(monkeypatch, tmp_path):
+    reads_only = scenario(
+        [LOOKUP_O10],
+        name="lookup_case",
+        sub_goals=["looked_up"],
+        negative_controls=[control("wrong_order", "looks up another order", [LOOKUP_O20])],
+    )
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [reads_only, refund_case()])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    stack = _LoggedStack()
+    results = asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path, contract=_contract({"lookup_order": "service", "refund_order": "service"}),
+            runtime=stack, provider=stack, factory=stack, work=tmp_path,
+        )
+    )
+    # Every call wrote the call log; only the refund changed the world.
+    assert results["lookup_case"]["outcome"] == "no_change"
+    assert results["refund_case"]["outcome"] == "change"
+
+
+def test_the_offline_end_state_leaves_out_the_harness_s_own_tables():
+    world = SimpleNamespace(
+        state=lambda: {"orders": [{"id": 1}], "_alk_tool_trace": [{"name": "lookup"}], "harness_seed_sentinel": [{}]}
+    )
+    assert module._end_state(world) == {"orders": [{"id": 1}]}

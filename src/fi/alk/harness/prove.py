@@ -53,7 +53,7 @@ from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
 from .scenario import Scenario
 from .understand import load
 from .world.runtime import Call, GeneratedWorld
-from .world.snapshot import read_manifest, restore
+from .world.snapshot import read_manifest, restore, source_state
 
 
 # The lane could not execute something; the case runs labelled "kept as written", never as proved.
@@ -899,8 +899,9 @@ def _with_value(step: Any, name: str, value: Any) -> Any:
 
 
 def _end_state(world: GeneratedWorld) -> dict[str, Any] | None:
+    """The world's own state, without the harness's tables a read also writes to."""
     try:
-        return world.state()
+        return source_state(world.state())
     except Exception:  # noqa: BLE001 - an unreadable state compares as different, never as equal
         return None
 

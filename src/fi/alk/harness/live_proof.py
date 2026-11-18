@@ -121,7 +121,7 @@ def _play(scenario: Scenario, world: Any, steps: list[Step]) -> tuple[list[Call]
 
 def _digest(world: Any) -> str | None:
     try:
-        return world_state_digest(world)
+        return world_state_digest(world, source_only=True)
     except Exception as exc:  # noqa: BLE001 - an unreadable state compares as different
         logger.info("live proof: world state not read: %s", type(exc).__name__)
         return None
