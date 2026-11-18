@@ -86,13 +86,15 @@ def build_environment(here: Path, destination: Path) -> str:
 
 def _summary(readme: str) -> tuple[str, str]:
     """The README's title and the first sentence of its first paragraph."""
-    title, paragraph = "", ""
+    title, lines = "", []
     for line in readme.splitlines():
         if not title and line.startswith("# "):
             title = line[2:].strip()
         elif title and line.strip() and not line.startswith("#"):
-            paragraph = line.strip()
-            break
+            lines.append(line.strip())
+        elif lines:
+            break  # the first paragraph ends at its blank line
+    paragraph = " ".join(lines)
     first = re.split(r"(?<=\.)\s", paragraph, maxsplit=1)[0]
     return title, first
 
