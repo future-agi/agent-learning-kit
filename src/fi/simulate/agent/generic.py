@@ -1399,7 +1399,7 @@ def _list_text(items: Any) -> Optional[str]:
     if not items:
         return None
     if _is_bare_block_list(items):
-        return _bare_blocks_text(items)
+        return _answer_text(items)
     if any(_is_message(item) for item in items):
         return _answer_text(items)  # its history rule and depth bound apply
     if any(_is_history_item(item) for item in items):
@@ -1407,27 +1407,6 @@ def _list_text(items: Any) -> Optional[str]:
     if any(_is_block_or_message(item) for item in items):
         return _answer_text(items)
     return None
-
-
-def _bare_blocks_text(items: Any) -> str:
-    """Text of one reply's bare block list.
-
-    Items without a ``type`` (Gemini parts, search hits, records with a ``text`` field) are
-    separate pieces joined with a space; a list holding typed blocks goes through ``text_of``.
-
-    The space is deliberate: a bare list may be unrelated hits or records, so an answer split
-    across two parts reads ``Hel lo`` here. A Gemini ``Content`` (``_reply_text``, ``_extract_content``)
-    is one reply split by the model, so its parts go through ``text_of`` and join with nothing
-    (``Hello``).
-    """
-    if all(_field_of(item, "type") is None for item in items):
-        pieces = (
-            _field_of(item, "text")
-            for item in items
-            if _field_of(item, "thought") is not True
-        )
-        return " ".join(piece for piece in pieces if isinstance(piece, str) and piece)
-    return _answer_text(items)
 
 
 def _is_untyped_text(item: Any) -> bool:

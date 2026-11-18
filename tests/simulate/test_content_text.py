@@ -517,3 +517,25 @@ def test_a_stream_with_no_chunks_is_not_recorded_as_unreadable():
     result = _generic_stream([])
     assert result.content == ""
     assert "reply_unreadable" not in (result.metadata or {})
+
+
+BEDROCK_BLOCKS = [{"text": "Your order shipped."}, {"text": "Anything else?"}]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"role": "assistant", "content": BEDROCK_BLOCKS},
+        {"content": BEDROCK_BLOCKS},
+        {"output": BEDROCK_BLOCKS},
+        BEDROCK_BLOCKS,
+    ],
+    ids=["message-content", "content-key", "output-key", "bare-list"],
+)
+def test_untyped_text_blocks_join_with_a_space_wherever_they_sit(reply):
+    assert _generic_reply(reply) == "Your order shipped. Anything else?"
+
+
+def test_stream_chunks_join_with_nothing_whatever_the_untyped_rule_is():
+    chunks = [{"text": "Your order "}, {"text": "shipped."}]
+    assert _generic_stream(chunks).content == "Your order shipped."

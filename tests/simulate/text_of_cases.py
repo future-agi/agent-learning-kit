@@ -161,9 +161,9 @@ CASES += [
     (
         "untyped-text-thought-false-kept",
         [{"text": "a", "thought": False}, NS(text="b", thought=False)],
-        "ab",
+        "a b",
     ),
-    ("untyped-text-no-thought-kept", [{"text": "a"}, NS(text="b", thought=None)], "ab"),
+    ("untyped-text-no-thought-kept", [{"text": "a"}, NS(text="b", thought=None)], "a b"),
 ]
 
 CASES += [
@@ -189,9 +189,9 @@ CASES += [
 
 CASES += [
     (
-        "untyped-empty-part-keeps-the-adjacent-join",
+        "untyped-empty-part-adds-no-extra-space",
         [{"text": "a"}, {"text": ""}, {"text": "b"}],
-        "ab",
+        "a b",
     ),
 ]
 
@@ -272,5 +272,13 @@ CASES += [
         "message-chunk-in-a-block-list",
         [NS(type="AIMessageChunk", content=_blocks()), {"type": "text", "text": "x"}],
         ANSWER,
+    ),
+]
+
+CASES += [
+    (
+        "untyped-text-blocks-of-a-converse-reply-join-with-a-space",
+        [{"text": "Your order shipped."}, {"text": "Anything else?"}],
+        "Your order shipped. Anything else?",
     ),
 ]

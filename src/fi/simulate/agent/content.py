@@ -104,9 +104,10 @@ def _text_of(content: Any, depth: int = 0) -> str:
     """Keep only the answer text of a reply.
 
     Extended-thinking models return a list of blocks (``thinking``, ``text``, ...). Answer
-    blocks are kept in order and joined with ``""`` only when they sit next to each other,
-    because one answer can be split across several text blocks. Plain strings are joined with
-    ``" "``. A list holding assistant messages is a history: only its last assistant message
+    blocks are kept in order. Typed text blocks (``text``, ``output_text``) that sit next to
+    each other are joined with ``""``, because one answer can be split across several of them.
+    Every other pair of pieces, plain strings and blocks with no ``type`` (a Bedrock Converse
+    ``{"text": ...}``, a Gemini part), is joined with ``" "``. A list holding assistant messages is a history: only its last assistant message
     counts (``AIMessage``, ``{"role": "assistant", "content"}``), and its content is joined as
     above. Any other block (thinking, redacted_thinking, tool_use, tool_result, image,
     unknown) gives ``""``, never its repr, and a typed block is never unwrapped as a message.
@@ -124,18 +125,18 @@ def _text_of(content: Any, depth: int = 0) -> str:
             if _is_message(item):
                 return _block_text(item, depth)
         text = ""
-        after_block = False
+        after_typed = False
         for item in content:
-            is_block = not isinstance(item, str)
+            typed = not isinstance(item, str) and _field(item, "type") is not None
             piece = item if isinstance(item, str) else _block_text(item, depth)
             if not piece:
                 if not isinstance(item, str) and not _is_text_block(item):
-                    after_block = False
+                    after_typed = False
                 continue
-            if text and not (is_block and after_block):
+            if text and not (typed and after_typed):
                 text += " "
             text += piece
-            after_block = is_block
+            after_typed = typed
         return text
     kind = _field(content, "type")
     if kind in _TEXT_KINDS or kind == "refusal":
