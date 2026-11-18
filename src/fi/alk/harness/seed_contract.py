@@ -215,6 +215,10 @@ def with_record(job: HarnessJob, raw: bytes) -> bytes | None:
         return None
     # Added here, not in `record_for`: it says who wrote the reading, not what it was made from.
     spliced = _splice(raw, {**record, "made_by": _made_by()}, empty=not body)
+    if len(spliced) <= SEED_LIMIT_BYTES:
+        return spliced
+    # made_by is what tipped it over: the record alone is worth more than who wrote it.
+    spliced = _splice(raw, record, empty=not body)
     # A reading at the edge stays as it was rather than crossing the platform's cap.
     if len(spliced) > SEED_LIMIT_BYTES:
         return None

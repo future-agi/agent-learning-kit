@@ -348,6 +348,35 @@ def test_the_record_is_skipped_near_the_size_cap(tmp_path, monkeypatch, size):
         assert parsed == []
 
 
+def test_a_reading_that_only_fits_without_made_by_still_gets_its_record():
+    job = _job()
+    base = json.dumps(CONTRACT).encode()
+    old = seed_contract._splice(base, record_for(job), empty=False)
+    # Padded so the record alone lands exactly on the cap, and made_by would cross it.
+    raw = base + b" " * (SEED_LIMIT_BYTES - len(old))
+    assert len(seed_contract._splice(raw, record_for(job), empty=False)) == (
+        SEED_LIMIT_BYTES
+    )
+
+    saved = with_record(job, raw)
+
+    assert saved is not None
+    assert len(saved) == SEED_LIMIT_BYTES
+    stored = json.loads(saved)[RECORD_KEY]
+    assert "made_by" not in stored
+    assert stored == record_for(job)
+    assert saved == seed_contract._splice(raw, record_for(job), empty=False)
+
+
+def test_a_reading_over_the_cap_even_without_made_by_keeps_no_record():
+    job = _job()
+    base = json.dumps(CONTRACT).encode()
+    old = seed_contract._splice(base, record_for(job), empty=False)
+    raw = base + b" " * (SEED_LIMIT_BYTES - len(old) + 1)
+
+    assert with_record(job, raw) is None
+
+
 def test_a_record_is_never_parsed_from_a_contract_over_the_cap(monkeypatch):
     parsed: list[int] = []
 
