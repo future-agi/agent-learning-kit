@@ -853,6 +853,10 @@ _LOG = logging.getLogger(__name__)
 _MANIFEST = RUNTIME_CONFIGURATION_NAMES_ENV
 
 
+# Names a repository .env never sets: the kit's own, stamped into a stored reading.
+_NEVER_FROM_REPOSITORY = frozenset({"ALK_BUILD_ID"})
+
+
 def _load_connection_env(source: Path) -> list[str]:
     """Fill missing connection variables from the submitted repository.
 
@@ -883,6 +887,11 @@ def _load_connection_env(source: Path) -> list[str]:
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
+            if name in _NEVER_FROM_REPOSITORY:
+                # Set by the sandbox template, in either branch: a repository can't say which kit
+                # build wrote a reading.
+                skipped_names.append(name)
+                continue
             if not inside:
                 if name not in os.environ:
                     os.environ[name] = value

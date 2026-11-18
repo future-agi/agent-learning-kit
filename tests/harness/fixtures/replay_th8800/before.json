@@ -1,0 +1,676 @@
+{
+ "agents_sdk_12_nov_reading": {
+  "control_environment": {
+   "ALK_CALLBACK_ENTRYPOINT": "agent:agent_callback",
+   "HARNESS_MODE": "1",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [],
+  "run_command": [
+   ".venv/bin/python",
+   "-c",
+   "\"\"\"HTTP bridge embedded into hosted bundles for ``fi.simulate`` callbacks.\n\nThe bundle producer serializes this module into the process command.  It deliberately uses only\nthe standard library plus the submitted agent's own ``fi.simulate`` dependency, so a callback-only\nrepository does not need to be modified or taught about the hosted process runtime.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport importlib\nimport inspect\nimport json\nimport os\nimport sys\nimport time\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\nfrom typing import Any\n\n# Main thread only: with livekit installed this import registers plugins.\nfrom fi.simulate import AgentInput\n\n\ndef _load_callback() -> Any:\n    target = os.environ[\"ALK_CALLBACK_ENTRYPOINT\"]\n    module_name, separator, attribute = target.partition(\":\")\n    if not separator or not module_name or not attribute:\n        raise RuntimeError(f\"invalid ALK_CALLBACK_ENTRYPOINT: {target!r}\")\n    callback = getattr(importlib.import_module(module_name), attribute)\n    if not callable(callback):\n        raise RuntimeError(f\"callback entrypoint is not callable: {target!r}\")\n    return callback\n\n\nCALLBACK = _load_callback()\n\n\ndef _json_body(value: Any) -> dict[str, Any]:\n    if hasattr(value, \"model_dump\"):\n        body = value.model_dump(mode=\"json\", exclude_none=True)\n    elif isinstance(value, dict):\n        body = value\n    else:\n        body = {\"content\": str(value)}\n    if not isinstance(body, dict):\n        raise TypeError(\"callback response must serialize to a JSON object\")\n    body.setdefault(\"content\", \"\")\n    return body\n\n\ndef _invoke(payload: dict[str, Any]) -> dict[str, Any]:\n    result = CALLBACK(AgentInput.model_validate(payload))\n    if inspect.isawaitable(result):\n        result = asyncio.run(result)\n    return _json_body(result)\n\n\nclass Handler(BaseHTTPRequestHandler):\n    def _respond(self, status: int, body: dict[str, Any]) -> None:\n        encoded = json.dumps(body, separators=(\",\", \":\")).encode(\"utf-8\")\n        self.send_response(status)\n        self.send_header(\"Content-Type\", \"application/json\")\n        self.send_header(\"Content-Length\", str(len(encoded)))\n        self.end_headers()\n        self.wfile.write(encoded)\n\n    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") == \"/health\":\n            self._respond(200, {\"status\": \"ok\"})\n        else:\n            self._respond(404, {\"error\": \"not_found\"})\n\n    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") != \"/invoke\":\n            self._respond(404, {\"error\": \"not_found\"})\n            return\n        started = time.monotonic()\n        status = 500\n        error_type = \"none\"\n        try:\n            length = int(self.headers.get(\"Content-Length\", \"0\"))\n            payload = json.loads(self.rfile.read(length) or b\"{}\")\n            if not isinstance(payload, dict):\n                raise TypeError(\"request body must be a JSON object\")\n            self._respond(200, _invoke(payload))\n            status = 200\n        except Exception as exc:  # noqa: BLE001 - target errors cross the HTTP seam\n            error_type = type(exc).__name__\n            self._respond(\n                500,\n                {\"error\": f\"{type(exc).__name__}: {exc}\", \"content\": \"\"},\n            )\n        finally:\n            elapsed_ms = round((time.monotonic() - started) * 1000)\n            print(\n                \"callback_http_request \"\n                f\"status={status} elapsed_ms={elapsed_ms} error_type={error_type}\",\n                file=sys.stderr,\n                flush=True,\n            )\n\n    def log_message(self, format: str, *args: Any) -> None:\n        return\n\n\ndef main() -> None:\n    port = int(os.environ.get(\"PORT\", \"8080\"))\n    ThreadingHTTPServer((\"0.0.0.0\", port), Handler).serve_forever()\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  ],
+  "saved_entries": [
+   [
+    "unreachable",
+    "examples.harness.openai_agents_support.agent",
+    "look_up_order"
+   ],
+   [
+    "unreachable",
+    "examples.harness.openai_agents_support.agent",
+    "start_return"
+   ],
+   [
+    "unreachable",
+    "examples.harness.openai_agents_support.agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "05bd25ac7ed553916c83689c2b0f228519c24188a611ab98d289830dde689586",
+  "sealed_sha": "981c7f97afc45de6ea2473ea9f739cec35dc1cdcf902af8ff16c87435df5297c",
+  "trace_version": null
+ },
+ "deep_agents_12_nov_reading": {
+  "control_environment": {
+   "ALK_OBSERVE_FRAMEWORKS": "1",
+   "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"examples.harness.deep_agents_support.agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"examples.harness.deep_agents_support.agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"examples.harness.deep_agents_support.agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"examples.harness.deep_agents_support.agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"examples.harness.deep_agents_support.agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"examples.harness.deep_agents_support.agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
+   "HARNESS_MODE": "1",
+   "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [
+   "look_up_order.py",
+   "return_policy.py",
+   "start_return.py"
+  ],
+  "run_command": [
+   "langgraph",
+   "dev",
+   "--no-browser",
+   "--host",
+   "0.0.0.0",
+   "--port",
+   "2024"
+  ],
+  "saved_entries": [
+   [
+    "import",
+    "examples.harness.deep_agents_support.agent",
+    "look_up_order"
+   ],
+   [
+    "import",
+    "examples.harness.deep_agents_support.agent",
+    "start_return"
+   ],
+   [
+    "import",
+    "examples.harness.deep_agents_support.agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "67d1f98ebca3830d6a0381c296df3ebff0c8f92a9e0fe2a0bef7863a5f158da0",
+  "sealed_sha": "84d549b9e803d2f7220b1f0c426e598a064397f31f910d18a4423830a21efaeb",
+  "trace_version": 1
+ },
+ "google_adk": {
+  "control_environment": {
+   "ALK_OBSERVE_FRAMEWORKS": "1",
+   "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"support_agent.agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"support_agent.agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"support_agent.agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"support_agent.agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"support_agent.agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"support_agent.agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
+   "HARNESS_MODE": "1",
+   "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [
+   "look_up_order.py",
+   "return_policy.py",
+   "start_return.py"
+  ],
+  "run_command": [
+   "sh",
+   "-c",
+   "adk web --host 0.0.0.0 --port $PORT ."
+  ],
+  "saved_entries": [
+   [
+    "import",
+    "support_agent.agent",
+    "look_up_order"
+   ],
+   [
+    "import",
+    "support_agent.agent",
+    "start_return"
+   ],
+   [
+    "import",
+    "support_agent.agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "b6c06fcc8ae6686ef872b1905ab106afc7701511e4f505d6faa735631fca3f6c",
+  "sealed_sha": "d9a91b2b4f99d82f1bcf17b5499ef9f53f42292e6e63a1c64edffc525aa881b4",
+  "trace_version": 1
+ },
+ "two_graphs_with_the_cli_installed": {
+  "control_environment": {
+   "ALK_OBSERVE_FRAMEWORKS": "1",
+   "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
+   "HARNESS_MODE": "1",
+   "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [
+   "look_up_order.py",
+   "return_policy.py",
+   "start_return.py"
+  ],
+  "run_command": [
+   "langgraph",
+   "dev"
+  ],
+  "saved_entries": [
+   [
+    "import",
+    "agent",
+    "look_up_order"
+   ],
+   [
+    "import",
+    "agent",
+    "start_return"
+   ],
+   [
+    "import",
+    "agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "c6444ea290c50b67cb9649fdb878a19bd2617914c7e1ae7727dbed955815ba12",
+  "sealed_sha": "46b50b80d10858877e920e3025ab62cd7a239e56cbef2c3460f417129887f2be",
+  "trace_version": 1
+ },
+ "no_subfolder_root_relative_module": {
+  "control_environment": {
+   "ALK_CALLBACK_ENTRYPOINT": "examples.harness.support.agent:agent_callback",
+   "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"examples.harness.support.agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"examples.harness.support.agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"examples.harness.support.agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"examples.harness.support.agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"examples.harness.support.agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"examples.harness.support.agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
+   "HARNESS_MODE": "1",
+   "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [
+   "look_up_order.py",
+   "return_policy.py",
+   "start_return.py"
+  ],
+  "run_command": [
+   ".venv/bin/python",
+   "-c",
+   "\"\"\"HTTP bridge embedded into hosted bundles for ``fi.simulate`` callbacks.\n\nThe bundle producer serializes this module into the process command.  It deliberately uses only\nthe standard library plus the submitted agent's own ``fi.simulate`` dependency, so a callback-only\nrepository does not need to be modified or taught about the hosted process runtime.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport importlib\nimport inspect\nimport json\nimport os\nimport sys\nimport time\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\nfrom typing import Any\n\n# Main thread only: with livekit installed this import registers plugins.\nfrom fi.simulate import AgentInput\n\n\ndef _load_callback() -> Any:\n    target = os.environ[\"ALK_CALLBACK_ENTRYPOINT\"]\n    module_name, separator, attribute = target.partition(\":\")\n    if not separator or not module_name or not attribute:\n        raise RuntimeError(f\"invalid ALK_CALLBACK_ENTRYPOINT: {target!r}\")\n    callback = getattr(importlib.import_module(module_name), attribute)\n    if not callable(callback):\n        raise RuntimeError(f\"callback entrypoint is not callable: {target!r}\")\n    return callback\n\n\nCALLBACK = _load_callback()\n\n\ndef _json_body(value: Any) -> dict[str, Any]:\n    if hasattr(value, \"model_dump\"):\n        body = value.model_dump(mode=\"json\", exclude_none=True)\n    elif isinstance(value, dict):\n        body = value\n    else:\n        body = {\"content\": str(value)}\n    if not isinstance(body, dict):\n        raise TypeError(\"callback response must serialize to a JSON object\")\n    body.setdefault(\"content\", \"\")\n    return body\n\n\ndef _invoke(payload: dict[str, Any]) -> dict[str, Any]:\n    result = CALLBACK(AgentInput.model_validate(payload))\n    if inspect.isawaitable(result):\n        result = asyncio.run(result)\n    return _json_body(result)\n\n\nclass Handler(BaseHTTPRequestHandler):\n    def _respond(self, status: int, body: dict[str, Any]) -> None:\n        encoded = json.dumps(body, separators=(\",\", \":\")).encode(\"utf-8\")\n        self.send_response(status)\n        self.send_header(\"Content-Type\", \"application/json\")\n        self.send_header(\"Content-Length\", str(len(encoded)))\n        self.end_headers()\n        self.wfile.write(encoded)\n\n    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") == \"/health\":\n            self._respond(200, {\"status\": \"ok\"})\n        else:\n            self._respond(404, {\"error\": \"not_found\"})\n\n    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") != \"/invoke\":\n            self._respond(404, {\"error\": \"not_found\"})\n            return\n        started = time.monotonic()\n        status = 500\n        error_type = \"none\"\n        try:\n            length = int(self.headers.get(\"Content-Length\", \"0\"))\n            payload = json.loads(self.rfile.read(length) or b\"{}\")\n            if not isinstance(payload, dict):\n                raise TypeError(\"request body must be a JSON object\")\n            self._respond(200, _invoke(payload))\n            status = 200\n        except Exception as exc:  # noqa: BLE001 - target errors cross the HTTP seam\n            error_type = type(exc).__name__\n            self._respond(\n                500,\n                {\"error\": f\"{type(exc).__name__}: {exc}\", \"content\": \"\"},\n            )\n        finally:\n            elapsed_ms = round((time.monotonic() - started) * 1000)\n            print(\n                \"callback_http_request \"\n                f\"status={status} elapsed_ms={elapsed_ms} error_type={error_type}\",\n                file=sys.stderr,\n                flush=True,\n            )\n\n    def log_message(self, format: str, *args: Any) -> None:\n        return\n\n\ndef main() -> None:\n    port = int(os.environ.get(\"PORT\", \"8080\"))\n    ThreadingHTTPServer((\"0.0.0.0\", port), Handler).serve_forever()\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  ],
+  "saved_entries": [
+   [
+    "import",
+    "examples.harness.support.agent",
+    "look_up_order"
+   ],
+   [
+    "import",
+    "examples.harness.support.agent",
+    "start_return"
+   ],
+   [
+    "import",
+    "examples.harness.support.agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "256b0d041d25b0fe2a14c100de9910407288e2b79c8f3d979de8314fd52a6348",
+  "sealed_sha": "570142ade527887256514b4eca4a3cccc3eb70bd6df0eb3ecc2c3c422fdd679f",
+  "trace_version": 1
+ },
+ "no_subfolder_unreachable_root_relative_module": {
+  "control_environment": {
+   "ALK_CALLBACK_ENTRYPOINT": "examples.harness.support.agent:agent_callback",
+   "HARNESS_MODE": "1",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [],
+  "run_command": [
+   ".venv/bin/python",
+   "-c",
+   "\"\"\"HTTP bridge embedded into hosted bundles for ``fi.simulate`` callbacks.\n\nThe bundle producer serializes this module into the process command.  It deliberately uses only\nthe standard library plus the submitted agent's own ``fi.simulate`` dependency, so a callback-only\nrepository does not need to be modified or taught about the hosted process runtime.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport importlib\nimport inspect\nimport json\nimport os\nimport sys\nimport time\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\nfrom typing import Any\n\n# Main thread only: with livekit installed this import registers plugins.\nfrom fi.simulate import AgentInput\n\n\ndef _load_callback() -> Any:\n    target = os.environ[\"ALK_CALLBACK_ENTRYPOINT\"]\n    module_name, separator, attribute = target.partition(\":\")\n    if not separator or not module_name or not attribute:\n        raise RuntimeError(f\"invalid ALK_CALLBACK_ENTRYPOINT: {target!r}\")\n    callback = getattr(importlib.import_module(module_name), attribute)\n    if not callable(callback):\n        raise RuntimeError(f\"callback entrypoint is not callable: {target!r}\")\n    return callback\n\n\nCALLBACK = _load_callback()\n\n\ndef _json_body(value: Any) -> dict[str, Any]:\n    if hasattr(value, \"model_dump\"):\n        body = value.model_dump(mode=\"json\", exclude_none=True)\n    elif isinstance(value, dict):\n        body = value\n    else:\n        body = {\"content\": str(value)}\n    if not isinstance(body, dict):\n        raise TypeError(\"callback response must serialize to a JSON object\")\n    body.setdefault(\"content\", \"\")\n    return body\n\n\ndef _invoke(payload: dict[str, Any]) -> dict[str, Any]:\n    result = CALLBACK(AgentInput.model_validate(payload))\n    if inspect.isawaitable(result):\n        result = asyncio.run(result)\n    return _json_body(result)\n\n\nclass Handler(BaseHTTPRequestHandler):\n    def _respond(self, status: int, body: dict[str, Any]) -> None:\n        encoded = json.dumps(body, separators=(\",\", \":\")).encode(\"utf-8\")\n        self.send_response(status)\n        self.send_header(\"Content-Type\", \"application/json\")\n        self.send_header(\"Content-Length\", str(len(encoded)))\n        self.end_headers()\n        self.wfile.write(encoded)\n\n    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") == \"/health\":\n            self._respond(200, {\"status\": \"ok\"})\n        else:\n            self._respond(404, {\"error\": \"not_found\"})\n\n    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") != \"/invoke\":\n            self._respond(404, {\"error\": \"not_found\"})\n            return\n        started = time.monotonic()\n        status = 500\n        error_type = \"none\"\n        try:\n            length = int(self.headers.get(\"Content-Length\", \"0\"))\n            payload = json.loads(self.rfile.read(length) or b\"{}\")\n            if not isinstance(payload, dict):\n                raise TypeError(\"request body must be a JSON object\")\n            self._respond(200, _invoke(payload))\n            status = 200\n        except Exception as exc:  # noqa: BLE001 - target errors cross the HTTP seam\n            error_type = type(exc).__name__\n            self._respond(\n                500,\n                {\"error\": f\"{type(exc).__name__}: {exc}\", \"content\": \"\"},\n            )\n        finally:\n            elapsed_ms = round((time.monotonic() - started) * 1000)\n            print(\n                \"callback_http_request \"\n                f\"status={status} elapsed_ms={elapsed_ms} error_type={error_type}\",\n                file=sys.stderr,\n                flush=True,\n            )\n\n    def log_message(self, format: str, *args: Any) -> None:\n        return\n\n\ndef main() -> None:\n    port = int(os.environ.get(\"PORT\", \"8080\"))\n    ThreadingHTTPServer((\"0.0.0.0\", port), Handler).serve_forever()\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  ],
+  "saved_entries": [
+   [
+    "unreachable",
+    "examples.harness.support.agent",
+    "look_up_order"
+   ],
+   [
+    "unreachable",
+    "examples.harness.support.agent",
+    "start_return"
+   ],
+   [
+    "unreachable",
+    "examples.harness.support.agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "abd845c2047ccb29bfbef72b6fe41a73806bfa4c413c29543dad6d2c2ae034ba",
+  "sealed_sha": "6e58e6b3efec1f0dccae735a81172bea6a3a2f6fc593eb673a64434d29e65aca",
+  "trace_version": null
+ },
+ "agent_folder_inside_a_regular_package": {
+  "control_environment": {
+   "ALK_CALLBACK_ENTRYPOINT": "tools:agent_callback",
+   "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"bench.envs.retail.tools\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"bench.envs.retail.tools\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"bench.envs.retail.tools\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"bench.envs.retail.tools\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"bench.envs.retail.tools\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"bench.envs.retail.tools\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
+   "HARNESS_MODE": "1",
+   "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [
+   "look_up_order.py",
+   "return_policy.py",
+   "start_return.py"
+  ],
+  "run_command": [
+   "sh",
+   "-c",
+   "cd \"./$1\" && shift && exec \"$@\"",
+   "alk-source-process",
+   "envs/retail",
+   "uv",
+   "run",
+   "--no-sync",
+   "python",
+   "-c",
+   "\"\"\"HTTP bridge embedded into hosted bundles for ``fi.simulate`` callbacks.\n\nThe bundle producer serializes this module into the process command.  It deliberately uses only\nthe standard library plus the submitted agent's own ``fi.simulate`` dependency, so a callback-only\nrepository does not need to be modified or taught about the hosted process runtime.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport importlib\nimport inspect\nimport json\nimport os\nimport sys\nimport time\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\nfrom typing import Any\n\n# Main thread only: with livekit installed this import registers plugins.\nfrom fi.simulate import AgentInput\n\n\ndef _load_callback() -> Any:\n    target = os.environ[\"ALK_CALLBACK_ENTRYPOINT\"]\n    module_name, separator, attribute = target.partition(\":\")\n    if not separator or not module_name or not attribute:\n        raise RuntimeError(f\"invalid ALK_CALLBACK_ENTRYPOINT: {target!r}\")\n    callback = getattr(importlib.import_module(module_name), attribute)\n    if not callable(callback):\n        raise RuntimeError(f\"callback entrypoint is not callable: {target!r}\")\n    return callback\n\n\nCALLBACK = _load_callback()\n\n\ndef _json_body(value: Any) -> dict[str, Any]:\n    if hasattr(value, \"model_dump\"):\n        body = value.model_dump(mode=\"json\", exclude_none=True)\n    elif isinstance(value, dict):\n        body = value\n    else:\n        body = {\"content\": str(value)}\n    if not isinstance(body, dict):\n        raise TypeError(\"callback response must serialize to a JSON object\")\n    body.setdefault(\"content\", \"\")\n    return body\n\n\ndef _invoke(payload: dict[str, Any]) -> dict[str, Any]:\n    result = CALLBACK(AgentInput.model_validate(payload))\n    if inspect.isawaitable(result):\n        result = asyncio.run(result)\n    return _json_body(result)\n\n\nclass Handler(BaseHTTPRequestHandler):\n    def _respond(self, status: int, body: dict[str, Any]) -> None:\n        encoded = json.dumps(body, separators=(\",\", \":\")).encode(\"utf-8\")\n        self.send_response(status)\n        self.send_header(\"Content-Type\", \"application/json\")\n        self.send_header(\"Content-Length\", str(len(encoded)))\n        self.end_headers()\n        self.wfile.write(encoded)\n\n    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") == \"/health\":\n            self._respond(200, {\"status\": \"ok\"})\n        else:\n            self._respond(404, {\"error\": \"not_found\"})\n\n    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") != \"/invoke\":\n            self._respond(404, {\"error\": \"not_found\"})\n            return\n        started = time.monotonic()\n        status = 500\n        error_type = \"none\"\n        try:\n            length = int(self.headers.get(\"Content-Length\", \"0\"))\n            payload = json.loads(self.rfile.read(length) or b\"{}\")\n            if not isinstance(payload, dict):\n                raise TypeError(\"request body must be a JSON object\")\n            self._respond(200, _invoke(payload))\n            status = 200\n        except Exception as exc:  # noqa: BLE001 - target errors cross the HTTP seam\n            error_type = type(exc).__name__\n            self._respond(\n                500,\n                {\"error\": f\"{type(exc).__name__}: {exc}\", \"content\": \"\"},\n            )\n        finally:\n            elapsed_ms = round((time.monotonic() - started) * 1000)\n            print(\n                \"callback_http_request \"\n                f\"status={status} elapsed_ms={elapsed_ms} error_type={error_type}\",\n                file=sys.stderr,\n                flush=True,\n            )\n\n    def log_message(self, format: str, *args: Any) -> None:\n        return\n\n\ndef main() -> None:\n    port = int(os.environ.get(\"PORT\", \"8080\"))\n    ThreadingHTTPServer((\"0.0.0.0\", port), Handler).serve_forever()\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  ],
+  "saved_entries": [
+   [
+    "import",
+    "bench.envs.retail.tools",
+    "look_up_order"
+   ],
+   [
+    "import",
+    "bench.envs.retail.tools",
+    "start_return"
+   ],
+   [
+    "import",
+    "bench.envs.retail.tools",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "e8b52365dffbe5769f96622ce2bafe550c4d57cc537e8cdacfea2a6564337c9e",
+  "sealed_sha": "86d4af18d5abec8346cc342346cc8f060e5b83fe081812a187d689c35e45440f",
+  "trace_version": 1
+ },
+ "unreachable_inside_a_regular_package": {
+  "control_environment": {
+   "ALK_CALLBACK_ENTRYPOINT": "tools:agent_callback",
+   "HARNESS_MODE": "1",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [],
+  "run_command": [
+   "sh",
+   "-c",
+   "cd \"./$1\" && shift && exec \"$@\"",
+   "alk-source-process",
+   "envs/retail",
+   "uv",
+   "run",
+   "--no-sync",
+   "python",
+   "-c",
+   "\"\"\"HTTP bridge embedded into hosted bundles for ``fi.simulate`` callbacks.\n\nThe bundle producer serializes this module into the process command.  It deliberately uses only\nthe standard library plus the submitted agent's own ``fi.simulate`` dependency, so a callback-only\nrepository does not need to be modified or taught about the hosted process runtime.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport importlib\nimport inspect\nimport json\nimport os\nimport sys\nimport time\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\nfrom typing import Any\n\n# Main thread only: with livekit installed this import registers plugins.\nfrom fi.simulate import AgentInput\n\n\ndef _load_callback() -> Any:\n    target = os.environ[\"ALK_CALLBACK_ENTRYPOINT\"]\n    module_name, separator, attribute = target.partition(\":\")\n    if not separator or not module_name or not attribute:\n        raise RuntimeError(f\"invalid ALK_CALLBACK_ENTRYPOINT: {target!r}\")\n    callback = getattr(importlib.import_module(module_name), attribute)\n    if not callable(callback):\n        raise RuntimeError(f\"callback entrypoint is not callable: {target!r}\")\n    return callback\n\n\nCALLBACK = _load_callback()\n\n\ndef _json_body(value: Any) -> dict[str, Any]:\n    if hasattr(value, \"model_dump\"):\n        body = value.model_dump(mode=\"json\", exclude_none=True)\n    elif isinstance(value, dict):\n        body = value\n    else:\n        body = {\"content\": str(value)}\n    if not isinstance(body, dict):\n        raise TypeError(\"callback response must serialize to a JSON object\")\n    body.setdefault(\"content\", \"\")\n    return body\n\n\ndef _invoke(payload: dict[str, Any]) -> dict[str, Any]:\n    result = CALLBACK(AgentInput.model_validate(payload))\n    if inspect.isawaitable(result):\n        result = asyncio.run(result)\n    return _json_body(result)\n\n\nclass Handler(BaseHTTPRequestHandler):\n    def _respond(self, status: int, body: dict[str, Any]) -> None:\n        encoded = json.dumps(body, separators=(\",\", \":\")).encode(\"utf-8\")\n        self.send_response(status)\n        self.send_header(\"Content-Type\", \"application/json\")\n        self.send_header(\"Content-Length\", str(len(encoded)))\n        self.end_headers()\n        self.wfile.write(encoded)\n\n    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") == \"/health\":\n            self._respond(200, {\"status\": \"ok\"})\n        else:\n            self._respond(404, {\"error\": \"not_found\"})\n\n    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") != \"/invoke\":\n            self._respond(404, {\"error\": \"not_found\"})\n            return\n        started = time.monotonic()\n        status = 500\n        error_type = \"none\"\n        try:\n            length = int(self.headers.get(\"Content-Length\", \"0\"))\n            payload = json.loads(self.rfile.read(length) or b\"{}\")\n            if not isinstance(payload, dict):\n                raise TypeError(\"request body must be a JSON object\")\n            self._respond(200, _invoke(payload))\n            status = 200\n        except Exception as exc:  # noqa: BLE001 - target errors cross the HTTP seam\n            error_type = type(exc).__name__\n            self._respond(\n                500,\n                {\"error\": f\"{type(exc).__name__}: {exc}\", \"content\": \"\"},\n            )\n        finally:\n            elapsed_ms = round((time.monotonic() - started) * 1000)\n            print(\n                \"callback_http_request \"\n                f\"status={status} elapsed_ms={elapsed_ms} error_type={error_type}\",\n                file=sys.stderr,\n                flush=True,\n            )\n\n    def log_message(self, format: str, *args: Any) -> None:\n        return\n\n\ndef main() -> None:\n    port = int(os.environ.get(\"PORT\", \"8080\"))\n    ThreadingHTTPServer((\"0.0.0.0\", port), Handler).serve_forever()\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  ],
+  "saved_entries": [
+   [
+    "unreachable",
+    "bench.envs.retail.tools",
+    "look_up_order"
+   ],
+   [
+    "unreachable",
+    "bench.envs.retail.tools",
+    "start_return"
+   ],
+   [
+    "unreachable",
+    "bench.envs.retail.tools",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "02227ba89f5a016c3771f88ae67f8ec738cf2c70afd64e9f7903a9ab8cef8793",
+  "sealed_sha": "dd9c3afe752c4458944ab67dd5128ef7def71575d86e8397cbe7a1eabe836d82",
+  "trace_version": null
+ },
+ "langchain_harbor_hotels": {
+  "control_environment": {
+   "ALK_OBSERVE_FRAMEWORKS": "1",
+   "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"check_availability\", \"module\": \"agent\", \"callable\": \"check_availability\"}, {\"name\": \"book_room\", \"module\": \"agent\", \"callable\": \"book_room\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"check_availability\", \"module\": \"agent\", \"name\": \"check_availability\"}, {\"callable\": \"book_room\", \"module\": \"agent\", \"name\": \"book_room\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
+   "HARNESS_MODE": "1",
+   "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [
+   "book_room.py",
+   "check_availability.py"
+  ],
+  "run_command": [
+   "python",
+   "-m",
+   "agent"
+  ],
+  "saved_entries": [
+   [
+    "import",
+    "agent",
+    "check_availability"
+   ],
+   [
+    "import",
+    "agent",
+    "book_room"
+   ]
+  ],
+  "saved_sha": "d56a398561250588bea08c526c40944236e0c9ce51709a6658e721f07e257f67",
+  "sealed_sha": "5bf268a01381b05b09dda3c390af9e8fb8eb0b0c46f6589a2517983fb4a6d5b9",
+  "trace_version": 1
+ },
+ "langgraph_json_with_http": {
+  "control_environment": {
+   "ALK_OBSERVE_FRAMEWORKS": "1",
+   "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
+   "HARNESS_MODE": "1",
+   "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [
+   "look_up_order.py",
+   "return_policy.py",
+   "start_return.py"
+  ],
+  "run_command": [
+   "langgraph",
+   "dev"
+  ],
+  "saved_entries": [
+   [
+    "import",
+    "agent",
+    "look_up_order"
+   ],
+   [
+    "import",
+    "agent",
+    "start_return"
+   ],
+   [
+    "import",
+    "agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "c6444ea290c50b67cb9649fdb878a19bd2617914c7e1ae7727dbed955815ba12",
+  "sealed_sha": "46b50b80d10858877e920e3025ab62cd7a239e56cbef2c3460f417129887f2be",
+  "trace_version": 1
+ },
+ "livekit_voice_with_unreachable": {
+  "control_environment": {
+   "FI_WORKER_HEALTH_PORT": "{{PORT_agent}}",
+   "HARNESS_MODE": "1",
+   "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+   "LIVEKIT_AGENT_NAME": "source-{{JOB_ID}}-w{{WORLD_INDEX}}"
+  },
+  "handlers": [],
+  "run_command": [
+   "uv",
+   "run",
+   "--no-sync",
+   "python",
+   "agent.py"
+  ],
+  "sealed_sha": "bf5c9cbef36da3058bcca003bd8bea3cabb220ce3bedecca54ef43692bf62981",
+  "trace_version": null
+ },
+ "outer_svc_agent_beside_inner": {
+  "control_environment": {
+   "ALK_CALLBACK_ENTRYPOINT": "agent:agent_callback",
+   "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"svc.agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"svc.agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"svc.agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"svc.agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"svc.agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"svc.agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
+   "HARNESS_MODE": "1",
+   "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [
+   "look_up_order.py",
+   "return_policy.py",
+   "start_return.py"
+  ],
+  "run_command": [
+   "uv",
+   "run",
+   "--no-sync",
+   "python",
+   "-c",
+   "\"\"\"HTTP bridge embedded into hosted bundles for ``fi.simulate`` callbacks.\n\nThe bundle producer serializes this module into the process command.  It deliberately uses only\nthe standard library plus the submitted agent's own ``fi.simulate`` dependency, so a callback-only\nrepository does not need to be modified or taught about the hosted process runtime.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport importlib\nimport inspect\nimport json\nimport os\nimport sys\nimport time\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\nfrom typing import Any\n\n# Main thread only: with livekit installed this import registers plugins.\nfrom fi.simulate import AgentInput\n\n\ndef _load_callback() -> Any:\n    target = os.environ[\"ALK_CALLBACK_ENTRYPOINT\"]\n    module_name, separator, attribute = target.partition(\":\")\n    if not separator or not module_name or not attribute:\n        raise RuntimeError(f\"invalid ALK_CALLBACK_ENTRYPOINT: {target!r}\")\n    callback = getattr(importlib.import_module(module_name), attribute)\n    if not callable(callback):\n        raise RuntimeError(f\"callback entrypoint is not callable: {target!r}\")\n    return callback\n\n\nCALLBACK = _load_callback()\n\n\ndef _json_body(value: Any) -> dict[str, Any]:\n    if hasattr(value, \"model_dump\"):\n        body = value.model_dump(mode=\"json\", exclude_none=True)\n    elif isinstance(value, dict):\n        body = value\n    else:\n        body = {\"content\": str(value)}\n    if not isinstance(body, dict):\n        raise TypeError(\"callback response must serialize to a JSON object\")\n    body.setdefault(\"content\", \"\")\n    return body\n\n\ndef _invoke(payload: dict[str, Any]) -> dict[str, Any]:\n    result = CALLBACK(AgentInput.model_validate(payload))\n    if inspect.isawaitable(result):\n        result = asyncio.run(result)\n    return _json_body(result)\n\n\nclass Handler(BaseHTTPRequestHandler):\n    def _respond(self, status: int, body: dict[str, Any]) -> None:\n        encoded = json.dumps(body, separators=(\",\", \":\")).encode(\"utf-8\")\n        self.send_response(status)\n        self.send_header(\"Content-Type\", \"application/json\")\n        self.send_header(\"Content-Length\", str(len(encoded)))\n        self.end_headers()\n        self.wfile.write(encoded)\n\n    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") == \"/health\":\n            self._respond(200, {\"status\": \"ok\"})\n        else:\n            self._respond(404, {\"error\": \"not_found\"})\n\n    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") != \"/invoke\":\n            self._respond(404, {\"error\": \"not_found\"})\n            return\n        started = time.monotonic()\n        status = 500\n        error_type = \"none\"\n        try:\n            length = int(self.headers.get(\"Content-Length\", \"0\"))\n            payload = json.loads(self.rfile.read(length) or b\"{}\")\n            if not isinstance(payload, dict):\n                raise TypeError(\"request body must be a JSON object\")\n            self._respond(200, _invoke(payload))\n            status = 200\n        except Exception as exc:  # noqa: BLE001 - target errors cross the HTTP seam\n            error_type = type(exc).__name__\n            self._respond(\n                500,\n                {\"error\": f\"{type(exc).__name__}: {exc}\", \"content\": \"\"},\n            )\n        finally:\n            elapsed_ms = round((time.monotonic() - started) * 1000)\n            print(\n                \"callback_http_request \"\n                f\"status={status} elapsed_ms={elapsed_ms} error_type={error_type}\",\n                file=sys.stderr,\n                flush=True,\n            )\n\n    def log_message(self, format: str, *args: Any) -> None:\n        return\n\n\ndef main() -> None:\n    port = int(os.environ.get(\"PORT\", \"8080\"))\n    ThreadingHTTPServer((\"0.0.0.0\", port), Handler).serve_forever()\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  ],
+  "saved_entries": [
+   [
+    "import",
+    "svc.agent",
+    "look_up_order"
+   ],
+   [
+    "import",
+    "svc.agent",
+    "start_return"
+   ],
+   [
+    "import",
+    "svc.agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "3e3468fece2bf36e5c7d28dd63c04911e60c0fddcd82e9167750d75cb656085b",
+  "sealed_sha": "2c05e57fd4e2fe9d8e0b7c6e26f09b9e8f886341910b6aab715596f5fb593a3e",
+  "trace_version": 1
+ },
+ "provider_chat_source": {
+  "saved_entries": [],
+  "saved_sha": "11c46ed8f4bddb11f2df20b73c2f22d06bdd247a186c0676dead93fd40b86a97"
+ },
+ "provider_no_prompt": {
+  "saved_entries": [
+   [
+    "import",
+    "faq.tools",
+    "search_faq"
+   ]
+  ],
+  "saved_sha": "11727f79bda961ea84ea3f0af886abae3ee20f40a1ef44c1e4f20d8ff1add0ba"
+ },
+ "provider_no_tools": {
+  "saved_entries": [],
+  "saved_sha": "d61cb22c69fc50132f47fdbe3f72815658a5c44e61f7581e195e216ff9bde693"
+ },
+ "provider_opentelemetry_instrumented": {
+  "saved_entries": [
+   [
+    "service",
+    "",
+    ""
+   ]
+  ],
+  "saved_sha": "396aa779e7e0ac487e0253aa952e7a1d98f03cf494e0ff323b188655f1ad9c85"
+ },
+ "provider_service_tool": {
+  "saved_entries": [
+   [
+    "service",
+    "",
+    ""
+   ]
+  ],
+  "saved_sha": "fa590163e1d7d5fa9aec50cf711f32994c5fd93e35beb74ad7e894ea88ffa076"
+ },
+ "provider_traceai_instrumented": {
+  "saved_entries": [
+   [
+    "import",
+    "billing.tools",
+    "get_invoice"
+   ]
+  ],
+  "saved_sha": "a204ad8c51fc791e6392505b64108e14deae961a391bd6595b3a8a22979096c2"
+ },
+ "provider_voice_source": {
+  "saved_entries": [
+   [
+    "import",
+    "clinic.tools",
+    "find_slots"
+   ],
+   [
+    "construct",
+    "clinic.agent",
+    "Receptionist.book_slot"
+   ]
+  ],
+  "saved_sha": "6b6a37b4bba55c9a1dfc234de7144e8c4f7128d2923495eaa8f7272e3e33d33f"
+ },
+ "pydantic_ai": {
+  "control_environment": {
+   "ALK_CALLBACK_ENTRYPOINT": "agent:agent_callback",
+   "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
+   "HARNESS_MODE": "1",
+   "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [
+   "look_up_order.py",
+   "return_policy.py",
+   "start_return.py"
+  ],
+  "run_command": [
+   ".venv/bin/python",
+   "-c",
+   "\"\"\"HTTP bridge embedded into hosted bundles for ``fi.simulate`` callbacks.\n\nThe bundle producer serializes this module into the process command.  It deliberately uses only\nthe standard library plus the submitted agent's own ``fi.simulate`` dependency, so a callback-only\nrepository does not need to be modified or taught about the hosted process runtime.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport importlib\nimport inspect\nimport json\nimport os\nimport sys\nimport time\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\nfrom typing import Any\n\n# Main thread only: with livekit installed this import registers plugins.\nfrom fi.simulate import AgentInput\n\n\ndef _load_callback() -> Any:\n    target = os.environ[\"ALK_CALLBACK_ENTRYPOINT\"]\n    module_name, separator, attribute = target.partition(\":\")\n    if not separator or not module_name or not attribute:\n        raise RuntimeError(f\"invalid ALK_CALLBACK_ENTRYPOINT: {target!r}\")\n    callback = getattr(importlib.import_module(module_name), attribute)\n    if not callable(callback):\n        raise RuntimeError(f\"callback entrypoint is not callable: {target!r}\")\n    return callback\n\n\nCALLBACK = _load_callback()\n\n\ndef _json_body(value: Any) -> dict[str, Any]:\n    if hasattr(value, \"model_dump\"):\n        body = value.model_dump(mode=\"json\", exclude_none=True)\n    elif isinstance(value, dict):\n        body = value\n    else:\n        body = {\"content\": str(value)}\n    if not isinstance(body, dict):\n        raise TypeError(\"callback response must serialize to a JSON object\")\n    body.setdefault(\"content\", \"\")\n    return body\n\n\ndef _invoke(payload: dict[str, Any]) -> dict[str, Any]:\n    result = CALLBACK(AgentInput.model_validate(payload))\n    if inspect.isawaitable(result):\n        result = asyncio.run(result)\n    return _json_body(result)\n\n\nclass Handler(BaseHTTPRequestHandler):\n    def _respond(self, status: int, body: dict[str, Any]) -> None:\n        encoded = json.dumps(body, separators=(\",\", \":\")).encode(\"utf-8\")\n        self.send_response(status)\n        self.send_header(\"Content-Type\", \"application/json\")\n        self.send_header(\"Content-Length\", str(len(encoded)))\n        self.end_headers()\n        self.wfile.write(encoded)\n\n    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") == \"/health\":\n            self._respond(200, {\"status\": \"ok\"})\n        else:\n            self._respond(404, {\"error\": \"not_found\"})\n\n    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") != \"/invoke\":\n            self._respond(404, {\"error\": \"not_found\"})\n            return\n        started = time.monotonic()\n        status = 500\n        error_type = \"none\"\n        try:\n            length = int(self.headers.get(\"Content-Length\", \"0\"))\n            payload = json.loads(self.rfile.read(length) or b\"{}\")\n            if not isinstance(payload, dict):\n                raise TypeError(\"request body must be a JSON object\")\n            self._respond(200, _invoke(payload))\n            status = 200\n        except Exception as exc:  # noqa: BLE001 - target errors cross the HTTP seam\n            error_type = type(exc).__name__\n            self._respond(\n                500,\n                {\"error\": f\"{type(exc).__name__}: {exc}\", \"content\": \"\"},\n            )\n        finally:\n            elapsed_ms = round((time.monotonic() - started) * 1000)\n            print(\n                \"callback_http_request \"\n                f\"status={status} elapsed_ms={elapsed_ms} error_type={error_type}\",\n                file=sys.stderr,\n                flush=True,\n            )\n\n    def log_message(self, format: str, *args: Any) -> None:\n        return\n\n\ndef main() -> None:\n    port = int(os.environ.get(\"PORT\", \"8080\"))\n    ThreadingHTTPServer((\"0.0.0.0\", port), Handler).serve_forever()\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  ],
+  "saved_entries": [
+   [
+    "import",
+    "agent",
+    "look_up_order"
+   ],
+   [
+    "import",
+    "agent",
+    "start_return"
+   ],
+   [
+    "import",
+    "agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "2274151c219aa11edb5c173c12e2bac12fae8b8d1f008c930a1e9f943378c28d",
+  "sealed_sha": "1ffe5a670007eea85017caae36df54a211abe2167abd12f65ed8e64343f9a439",
+  "trace_version": 1
+ },
+ "saved_unreachable_entry_with_module_and_callable": {
+  "control_environment": {
+   "ALK_CALLBACK_ENTRYPOINT": "agent:agent_callback",
+   "HARNESS_MODE": "1",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [],
+  "run_command": [
+   ".venv/bin/python",
+   "-c",
+   "\"\"\"HTTP bridge embedded into hosted bundles for ``fi.simulate`` callbacks.\n\nThe bundle producer serializes this module into the process command.  It deliberately uses only\nthe standard library plus the submitted agent's own ``fi.simulate`` dependency, so a callback-only\nrepository does not need to be modified or taught about the hosted process runtime.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport importlib\nimport inspect\nimport json\nimport os\nimport sys\nimport time\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\nfrom typing import Any\n\n# Main thread only: with livekit installed this import registers plugins.\nfrom fi.simulate import AgentInput\n\n\ndef _load_callback() -> Any:\n    target = os.environ[\"ALK_CALLBACK_ENTRYPOINT\"]\n    module_name, separator, attribute = target.partition(\":\")\n    if not separator or not module_name or not attribute:\n        raise RuntimeError(f\"invalid ALK_CALLBACK_ENTRYPOINT: {target!r}\")\n    callback = getattr(importlib.import_module(module_name), attribute)\n    if not callable(callback):\n        raise RuntimeError(f\"callback entrypoint is not callable: {target!r}\")\n    return callback\n\n\nCALLBACK = _load_callback()\n\n\ndef _json_body(value: Any) -> dict[str, Any]:\n    if hasattr(value, \"model_dump\"):\n        body = value.model_dump(mode=\"json\", exclude_none=True)\n    elif isinstance(value, dict):\n        body = value\n    else:\n        body = {\"content\": str(value)}\n    if not isinstance(body, dict):\n        raise TypeError(\"callback response must serialize to a JSON object\")\n    body.setdefault(\"content\", \"\")\n    return body\n\n\ndef _invoke(payload: dict[str, Any]) -> dict[str, Any]:\n    result = CALLBACK(AgentInput.model_validate(payload))\n    if inspect.isawaitable(result):\n        result = asyncio.run(result)\n    return _json_body(result)\n\n\nclass Handler(BaseHTTPRequestHandler):\n    def _respond(self, status: int, body: dict[str, Any]) -> None:\n        encoded = json.dumps(body, separators=(\",\", \":\")).encode(\"utf-8\")\n        self.send_response(status)\n        self.send_header(\"Content-Type\", \"application/json\")\n        self.send_header(\"Content-Length\", str(len(encoded)))\n        self.end_headers()\n        self.wfile.write(encoded)\n\n    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") == \"/health\":\n            self._respond(200, {\"status\": \"ok\"})\n        else:\n            self._respond(404, {\"error\": \"not_found\"})\n\n    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") != \"/invoke\":\n            self._respond(404, {\"error\": \"not_found\"})\n            return\n        started = time.monotonic()\n        status = 500\n        error_type = \"none\"\n        try:\n            length = int(self.headers.get(\"Content-Length\", \"0\"))\n            payload = json.loads(self.rfile.read(length) or b\"{}\")\n            if not isinstance(payload, dict):\n                raise TypeError(\"request body must be a JSON object\")\n            self._respond(200, _invoke(payload))\n            status = 200\n        except Exception as exc:  # noqa: BLE001 - target errors cross the HTTP seam\n            error_type = type(exc).__name__\n            self._respond(\n                500,\n                {\"error\": f\"{type(exc).__name__}: {exc}\", \"content\": \"\"},\n            )\n        finally:\n            elapsed_ms = round((time.monotonic() - started) * 1000)\n            print(\n                \"callback_http_request \"\n                f\"status={status} elapsed_ms={elapsed_ms} error_type={error_type}\",\n                file=sys.stderr,\n                flush=True,\n            )\n\n    def log_message(self, format: str, *args: Any) -> None:\n        return\n\n\ndef main() -> None:\n    port = int(os.environ.get(\"PORT\", \"8080\"))\n    ThreadingHTTPServer((\"0.0.0.0\", port), Handler).serve_forever()\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  ],
+  "saved_entries": [
+   [
+    "unreachable",
+    "agent",
+    "look_up_order"
+   ],
+   [
+    "unreachable",
+    "agent",
+    "start_return"
+   ],
+   [
+    "unreachable",
+    "agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "bfd0da555f3c189c935206fadbc8b0175fb2e89312c682170c37e07fd9060a1c",
+  "sealed_sha": "6fedb3eecb2b38db2e5542e48588f57c3942d5c2902c55d0913db7c2837d2360",
+  "trace_version": null
+ },
+ "uv_run_langgraph_dev": {
+  "control_environment": {
+   "ALK_OBSERVE_FRAMEWORKS": "1",
+   "ALK_TOOL_TRACE_BINDINGS": "[{\"name\": \"look_up_order\", \"module\": \"agent\", \"callable\": \"look_up_order\"}, {\"name\": \"start_return\", \"module\": \"agent\", \"callable\": \"start_return\"}, {\"name\": \"return_policy\", \"module\": \"agent\", \"callable\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_BINDINGS": "[{\"callable\": \"look_up_order\", \"module\": \"agent\", \"name\": \"look_up_order\"}, {\"callable\": \"start_return\", \"module\": \"agent\", \"name\": \"start_return\"}, {\"callable\": \"return_policy\", \"module\": \"agent\", \"name\": \"return_policy\"}]",
+   "ALK_WORLD_DOOR_URL": "{{ALK_WORLD_DOOR_URL}}",
+   "HARNESS_MODE": "1",
+   "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [
+   "look_up_order.py",
+   "return_policy.py",
+   "start_return.py"
+  ],
+  "run_command": [
+   "uv",
+   "run",
+   "--with",
+   "langgraph-cli[inmem]",
+   "langgraph",
+   "dev"
+  ],
+  "saved_entries": [
+   [
+    "import",
+    "agent",
+    "look_up_order"
+   ],
+   [
+    "import",
+    "agent",
+    "start_return"
+   ],
+   [
+    "import",
+    "agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "7a87aaa0afec68ec07b1c1e0781210ada14984b0d5219ab65d3e2d837bb817c3",
+  "sealed_sha": "4389725c0239165f10d57f5ff89f112d1bc9cca48755fdf5af6208c7512a2d67",
+  "trace_version": 1
+ },
+ "workdir_deeper_than_the_subfolder": {
+  "control_environment": {
+   "ALK_CALLBACK_ENTRYPOINT": "agent:agent_callback",
+   "HARNESS_MODE": "1",
+   "PORT": "{{PORT_agent}}"
+  },
+  "handlers": [],
+  "run_command": [
+   ".venv/bin/python",
+   "-c",
+   "\"\"\"HTTP bridge embedded into hosted bundles for ``fi.simulate`` callbacks.\n\nThe bundle producer serializes this module into the process command.  It deliberately uses only\nthe standard library plus the submitted agent's own ``fi.simulate`` dependency, so a callback-only\nrepository does not need to be modified or taught about the hosted process runtime.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport importlib\nimport inspect\nimport json\nimport os\nimport sys\nimport time\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\nfrom typing import Any\n\n# Main thread only: with livekit installed this import registers plugins.\nfrom fi.simulate import AgentInput\n\n\ndef _load_callback() -> Any:\n    target = os.environ[\"ALK_CALLBACK_ENTRYPOINT\"]\n    module_name, separator, attribute = target.partition(\":\")\n    if not separator or not module_name or not attribute:\n        raise RuntimeError(f\"invalid ALK_CALLBACK_ENTRYPOINT: {target!r}\")\n    callback = getattr(importlib.import_module(module_name), attribute)\n    if not callable(callback):\n        raise RuntimeError(f\"callback entrypoint is not callable: {target!r}\")\n    return callback\n\n\nCALLBACK = _load_callback()\n\n\ndef _json_body(value: Any) -> dict[str, Any]:\n    if hasattr(value, \"model_dump\"):\n        body = value.model_dump(mode=\"json\", exclude_none=True)\n    elif isinstance(value, dict):\n        body = value\n    else:\n        body = {\"content\": str(value)}\n    if not isinstance(body, dict):\n        raise TypeError(\"callback response must serialize to a JSON object\")\n    body.setdefault(\"content\", \"\")\n    return body\n\n\ndef _invoke(payload: dict[str, Any]) -> dict[str, Any]:\n    result = CALLBACK(AgentInput.model_validate(payload))\n    if inspect.isawaitable(result):\n        result = asyncio.run(result)\n    return _json_body(result)\n\n\nclass Handler(BaseHTTPRequestHandler):\n    def _respond(self, status: int, body: dict[str, Any]) -> None:\n        encoded = json.dumps(body, separators=(\",\", \":\")).encode(\"utf-8\")\n        self.send_response(status)\n        self.send_header(\"Content-Type\", \"application/json\")\n        self.send_header(\"Content-Length\", str(len(encoded)))\n        self.end_headers()\n        self.wfile.write(encoded)\n\n    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") == \"/health\":\n            self._respond(200, {\"status\": \"ok\"})\n        else:\n            self._respond(404, {\"error\": \"not_found\"})\n\n    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API\n        if self.path.rstrip(\"/\") != \"/invoke\":\n            self._respond(404, {\"error\": \"not_found\"})\n            return\n        started = time.monotonic()\n        status = 500\n        error_type = \"none\"\n        try:\n            length = int(self.headers.get(\"Content-Length\", \"0\"))\n            payload = json.loads(self.rfile.read(length) or b\"{}\")\n            if not isinstance(payload, dict):\n                raise TypeError(\"request body must be a JSON object\")\n            self._respond(200, _invoke(payload))\n            status = 200\n        except Exception as exc:  # noqa: BLE001 - target errors cross the HTTP seam\n            error_type = type(exc).__name__\n            self._respond(\n                500,\n                {\"error\": f\"{type(exc).__name__}: {exc}\", \"content\": \"\"},\n            )\n        finally:\n            elapsed_ms = round((time.monotonic() - started) * 1000)\n            print(\n                \"callback_http_request \"\n                f\"status={status} elapsed_ms={elapsed_ms} error_type={error_type}\",\n                file=sys.stderr,\n                flush=True,\n            )\n\n    def log_message(self, format: str, *args: Any) -> None:\n        return\n\n\ndef main() -> None:\n    port = int(os.environ.get(\"PORT\", \"8080\"))\n    ThreadingHTTPServer((\"0.0.0.0\", port), Handler).serve_forever()\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  ],
+  "saved_entries": [
+   [
+    "unreachable",
+    "agent",
+    "look_up_order"
+   ],
+   [
+    "unreachable",
+    "agent",
+    "start_return"
+   ],
+   [
+    "unreachable",
+    "agent",
+    "return_policy"
+   ]
+  ],
+  "saved_sha": "44f9bed2658cd4b01ef08237d37aacd1d0c06501097366aca81bec862563f2cf",
+  "sealed_sha": "76131ed8f907f651c481250bf591c64ceea1b35ba93529e1d7a1deb88ac2a1cb",
+  "trace_version": null
+ }
+}

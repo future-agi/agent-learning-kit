@@ -1,4 +1,5 @@
 import json
+from typing import Any
 import logging
 import os
 import stat
@@ -1253,10 +1254,31 @@ def _record_compose(monkeypatch, *, raises=None, returncode=0, output=""):
                 directory_mode=stat.S_IMODE(path.parent.stat().st_mode),
                 values=_parse_env_file(path.read_text(encoding="utf-8")),
             )
+        # Override files and the service env files they name, read while Compose would read them.
+        overrides: dict[str, Any] = {}
+        service_env_files: dict[str, types.SimpleNamespace] = {}
+        for index, argument in enumerate(command[:-1]):
+            if argument != "--file" or not Path(command[index + 1]).is_file():
+                continue
+            text = Path(command[index + 1]).read_text(encoding="utf-8")
+            try:
+                document = json.loads(text)
+            except ValueError:
+                continue
+            overrides[command[index + 1]] = document
+            for service in (document.get("services") or {}).values():
+                for named in (service or {}).get("env_file") or []:
+                    path = Path(named)
+                    service_env_files[named] = types.SimpleNamespace(
+                        mode=stat.S_IMODE(path.stat().st_mode),
+                        values=_parse_env_file(path.read_text(encoding="utf-8")),
+                    )
         call = types.SimpleNamespace(
             argv=list(command),
             env=dict(kwargs["env"]),
             env_files=env_files,
+            overrides=overrides,
+            service_env_files=service_env_files,
             job=job,
             cwd=kwargs.get("cwd"),
             cwd_listing=(
@@ -1443,6 +1465,168 @@ def _drive_start_runtime(destination: Path, monkeypatch, **kwargs) -> list:
     )
     provisioning.start_runtime(destination, **kwargs)
     return calls
+
+
+_AGENT_SETTINGS = {
+    "HTTPS_PROXY": "http://proxy.agent.invalid:3128",
+    "LANG": "de_DE.UTF-8",
+    "SSL_CERT_FILE": "/agent/ca.pem",
+}
+
+
+def _agent_settings_environment(tmp_path: Path, monkeypatch, *, managed: bool):
+    names = [*_AGENT_SETTINGS, "MY_KEY"]
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(names))
+    for name, value in {**_AGENT_SETTINGS, "MY_KEY": "own"}.items():
+        monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", value)
+    environment = _compose_environment(
+        tmp_path,
+        runtime_services=["agent-runtime"],
+        running=True,
+        managed=managed,
+        runtime_configuration_names=names,
+    )
+    environment.save(tmp_path)
+    return environment
+
+
+def test_a_kit_written_runtime_gives_the_agent_its_proxy_ca_and_locale_settings(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    # Compose reads these names for itself, so they never go through its environment or the
+    # job's env file. Where the kit wrote the service file, they go to the agent's own service
+    # as its env_file, which reaches that container and nothing else.
+    _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+
+    with caplog.at_level("WARNING"):
+        calls = _drive_start_runtime(tmp_path, monkeypatch)
+
+    # Delivered, so not reported as skipped.
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert not any(name in logged for name in _AGENT_SETTINGS), logged
+    run_call = next(call for call in calls if "run" in call.argv)
+    [override] = run_call.overrides.values()
+    [(path, delivered)] = run_call.service_env_files.items()
+    # Only the agent's service gets the file, never a helper service in the same project.
+    assert override == {"services": {"agent-runtime": {"env_file": [path]}}}
+    assert delivered.values == _AGENT_SETTINGS
+    assert delivered.mode == 0o600
+    for name in _AGENT_SETTINGS:
+        assert name not in _seen(run_call), name
+        assert name not in run_call.argv, name
+    assert _seen(run_call)["MY_KEY"] == "own"
+    # Only the run that starts the agent carries it.
+    assert all(not call.overrides for call in calls if call is not run_call)
+    # The values are gone once the agent is started.
+    assert not Path(path).exists()
+    assert not Path(path).parent.exists()
+
+
+def test_compose_config_never_gets_the_agents_settings(tmp_path: Path, monkeypatch) -> None:
+    # `config` prints the rendered file, values included, so the override that names the
+    # settings file must reach the run that starts the agent and never a `config` call. The
+    # kit's own `config` runs here for real, through the recorded Compose.
+    _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
+    calls = _record_compose(
+        monkeypatch,
+        output=json.dumps({"services": {"agent-runtime": {"environment": {}}}}),
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_docker",
+        lambda *arguments, **_kwargs: (
+            "running" if arguments and arguments[0] == "inspect" else ""
+        ),
+    )
+
+    provisioning.start_runtime(tmp_path)
+
+    config_calls = [call for call in calls if "config" in call.argv]
+    assert config_calls, "the kit's own config call was not made"
+    for call in config_calls:
+        assert not call.overrides, call.argv
+        assert not call.service_env_files, call.argv
+        for value in _AGENT_SETTINGS.values():
+            assert value not in " ".join(call.argv), call.argv
+    # The run that starts the agent does carry it, so the check above can see an override.
+    run_call = next(call for call in calls if "run" in call.argv)
+    assert run_call.service_env_files
+
+
+def test_a_customers_own_compose_file_still_skips_the_settings_compose_reads(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Only the customer knows which of their services a proxy or locale is for.
+    environment = _agent_settings_environment(tmp_path, monkeypatch, managed=False)
+
+    calls = _drive_start_runtime(tmp_path, monkeypatch)
+
+    run_call = next(call for call in calls if "run" in call.argv)
+    assert run_call.overrides == {}
+    for name in _AGENT_SETTINGS:
+        assert name not in _seen(run_call), name
+    assert provisioning.skipped_setting_names(environment) == sorted(_AGENT_SETTINGS)
+
+
+def test_a_kit_written_runtime_reports_no_skipped_settings(
+    tmp_path: Path, monkeypatch
+) -> None:
+    environment = _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+
+    assert provisioning.skipped_setting_names(environment) == []
+
+
+def test_a_settings_file_a_killed_worker_left_is_removed_by_stop_s_sweep(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A worker killed after writing the file never reaches its own cleanup; ``stop`` sweeps the
+    # project's private job directories, and this one is among them.
+    environment = _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+    override = provisioning._agent_settings_override(environment, "agent-runtime")
+    assert override is not None and override.parent.exists()
+
+    provisioning._remove_leftover_job_directories(environment.project)
+
+    assert not override.parent.exists()
+
+
+def test_a_setting_with_dollars_and_quotes_is_written_to_arrive_as_given(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Compose must not substitute inside the value: it reaches the agent exactly as given.
+    _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+    given = 'http://u:pa$$w"rd@proxy.invalid:3128/$HOME/${PATH}\\x'
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_HTTPS_PROXY", given)
+    environment = provisioning.ProvisionedEnvironment.load(tmp_path)
+    override = provisioning._agent_settings_override(environment, "agent-runtime")
+    try:
+        settings = json.loads(override.read_text())["services"]["agent-runtime"]["env_file"][0]
+        assert _parse_env_file(Path(settings).read_text())["HTTPS_PROXY"] == given
+    finally:
+        provisioning._remove_job_directory(override.parent)
+
+
+def test_the_agents_settings_file_is_removed_when_the_start_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
+    calls = _record_compose(monkeypatch, returncode=1, output="boom")
+    monkeypatch.setattr(
+        provisioning,
+        "_config",
+        lambda _environment: {"services": {"agent-runtime": {"environment": {}}}},
+    )
+    monkeypatch.setattr(provisioning, "_docker", lambda *arguments, **_kwargs: "")
+
+    with pytest.raises(provisioning.ProvisionError):
+        provisioning.start_runtime(tmp_path)
+
+    run_call = next(call for call in calls if "run" in call.argv)
+    [path] = run_call.service_env_files
+    assert not Path(path).exists()
+    assert not Path(path).parent.exists()
 
 
 _RESERVED_NAMES = [
@@ -1733,15 +1917,17 @@ def test_a_jobs_proxy_and_export_settings_reach_only_the_env_file(
     assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in call.env
     assert call.job.values["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://canary.invalid"
 
-    # A proxy reaches neither: the job fails naming it, before Compose runs.
+    # A proxy reaches neither: it is skipped, and Compose still runs.
     proxies = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
     _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(proxies))
     for name in proxies:
         monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", _PROXY_AND_EXPORT[name] or "x")
     environment = _compose_environment(tmp_path, runtime_configuration_names=proxies)
-    with pytest.raises(provisioning.ProvisionError, match="compose_value_name_reserved"):
-        provisioning._run(environment, "up")
-    assert len(calls) == 1
+    provisioning._run(environment, "up")
+    assert len(calls) == 2
+    for name in proxies:
+        assert name not in calls[1].env, name
+        assert name not in calls[1].job.values, name
 
 
 def test_a_customers_tool_credential_reaches_the_env_file(tmp_path: Path, monkeypatch) -> None:
@@ -1763,27 +1949,95 @@ def test_a_customers_tool_credential_reaches_the_env_file(tmp_path: Path, monkey
     assert "DOCKER_CONFIG" not in job.values
 
 
-def test_an_admitted_value_compose_cannot_carry_fails_the_job_by_name(
-    tmp_path: Path, monkeypatch
+def test_an_admitted_value_compose_also_reads_is_skipped_and_named(
+    tmp_path: Path, monkeypatch, caplog
 ) -> None:
-    # Intake admits a proxy, CA bundle or locale name as the agent's own setting (the local
-    # runtime hands it over), but a Compose service can't get it under its own name. The job fails
-    # naming it, before Compose runs, never drops it silently (Dileep, #337).
-    names = ["HTTPS_PROXY", "SSL_CERT_FILE", "LANG", "MY_KEY"]
+    # Intake admits a proxy, CA bundle or locale name as the agent's own setting, but Compose
+    # reads the same names for itself. Until the value can go to the agent's own service
+    # (a later change), it is skipped as before #337, and the skip is named: the job runs, it
+    # does not fail (Dileep, #348).
+    names = ["HTTPS_PROXY", "SSL_CERT_FILE", "LANG", "LC_ALL", "NO_PROXY", "REQUESTS_CA_BUNDLE", "MY_KEY"]
     _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(names))
     for name in names:
         monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", f"{name.lower()}-canary")
     calls = _record_compose(monkeypatch)
     environment = _compose_environment(tmp_path, runtime_configuration_names=names)
 
-    with pytest.raises(provisioning.ProvisionError) as refused:
+    with caplog.at_level("WARNING"):
         provisioning._run(environment, "up")
 
-    message = str(refused.value)
-    assert message.startswith("compose_value_name_reserved: HTTPS_PROXY, LANG, SSL_CERT_FILE")
-    assert "MY_KEY" not in message
-    assert "canary" not in message
-    assert calls == []
+    assert len(calls) == 1
+    assert calls[0].job.values["MY_KEY"] == "my_key-canary"
+    skipped = ["HTTPS_PROXY", "LANG", "LC_ALL", "NO_PROXY", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"]
+    for name in skipped:
+        assert name not in calls[0].job.values, name
+        assert name not in calls[0].env, name
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert all(name in logged for name in skipped)
+    assert "MY_KEY" not in logged
+    assert "canary" not in logged
+
+
+def test_an_environment_record_with_a_field_this_kit_does_not_know_still_loads(
+    tmp_path: Path,
+) -> None:
+    # A newer kit may add fields to environment.json (a template rolled back reads one that a
+    # newer kit wrote); this kit keeps the fields it knows and ignores the rest.
+    environment = _compose_environment(tmp_path, runtime_configuration_names=["MY_KEY"])
+    destination = tmp_path / "session"
+    environment.save(destination)
+    record = json.loads(destination.joinpath(provisioning.MANIFEST).read_text())
+    record["a_field_from_a_newer_kit"] = ["anything"]
+    destination.joinpath(provisioning.MANIFEST).write_text(json.dumps(record))
+
+    loaded = provisioning.ProvisionedEnvironment.load(destination)
+
+    assert loaded == environment
+
+
+def test_provision_records_no_skipped_settings_for_a_kit_written_runtime(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The kit wrote this service file, so the agent gets its proxy and locale through its own
+    # service and nothing is reported as skipped (a customer's own file is the other test).
+    source = tmp_path / "agent"
+    session = tmp_path / "session"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    source.joinpath("agent.py").write_text("print('ready')\n")
+    names = ["LANG", "MY_KEY", "NO_PROXY"]
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(names))
+    for name in names:
+        monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", f"{name.lower()}-canary")
+    monkeypatch.setattr(
+        provisioning, "_contract_runtime_configuration_names", lambda _contract: names
+    )
+
+    def run(_environment, *arguments, **_kwargs):
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(
+                {
+                    "services": {
+                        "agent-runtime": {
+                            "profiles": ["harness-runtime"],
+                            "build": {
+                                "context": str(session / "generated-runtime-context"),
+                                "dockerfile": GENERATED_DOCKERFILE,
+                            },
+                        }
+                    }
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    environment = provisioning.provision(source, session, _contract())
+
+    assert environment.managed
+    assert environment.skipped_setting_names == []
+    saved = json.loads(session.joinpath("environment.json").read_text())
+    assert saved["skipped_setting_names"] == []
+    assert "canary" not in session.joinpath("environment.json").read_text()
 
 def _failing_unlink(monkeypatch, inside: str):
     """Make removing any file under a directory whose name holds ``inside`` fail."""

@@ -1502,3 +1502,79 @@ def test_an_aborted_readiness_call_counts_its_tool_calls_not_its_hand_offs(
         asyncio.run(workflow_probe(tmp_path, url))
     _, receipt = workflow_receipt(tmp_path)
     assert receipt["tool_call_count"] == 1
+
+
+def _traced_unreachable_contract():
+    """An Agents SDK reading's shape: the tool is held by the framework, so `unreachable`, and it
+    names the module and the def where the kit watches it (TH-8800)."""
+    from fi.alk.harness.contract import ToolEntry, ToolSpec
+
+    return AgentContract(
+        tools=[ToolSpec(name="lookup_account")],
+        tool_entrypoints=[ToolEntry(
+            tool="lookup_account", mode="unreachable", module="agent", callable="lookup_account",
+        )],
+        # A callback contract, as the bundler binds `unreachable` entries only on that route: a
+        # command would wire the framework observer and bind nothing.
+        runtime=Runtime(
+            language="python", command=[], execution="auto",
+            interface=RuntimeInterface(kind="callable", protocol="fi.alk"),
+        ),
+    )
+
+
+def test_a_traced_unreachable_tool_never_makes_evidence_required(tmp_path, profile_app, monkeypatch):
+    """A binding that records nothing can't raise `chat_tool_evidence_unverified`: readiness passes
+    as `not_observed`, as it does today."""
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.contract import has_executable_tool_workflow
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    contract = _traced_unreachable_contract()
+    assert not has_executable_tool_workflow(contract, include_construct=False)
+    url, state = profile_app
+    state.update(profile=True, body={"content": "The account is active"})
+
+    async def conversation(target, *_args):
+        answer = await target.say("Look up account A-1")
+        return Transcript(
+            exchanges=[Exchange("customer", "Look up account A-1"), Exchange("agent", answer)],
+            calls=[], ended="finished",
+        )
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    asyncio.run(workflow_probe(
+        tmp_path, url, contract=contract,
+        job=SimpleNamespace(metadata={}, require_tool_workflow=False),
+    ))
+    _, receipt = workflow_receipt(tmp_path)
+    assert receipt["status"] == "passed"
+    assert receipt["tool_evidence_status"] == "not_observed"
+    assert receipt["tool_call_count"] == 0
+
+
+def test_a_traced_unreachable_tool_that_is_called_is_graded_and_observed(tmp_path, profile_app, monkeypatch):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+    from fi.alk.harness.world.runtime import Call
+
+    url, state = profile_app
+    state.update(profile=True, body={"content": "The account is active"})
+
+    async def conversation(target, *_args):
+        answer = await target.say("Look up account A-1")
+        return Transcript(
+            exchanges=[Exchange("customer", "Look up account A-1"), Exchange("agent", answer)],
+            calls=[Call(name="lookup_account", arguments={"account_id": "A-1"}, result={"active": True})],
+            ended="finished",
+        )
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    asyncio.run(workflow_probe(
+        tmp_path, url, contract=_traced_unreachable_contract(),
+        job=SimpleNamespace(metadata={}, require_tool_workflow=False),
+    ))
+    _, receipt = workflow_receipt(tmp_path)
+    assert receipt["status"] == "passed"
+    assert receipt["tool_call_count"] == 1
+    assert "tool_evidence_status" not in receipt
