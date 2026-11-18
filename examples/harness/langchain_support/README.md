@@ -1,44 +1,42 @@
 # LangChain support agent
 
-A customer support chat agent built on LangChain's `create_agent`. It has three tools over a
-small in-memory set of orders: `look_up_order`, `start_return` and `return_policy`.
+A customer support chat agent built on LangChain's `create_agent`, written the way LangChain's
+documentation writes one: a module-level `agent` built from a chat model, the tools and a
+system prompt. It has three tools over a small in-memory set of orders: `look_up_order`,
+`start_return` and `return_policy`.
 
 ## How the kit runs it
 
-The kit calls `agent_callback` in `agent.py` once per turn with the whole conversation. The
-function builds the agent and passes it the user and assistant turns as `messages`. It
-replies with the last message's text as `{"content": ...}` only.
+`create_agent` returns a LangGraph graph, and `langgraph.json` names it, `agent.py:agent`,
+which is how LangChain deploys an agent. The kit runs it with its LangGraph adapter.
+- Each turn the adapter sends the whole conversation as `messages` and replies with the last
+  message's text.
+- Tool calls are not returned: the agent runs the tools itself, and the kit's tool tracer
+  records each call made to the three tool functions, including the ones made from a worker
+  thread.
 
-Tool calls are not returned: the agent runs the tools itself, and the kit's generic tool
-tracer records each call made to the three tool functions, including the ones LangChain
-makes from a worker thread. There is no `langgraph.json`, so the kit runs this agent through
-its callback bridge, not its LangGraph adapter, though `create_agent` returns a LangGraph
-graph.
-
-Each conversation the kit names gets its own copy of the orders, so a return started in one
-scenario is not there in the next.
+The agent and its model are built once, at import. They are not built per turn, and not run
+through the kit's callback bridge: that bridge runs each request in an event loop of its own,
+and a client built once would carry its connections into a loop that has closed.
 
 ## Environment
 
-- `OPENAI_API_KEY`: the key for the endpoint (required for a turn). A blank value counts as
-  unset.
+- `OPENAI_API_KEY`: the key for the endpoint (required for a turn). Without it the module
+  still imports, with a placeholder key, and the turn fails. A blank value counts as unset.
 - `OPENAI_BASE_URL`: the endpoint's base URL, required whenever a key is set. Set it to the
   model gateway for the default model.
-  - With a key and no base URL (unset, empty or blank), the turn is refused before a model is
-    built, naming the missing setting.
-  - The check reads `OPENAI_BASE_URL` only, so `OPENAI_API_BASE` alone doesn't satisfy it.
-  - With neither a key nor a base URL, `ChatOpenAI` itself refuses to build the client.
+  - With a key and no base URL, the module refuses to import, naming the missing setting.
+  - The check reads `OPENAI_BASE_URL` only, so set it even where `OPENAI_API_BASE` is set.
 - `OPENAI_MODEL`: the model name, default `vertex_ai/gemini-3.7-flash` (a gateway name).
 
 The endpoint must speak chat completions: the model is built with `use_responses_api=False`.
+Install with `pip install -r requirements.txt` on Python 3.12.
 
 ## Known limits
 
-- The agent and the model are built on every turn, because each request runs in its own
-  event loop and the client's async connection belongs to the loop it was first used in. So
-  there is no connection reuse between turns.
-
-Install with `pip install -r requirements.txt` on Python 3.12.
-
-`agent-simulate` is pinned in `requirements.txt` because the kit's callback bridge imports
-`fi.simulate.AgentInput`.
+- The kit's LangGraph adapter runs every request on one event loop. The plain tools run on a
+  worker thread and don't block it.
+- Every conversation the agent process serves shares the same orders, so a return started in
+  one scenario is still there in the next. The kit's LangGraph adapter calls the graph with no
+  thread, so the tools can't tell conversations apart. The LangGraph and Deep Agents
+  references have the same limit.

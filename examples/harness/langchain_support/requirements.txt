@@ -1,3 +1,2 @@
 langchain==1.5.0
 langchain-openai==1.7.3
-agent-simulate==0.1.3
