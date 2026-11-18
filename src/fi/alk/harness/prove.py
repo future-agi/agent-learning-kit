@@ -39,15 +39,22 @@ from .actors import load_actors
 from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
+from .controls import (
+    JUDGED_ONLY_TEXT,
+    ControlJudge,
+    control_broken,
+    play_controls,
+    play_judged_controls,
+)
 from .folder import apply_setup, check_ready
 from .grounding import policy_conflicts, resolve_sources, unresolved
-from .judge import judge_sub_goal
 from .leaks import leaks
 from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
-from .scenario import NegativeControl, Scenario
+from .scenario import Scenario
 from .understand import load
-from .world.runtime import Call, GeneratedWorld, settled
+from .world.runtime import Call, GeneratedWorld
 from .world.snapshot import read_manifest, restore
+
 
 # The lane could not execute something; the case runs labelled "kept as written", never as proved.
 # "judged_only": only a judge grades the case and no control has shown the judge fails a wrong behaviour.
@@ -105,8 +112,6 @@ def refuses_keeping(proof: Proof) -> bool:
     return (not proof.holds and not (proof.deferred and not proof.broken)) or proof.blocked_reason() in REFUSED_CODES
 
 
-# Decides one judged sub-goal of a control: (goal, world, calls, what was said, scenario) -> (held, explanation).
-ControlJudge = Callable[[Any, Any, list[Call], list[dict[str, str]], Any], tuple[bool | None, str]]
 
 
 @dataclass
@@ -568,10 +573,11 @@ def _resolve_reference_values(value: object, calls: list[Call]) -> object:
     return current
 
 
-def _run(
+def run_steps(
     scenario: Scenario, world_root: Path, *, with_solution: bool, steps: Sequence[Any] | None = None
 ) -> tuple[GeneratedWorld, list[Call], list[str], list[str]]:
-    """A world set up for this scenario, optionally with the solution (or `steps`) played through it."""
+    """A world set up for this scenario, optionally with the solution (or `steps`) played through it: the world, the
+    agent's calls, the steps the world refused and the tools assumed (not executed here). The caller closes the world."""
     world, _applied, _ready = prepared(scenario, world_root)
     refused: list[str] = []
     assumed: list[str] = []
@@ -1012,112 +1018,16 @@ def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
     return wrong
 
 
-def _controls(
-    scenario: Scenario,
-    world_root: Path,
-    checks: list[tuple[str, str]],
-    reference: Any,
-) -> list[ControlResult]:
-    """Play each negative control like a solution; a control fails when a check it names fails."""
-    played: list[ControlResult] = []
-    for control in getattr(scenario, "negative_controls", None) or []:
-        if not checks:
-            played.append({"name": control.name, "why": control.why, "failed": None, "held": [], "assumed": []})
-            continue
-        world, calls, _refused, assumed = _run(scenario, world_root, with_solution=True, steps=control.steps)
-        try:
-            outcomes = [run_check(source, world, calls, name=name, reference=reference) for name, source in checks]
-        finally:
-            world.close()
-        played.append(played_control(control, outcomes, assumed))
-    return played
-
-
-def played_control(control: NegativeControl, outcomes: Sequence[Outcome], assumed: list[str]) -> ControlResult:
-    """A control as played: it fails when a check it names (every check when it names none) fails. A check that raised
-    under it is broken, not failing: no evidence. With no outcomes it was not played."""
-    named = set(control.must_fail) or {one.name for one in outcomes}
-    return {
-        "name": control.name,
-        "why": control.why,
-        "failed": any(not one.held and not one.broken for one in outcomes if one.name in named) if outcomes else None,
-        "held": [one.name for one in outcomes if one.held],
-        "broken": [one.name for one in outcomes if one.broken and one.name in named],
-        "assumed": assumed,
-    }
-
-
-JUDGED_ONLY_TEXT = (
-    "Kept as written: only a judge grades this case, and nothing has shown the judge fails a wrong behaviour."
-)
-
-
-def _harness_judge(goal: Any, world: Any, calls: list[Call], messages: list[dict[str, str]], scenario: Any) -> Any:
-    """The harness judge on one sub-goal, run on its own loop so it works from sync and async callers."""
-
-    return settled(judge_sub_goal(goal, world, calls, messages=messages, scenario=scenario))
-
-
-def _judged_controls(
-    scenario: Scenario, catalogue: Catalogue, world_root: Path, *, judge: ControlJudge | None = None
-) -> list[ControlResult]:
-    """Play each control of a judged-only case through the judge: its steps on a set-up world and its
-    transcript as what was said. It fails when the judge fails a sub-goal it names. A control with no
-    transcript gives the judge nothing the wrong agent said, so it is not played and reads not run."""
-    decide = judge or _harness_judge
-    judged = {
-        name: goal
-        for name in scenario.sub_goals
-        if (goal := catalogue.named(name)) is not None and not goal.deterministic()
-    }
-    played: list[ControlResult] = []
-    for control in getattr(scenario, "negative_controls", None) or []:
-        entry: ControlResult = {
-            "name": control.name,
-            "why": control.why,
-            "failed": None,
-            "held": [],
-            "assumed": [],
-            "judged": True,
-            "verdicts": {},
-        }
-        named = [name for name in (control.must_fail or judged) if name in judged]
-        if not control.transcript or not named:
-            played.append(entry)
-            continue
-        world, calls, _refused, _assumed = _run(scenario, world_root, with_solution=True, steps=control.steps)
-        try:
-            for name in named:
-                try:
-                    held, explanation = decide(judged[name], world, calls, list(control.transcript), scenario)
-                except Exception as exc:  # noqa: BLE001 - a judge that could not run decides nothing
-                    held, explanation = None, f"the judge could not run: {type(exc).__name__}"
-                entry["verdicts"][name] = {
-                    "verdict": "pass" if held is True else "fail" if held is False else "inconclusive",
-                    "explanation": str(explanation or "")[:500],
-                }
-        finally:
-            world.close()
-        verdicts = [one["verdict"] for one in entry["verdicts"].values()]
-        entry["held"] = [name for name, one in entry["verdicts"].items() if one["verdict"] == "pass"]
-        if "fail" in verdicts:
-            entry["failed"] = True
-        elif verdicts and all(one == "pass" for one in verdicts):
-            entry["failed"] = False
-        played.append(entry)
-    return played
-
-
 def _outcome(scenario: Scenario, world_root: Path) -> str:
     """"no_change" when the reference leaves the world as doing nothing does; unreadable reads "change"."""
-    done, _, _, assumed = _run(scenario, world_root, with_solution=True)
+    done, _, _, assumed = run_steps(scenario, world_root, with_solution=True)
     try:
         after = _end_state(done)
     finally:
         done.close()
     if assumed:
         return "change"
-    nothing, _, _, _ = _run(scenario, world_root, with_solution=False)
+    nothing, _, _, _ = run_steps(scenario, world_root, with_solution=False)
     try:
         untouched = _end_state(nothing)
     finally:
@@ -1223,7 +1133,7 @@ def prove(
         proof.judged_only = True
         if proof.ready:
             proof.outcome = _outcome(scenario, world_root)
-            proof.controls = _judged_controls(scenario, catalogue, world_root, judge=judge)
+            proof.controls = play_judged_controls(scenario, catalogue, world_root, run=run_steps, judge=judge)
         return proof
 
     # Gate 1: is the world ready for this scenario at all?
@@ -1242,7 +1152,7 @@ def prove(
     proof.ready = True
 
     # Gate 2: does the reference solution pass this scenario's own checks?
-    world, calls, refused, assumed = _run(scenario, world_root, with_solution=True)
+    world, calls, refused, assumed = run_steps(scenario, world_root, with_solution=True)
     # What the proof below could not cover. Detected here since forever and logged into a void; a
     # scenario whose whole solution was assumed used to save as proved.
     proof.assumed = assumed
@@ -1262,7 +1172,7 @@ def prove(
         world.close()
     varied, changed = _other_choices(scenario, _declared_options(world_root))
     if changed:
-        other_world, other_calls, other_refused, _ = _run(
+        other_world, other_calls, other_refused, _ = run_steps(
             scenario, world_root, with_solution=True, steps=varied
         )
         try:
@@ -1275,7 +1185,7 @@ def prove(
         finally:
             other_world.close()
     for label, steps in _bare_ids(scenario) if held else ():
-        bare_world, bare_calls, bare_refused, _ = _run(scenario, world_root, with_solution=True, steps=steps)
+        bare_world, bare_calls, bare_refused, _ = run_steps(scenario, world_root, with_solution=True, steps=steps)
         try:
             # The world took the bare id and ended exactly where the reference does: the same choice.
             if not bare_refused and right_state is not None and _end_state(bare_world) == right_state:
@@ -1287,7 +1197,7 @@ def prove(
         finally:
             bare_world.close()
     for label, steps in _unseparated_ids(scenario) if held else ():
-        typed_world, typed_calls, typed_refused, _ = _run(scenario, world_root, with_solution=True, steps=steps)
+        typed_world, typed_calls, typed_refused, _ = run_steps(scenario, world_root, with_solution=True, steps=steps)
         try:
             # The world took the id typed without separators and ended where the reference does: the same record.
             if not typed_refused and right_state is not None and _end_state(typed_world) == right_state:
@@ -1300,7 +1210,7 @@ def prove(
             typed_world.close()
     said, spoken = _said_another_way(scenario)
     if spoken and held:
-        said_world, said_calls, said_refused, _ = _run(scenario, world_root, with_solution=True, steps=said)
+        said_world, said_calls, said_refused, _ = run_steps(scenario, world_root, with_solution=True, steps=said)
         try:
             # Only a world that took the spoken form and ended exactly where the reference does treats it as the
             # same date; one that refuses it or stores it as given leaves a check free to want the reference form.
@@ -1313,7 +1223,7 @@ def prove(
         finally:
             said_world.close()
     for number, other in enumerate(getattr(scenario, "alternatives", None) or (), start=1):
-        alt_world, alt_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=other)
+        alt_world, alt_calls, _, _ = run_steps(scenario, world_root, with_solution=True, steps=other)
         try:
             proof.too_strict += [
                 f"{name} (another way the instructions allow, alternative {number}: "
@@ -1328,7 +1238,7 @@ def prove(
             # A wrong value on an assumed step never reaches the world, so the excused checks that would notice it
             # cannot: no evidence that nothing checks it.
             continue
-        wrong_world, wrong_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=steps)
+        wrong_world, wrong_calls, _, _ = run_steps(scenario, world_root, with_solution=True, steps=steps)
         try:
             # Only a value a later step sets again, leaving the right end state, is a corrected draft
             # no check must notice; a read-only lookup leaves the same state and is still checked.
@@ -1345,7 +1255,7 @@ def prove(
     proof.solvable = all(one.held or one.name in proof.excused for one in proof.with_solution) and not proof.broken
 
     # Gate 3: do those same checks fail when nothing is done?
-    untouched, nothing, _, _ = _run(scenario, world_root, with_solution=False)
+    untouched, nothing, _, _ = run_steps(scenario, world_root, with_solution=False)
     try:
         untouched_state = _end_state(untouched)
         start = untouched_state
@@ -1414,17 +1324,8 @@ def prove(
         and right_state == untouched_state
         else "change"
     )
-    proof.controls = _controls(scenario, world_root, checks, reference)
+    proof.controls = play_controls(scenario, world_root, checks, reference, run=run_steps)
     proof.broken += control_broken(proof.controls)
     if proof.outcome == "no_change" and any(one.get("failed") for one in proof.ran_controls):
         proof.vacuous = False
     return proof
-
-
-def control_broken(controls: list[ControlResult]) -> list[str]:
-    """Each check that raised under a negative control, named with the control."""
-    return [
-        f"{name} (under negative control {one.get('name')})"
-        for one in controls
-        for name in one.get("broken") or []
-    ]

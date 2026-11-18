@@ -10617,7 +10617,7 @@ def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_
 def test_a_check_reads_the_proof_s_action_log_as_it_reads_the_run_s(tmp_path):
     from fi.alk.harness.actors import Actor, ActorList, save_actors
     from fi.alk.harness.checks import run_check
-    from fi.alk.harness.prove import _run
+    from fi.alk.harness.prove import run_steps
 
     root, _contract, _catalogue = _built_environment(tmp_path)
     save_actors(root, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
@@ -10627,7 +10627,7 @@ def test_a_check_reads_the_proof_s_action_log_as_it_reads_the_run_s(tmp_path):
             "actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}],
         }
     )
-    world, calls, _refused, _assumed = _run(scenario, root, with_solution=True)
+    world, calls, _refused, _assumed = run_steps(scenario, root, with_solution=True)
     check = (
         "def check(world, calls):\n"
         "    tried = world.events(actor_id='reviewer', outcome='refused')\n"
