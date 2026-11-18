@@ -16,10 +16,15 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import psycopg
 import pytest
 import test_process_runtime as runtime_tests
 
+from fi.alk.harness import bundle_author_v2 as author
+from fi.alk.harness import call_runner, world_door
 from fi.alk.harness import process_runtime as pr
+from fi.alk.harness import tool_trace_proxy as proxy
+from fi.alk.harness.actors import ACTORS_DDL
 from fi.alk.harness.bundle_v2 import BaselineStrategy
 from fi.alk.harness.world_roles import seed_escalation_queries
 
@@ -230,7 +235,6 @@ real_postgres = pytest.mark.skipif(
 @pytest.fixture
 def worlds():
     """A sealed baseline and two worlds cloned from it, the way per-user provisioning makes them."""
-    import psycopg
 
     parts = urlsplit(_REAL)
     superuser = pr.EngineCredentials(
@@ -313,7 +317,6 @@ def test_a_world_s_role_changes_its_own_world_s_rows(worlds):
 
 @real_postgres
 def test_a_world_s_role_cannot_reach_another_world_or_the_cluster(worlds):
-    import psycopg
 
     connect, _reset, baseline = worlds
     for dbname in ("w1", "postgres", "template1", baseline):
@@ -323,7 +326,6 @@ def test_a_world_s_role_cannot_reach_another_world_or_the_cluster(worlds):
 
 @real_postgres
 def test_a_world_s_role_cannot_run_programs_or_change_the_cluster(worlds):
-    import psycopg
 
     connect, _reset, baseline = worlds
     with connect(0, "w0") as connection:
@@ -341,7 +343,6 @@ def test_a_world_s_role_cannot_run_programs_or_change_the_cluster(worlds):
 
 @real_postgres
 def test_no_moment_of_a_reset_lets_another_world_s_role_in(worlds):
-    import psycopg
 
     connect, reset, _baseline = worlds
     stop = threading.Event()
@@ -515,10 +516,7 @@ def test_a_seed_that_left_a_way_to_more_rights_fails_the_build(tmp_path: Path):
 def door_worlds(monkeypatch):
     """A baseline seeded as the bundle author seeds it, sealed with or without a door, and two worlds made from it.
     Yields `make(door)` returning (superuser url, world role url, door role url, reset)."""
-    import psycopg
 
-    from fi.alk.harness import bundle_author_v2 as author
-    from fi.alk.harness import world_door
 
     parts = urlsplit(_REAL)
     host, port = parts.hostname or "localhost", parts.port or 5432
@@ -594,7 +592,6 @@ _PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE")
 
 
 def _rights(address: str) -> dict[str, set[str]]:
-    import psycopg
 
     with psycopg.connect(address, autocommit=True) as connection:
         return {
@@ -611,7 +608,6 @@ def _rights(address: str) -> dict[str, set[str]]:
 
 @real_postgres
 def test_the_agent_s_role_has_no_right_on_any_harness_table_and_the_door_has_only_its_own(door_worlds):
-    import psycopg
 
     _superuser, world, door, reset = door_worlds(True)
     expected = {
@@ -657,7 +653,6 @@ def test_a_bundle_without_a_door_keeps_today_s_grants(door_worlds):
 def _trial_state(monkeypatch, superuser: str, faults: list, **deadlines) -> None:
     from types import SimpleNamespace
 
-    from fi.alk.harness import call_runner
 
     monkeypatch.setattr(call_runner, "_find_postgres_endpoint", lambda _runtime: SimpleNamespace(address=superuser))
     call_runner._write_trial_state(SimpleNamespace(), faults, **deadlines)
@@ -666,10 +661,7 @@ def _trial_state(monkeypatch, superuser: str, faults: list, **deadlines) -> None
 @real_postgres
 def test_the_door_reads_this_trial_s_faults_so_a_faulted_and_a_fault_free_trial_both_write(door_worlds, monkeypatch):
     """G3: under per-user roles the door read none of the trial's faults, and every write answered 503."""
-    import psycopg
 
-    from fi.alk.harness import tool_trace_proxy as proxy
-    from fi.alk.harness import world_door as wd
 
     superuser, _world, door, _reset = door_worlds(True)
     monkeypatch.setattr(proxy, "DATABASE_URL", door)
@@ -677,12 +669,12 @@ def test_the_door_reads_this_trial_s_faults_so_a_faulted_and_a_fault_free_trial_
 
     class _World:
         def run(self, call):
-            return wd.Executed(200, {"ok": True})
+            return world_door.Executed(200, {"ok": True})
 
-    gate = wd.WorldDoor(_World(), wd.PostgresLog(door), wd.DictRoster({}), faults=proxy._trial_faults)
+    gate = world_door.WorldDoor(_World(), world_door.PostgresLog(door), world_door.DictRoster({}), faults=proxy._trial_faults)
 
-    def write(key: str, action: str = "orders.cancel") -> wd.Outcome:
-        return gate.enter(wd.ToolCall(action=action, name=action.rsplit(".", 1)[-1], effect="write", key=key))
+    def write(key: str, action: str = "orders.cancel") -> world_door.Outcome:
+        return gate.enter(world_door.ToolCall(action=action, name=action.rsplit(".", 1)[-1], effect="write", key=key))
 
     _trial_state(monkeypatch, superuser, [])
     assert (write("k1").outcome, write("k1").outcome) == ("committed", "duplicate")
@@ -702,15 +694,13 @@ def test_the_door_reads_this_trial_s_faults_so_a_faulted_and_a_fault_free_trial_
 def test_as_the_door_s_role_the_template_s_tables_take_a_key_claim_and_a_worker_s_run(door_worlds):
     """The door owns none of the tables, so it never makes or alters them: Postgres refuses that DDL to a non-owner
     even when the table is already there."""
-    import psycopg
 
-    from fi.alk.harness import world_door as wd
 
     superuser, _world, door, _reset = door_worlds(True)
-    log = wd.PostgresLog(door)
+    log = world_door.PostgresLog(door)
     assert log.claim("k1", "agent") is None
     log.settle("k1", "agent", "committed", {"status": 200})
-    wd.mark_worker_run(door, "refund")
+    world_door.mark_worker_run(door, "refund")
     with psycopg.connect(superuser, autocommit=True) as connection:
         assert connection.execute("SELECT state FROM _alk_action_keys").fetchall() == [("committed",)]
         assert connection.execute("SELECT worker FROM _alk_worker_runs").fetchall() == [("refund",)]
@@ -721,12 +711,10 @@ def test_a_worker_stop_made_as_the_door_s_role_is_recorded_as_stopped(door_world
     import time
     from types import SimpleNamespace
 
-    from fi.alk.harness import call_runner
-    from fi.alk.harness import world_door as wd
 
     superuser, _world, door, _reset = door_worlds(True)
     _trial_state(monkeypatch, superuser, [], worker_deadline_at=time.time() - 1)
-    assert wd.claim_worker_stop(door, "refund", "", lambda: True) is True
+    assert world_door.claim_worker_stop(door, "refund", "", lambda: True) is True
     stops = call_runner.read_worker_stops(SimpleNamespace())
     assert [(row["worker"], row["reason"]) for row in stops] == [("refund", "deadline_passed")]
 
@@ -793,3 +781,8 @@ def test_a_seed_refusal_says_what_to_change():
 
     said = str(raised.value)
     assert "role sneaky is a superuser" in said and "Change the seed so it gives no role SUPERUSER" in said
+
+
+def test_the_door_s_rights_name_only_tables_the_harness_makes():
+    made = world_door.ddl_columns(author._TOOL_TRACE_DDL, ACTORS_DDL, *world_door.HARNESS_TABLES_DDL)
+    assert set(pr.DOOR_TABLE_RIGHTS) == set(made)
