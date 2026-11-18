@@ -105,9 +105,6 @@ class NegativeControl(BaseModel):
         return self
 
 
-SOURCE_KINDS = ("rule", "file", "chat_message", "evidence_case", "requirement", "assumption")
-
-
 class ScenarioSource(BaseModel):
     """Where one requirement of a case comes from, so it is shown on the case and checked."""
 
@@ -116,7 +113,7 @@ class ScenarioSource(BaseModel):
     # evidence:<EvidenceImportCase id> | "" for requirement and assumption
     ref: str = ""
     quote: str = Field(default="", max_length=500)  # the cited words; required for rule and file
-    supports: str = ""  # which part of the case it justifies, e.g. "the 14-day limit"
+    supports: str = ""  # which part of the case it justifies, e.g. "<the limit the rule states>"
 
     @model_validator(mode="after")
     def _quoted(self) -> "ScenarioSource":

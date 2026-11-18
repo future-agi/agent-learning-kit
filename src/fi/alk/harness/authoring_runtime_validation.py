@@ -24,7 +24,17 @@ from typing import TYPE_CHECKING
 
 import fi.alk
 
-from . import bundle_v2, call_runner, failure_record, hosted_entrypoint, judge, live_proof, tool_routing
+from . import (
+    bundle_v2,
+    call_runner,
+    failure_record,
+    hosted_entrypoint,
+    judge,
+    live_proof,
+    outbound,
+    process_runtime,
+    tool_routing,
+)
 from .contract import AgentContract
 from .catalogue import load_catalogue
 from .certification import CheckStatus
@@ -843,31 +853,23 @@ def _prepare_runtime_work(job, work: Path, secrets_path: Path, *, local_runtime:
 
 def _runtime_provider(job, secrets: Path, authoring: Path, *, local_runtime: bool, generic: bool):
     """The process runtime provider validation starts the bundle with."""
-    from . import outbound
-    from .hosted_entrypoint import resolve_hosted_public_url, job_secret_purposes
-    from .process_runtime import (
-        ProcessRuntimeProvider,
-        default_user_resolver,
-        hosted_user_resolution,
-    )
-
     capabilities = None if local_runtime else outbound.load_capabilities(unlink=False)
     transport = outbound.RequestsTransport()
-    return ProcessRuntimeProvider(
+    return process_runtime.ProcessRuntimeProvider(
         secrets_path=secrets,
-        secret_purpose_map=job_secret_purposes(job),
+        secret_purpose_map=hosted_entrypoint.job_secret_purposes(job),
         # A local parity run shares the host/container process namespace and must resolve
         # the same unprivileged identities installed in its image. A hosted sandbox runs
         # each declared user only when the platform granted per-user isolation.
         **(
-            {"user_resolver": default_user_resolver, "require_declared_user": False}
+            {"user_resolver": process_runtime.default_user_resolver, "require_declared_user": False}
             if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
-            else hosted_user_resolution()
+            else process_runtime.hosted_user_resolution()
         ),
         public_url_resolver=(
             None
             if capabilities is None
-            else lambda port, ttl: resolve_hosted_public_url(
+            else lambda port, ttl: hosted_entrypoint.resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl
             )
         ),
@@ -888,7 +890,6 @@ async def validate_once(
     review=None,
     readiness_only: bool = False,
 ) -> int:
-    from . import outbound
     from .bundle_author_v2 import author_bundle_v2
     from .compose_integration import enabled as compose_enabled
     from .hosted_compose_bootstrap import initialize_hosted_compose
@@ -1504,7 +1505,7 @@ async def validate_once(
                     if live:
                         print(f"runtime validation: proved {len(live)} cases on the live runtime", flush=True)
                 except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
-                    print(f"runtime validation: live proofs not run: {type(exc).__name__}: {exc}", flush=True)
+                    print(f"runtime validation: live proofs not run: {outbound.redact_outbound_text(f'{type(exc).__name__}: {exc}')}", flush=True)
             if generic:
                 await provider.reset(runtime, work_directory=work)
                 reset_world = await factory.create(

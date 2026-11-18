@@ -24,26 +24,6 @@ from .scenario import Scenario
 SHINGLE = 8
 EXCERPT = 120
 
-# Fields only the grader reads. Importable by the runtime-boundary probe so both name one list.
-GRADER_ONLY_FIELDS = (
-    "sub_goal.what",
-    "sub_goal.judged",
-    "sub_goal.reference",
-    "sub_goal.verifier",
-    "sub_goal.comparison",
-    "sub_goal.check (compared literals)",
-    "scenario.tests",
-    "scenario.negative_controls",
-    "scenario.solution (argument values)",
-    "evaluator_only files",
-)
-# What each audience is given.
-VISIBLE_FIELDS = {
-    "simulated person": ("instruction", "variables", "persona"),
-    "tested agent": ("instruction (when not conversational)", "persona.initial_message", "variables (opening message)"),
-    "actor": ("actor instructions", "actor knowledge"),
-}
-
 
 @dataclass
 class Leak:

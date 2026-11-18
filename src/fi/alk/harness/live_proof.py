@@ -32,10 +32,10 @@ from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
 from .folder import apply_setup, check_ready
+from .outbound import redact_outbound_text
 from .proof_records import CheckRecord, ControlResult, LiveResult
 from .proofs import proof_key
-from .prove import Proof
-from .prove import checks_for, control_broken, executes, play_reference_step
+from .prove import Proof, checks_for, control_broken, executes, play_reference_step, played_control
 from .scenario_tools import load_scenarios
 from .scenario import Scenario, Step
 from .world.handle import MCP_ROUTE, mcp_request
@@ -185,24 +185,12 @@ async def prove_live(
                 except Exception as exc:  # noqa: BLE001 - a control that cannot be played is no evidence, the case still is
                     controls.append(
                         {"name": control.name, "why": control.why, "failed": None, "held": [], "assumed": [],
-                         "error": f"{type(exc).__name__}: {exc}"[:300]}
+                         "error": redact_outbound_text(f"{type(exc).__name__}: {exc}")[:300]}
                     )
                     continue
-                named = set(control.must_fail) or {one.name for one in outcomes}
-                controls.append(
-                    {
-                        "name": control.name,
-                        "why": control.why,
-                        "failed": any(not one.held and not one.broken for one in outcomes if one.name in named)
-                        if outcomes
-                        else None,
-                        "held": [one.name for one in outcomes if one.held],
-                        "broken": [one.name for one in outcomes if one.broken and one.name in named],
-                        "assumed": control_assumed,
-                    }
-                )
+                controls.append(played_control(control, outcomes, control_assumed))
         except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play keeps its offline proof
-            logger.warning("live proof skipped for %s: %s: %s", key, type(exc).__name__, exc)
+            logger.warning("live proof skipped for %s: %s", key, redact_outbound_text(f"{type(exc).__name__}: {exc}"))
             continue
         results[key] = {
             "assumed": assumed,

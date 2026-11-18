@@ -25,6 +25,7 @@ from typing import Any
 
 from .catalogue import load_catalogue
 from .live_proof import apply_live, load_live
+from .outbound import redact_outbound_text
 from .proofs import proof_entry, proof_key, unprovable_entry
 from .prove import load_proof_contract, load_world_actors, prove
 from .scenario_tools import load_scenarios
@@ -87,7 +88,7 @@ def prove_suite(
                 # The certification just played this case on the live runtime: its gates win.
                 proof = apply_live(proof, live[key])
         except Exception as exc:  # noqa: BLE001 - a case that cannot be proved is recorded, never fatal
-            first = (str(exc).splitlines() or [""])[0][:200]
+            first = (redact_outbound_text(str(exc)).splitlines() or [""])[0][:200]
             proofs[key] = unprovable_entry(f"{type(exc).__name__}: {first}".rstrip(": "))
         else:
             # `live`: its gates are what the live runtime showed, not what was recorded without running.

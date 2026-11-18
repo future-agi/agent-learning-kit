@@ -27,11 +27,9 @@ Only a scenario that clears all three is kept. That is the green light.
 from __future__ import annotations
 
 import ast
-import asyncio
 import json
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
@@ -42,8 +40,8 @@ from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
 from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
 from .folder import apply_setup, check_ready
-from .scenario import Scenario
-from .world.runtime import Call, GeneratedWorld
+from .scenario import NegativeControl, Scenario
+from .world.runtime import Call, GeneratedWorld, settled
 from .world.snapshot import read_manifest, restore
 from .grounding import policy_conflicts, resolve_sources, unresolved
 from .judge import judge_sub_goal
@@ -350,16 +348,17 @@ class Proof:
             )
         if fault := self._source_faults():
             return fault
-        if self.judged_only and not self.controls_failed:
-            return JUDGED_ONLY_TEXT
-        if self.controls and not self.ran_controls:
-            return "no negative control could run here: " + ", ".join(
-                f"{one['name']} ({', '.join(one.get('assumed') or [])})" for one in self.controls
-            )
+        # The lane's own limits, in `blocked_reason`'s order.
         if self.assumed:
             return "kept as written: these tools have no endpoint here, so their solution steps never ran: " + ", ".join(
                 self.assumed
             )
+        if self.controls and not self.ran_controls and not self.judged_only:
+            return "no negative control could run here: " + ", ".join(
+                f"{one['name']} ({', '.join(one.get('assumed') or [])})" for one in self.controls
+            )
+        if self.judged_only and not self.controls_failed:
+            return JUDGED_ONLY_TEXT
         return "holds"
 
 
@@ -977,20 +976,22 @@ def _controls(
             outcomes = [run_check(source, world, calls, name=name, reference=reference) for name, source in checks]
         finally:
             world.close()
-        named = set(control.must_fail) or {name for name, _ in checks}
-        held = [one.name for one in outcomes if one.held]
-        played.append(
-            {
-                "name": control.name,
-                "why": control.why,
-                # A check that raised under the control is broken, not failing: no evidence.
-                "failed": any(not one.held and not one.broken for one in outcomes if one.name in named),
-                "held": held,
-                "broken": [one.name for one in outcomes if one.broken and one.name in named],
-                "assumed": assumed,
-            }
-        )
+        played.append(played_control(control, outcomes, assumed))
     return played
+
+
+def played_control(control: NegativeControl, outcomes: Sequence[Outcome], assumed: list[str]) -> ControlResult:
+    """A control as played: it fails when a check it names (every check when it names none) fails. A check that raised
+    under it is broken, not failing: no evidence. With no outcomes it was not played."""
+    named = set(control.must_fail) or {one.name for one in outcomes}
+    return {
+        "name": control.name,
+        "why": control.why,
+        "failed": any(not one.held and not one.broken for one in outcomes if one.name in named) if outcomes else None,
+        "held": [one.name for one in outcomes if one.held],
+        "broken": [one.name for one in outcomes if one.broken and one.name in named],
+        "assumed": assumed,
+    }
 
 
 JUDGED_ONLY_TEXT = (
@@ -1001,11 +1002,7 @@ JUDGED_ONLY_TEXT = (
 def _harness_judge(goal: Any, world: Any, calls: list[Call], messages: list[dict[str, str]], scenario: Any) -> Any:
     """The harness judge on one sub-goal, run on its own loop so it works from sync and async callers."""
 
-    def decide() -> Any:
-        return asyncio.run(judge_sub_goal(goal, world, calls, messages=messages, scenario=scenario))
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(decide).result()
+    return settled(judge_sub_goal(goal, world, calls, messages=messages, scenario=scenario))
 
 
 def _judged_controls(

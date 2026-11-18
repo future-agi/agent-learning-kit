@@ -39,7 +39,8 @@ def _save(destination: Path, proofs: dict[str, dict[str, Any]]) -> None:
         raise
 
 
-def _now() -> str:
+def utc_stamp() -> str:
+    """Now, in UTC to the second and one fixed form, so two stamps compare as text the way the times do."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
@@ -50,17 +51,7 @@ def proof_key(scenario: Scenario) -> str:
 
 def proof_entry(proof: Proof, solution_steps: int) -> ProofEntry:
     blocked = proof.blocked_reason()
-    if proof.proved:
-        why = ""
-    elif not proof.holds:
-        why = proof.why()
-    elif proof.assumed and blocked == "solution_assumed":
-        why = (
-            "kept as written: these tools have no endpoint here, so their solution steps never ran: "
-            + ", ".join(proof.assumed)
-        )
-    else:
-        why = proof.why()
+    why = "" if proof.proved else proof.why()
     return {
         "format": 2,
         "holds": proof.holds,
@@ -70,7 +61,7 @@ def proof_entry(proof: Proof, solution_steps: int) -> ProofEntry:
         "solvable": proof.solvable,
         "not_vacuous": not proof.vacuous,
         "why": why,
-        "proved_at": _now(),
+        "proved_at": utc_stamp(),
         "assumed": list(proof.assumed),
         "solution_steps": solution_steps,
         "deferred": proof.deferred,
@@ -104,7 +95,7 @@ def unprovable_entry(why: str, blocked_reason: str = "broken_check") -> ProofEnt
         "solvable": False,
         "not_vacuous": False,
         "why": why,
-        "proved_at": _now(),
+        "proved_at": utc_stamp(),
         "assumed": [],
         "solution_steps": 0,
         "deferred": False,

@@ -72,6 +72,7 @@ from .folder import (
 )
 from .checks import reference_of, run_check
 from .proofs import proof_key, record_proof, record_unprovable
+from .understand import load as load_contract
 from .prove import (
     NO_NEGATIVE_CONTROL,
     executes,
@@ -1490,16 +1491,15 @@ def _a_read_that_declines(scenario: Scenario, proof: Any, world_root: Path) -> b
         return False
     tool = scenario.solution[0].tool
     try:
-        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+        contract = load_contract(world_root)
     except (OSError, ValueError):
-        contract = {}
-    writes = any(
-        isinstance(one, dict) and one.get("name") == tool and str(one.get("effects") or "").strip()
-        for one in contract.get("tools") or []
-    ) or any(
-        isinstance(one, dict) and one.get("tool") == tool and one.get("effect") == "write"
-        for one in contract.get("tool_entrypoints") or []
-    )
+        contract = None
+    if contract is None:
+        return True
+    spec = next((one for one in contract.tools if one.name == tool), None)
+    # A tool the door would log as a write (`_read_tools`), or one whose contract names what it changes.
+    routed = {entry.tool for entry in contract.tool_entrypoints}
+    writes = bool(spec and spec.effects.strip()) or (tool in routed and tool not in _read_tools(contract))
     return not writes
 
 
