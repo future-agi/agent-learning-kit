@@ -1683,3 +1683,31 @@ def test_a_history_with_no_assistant_message_gives_no_user_words_on_every_route(
 )
 def test_a_state_history_gives_its_last_agent_turn(reply):
     assert _generic_response(reply).content == "Shipped."
+
+
+# --- A stream chunk of a message kind that is not the agent's gives nothing. ---
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "other",
+    [
+        {"type": "tool", "content": "BEHIND-1"},
+        {"type": "user", "content": "BEHIND-2"},
+        {"type": "human", "content": "BEHIND-3"},
+        {"type": "system", "content": "BEHIND-4"},
+        {"type": "message", "role": "user", "content": "BEHIND-5"},
+        SimpleNamespace(type="human", content="BEHIND-6"),
+    ],
+    ids=["tool", "user", "human", "system", "message-from-user", "human-object"],
+)
+def test_a_stream_chunk_of_a_message_kind_that_is_not_the_agents_gives_nothing(
+    other, is_async
+):
+    chunks = [
+        {"type": "token", "content": "Your order "},
+        other,
+        {"type": "token", "content": "shipped today."},
+    ]
+    result = _generic_stream(chunks, is_async=is_async)
+    assert result.content == "Your order shipped today."

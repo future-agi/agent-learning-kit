@@ -166,8 +166,9 @@ def _stream_event_text(chunk: Any) -> Any:
 
     Anthropic raw events and OpenAI Responses events carry thinking, signatures, tool input
     and bookkeeping next to the answer. Only ``response.output_text.delta`` and a
-    ``content_block_delta`` holding a listed delta give text. A message kind (and a chunk with
-    no string ``type``) is left to the caller's key lookup. Any other typed event gives the
+    ``content_block_delta`` holding a listed delta give text. An agent message kind (and a chunk with
+    no string ``type``) is left to the caller's key lookup; a tool, user, human or system chunk
+    gives ``""``. Any other typed event gives the
     string of a listed answer type (``_stream_answer_text``), else ``""``, never its JSON.
     """
     kind = _field(chunk, "type")
@@ -178,11 +179,20 @@ def _stream_event_text(chunk: Any) -> Any:
     if kind == "response.output_text.delta":
         value = _field(chunk, "delta")
         return value if isinstance(value, str) else ""
+    if kind in ("tool", "user", "human", "system"):
+        return ""  # a message of the caller or of a tool, never the agent's answer
     if (
         kind == "refusal"
         or kind in _ENVELOPE_KINDS
         or kind.endswith(("Message", "MessageChunk"))
     ):
+        role = _field(chunk, "role")
+        if (
+            isinstance(role, str)
+            and role in _CHAT_ROLES
+            and role not in ("assistant", "model")
+        ):
+            return ""
         return None
     return _stream_answer_text(chunk)
 

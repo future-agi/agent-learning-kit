@@ -527,6 +527,10 @@ STREAM_OTHER_TYPES = [
     "response.reasoning_text.delta",
     "token.delta",
     "vendor.text",
+    "tool",
+    "user",
+    "human",
+    "system",
 ]
 STREAM_FIELDS = ["content", "text", "delta"]
 
