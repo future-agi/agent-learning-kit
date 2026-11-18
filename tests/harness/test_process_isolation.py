@@ -594,3 +594,33 @@ def test_every_declared_process_user_exists_in_the_images_and_the_template_check
             assert f"useradd --uid {uid} --gid {uid} --create-home --shell /usr/sbin/nologin {user}" in dockerfile
     for user, uid in uids.items():
         assert f'test "$(id -u {user})" = {uid}' in template
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root may write any file")
+def test_the_agent_s_user_can_write_nothing_in_the_harness_s_own_source(tmp_path):
+    import stat
+
+    from fi.alk.harness.privilege import writable_harness_source
+
+    source = tmp_path / "fi"
+    (source / "alk" / "harness").mkdir(parents=True)
+    (source / "alk" / "harness" / "checks.py").write_text("# the grader\n")
+    (source / "evals").mkdir()
+    # As unpacked by the user that runs it: every part writable, the grader among it.
+    found = writable_harness_source([source])
+    assert str(source / "alk" / "harness" / "checks.py") in found and str(source / "evals") in found
+
+    for path in [*source.rglob("*"), source]:
+        path.chmod(stat.S_IMODE(path.stat().st_mode) & ~0o222)
+    try:
+        assert writable_harness_source([source]) == []
+    finally:
+        for path in [source, *source.rglob("*")]:
+            path.chmod(stat.S_IMODE(path.stat().st_mode) | 0o200)
+
+
+def test_the_template_refuses_a_harness_source_its_user_can_write():
+    root = Path(__file__).resolve().parents[2]
+    template = (root / "scripts" / "e2b-template.py").read_text()
+    assert '"harness-source-read-only"' in template
+    assert "writable_harness_source" in template and "sys.exit(1 if found else 0)" in template
