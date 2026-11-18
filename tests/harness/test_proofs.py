@@ -230,6 +230,7 @@ def test_an_agent_bound_tool_with_a_state_check_is_kept_as_written_not_unsolvabl
     assert proof.assumed == ["refund_order"] and proof.holds is True
     assert (saved["blocked_reason"], saved["kept_as_written"], saved["proved"]) == ("solution_assumed", True, False)
     assert saved["why"].startswith("kept as written")
+    assert saved["excused"] == ["refund_once"]
 
 
 def test_an_assumed_case_still_reads_its_faults(monkeypatch, tmp_path):
@@ -243,3 +244,21 @@ def test_an_assumed_case_still_reads_its_faults(monkeypatch, tmp_path):
 
     assert leaked.blocked_reason() == "answer_leaked" and leaked.kept_as_written is False
     assert uncontrolled.blocked_reason() == "no_negative_control" and uncontrolled.why().startswith("no negative control")
+
+
+def test_a_call_check_failing_on_a_tool_that_ran_is_a_fault_even_with_a_step_assumed(monkeypatch, tmp_path):
+    # The refund runs inside the agent (assumed); the lookup ran, and the check of its call fails.
+    install(monkeypatch, runtime_tools={"refund_order"})
+    wrong_lookup = check(
+        "return None if any(c.name == 'lookup_order' and c.ok and c.arguments.get('order_id') == 'O-99' for c in calls) "
+        "else 'O-99 never looked up'"
+    )
+    proof = module.prove(
+        refund_case(), catalogue(refund_once=REFUND_CATALOGUE["refund_once"], looked_up=wrong_lookup), tmp_path,
+        contract=None, actors=[],
+    )
+
+    assert proof.assumed == ["refund_order"]
+    # The world-only refund check is excused; the failed call check is not.
+    assert proof.excused == ["refund_once"]
+    assert (proof.solvable, proof.blocked_reason(), proof.kept_as_written) == (False, "not_solvable", False)

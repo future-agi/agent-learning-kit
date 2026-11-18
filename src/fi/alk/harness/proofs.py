@@ -81,6 +81,7 @@ def proof_entry(proof: Proof, solution_steps: int) -> ProofEntry:
         "sources": [dict(one) for one in proof.sources],
         "policy_checks": [dict(one) for one in proof.policy_checks],
         "evidence": {name: list(kinds) for name, kinds in proof.evidence.items()},
+        "excused": list(proof.excused),
         "blocked_reason": blocked,
         **({"trial": proof.trial} if proof.trial else {}),
     }
@@ -114,6 +115,7 @@ def unprovable_entry(why: str, blocked_reason: str = "broken_check") -> ProofEnt
         "sources": [],
         "policy_checks": [],
         "evidence": {},
+        "excused": [],
         "blocked_reason": blocked_reason,
     }
 

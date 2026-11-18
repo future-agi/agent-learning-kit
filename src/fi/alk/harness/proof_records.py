@@ -102,6 +102,8 @@ class _ProofFields(TypedDict):
     sources: list[SourceResult]
     policy_checks: list[PolicyCheck]
     evidence: dict[str, list[str]]
+    # Checks the reference failed only because a step it took was assumed (they read the world alone).
+    excused: list[str]
     blocked_reason: str | None
 
 
@@ -109,3 +111,5 @@ class ProofEntry(_ProofFields, total=False):
     """One case's latest proof in ``proofs.json`` (format 2)."""
 
     trial: dict[str, Any]
+    # Whether the case was played on the live runtime (a certification's proving).
+    live: bool

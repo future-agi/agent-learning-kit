@@ -139,18 +139,12 @@ class Proof:
     # The reference solution's trial, for comparing tools' declared tables with what changed: the calls the world took
     # in order, the tables that ended different from the start, and why it cannot say which tool changed them.
     trial: dict[str, Any] = field(default_factory=dict)
+    # Checks the reference failed only because a step it took was assumed: each reads the world alone, which an
+    # assumed step never changes (`excused_by_assumed_steps`).
+    excused: list[str] = field(default_factory=list)
 
     @property
     def holds(self) -> bool:
-        if self.assumed:
-            # The solution never ran, so the gates read from its run (solvable, failed attempts, too strict,
-            # unchecked) are no evidence either way; the gates on the untouched world still are.
-            return (
-                self.ready
-                and not self.vacuous
-                and (self.outcome == "no_change" or not self.weak)
-                and not self.broken
-            )
         return (
             self.ready
             and self.solvable
@@ -190,18 +184,17 @@ class Proof:
             # A deferred proof returns before any gate runs, so its gates read unset, not failed.
             if not self.ready:
                 return "not_ready"
-            # With steps assumed, the gates read from the solution's run are skipped: it never ran (`holds`).
-            if not self.solvable and not self.assumed:
+            if not self.solvable:
                 return "not_solvable"
             if self.vacuous:
                 return "vacuous"
             if self.weak and self.outcome == "change":
                 return "weak_check"
-            if self.failed_attempts and not self.assumed:
+            if self.failed_attempts:
                 return "credits_failed_attempt"
-            if self.too_strict and not self.assumed:
+            if self.too_strict:
                 return "too_strict"
-            if self.unchecked and not self.assumed:
+            if self.unchecked:
                 return "unchecked"
             if not self.judged_only:
                 if not self.controls:
@@ -272,7 +265,7 @@ class Proof:
             return "these checks are broken, not failing:\n  - " + "\n  - ".join(
                 self.broken
             )
-        if not self.solvable and not self.assumed:
+        if not self.solvable:
             failed = [one for one in self.with_solution if not one.held]
             said = "\n  - ".join(f"{one.name}: {one.said}" for one in failed)
             refusals = (
@@ -302,7 +295,7 @@ class Proof:
                 "        if any(c.ok for c in tried): return 'it succeeded'\n"
                 "        return None"
             )
-        if self.unchecked and not self.assumed:
+        if self.unchecked:
             return (
                 "these values are marked fixed, yet every check still passes when the agent gets "
                 "them wrong:\n  - "
@@ -311,7 +304,7 @@ class Proof:
                 "compare it, or take it out of `fixed` if only what is said settles it or the agent words it "
                 "itself (a reason, a note, a message), which no check compares as text."
             )
-        if self.too_strict and not self.assumed:
+        if self.too_strict:
             return (
                 "these checks fail an agent that does every fixed thing right but makes its own "
                 "choice, for an argument this scenario does not mark fixed, a way its "
@@ -321,7 +314,7 @@ class Proof:
                 "rule of the agent fixes. Check the outcome instead, or mark the argument fixed "
                 "if one of those really fixes it."
             )
-        if self.failed_attempts and not self.assumed:
+        if self.failed_attempts:
             return (
                 "these checks award credit when every tool attempt crashes without changing "
                 "the world or returning a result:\n  - "
@@ -368,6 +361,19 @@ class Proof:
                 self.assumed
             )
         return "holds"
+
+
+def excused_by_assumed_steps(proof: Proof) -> list[str]:
+    """The checks the reference failed that are no evidence, because a step was assumed: an assumed step never ran,
+    so the world never changed, and a check that reads only the world cannot pass. A check that reads the calls is
+    evidence either way, and with nothing assumed every failure counts."""
+    if not proof.assumed:
+        return []
+    return sorted(
+        one.name
+        for one in proof.with_solution
+        if not one.held and not one.broken and proof.evidence.get(one.name) == ["world_state"]
+    )
 
 
 def check_evidence(source: str) -> list[str]:
@@ -1198,6 +1204,7 @@ def prove(
         ]
         passing = {one.name for one in proof.with_solution if one.held}
         held = [(name, source) for name, source in checks if name in passing]
+        proof.excused = excused_by_assumed_steps(proof)
         right_state = _end_state(world)
         played = [call.name for call in calls if call.ok and not call.refused]
         others = len(world.calls) - len(calls) if right_state is not None else 0
@@ -1267,6 +1274,10 @@ def prove(
         finally:
             alt_world.close()
     for label, steps, corrected in _with_one_wrong(scenario) if held else ():
+        if proof.excused and label.split(".", 1)[0] in assumed:
+            # A wrong value on an assumed step never reaches the world, so the excused checks that would notice it
+            # cannot: no evidence that nothing checks it.
+            continue
         wrong_world, wrong_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=steps)
         try:
             # Only a value a later step sets again, leaving the right end state, is a corrected draft
@@ -1281,7 +1292,7 @@ def prove(
             wrong_world.close()
     proof.refused = refused
     proof.broken = [one.name for one in proof.with_solution if one.broken]
-    proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken
+    proof.solvable = all(one.held or one.name in proof.excused for one in proof.with_solution) and not proof.broken
 
     # Gate 3: do those same checks fail when nothing is done?
     untouched, nothing, _, _ = _run(scenario, world_root, with_solution=False)
