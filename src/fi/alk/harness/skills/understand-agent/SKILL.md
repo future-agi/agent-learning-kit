@@ -235,6 +235,16 @@ Find, in roughly this order:
    sees the dependency path; without this mapping ALK cannot normalize it back to the semantic
    tool the agent actually chose.
 
+   Write `module` as the dotted name the agent's own process imports, from the folder it runs
+   in: for `agent.py` in the folder the agent starts from, `agent`, not the name counted from the
+   repository root. A module-level tool the kit can call is `import`, and a method on a class is
+   `construct`, decorated or not: a plain `def`, Pydantic AI's `@agent.tool_plain`, a LangChain
+   `@tool`, and a LiveKit `@function_tool` method on an `Agent` class all keep those modes. The
+   one exception is a tool whose module attribute is an object the kit can't call: the OpenAI
+   Agents SDK's `@function_tool` (imported from `agents`) turns the def into a `FunctionTool`.
+   Record that one as `unreachable`, but still fill in `module` and `callable` with the def's own
+   name: the kit can't call it, but watches it when it knows where it is, and records its calls.
+
    Record each entry's effect: "read" when the code only reads (a lookup, a search, a list),
    "write" when it creates, changes or deletes anything. Leave it empty only when you cannot tell;
    an empty one counts as a write unless the endpoint is called with GET.
@@ -263,6 +273,17 @@ Find, in roughly this order:
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
    startable but the simulator cannot honestly claim to have exercised it.
+
+   **A LangGraph app comes first.** Before choosing a command or an HTTP interface, look for a
+   `langgraph.json` that names a graph. When the requirements the app installs have no
+   `langgraph-cli` (and no Compose file or Dockerfile of the app installs it), `langgraph dev` and
+   `langgraph up` can't run there: leave `runtime.command`
+   empty, set `execution` to `auto`, and declare the interface as `callable` with protocol
+   `fi.alk`; the kit serves the graph itself through it.
+   In that no-CLI shape, don't map the LangGraph server's `/runs/wait` with a JSON template.
+   An app that installs `langgraph-cli`, or whose `langgraph.json` has an `http` or `auth` key
+   or declares more than one graph, keeps its command and its HTTP interface, and may map
+   `/runs/wait`.
 
    If an HTTP ingress uses neither the ALK nor OpenAI envelope, do not stop and do not label it as
    one of those protocols. Read the route models, OpenAPI setup, client examples and tests, then use

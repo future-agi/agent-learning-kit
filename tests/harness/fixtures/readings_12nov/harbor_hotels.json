@@ -1,0 +1,305 @@
+{"reading_inputs": {"version":1,"source":{"kind":"github","repository":"real/small","commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"subfolder":"","evals_sha256":null,"generic_harness_v1":true}, 
+  "agent": "harbor-hotels-langchain",
+  "one_liner": "A stateless LangChain chat assistant for Harbor Hotels (Lisbon, Porto, Bergen) that checks room availability and rates and books rooms, over an OpenAI-chat-completions HTTP endpoint.",
+  "modality": "chat",
+  "call_direction": "inbound",
+  "agent_languages": [],
+  "conversational": true,
+  "system_prompt_excerpt": "SYSTEM_PROMPT = (\n    \"You are the reservations assistant for Harbor Hotels, a small hotel group with \"\n    \"properties in Lisbon, Porto and Bergen. You help guests check availability and book \"\n    \"rooms. Rules: never invent a rate or availability, always call check_availability \"\n    \"before quoting a price; only call book_room after the guest has confirmed the city, \"\n    \"room type, number of nights and the name for the booking; amounts are in euros; if the \"\n    \"guest asks for anything other than hotel bookings (flights, tours, restaurants), say \"\n    \"that you can only help with Harbor Hotels bookings.\"\n)",
+  "system_prompt_from": [
+    {
+      "path": "agent.py",
+      "start_line": 52,
+      "end_line": 60
+    }
+  ],
+  "model": {
+    "provider": "anthropic",
+    "name": "claude-sonnet-5-5",
+    "path": "agent.py",
+    "line": 48
+  },
+  "hard_constraints": [
+    "never invent a rate or availability",
+    "always call check_availability before quoting a price",
+    "only call book_room after the guest has confirmed the city, room type, number of nights and the name for the booking",
+    "amounts are in euros",
+    "if the guest asks for anything other than hotel bookings (flights, tours, restaurants), say that you can only help with Harbor Hotels bookings"
+  ],
+  "tools": [
+    {
+      "name": "check_availability",
+      "args": [
+        "city",
+        "room_type",
+        "nights"
+      ],
+      "arg_types": {
+        "city": "str",
+        "room_type": "str",
+        "nights": "int"
+      },
+      "arg_values": {
+        "city": [
+          "lisbon",
+          "porto",
+          "bergen"
+        ],
+        "room_type": [
+          "standard",
+          "harbor_view",
+          "suite"
+        ],
+        "nights": [
+          "integer 1..14"
+        ]
+      },
+      "description": "Check a Harbor Hotels room and return its nightly rate in euros. city is lisbon, porto or bergen. room_type is standard, harbor_view or suite. nights is a whole number from 1 to 14.",
+      "requires": [],
+      "refuses": "Returned as an ordinary string, not an error, always starting 'unavailable: '. Checks run in this order: (1) city (stripped, case-insensitive) not in lisbon/porto/bergen -> 'unavailable: no Harbor Hotels property in {city}; cities are lisbon, porto, bergen'; (2) room_type (stripped, case-insensitive) not standard/harbor_view/suite -> 'unavailable: unknown room type {room_type}; types are standard, harbor_view, suite'; (3) nights not an int or outside 1..14 -> 'unavailable: nights must be a whole number from 1 to 14'; (4) the (porto, harbor_view) combination is permanently sold out -> 'unavailable: the harbor_view room in {city} is sold out'. Note: the sold-out check applies regardless of nights.",
+      "effects": "Read-only. Looks up the rate in the in-memory RATES table and returns 'available: {rate} EUR per night, {rate*nights} EUR for {nights} night(s)'. Changes nothing.",
+      "inputs_from": {}
+    },
+    {
+      "name": "book_room",
+      "args": [
+        "city",
+        "room_type",
+        "nights",
+        "guest_name"
+      ],
+      "arg_types": {
+        "city": "str",
+        "room_type": "str",
+        "nights": "int",
+        "guest_name": "str"
+      },
+      "arg_values": {
+        "city": [
+          "lisbon",
+          "porto",
+          "bergen"
+        ],
+        "room_type": [
+          "standard",
+          "harbor_view",
+          "suite"
+        ],
+        "nights": [
+          "integer 1..14"
+        ]
+      },
+      "description": "Book a room once the guest has confirmed city, room type, nights and name. Returns the booking code.",
+      "requires": [],
+      "refuses": "Returned as an ordinary string, always starting 'not booked: '. Same validation and order as check_availability (city, room type, nights 1..14, sold-out porto/harbor_view), with the prefix 'not booked: ' instead of 'unavailable: '; then, only after those pass, an empty or whitespace-only guest_name -> 'not booked: a guest name is required'. So an invalid room with a blank name reports the room error first. The tool itself does not require check_availability to have been called first; that sequencing is only a prompt rule.",
+      "effects": "Creates a booking in the process-global in-memory BOOKINGS dict under code 'HH-{len(BOOKINGS)+1001}' (first is HH-1001, then HH-1002, ...), storing city and room_type (stripped, lowercased), nights, guest_name (stripped) and total_eur = rate*nights. Returns 'booked: code {code}, {total} EUR total for {nights} night(s)'. Bookings are shared across all conversations and persist until the process exits; no tool reads, changes or cancels them.",
+      "inputs_from": {}
+    }
+  ],
+  "data_schema": {
+    "RATES": {
+      "key": "city (lisbon|porto|bergen)",
+      "value": "dict room_type (standard|harbor_view|suite) -> nightly rate in EUR (int)"
+    },
+    "SOLD_OUT": "set of (city, room_type) tuples",
+    "BOOKINGS": {
+      "key": "code 'HH-<1001+n>'",
+      "value": {
+        "city": "str lowercase",
+        "room_type": "str lowercase",
+        "nights": "int 1..14",
+        "guest_name": "str",
+        "total_eur": "int = rate*nights"
+      }
+    }
+  },
+  "base_environment": {
+    "RATES": {
+      "lisbon": {
+        "standard": 120,
+        "harbor_view": 175,
+        "suite": 290
+      },
+      "porto": {
+        "standard": 105,
+        "harbor_view": 160,
+        "suite": 260
+      },
+      "bergen": {
+        "standard": 140,
+        "harbor_view": 210,
+        "suite": 330
+      }
+    },
+    "SOLD_OUT": [
+      [
+        "porto",
+        "harbor_view"
+      ]
+    ],
+    "BOOKINGS": {}
+  },
+  "dependencies": [
+    {
+      "name": "hotel_world",
+      "kind": "datastore",
+      "what": "Module-level in-memory dicts in agent.py: RATES (per-city, per-room nightly EUR rate), SOLD_OUT set, and BOOKINGS dict (starts empty, filled by book_room). No external database.",
+      "used_by": [
+        "check_availability",
+        "book_room"
+      ],
+      "engine": "in_process",
+      "version": "",
+      "reached": {
+        "dsn_env": "",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "",
+        "loader_function": ""
+      }
+    }
+  ],
+  "runtime_dependencies": [
+    {
+      "name": "model_provider",
+      "kind": "inference",
+      "what": "LLM that drives the conversation and tool calls. ANTHROPIC_API_KEY or OPENAI_API_KEY is required (Anthropic wins if its key is set, unless HARBOR_PROVIDER says otherwise). OPENAI_BASE_URL/OPENAI_API_BASE optionally route OpenAI calls through a gateway.",
+      "used_by": [],
+      "engine": "anthropic or openai (via langchain_anthropic ChatAnthropic / langchain_openai ChatOpenAI)",
+      "version": "",
+      "reached": {
+        "dsn_env": "ANTHROPIC_API_KEY or OPENAI_API_KEY",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "",
+        "loader_function": ""
+      }
+    },
+    {
+      "name": "trace_export",
+      "kind": "transport",
+      "what": "Optional trace export, started only when FI_BASE_URL is set or HARBOR_TRACING=on; off otherwise. The agent never reads FI_API_KEY/FI_SECRET_KEY.",
+      "used_by": [],
+      "engine": "traceAI / OpenTelemetry OTLP (fi_instrumentation)",
+      "version": "",
+      "reached": {
+        "dsn_env": "FI_BASE_URL",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "",
+        "loader_function": ""
+      }
+    }
+  ],
+  "implementation": "present",
+  "tool_entrypoints": [
+    {
+      "tool": "check_availability",
+      "mode": "import",
+      "module": "agent",
+      "callable": "check_availability",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "A langchain_core @tool StructuredTool; call with .invoke({'city':..,'room_type':..,'nights':..}). Importing agent imports fi_instrumentation, traceai_langchain and langchain_core (installed from requirements.txt) but starts neither tracing nor the server (guarded by __main__). Fully local, no dependency endpoint."
+    },
+    {
+      "tool": "book_room",
+      "mode": "import",
+      "module": "agent",
+      "callable": "book_room",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "A langchain_core @tool StructuredTool; call with .invoke({...}). Mutates module-global agent.BOOKINGS under a lock. Fully local, no dependency endpoint."
+    }
+  ],
+  "refusal_signature": "Tools return plain strings and never raise for business refusals: check_availability returns a string beginning 'unavailable: ', book_room returns a string beginning 'not booked: '. Success strings begin 'available: ' and 'booked: '. Separately, the agent loop returns 'Sorry, I could not finish that request. Please try again.' after 6 model/tool steps, and an unknown tool name yields 'error: unknown tool {name}'.",
+  "data_store": {
+    "kind": "in_process",
+    "version": "",
+    "configured_by": "hardcoded module-level dicts in agent.py; no connection to configure",
+    "config_key": "",
+    "host": "",
+    "port": null,
+    "database": "",
+    "user": "",
+    "password_from": "",
+    "schema_from": "",
+    "loaded_by": "module import of agent.py (RATES, SOLD_OUT, BOOKINGS)",
+    "loader_module": "agent"
+  },
+  "runtime": {
+    "language": "python",
+    "version": "3.12",
+    "install": ".venv/bin/python -m pip install --requirement requirements.txt",
+    "extras": [],
+    "requirements_files": [],
+    "observations": {},
+    "workspaces": {},
+    "workdir": ".",
+    "execution": "native",
+    "compose_file": "",
+    "compose_overrides": [],
+    "compose_image_services": [],
+    "service": "",
+    "additional_services": [],
+    "required_environment": {},
+    "secret_files": {},
+    "config_files": {},
+    "directories": [],
+    "dockerfile": "",
+    "command": [
+      "python",
+      "agent.py"
+    ],
+    "context_excludes": [],
+    "platform": "",
+    "interface": {
+      "kind": "http",
+      "protocol": "openai_chat",
+      "model": null,
+      "port": 8080,
+      "path": "/v1/chat/completions",
+      "health_path": "/health",
+      "include_tools": false,
+      "request_template": null,
+      "response_path": "",
+      "headers_template": {},
+      "completed_tool_events": null,
+      "completed_tools": null,
+      "local_auth": null,
+      "setup_secrets": {},
+      "failure_rule": null,
+      "setup_requests": []
+    }
+  },
+  "real_use_cases": [
+    "Check whether a Harbor Hotels room (city, room type, nights) is available and quote its nightly rate and total in euros.",
+    "Book a room for a named guest once city, room type, nights and name are confirmed, returning a booking code.",
+    "Explain unavailability: unknown city or room type, nights outside 1-14, or the sold-out Porto harbor_view room.",
+    "Decline requests that are not Harbor Hotels bookings (flights, tours, restaurants)."
+  ],
+  "caller_identity": "The agent never identifies the caller. It is stateless: the caller sends the whole conversation (user/assistant messages) on every POST; system and tool messages sent by the caller are ignored. Nothing is loaded before a tool runs.",
+  "notes": "Single-file agent (agent.py), one agent, one runtime (HTTP chat). There is NO Dockerfile, Compose file or Procfile in the repo (README says the harness runs 'python agent.py'); deployment is native Python startup, consistent with the available execution capabilities, so nothing from a Dockerfile is needed. README says venv python3.12; requirements.txt comments mention 3.11/3.13 installs; pins have not been re-resolved. Model: default is claude-sonnet-5-5 (Anthropic, written on line 48) when ANTHROPIC_API_KEY is set, else gpt-4o-mini; HARBOR_MODEL overrides; the HTTP response's 'model' field just echoes it and the request's model field is ignored. Tools execute inside the agent's loop (max 6 model steps per turn); the HTTP response only carries final assistant text and does not expose completed tool calls, so tool-call evidence is only available through traces (FI_BASE_URL/HARBOR_TRACING=on) — no completed_tools mapping is declared. Endpoints: GET /health -> {status: ok}; POST /v1/chat/completions needs 'messages' list (else 400 messages_required); internal failures return 500 {error:{type:<ExceptionClass>}}; other paths 404. If the messages contain no user message, the agent returns a fixed welcome string without calling the model. BOOKINGS state is process-global and shared by all conversations; booking codes depend on how many bookings exist so far. Guard quirks: nights is validated with isinstance int (JSON booleans would pass in Python, since bool is an int, though the tool schema types it int); a blank guest_name is only refused after city/room/nights/sold-out checks. Required env: one of ANTHROPIC_API_KEY or OPENAI_API_KEY (either-or, so not listed in required_environment).",
+  "open_questions": [],
+  "chosen_evals": [],
+  "amendments": [],
+  "instrumentation": "traceai"
+}
