@@ -2263,8 +2263,7 @@ def scenario_tools(
         + (
             " `actor` names the actor this sub-goal depends on, by id, when it grades how the agent dealt with that "
             "actor (it always grades the agent, never the actor): it reads not applicable on a call the actor never "
-            "came into and inconclusive when the actor came in and never reached the agent. Leave it empty for a "
-            "sub-goal about the person's task."
+            "came into. Leave it empty for a sub-goal about the person's task."
         ),
         schema(
             {

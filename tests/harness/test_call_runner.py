@@ -2264,6 +2264,8 @@ def test_tool_trace_parsed_json_result_is_not_truncated(monkeypatch) -> None:
 def test_tool_trace_holds_only_the_agents_calls(monkeypatch) -> None:
     """A world actor's action shares the trace table with the agent's calls; it is never graded as the agent's,
     and never fires an actor waiting on one of the agent's tools."""
+    # The voice call actor imports LiveKit, which the newest-dependencies CI row doesn't install.
+    pytest.importorskip("livekit")
     from fi.simulate.simulation.engines.call_actor_voice import world_access
 
     columns = [
@@ -3826,3 +3828,230 @@ def test_a_voice_trial_writes_a_fault_named_by_its_tool_as_that_tool_s_route_act
     _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
 
     assert written and written[0] == [{"action": "orders.refund", "mode": "unavailable"}]
+
+
+def test_a_langchain_span_whose_input_is_the_arguments_text_pairs_with_the_agent_s_own_call():
+    """A LangGraph agent reports its calls, and the framework's spans record the same calls each as one `input`
+    holding the arguments' repr and its answer as the framework's message object, ended before the agent's report
+    is timed: each call is counted once, so a door
+    that recorded every call leaves no notice. Timings and shapes are a real chat trial's."""
+    import tempfile
+
+    from fi.alk.harness.call_runner import _with_span_calls, evidence_notices
+
+    lookup, cancel = {"order_id": "BK-2002"}, {"order_id": "BK-2002", "reason": "bought twice"}
+
+    def span(name, arguments, at, ended, event):
+        # LangChain's tool span: the arguments' repr as one input, the answer as its ToolMessage object.
+        message = f"content='{json.dumps(answers[name])}' name='{name}' tool_call_id='call_{event}'"
+        return {"name": name, "arguments": {"input": repr(arguments)}, "output": repr({"output": message}),
+                "is_error": False, "source": "otel", "at": at, "ended_at": ended, "event_id": event}
+
+    answers = {"get_order_status": {"found": True, "order_id": "BK-2002"}, "cancel_order": {"cancelled": True}}
+
+    spans = [
+        span("get_order_status", lookup, 349.100, 349.243, "c7e48f222416d22c"),
+        span("get_order_status", lookup, 355.054, 355.071, "9eb48efbaf238416"),
+        span("cancel_order", cancel, 356.852, 356.868, "a77e326651cc93e4"),
+    ]
+    reported = [
+        Call(name="get_order_status", arguments=dict(lookup), ok=True, at=350.748, result=answers["get_order_status"]),
+        Call(name="get_order_status", arguments=dict(lookup), ok=True, at=358.97095,
+             result=answers["get_order_status"]),
+        Call(name="cancel_order", arguments=dict(cancel), ok=True, at=358.97097, result=answers["cancel_order"]),
+    ]
+    with tempfile.TemporaryDirectory() as folder:
+        trace = Path(folder) / "agent-tool-calls.jsonl"
+        trace.write_text("".join(json.dumps(one) + "\n" for one in spans))
+        calls = _with_span_calls(reported, _runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert sorted(call.name for call in calls) == ["cancel_order", "get_order_status", "get_order_status"]
+    # Each keeps the answer the agent's own report gave, never the framework's message text.
+    assert all(call.result == answers[call.name] for call in calls)
+    log = [{"name": one, "actor_id": "agent", "outcome": "committed"}
+           for one in ("get_order_status", "get_order_status", "cancel_order")]
+    assert evidence_notices(log, calls, {"get_order_status", "cancel_order"}) == []
+
+
+def _ride_contract():
+    """The ride voice agent's tools as its contract binds them: each a method of the agent, most calling the world over
+    a route (one under another name), some agent-only steps that never reach the world."""
+    routes = {
+        "create_guest_rider": "create_guest_rider", "geocode_address": "geocode_address",
+        "confirm_address": "", "get_ride_options": "get_ride_options", "select_ride_option": "",
+        "get_payment_methods": "get_payment_methods", "select_payment_method": "",
+        "send_payment_link_sms": "send_payment_link_sms", "check_payment_link_status": "get_payment_link_status",
+        "transfer_to_human": "transfer_to_human",
+    }
+    return {
+        "tool_entrypoints": [
+            {"tool": tool, "mode": "construct", "endpoint": route, "method": "POST",
+             "module": "uber_voice_agent.ride_agent", "callable": f"RideBookingAgent.{tool}"}
+            for tool, route in routes.items()
+        ]
+    }
+
+
+def test_a_tool_proxy_trial_counts_each_tool_by_its_route_and_never_an_agent_only_step():
+    """A real ride call: 22 calls the agent reported against 19 rows the tool proxy logged under world actions. Every
+    call is accounted for, so the trial is measured."""
+    reported = (
+        ["create_guest_rider"] + ["geocode_address"] * 2 + ["confirm_address"] * 2 + ["get_ride_options"]
+        + ["select_ride_option"] + ["get_payment_methods"] * 3 + ["select_payment_method"]
+        + ["send_payment_link_sms"] * 2 + ["check_payment_link_status"] * 8 + ["transfer_to_human"]
+    )
+    calls = [Call(name=name, arguments={}, ok=True) for name in reported]
+    logged = (
+        ["lookup_rider_by_phone", "create_guest_rider"] + ["geocode_address"] * 2 + ["get_ride_options"]
+        + ["get_payment_link_status"] * 8 + ["get_payment_methods"] * 3 + ["send_payment_link_sms"] * 2
+        + ["transfer_to_human"]
+    )
+    log = [{"name": name, "action": name, "actor_id": "agent", "outcome": "committed"} for name in logged]
+
+    held = cr.in_process_tools(_ride_contract(), {"tool_proxy": object()})
+
+    assert (len(calls), len(log)) == (22, 19)
+    assert held["check_payment_link_status"]["action"] == "get_payment_link_status" and "confirm_address" not in held
+    assert cr.evidence_notices(log, calls, held) == []
+    # A routed call the proxy did not log is still one it missed.
+    assert cr.evidence_notices(log[:-1], calls, held)[0]["count"] == 1
+
+
+def test_behind_the_in_process_door_every_bound_tool_is_held_by_its_own_name():
+    """The in-process door wraps every bound tool and logs it by its name: an agent-only step it kept no row for is
+    a call that ran past it."""
+    held = cr.in_process_tools(_ride_contract(), {"world_door": object()})
+    calls = [Call(name="confirm_address", arguments={}, ok=True)]
+
+    assert held["confirm_address"] == {"action": "confirm_address"}
+    assert cr.evidence_notices([], calls, held)[0]["count"] == 1
+    assert cr.evidence_notices([{"name": "confirm_address", "actor_id": "agent"}], calls, held) == []
+
+
+def test_a_langgraph_trial_behind_the_in_process_door_is_measured_when_the_door_logged_every_call():
+    """A real in-process LangGraph call: a lookup, the cancel, a second lookup. Each is a span (LangChain's input
+    repr and ToolMessage answer) and the agent's own report, timed after its span; the door logged the three. The
+    calls are counted once each and none ran past the door, so the trial's tool evidence stands."""
+    import tempfile
+
+    from fi.alk.harness.call_runner import _with_span_calls
+
+    lookup, cancel = {"order_id": "BK-2002"}, {"order_id": "BK-2002", "reason": "requested while processing"}
+    answers = {"get_order_status": {"found": True, "status": "processing"}, "cancel_order": {"cancelled": True}}
+
+    def span(name, arguments, at, ended, event):
+        message = f"content='{json.dumps(answers[name])}' name='{name}' tool_call_id='call_{event}'"
+        return {"name": name, "arguments": {"input": repr(arguments)}, "output": repr({"output": message}),
+                "is_error": False, "source": "otel", "at": at, "ended_at": ended, "event_id": event}
+
+    spans = [
+        span("get_order_status", lookup, 12.141, 12.311, "7c4bc65c239c139f"),
+        span("cancel_order", cancel, 14.125, 14.143, "5a41ab9cbff8a791"),
+        span("get_order_status", lookup, 22.893, 22.910, "04f55d259eca13b4"),
+    ]
+    reported = [
+        Call(name="get_order_status", arguments=dict(lookup), ok=True, at=16.98242, result=answers["get_order_status"]),
+        Call(name="cancel_order", arguments=dict(cancel), ok=True, at=16.98245, result=answers["cancel_order"]),
+        Call(name="get_order_status", arguments=dict(lookup), ok=True, at=27.72677, result=answers["get_order_status"]),
+    ]
+    contract = {"tool_entrypoints": [
+        {"tool": tool, "mode": "import", "module": "agent.tools", "callable": tool}
+        for tool in ("get_order_status", "cancel_order")
+    ]}
+    log = [{"name": name, "action": name, "actor_id": "agent", "outcome": outcome}
+           for name, outcome in (("get_order_status", "committed"), ("cancel_order", "committed"),
+                                 ("get_order_status", "committed"))]
+    with tempfile.TemporaryDirectory() as folder:
+        trace = Path(folder) / "agent-tool-calls.jsonl"
+        trace.write_text("".join(json.dumps(one) + "\n" for one in spans))
+        calls = _with_span_calls(reported, _runtime(metadata={"tool_trace_path": str(trace)}))
+
+    held = cr.in_process_tools(contract, {"world_door": object()})
+
+    assert len(calls) == 3
+    assert cr.evidence_notices(log, calls, held) == []
+
+
+def _order_routes(*tools):
+    entries = {
+        "get_order": {"endpoint": "/orders/{order_id}", "method": "GET"},
+        "cancel_order": {"endpoint": "/orders/{order_id}", "method": "DELETE"},
+        "confirm_order": {"endpoint": ""},
+    }
+    return {"tool_entrypoints": [
+        {"tool": tool, "mode": "construct", "module": "agent", "callable": f"Agent.{tool}", **entries[tool]}
+        for tool in tools
+    ]}
+
+
+def test_calls_on_a_route_with_a_part_pair_with_the_proxy_s_rows_for_each_part():
+    held = cr.in_process_tools(_order_routes("get_order"), {"tool_proxy": object()})
+    calls = [Call(name="get_order", arguments={"order_id": one}, ok=True) for one in ("1043", "1044")]
+    log = [{"name": one, "action": f"orders.{one}", "method": "GET", "actor_id": "agent"} for one in ("1043", "1044")]
+
+    assert cr.evidence_notices(log, calls, held) == []
+
+
+def test_a_dropped_delete_is_never_hidden_by_the_get_of_the_same_route():
+    held = cr.in_process_tools(_order_routes("get_order", "cancel_order"), {"tool_proxy": object()})
+    calls = [Call(name="get_order", arguments={}, ok=True), Call(name="cancel_order", arguments={}, ok=True)]
+    # The proxy logged the read; the cancel's row never came.
+    log = [{"name": "1043", "action": "orders.1043", "method": "GET", "actor_id": "agent"}]
+
+    assert cr.evidence_notices(log, calls, held)[0]["count"] == 1
+
+
+def _proxied(**routes):
+    contract = {"tool_entrypoints": [
+        {"tool": tool, "mode": "construct", "module": "agent", "callable": f"Agent.{tool}", "endpoint": endpoint,
+         "method": method}
+        for tool, (method, endpoint) in routes.items()
+    ]}
+    return cr.in_process_tools(contract, {"tool_proxy": object()})
+
+
+def test_a_proxy_row_named_like_the_tool_never_stands_for_a_call_made_with_another_method():
+    """The proxy names its row by the route's last part: a POST row named `get_order` is not the GET's record."""
+    held = _proxied(get_order=("GET", "/orders/get_order"), place_order=("POST", "/orders/get_order"))
+    calls = [Call(name="get_order", arguments={}, ok=True), Call(name="place_order", arguments={}, ok=True)]
+    log = [{"name": "get_order", "action": "orders.get_order", "method": "POST", "actor_id": "agent"}]
+
+    assert cr.evidence_notices(log, calls, held)[0]["count"] == 1
+    # Nor when the GET is the only call held: the POST row is still not its record.
+    assert cr.evidence_notices(log, calls[:1], _proxied(get_order=("GET", "/orders/get_order")))[0]["count"] == 1
+
+
+def test_a_proxy_row_for_another_route_with_the_same_last_part_is_not_the_tool_s_record():
+    """`/ticket/update` is logged with the name `update`; a tool named `update` bound to `/crm/update` never made it."""
+    held = _proxied(update=("POST", "/crm/update"))
+    calls = [Call(name="update", arguments={}, ok=True)]
+    log = [{"name": "update", "action": "ticket.update", "method": "POST", "actor_id": "agent"}]
+
+    assert cr.evidence_notices(log, calls, held)[0]["count"] == 1
+
+
+def test_one_proxy_row_settles_one_call_when_two_tools_share_its_route():
+    held = _proxied(update_address=("POST", "/orders/update"), update_delivery=("POST", "/orders/update"))
+    calls = [Call(name="update_address", arguments={}, ok=True), Call(name="update_delivery", arguments={}, ok=True)]
+    row = {"name": "update", "action": "orders.update", "method": "POST", "actor_id": "agent"}
+
+    assert cr.evidence_notices([row], calls, held)[0]["count"] == 1
+    assert cr.evidence_notices([row, dict(row)], calls, held) == []
+
+
+def test_a_row_goes_to_its_own_route_before_one_with_a_part_that_also_matches_it():
+    held = _proxied(cancel_order=("POST", "/orders/{order_id}"), refresh_orders=("POST", "/orders/refresh"))
+    calls = [Call(name="cancel_order", arguments={}, ok=True), Call(name="refresh_orders", arguments={}, ok=True)]
+    log = [{"name": "refresh", "action": "orders.refresh", "method": "POST", "actor_id": "agent"},
+           {"name": "1043", "action": "orders.1043", "method": "POST", "actor_id": "agent"}]
+
+    assert cr.evidence_notices(log, calls, held) == []
+    assert cr.evidence_notices(log[:1], calls, held)[0]["count"] == 1
+
+
+def test_were_the_in_process_door_beside_the_proxy_it_would_decide_and_hold_every_bound_tool():
+    """The bundle never installs both (the in-process door is left out when there is a tool proxy); were both there,
+    the in-process door wraps every bound tool, so a step with no route is still held by its name."""
+    both = cr.in_process_tools(_order_routes("get_order", "confirm_order"), {"tool_proxy": object(), "world_door": object()})
+
+    assert both["confirm_order"] == {"action": "confirm_order"} and both["get_order"] == {"action": "get_order"}

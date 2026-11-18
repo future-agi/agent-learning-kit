@@ -75,7 +75,8 @@ def test_provider_429_exhausts_bounded_retries(monkeypatch) -> None:
 
     timeouts = []
 
-    async def rate_limited(self, http_request, stream=False):
+    async def rate_limited(self, http_request, stream=False, **_options):
+        # google-genai 2.34 also passes `implicit_retry`.
         timeouts.append(http_request.timeout)
         raise ClientError(
             429,
