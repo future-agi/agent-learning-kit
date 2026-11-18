@@ -1132,6 +1132,65 @@ def test_a_github_submission_without_a_commit_sha_is_refused_at_intake(tmp_path)
     assert "github_commit_sha_required" in response.text
 
 
+@pytest.mark.parametrize(
+    ("repository", "reason"),
+    [
+        ("https://gitlab.com/acme/agent", "github_repository_invalid"),
+        ("https://ghe.acme.test/acme/agent", "github_repository_invalid"),
+        (
+            "https://github.com/acme/agent/commit/" + "a" * 40,
+            "github_repository_url_must_point_to_repository_or_branch",
+        ),
+    ],
+)
+def test_a_location_that_is_not_a_github_repository_is_refused_for_that_without_a_sha(
+    tmp_path, repository, reason
+):
+    # The missing commit is not what is wrong with it: adding one would only uncover this.
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"github_repository": repository})
+
+    assert response.status_code == 400
+    assert reason in response.text
+    assert "github_commit_sha_required" not in response.text
+
+
+@pytest.mark.parametrize(
+    "sha",
+    ["   ", "abc1234", "z" * 40, "a" * 39, "a" * 41, " " + "a" * 40, "a" * 40 + "\n"],
+)
+def test_a_commit_sha_that_is_not_forty_hex_characters_is_refused_at_intake(tmp_path, sha):
+    # The job refuses it too, but only while it is being built: a 500 with no reason.
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs", json={"github_repository": "acme/agent", "github_commit_sha": sha}
+    )
+
+    assert response.status_code == 422
+    assert "github_commit_sha_invalid" in response.text
+
+
+@pytest.mark.parametrize(
+    ("extra", "reason"),
+    [
+        ({"environment_values": {"PATH": "x"}}, "environment_name_reserved"),
+        ({"connector_config": {"ALK_JOB_X": "x"}}, "connector_config_name_reserved"),
+    ],
+)
+def test_a_reserved_name_is_reported_before_the_missing_commit(tmp_path, extra, reason):
+    # Both are wrong; the reserved name is reported first, so adding a commit does not
+    # just uncover the next refusal.
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"github_repository": "acme/agent", **extra})
+
+    assert response.status_code == 422
+    assert reason in response.text
+    assert "github_commit_sha_required" not in response.text
+
+
 def test_job_submission_requires_exactly_one_source(tmp_path):
     client = TestClient(create_app(tmp_path / "state"))
 

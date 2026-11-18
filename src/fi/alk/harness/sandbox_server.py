@@ -139,13 +139,30 @@ class LocalSandboxRequest(BaseModel):
                 raise ValueError(
                     "A subfolder needs the generic harness, which this job didn't ask for."
                 )
-        if self.github_repository and not self.github_commit_sha:
-            # A GitHub job runs hosted, and HarnessJob refuses a hosted GitHub job without the
-            # commit it checks out; refuse here, by name, rather than fail building the job.
-            raise ValueError("github_commit_sha_required")
         _validate_environment_values(self.environment_values, self.secret_refs)
         _validate_controller_names(self.connector_config, self.secret_refs)
+        if self.github_repository:
+            self._check_commit_sha()
         return self
+
+    def _check_commit_sha(self) -> None:
+        """A GitHub job runs hosted, and HarnessJob refuses a hosted GitHub job without the
+        commit it checks out, or with one that isn't 40 hex characters. Refuse here, by name,
+        rather than fail building the job.
+
+        Checked last, so a reserved name is reported first, and only for a location that is a
+        GitHub repository: submit refuses any other location for what it is (a 400), which
+        would otherwise show only once a commit was added."""
+        try:
+            parse_github_location(self.github_repository)
+        except ValueError:
+            return
+        if not self.github_commit_sha:
+            raise ValueError("github_commit_sha_required")
+        sha = self.github_commit_sha.lower()
+        # The same rule as HarnessJob's: no trimming, so what passes here is what it accepts.
+        if len(sha) != 40 or any(char not in "0123456789abcdef" for char in sha):
+            raise ValueError("github_commit_sha_invalid")
 
 
 class SandboxPreflightRequest(BaseModel):
