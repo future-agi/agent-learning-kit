@@ -3196,6 +3196,44 @@ def test_receipt_failure_message_is_capped_like_the_terminal_message() -> None:
     asyncio.run(scenario())
 
 
+def _receipt_reason_sent(reason: str, *, extra_secret_values: tuple[str, ...] = ()) -> str:
+    async def scenario() -> str:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport, extra_secret_values=extra_secret_values)
+        await adapter.receipt(
+            ResultReceipt(
+                scenario_key="s1",
+                scenario_id="platform-s1",
+                scenario_attempt=1,
+                world_index=0,
+                status="passed",
+                sub_goals=(),
+                evaluations=(),
+                call=None,
+                failure=None,
+                reason=reason,
+            )
+        )
+        return transport.receipts[("job-1", "s1")]["reason"]
+
+    return asyncio.run(scenario())
+
+
+def test_a_receipt_note_with_a_secret_across_the_platform_s_limit_never_sends_part_of_it() -> None:
+    secret = "sk-live-" + "q" * 40
+    sent = _receipt_reason_sent("did not reach the agent: " + "r" * 455 + secret, extra_secret_values=(secret,))
+
+    assert len(sent) <= he._RECEIPT_REASON_MAX_CHARS
+    assert "sk-live-" not in sent and "qqqq" not in sent
+
+
+def test_a_receipt_note_whose_url_credentials_grow_when_masked_still_fits_the_platform_s_limit() -> None:
+    sent = _receipt_reason_sent("did not reach the agent: " + "s://u:p@h " * 47)
+
+    assert len(sent) <= he._RECEIPT_REASON_MAX_CHARS and sent.endswith("…[truncated]")
+    assert ":p@" not in sent and "s://u:***@h" in sent
+
+
 def test_cancel_before_provision_skips_provisioning_entirely() -> None:
     # The pre-provision cancel checkpoint (`hosted_entrypoint.py:1342` area) had no
     # test driving a cancel signal written BEFORE `run_job` starts -- disabling all three
