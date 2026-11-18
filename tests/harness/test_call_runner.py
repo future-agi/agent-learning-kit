@@ -2433,6 +2433,7 @@ def test_tool_trace_parsed_json_result_is_not_truncated(monkeypatch) -> None:
 def test_tool_trace_holds_only_the_agents_calls(monkeypatch) -> None:
     """A world actor's action shares the trace table with the agent's calls; it is never graded as the agent's,
     and never fires an actor waiting on one of the agent's tools."""
+    pytest.importorskip("livekit")  # the call runs in LiveKit mode
     from fi.simulate.simulation.engines.call_actor_voice import world_access
 
     columns = [
@@ -4945,6 +4946,7 @@ def test_only_a_scenario_that_holds_a_tool_call_gives_the_call_the_hold_to_wait_
 
 
 def test_the_call_process_waits_through_the_hold_it_is_given(monkeypatch) -> None:
+    pytest.importorskip("livekit")  # the call runs in LiveKit mode
     from fi.simulate.simulation.engines import livekit
 
     seen: list[object] = []
