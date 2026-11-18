@@ -6152,9 +6152,7 @@ def test_a_bundle_seals_its_evaluator_only_attached_files_and_never_ships_them(t
         assert "answers.md" in rules["evaluator_only"]["files"] and "actors.json" not in sealed
 
 
-def test_a_bundle_whose_attached_file_has_an_unknown_role_is_not_sealed(tmp_path: Path) -> None:
-    from fi.alk.harness.actors import KnowledgeRolesError
-
+def test_a_bundle_whose_attached_file_has_an_unknown_role_seals_it_as_evaluator_only(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
@@ -6162,8 +6160,11 @@ def test_a_bundle_whose_attached_file_has_an_unknown_role_is_not_sealed(tmp_path
     (authoring / "knowledge").mkdir()
     (authoring / "knowledge" / "roles.json").write_text(json.dumps({"knowledge/answers.md": "private"}), encoding="utf-8")
 
-    with pytest.raises(KnowledgeRolesError, match="'private'"):
-        author_bundle_v2(source=source, job=_job(connector="http", scenario_count=1), authoring=authoring, output=tmp_path / "b")
+    output = tmp_path / "b"
+    author_bundle_v2(source=source, job=_job(connector="http", scenario_count=1), authoring=authoring, output=output)
+
+    rules = json.loads((output / "actor_rules.json").read_text(encoding="utf-8"))
+    assert "answers.md" in rules["evaluator_only"]["files"]
 
 
 def test_a_world_without_actors_gets_the_full_action_log(tmp_path: Path) -> None:

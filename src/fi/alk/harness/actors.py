@@ -489,7 +489,7 @@ def load_actors(root: Path) -> ActorList:
 
 
 def save_actors(root: Path, listing: ActorList) -> None:
-    hidden = {Path(path).name for path in evaluator_only_paths(root, strict=True)}
+    hidden = {Path(path).name for path in evaluator_only_paths(root)}
     named = [
         str(path)
         for actor in listing.actors
@@ -602,15 +602,10 @@ FILE_ROLES = ("policy", "seed_records", "evaluator_only")
 _logger = logging.getLogger(__name__)
 
 
-class KnowledgeRolesError(ValueError):
-    """A role the harness does not know, named with the file it was given to."""
-
-
-def knowledge_roles(root: Path, *, strict: bool = True) -> dict[str, str]:
+def knowledge_roles(root: Path) -> dict[str, str]:
     """Each attached file's role by its path under `knowledge/`. No file, or one that is not a JSON object, is no
-    roles (every file as before). A path outside `knowledge/` is left out with a warning. An unknown role raises
-    `KnowledgeRolesError`; read with ``strict`` off it is kept from actors and the agent as evaluator-only instead,
-    never shown."""
+    roles (every file as before). A path outside `knowledge/` is left out with a warning. A role the harness does not
+    know is read as evaluator-only, the safe side (kept from the agent and every actor), with a warning."""
     try:
         body = json.loads((Path(root) / KNOWLEDGE_ROLES).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -625,24 +620,27 @@ def knowledge_roles(root: Path, *, strict: bool = True) -> dict[str, str]:
             _logger.warning("%s names %r, which is not a file under knowledge/; left out", KNOWLEDGE_ROLES, raw)
             continue
         if role not in FILE_ROLES:
-            if strict:
-                raise KnowledgeRolesError(
-                    f"{KNOWLEDGE_ROLES}: {path} has role {role!r}, which is not one of {', '.join(FILE_ROLES)}"
-                )
+            _logger.warning(
+                "%s gives %s the role %r, which is not one of %s; kept from the agent and actors as evaluator_only",
+                KNOWLEDGE_ROLES,
+                path,
+                role,
+                ", ".join(FILE_ROLES),
+            )
             role = "evaluator_only"
         roles[path] = role
     return roles
 
 
-def evaluator_only_paths(root: Path, *, strict: bool = False) -> list[str]:
+def evaluator_only_paths(root: Path) -> list[str]:
     """The attached files only the evaluator may read, by path under `knowledge/`."""
-    return sorted(path for path, role in knowledge_roles(root, strict=strict).items() if role == "evaluator_only")
+    return sorted(path for path, role in knowledge_roles(root).items() if role == "evaluator_only")
 
 
 def evaluator_only_rule(root: Path | None = None) -> dict[str, list[str]]:
     """What only the grader may read, with the environment's own evaluator-only files beside the harness's. Files are
-    named as both readers compare them, by name; an unknown role in ``root``'s roles raises."""
-    names = [Path(path).name for path in evaluator_only_paths(root, strict=True)] if root is not None else []
+    named as both readers compare them, by name."""
+    names = [Path(path).name for path in evaluator_only_paths(root)] if root is not None else []
     # The harness's own first and in their order, so an environment without roles seals exactly as before.
     added = [name for name in sorted(set(names)) if name not in EVALUATOR_ONLY["files"]]
     return {**EVALUATOR_ONLY, "files": [*EVALUATOR_ONLY["files"], *added]}

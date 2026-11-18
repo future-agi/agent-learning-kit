@@ -269,15 +269,21 @@ def test_an_evaluator_only_attached_file_is_sealed_among_what_only_the_grader_re
     assert files == [*EVALUATOR_ONLY["files"], "answers.md"]
 
 
-def test_an_unknown_role_is_refused_naming_the_file_and_the_role(tmp_path):
-    from fi.alk.harness.actors import ActorList, KnowledgeRolesError, save_actors
+def test_an_unknown_role_is_kept_hidden_with_a_warning_and_saving_carries_on(tmp_path, caplog):
+    from fi.alk.harness.actors import EVALUATOR_ONLY, ActorList, read_knowledge, save_actors
 
     _attach(tmp_path, {"knowledge/answers.md": "secret"}, **{"answers.md": "Refund 18.00"})
 
-    with pytest.raises(KnowledgeRolesError, match="knowledge/answers.md has role 'secret'"):
-        write_actor_rules(tmp_path)
-    with pytest.raises(KnowledgeRolesError):
-        save_actors(tmp_path, ActorList())
+    save_actors(tmp_path, ActorList())
+
+    # The safe side: read as evaluator-only, so neither the agent nor an actor is given it.
+    files = json.loads((tmp_path / ACTOR_RULES_FILE).read_text())["evaluator_only"]["files"]
+    assert files == [*EVALUATOR_ONLY["files"], "answers.md"]
+    [read] = read_knowledge([{"kind": "files", "paths": ["knowledge/answers.md"]}], tmp_path)
+    assert read["read"] == []
+    assert any(
+        "knowledge/answers.md" in one.getMessage() and "'secret'" in one.getMessage() for one in caplog.records
+    )
 
 
 def test_a_role_for_a_path_outside_knowledge_is_left_out_with_a_warning(tmp_path, caplog):
