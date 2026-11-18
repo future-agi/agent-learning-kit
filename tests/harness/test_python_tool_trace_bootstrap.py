@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -757,6 +758,69 @@ def test_a_failed_probe_means_the_owner_is_needed(tmp_path: Path, mechanism: str
         check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
     )
     assert result.stdout.strip() == "True"
+
+
+ARGUMENT_TOOL = "def t(blob, n=1):\n    return 'ok'\n"
+
+
+def _traced_line(tmp_path: Path, mechanism: str, call: str) -> str:
+    """The one line a tool call writes under ``mechanism``, minus its start time."""
+    folder = tmp_path / mechanism
+    folder.mkdir()
+    (folder / "agent.py").write_text(ARGUMENT_TOOL)
+    trace, env = _trace_environment(folder, [{"name": "t", "module": "agent", "callable": "t"}])
+    env["ALK_TOOL_TRACE_MECHANISM"] = mechanism
+    subprocess.run(
+        [_TRACED_PYTHON, "-c", f"import agent\n{call}\n"], check=True, env=env, cwd=folder
+    )
+    (line,) = trace.read_text().splitlines()
+    return re.sub(r'"at": [0-9.e+-]+', '"at": 0', line)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param("agent.t('x' * 50_000_000)", id="a-50-mb-string"),
+        pytest.param("agent.t([[i, 'row %d' % i] for i in range(300_000)])", id="a-300k-row-list"),
+        pytest.param("agent.t('x' * 9_999, 'y' * 3_000)", id="a-string-that-fits-beside-one-that-is-cut"),
+        pytest.param(
+            "agent.t(['x' * 20_000], {'a': 'k' * 3_000, 'b': 'z' * 30_000})",
+            id="a-dict-beside-a-list",
+        ),
+        pytest.param("agent.t(*['q' * 12_000, 'r' * 12_000])", id="two-cut-values-over-the-line-limit"),
+        pytest.param("agent.t(tuple(range(20_000)))", id="a-tuple"),
+    ],
+)
+def test_an_oversize_argument_is_recorded_as_the_profile_path_records_it(
+    tmp_path: Path, mechanism: str, call: str
+) -> None:
+    if mechanism != "monitoring":
+        pytest.skip("compares the monitoring path with the profile path")
+    profile = _traced_line(tmp_path, "profile", call)
+    monitoring = _traced_line(tmp_path, "monitoring", call)
+    assert monitoring == profile
+
+
+def test_a_large_argument_is_not_copied_in_full_at_entry(tmp_path: Path, mechanism: str) -> None:
+    """Only what is written is copied: a 50 MB string costs a few KB, not its JSON and its copy."""
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path reads the arguments at entry")
+    (tmp_path / "agent.py").write_text(ARGUMENT_TOOL)
+    trace, env = _trace_environment(tmp_path, [{"name": "t", "module": "agent", "callable": "t"}])
+    result = subprocess.run(
+        [
+            _TRACED_PYTHON,
+            "-c",
+            "import resource, sys, agent\n"
+            "scale = 1 if sys.platform == 'darwin' else 1024\n"
+            "blob = 'x' * 50_000_000\n"
+            "before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale\n"
+            "agent.t(blob)\n"
+            "print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale - before)\n",
+        ],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert int(result.stdout) < 20_000_000
 
 
 ASYNC_TOOLS = (

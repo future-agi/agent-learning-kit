@@ -76,9 +76,16 @@ def _text(value: Any) -> str:
             return "<unprintable value>"
 
 
+class _Cut(str):
+    """A value's text already cut to its share, with the note. A second cut would nest the note,
+    so `_cut_text` and `_bounded` leave one as it is."""
+
+
 def _cut_text(value: Any) -> Any:
     """The value unchanged when its JSON fits a value's share, otherwise its text cut, with a
     note giving the full length so that a reader knows the cut happened."""
+    if isinstance(value, _Cut):
+        return value
     text = (
         value
         if isinstance(value, str)
@@ -86,7 +93,31 @@ def _cut_text(value: Any) -> Any:
     )
     if len(text) <= _MAX_VALUE_CHARS:
         return value
-    return f"{text[:_MAX_VALUE_CHARS]} [cut from {len(text)} characters]"
+    return _cut_note(text)
+
+
+def _cut_note(text: str) -> _Cut:
+    return _Cut(f"{text[:_MAX_VALUE_CHARS]} [cut from {len(text)} characters]")
+
+
+def _entry_value(value: Any) -> Any:
+    """What a monitoring-path call records for one argument, taken when the call starts: the value
+    as it was passed (a JSON round trip, so a list the tool mutates is recorded as passed), except
+    that one too large to be written whole is cut there and then, as `write_record` would cut it,
+    so only what is written is copied. A mapping is kept whole: its cut is per key."""
+    if isinstance(value, str):
+        text = str.__str__(value)
+    elif isinstance(value, (dict, list, tuple, int, float, bool, type(None))):
+        try:
+            text = json.dumps(value, default=_text, sort_keys=True)
+        except TypeError:  # keys that do not sort together: as a round trip would have them
+            return json.loads(json.dumps(value, default=_text))
+        if len(text) <= _MAX_RECORD_CHARS or isinstance(value, dict):
+            return json.loads(text)
+        return _cut_note(text)
+    else:
+        text = _text(value)  # what `json.dumps(default=_text)` makes of it
+    return _cut_text(text) if len(text) > _MAX_RECORD_CHARS else text
 
 
 def _bounded(value: Any) -> Any:
@@ -598,7 +629,12 @@ def _install_declared_python_tools() -> None:
                 "at": started,
             }
             line = json.dumps(record, default=_text, sort_keys=True)
-            if len(line) > _MAX_RECORD_CHARS:
+            # A value already cut when the call started means the whole line would have been too
+            # long: it is bounded the same way, and marked.
+            cut_early = isinstance(arguments, dict) and any(
+                isinstance(item, _Cut) for item in arguments.values()
+            )
+            if len(line) > _MAX_RECORD_CHARS or cut_early:
                 # Cut the values, never the line: a cut line is not JSON, so the call would read
                 # as no evidence at all. Only an oversize value is cut, so the rest keep their
                 # types for a check, and each cut value says it was cut.
@@ -869,7 +905,10 @@ def _install_declared_python_tools() -> None:
                     armed.add(code)
                 try:
                     # Encoded now, so a list or dict the tool mutates is recorded as passed.
-                    arguments = json.loads(json.dumps(collect_arguments(frame), default=_text))
+                    arguments = {
+                        name: _entry_value(value)
+                        for name, value in collect_arguments(frame).items()
+                    }
                 except Exception:  # noqa: BLE001
                     arguments = None
                 owner = None
