@@ -3482,3 +3482,101 @@ def test_stale_pre_run_sessions_are_written_again_before_the_bundle_is_compiled(
         assert not any(step == "refresh" for step, _ in order)
     else:
         assert order == [("refresh", authoring), ("compile", None)]
+
+
+def _door_manifest(*users_by_name):
+    return SimpleNamespace(
+        provenance=SimpleNamespace(source_digest="a" * 64),
+        digest="sha256:" + "d" * 64,
+        processes=[
+            SimpleNamespace(name=name, user=SimpleNamespace(value=user)) for name, user in users_by_name
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "processes", "door_user"),
+    [
+        # Per-user isolation with the tool proxy in front of a tools service.
+        ("per_user", [("agent", "svc-agent"), ("tools-api", "svc-tools"), ("tool-proxy", "svc-tools")], "svc-tools"),
+        # The in-process door of an agent that runs its own tools; the harness ran every process as itself.
+        ("fixed_user", [("agent", "svc-agent"), ("world-door", "svc-tools")], "svc-tools"),
+        # No door at all (an agent with no tools service and nothing to bind).
+        ("fixed_user", [("agent", "svc-agent")], None),
+        # Door processes that disagree name no one user.
+        ("per_user", [("tool-proxy", "svc-tools"), ("world-door", "svc-agent")], None),
+    ],
+    ids=["per-user-proxy", "fixed-user-in-process-door", "no-door", "door-users-disagree"],
+)
+def test_runtime_evidence_records_how_processes_ran_and_the_door_user(
+    tmp_path, monkeypatch, mode, processes, door_user
+) -> None:
+    from fi.alk.harness import certification, privilege
+
+    captured = {}
+
+    class Store:
+        def __init__(self, _root):
+            pass
+
+        def write_runtime_evidence(self, evidence):
+            captured["evidence"] = evidence
+
+        def write_tool_certification(self, _report):
+            pass
+
+        def write_action_certification(self, _report):
+            pass
+
+    monkeypatch.setattr(certification, "GenericHarnessArtifactStore", Store)
+    monkeypatch.setattr(privilege, "_mode", privilege.IsolationMode(mode))
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    (authoring / "contract.json").write_text("{}", encoding="utf-8")
+
+    _write_runtime_evidence(
+        job=SimpleNamespace(),
+        authoring=authoring,
+        manifest=_door_manifest(*processes),
+        count=1,
+        external_provider=True,
+        tool_report=SimpleNamespace(certified_or_runtime_only=0, total=0),
+        action_report=SimpleNamespace(certified=0, executable=0, total=0),
+        reset_equivalence=CheckStatus.NOT_APPLICABLE,
+        world_isolation=CheckStatus.NOT_APPLICABLE,
+        chat_ingress=CheckStatus.NOT_APPLICABLE,
+    )
+
+    evidence = captured["evidence"]
+    assert (evidence.process_isolation, evidence.door_user) == (mode, door_user)
+
+
+@pytest.mark.parametrize("recorded", [True, False], ids=["recorded", "evidence-from-before"])
+def test_certificate_carries_the_isolation_the_runtime_recorded(tmp_path, recorded) -> None:
+    authoring = tmp_path / "authoring"
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    digest = "sha256:" + "a" * 64
+    store.write_runtime_evidence(
+        RuntimeValidationEvidence(
+            source_digest=digest,
+            source_schema_hash=digest,
+            world_ir_hash=digest,
+            compiler_version="compiler-v1",
+            bundle_digest=digest,
+            contract_hash=digest,
+            scenario_set_hash=digest,
+            checks=CertificationChecks(static=CheckStatus.PASSED),
+            **({"process_isolation": "per_user", "door_user": "svc-tools"} if recorded else {}),
+        )
+    )
+    controller = RepairController()
+    controller.decide(CandidateObservation(candidate_hash=digest, phase=RepairPhase.ENVIRONMENT))
+
+    _write_generic_certificate(SimpleNamespace(source=None, metadata={}), authoring, controller.history)
+
+    runtime = json.loads(store.read_certification().model_dump_json())["runtime"]
+    if recorded:
+        assert (runtime["process_isolation"], runtime["door_user"]) == ("per_user", "svc-tools")
+    else:
+        # An older runtime's evidence says nothing about isolation; the certificate does not guess.
+        assert "process_isolation" not in runtime and "door_user" not in runtime

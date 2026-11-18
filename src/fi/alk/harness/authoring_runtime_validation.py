@@ -100,6 +100,17 @@ def _world_isolation_status(build_output: dict):
     return CheckStatus.NOT_RUN
 
 
+# The processes that make up the world's door: the tool proxy in front of a tools service, or the in-process door.
+_DOOR_PROCESSES = ("tool-proxy", "world-door")
+
+
+def _door_user(manifest) -> str | None:
+    """The OS user the bundle's door processes are declared to run as; None when the bundle has no door or its door
+    processes do not agree on one user."""
+    users = {process.user.value for process in getattr(manifest, "processes", ()) if process.name in _DOOR_PROCESSES}
+    return users.pop() if len(users) == 1 else None
+
+
 def _write_runtime_evidence(
     *,
     job,
@@ -122,6 +133,7 @@ def _write_runtime_evidence(
         GenericHarnessArtifactStore,
         RuntimeValidationEvidence,
     )
+    from .privilege import isolation_mode
 
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     limitations = [
@@ -229,6 +241,8 @@ def _write_runtime_evidence(
             world_isolation=world_isolation,
         ),
         limitations=tuple(limitations),
+        process_isolation=isolation_mode().value,
+        door_user=_door_user(manifest),
     )
     store.write_runtime_evidence(evidence)
     store.write_tool_certification(tool_report)
@@ -418,6 +432,8 @@ def _write_generic_certificate(
             validation_attempts=len(repairs.decisions),
             harness_version=_harness_version(),
             frameworks=installed_frameworks(source),
+            process_isolation=evidence.process_isolation,
+            door_user=evidence.door_user,
         ),
         checks=_with_judge_check(evidence.checks, authoring),
         repairs=repairs,

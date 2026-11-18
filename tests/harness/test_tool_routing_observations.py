@@ -689,3 +689,25 @@ def test_a_repaired_candidate_past_the_shared_budget_leaves_the_tool_unobserved(
         "get_hours",
         "track_parcel",
     ]
+
+
+def test_a_call_the_door_also_wrote_to_the_world_log_is_counted_once():
+    logged = [Call(name="lookup_order", arguments={"order_id": "A-1"}, at=10.0)]
+    ran = [
+        Call(name="lookup_order", arguments={"order_id": "A-1"}, at=10.0),
+        Call(name="track_parcel", arguments={}, at=11.0),
+    ]
+
+    received = chat_readiness.received_calls(logged, ran)
+
+    assert [one.name for one in received] == ["lookup_order", "track_parcel"]
+    # No log at all (a world whose door keeps its log in memory): every call the harness ran counts.
+    assert [one.name for one in chat_readiness.received_calls([], ran)] == ["lookup_order", "track_parcel"]
+    # Two identical calls in both are still two calls.
+    assert len(chat_readiness.received_calls(logged * 2, ran[:1] * 2)) == 2
+
+
+def test_a_bundle_without_a_contract_records_no_routing(tmp_path):
+    record_tool_routing(tmp_path, "s-1", None, PROXIED, received=[_call("lookup")], reported=[])
+
+    assert not (tmp_path / "generic-harness" / TOOL_ROUTING).exists()
