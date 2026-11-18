@@ -449,7 +449,7 @@ def test_old_certificate_keeps_its_fingerprint() -> None:
     certificate = _certificate()
     body = certificate.model_dump_json()
 
-    for unrecorded in ("harness_version", "frameworks", "judge_reachable"):
+    for unrecorded in ("harness_version", "frameworks", "judge_reachable", "process_isolation", "door_user"):
         assert unrecorded not in body
     again = HarnessCertification.model_validate_json(body)
     assert again.fingerprint == certificate.fingerprint
@@ -468,6 +468,8 @@ def test_certificate_records_harness_and_frameworks() -> None:
             validation_attempts=1,
             harness_version="0.3.1",
             frameworks={"langchain-core": "0.3.12"},
+            process_isolation="per_user",
+            door_user="svc-tools",
         ),
         checks=held.checks.model_copy(update={"judge_reachable": CheckStatus.FAILED}),
         repairs=held.repairs,
@@ -477,6 +479,7 @@ def test_certificate_records_harness_and_frameworks() -> None:
 
     assert body["runtime"]["harness_version"] == "0.3.1"
     assert body["runtime"]["frameworks"] == {"langchain-core": "0.3.12"}
+    assert (body["runtime"]["process_isolation"], body["runtime"]["door_user"]) == ("per_user", "svc-tools")
     assert body["checks"]["judge_reachable"] == "failed"
     assert certificate.fingerprint != held.fingerprint
     assert HarnessCertification.model_validate(body).fingerprint == certificate.fingerprint
