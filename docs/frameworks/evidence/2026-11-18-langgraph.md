@@ -1,11 +1,11 @@
 # LangGraph (page-turner-langgraph-otel): real reading, 18 Nov 2026
 
 ## Run
-- Agent: `page-turner-langgraph-otel`: a local test agent, not in any git repository (`~/Desktop/th-7957/e2e-agents/page-turner-langgraph-otel`). The kit has no reference agent for this framework. Content hash of its files at read time (sha256 over the sorted per-file sha256 lines): `03e03e9e203491ff`.
+- Agent: `page-turner-langgraph-otel`: a local test agent, not in any git repository. The kit has no reference agent for this framework. Content hash of its files at read time (sha256 over the sorted per-file sha256 lines): `03e03e9e203491ff`.
 - Kit: `d9b61c0370800a5faa3140012ec50211ba0bfd82` (`feat/TH-8804-source-subfolder`).
-- Reading model: Claude Sonnet, through the local gateway (alias `gemini-th7957-alias`), `authoring_entrypoint --read-agent-only`.
+- Reading model: Claude Sonnet, through a local model gateway, `authoring_entrypoint --read-agent-only`.
 - Spend: 7 model turns. The alias is unpriced, so `cost.json` reads $0.00; estimated from its tokens at Sonnet prices: $0.22-$0.73.
-- Raw outputs, outside this repository: `E2E-frameworks/readings/2026-11-18/out/langgraph/`.
+- Raw outputs: kept outside this repository.
 
 ## Expected
 Written before the reading ran.

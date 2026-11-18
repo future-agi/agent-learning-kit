@@ -22,8 +22,12 @@ from fi.alk.harness.framework_support import (
 REPO = Path(__file__).resolve().parents[2]
 ENTRIES = framework_support.frameworks()
 SMOKE = (REPO / ".github" / "workflows" / "sdk-smoke.yml").read_text(encoding="utf-8")
-# Kit commits a real run was made on that aren't merged into this branch yet, with the PR each is
-# the head of. A pass on one of them leaves its layer pending; remove the line when the PR merges.
+# The kit commits a real run can prove a layer on: commits in this branch's history, so the
+# reference agent and the reading code are the ones here. Any other commit, or none, proves
+# nothing (the list fails closed). Add a commit only after checking it is an ancestor.
+MERGED_KITS = {"d9b61c0370800a5faa3140012ec50211ba0bfd82"}
+# Unmerged kit commits a run was made on, with the PR each is the head of; a pass on one leaves
+# its layer pending and its note names the PR.
 UNMERGED_KITS = {"5aa31fdb30aa02260d2d006cad121991a3b3828c": "#341"}
 
 
@@ -54,7 +58,11 @@ def test_every_layer_uses_known_words_and_a_pending_one_says_what_it_waits_on() 
                     # ADR-006: each real run names the model that did the reading.
                     assert item.get("model"), item
                     assert item.get("result") in ("pass", "miss"), item
-                    assert re.fullmatch(r"[0-9a-f]{40}", item.get("kit", "")), item
+                    # `kit` is null when no single commit holds what ran.
+                    assert "kit" in item, item
+                    assert item["kit"] is None or re.fullmatch(
+                        r"[0-9a-f]{40}", item["kit"]
+                    ), item
         checks = entry["layers"]["run"]["checks"]
         assert tuple(checks) == CHECKS and set(checks.values()) <= set(RESULTS), entry[
             "key"
@@ -70,7 +78,7 @@ def test_read_and_run_are_proven_only_by_a_real_run() -> None:
                 assert kinds == {"real_run"}, (entry["key"], layer)
                 # A miss proves nothing, and nor does a pass on a kit not merged here.
                 assert any(
-                    item["result"] == "pass" and item["kit"] not in UNMERGED_KITS
+                    item["result"] == "pass" and item["kit"] in MERGED_KITS
                     for item in claim["evidence"]
                 ), (entry["key"], layer)
 
@@ -195,7 +203,13 @@ def test_every_piece_of_evidence_names_something_that_exists(
         ]
         assert heading in headings, ref
         # The record states the result and the kit commit the entry claims.
-        assert item["kit"][:8] in record.read_text(encoding="utf-8"), ref
+        if item["kit"] is not None:
+            kit_lines = [
+                line
+                for line in record.read_text(encoding="utf-8").splitlines()
+                if line.startswith("- Kit:")
+            ]
+            assert len(kit_lines) == 1 and f"`{item['kit']}`" in kit_lines[0], ref
         word = {"read": "Reading", "run": "Run"}[layer]
         section = _section(record, heading)
         assert any(

@@ -45,7 +45,7 @@ DATA = Path(__file__).resolve().parent / "data" / "framework_support.json"
 
 _STATUS_WORDS = {"proven": "proven", "pending": "pending", "not_proven": "-"}
 _RESULT_WORDS = {"passed": "passed", "failed": "failed", "not_run": "-"}
-# A page's word for the highest layer proven (ADR-006's proposal; Khushal may change them).
+# A page's word for the highest layer proven.
 _LEVEL_WORDS = {
     None: "Not recognised",
     "found": "Recognised, not yet tested",

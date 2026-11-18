@@ -13,13 +13,13 @@ Generated from `src/fi/alk/harness/data/framework_support.json` (decision record
 | Claude Agent SDK | Recognised, not yet tested | none | 3.12 | proven | - | - | - | - | - | - | - | - |
 | CrewAI | Read, not yet tested | none | 3.12 | proven | proven | - | - | - | - | - | - | - |
 | Deep Agents | Recognised, not yet tested | `deepagents==0.7.32` | 3.12 | proven | pending | pending | - | failed | - | - | - | - |
-| Google ADK | Read, not yet tested | `google-adk==2.13.0` | 3.12 | proven | proven | - | - | passed | passed | passed | failed | - |
+| Google ADK | Recognised, not yet tested | `google-adk==2.13.0` | 3.12 | proven | pending | - | - | passed | passed | passed | failed | - |
 | LangChain | Recognised, not yet tested | none | - | proven | pending | - | - | - | - | - | - | - |
 | LangGraph | Recognised, not yet tested | none | - | proven | - | - | - | - | - | - | - | - |
 | LiveKit Agents | Recognised, not yet tested | none | - | proven | pending | - | - | - | - | - | - | - |
 | OpenAI Agents SDK | Recognised, not yet tested | `openai-agents==0.24.0` | 3.12 | proven | pending | pending | - | passed | passed | failed | failed | - |
 | Pipecat | Recognised, not yet tested | none | - | proven | - | - | - | - | - | - | - | - |
-| Pydantic AI | Read, not yet tested | `pydantic-ai-slim==2.61.0` | 3.12 | proven | proven | - | - | passed | passed | passed | passed | - |
+| Pydantic AI | Recognised, not yet tested | `pydantic-ai-slim==2.61.0` | 3.12 | proven | pending | - | - | passed | passed | passed | passed | - |
 
 ## Notes and limits
 
@@ -31,6 +31,7 @@ Generated from `src/fi/alk/harness/data/framework_support.json` (decision record
 - **Deep Agents, read:** Read on kit PR #341's head (5aa31fdb), pending its merge: the 18 Nov reading there matched its expected contract fully (the kit's graph route). The 12 Nov reading, on the kit before #341, saved `langgraph dev`.
 - **Deep Agents, run:** Waits on kit PR #341 merging and a new run from a reading on it. #341 sends such an app to the kit's own graph route; from the 12 Nov reading it failed to start.
 - **Deep Agents:** Readings stored before #341 merges need reading again.
+- **Google ADK, read:** The 12 Nov reading described the agent, but it ran on a local merge of then-open pull requests: no single kit commit holds that reference agent and reading code, and no expectation was written first. Waits on a new reading on a kit commit merged here, against a written expectation.
 - **Google ADK, run:** Replies were right, but the transcript recorded 5 tool calls for 3, and stopping wasn't recorded; not rechecked since.
 - **Google ADK:** The reference pins google-adk 2.13.0, outside the kit's own google-adk range (below 2.8, held there by OpenTelemetry). The tested version is the agent's.
 - **LangChain, read:** The 18 Nov reading of an outside agent (harbor-hotels-langchain) passed against its written expectation. Waits on a reference agent in the kit, at a fixed commit, with pinned versions.
@@ -51,4 +52,5 @@ Generated from `src/fi/alk/harness/data/framework_support.json` (decision record
 - **Pipecat, read:** No reference agent and no reading.
 - **Pipecat, run:** Hosted Pipecat runs are not built (ADR-001).
 - **Pipecat:** Recognised by name only.
+- **Pydantic AI, read:** The 12 Nov reading described the agent, but it ran on a local merge of then-open pull requests: no single kit commit holds that reference agent and reading code, and no expectation was written first. Waits on a new reading on a kit commit merged here, against a written expectation.
 - **Pydantic AI, run:** Four of the five checks passed from its reading; stopping wasn't recorded.

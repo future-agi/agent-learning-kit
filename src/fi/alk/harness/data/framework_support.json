@@ -160,7 +160,7 @@
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents",
               "date": "2026-11-12",
               "result": "miss",
-              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             },
             {
@@ -182,7 +182,7 @@
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents",
               "date": "2026-11-12",
               "result": "miss",
-              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
@@ -232,18 +232,18 @@
           "note": ""
         },
         "read": {
-          "status": "proven",
+          "status": "pending",
           "evidence": [
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK",
               "date": "2026-11-12",
               "result": "pass",
-              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": ""
+          "note": "The 12 Nov reading described the agent, but it ran on a local merge of then-open pull requests: no single kit commit holds that reference agent and reading code, and no expectation was written first. Waits on a new reading on a kit commit merged here, against a written expectation."
         },
         "run": {
           "status": "not_proven",
@@ -253,7 +253,7 @@
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK",
               "date": "2026-11-12",
               "result": "miss",
-              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
@@ -492,7 +492,7 @@
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
               "date": "2026-11-12",
               "result": "miss",
-              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             },
             {
@@ -514,7 +514,7 @@
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
               "date": "2026-11-12",
               "result": "miss",
-              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
@@ -611,18 +611,18 @@
           "note": ""
         },
         "read": {
-          "status": "proven",
+          "status": "pending",
           "evidence": [
             {
               "kind": "real_run",
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI",
               "date": "2026-11-12",
               "result": "pass",
-              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": ""
+          "note": "The 12 Nov reading described the agent, but it ran on a local merge of then-open pull requests: no single kit commit holds that reference agent and reading code, and no expectation was written first. Waits on a new reading on a kit commit merged here, against a written expectation."
         },
         "run": {
           "status": "not_proven",
@@ -632,7 +632,7 @@
               "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI",
               "date": "2026-11-12",
               "result": "miss",
-              "kit": "c0e51b7ee3b090e9a6134210e0cd839961f8ac79",
+              "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             }
           ],

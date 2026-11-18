@@ -3,9 +3,9 @@
 ## Run
 - Agent: `future-agi/agent-learning-kit`, `examples/harness/openai_agents_support`, at `5aa31fdb30aa02260d2d006cad121991a3b3828c`.
 - Kit: `5aa31fdb30aa02260d2d006cad121991a3b3828c` (kit PR #341's head; the status stays pending until #341 merges).
-- Reading model: Claude Sonnet, through the local gateway (alias `gemini-th7957-alias`), `authoring_entrypoint --read-agent-only`.
+- Reading model: Claude Sonnet, through a local model gateway, `authoring_entrypoint --read-agent-only`.
 - Spend: 9 model turns. The alias is unpriced, so `cost.json` reads $0.00; estimated from its tokens at Sonnet prices: $0.20-$0.74.
-- Raw outputs, outside this repository: `E2E-frameworks/readings/2026-11-18/out/openai_agents/`.
+- Raw outputs: kept outside this repository.
 
 ## Expected
 Written before the reading ran.

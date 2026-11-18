@@ -1,11 +1,11 @@
 # LangChain (harbor-hotels-langchain): real reading, 18 Nov 2026
 
 ## Run
-- Agent: `harbor-hotels-langchain`: a local test agent, not in any git repository (`~/Desktop/th-7957/e2e-agents/harbor-hotels-langchain`). The kit has no reference agent for this framework. Content hash of its files at read time (sha256 over the sorted per-file sha256 lines): `d999fd698d010eaf`.
+- Agent: `harbor-hotels-langchain`: a local test agent, not in any git repository. The kit has no reference agent for this framework. Content hash of its files at read time (sha256 over the sorted per-file sha256 lines): `d999fd698d010eaf`.
 - Kit: `d9b61c0370800a5faa3140012ec50211ba0bfd82` (`feat/TH-8804-source-subfolder`).
-- Reading model: Claude Sonnet, through the local gateway (alias `gemini-th7957-alias`), `authoring_entrypoint --read-agent-only`.
+- Reading model: Claude Sonnet, through a local model gateway, `authoring_entrypoint --read-agent-only`.
 - Spend: 8 model turns. The alias is unpriced, so `cost.json` reads $0.00; estimated from its tokens at Sonnet prices: $0.34-$1.00.
-- Raw outputs, outside this repository: `E2E-frameworks/readings/2026-11-18/out/langchain/`.
+- Raw outputs: kept outside this repository.
 
 ## Expected
 Written before the reading ran.
