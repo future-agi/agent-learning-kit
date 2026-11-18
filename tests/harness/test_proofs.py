@@ -284,3 +284,13 @@ def test_the_refusal_table_quotes_the_reason_each_refused_proof_gives():
     for proof in refused:
         said = proof.why()
         assert any(said.startswith(one) for one in quoted), said
+
+
+def test_each_saved_proof_says_whether_a_submit_refuses_it(tmp_path):
+    record_proof(tmp_path, "uncontrolled", Proof(ready=True, solvable=True, vacuous=False, controls=[]))
+    record_proof(tmp_path, "assumed", Proof(ready=True, solvable=True, vacuous=False, assumed=["x"], controls=RAN))
+    record_unprovable(tmp_path, "crashed", "ValueError")
+
+    saved = load_proofs(tmp_path)
+
+    assert {key: one["refused"] for key, one in saved.items()} == {"uncontrolled": True, "assumed": False, "crashed": True}

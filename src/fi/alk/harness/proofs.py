@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .json_file import write_json_atomic
 from .proof_records import ProofEntry
-from .prove import BlockedReason, Proof
+from .prove import BlockedReason, Proof, refuses_keeping
 from .scenario import Scenario, scenario_slug
 
 PROOFS = "proofs.json"
@@ -63,6 +63,7 @@ def proof_entry(proof: Proof, solution_steps: int) -> ProofEntry:
         "evidence": {name: list(kinds) for name, kinds in proof.evidence.items()},
         "excused": list(proof.excused),
         "blocked_reason": blocked,
+        "refused": refuses_keeping(proof),
         **({"trial": proof.trial} if proof.trial else {}),
     }
 
@@ -97,6 +98,7 @@ def unprovable_entry(why: str, blocked_reason: BlockedReason = BlockedReason.BRO
         "evidence": {},
         "excused": [],
         "blocked_reason": blocked_reason,
+        "refused": True,
     }
 
 

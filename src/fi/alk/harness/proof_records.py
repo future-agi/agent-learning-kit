@@ -113,3 +113,5 @@ class ProofEntry(_ProofFields, total=False):
     trial: dict[str, Any]
     # Whether the case was played on the live runtime (a certification's proving).
     live: bool
+    # Whether a submit refuses a case with this proof (`prove.refuses_keeping`): the one rule, so no reader copies it.
+    refused: bool

@@ -88,6 +88,23 @@ LANE_CODES = frozenset(
 )
 # A case with no negative control at all: refused at submit, kept not proved through a rebuild.
 NO_NEGATIVE_CONTROL = BlockedReason.NO_NEGATIVE_CONTROL
+# A writer's fault: the scenario is not kept. The lane codes (an unbound tool) are kept and labelled.
+REFUSED_CODES = frozenset(
+    {
+        BlockedReason.NEGATIVE_CONTROL_PASSED,
+        BlockedReason.NO_NEGATIVE_CONTROL,
+        BlockedReason.ANSWER_LEAKED,
+        BlockedReason.SOURCE_UNRESOLVED,
+    }
+)
+
+
+def refuses_keeping(proof: Proof) -> bool:
+    """Whether a scenario with this proof may not be kept: its checks do not hold (unless only the live runtime can
+    prove it), or the writer left a fault the lane caught. One rule for a submit and for every case a rebuild keeps."""
+    return (not proof.holds and not (proof.deferred and not proof.broken)) or proof.blocked_reason() in REFUSED_CODES
+
+
 # Decides one judged sub-goal of a control: (goal, world, calls, what was said, scenario) -> (held, explanation).
 ControlJudge = Callable[[Any, Any, list[Call], list[dict[str, str]], Any], tuple[bool | None, str]]
 

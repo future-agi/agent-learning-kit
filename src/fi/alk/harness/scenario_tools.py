@@ -75,7 +75,7 @@ from .proofs import proof_key, record_proof, record_unprovable
 from .understand import load as load_contract
 from .prove import (
     BlockedReason,
-    Proof,
+    refuses_keeping,
     executes,
     native_runtime,
     native_source_problem,
@@ -1481,42 +1481,6 @@ def _controls_the_contract_refuses(scenario: Scenario, world_root: Path) -> list
     ]
 
 
-# A writer's fault: the scenario is not kept. The lane codes (an unbound tool) are kept and labelled.
-_REFUSED_CODES = frozenset(
-    {
-        BlockedReason.NEGATIVE_CONTROL_PASSED,
-        BlockedReason.NO_NEGATIVE_CONTROL,
-        BlockedReason.ANSWER_LEAKED,
-        BlockedReason.SOURCE_UNRESOLVED,
-    }
-)
-
-
-def _a_read_that_declines(scenario: Scenario, proof: Any, world_root: Path) -> bool:
-    """Whether a one-call reference is a refusal: its call ran, left the world exactly as doing nothing does, and its
-    tool is not one the contract says writes."""
-    if proof.outcome != "no_change" or len(scenario.solution) != 1:
-        return False
-    tool = scenario.solution[0].tool
-    try:
-        contract = load_contract(world_root)
-    except (OSError, ValueError):
-        contract = None
-    if contract is None:
-        return True
-    spec = next((one for one in contract.tools if one.name == tool), None)
-    # A tool the door would log as a write (`_read_tools`), or one whose contract names what it changes.
-    routed = {entry.tool for entry in contract.tool_entrypoints}
-    writes = bool(spec and spec.effects.strip()) or (tool in routed and tool not in _read_tools(contract))
-    return not writes
-
-
-def refuses_keeping(proof: Proof) -> bool:
-    """Whether a scenario with this proof may not be kept: its checks do not hold (unless only the live runtime can
-    prove it), or the writer left a fault the lane caught. One rule for a submit and for every case a rebuild keeps."""
-    return (not proof.holds and not (proof.deferred and not proof.broken)) or proof.blocked_reason() in _REFUSED_CODES
-
-
 def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions: str) -> list[str]:
     """Fixed text values whose stated source (caller, record or a quoted rule) does not contain them."""
 
@@ -1684,6 +1648,25 @@ def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
         if isinstance(node, dict):
             node.pop(last, None)
     return result
+
+
+def _a_read_that_declines(scenario: Scenario, proof: Any, world_root: Path) -> bool:
+    """Whether a one-call reference is a refusal: its call ran, left the world exactly as doing nothing does, and its
+    tool is not one the contract says writes."""
+    if proof.outcome != "no_change" or len(scenario.solution) != 1:
+        return False
+    tool = scenario.solution[0].tool
+    try:
+        contract = load_contract(world_root)
+    except (OSError, ValueError):
+        contract = None
+    if contract is None:
+        return True
+    spec = next((one for one in contract.tools if one.name == tool), None)
+    # A tool the door would log as a write (`_read_tools`), or one whose contract names what it changes.
+    routed = {entry.tool for entry in contract.tool_entrypoints}
+    writes = bool(spec and spec.effects.strip()) or (tool in routed and tool not in _read_tools(contract))
+    return not writes
 
 
 def accept_scenario(
