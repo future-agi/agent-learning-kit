@@ -235,7 +235,7 @@ class Proof:
                 f"{one['ref'] or 'rule'} \"{one['rule']}\": {one['why'] or 'contradicted'}" for one in self.conflicts
             )
         if self.leaks:
-            return "what the caller or the agent sees gives the answer away:\n  - " + "\n  - ".join(
+            return "what the simulated person or the agent sees gives the answer away:\n  - " + "\n  - ".join(
                 f"{one['who']}: {one['field']} repeats \"{one['excerpt']}\" from {one['grader_field']}"
                 for one in self.leaks
             )
