@@ -391,9 +391,19 @@ def test_a_restored_scenario_without_a_negative_control_is_not_restored(tmp_path
     assert "no negative control" in dropped.load(root)["cancels-a-booking"]["restore_failed"]
 
 
-def test_a_restored_scenario_the_lane_could_not_run_is_restored_as_kept_as_written(tmp_path, monkeypatch):
+# Review B4: the cancel tool runs inside the agent, so its assumed step leaves the world the state check reads unchanged
+# (solvable reads False) and the control could not run either.
+_NOT_RUN = [{"name": "wrong", "why": "cancels twice", "failed": None, "held": [], "assumed": ["cancel_booking"]}]
+
+
+@pytest.mark.parametrize(
+    ("solvable", "controls"), [(True, _RAN), (False, _NOT_RUN)], ids=["call-check", "agent-bound-state-check"]
+)
+def test_a_restored_scenario_the_lane_could_not_run_is_restored_as_kept_as_written(
+    tmp_path, monkeypatch, solvable, controls
+):
     def proof_for(key):
-        return Proof(ready=True, solvable=True, vacuous=False, assumed=["cancel_booking"], controls=_RAN)
+        return Proof(ready=True, solvable=solvable, vacuous=False, assumed=["cancel_booking"], controls=controls)
 
     _root, _kept, result = _restore_with(tmp_path, monkeypatch, proof_for)
 
