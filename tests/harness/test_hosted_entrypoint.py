@@ -4464,6 +4464,7 @@ def test_the_persona_s_pace_reaches_the_speech_provider(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
@@ -4496,6 +4497,7 @@ def test_a_provider_with_no_speed_setting_is_left_alone(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
@@ -4531,6 +4533,7 @@ def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     monkeypatch.setattr(
@@ -4815,6 +4818,7 @@ def test_the_callers_voice_speaks_their_language(monkeypatch):
 
     from fi.alk.harness.simulator_voice import simulator_definition
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
@@ -4900,6 +4904,7 @@ def test_the_persona_s_emotion_reaches_the_speech_provider(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
@@ -4930,6 +4935,7 @@ def test_a_persona_with_no_recognised_emotion_sends_no_emotion_key(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
