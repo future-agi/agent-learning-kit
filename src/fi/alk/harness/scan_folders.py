@@ -19,6 +19,7 @@ from multiprocessing.process import BaseProcess
 from pathlib import Path
 from typing import Any
 
+from .forkserver_preload import PRELOAD
 from .framework_detection import detect_framework
 from .reading_entry import MaskSecrets
 from .source_folder import SubfolderNotFound, agent_folder
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 logger.addFilter(MaskSecrets())
 
 # Loaded once in the fork server, so a restarted child doesn't import the kit again.
-_PRELOAD = ["fi.alk.harness.framework_detection"]
+_PRELOAD = PRELOAD
 # A killed child is gone almost at once; the bound only stops a wedged reap holding the scan.
 _JOIN_SECONDS = 5.0
 # The key of a child's answer that carries a failed check's trace instead of a framework.
