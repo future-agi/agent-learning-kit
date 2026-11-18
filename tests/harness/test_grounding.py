@@ -18,7 +18,7 @@ def test_rule_quote_must_match(tmp_path):
     right = SimpleNamespace(sources=[ScenarioSource(kind="rule", ref="rule:0", quote="at most once")])
     assert resolve_sources(wrong, CONTRACT, tmp_path)[0]["resolved"] is False
     resolved = resolve_sources(right, CONTRACT, tmp_path)[0]
-    assert resolved["resolved"] is True and resolved["resolved_ref"] == "rule:1"
+    assert resolved["resolved"] is True and (resolved["resolved_ref"], resolved["rule_index"]) == ("rule:1", 1)
 
 
 def test_no_sources_is_not_blocking(monkeypatch, tmp_path):

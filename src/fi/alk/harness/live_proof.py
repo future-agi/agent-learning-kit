@@ -27,24 +27,18 @@ from typing import TYPE_CHECKING, Any
 from .catalogue import Catalogue, load_catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
+from .controls import control_broken, played_control
 from .folder import apply_setup, check_ready
 from .json_file import write_json_atomic
 from .outbound import redact_outbound_text
 from .proof_records import CheckRecord, ControlResult, LiveResult
 from .proofs import proof_key
-from .prove import (
-    Proof,
-    checks_for,
-    control_broken,
-    executes,
-    play_reference_step,
-    played_control,
-)
+from .prove import Proof, checks_for, executes, play_reference_step
 from .scenario import Scenario, Step
 from .scenario_tools import load_scenarios
 from .world.handle import MCP_ROUTE, mcp_request
-from .world.snapshot import world_state_digest
 from .world.runtime import Call
+from .world.snapshot import world_state_digest
 
 if TYPE_CHECKING:
     from .hosted_entrypoint import ProcessWorldFactory
