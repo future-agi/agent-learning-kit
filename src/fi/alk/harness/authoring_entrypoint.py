@@ -496,12 +496,13 @@ def _prove_only(args: argparse.Namespace) -> int:
     return 0
 
 
-def _prove_scenarios(output: Path, deadline_at: float | None) -> None:
-    """Prove every scenario on this certification's authoring tree; never fails the certify."""
+def _prove_scenarios(output: Path, deadline_at: float | None, *, stage: str = "certify-only") -> None:
+    """Prove every scenario on this authoring tree into `SCENARIO_PROOFS`, with what the validation just played on the
+    live runtime applied as `--prove-only` applies it (nothing is played again); never fails the build or certify."""
     try:
         prove_suite.prove_suite(output, output / SCENARIO_PROOFS, deadline_at=deadline_at)
     except Exception as exc:  # noqa: BLE001 - a missing proofs file reads as "no new proofs"
-        print(f"certify-only: scenario proofs not written: {_one_line(exc)}", file=sys.stderr, flush=True)
+        print(f"{stage}: scenario proofs not written: {_one_line(exc)}", file=sys.stderr, flush=True)
 
 
 def _load_provider_import_profile(
@@ -903,6 +904,8 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
                         runtime_job, args.source.resolve(), args.output.resolve()
                     )
                 )
+                # A fresh build shows each case's verdict from the live runtime it was just played on.
+                _prove_scenarios(args.output.resolve(), None, stage="build")
         finally:
             if previous_profile_path is None:
                 os.environ.pop(PROVIDER_IMPORT_PROFILE_PATH_ENV, None)

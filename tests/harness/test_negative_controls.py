@@ -533,3 +533,66 @@ def test_a_reference_the_service_fails_is_played_but_never_proved(monkeypatch, t
     assert live_proof.live_summary(results) == "played 1 cases on the live runtime; the reference passed in 0"
     proof = live_proof.apply_live(Proof(deferred=True), live)
     assert proof.proved is False and proof.holds is False and proof.blocked_reason() == "not_solvable"
+
+
+# The lookup checked as any agent may type the id, so the offline pass finds nothing too strict.
+_BUILT_GOALS = dict(
+    refund_once=REFUND_CATALOGUE["refund_once"],
+    looked_up=check(
+        "return None if any(c.name == 'lookup_order' and c.ok and same_id(c.arguments.get('order_id'), 'O-10') "
+        "for c in calls) else 'O-10 never looked up'"
+    ),
+)
+
+
+def _built(monkeypatch, tmp_path, case, *, forward=None):
+    """A build: its validation plays `case` on the live runtime, then the build proves its suite into the archived
+    `scenario-proofs.json`, the offline pass reading service tools as assumed as it does without a runtime."""
+    import json
+
+    from fi.alk.harness import authoring_entrypoint, prove_suite
+
+    if forward is not None:
+        monkeypatch.setattr(ServiceWorld, "forward", forward)
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [case])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    stack = Stack()
+    asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path, contract=_contract({"lookup_order": "service", "refund_order": "service"}),
+            runtime=stack, provider=stack, factory=stack, work=tmp_path,
+        )
+    )
+    install(monkeypatch, runtime_tools={"lookup_order", "refund_order"})
+    monkeypatch.setattr(prove_suite, "load_scenarios", lambda path: [case])
+    monkeypatch.setattr(prove_suite, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    authoring_entrypoint._prove_scenarios(tmp_path, None, stage="build")
+    return json.loads((tmp_path / authoring_entrypoint.SCENARIO_PROOFS).read_text(encoding="utf-8"))["refund_case"]
+
+
+def test_a_build_s_proofs_carry_the_verdict_its_live_run_gave(monkeypatch, tmp_path):
+    saved = _built(monkeypatch, tmp_path, refund_case())
+    assert saved["live"] is True and saved["proved"] is True and saved["proved_at"]
+    assert saved["controls"][0]["ran"] is True and saved["controls"][0]["failed"] is True
+    # Nothing the offline pass assumed is carried over: the live run executed every step.
+    assert saved["assumed"] == [] and saved["excused"] == [] and "trial" not in saved
+
+
+def test_a_build_s_case_whose_refund_the_service_fails_is_not_solvable(monkeypatch, tmp_path):
+    def timing_out(self, endpoint, arguments=None, *, record_as="", record=True):
+        args = dict(arguments or {})
+        if endpoint == "refund":
+            return Call(endpoint, args, ok=False, error="504 payment_times_out")
+        return Call(endpoint, args, result=self.store["orders"].get(args.get("order_id")), ok=True)
+
+    saved = _built(monkeypatch, tmp_path, refund_case(), forward=timing_out)
+    assert saved["live"] is True and saved["proved"] is False and saved["blocked_reason"] == "not_solvable"
+
+
+def test_a_build_s_case_whose_control_did_not_run_is_not_proved(monkeypatch, tmp_path):
+    place = {"tool": "place_order", "arguments": {"order_id": "O-10"}}
+    case = refund_case(negative_controls=[control("places_instead", "places a new order", [LOOKUP_O10, place])])
+    saved = _built(monkeypatch, tmp_path, case)
+    assert saved["live"] is True and saved["controls"][0]["ran"] is False and saved["controls"][0]["failed"] is None
+    assert saved["proved"] is False and saved["blocked_reason"] == "control_not_run"
