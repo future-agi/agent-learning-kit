@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from fi.alk.harness import framework_support, scan_document
+from fi.alk import trinity
+from fi.alk.harness import framework_detection, framework_support, scan_document
 from fi.alk.harness.framework_support import (
     CHECKS,
     EVIDENCE_KINDS,
@@ -28,7 +29,12 @@ SMOKE = (REPO / ".github" / "workflows" / "sdk-smoke.yml").read_text(encoding="u
 MERGED_KITS = {"d9b61c0370800a5faa3140012ec50211ba0bfd82"}
 # Unmerged kit commits a run was made on, with the PR each is the head of; a pass on one leaves
 # its layer pending and its note names the PR.
-UNMERGED_KITS = {"5aa31fdb30aa02260d2d006cad121991a3b3828c": "#341"}
+UNMERGED_KITS: dict[str, str] = {}
+# The models a real run's reading is recorded with. Add a model only as a run's own logs name it.
+KNOWN_MODELS = {"claude-sonnet (laptop gateway)"}
+# The reader's words that name no framework.
+NOT_A_FRAMEWORK = {"other", "none", "unknown"}
+EVIDENCE = "src/fi/alk/harness/data/framework_evidence/"
 
 
 def test_the_schema_is_named() -> None:
@@ -37,10 +43,16 @@ def test_the_schema_is_named() -> None:
     )
 
 
-def test_all_ten_names_have_an_entry() -> None:
-    assert [entry["key"] for entry in ENTRIES] == sorted(
-        scan_document.FRAMEWORK_NAMES[:10]
-    )
+def test_every_framework_the_reader_names_has_an_entry() -> None:
+    named = set(scan_document.FRAMEWORK_NAMES) - NOT_A_FRAMEWORK
+    assert [entry["key"] for entry in ENTRIES] == sorted(named)
+    assert named == framework_detection._NAMED_FRAMEWORKS
+
+
+def test_every_entrys_package_is_one_its_detection_row_names() -> None:
+    for entry in ENTRIES:
+        row = framework_detection._ROW_BY_FRAMEWORK[entry["key"]]
+        assert entry["package"] in row.packages, (entry["key"], row.packages)
 
 
 def test_every_layer_uses_known_words_and_a_pending_one_says_what_it_waits_on() -> None:
@@ -55,8 +67,12 @@ def test_every_layer_uses_known_words_and_a_pending_one_says_what_it_waits_on() 
                 assert item["kind"] in EVIDENCE_KINDS, (entry["key"], layer, item)
                 if item["kind"] == "real_run":
                     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", item["date"]), item
-                    # Each real run names the model that did the reading.
-                    assert item.get("model"), item
+                    # Each real run names the model that did the reading, as its logs name it.
+                    assert item.get("model") in KNOWN_MODELS, item
+                    # A record is named by the date it ran, and its evidence carries that date.
+                    path = item["ref"].partition("#")[0]
+                    assert path.startswith(EVIDENCE), item
+                    assert Path(path).name.startswith(f"{item['date']}-"), item
                     assert item.get("result") in ("pass", "miss"), item
                     # `kit` is null when no single commit holds what ran.
                     assert "kit" in item, item
@@ -69,9 +85,17 @@ def test_every_layer_uses_known_words_and_a_pending_one_says_what_it_waits_on() 
         ]
 
 
-def test_read_and_run_are_proven_only_by_a_real_run() -> None:
+def test_a_proven_layer_has_evidence() -> None:
     for entry in ENTRIES:
-        for layer in ("read", "run"):
+        for layer in LAYERS:
+            claim = entry["layers"][layer]
+            if claim["status"] == "proven":
+                assert claim["evidence"], (entry["key"], layer)
+
+
+def test_read_run_and_platform_are_proven_only_by_a_real_run() -> None:
+    for entry in ENTRIES:
+        for layer in ("read", "run", "platform"):
             claim = entry["layers"][layer]
             if claim["status"] == "proven":
                 kinds = {item["kind"] for item in claim["evidence"]}
@@ -127,13 +151,15 @@ def test_run_is_proven_only_when_all_five_checks_passed() -> None:
             assert set(run["checks"].values()) == {"passed"}, entry["key"]
 
 
-def test_a_check_has_a_result_only_from_a_real_run() -> None:
+def test_a_check_has_a_result_only_from_a_real_run_on_a_merged_kit() -> None:
+    # A run on no single commit can't prove a layer, so it can't fill the check columns either.
     for entry in ENTRIES:
         run = entry["layers"]["run"]
         if any(result != "not_run" for result in run["checks"].values()):
-            assert any(item["kind"] == "real_run" for item in run["evidence"]), entry[
-                "key"
-            ]
+            assert any(
+                item["kind"] == "real_run" and item["kit"] in MERGED_KITS
+                for item in run["evidence"]
+            ), entry["key"]
 
 
 def _evidence() -> list[tuple[str, str, dict]]:
@@ -218,24 +244,25 @@ def test_every_piece_of_evidence_names_something_that_exists(
         ), ref
 
 
-def test_every_tested_version_is_a_pin_of_its_reference_or_a_ci_row() -> None:
+def test_a_version_is_tested_only_when_a_real_run_or_a_ci_row_used_it() -> None:
     for entry in ENTRIES:
-        pins = set()
-        if entry["reference"]:
-            requirements = REPO / entry["reference"] / "requirements.txt"
-            for line in requirements.read_text(encoding="utf-8").splitlines():
-                match = re.match(
-                    r"([A-Za-z0-9_.-]+)(?:\[[^]]*\])?==(\S+)", line.strip()
-                )
-                if match:
-                    pins.add(f"{match.group(1)}=={match.group(2)}")
+        pins = _pins(entry["reference"]) if entry["reference"] else {}
+        # A run on no single commit can't say which versions it used, so only a merged one counts.
+        ran = any(
+            item["kind"] == "real_run" and item["kit"] in MERGED_KITS
+            for item in entry["layers"]["run"]["evidence"]
+        )
         for version in entry["tested_versions"]:
             package, _, number = version.partition("==")
             assert package == entry["package"], (entry["key"], version)
             in_ci = version in SMOKE or (
                 f"{package}==" in SMOKE and f'"{number}"' in SMOKE
             )
-            assert version in pins or in_ci, (entry["key"], version)
+            # A pin is only what the reference asks for; it is tested once a run used it.
+            assert in_ci or (ran and pins.get(package) == number), (
+                entry["key"],
+                version,
+            )
 
 
 def test_the_reference_exists_and_its_python_is_the_one_stated() -> None:
@@ -252,6 +279,21 @@ def test_the_reference_exists_and_its_python_is_the_one_stated() -> None:
 def test_the_docs_page_is_generated_from_the_file() -> None:
     page = (REPO / "docs" / "frameworks" / "supported.md").read_text(encoding="utf-8")
     assert page == framework_support.markdown_page()
+
+
+def test_the_release_docs_gate_finds_nothing_wrong_with_the_list_s_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The gate runs each page's backing example; only its reading of the pages is under test here.
+    monkeypatch.setattr(trinity, "_execute_docs_backing_fresh", lambda *_: None)
+    status = trinity._release_docs_executability_status(REPO, [])
+    ours = ("docs/frameworks/supported.md", "docs/frameworks/evidence/")
+    for kind in ("metadata_errors", "claims_errors"):
+        found = [e for e in status[kind] if str(e.get("path", "")).startswith(ours)]
+        assert found == [], (kind, found)
+    # The page is in the docs index, regenerated.
+    assert status["index_errors"] == []
+    assert "docs/frameworks/supported.md" in {page["path"] for page in status["pages"]}
 
 
 def _pins(reference: str) -> dict[str, str]:

@@ -115,6 +115,7 @@
 - [PydanticAI: offline framework-adapter simulation](docs/frameworks/pydantic-ai.md): twin=examples/sdk_multi_framework_simulation.py kind=agent-learning.run.v1
 - [SmolAgents: offline framework-adapter simulation](docs/frameworks/smolagents.md): twin=examples/sdk_framework_adapter_cert_smolagents.py kind=agent-learning.run.v1
 - [Strands: offline framework-adapter simulation](docs/frameworks/strands.md): twin=examples/sdk_framework_adapter_cert_strands.py kind=agent-learning.run.v1
+- [Supported frameworks](docs/frameworks/supported.md): twin=none kind=none
 - [Together: offline framework-adapter simulation](docs/frameworks/together.md): twin=examples/sdk_framework_adapter_cert_together.py kind=agent-learning.run.v1
 - [Vector stores: offline retrieval-hook simulation](docs/frameworks/vector-stores.md): twin=examples/sdk_retrieval_hook_optimization.py kind=agent-learning.run.v1
 - [xAI: offline framework-adapter simulation](docs/frameworks/xai.md): twin=examples/sdk_framework_adapter_cert_xai.py kind=agent-learning.run.v1

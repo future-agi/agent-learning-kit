@@ -2,7 +2,7 @@
 
 ## Run
 - Agent: `future-agi/agent-learning-kit`, `examples/harness/deep_agents_support`, at `5aa31fdb30aa02260d2d006cad121991a3b3828c`.
-- Kit: `5aa31fdb30aa02260d2d006cad121991a3b3828c` (kit PR #341's head; the status stays pending until #341 merges).
+- Kit: `5aa31fdb30aa02260d2d006cad121991a3b3828c` (kit PR #341's head, read before #341 merged).
 - Reading model: Claude Sonnet, through a local model gateway, `authoring_entrypoint --read-agent-only`.
 - Spend: 8 model turns. The alias is unpriced, so `cost.json` reads $0.00; estimated from its tokens at Sonnet prices: $0.10-$0.54.
 - Raw outputs: kept outside this repository.

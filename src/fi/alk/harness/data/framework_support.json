@@ -38,7 +38,7 @@
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-18-claude_agent_sdk.md#Result",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-claude_agent_sdk.md#Result",
               "date": "2026-11-18",
               "result": "miss",
               "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
@@ -101,7 +101,7 @@
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-18-crewai.md#Result",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-crewai.md#Result",
               "date": "2026-11-18",
               "result": "pass",
               "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
@@ -136,9 +136,7 @@
       "key": "deepagents",
       "name": "Deep Agents",
       "package": "deepagents",
-      "tested_versions": [
-        "deepagents==0.7.32"
-      ],
+      "tested_versions": [],
       "pinned_versions": [
         "deepagents==0.7.32"
       ],
@@ -166,7 +164,7 @@
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Deep Agents",
               "date": "2026-11-12",
               "result": "miss",
               "kit": null,
@@ -174,30 +172,30 @@
             },
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-18-deepagents.md#Result",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-deepagents.md#Result",
               "date": "2026-11-18",
               "result": "pass",
               "kit": "5aa31fdb30aa02260d2d006cad121991a3b3828c",
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Read on kit PR #341's head (5aa31fdb), pending its merge: the 18 Nov reading there matched its expected contract fully (the kit's graph route). The 12 Nov reading, on the kit before #341, saved `langgraph dev`."
+          "note": "Read on kit PR #341's head (5aa31fdb) before #341 merged: the 18 Nov reading there matched its expected contract fully (the kit's graph route). Waits on a reading on a kit commit merged here, with production's model. The 12 Nov reading, on the kit before #341, saved `langgraph dev`."
         },
         "run": {
           "status": "pending",
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Deep Agents",
               "date": "2026-11-12",
               "result": "miss",
               "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Waits on kit PR #341 merging and a new run from a reading on it. #341 sends such an app to the kit's own graph route; from the 12 Nov reading it failed to start.",
+          "note": "Waits on a run from a reading on a kit commit merged here. #341 sends such an app to the kit's own graph route; the 12 Nov run, from the reading before #341 and on no single kit commit, failed to start. Its check results are not shown, because no single commit holds what ran.",
           "checks": {
-            "start": "failed",
+            "start": "not_run",
             "two_turn": "not_run",
             "tool_binding": "not_run",
             "evidence": "not_run",
@@ -218,9 +216,7 @@
       "key": "google_adk",
       "name": "Google ADK",
       "package": "google-adk",
-      "tested_versions": [
-        "google-adk==2.13.0"
-      ],
+      "tested_versions": [],
       "pinned_versions": [
         "google-adk==2.13.0"
       ],
@@ -248,7 +244,7 @@
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Google ADK",
               "date": "2026-11-12",
               "result": "pass",
               "kit": null,
@@ -262,19 +258,19 @@
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Google ADK",
               "date": "2026-11-12",
               "result": "miss",
               "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Replies were right, but the transcript recorded 5 tool calls for 3, and stopping wasn't recorded; not rechecked since.",
+          "note": "The 12 Nov run, on no single kit commit, started and replied right over two turns with its tools bound, but the transcript recorded 5 tool calls for 3 and stopping wasn't recorded; not rechecked since. Its check results are not shown, because no single commit holds what ran.",
           "checks": {
-            "start": "passed",
-            "two_turn": "passed",
-            "tool_binding": "passed",
-            "evidence": "failed",
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
             "stop": "not_run"
           }
         },
@@ -304,21 +300,16 @@
               "kind": "test",
               "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[langchain_agent.py-]",
               "date": null
-            },
-            {
-              "kind": "test",
-              "ref": "tests/harness/test_agent_scan.py::test_a_langchain_chat_model_needs_no_ai_step",
-              "date": null
             }
           ],
-          "note": ""
+          "note": "The reader's file check names LangChain for the kit's LangChain example. For harbor-hotels-langchain, the one real LangChain agent tried, the offline walk (scan_walk) does not name it; only the reading does."
         },
         "read": {
           "status": "pending",
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-18-langchain.md#Result",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-langchain.md#Result",
               "date": "2026-11-18",
               "result": "pass",
               "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
@@ -347,8 +338,7 @@
       },
       "limits": [
         "No reference agent in the kit.",
-        "The 18 Nov reading binds the tools as `check_availability.func` (the plain function inside the `@tool` object); whether the tool tracer binds `.func` is unchecked until an agent run.",
-        "The offline walk (scan_walk) does not name LangChain for harbor-hotels-langchain; only the reading does."
+        "The 18 Nov reading binds the tools as `check_availability.func` (the plain function inside the `@tool` object); whether the tool tracer binds `.func` is unchecked until an agent run."
       ]
     },
     {
@@ -386,7 +376,7 @@
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-18-langgraph.md#Result",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-langgraph.md#Result",
               "date": "2026-11-18",
               "result": "miss",
               "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
@@ -442,7 +432,7 @@
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-18-livekit.md#Result",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-livekit.md#Result",
               "date": "2026-11-18",
               "result": "pass",
               "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
@@ -477,9 +467,7 @@
       "key": "openai_agents",
       "name": "OpenAI Agents SDK",
       "package": "openai-agents",
-      "tested_versions": [
-        "openai-agents==0.24.0"
-      ],
+      "tested_versions": [],
       "pinned_versions": [
         "openai-agents==0.24.0"
       ],
@@ -507,7 +495,7 @@
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
               "date": "2026-11-12",
               "result": "miss",
               "kit": null,
@@ -515,33 +503,33 @@
             },
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-18-openai_agents.md#Result",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-openai_agents.md#Result",
               "date": "2026-11-18",
               "result": "pass",
               "kit": "5aa31fdb30aa02260d2d006cad121991a3b3828c",
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Read on kit PR #341's head (5aa31fdb), pending its merge: the 18 Nov reading there matched its expected contract fully. The 12 Nov reading, on the kit before #341, described the agent but marked its tools unreachable from the repository root."
+          "note": "Read on kit PR #341's head (5aa31fdb) before #341 merged: the 18 Nov reading there matched its expected contract fully. Waits on a reading on a kit commit merged here, with production's model. The 12 Nov reading, on the kit before #341, described the agent but marked its tools unreachable from the repository root."
         },
         "run": {
           "status": "pending",
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
               "date": "2026-11-12",
               "result": "miss",
               "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Waits on kit PR #341 merging and a new run from a reading on it. #341 binds the tools; from the 12 Nov reading it replied right with no tool calls recorded.",
+          "note": "Waits on a run from a reading on a kit commit merged here. The 12 Nov run, on no single kit commit, started and replied right over two turns but recorded no tool calls, so tool binding and evidence failed; #341 has since bound the tools. Its check results are not shown, because no single commit holds what ran.",
           "checks": {
-            "start": "passed",
-            "two_turn": "passed",
-            "tool_binding": "failed",
-            "evidence": "failed",
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
             "stop": "not_run"
           }
         },
@@ -607,9 +595,7 @@
       "key": "pydantic_ai",
       "name": "Pydantic AI",
       "package": "pydantic-ai-slim",
-      "tested_versions": [
-        "pydantic-ai-slim==2.61.0"
-      ],
+      "tested_versions": [],
       "pinned_versions": [
         "pydantic-ai-slim==2.61.0"
       ],
@@ -637,7 +623,7 @@
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Pydantic AI",
               "date": "2026-11-12",
               "result": "pass",
               "kit": null,
@@ -651,19 +637,19 @@
           "evidence": [
             {
               "kind": "real_run",
-              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Pydantic AI",
               "date": "2026-11-12",
               "result": "miss",
               "kit": null,
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Four of the five checks passed from its reading; stopping wasn't recorded.",
+          "note": "The 12 Nov run, on no single kit commit, passed four of the five checks (start, two turns, tool binding, evidence); stopping wasn't recorded. Its check results are not shown, because no single commit holds what ran.",
           "checks": {
-            "start": "passed",
-            "two_turn": "passed",
-            "tool_binding": "passed",
-            "evidence": "passed",
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
             "stop": "not_run"
           }
         },

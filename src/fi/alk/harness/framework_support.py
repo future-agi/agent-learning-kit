@@ -1,9 +1,10 @@
 """The supported-frameworks list: the frameworks a user can bring an agent in, and how far each is
 proven.
 
-The list is data, `data/framework_support.json` beside this file, because the platform doesn't
-import the kit and reads a copy of the file. This loader reads it, and `docs/frameworks/supported.md`
-is generated from it (`markdown_page()`); a test keeps the page equal to the file. `fi.simulate.supported_frameworks()`
+The list is data, `data/framework_support.json` beside this file, so that the platform, which doesn't
+import the kit, can copy the file. This loader reads it, and `docs/frameworks/supported.md` is
+generated from it (`markdown_page()`); a test keeps the page equal to the file. Each real run is
+described in a record in `data/framework_evidence/`, named by the run's date. `fi.simulate.supported_frameworks()`
 (the simulate SDK's adapter names) is a different thing and is never this list.
 
 Schema `futureagi.framework-support.v1`. Changes are additive, a reader ignores fields it doesn't
@@ -14,7 +15,7 @@ One entry per framework, keyed by the reader's ten words (`scan_document.FRAMEWO
 reference agent's folder), `layers` and `limits` (plain sentences).
 
 - `tested_versions`: exact `package==version` strings a real run of the reference agent used (a
-  run-layer real run or a CI row that runs the agent). A reading doesn't start the framework, so it
+  run-layer real run on a kit commit merged here, or a CI row that runs the agent). A reading doesn't start the framework, so it
   doesn't make a version tested.
 - `pinned_versions`: the entry's package as pinned in the reference's `requirements.txt` (empty
   with no reference).
@@ -25,14 +26,16 @@ reference agent's folder), `layers` and `limits` (plain sentences).
 - **read**: a real reading described the reference agent correctly;
 - **run**: the agent ran from that reading; `run.checks` has one result per check of the plan
   (`start`, `two_turn`, `tool_binding`, `evidence`, `stop`: `passed`, `failed` or `not_run`), and it
-  is proven only when all five passed;
+  is proven only when all five passed. A check has a result only from a real run on a kit commit
+  merged here; a run on no single commit is described in the note instead;
 - **platform**: connected through the platform's own screens and saved as Agent and version 1.
 
 Status is `proven`, `pending` (the note says what it waits on) or `not_proven`. Evidence is a list
-of `{kind, ref, date}`, kind `test` (a test id) or `real_run` (a record and its date). A `real_run`
-item also has `model` (the reading model), `result` (`pass` or `miss`) and `kit` (the kit commit it
-ran on, or null when no single commit holds what ran). Read and run are proven only by a passing
-real run on a kit commit merged here that holds the reference agent: a real model on a real
+of `{kind, ref, date}`, kind `test` (a test id) or `real_run` (a record and its date, which is the
+date in the record's name). A `real_run` item also has `model` (the reading model, as the run's logs
+name it), `result` (`pass` or `miss`) and `kit` (the kit commit it ran on, or null when no single
+commit holds what ran). A proven layer has evidence. Read, run and platform are proven only by a
+passing real run on a kit commit merged here that holds the reference agent: a real model on a real
 reference agent, never stand-in modules. A run on an agent outside the kit leaves its layer
 pending until the kit holds a reference agent.
 """
@@ -50,6 +53,8 @@ CHECKS = ("start", "two_turn", "tool_binding", "evidence", "stop")
 RESULTS = ("passed", "failed", "not_run")
 EVIDENCE_KINDS = ("test", "real_run")
 DATA = Path(__file__).resolve().parent / "data" / "framework_support.json"
+# The docs pages' frontmatter kind; the page is a table generated from data, with no example to run.
+DOCS_PAGE_KIND = "agent-learning.docs-page.v1"
 
 _STATUS_WORDS = {"proven": "proven", "pending": "pending", "not_proven": "-"}
 _RESULT_WORDS = {"passed": "passed", "failed": "failed", "not_run": "-"}
@@ -90,6 +95,14 @@ def markdown_page(path: Path = DATA) -> str:
     """`docs/frameworks/supported.md`, generated from the list."""
     entries = frameworks(path)
     lines = [
+        "---",
+        f"kind: {DOCS_PAGE_KIND}",
+        "track: frameworks",
+        "backing: []",
+        "artifact_kinds: []",
+        "claims: []",
+        "---",
+        "",
         "# Supported frameworks",
         "",
         "Generated from `src/fi/alk/harness/data/framework_support.json`; a test keeps this "
