@@ -191,9 +191,9 @@ jobs:
           tests/test_release_pr_step.py
           tests/episode
       - name: Rerun the Claude cost tests on the locked SDK
-        if: matrix.dependencies == 'minimum-livekit'
         # The hosted image installs from uv.lock, while the step above gets pip's newest SDK. The
-        # two handle a resumed session differently, so the cost tests run on both.
+        # two handle a resumed session differently, so the cost tests run on both. It runs in both
+        # rows: a test keeps this step unconditional.
         run: |
           version=$(python -c "import tomllib; lock = tomllib.load(open('uv.lock', 'rb')); print(next(p['version'] for p in lock['package'] if p['name'] == 'claude-agent-sdk'))")
           python -m pip install "claude-agent-sdk==$version"
