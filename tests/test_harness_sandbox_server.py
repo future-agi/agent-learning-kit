@@ -1170,7 +1170,17 @@ def test_a_location_that_is_not_a_github_repository_is_refused_for_that_without_
 
 @pytest.mark.parametrize(
     "sha",
-    ["   ", "abc1234", "z" * 40, "a" * 39, "a" * 41, " " + "a" * 40, "a" * 40 + "\n"],
+    [
+        "main",
+        "   ",
+        "abc1234",
+        "z" * 40,
+        "g" * 40,
+        "a" * 39,
+        "a" * 41,
+        " " + "a" * 40,
+        "a" * 40 + "\n",
+    ],
 )
 def test_a_commit_sha_that_is_not_forty_hex_characters_is_refused_with_its_code(tmp_path, sha):
     client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
