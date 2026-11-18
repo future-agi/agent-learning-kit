@@ -711,3 +711,10 @@ def test_a_bundle_without_a_contract_records_no_routing(tmp_path):
     record_tool_routing(tmp_path, "s-1", None, PROXIED, received=[_call("lookup")], reported=[])
 
     assert not (tmp_path / "generic-harness" / TOOL_ROUTING).exists()
+
+
+def test_the_tool_request_is_written_only_from_its_template(monkeypatch):
+    monkeypatch.setattr(tool_routing, "TOOL_REQUEST_TEMPLATE", "{tool}|{about}|{arguments}")
+
+    # Every word sent comes from the template: here, only the filled-in fields remain.
+    assert tool_routing._tool_request(_contract().tools[0]) == "lookup_order|| with order_id='A-1'"

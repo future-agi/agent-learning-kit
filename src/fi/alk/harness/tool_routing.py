@@ -227,6 +227,13 @@ def _outside_world(contract: AgentContract) -> set[str]:
     return names
 
 
+# The one text sent to the agent to ask for a tool its qualifying conversation did not show. Certification runs no
+# model, so it cannot be written in the conversation's language: English unless this is changed. Filled with the
+# tool's name, its description in brackets when it has one, and " with <argument>=<value>, ..." when it takes any.
+TOOL_REQUEST_TEMPLATE = (
+    "Please use your {tool} tool{about} now{arguments}. This runs in a disposable test world: call the tool once and "
+    "tell me what it returns."
+)
 _TYPE_EXAMPLES = {"int": 1, "integer": 1, "number": 1, "float": 1.0, "bool": True, "boolean": True}
 
 
@@ -243,11 +250,10 @@ def _tool_request(tool) -> str:
         else:
             values[arg] = _TYPE_EXAMPLES.get(str(tool.arg_types.get(arg, "")).lower(), "test")
     shown = ", ".join(f"{arg}={value!r}" for arg, value in values.items())
-    about = f" ({tool.description.strip()})" if tool.description.strip() else ""
-    return (
-        f"Please use your {tool.name} tool{about} now"
-        + (f" with {shown}" if shown else "")
-        + ". This runs in a disposable test world: call the tool once and tell me what it returns."
+    return TOOL_REQUEST_TEMPLATE.format(
+        tool=tool.name,
+        about=f" ({tool.description.strip()})" if tool.description.strip() else "",
+        arguments=f" with {shown}" if shown else "",
     )
 
 
