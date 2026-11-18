@@ -255,7 +255,9 @@ def publish_e2b_template(
     template = (
         Template()
         .from_image(image_reference, **image_kwargs)
-        .set_envs(HOSTED_RUNTIME_ENV)
+        # The kit's commit, for the readings the sandbox makes to record. Added here so
+        # HOSTED_RUNTIME_ENV stays what it is for everything else.
+        .set_envs({**HOSTED_RUNTIME_ENV, "ALK_BUILD_ID": source_revision})
         .set_user("svc-control")
         .set_workdir("/work")
     )
