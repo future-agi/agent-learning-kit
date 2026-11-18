@@ -1454,7 +1454,7 @@ async def validate_once(
                         seed=job.seed or 0,
                     )
                     if live:
-                        print(f"runtime validation: proved {len(live)} cases on the live runtime", flush=True)
+                        print(f"runtime validation: {live_proof.live_summary(live)}", flush=True)
                 except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
                     print(f"runtime validation: live proofs not run: {outbound.redact_outbound_text(f'{type(exc).__name__}: {exc}')}", flush=True)
             if generic:

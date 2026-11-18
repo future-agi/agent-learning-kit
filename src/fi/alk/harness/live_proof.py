@@ -208,6 +208,17 @@ async def prove_live(
     return results
 
 
+def live_summary(results: Mapping[str, LiveResult]) -> str:
+    """How many cases the live runtime played, and in how many the reference ran every step and passed every check. A
+    case played is not a case proved: its proof is decided when these results are applied to it."""
+    held = sum(
+        1
+        for one in results.values()
+        if not one.get("assumed") and not one.get("refused") and all(row["held"] for row in one.get("with_solution") or [])
+    )
+    return f"played {len(results)} cases on the live runtime; the reference passed in {held}"
+
+
 def write_live(authoring: Path, results: Mapping[str, LiveResult]) -> None:
     """Merge `results` into the live proofs file by key, so other keys keep theirs."""
     write_json_atomic(Path(authoring) / LIVE_PROOFS, {**load_live(authoring), **results})

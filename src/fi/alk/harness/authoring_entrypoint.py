@@ -489,7 +489,7 @@ def _prove_only(args: argparse.Namespace) -> int:
     try:
         job = HarnessJob.model_validate_json(args.job.read_text(encoding="utf-8"))
         live = asyncio.run(authoring_runtime_validation.prove_on_sealed_runtime(job, args.source.resolve(), output, keys=keys, until=until))
-        print(f"prove-only: proved {len(live)} cases on the live runtime", file=sys.stderr, flush=True)
+        print(f"prove-only: {live_proof.live_summary(live)}", file=sys.stderr, flush=True)
     except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
         print(f"prove-only: live proofs not run: {redact_outbound_text(_one_line(exc))}", file=sys.stderr, flush=True)
     prove_suite.prove_suite(output, output / SCENARIO_PROOFS, deadline_at=args.deadline_at, keys=keys)

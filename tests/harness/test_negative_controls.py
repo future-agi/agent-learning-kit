@@ -209,6 +209,7 @@ def test_service_tool_control_runs_and_fails_on_the_runtime(monkeypatch, tmp_pat
 
     proof = live_proof.apply_live(Proof(deferred=True), live)
     assert proof.proved is True and proof.blocked_reason() is None
+    assert live_proof.live_summary(results) == "played 1 cases on the live runtime; the reference passed in 1"
 
 
 CALLED_ONCE = check(
@@ -511,3 +512,24 @@ def test_a_control_whose_steps_never_ran_is_not_read_as_failed():
 
     proof = Proof(controls=[unrun])
     assert proof.ran_controls == [] and proof.controls_failed is False and proof.proved is False
+
+
+def test_a_reference_the_service_fails_is_played_but_never_proved(monkeypatch, tmp_path):
+    # The case's order is one the tools service always fails to refund (a payment timeout), and its check expects the
+    # refund issued: the live runtime plays the case, the reference does not pass, and nothing reads it as proved.
+    def timing_out(self, endpoint, arguments=None, *, record_as="", record=True):
+        self.forwarded.append(endpoint)
+        args = dict(arguments or {})
+        if endpoint == "refund":
+            return Call(endpoint, args, ok=False, error="504 payment_times_out")
+        return Call(endpoint, args, result=self.store["orders"].get(args.get("order_id")), ok=True)
+
+    monkeypatch.setattr(ServiceWorld, "forward", timing_out)
+    results, _stack = _prove(monkeypatch, tmp_path, {"lookup_order": "service", "refund_order": "service"})
+
+    live = results["refund_case"]
+    assert live["assumed"] == [] and live["refused"]
+    assert dict((one["name"], one["held"]) for one in live["with_solution"])["refund_once"] is False
+    assert live_proof.live_summary(results) == "played 1 cases on the live runtime; the reference passed in 0"
+    proof = live_proof.apply_live(Proof(deferred=True), live)
+    assert proof.proved is False and proof.holds is False and proof.blocked_reason() == "not_solvable"
