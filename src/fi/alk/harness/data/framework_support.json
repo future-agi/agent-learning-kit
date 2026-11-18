@@ -180,7 +180,7 @@
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Read on kit PR #341's head (5aa31fdb) before #341 merged: the 18 Nov reading there matched its expected contract fully (the kit's graph route). Waits on a reading on a kit commit merged here, with production's model. The 12 Nov reading, on the kit before #341, saved `langgraph dev`."
+          "note": "Read on kit PR #341's head (5aa31fdb) before #341 merged; #341 is now merged with this folder unchanged, and the 18 Nov reading there matched its expected contract fully (the kit's graph route). Held pending until the first full run reads it again with production's model, rather than proven on a laptop-model reading made before the merge. The 12 Nov reading, on the kit before #341, saved `langgraph dev`."
         },
         "run": {
           "status": "pending",
@@ -194,7 +194,7 @@
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Waits on a run from a reading on a kit commit merged here. #341 sends such an app to the kit's own graph route; the 12 Nov run, from the reading before #341 and on no single kit commit, failed to start. Its check results are not shown, because no single commit holds what ran.",
+          "note": "Waits on the first full run, from a reading on a kit commit merged here. #341 sends such an app to the kit's own graph route; the 12 Nov run, from the reading before #341 and on no single kit commit, failed to start. Its check results are not shown, because no single commit holds what ran.",
           "checks": {
             "start": "not_run",
             "two_turn": "not_run",
@@ -511,7 +511,7 @@
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Read on kit PR #341's head (5aa31fdb) before #341 merged: the 18 Nov reading there matched its expected contract fully. Waits on a reading on a kit commit merged here, with production's model. The 12 Nov reading, on the kit before #341, described the agent but marked its tools unreachable from the repository root."
+          "note": "Read on kit PR #341's head (5aa31fdb) before #341 merged; #341 is now merged with this folder unchanged, and the 18 Nov reading there matched its expected contract fully. Held pending until the first full run reads it again with production's model, rather than proven on a laptop-model reading made before the merge. The 12 Nov reading, on the kit before #341, described the agent but marked its tools unreachable from the repository root."
         },
         "run": {
           "status": "pending",
@@ -525,7 +525,7 @@
               "model": "claude-sonnet (laptop gateway)"
             }
           ],
-          "note": "Waits on a run from a reading on a kit commit merged here. The 12 Nov run, on no single kit commit, started and replied right over two turns but recorded no tool calls, so tool binding and evidence failed; #341 has since bound the tools. Its check results are not shown, because no single commit holds what ran.",
+          "note": "Waits on the first full run, from a reading on a kit commit merged here. The 12 Nov run, on no single kit commit, started and replied right over two turns but recorded no tool calls, so tool binding and evidence failed; #341 has since bound the tools. Its check results are not shown, because no single commit holds what ran.",
           "checks": {
             "start": "not_run",
             "two_turn": "not_run",
