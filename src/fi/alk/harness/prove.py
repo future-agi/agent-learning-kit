@@ -112,8 +112,6 @@ def refuses_keeping(proof: Proof) -> bool:
     return (not proof.holds and not (proof.deferred and not proof.broken)) or proof.blocked_reason() in REFUSED_CODES
 
 
-
-
 @dataclass
 class Proof:
     """Whether a scenario holds up, and what happened when it was tried."""
