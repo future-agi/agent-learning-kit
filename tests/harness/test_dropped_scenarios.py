@@ -425,3 +425,13 @@ def test_the_rebuild_message_asks_for_a_control_for_each_restored_scenario_witho
     assert "no negative control" in said
     for key in CANCELS:
         assert key in said.split("no negative control", 1)[1]
+
+
+def test_a_restore_recorded_before_restores_were_stamped_still_needs_a_proof(tmp_path):
+    # A drop record written by an older harness: no `restored_at`, so any proof of this rebuild counts.
+    record = {"name": "cancels"}
+
+    done, failed, _ = dropped.finish_restore(tmp_path, {"k": record}, [], {"k"}, {"k": {"proved": True}})
+    assert failed == [] and [one["key"] for one in done] == ["k"]
+    done, failed, _ = dropped.finish_restore(tmp_path, {"k": record}, [], {"k"}, {})
+    assert done == [] and failed == [{"key": "k", "why": "not proved again in this rebuild"}]
