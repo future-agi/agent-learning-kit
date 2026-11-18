@@ -1522,6 +1522,38 @@ def test_a_kit_written_runtime_gives_the_agent_its_proxy_ca_and_locale_settings(
     assert not Path(path).parent.exists()
 
 
+def test_compose_config_never_gets_the_agents_settings(tmp_path: Path, monkeypatch) -> None:
+    # `config` prints the rendered file, values included, so the override that names the
+    # settings file must reach the run that starts the agent and never a `config` call. The
+    # kit's own `config` runs here for real, through the recorded Compose.
+    _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
+    calls = _record_compose(
+        monkeypatch,
+        output=json.dumps({"services": {"agent-runtime": {"environment": {}}}}),
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_docker",
+        lambda *arguments, **_kwargs: (
+            "running" if arguments and arguments[0] == "inspect" else ""
+        ),
+    )
+
+    provisioning.start_runtime(tmp_path)
+
+    config_calls = [call for call in calls if "config" in call.argv]
+    assert config_calls, "the kit's own config call was not made"
+    for call in config_calls:
+        assert not call.overrides, call.argv
+        assert not call.service_env_files, call.argv
+        for value in _AGENT_SETTINGS.values():
+            assert value not in " ".join(call.argv), call.argv
+    # The run that starts the agent does carry it, so the check above can see an override.
+    run_call = next(call for call in calls if "run" in call.argv)
+    assert run_call.service_env_files
+
+
 def test_a_customers_own_compose_file_still_skips_the_settings_compose_reads(
     tmp_path: Path, monkeypatch
 ) -> None:
