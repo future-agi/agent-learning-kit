@@ -51,6 +51,23 @@ _ENVELOPE_KINDS = (
     "assistant",
     "message",
 )
+# A streamed chunk of a type the customer chose is answer text only when its type is one of these,
+# compared without regard to case, "-" or "_". Any other type, dotted or not, gives nothing.
+_STREAM_ANSWER_TYPES = frozenset(
+    (
+        "token",
+        "text",
+        "delta",
+        "chunk",
+        "content",
+        "answer",
+        "output",
+        "outputtext",
+        "textdelta",
+        "textmessagecontent",
+    )
+)
+_STREAM_ANSWER_FIELDS = ("content", "text", "delta")
 _MISSING = object()
 _MOST_DEPTH = 32
 
@@ -59,6 +76,25 @@ def _field(value: Any, name: str) -> Any:
     if isinstance(value, dict):
         return value.get(name)
     return getattr(value, name, None)
+
+
+def _stream_answer_text(chunk: Any) -> str:
+    """Text of a streamed chunk whose undotted type is on the answer list, else ``""``.
+
+    The text is the first of ``content``, ``text`` and ``delta`` that is a string. A thought, a
+    status, a tool result, a provider event (its type has a dot) or any unlisted type gives
+    nothing, so only what a reader positively knows is answer text reaches the transcript.
+    """
+    kind = _field(chunk, "type")
+    if not isinstance(kind, str) or "." in kind:
+        return ""
+    if kind.replace("-", "").replace("_", "").lower() not in _STREAM_ANSWER_TYPES:
+        return ""
+    for name in _STREAM_ANSWER_FIELDS:
+        value = _field(chunk, name)
+        if isinstance(value, str):
+            return value
+    return ""
 
 
 def _is_text_block(block: Any) -> bool:

@@ -16,7 +16,7 @@ from fi.simulate.environment import (
     normalize_orchestration_trace_events,
     normalize_orchestration_trace_export,
 )
-from fi.simulate.agent.content import _MOST_DEPTH, _is_message
+from fi.simulate.agent.content import _MOST_DEPTH, _is_message, _stream_answer_text
 from fi.simulate.agent.content import text_of as _walk_text
 from fi.simulate.agent.wrapper import (
     AgentInput,
@@ -390,6 +390,14 @@ class GenericAgentWrapper(AgentWrapper):
             },
             **self.metadata,
         }
+        if chunks and not content_parts:
+            unreadable = _unreadable_stream_record(chunks)
+            metadata["reply_unreadable"] = unreadable
+            _LOG.warning(
+                "reply_unreadable: the agent stream held no answer text (chunk_types=%s, keys=%s)",
+                unreadable["chunk_types"],
+                unreadable["keys"],
+            )
         return AgentResponse(
             content="".join(content_parts),
             tool_calls=tool_calls or None,
@@ -7942,8 +7950,6 @@ def _is_sync_stream(value: Any) -> bool:
 
 _STREAM_TEXT_TYPES = frozenset(
     {
-        "text",
-        "output_text",
         "refusal",
         "message",
         "ai",
@@ -7961,8 +7967,9 @@ def _stream_event_text(chunk: Any) -> Optional[str]:
 
     Anthropic raw events and OpenAI Responses events carry thinking, signatures, tool input
     and bookkeeping next to the answer. Only ``text_delta`` and
-    ``response.output_text.delta`` give text; any other chunk with a string ``type`` that is
-    not a text or message kind gives "", never its JSON.
+    ``response.output_text.delta`` give text; a chunk whose undotted ``type`` is on the answer
+    list gives its string; any other chunk with a string ``type`` that is not a text or message
+    kind gives "", never its JSON.
     """
     get = (
         chunk.get
@@ -7975,13 +7982,14 @@ def _stream_event_text(chunk: Any) -> Optional[str]:
     if kind == "content_block_delta":
         delta = get("delta")
         return _stream_event_text(delta) or ""
-    if kind in ("text_delta", "response.output_text.delta"):
-        value = get("text") if kind == "text_delta" else get("delta")
+    if kind == "response.output_text.delta":
+        value = get("delta")
         return value if isinstance(value, str) else ""
     if kind in _STREAM_TEXT_TYPES or kind.endswith(("Message", "MessageChunk")):
         return None
-    # Any other typed event (provider bookkeeping, thinking, vendor events) is not answer text.
-    return ""
+    # A chunk type of the customer's own is read only when it is on the answer list; any other
+    # typed event (provider bookkeeping, thinking, status, tool results) is not answer text.
+    return _stream_answer_text(chunk)
 
 
 def _stream_chunk_text(chunk: Any) -> str:
@@ -8551,6 +8559,22 @@ def _unreadable_record(raw: Any) -> Dict[str, Any]:
         mapped = getattr(raw, "__dict__", None)
     keys = sorted(str(key)[:64] for key in mapped)[:50] if isinstance(mapped, Mapping) else []
     return {"type": type(raw).__name__, "keys": keys}
+
+
+def _unreadable_stream_record(chunks: List[Any]) -> Dict[str, Any]:
+    """What a stream held that gave no text: chunk type names and top-level key names only."""
+    kinds = set()
+    keys = set()
+    for chunk in chunks:
+        kind = _field_of(chunk, "type")
+        if isinstance(kind, str):
+            kinds.add(kind[:64])
+        mapped = _object_mapping(chunk)
+        if mapped is None:
+            mapped = getattr(chunk, "__dict__", None)
+        if isinstance(mapped, Mapping):
+            keys.update(str(key)[:64] for key in mapped)
+    return {"type": "stream", "keys": sorted(keys)[:50], "chunk_types": sorted(kinds)[:50]}
 
 
 def _stringify(value: Any) -> str:

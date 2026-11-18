@@ -69,9 +69,12 @@ def test_every_copy_keeps_the_text_of_every_reply_shape(copy_name, content, expe
 GUARDED = (
     "_TEXT_KINDS",
     "_ENVELOPE_KINDS",
+    "_STREAM_ANSWER_TYPES",
+    "_STREAM_ANSWER_FIELDS",
     "_MISSING",
     "_MOST_DEPTH",
     "_field",
+    "_stream_answer_text",
     "_is_text_block",
     "_block_text",
     "_is_message",
@@ -406,3 +409,111 @@ def test_the_drift_guard_names_every_helper_of_the_region():
         if isinstance(node, ast.Assign):
             defined |= {t.id for t in node.targets if isinstance(t, ast.Name)}
     assert defined == set(GUARDED)
+
+
+def _generic_stream(chunks, *, is_async=False):
+    """The AgentResponse a streaming agent becomes after ``wrap_agent(...).call(...)``."""
+
+    class SyncAgent:
+        def invoke(self, inputs):
+            yield from chunks
+
+    class AsyncAgent:
+        async def invoke(self, inputs):
+            for chunk in chunks:
+                yield chunk
+
+    agent = AsyncAgent() if is_async else SyncAgent()
+    agent_input = AgentInput(
+        thread_id="t",
+        execution_id="t",
+        messages=[{"role": "user", "content": "hi"}],
+        new_message={"role": "user", "content": "hi"},
+    )
+    return asyncio.run(wrap_agent(agent).call(agent_input))
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [
+            {"type": "token", "content": "Your order "},
+            {"type": "token", "content": "shipped today."},
+        ],
+        [
+            {"type": "delta", "delta": "Your order "},
+            {"type": "delta", "delta": "shipped today."},
+        ],
+        [
+            {"type": "chunk", "text": "Your order "},
+            {"type": "chunk", "text": "shipped today."},
+        ],
+        [
+            {"type": "TOKEN", "content": "Your order "},
+            {"type": "text-delta", "delta": "shipped "},
+            {"type": "Text_Message_Content", "delta": "today."},
+        ],
+        [
+            SimpleNamespace(type="token", content="Your order "),
+            SimpleNamespace(type="answer", text="shipped today."),
+        ],
+        [
+            {"type": "token", "content": "Your order "},
+            {"type": "token", "content": "shipped today."},
+            {"type": "done"},
+        ],
+        [
+            {"type": "thought", "content": "THOUGHT-1"},
+            {"type": "token", "content": "Your order "},
+            {"type": "status", "content": "STATUS-1", "text": "STATUS-2"},
+            {"type": "token", "content": "shipped today."},
+            {"type": "tool_result", "content": "TOOL-1", "delta": "TOOL-2"},
+        ],
+        [
+            {"type": "token", "content": "Your order "},
+            {"type": "vendor.token", "content": "VENDOR-1"},
+            {"type": "token", "content": ["LIST-1"]},
+            {"type": "token", "content": {"a": "DICT-1"}},
+            {"type": "token", "content": "shipped today."},
+        ],
+    ],
+    ids=[
+        "token-content",
+        "delta-delta",
+        "chunk-text",
+        "spellings-of-the-listed-types",
+        "objects",
+        "ends-in-done",
+        "thought-status-and-tool-chunks-give-nothing",
+        "dotted-and-non-string-chunks-give-nothing",
+    ],
+)
+def test_a_stream_chunk_of_the_customers_own_type_is_read_when_the_type_is_listed(
+    chunks, is_async
+):
+    result = _generic_stream(chunks, is_async=is_async)
+    assert result.content == "Your order shipped today."
+    assert "reply_unreadable" not in (result.metadata or {})
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_a_stream_of_only_thought_chunks_is_unreadable_and_names_the_types(is_async):
+    chunks = [
+        {"type": "thought", "content": "THOUGHT-1"},
+        {"type": "thought", "content": "THOUGHT-2"},
+    ]
+    result = _generic_stream(chunks, is_async=is_async)
+    assert result.content == ""
+    assert result.metadata["reply_unreadable"] == {
+        "type": "stream",
+        "keys": ["content", "type"],
+        "chunk_types": ["thought"],
+    }
+    assert "THOUGHT" not in json.dumps(result.metadata["reply_unreadable"])
+
+
+def test_a_stream_with_no_chunks_is_not_recorded_as_unreadable():
+    result = _generic_stream([])
+    assert result.content == ""
+    assert "reply_unreadable" not in (result.metadata or {})

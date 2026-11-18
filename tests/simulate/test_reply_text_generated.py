@@ -497,3 +497,101 @@ def test_a_message_nested_past_the_depth_limit_gives_nothing():
     for _ in range(40):
         value = [{"role": "assistant", "content": value}]
     assert marker not in asyncio.run(_transcript({"output": value}))
+
+
+# The names that mean answer text in a stream, written out here from the rule: compared without
+# regard to case, "-" or "_".
+STREAM_ANSWER_TYPES = [
+    "token",
+    "text",
+    "delta",
+    "chunk",
+    "content",
+    "answer",
+    "output",
+    "output_text",
+    "text_delta",
+    "text_message_content",
+]
+STREAM_OTHER_TYPES = [
+    "thought",
+    "thinking",
+    "reasoning",
+    "reasoning-delta",
+    "status",
+    "tool_result",
+    "tool_call",
+    "done",
+    "end",
+    "vendor_event",
+    "response.reasoning_text.delta",
+    "token.delta",
+    "vendor.text",
+]
+STREAM_FIELDS = ["content", "text", "delta"]
+
+
+def _spelled(rng, name):
+    """The same type name in another case, with "-" or "_" for the other."""
+    name = rng.choice([name, name.upper(), name.title()])
+    return name.replace("_", rng.choice(["_", "-", ""]))
+
+
+def _stream_chunk(rng, case):
+    pick = rng.random()
+    if pick < 0.5:
+        marker = case.mark("answer")
+        chunk = {
+            "type": _spelled(rng, rng.choice(STREAM_ANSWER_TYPES)),
+            rng.choice(STREAM_FIELDS): marker,
+        }
+        if rng.random() < 0.3:
+            chunk["id"] = case.mark("bad")
+        return chunk, marker
+    if pick < 0.8:
+        chunk = {"type": rng.choice(STREAM_OTHER_TYPES)}
+        for field in rng.sample(STREAM_FIELDS, rng.randint(1, 3)):
+            chunk[field] = case.mark("bad")
+        return chunk, ""
+    if pick < 0.9:
+        # A listed type whose fields hold no string: nothing to read.
+        chunk = {"type": _spelled(rng, rng.choice(STREAM_ANSWER_TYPES))}
+        for field in rng.sample(STREAM_FIELDS, rng.randint(1, 3)):
+            chunk[field] = rng.choice(
+                [
+                    [case.mark("bad")],
+                    {"value": case.mark("bad")},
+                    None,
+                    7,
+                ]
+            )
+        chunk["payload"] = {"note": case.mark("bad")}
+        return chunk, ""
+    return {"type": "done", "usage": {"n": case.mark("bad")}}, ""
+
+
+def test_generated_streams_give_exactly_the_text_of_the_listed_chunk_types():
+    async def run():
+        for index in range(CASES):
+            rng = random.Random(f"{SEED}:stream:{index}")
+            case = _Case(index)
+            chunks, expected = [], []
+            for _ in range(rng.randint(1, 8)):
+                chunk, answer = _stream_chunk(rng, case)
+                chunks.append(_maybe_object(rng, chunk))
+                expected.append(answer)
+
+            def agent(i, chunks=chunks):
+                yield from chunks
+
+            result = await wrap_agent(agent).call(_agent_input())
+            text = result.content
+            assert text == "".join(expected), (
+                f"seed={SEED} stream case={index}\nchunks={chunks!r}\ntranscript={text!r}"
+            )
+            if not text:
+                assert "reply_unreadable" in result.metadata, (index, chunks)
+            else:
+                assert "reply_unreadable" not in result.metadata, (index, chunks)
+
+    asyncio.run(run())
