@@ -1442,9 +1442,7 @@ async def validate_once(
                 # While the stack is up, play each case's reference and controls through the
                 # service-backed and MCP Toolbox tools for real; never fails validation.
                 try:
-                    # Only this attempt's plays count: an earlier attempt's may be of cases repaired since.
-                    live_proof.forget_live(authoring, None)
-                    live = await live_proof.prove_live(
+                    await play_this_attempt(
                         authoring=authoring,
                         contract=AgentContract.model_validate_json(
                             (bundle / "contract.json").read_text(encoding="utf-8")
@@ -1455,8 +1453,6 @@ async def validate_once(
                         work=work,
                         seed=job.seed or 0,
                     )
-                    if live:
-                        print(f"runtime validation: {live_proof.live_summary(live)}", flush=True)
                 except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
                     print(f"runtime validation: live proofs not run: {outbound.redact_outbound_text(f'{type(exc).__name__}: {exc}')}", flush=True)
             if generic:
@@ -1632,6 +1628,33 @@ async def prove_on_sealed_runtime(
             )
         finally:
             await provider.close(work_directory=work)
+
+
+async def play_this_attempt(
+    *,
+    authoring: Path,
+    contract: AgentContract,
+    runtime,
+    provider,
+    factory,
+    work: Path,
+    seed: int,
+) -> dict[str, live_proof.LiveResult]:
+    """Play this validation attempt's cases on its live runtime. Only this attempt's plays count: an earlier attempt's
+    results are dropped first, since a repair between attempts may have changed the cases they were played on."""
+    live_proof.forget_live(authoring, None)
+    live = await live_proof.prove_live(
+        authoring=authoring,
+        contract=contract,
+        runtime=runtime,
+        provider=provider,
+        factory=factory,
+        work=work,
+        seed=seed,
+    )
+    if live:
+        print(f"runtime validation: {live_proof.live_summary(live)}", flush=True)
+    return live
 
 
 def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
