@@ -18,6 +18,18 @@ opt_in_lane: false
 > cell links real pages; empty cells render as `—`, never invented pages. A
 > page may appear in at most two cells.
 
+## Toolchain route and libraries
+
+[Install and offline first success](../../README.md#first-success-deterministic-and-credential-free)
+→ [inspect/evaluate evidence](../eval/overview.md)
+→ [source-based environment authoring](../simulate/environment-authoring.md)
+→ [choose a supported execution seam](../simulate/environment-authoring.md#supported-extension-seams).
+Authoring is model-backed and opt-in; it is not part of the offline fixture.
+
+The [library inventory](../../LIBRARIES.md) covers the public facades and included
+engines, reference harness, Studio, benchmarks, loss/practice, episodes,
+telemetry, TypeScript boundaries and external dependencies.
+
 ## The matrix (stage × objective)
 
 | | Behavior | Capability | Reliability | Safety |
@@ -41,7 +53,7 @@ two reasons to need it).
 | memory | [optimize/memory-targets](../optimize/memory-targets.md) · [simulate/memory](../simulate/memory.md) |
 | skills / tools | [prove/actions](../prove/actions.md) · [redteam/first-campaign](../redteam/first-campaign.md) |
 | protocol | [frameworks/mcp](../frameworks/mcp.md) · [frameworks/a2a](../frameworks/a2a.md) · [frameworks/openenv](../frameworks/openenv.md) |
-| harness | [prove/release-check-in-your-ci](../prove/release-check-in-your-ci.md) · [quickstart/golden-path-ci](../quickstart/golden-path-ci.md) |
+| harness | [environment authoring and seams](../simulate/environment-authoring.md) · [reference harness](../../src/fi/alk/harness/README.md) |
 
 ## By framework
 
