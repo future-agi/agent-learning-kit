@@ -119,6 +119,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # hosted test cannot silently execute an older installed ALK.
 ARG ALK_HOSTED_SOURCE_REVISION=20260923-parallel-world-slots-self-repair
 LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
+# The build id a reading records (made_by.build_id). It travels with the image, so a template or
+# snapshot made from this image later can't stamp another commit on it. The default above fails
+# the id's hex rule, so an image built without the argument records "".
+ENV ALK_BUILD_ID=${ALK_HOSTED_SOURCE_REVISION}
 COPY src ./src
 COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json
 # Only the files this install creates are made read-only: a recursive chmod of the whole venv in
