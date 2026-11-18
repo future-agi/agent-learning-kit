@@ -755,6 +755,10 @@ def _install_declared_python_tools() -> None:
         monitoring = getattr(sys, "monitoring", None)
         if monitoring is None:
             return False
+        import gc
+        import types
+        import weakref
+
         tool = None
         for candidate in (5, 4):  # never the debugger, coverage or profiler ids
             try:
@@ -781,6 +785,11 @@ def _install_declared_python_tools() -> None:
         start_only = events.PY_START
         while_open = events.PY_START | events.PY_UNWIND | events.PY_THROW
         guard = threading.Lock()
+        # frame id -> weak reference to the generator that owns the frame, kept only for an
+        # open generator call. Early 3.12 and 3.13 releases fire no event when a generator
+        # paused at a bare `yield` is closed, so such a call is found by its owner ending.
+        owners: dict[int, Any] = {}
+        generator_flag = 0x20  # inspect.CO_GENERATOR; coroutines and async generators differ
 
         def arguments_of(call: tuple[Any, float, str, Any]) -> Any:
             def get() -> Any:
@@ -790,7 +799,37 @@ def _install_declared_python_tools() -> None:
 
             return get
 
+        def settle_closed() -> None:
+            """Record each open generator call whose generator is gone or finished, and turn
+            the exception events off once no call is open."""
+            try:
+                gone = []
+                with guard:
+                    for frame_id, owner in list(owners.items()):
+                        generator = owner()
+                        if generator is not None and generator.gi_frame is not None:
+                            continue
+                        del owners[frame_id]
+                        thrown.pop(frame_id, None)
+                        call = calls.pop(frame_id, None)
+                        if call is not None:
+                            gone.append(call)
+                    if gone and not calls:
+                        monitoring.set_events(tool, start_only)
+                for call in gone:
+                    write_record(
+                        call[2],
+                        arguments_of(call),
+                        "the generator was closed before it finished",
+                        False,
+                        call[1],
+                    )
+            except Exception:  # noqa: BLE001 - observation must never reach the agent's call
+                pass
+
         def on_start(code: Any, offset: int) -> Any:
+            if owners:
+                settle_closed()
             if code.co_name not in function_names:
                 return disable
             try:
@@ -809,8 +848,18 @@ def _install_declared_python_tools() -> None:
                     arguments = collect_arguments(frame)
                 except Exception:  # noqa: BLE001
                     arguments = None
+                owner = None
+                if code.co_flags & generator_flag:
+                    generator = next(
+                        (o for o in gc.get_referrers(frame) if isinstance(o, types.GeneratorType)),
+                        None,
+                    )
+                    if generator is not None:
+                        owner = weakref.ref(generator)
                 with guard:
                     calls[id(frame)] = (frame, time.time(), key, arguments)
+                    if owner is not None:
+                        owners[id(frame)] = owner
                     thrown.pop(id(frame), None)
                     if len(calls) == 1:
                         monitoring.set_events(tool, while_open)
@@ -833,11 +882,14 @@ def _install_declared_python_tools() -> None:
                 pass
 
         def finish(frame: Any, value: Any, raised: bool) -> None:
+            if owners:
+                settle_closed()
             with guard:
                 call = calls.get(id(frame))
                 if call is None or call[0] is not frame:
                     return
                 del calls[id(frame)]
+                owners.pop(id(frame), None)
                 thrown.pop(id(frame), None)
                 if not calls:
                     monitoring.set_events(tool, start_only)

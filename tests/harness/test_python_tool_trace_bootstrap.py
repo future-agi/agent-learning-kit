@@ -573,6 +573,43 @@ def test_a_generator_closed_early_is_recorded_and_is_not_an_error(
         assert seen == expected
 
 
+@pytest.mark.parametrize("later", ["agent.other_tool(1)", "agent.not_a_tool()"])
+def test_a_generator_closed_at_a_bare_yield_is_settled_by_the_next_start(
+    tmp_path: Path, mechanism: str, later: str
+) -> None:
+    """Where a close fires no event, the open call is still settled and the exception events go off."""
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path keeps process-wide events on while a call is open")
+    source = (
+        "def bare(n):\n    yield 1\n    yield 2\n"
+        "def other_tool(x):\n    return x\n"
+        "def not_a_tool():\n    return 0\n"
+    )
+    (tmp_path / "agent.py").write_text(source)
+    trace, env = _trace_environment(
+        tmp_path,
+        [{"name": n, "module": "agent", "callable": n} for n in ("bare", "other_tool")],
+    )
+    result = subprocess.run(
+        [
+            _TRACED_PYTHON,
+            "-c",
+            "import sys, agent\n"
+            "g = agent.bare(3); next(g); g.close()\n"
+            f"{later}\n"
+            "tool = next(i for i in range(6) if sys.monitoring.get_tool(i) == 'alk-tool-trace')\n"
+            "print(sys.monitoring.get_events(tool))\n",
+        ],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    # Only PY_START (1) is left on; PY_UNWIND and PY_THROW are off again.
+    assert result.stdout.split()[-1] == "1"
+    seen = [(r["name"], r["arguments"], r["is_error"], r["output"]) for r in _records(trace)]
+    closed = ("bare", {"n": 3}, False, "the generator was closed before it finished")
+    assert seen[0] == closed
+    assert seen.count(closed) == 1
+
+
 ASYNC_TOOLS = (
     "import asyncio\n"
     "async def inner():\n    await asyncio.sleep(10)\n"
