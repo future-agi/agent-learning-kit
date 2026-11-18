@@ -209,3 +209,11 @@ def test_check_reading_calls_records_tool_calls_evidence(monkeypatch, tmp_path):
         "refund_once": ["world_state"],
         "looked_up": ["tool_calls"],
     }
+
+
+def test_a_deferred_proof_gives_the_reason_it_is_blocked_for_not_an_unrun_gate():
+    leaked = [{"who": "caller", "field": "instruction", "grader_field": "tests", "excerpt": "the menu"}]
+    proof = Proof(deferred=True, leaks=leaked)
+
+    assert proof.blocked_reason() == "answer_leaked"
+    assert proof.why().startswith("what the caller or the agent sees gives the answer away")

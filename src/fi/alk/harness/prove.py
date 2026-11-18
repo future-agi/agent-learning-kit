@@ -216,10 +216,31 @@ class Proof:
             "not_vacuous": not self.vacuous and not self.failed_attempts,
         }
 
+    def _source_faults(self) -> str:
+        """What the case's own text and sources got wrong, checked before any gate: a contradicted rule, a leaked
+        answer, a source that does not resolve; "" when none."""
+        if self.conflicts:
+            return "its expected outcome contradicts a cited rule:\n  - " + "\n  - ".join(
+                f"{one['ref'] or 'rule'} \"{one['rule']}\": {one['why'] or 'contradicted'}" for one in self.conflicts
+            )
+        if self.leaks:
+            return "what the caller or the agent sees gives the answer away:\n  - " + "\n  - ".join(
+                f"{one['who']}: {one['field']} repeats \"{one['excerpt']}\" from {one['grader_field']}"
+                for one in self.leaks
+            )
+        if self.unresolved_sources:
+            return "a cited source does not resolve:\n  - " + "\n  - ".join(
+                f"{one['kind']} {one['ref']}: {one['problem']}" for one in self.unresolved_sources
+            )
+        return ""
+
     def why(self) -> str:
         """What to fix, in the order worth fixing it."""
         if self.deferred and not self.broken and not self.leaks and not self.unresolved_sources and not self.conflicts:
             return "DEFERRED: setup, readiness and outcome checks require the live runtime; file access declarations do not verify fixture contents."
+        if self.deferred and not self.broken:
+            # A deferred proof returns before any gate runs, so its gates read unset, never failed (`blocked_reason`).
+            return self._source_faults()
         if self.broken and not self.why_not_ready:
             return "these checks are broken, not failing:\n  - " + "\n  - ".join(self.broken)
         if not self.ready:
@@ -316,19 +337,8 @@ class Proof:
                 "no negative control: add a wrong behaviour written for this task (for example the "
                 "wrong record, the action done twice, or the forbidden change) that its checks must fail."
             )
-        if self.conflicts:
-            return "its expected outcome contradicts a cited rule:\n  - " + "\n  - ".join(
-                f"{one['ref'] or 'rule'} \"{one['rule']}\": {one['why'] or 'contradicted'}" for one in self.conflicts
-            )
-        if self.leaks:
-            return "what the caller or the agent sees gives the answer away:\n  - " + "\n  - ".join(
-                f"{one['who']}: {one['field']} repeats \"{one['excerpt']}\" from {one['grader_field']}"
-                for one in self.leaks
-            )
-        if self.unresolved_sources:
-            return "a cited source does not resolve:\n  - " + "\n  - ".join(
-                f"{one['kind']} {one['ref']}: {one['problem']}" for one in self.unresolved_sources
-            )
+        if fault := self._source_faults():
+            return fault
         if self.judged_only and not self.controls_failed:
             return JUDGED_ONLY_TEXT
         if self.controls and not self.ran_controls:
