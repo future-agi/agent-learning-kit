@@ -615,8 +615,10 @@ def knowledge_roles(root: Path) -> dict[str, str]:
         return {}
     roles: dict[str, str] = {}
     for raw, role in body.items():
-        path = str(raw).strip().removeprefix("./")
-        if not path.startswith("knowledge/") or ".." in Path(path).parts or path == KNOWLEDGE_ROLES:
+        # Read exactly as written, as the platform reads it (`harness_actor_rules.file_roles`), so a key both sides
+        # see is the same file: " knowledge/x" or "./knowledge/x" names none on either.
+        path = str(raw)
+        if not path.startswith("knowledge/") or ".." in path.split("/") or path == KNOWLEDGE_ROLES:
             _logger.warning("%s names %r, which is not a file under knowledge/; left out", KNOWLEDGE_ROLES, raw)
             continue
         if role not in FILE_ROLES:

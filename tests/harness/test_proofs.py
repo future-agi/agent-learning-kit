@@ -217,3 +217,29 @@ def test_a_deferred_proof_gives_the_reason_it_is_blocked_for_not_an_unrun_gate()
 
     assert proof.blocked_reason() == "answer_leaked"
     assert proof.why().startswith("what the caller or the agent sees gives the answer away")
+
+
+def test_an_agent_bound_tool_with_a_state_check_is_kept_as_written_not_unsolvable(monkeypatch, tmp_path):
+    # Review B4: the refund tool runs inside the agent, so its step never changes the world the state check reads.
+    install(monkeypatch, runtime_tools={"refund_order"})
+    proof = module.prove(refund_case(), catalogue(**REFUND_CATALOGUE), tmp_path, contract=None, actors=[])
+
+    record_proof(tmp_path, "k", proof, solution_steps=2)
+    saved = load_proofs(tmp_path)["k"]
+
+    assert proof.assumed == ["refund_order"] and proof.holds is True
+    assert (saved["blocked_reason"], saved["kept_as_written"], saved["proved"]) == ("solution_assumed", True, False)
+    assert saved["why"].startswith("kept as written")
+
+
+def test_an_assumed_case_still_reads_its_faults(monkeypatch, tmp_path):
+    install(monkeypatch, runtime_tools={"refund_order"})
+    goals = catalogue(**REFUND_CATALOGUE)
+
+    leaked = module.prove(
+        refund_case(instruction="Make sure the agent will refund once for order O-10."), goals, tmp_path, contract=None
+    )
+    uncontrolled = module.prove(refund_case(negative_controls=[]), goals, tmp_path, contract=None)
+
+    assert leaked.blocked_reason() == "answer_leaked" and leaked.kept_as_written is False
+    assert uncontrolled.blocked_reason() == "no_negative_control" and uncontrolled.why().startswith("no negative control")

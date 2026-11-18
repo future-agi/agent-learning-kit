@@ -289,11 +289,13 @@ def test_an_unknown_role_is_kept_hidden_with_a_warning_and_saving_carries_on(tmp
 def test_a_role_for_a_path_outside_knowledge_is_left_out_with_a_warning(tmp_path, caplog):
     from fi.alk.harness.actors import EVALUATOR_ONLY
 
-    _attach(tmp_path, {"answers.md": "evaluator_only", "knowledge/../answers.md": "evaluator_only"})
+    # Keys are read exactly as written, as the platform reads them: a padded or `./` key names no file on either side.
+    outside = ["answers.md", "knowledge/../answers.md", " knowledge/answers.md", "./knowledge/answers.md"]
+    _attach(tmp_path, dict.fromkeys(outside, "evaluator_only"), **{"answers.md": "Refund 18.00"})
     write_actor_rules(tmp_path)
 
     assert json.loads((tmp_path / ACTOR_RULES_FILE).read_text())["evaluator_only"] == EVALUATOR_ONLY
-    assert sum("not a file under knowledge/" in one.getMessage() for one in caplog.records) == 2
+    assert sum("not a file under knowledge/" in one.getMessage() for one in caplog.records) == len(outside)
 
 
 def test_an_actor_is_never_given_an_evaluator_only_attached_file(tmp_path):

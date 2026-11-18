@@ -227,6 +227,8 @@ def _unproved(record: Mapping[str, Any], proof: Mapping[str, Any] | None) -> str
     """Why a restored scenario's proof does not bring it back, or "" when it does: proved, or kept as written
     because this lane could not run a step. Only a proof made since the restore counts."""
     since = str(record.get("restored_at") or "")
+    # Compared as text: both stamps are UTC to the second in one fixed form (`_now` here and in `proofs`), which sorts
+    # as the times do. A stamp in any other form would need parsing first.
     if not proof or str(proof.get("proved_at") or "") < since:
         return "not proved again in this rebuild"
     if proof.get("proved") is True or proof.get("kept_as_written") is True:

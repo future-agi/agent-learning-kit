@@ -134,6 +134,15 @@ class Proof:
 
     @property
     def holds(self) -> bool:
+        if self.assumed:
+            # The solution never ran, so the gates read from its run (solvable, failed attempts, too strict,
+            # unchecked) are no evidence either way; the gates on the untouched world still are.
+            return (
+                self.ready
+                and not self.vacuous
+                and (self.outcome == "no_change" or not self.weak)
+                and not self.broken
+            )
         return (
             self.ready
             and self.solvable
@@ -173,17 +182,18 @@ class Proof:
             # A deferred proof returns before any gate runs, so its gates read unset, not failed.
             if not self.ready:
                 return "not_ready"
-            if not self.solvable:
+            # With steps assumed, the gates read from the solution's run are skipped: it never ran (`holds`).
+            if not self.solvable and not self.assumed:
                 return "not_solvable"
             if self.vacuous:
                 return "vacuous"
             if self.weak and self.outcome == "change":
                 return "weak_check"
-            if self.failed_attempts:
+            if self.failed_attempts and not self.assumed:
                 return "credits_failed_attempt"
-            if self.too_strict:
+            if self.too_strict and not self.assumed:
                 return "too_strict"
-            if self.unchecked:
+            if self.unchecked and not self.assumed:
                 return "unchecked"
             if not self.judged_only:
                 if not self.controls:
@@ -254,7 +264,7 @@ class Proof:
             return "these checks are broken, not failing:\n  - " + "\n  - ".join(
                 self.broken
             )
-        if not self.solvable:
+        if not self.solvable and not self.assumed:
             failed = [one for one in self.with_solution if not one.held]
             said = "\n  - ".join(f"{one.name}: {one.said}" for one in failed)
             refusals = (
@@ -284,7 +294,7 @@ class Proof:
                 "        if any(c.ok for c in tried): return 'it succeeded'\n"
                 "        return None"
             )
-        if self.unchecked:
+        if self.unchecked and not self.assumed:
             return (
                 "these values are marked fixed, yet every check still passes when the agent gets "
                 "them wrong:\n  - "
@@ -293,7 +303,7 @@ class Proof:
                 "compare it, or take it out of `fixed` if only what is said settles it or the agent words it "
                 "itself (a reason, a note, a message), which no check compares as text."
             )
-        if self.too_strict:
+        if self.too_strict and not self.assumed:
             return (
                 "these checks fail an agent that does every fixed thing right but makes its own "
                 "choice, for an argument this scenario does not mark fixed, a way its "
@@ -303,7 +313,7 @@ class Proof:
                 "rule of the agent fixes. Check the outcome instead, or mark the argument fixed "
                 "if one of those really fixes it."
             )
-        if self.failed_attempts:
+        if self.failed_attempts and not self.assumed:
             return (
                 "these checks award credit when every tool attempt crashes without changing "
                 "the world or returning a result:\n  - "
@@ -344,6 +354,10 @@ class Proof:
         if self.controls and not self.ran_controls:
             return "no negative control could run here: " + ", ".join(
                 f"{one['name']} ({', '.join(one.get('assumed') or [])})" for one in self.controls
+            )
+        if self.assumed:
+            return "kept as written: these tools have no endpoint here, so their solution steps never ran: " + ", ".join(
+                self.assumed
             )
         return "holds"
 
