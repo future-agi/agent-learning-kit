@@ -4707,13 +4707,13 @@ def test_job_tool_requirement_uses_observed_calls(required, with_calls, expected
     asyncio.run(scenario())
 
 
-def _run_with_friend(monkeypatch, summary, sub_goals) -> hs.ResultReceipt:
+def _run_with_friend(monkeypatch, summary, sub_goals, duplicates=()) -> hs.ResultReceipt:
 
     async def scenario() -> hs.ResultReceipt:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
-        outcome = replace(_call_outcome(), call_actors=(summary,) if summary else ())
+        outcome = replace(_call_outcome(), call_actors=(summary,) if summary else (), duplicates=duplicates)
         scheduler = hs.HostedScheduler(
             pool=pool,
             world_factory=FakeWorldFactory(),
@@ -4770,6 +4770,22 @@ def test_a_call_its_call_actor_never_reached_is_graded_with_the_actor_noted(
     assert (failed.status, failed.failure) == ("failed", None)
     assert [one.verdict for one in failed.sub_goals] == ["fail"]
     assert failed.reason == f"did not reach the agent: {why}"
+
+
+def test_a_duplicate_commit_beside_an_actor_note_keeps_both_reasons_and_no_failure(monkeypatch) -> None:
+    """The platform refuses a passed or failed receipt carrying a failure, and a refused result reads skipped: a double
+    refund must fail the agent with why in its reason, and the actor's note beside it."""
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(),
+        [FakeSubGoal("booked", lambda w, c: None)],
+        duplicates=({"action": "orders.issue_refund", "name": "issue_refund"},),
+    )
+    assert (receipt.status, receipt.failure) == ("failed", None)
+    assert receipt.reason == (
+        "did not reach the agent: Rowan (not_delivered); "
+        "The agent repeated issue_refund after its answer was lost, and the world committed it twice."
+    )
 
 
 def test_a_fault_after_an_actor_never_reached_the_agent_keeps_the_note_beside_the_fault(monkeypatch) -> None:
@@ -4892,9 +4908,9 @@ def test_a_duplicate_commit_fails_the_scenario(monkeypatch) -> None:
     )
     passing = [FakeSubGoal("refunded", lambda w, c: None)]
     receipt, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=duplicated)
-    assert receipt.status == "failed"
-    assert receipt.failure is not None and receipt.failure.code == "duplicate_commit"
-    assert receipt.failure.message == (
+    # Failed, with why in its reason: a graded receipt carrying a failure is refused by the platform.
+    assert receipt.status == "failed" and receipt.failure is None
+    assert receipt.reason == (
         "The agent repeated issue_refund after its answer was lost, and the world committed it twice."
     )
     clean, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=_call_outcome(turns=2))
