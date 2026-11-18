@@ -126,7 +126,7 @@ class ProvisionedEnvironment:
     runtime_configuration_names: list[str] = field(default_factory=list)
     # Names only: the job's own settings Compose also reads for itself (a proxy, CA bundle or
     # locale), skipped rather than handed over until they can go to the agent's own service
-    # (ADR-014). Shown to the owner in the job's result.
+    # (a later change). Shown to the owner in the job's result.
     skipped_setting_names: list[str] = field(default_factory=list)
 
     def save(self, destination: Path) -> Path:
@@ -330,7 +330,7 @@ def _agent_setting_compose_also_reads(name: str) -> bool:
 
 def skipped_setting_names(environment: ProvisionedEnvironment) -> list[str]:
     """The job's settings ``_runtime_values`` skips because Compose also reads them: names
-    only, for the job's result (ADR-014, step 1)."""
+    only, for the job's result."""
     return sorted(
         name
         for name in environment.runtime_configuration_names
@@ -347,7 +347,7 @@ def _runtime_values(
     A proxy, CA bundle or locale setting is skipped, as it was before kit #337: Compose reads
     the same names for itself, and passing them would steer the tool, not the agent. The skip
     is logged and recorded in the job's result (``skipped_setting_names``) until the value can
-    go to the agent's own service (ADR-014, step 2)."""
+    go to the agent's own service."""
     values: dict[str, str] = {}
     under_sandbox = _under_sandbox()
     for name in environment.runtime_configuration_names:

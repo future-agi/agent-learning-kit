@@ -2255,7 +2255,7 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
             str(name): re.sub(r"(://)[^/@]+@", r"\1***@", str(value))
             for name, value in dict(environment.get("overrides") or {}).items()
         }
-        # Names only (ADR-014, step 1): the job's settings the kit skipped because Compose
+        # Names only: the job's settings the kit skipped because Compose
         # also reads them, so the owner can see their agent ran without them.
         skipped = sorted(
             str(name)

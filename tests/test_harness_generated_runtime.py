@@ -1733,7 +1733,7 @@ def test_a_jobs_proxy_and_export_settings_reach_only_the_env_file(
     assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in call.env
     assert call.job.values["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://canary.invalid"
 
-    # A proxy reaches neither: it is skipped, and Compose still runs (ADR-014, step 1).
+    # A proxy reaches neither: it is skipped, and Compose still runs.
     proxies = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
     _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(proxies))
     for name in proxies:
@@ -1770,7 +1770,7 @@ def test_an_admitted_value_compose_also_reads_is_skipped_and_named(
 ) -> None:
     # Intake admits a proxy, CA bundle or locale name as the agent's own setting, but Compose
     # reads the same names for itself. Until the value can go to the agent's own service
-    # (ADR-014, step 2), it is skipped as before #337, and the skip is named: the job runs, it
+    # (a later change), it is skipped as before #337, and the skip is named: the job runs, it
     # does not fail (Dileep, #348).
     names = ["HTTPS_PROXY", "SSL_CERT_FILE", "LANG", "LC_ALL", "NO_PROXY", "REQUESTS_CA_BUNDLE", "MY_KEY"]
     _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(names))

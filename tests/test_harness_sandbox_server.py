@@ -571,7 +571,7 @@ def test_local_sandbox_reports_committed_scenario_progress_while_worker_runs(
 
 
 def test_the_environment_output_names_the_settings_the_kit_skipped(tmp_path):
-    # ADR-014, step 1: a setting the kit skipped is in the job's result, by name only.
+    # A setting the kit skipped is in the job's result, by name only.
     from fi.alk.harness.sandbox_server import _stage_outputs
 
     (tmp_path / "environment.json").write_text(
