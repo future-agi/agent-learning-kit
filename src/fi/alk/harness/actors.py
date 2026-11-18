@@ -603,6 +603,26 @@ FILE_ROLES = ("policy", "seed_records", EVALUATOR_ONLY_ROLE)
 # What a role the harness does not know is read as: the safe side, kept from the agent and every actor.
 UNKNOWN_ROLE_READS_AS = EVALUATOR_ONLY_ROLE
 _logger = logging.getLogger(__name__)
+# The rule `knowledge_role_key` applies, as data for any other reader of the roles file.
+KNOWLEDGE_ROLE_KEYS = {
+    "file": KNOWLEDGE_ROLES,
+    "roles": list(FILE_ROLES),
+    "unknown_role_reads_as": UNKNOWN_ROLE_READS_AS,
+    "strip": True,
+    "drop_prefix": "./",
+    "under": "knowledge/",
+    "refuse_parts": [".."],
+}
+
+
+def knowledge_role_key(raw: object) -> str | None:
+    """The attached file a `knowledge/roles.json` key names, or None when it names none: surrounding whitespace and
+    one leading "./" are dropped, and the path must lie under `knowledge/` with no ".." part. The one rule for reading
+    a key, sealed in the actor rules (`KNOWLEDGE_ROLE_KEYS`) so every reader applies the same one."""
+    path = str(raw).strip().removeprefix("./")
+    if not path.startswith("knowledge/") or ".." in path.split("/") or path == KNOWLEDGE_ROLES:
+        return None
+    return path
 
 
 def knowledge_roles(root: Path) -> dict[str, str]:
@@ -618,10 +638,8 @@ def knowledge_roles(root: Path) -> dict[str, str]:
         return {}
     roles: dict[str, str] = {}
     for raw, role in body.items():
-        # Read exactly as written, as the platform reads it (`harness_actor_rules.file_roles`), so a key both sides
-        # see is the same file: " knowledge/x" or "./knowledge/x" names none on either.
-        path = str(raw)
-        if not path.startswith("knowledge/") or ".." in path.split("/") or path == KNOWLEDGE_ROLES:
+        path = knowledge_role_key(raw)
+        if path is None:
             _logger.warning("%s names %r, which is not a file under knowledge/; left out", KNOWLEDGE_ROLES, raw)
             continue
         if role not in FILE_ROLES:
@@ -964,6 +982,8 @@ def actor_rules(config: dict[str, Any] | None = None, root: Path | None = None) 
         "schema": ACTOR_RULES_SCHEMA,
         # With the environment's evaluator-only attached files when ``root`` holds their roles.
         "evaluator_only": evaluator_only_rule(root),
+        # How a reader of `knowledge/roles.json` reads it, so it never decides differently from this release.
+        "knowledge_roles": KNOWLEDGE_ROLE_KEYS,
         "brief_inputs": BRIEF_INPUTS,
         "private_to_actor": PRIVATE_TO_ACTOR,
         # Files an actor's knowledge may never name, beside the evaluator-only ones.
