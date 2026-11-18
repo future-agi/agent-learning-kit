@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -241,6 +242,7 @@ def capability_catalog(
         "capabilities": capabilities,
         "consolidation": _consolidation_metadata(),
         "provider_capabilities": provider_capabilities(),
+        "framework_support": framework_support(),
         "research_sources": copy.deepcopy(RESEARCH_SOURCES),
         "summary": {
             "artifact_count": len(artifacts),
@@ -258,15 +260,25 @@ def capability_catalog(
     return payload
 
 
+# The supported-frameworks list (decision record ADR-006). Read as a file, so this command doesn't
+# load the harness; the harness's own loader is `fi.alk.harness.framework_support`.
+_FRAMEWORK_SUPPORT = (
+    Path(__file__).resolve().parent / "harness" / "data" / "framework_support.json"
+)
+
+
+def framework_support() -> dict[str, Any]:
+    """The frameworks a user can bring an agent in, how far each is proven, and the evidence."""
+    return json.loads(_FRAMEWORK_SUPPORT.read_text(encoding="utf-8"))
+
+
 def static_capabilities() -> dict[str, list[str]]:
     """Return capabilities supported by the installed SDK, independent of a run."""
 
     from fi.alk import simulate, trinity
 
     provider_caps = provider_capabilities()
-    provider_values = {
-        value for values in provider_caps.values() for value in values
-    }
+    provider_values = {value for values in provider_caps.values() for value in values}
     consolidation = trinity.consolidation_metadata()
     return {
         "channels": sorted(provider_values),
@@ -431,12 +443,15 @@ def _missing_required_capabilities(
 ) -> dict[str, list[str]]:
     missing: dict[str, list[str]] = {}
     for key, values in required.items():
-        observed_values = {_capability_key(value) for value in _as_list(observed.get(key))}
+        observed_values = {
+            _capability_key(value) for value in _as_list(observed.get(key))
+        }
         missing_values = sorted(
             {
                 _capability_key(value)
                 for value in _as_list(values)
-                if _capability_key(value) and _capability_key(value) not in observed_values
+                if _capability_key(value)
+                and _capability_key(value) not in observed_values
             }
         )
         if missing_values:
@@ -488,8 +503,12 @@ def _collect_payload_capabilities(
         _add_capabilities(caps, "metrics", summary.get("observed_metrics"))
         _add_capabilities(caps, "metrics", summary.get("required_metrics"))
         _add_capabilities(caps, "metrics", summary.get("eval_metrics"))
-        _add_capabilities(caps, "metrics", _mapping_keys(summary.get("metric_averages")))
-        _add_capabilities(caps, "environment_state_keys", summary.get("environment_state_keys"))
+        _add_capabilities(
+            caps, "metrics", _mapping_keys(summary.get("metric_averages"))
+        )
+        _add_capabilities(
+            caps, "environment_state_keys", summary.get("environment_state_keys")
+        )
         provider_channels = dict(summary.get("provider_channels") or {})
         _add_capabilities(caps, "providers", provider_channels.keys())
         for channels in provider_channels.values():
@@ -520,7 +539,9 @@ def _collect_payload_capabilities(
                 _add_capability(caps, "environment_types", environment.get("type"))
         for history_item in _as_list(optimization.get("history")):
             if isinstance(history_item, Mapping):
-                _add_capabilities(caps, "metrics", _mapping_keys(history_item.get("metrics")))
+                _add_capabilities(
+                    caps, "metrics", _mapping_keys(history_item.get("metrics"))
+                )
 
         for child in item.values():
             _collect_payload_capabilities(child, caps, depth=depth + 1)
@@ -577,13 +598,7 @@ def _add_capability(caps: dict[str, set[str]], key: str, value: Any) -> None:
 
 
 def _capability_key(value: Any) -> str:
-    return (
-        str(value or "")
-        .strip()
-        .lower()
-        .replace("-", "_")
-        .replace(" ", "_")
-    )
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _as_list(value: Any) -> list[Any]:

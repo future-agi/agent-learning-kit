@@ -1,35 +1,53 @@
 # Supported frameworks
 
-Generated from `src/fi/alk/harness/data/framework_support.json` (decision record ADR-006); a test keeps this page equal to it. Each framework is at the highest level its evidence reaches: Recognised (we name it from the code), Read (a real reading described a reference agent correctly), Runs (the five checks passed from that reading: start, a two-turn session, tool binding, evidence, stop), Through the platform (connected on the platform and saved as Agent and version 1). The versions are the reference agent's own, as its reading and run used them.
+Generated from `src/fi/alk/harness/data/framework_support.json` (decision record ADR-006); a test keeps this page equal to it, and `agent-learn capabilities` carries the file as `framework_support`.
 
-| Framework | Level | Versions on record | Python | Start | Two turns | Tools bound | Evidence | Stop |
-|---|---|---|---|---|---|---|---|---|
-| Claude Agent SDK | Recognised, not yet tested | none | 3.12 | - | - | - | - | - |
-| CrewAI | Recognised, not yet tested | none | 3.12 | - | - | - | - | - |
-| Deep Agents | Read, not yet tested | `deepagents==0.7.32` | 3.12 | failed | - | - | - | - |
-| Google ADK | Read, not yet tested | `google-adk==2.13.0` | 3.12 | passed | passed | passed | failed | - |
-| LangChain | Recognised, not yet tested | none | - | - | - | - | - | - |
-| LangGraph | Recognised, not yet tested | none | - | - | - | - | - | - |
-| LiveKit Agents | Recognised, not yet tested | none | - | - | - | - | - | - |
-| OpenAI Agents SDK | Read, not yet tested | `openai-agents==0.24.0` | 3.12 | passed | passed | failed | failed | - |
-| Pipecat | Recognised, not yet tested | none | - | - | - | - | - | - |
-| Pydantic AI | Read, not yet tested | `pydantic-ai-slim==2.61.0` | 3.12 | passed | passed | passed | passed | - |
+- **Found:** the kit names the framework from the code.
+- **Read:** a real reading described the reference agent correctly.
+- **Run:** the agent ran from that reading, with five checks: start, a two-turn session, tool binding, evidence, stop. It is proven only when all five passed.
+- **Platform:** connected through the platform's own screens and saved as Agent and version 1.
+- **Versions** are the reference agent's own environment, not the kit's.
 
-## Known limits
+| Framework | Level | Versions | Python | Found | Read | Run | Platform | Start | Two turns | Tools bound | Evidence | Stop |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Claude Agent SDK | Recognised, not yet tested | none | 3.12 | proven | pending | - | - | - | - | - | - | - |
+| CrewAI | Recognised, not yet tested | none | 3.12 | proven | pending | - | - | - | - | - | - | - |
+| Deep Agents | Read, not yet tested | `deepagents==0.7.32` | 3.12 | proven | proven | pending | - | failed | - | - | - | - |
+| Google ADK | Read, not yet tested | `google-adk==2.13.0` | 3.12 | proven | proven | - | - | passed | passed | passed | failed | - |
+| LangChain | Recognised, not yet tested | none | - | proven | pending | - | - | - | - | - | - | - |
+| LangGraph | Recognised, not yet tested | none | - | proven | pending | - | - | - | - | - | - | - |
+| LiveKit Agents | Recognised, not yet tested | none | - | proven | pending | - | - | - | - | - | - | - |
+| OpenAI Agents SDK | Read, not yet tested | `openai-agents==0.24.0` | 3.12 | proven | proven | pending | - | passed | passed | failed | failed | - |
+| Pipecat | Recognised, not yet tested | none | - | proven | - | - | - | - | - | - | - | - |
+| Pydantic AI | Read, not yet tested | `pydantic-ai-slim==2.61.0` | 3.12 | proven | proven | - | - | passed | passed | passed | passed | - |
 
-- **Claude Agent SDK:** No real reading is on record yet; one is being run (TH-8952).
-- **Claude Agent SDK:** The reference runs on the real SDK and its bundled CLI against a local stub model in CI, from a hand-written contract, not from a reading.
-- **CrewAI:** No real reading is on record yet; one is being run (TH-8952).
-- **CrewAI:** The kit's tests run the reference only against a stand-in CrewAI.
-- **Deep Agents:** The reading described the agent, but saved `langgraph dev`, which the agent doesn't install, so the run from it failed to start. Kit PR #341 sends such an app to the kit's own graph route; until it merges, readings of Deep Agents agents need reading again.
-- **Google ADK:** The run from its reading gave right replies, but the transcript recorded 5 tool calls for 3 (two extra with empty arguments); not rechecked since.
+## Notes and limits
+
+- **Claude Agent SDK, read:** Waits on the real reading Pine is running now (TH-8952).
+- **Claude Agent SDK, run:** No run from a reading. CI runs the reference on the real SDK and CLI against a local stub model, from a hand-written contract, which is not a real run.
+- **Claude Agent SDK:** The kit builds and binds the reference from a hand-written contract (test_build_runs_the_callback_bridge_with_the_generic_tool_tracer).
+- **CrewAI, read:** Waits on the real reading Pine is running now (TH-8952).
+- **CrewAI, run:** No run from a reading; the kit's tests use a stand-in CrewAI.
+- **CrewAI:** The kit builds and binds the reference from a hand-written contract, against a stand-in CrewAI only.
+- **Deep Agents, read:** The reading described the agent, but saved `langgraph dev`, which the agent doesn't install. Pine is reading it again on #341's head.
+- **Deep Agents, run:** Waits on kit PR #341, which sends such an app to the kit's own graph route; from the 12 Nov reading it failed to start.
+- **Deep Agents:** Readings stored before #341 merges need reading again.
+- **Google ADK, run:** Replies were right, but the transcript recorded 5 tool calls for 3, and stopping wasn't recorded; not rechecked since.
 - **Google ADK:** The reference pins google-adk 2.13.0, outside the kit's own google-adk range (below 2.8, held there by OpenTelemetry). The tested version is the agent's.
-- **LangChain:** No reference agent in the kit and no real reading on record; one is being run on an outside agent (TH-8952).
-- **LangGraph:** No reference agent in the kit and no real reading on record; one is being run on an outside agent (TH-8952).
-- **LangGraph:** Deep Agents, built on LangGraph, has its own row.
-- **LiveKit Agents:** No reference agent in the kit and no real reading on record; one is being run on an outside agent (TH-8952).
-- **LiveKit Agents:** 15 real calls on three livekit/agents examples are recorded (Aug 2026, src/fi/alk/harness/IMPLEMENTATION_AND_VALIDATION_STATUS.md), from hand-made setups, not from a reading; the record doesn't give the livekit-agents version.
-- **OpenAI Agents SDK:** The reading described the agent, but marked its tools unreachable, so the run from it replied right with no tool calls recorded. Kit PR #341 binds them; until it merges, readings of Agents SDK agents need reading again.
+- **LangChain, read:** Waits on the real reading Pine is running now (TH-8952). On an outside agent: the kit has no LangChain reference agent.
+- **LangChain, run:** No LangChain agent has run in the kit's tests.
+- **LangChain:** No reference agent in the kit.
+- **LangGraph, read:** Waits on the real reading Pine is running now (TH-8952). On an outside agent: the kit has no LangGraph reference agent.
+- **LangGraph, run:** Only the kit's LangGraph adapter against a stand-in graph.
+- **LangGraph:** No reference agent in the kit. Deep Agents, built on LangGraph, has its own entry.
+- **LiveKit Agents, read:** Waits on the real reading Pine is running now (TH-8952). On an outside agent: the kit has no LiveKit reference agent.
+- **LiveKit Agents, run:** No run from a reading. 15 real calls on three livekit/agents examples are recorded (Aug 2026, src/fi/alk/harness/IMPLEMENTATION_AND_VALIDATION_STATUS.md), from hand-made setups; the record doesn't give the livekit-agents version.
+- **LiveKit Agents:** No reference agent in the kit.
+- **OpenAI Agents SDK, read:** The reading described the agent, but marked its tools unreachable. Pine is reading it again on #341's head.
+- **OpenAI Agents SDK, run:** Waits on kit PR #341, which binds the tools; from the 12 Nov reading it replied right with no tool calls recorded.
+- **OpenAI Agents SDK:** Readings stored before #341 merges need reading again.
 - **OpenAI Agents SDK:** The kit's own hook also runs on openai-agents 0.18.3 and 0.20.0 in CI.
-- **Pipecat:** Recognised by name only: no reference agent and no reading. Hosted Pipecat runs are not built (decision record ADR-001).
-- **Pydantic AI:** The run from its reading passed four of the five checks; stopping wasn't recorded, so it isn't at Runs yet.
+- **Pipecat, read:** No reference agent and no reading.
+- **Pipecat, run:** Hosted Pipecat runs are not built (ADR-001).
+- **Pipecat:** Recognised by name only.
+- **Pydantic AI, run:** Four of the five checks passed from its reading; stopping wasn't recorded.

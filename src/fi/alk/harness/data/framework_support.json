@@ -1,324 +1,570 @@
 {
-  "schema_version": 1,
-  "about": "The frameworks a user can bring an agent in, the level each has reached, and the evidence. Decision record ADR-006. Edited by hand; the loader beside this file (framework_support.py) says what each field means.",
+  "schema_version": "futureagi.framework-support.v1",
   "frameworks": [
     {
-      "name": "claude_agent_sdk",
-      "title": "Claude Agent SDK",
+      "key": "claude_agent_sdk",
+      "name": "Claude Agent SDK",
       "package": "claude-agent-sdk",
-      "level": "recognised",
       "tested_versions": [],
       "python": "3.12",
       "reference": "examples/harness/claude_agent_sdk_support",
-      "checks": {
-        "start": "not_run",
-        "two_turn_session": "not_run",
-        "tool_binding": "not_run",
-        "evidence": "not_run",
-        "stop": "not_run"
-      },
-      "evidence": {
-        "recognised": [
-          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[claude_agent_sdk_agent.py]",
-          "test:tests/harness/test_framework_detection.py::test_every_framework_is_detected[claude_code_sdk]",
-          "test:tests/harness/test_claude_agent_sdk_reference.py::test_example_is_detected_as_the_claude_agent_sdk"
-        ],
-        "read": null,
-        "runs": null,
-        "platform": null
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[claude_agent_sdk_agent.py]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_every_framework_is_detected[claude_code_sdk]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_claude_agent_sdk_reference.py::test_example_is_detected_as_the_claude_agent_sdk",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "pending",
+          "evidence": [],
+          "note": "Waits on the real reading Pine is running now (TH-8952)."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "No run from a reading. CI runs the reference on the real SDK and CLI against a local stub model, from a hand-written contract, which is not a real run.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
       },
       "limits": [
-        "No real reading is on record yet; one is being run (TH-8952).",
-        "The reference runs on the real SDK and its bundled CLI against a local stub model in CI, from a hand-written contract, not from a reading."
+        "The kit builds and binds the reference from a hand-written contract (test_build_runs_the_callback_bridge_with_the_generic_tool_tracer)."
       ]
     },
     {
-      "name": "crewai",
-      "title": "CrewAI",
+      "key": "crewai",
+      "name": "CrewAI",
       "package": "crewai",
-      "level": "recognised",
       "tested_versions": [],
       "python": "3.12",
       "reference": "examples/harness/crewai_support",
-      "checks": {
-        "start": "not_run",
-        "two_turn_session": "not_run",
-        "tool_binding": "not_run",
-        "evidence": "not_run",
-        "stop": "not_run"
-      },
-      "evidence": {
-        "recognised": [
-          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[crewai_agent.py]",
-          "test:tests/harness/test_crewai_reference.py::test_example_is_detected_as_crewai"
-        ],
-        "read": null,
-        "runs": null,
-        "platform": null
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[crewai_agent.py]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_crewai_reference.py::test_example_is_detected_as_crewai",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "pending",
+          "evidence": [],
+          "note": "Waits on the real reading Pine is running now (TH-8952)."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "No run from a reading; the kit's tests use a stand-in CrewAI.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
       },
       "limits": [
-        "No real reading is on record yet; one is being run (TH-8952).",
-        "The kit's tests run the reference only against a stand-in CrewAI."
+        "The kit builds and binds the reference from a hand-written contract, against a stand-in CrewAI only."
       ]
     },
     {
-      "name": "deepagents",
-      "title": "Deep Agents",
+      "key": "deepagents",
+      "name": "Deep Agents",
       "package": "deepagents",
-      "level": "read",
       "tested_versions": [
         "deepagents==0.7.32"
       ],
       "python": "3.12",
       "reference": "examples/harness/deep_agents_support",
-      "checks": {
-        "start": "failed",
-        "two_turn_session": "not_run",
-        "tool_binding": "not_run",
-        "evidence": "not_run",
-        "stop": "not_run"
-      },
-      "evidence": {
-        "recognised": [
-          "test:tests/harness/test_framework_detection.py::test_every_framework_is_detected[deepagents]",
-          "test:tests/harness/test_deep_agents_reference.py::test_example_is_detected_as_deep_agents"
-        ],
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_every_framework_is_detected[deepagents]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_deep_agents_reference.py::test_example_is_detected_as_deep_agents",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
         "read": {
-          "date": "2026-11-12",
-          "place": "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents"
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents",
+              "date": "2026-11-12"
+            }
+          ],
+          "note": "The reading described the agent, but saved `langgraph dev`, which the agent doesn't install. Pine is reading it again on #341's head."
         },
-        "runs": {
-          "date": "2026-11-12",
-          "place": "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents"
+        "run": {
+          "status": "pending",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Deep Agents",
+              "date": "2026-11-12"
+            }
+          ],
+          "note": "Waits on kit PR #341, which sends such an app to the kit's own graph route; from the 12 Nov reading it failed to start.",
+          "checks": {
+            "start": "failed",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
         },
-        "platform": null
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
       },
       "limits": [
-        "The reading described the agent, but saved `langgraph dev`, which the agent doesn't install, so the run from it failed to start. Kit PR #341 sends such an app to the kit's own graph route; until it merges, readings of Deep Agents agents need reading again."
+        "Readings stored before #341 merges need reading again."
       ]
     },
     {
-      "name": "google_adk",
-      "title": "Google ADK",
+      "key": "google_adk",
+      "name": "Google ADK",
       "package": "google-adk",
-      "level": "read",
       "tested_versions": [
         "google-adk==2.13.0"
       ],
       "python": "3.12",
       "reference": "examples/harness/google_adk_support",
-      "checks": {
-        "start": "passed",
-        "two_turn_session": "passed",
-        "tool_binding": "passed",
-        "evidence": "failed",
-        "stop": "not_run"
-      },
-      "evidence": {
-        "recognised": [
-          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[google_adk_agent.py]",
-          "test:tests/harness/test_google_adk_reference.py::test_example_is_detected_as_an_adk_app"
-        ],
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[google_adk_agent.py]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_google_adk_reference.py::test_example_is_detected_as_an_adk_app",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
         "read": {
-          "date": "2026-11-12",
-          "place": "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK"
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK",
+              "date": "2026-11-12"
+            }
+          ],
+          "note": ""
         },
-        "runs": {
-          "date": "2026-11-12",
-          "place": "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK"
+        "run": {
+          "status": "not_proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Google ADK",
+              "date": "2026-11-12"
+            }
+          ],
+          "note": "Replies were right, but the transcript recorded 5 tool calls for 3, and stopping wasn't recorded; not rechecked since.",
+          "checks": {
+            "start": "passed",
+            "two_turn": "passed",
+            "tool_binding": "passed",
+            "evidence": "failed",
+            "stop": "not_run"
+          }
         },
-        "platform": null
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
       },
       "limits": [
-        "The run from its reading gave right replies, but the transcript recorded 5 tool calls for 3 (two extra with empty arguments); not rechecked since.",
         "The reference pins google-adk 2.13.0, outside the kit's own google-adk range (below 2.8, held there by OpenTelemetry). The tested version is the agent's."
       ]
     },
     {
-      "name": "langchain",
-      "title": "LangChain",
+      "key": "langchain",
+      "name": "LangChain",
       "package": "langchain-core",
-      "level": "recognised",
       "tested_versions": [],
       "python": null,
       "reference": null,
-      "checks": {
-        "start": "not_run",
-        "two_turn_session": "not_run",
-        "tool_binding": "not_run",
-        "evidence": "not_run",
-        "stop": "not_run"
-      },
-      "evidence": {
-        "recognised": [
-          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[langchain_agent.py]",
-          "test:tests/harness/test_agent_scan.py::test_a_langchain_chat_model_needs_no_ai_step"
-        ],
-        "read": null,
-        "runs": null,
-        "platform": null
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[langchain_agent.py]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_agent_scan.py::test_a_langchain_chat_model_needs_no_ai_step",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "pending",
+          "evidence": [],
+          "note": "Waits on the real reading Pine is running now (TH-8952). On an outside agent: the kit has no LangChain reference agent."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "No LangChain agent has run in the kit's tests.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
       },
       "limits": [
-        "No reference agent in the kit and no real reading on record; one is being run on an outside agent (TH-8952)."
+        "No reference agent in the kit."
       ]
     },
     {
-      "name": "langgraph",
-      "title": "LangGraph",
+      "key": "langgraph",
+      "name": "LangGraph",
       "package": "langgraph",
-      "level": "recognised",
       "tested_versions": [],
       "python": null,
       "reference": null,
-      "checks": {
-        "start": "not_run",
-        "two_turn_session": "not_run",
-        "tool_binding": "not_run",
-        "evidence": "not_run",
-        "stop": "not_run"
-      },
-      "evidence": {
-        "recognised": [
-          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[langgraph_agent.py]",
-          "test:tests/harness/test_framework_detection.py::test_every_framework_is_detected[langgraph_star]",
-          "test:tests/harness/test_agent_reading.py::test_the_framework_is_a_builds_shape[langgraph]"
-        ],
-        "read": null,
-        "runs": null,
-        "platform": null
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[langgraph_agent.py]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_every_framework_is_detected[langgraph_star]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_agent_reading.py::test_the_framework_is_a_builds_shape[langgraph]",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "pending",
+          "evidence": [],
+          "note": "Waits on the real reading Pine is running now (TH-8952). On an outside agent: the kit has no LangGraph reference agent."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Only the kit's LangGraph adapter against a stand-in graph.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
       },
       "limits": [
-        "No reference agent in the kit and no real reading on record; one is being run on an outside agent (TH-8952).",
-        "Deep Agents, built on LangGraph, has its own row."
+        "No reference agent in the kit. Deep Agents, built on LangGraph, has its own entry."
       ]
     },
     {
-      "name": "livekit",
-      "title": "LiveKit Agents",
+      "key": "livekit",
+      "name": "LiveKit Agents",
       "package": "livekit-agents",
-      "level": "recognised",
       "tested_versions": [],
       "python": null,
       "reference": null,
-      "checks": {
-        "start": "not_run",
-        "two_turn_session": "not_run",
-        "tool_binding": "not_run",
-        "evidence": "not_run",
-        "stop": "not_run"
-      },
-      "evidence": {
-        "recognised": [
-          "test:tests/harness/test_framework_detection.py::test_every_framework_is_detected[livekit]"
-        ],
-        "read": null,
-        "runs": null,
-        "platform": null
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_every_framework_is_detected[livekit]",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "pending",
+          "evidence": [],
+          "note": "Waits on the real reading Pine is running now (TH-8952). On an outside agent: the kit has no LiveKit reference agent."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "No run from a reading. 15 real calls on three livekit/agents examples are recorded (Aug 2026, src/fi/alk/harness/IMPLEMENTATION_AND_VALIDATION_STATUS.md), from hand-made setups; the record doesn't give the livekit-agents version.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
       },
       "limits": [
-        "No reference agent in the kit and no real reading on record; one is being run on an outside agent (TH-8952).",
-        "15 real calls on three livekit/agents examples are recorded (Aug 2026, src/fi/alk/harness/IMPLEMENTATION_AND_VALIDATION_STATUS.md), from hand-made setups, not from a reading; the record doesn't give the livekit-agents version."
+        "No reference agent in the kit."
       ]
     },
     {
-      "name": "openai_agents",
-      "title": "OpenAI Agents SDK",
+      "key": "openai_agents",
+      "name": "OpenAI Agents SDK",
       "package": "openai-agents",
-      "level": "read",
       "tested_versions": [
         "openai-agents==0.24.0"
       ],
       "python": "3.12",
       "reference": "examples/harness/openai_agents_support",
-      "checks": {
-        "start": "passed",
-        "two_turn_session": "passed",
-        "tool_binding": "failed",
-        "evidence": "failed",
-        "stop": "not_run"
-      },
-      "evidence": {
-        "recognised": [
-          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[openai_agents_agent.py]",
-          "test:tests/harness/test_openai_agents_reference.py::test_example_is_detected_as_the_sdk_agent"
-        ],
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[openai_agents_agent.py]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_openai_agents_reference.py::test_example_is_detected_as_the_sdk_agent",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
         "read": {
-          "date": "2026-11-12",
-          "place": "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK"
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
+              "date": "2026-11-12"
+            }
+          ],
+          "note": "The reading described the agent, but marked its tools unreachable. Pine is reading it again on #341's head."
         },
-        "runs": {
-          "date": "2026-11-12",
-          "place": "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK"
+        "run": {
+          "status": "pending",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
+              "date": "2026-11-12"
+            }
+          ],
+          "note": "Waits on kit PR #341, which binds the tools; from the 12 Nov reading it replied right with no tool calls recorded.",
+          "checks": {
+            "start": "passed",
+            "two_turn": "passed",
+            "tool_binding": "failed",
+            "evidence": "failed",
+            "stop": "not_run"
+          }
         },
-        "platform": null
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
       },
       "limits": [
-        "The reading described the agent, but marked its tools unreachable, so the run from it replied right with no tool calls recorded. Kit PR #341 binds them; until it merges, readings of Agents SDK agents need reading again.",
+        "Readings stored before #341 merges need reading again.",
         "The kit's own hook also runs on openai-agents 0.18.3 and 0.20.0 in CI."
       ]
     },
     {
-      "name": "pipecat",
-      "title": "Pipecat",
+      "key": "pipecat",
+      "name": "Pipecat",
       "package": "pipecat-ai",
-      "level": "recognised",
       "tested_versions": [],
       "python": null,
       "reference": null,
-      "checks": {
-        "start": "not_run",
-        "two_turn_session": "not_run",
-        "tool_binding": "not_run",
-        "evidence": "not_run",
-        "stop": "not_run"
-      },
-      "evidence": {
-        "recognised": [
-          "test:tests/harness/test_framework_detection.py::test_every_framework_is_detected[pipecat]"
-        ],
-        "read": null,
-        "runs": null,
-        "platform": null
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_every_framework_is_detected[pipecat]",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "No reference agent and no reading."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Hosted Pipecat runs are not built (ADR-001).",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
       },
       "limits": [
-        "Recognised by name only: no reference agent and no reading. Hosted Pipecat runs are not built (decision record ADR-001)."
+        "Recognised by name only."
       ]
     },
     {
-      "name": "pydantic_ai",
-      "title": "Pydantic AI",
+      "key": "pydantic_ai",
+      "name": "Pydantic AI",
       "package": "pydantic-ai-slim",
-      "level": "read",
       "tested_versions": [
         "pydantic-ai-slim==2.61.0"
       ],
       "python": "3.12",
       "reference": "examples/harness/pydantic_ai_support",
-      "checks": {
-        "start": "passed",
-        "two_turn_session": "passed",
-        "tool_binding": "passed",
-        "evidence": "passed",
-        "stop": "not_run"
-      },
-      "evidence": {
-        "recognised": [
-          "test:tests/harness/test_framework_detection.py::test_examples_report_their_framework[pydantic_ai_agent.py]",
-          "test:tests/harness/test_pydantic_ai_reference.py::test_example_is_detected_as_pydantic_ai"
-        ],
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[pydantic_ai_agent.py]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_pydantic_ai_reference.py::test_example_is_detected_as_pydantic_ai",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
         "read": {
-          "date": "2026-11-12",
-          "place": "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI"
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI",
+              "date": "2026-11-12"
+            }
+          ],
+          "note": ""
         },
-        "runs": {
-          "date": "2026-11-12",
-          "place": "record:docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI"
+        "run": {
+          "status": "not_proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "docs/frameworks/evidence/2026-11-12-reference-readings.md#Pydantic AI",
+              "date": "2026-11-12"
+            }
+          ],
+          "note": "Four of the five checks passed from its reading; stopping wasn't recorded.",
+          "checks": {
+            "start": "passed",
+            "two_turn": "passed",
+            "tool_binding": "passed",
+            "evidence": "passed",
+            "stop": "not_run"
+          }
         },
-        "platform": null
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
       },
-      "limits": [
-        "The run from its reading passed four of the five checks; stopping wasn't recorded, so it isn't at Runs yet."
-      ]
+      "limits": []
     }
   ]
 }
