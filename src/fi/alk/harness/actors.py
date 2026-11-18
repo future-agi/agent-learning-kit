@@ -9,7 +9,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Collection
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -582,6 +582,8 @@ NOT_KNOWLEDGE = {
         "simulator_prompt.md",
         "source-data-invariants.json",
         "scenarios.json",
+        # Names each attached file's role, the evaluator-only ones among them: a map to the grading answers.
+        "knowledge/roles.json",
     ],
     "prefixes": ["generic-harness/", "handlers/", "seed/", "scenarios/", "checks/", "."],
 }
@@ -590,8 +592,10 @@ NOT_KNOWLEDGE = {
 def knowledge_file_allowed(path: str, hidden: Collection[str] = ()) -> bool:
     """Whether an actor may be given this environment file to read; ``hidden`` adds the environment's own
     evaluator-only files, by name."""
-    name = str(path).strip().lstrip("/")
-    return bool(name) and ".." not in Path(name).parts and Path(name).name not in {*EVALUATOR_ONLY["files"], *hidden} and (
+    raw = str(path).strip().lstrip("/")
+    # Read as the path it resolves to, so `knowledge//roles.json` or `knowledge/./roles.json` is the file it names.
+    name = PurePosixPath(raw).as_posix() if raw else ""
+    return bool(name) and name != "." and ".." not in Path(name).parts and Path(name).name not in {*EVALUATOR_ONLY["files"], *hidden} and (
         name not in NOT_KNOWLEDGE["files"] and not any(name.startswith(prefix) for prefix in NOT_KNOWLEDGE["prefixes"])
     )
 
