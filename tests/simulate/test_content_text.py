@@ -1615,3 +1615,71 @@ def test_an_unreadable_reply_logs_names_only(caplog):
 )
 def test_a_reply_that_is_empty_or_was_read_records_nothing(reply):
     assert "reply_unreadable" not in (_call(reply).metadata or {})
+
+
+# --- A history read from state or under a reply key gives only the agent's own turn. ---
+
+_USER_ONLY = [{"role": "user", "content": "where is my order"}]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"messages": _USER_ONLY},
+        SimpleNamespace(messages=_USER_ONLY),
+        {"output": {"messages": _USER_ONLY}},
+        {"response": _USER_ONLY},
+        {"data": _USER_ONLY},
+        {"result": {"messages": _USER_ONLY}},
+        {
+            "messages": [
+                {"role": "user", "content": "q"},
+                {"type": "tool", "content": "T"},
+            ]
+        },
+        {"messages": [SimpleNamespace(type="human", content="where is my order")]},
+    ],
+    ids=[
+        "state-messages",
+        "object-messages",
+        "output-state",
+        "response-list",
+        "data-list",
+        "result-state",
+        "user-then-tool-state",
+        "human-object-state",
+    ],
+)
+def test_a_history_with_no_assistant_message_gives_no_user_words_on_every_route(reply):
+    result = _generic_response(reply)
+    assert result.content == ""
+    assert "reply_unreadable" in result.metadata
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {
+            "messages": [
+                {"role": "assistant", "content": "Shipped."},
+                {"role": "user", "content": "thanks"},
+            ]
+        },
+        {
+            "messages": [
+                {"role": "user", "content": "q"},
+                {"role": "assistant", "content": "Shipped."},
+                {"role": "tool", "content": "T"},
+            ]
+        },
+        {
+            "messages": [
+                {"role": "user", "content": "q"},
+                {"role": "model", "parts": [{"text": "Shipped."}]},
+            ]
+        },
+    ],
+    ids=["assistant-then-user", "assistant-then-tool", "gemini-model-turn"],
+)
+def test_a_state_history_gives_its_last_agent_turn(reply):
+    assert _generic_response(reply).content == "Shipped."

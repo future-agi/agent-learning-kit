@@ -8388,9 +8388,17 @@ def _last_message_content(messages: Any) -> str:
     if not messages:
         return ""
     try:
-        return _message_content(list(messages)[-1])
+        items = list(messages)
     except TypeError:
         return _message_content(messages)
+    # A history gives its last agent turn; one with chat messages but none from the agent has
+    # no reply, and never gives the caller's or a tool's words back as one.
+    agent_turns = [item for item in items if is_agent_turn(item)]
+    if agent_turns:
+        return _message_content(agent_turns[-1])
+    if any(is_history_item(item) for item in items):
+        return ""
+    return _message_content(items[-1])
 
 
 def _message_content(message: Any) -> str:
