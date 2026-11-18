@@ -3488,6 +3488,23 @@ def test_the_agent_runtime_is_started_without_publishing_its_service_ports(
     assert "-P" not in command and "--service-ports" not in command
 
 
+def test_a_tool_credential_reaches_the_agent_runtime_env_list(tmp_path, monkeypatch):
+    # GIT_TOKEN is the agent's own setting, so it is named in `--env` like MY_KEY; a reserved
+    # name that is not a tool credential (DOCKER_CONFIG) stays out.
+    worker = {
+        "ALK_RUNTIME_CONFIGURATION_NAMES": "GIT_TOKEN,MY_KEY,DOCKER_CONFIG",
+        "ALK_RUNTIME_VALUE_GIT_TOKEN": "git-canary",
+        "ALK_RUNTIME_VALUE_MY_KEY": "key-canary",
+        "ALK_RUNTIME_VALUE_DOCKER_CONFIG": "/steer",
+    }
+    argv, _environment = _agent_runtime_command(worker, tmp_path, monkeypatch, label="toolcred")
+    pairs = [argv[i : i + 2] for i in range(len(argv) - 1)]
+    assert ["--env", "GIT_TOKEN"] in pairs
+    assert ["--env", "MY_KEY"] in pairs
+    assert ["--env", "DOCKER_CONFIG"] not in pairs
+    assert "git-canary" not in " ".join(argv)
+
+
 @pytest.mark.parametrize("name", ["GIT_TOKEN", "DOCKER_PASSWORD", "SSH_PRIVATE_KEY"])
 def test_a_tool_credential_is_accepted_as_a_target_ref(name):
     # How the platform's create sends every stored value; the same rule as environment values.

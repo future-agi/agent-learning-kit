@@ -2849,7 +2849,11 @@ def start_runtime(
         "TOOLS_API_URL",
     }
     # No ``--env`` may name a client-steering name, whatever put it in ``injected``.
-    for name in [name for name in injected if client_name_reserved(name)]:
+    for name in [
+        name
+        for name in injected
+        if client_name_reserved(name) and not tool_credential_name(name)
+    ]:
         del injected[name]
         skipped_reserved.add(name)
     _log_skipped_reserved(skipped_reserved)
