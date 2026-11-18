@@ -1446,6 +1446,8 @@ async def validate_once(
                 # While the stack is up, play each case's reference and controls through the
                 # service-backed and MCP Toolbox tools for real; never fails validation.
                 try:
+                    # Only this attempt's plays count: an earlier attempt's may be of cases repaired since.
+                    live_proof.forget_live(authoring, None)
                     live = await live_proof.prove_live(
                         authoring=authoring,
                         contract=AgentContract.model_validate_json(

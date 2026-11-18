@@ -7007,3 +7007,38 @@ def test_a_decode_total_spent_exactly_doesnt_say_the_walk_stopped(tmp_path, monk
 
     found, stopped = _save_walk(repo)
     assert not stopped and repo / "common" / "web.py" in found
+
+
+def test_a_build_proves_its_suite_after_its_validation(tmp_path, no_waiting, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / _FINISHED).write_text("{}", encoding="utf-8")
+    job = HarnessJob(
+        job_id="built",
+        run_id="built",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        scenario_count=2,
+        metadata={"generic_harness_v1": True},
+    )
+    job_path = tmp_path / "job.json"
+    job_path.write_text(job.model_dump_json(), encoding="utf-8")
+    steps = []
+
+    async def validate(*args, **kwargs):
+        steps.append("validated")
+
+    monkeypatch.setattr(authoring_entrypoint, "_review_while_writing", lambda *args: None)
+    monkeypatch.setattr("fi.alk.harness.authoring_runtime_validation.validate_and_repair", validate)
+    monkeypatch.setattr(
+        authoring_entrypoint, "_prove_scenarios", lambda path, deadline, *, stage: steps.append(("proved", path, stage))
+    )
+    status = authoring_entrypoint.main(
+        [str(job_path), "--source", str(source), "--output", str(output), "--await-harness"],
+        validate_runtime=True,
+    )
+    assert status == 0
+    assert steps == ["validated", ("proved", output.resolve(), "build")]
