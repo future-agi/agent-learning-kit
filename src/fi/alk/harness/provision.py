@@ -331,12 +331,61 @@ def _agent_setting_compose_also_reads(name: str) -> bool:
 def skipped_setting_names(environment: ProvisionedEnvironment) -> list[str]:
     """The job's settings ``_runtime_values`` skips because Compose also reads them: names
     only, for the job's result."""
-    return sorted(
-        name
-        for name in environment.runtime_configuration_names
-        if _agent_setting_compose_also_reads(name)
-        and runtime_configuration_value(name).strip()
+    if environment.managed:
+        # Delivered to the agent's own service instead (``_agent_settings_override``).
+        return []
+    return sorted(_agent_settings(environment))
+
+
+def _agent_settings(environment: ProvisionedEnvironment) -> dict[str, str]:
+    """The job's own proxy, CA bundle and locale values, which Compose also reads for itself."""
+    values: dict[str, str] = {}
+    for name in environment.runtime_configuration_names:
+        if not _agent_setting_compose_also_reads(name):
+            continue
+        value = runtime_configuration_value(name).strip()
+        if value:
+            values[name] = value
+    return values
+
+
+def _delivered_agent_settings(environment: ProvisionedEnvironment) -> set[str]:
+    """The names ``_agent_settings_override`` hands to the agent's own service: not skipped."""
+    return set(_agent_settings(environment)) if environment.managed else set()
+
+
+def _agent_settings_override(
+    environment: ProvisionedEnvironment, service: str
+) -> Path | None:
+    """For a service file the kit wrote, a private override giving the agent's service its
+    proxy, CA bundle and locale values as that service's own ``env_file``.
+
+    A service ``env_file`` reaches only that service's container: unlike the project
+    ``--env-file``, Compose doesn't take it into its own environment or that of anything it
+    starts, on either Compose version the sandbox carries. Only the agent's service names it,
+    and only the ``run`` that starts the agent is given the override, never ``config``, which
+    would print the values. Both files are 0600 in a private job directory that the caller
+    removes, and that ``stop`` sweeps if a worker dies first. A customer's own Compose file
+    gets none: only they know which service a proxy or locale is for, so those values are
+    skipped and named."""
+    if not environment.managed:
+        return None
+    values = _agent_settings(environment)
+    if not values:
+        return None
+    directory = Path(
+        tempfile.mkdtemp(prefix=_job_directory_prefix(environment.project))
     )
+    try:
+        descriptor, settings_file = tempfile.mkstemp(dir=directory)
+        _write_env_file(descriptor, values)
+        descriptor, override = tempfile.mkstemp(dir=directory, suffix=".json")
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump({"services": {service: {"env_file": [settings_file]}}}, handle)
+    except BaseException:
+        _remove_job_directory(directory)
+        raise
+    return Path(override)
 
 
 def _runtime_values(
@@ -384,7 +433,7 @@ def _compose_values(
                 skipped.add(name)
             else:
                 values[name] = value
-    _log_skipped_reserved(skipped)
+    _log_skipped_reserved(skipped - _delivered_agent_settings(environment))
     return values
 
 
@@ -477,6 +526,7 @@ def _run(
     timeout: int = 900,
     process_overrides: dict[str, str] | None = None,
     teardown: bool = False,
+    extra_files: tuple[str, ...] = (),
 ) -> str:
     """Run one ``docker compose`` call.
 
@@ -539,6 +589,8 @@ def _run(
             files = ["--file", environment.compose_file]
             if environment.compose_override_file:
                 files.extend(("--file", environment.compose_override_file))
+            for path in extra_files:
+                files.extend(("--file", path))
             # Giving Compose an explicit --env-file stops it reading the repository's ``.env`` by
             # itself, so that file goes first (as today, now explicit) and the job file, which
             # wins, after it. A ``.env`` directory would break an explicit --env-file.
@@ -2852,7 +2904,7 @@ def start_runtime(
     for name in [name for name in injected if client_name_reserved(name)]:
         del injected[name]
         skipped_reserved.add(name)
-    _log_skipped_reserved(skipped_reserved)
+    _log_skipped_reserved(skipped_reserved - _delivered_agent_settings(environment))
     for name in sorted(injected):
         value = f"{name}={injected[name]}" if name in explicit_non_secret else name
         arguments.extend(("--env", value))
@@ -2862,7 +2914,18 @@ def start_runtime(
         for name, value in injected.items()
         if runtime_only.get(name) != value
     }
-    _run(environment, *arguments, timeout=900, process_overrides=process_overrides)
+    agent_settings = _agent_settings_override(environment, service)
+    try:
+        _run(
+            environment,
+            *arguments,
+            timeout=900,
+            process_overrides=process_overrides,
+            extra_files=(str(agent_settings),) if agent_settings else (),
+        )
+    finally:
+        if agent_settings is not None:
+            _remove_job_directory(agent_settings.parent)
     deadline = time.monotonic() + 60
     # LiveKit workers commonly stay alive while warming VAD/STT/TTS processes and only register
     # for dispatch afterwards.  Starting a room after five seconds races that registration: the

@@ -1,4 +1,5 @@
 import json
+from typing import Any
 import logging
 import os
 import stat
@@ -1253,10 +1254,31 @@ def _record_compose(monkeypatch, *, raises=None, returncode=0, output=""):
                 directory_mode=stat.S_IMODE(path.parent.stat().st_mode),
                 values=_parse_env_file(path.read_text(encoding="utf-8")),
             )
+        # Override files and the service env files they name, read while Compose would read them.
+        overrides: dict[str, Any] = {}
+        service_env_files: dict[str, types.SimpleNamespace] = {}
+        for index, argument in enumerate(command[:-1]):
+            if argument != "--file" or not Path(command[index + 1]).is_file():
+                continue
+            text = Path(command[index + 1]).read_text(encoding="utf-8")
+            try:
+                document = json.loads(text)
+            except ValueError:
+                continue
+            overrides[command[index + 1]] = document
+            for service in (document.get("services") or {}).values():
+                for named in (service or {}).get("env_file") or []:
+                    path = Path(named)
+                    service_env_files[named] = types.SimpleNamespace(
+                        mode=stat.S_IMODE(path.stat().st_mode),
+                        values=_parse_env_file(path.read_text(encoding="utf-8")),
+                    )
         call = types.SimpleNamespace(
             argv=list(command),
             env=dict(kwargs["env"]),
             env_files=env_files,
+            overrides=overrides,
+            service_env_files=service_env_files,
             job=job,
             cwd=kwargs.get("cwd"),
             cwd_listing=(
@@ -1443,6 +1465,106 @@ def _drive_start_runtime(destination: Path, monkeypatch, **kwargs) -> list:
     )
     provisioning.start_runtime(destination, **kwargs)
     return calls
+
+
+_AGENT_SETTINGS = {
+    "HTTPS_PROXY": "http://proxy.agent.invalid:3128",
+    "LANG": "de_DE.UTF-8",
+    "SSL_CERT_FILE": "/agent/ca.pem",
+}
+
+
+def _agent_settings_environment(tmp_path: Path, monkeypatch, *, managed: bool):
+    names = [*_AGENT_SETTINGS, "MY_KEY"]
+    _shell(monkeypatch, {"PATH": "/usr/bin"}, ",".join(names))
+    for name, value in {**_AGENT_SETTINGS, "MY_KEY": "own"}.items():
+        monkeypatch.setenv(f"ALK_RUNTIME_VALUE_{name}", value)
+    environment = _compose_environment(
+        tmp_path,
+        runtime_services=["agent-runtime"],
+        running=True,
+        managed=managed,
+        runtime_configuration_names=names,
+    )
+    environment.save(tmp_path)
+    return environment
+
+
+def test_a_kit_written_runtime_gives_the_agent_its_proxy_ca_and_locale_settings(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    # Compose reads these names for itself, so they never go through its environment or the
+    # job's env file. Where the kit wrote the service file, they go to the agent's own service
+    # as its env_file, which reaches that container and nothing else.
+    _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+
+    with caplog.at_level("WARNING"):
+        calls = _drive_start_runtime(tmp_path, monkeypatch)
+
+    # Delivered, so not reported as skipped.
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert not any(name in logged for name in _AGENT_SETTINGS), logged
+    run_call = next(call for call in calls if "run" in call.argv)
+    [override] = run_call.overrides.values()
+    [(path, delivered)] = run_call.service_env_files.items()
+    # Only the agent's service gets the file, never a helper service in the same project.
+    assert override == {"services": {"agent-runtime": {"env_file": [path]}}}
+    assert delivered.values == _AGENT_SETTINGS
+    assert delivered.mode == 0o600
+    for name in _AGENT_SETTINGS:
+        assert name not in _seen(run_call), name
+        assert name not in run_call.argv, name
+    assert _seen(run_call)["MY_KEY"] == "own"
+    # Only the run that starts the agent carries it.
+    assert all(not call.overrides for call in calls if call is not run_call)
+    # The values are gone once the agent is started.
+    assert not Path(path).exists()
+    assert not Path(path).parent.exists()
+
+
+def test_a_customers_own_compose_file_still_skips_the_settings_compose_reads(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Only the customer knows which of their services a proxy or locale is for.
+    environment = _agent_settings_environment(tmp_path, monkeypatch, managed=False)
+
+    calls = _drive_start_runtime(tmp_path, monkeypatch)
+
+    run_call = next(call for call in calls if "run" in call.argv)
+    assert run_call.overrides == {}
+    for name in _AGENT_SETTINGS:
+        assert name not in _seen(run_call), name
+    assert provisioning.skipped_setting_names(environment) == sorted(_AGENT_SETTINGS)
+
+
+def test_a_kit_written_runtime_reports_no_skipped_settings(
+    tmp_path: Path, monkeypatch
+) -> None:
+    environment = _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+
+    assert provisioning.skipped_setting_names(environment) == []
+
+
+def test_the_agents_settings_file_is_removed_when_the_start_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _agent_settings_environment(tmp_path, monkeypatch, managed=True)
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
+    calls = _record_compose(monkeypatch, returncode=1, output="boom")
+    monkeypatch.setattr(
+        provisioning,
+        "_config",
+        lambda _environment: {"services": {"agent-runtime": {"environment": {}}}},
+    )
+    monkeypatch.setattr(provisioning, "_docker", lambda *arguments, **_kwargs: "")
+
+    with pytest.raises(provisioning.ProvisionError):
+        provisioning.start_runtime(tmp_path)
+
+    run_call = next(call for call in calls if "run" in call.argv)
+    [path] = run_call.service_env_files
+    assert not Path(path).exists()
+    assert not Path(path).parent.exists()
 
 
 _RESERVED_NAMES = [
@@ -1811,10 +1933,11 @@ def test_an_environment_record_with_a_field_this_kit_does_not_know_still_loads(
     assert loaded == environment
 
 
-def test_provision_records_the_settings_it_skipped_for_the_jobs_result(
+def test_provision_records_no_skipped_settings_for_a_kit_written_runtime(
     tmp_path: Path, monkeypatch
 ) -> None:
-    # The owner sees the skip in the job's result, not only in a log they can't read.
+    # The kit wrote this service file, so the agent gets its proxy and locale through its own
+    # service and nothing is reported as skipped (a customer's own file is the other test).
     source = tmp_path / "agent"
     session = tmp_path / "session"
     source.mkdir()
@@ -1848,9 +1971,10 @@ def test_provision_records_the_settings_it_skipped_for_the_jobs_result(
     monkeypatch.setattr(provisioning, "_run", run)
     environment = provisioning.provision(source, session, _contract())
 
-    assert environment.skipped_setting_names == ["LANG", "NO_PROXY"]
+    assert environment.managed
+    assert environment.skipped_setting_names == []
     saved = json.loads(session.joinpath("environment.json").read_text())
-    assert saved["skipped_setting_names"] == ["LANG", "NO_PROXY"]
+    assert saved["skipped_setting_names"] == []
     assert "canary" not in session.joinpath("environment.json").read_text()
 
 def _failing_unlink(monkeypatch, inside: str):
