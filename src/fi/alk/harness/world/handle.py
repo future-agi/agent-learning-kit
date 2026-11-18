@@ -369,6 +369,7 @@ class HostedWorld(HttpObservationHandle):
         *,
         record_as: str = "",
         record: bool = True,
+        timeout: float = 30.0,
     ) -> Call:
         """POST `arguments` as JSON to `endpoint` behind the bundle's tool proxy, which forwards it to
         the agent's own tools service and records the call. The same wire format a provisioned
@@ -382,7 +383,7 @@ class HostedWorld(HttpObservationHandle):
         name = record_as or endpoint.strip("/")
         at = time.time()
         try:
-            response = requests.post(f"{self._tool_proxy}/{endpoint.strip('/')}", json=args, timeout=30)
+            response = requests.post(f"{self._tool_proxy}/{endpoint.strip('/')}", json=args, timeout=timeout)
             try:
                 body: Any = response.json()
             except ValueError:
@@ -423,7 +424,7 @@ class HostedWorld(HttpObservationHandle):
         if not endpoint:
             raise WorldUnavailable(
                 f"{name} has no bound service endpoint; only service-backed tools behind the tool "
-                "proxy can be played — report, don't guess."
+                "proxy can be played, so say so rather than guess."
             )
         return self.forward(endpoint, arguments, record_as=name)
 

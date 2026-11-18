@@ -837,8 +837,8 @@ The grader-only material is each sub-goal's `what`, `judged`, `reference`, `veri
 `comparison`, the values a check compares against that the world does not hold, `tests`, each
 negative control's `why`, and every file only the evaluator reads. None of it may appear in what the
 simulated person or the agent is given: the instruction, the variables, the persona, its opening
-message, or an actor's brief and knowledge. A scenario that repeats eight words of a sub-goal, a
-multi-word sub-goal name or a computed expected value in those fields is refused with the excerpt.
+message, or an actor's brief and knowledge. A scenario whose visible text restates grader-only material
+(a sub-goal's words or name, or a value a check expects) is refused with the excerpt.
 On a conversational agent, the opening message must not repeat the instruction either: the
 instruction is the simulated person's, never the agent's.
 
