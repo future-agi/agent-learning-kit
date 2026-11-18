@@ -2661,6 +2661,9 @@ class ResultReceiptDraft(BaseModel):
                 raise ValueError("skipped_receipt_shape_invalid")
         elif self.status is ScenarioStatus.ERRORED and self.failure is None:
             raise ValueError("errored_receipt_requires_failure")
+        elif self.status in (ScenarioStatus.PASSED, ScenarioStatus.FAILED) and self.failure is not None:
+            # The platform refuses a graded receipt that carries a failure; refused, the result would be lost.
+            raise ValueError("graded_receipt_must_not_include_failure")
         return self
 
 
