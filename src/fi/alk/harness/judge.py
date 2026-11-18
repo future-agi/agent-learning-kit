@@ -175,26 +175,14 @@ def judge_reachable(timeout: float = _REACHABLE_TIMEOUT_SECONDS) -> str:
     """``passed`` when the judge's model answers one tiny request in ``timeout`` seconds, else
     ``failed``: a judged sub-goal cannot be graded without it."""
     try:
-        env = provider_env(judge_model())
-        base, key = env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_AUTH_TOKEN")
-        if not base or not key:
-            raise NoGateway("no gateway configured for the judge")
-        response = requests.post(
-            f"{base}/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}"},
-            json={
-                "model": env["ANTHROPIC_MODEL"],
-                "messages": [{"role": "user", "content": "Reply with the single word: ready"}],
-                "max_tokens": 5,
-            },
-            timeout=timeout,
+        _complete(
+            [{"role": "user", "content": "Reply with the single word: ready"}], [], False, timeout=timeout, max_tokens=5
         )
-        response.raise_for_status()
-        answered = bool((response.json().get("choices") or [None])[0])
     except Exception as exc:  # noqa: BLE001 - any failure means the judge cannot grade
         logger.warning("judge not reachable in the check: %s", type(exc).__name__)
+        logger.debug("judge reachability failure", exc_info=True)
         return "failed"
-    return "passed" if answered else "failed"
+    return "passed"
 
 
 def _short(value: object) -> object:
@@ -658,7 +646,12 @@ def _transcript(messages: Sequence[Any]) -> str:
 
 
 def _complete(
-    conversation: list[dict[str, Any]], tools: Sequence[Any], forced: bool
+    conversation: list[dict[str, Any]],
+    tools: Sequence[Any],
+    forced: bool,
+    *,
+    timeout: float = _TURN_TIMEOUT_SECONDS,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """One turn of the judge on the gateway's OpenAI-compatible chat completions."""
     env = provider_env(judge_model())
@@ -679,11 +672,13 @@ def _complete(
         ]
     if forced:
         body["tool_choice"] = {"type": "function", "function": {"name": "decide"}}
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
     response = requests.post(
         f"{base}/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
         json=body,
-        timeout=_TURN_TIMEOUT_SECONDS,
+        timeout=timeout,
     )
     response.raise_for_status()
     answer = response.json()

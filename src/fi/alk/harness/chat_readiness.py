@@ -313,6 +313,7 @@ def world_call_log(runtime: EnvironmentRuntime, since: float = 0.0) -> list[Call
         return [call for call in call_runner.collect_tool_trace_calls(runtime) if call.at >= since]
     except Exception as unread:  # noqa: BLE001 - routing is an observation: a log that cannot be read is none received
         logger.info("world call log not read: %s", type(unread).__name__)
+        logger.debug("the failure in full", exc_info=True)
         return []
 
 
@@ -467,23 +468,17 @@ def record_tool_routing(
     )
 
 
-_REACH_FIELDS = ("dsn_env", "config_key", "host", "port", "database", "loader_module")
-
-
-def _outside_world(contract) -> set[str]:
+def _outside_world(contract: AgentContract) -> set[str]:
     """Tools the contract says cannot be routed to the test world: no reachable
     implementation, or a dependency the environment cannot stand up a copy of."""
-    document = contract.model_dump(mode="json") if hasattr(contract, "model_dump") else {}
     names = {
-        str(entry.get("tool") or "")
-        for entry in document.get("tool_entrypoints") or []
-        if entry.get("mode") == "unreachable"
-        or (entry.get("mode") == "service" and not entry.get("service"))
+        entry.tool
+        for entry in contract.tool_entrypoints
+        if entry.mode == "unreachable" or (entry.mode == "service" and not entry.service)
     }
-    for dependency in document.get("dependencies") or []:
-        reached = dependency.get("reached") or {}
-        if not (dependency.get("engine") and any(reached.get(f) for f in _REACH_FIELDS)):
-            names.update(str(tool) for tool in dependency.get("used_by") or [])
+    for dependency in contract.dependencies:
+        if not (dependency.engine and dependency.reached.has_seam()):
+            names.update(dependency.used_by)
     return names
 
 
@@ -545,8 +540,8 @@ async def request_uncovered_tools(
     conversation driven like a scenario's; at the world only the asked tool runs, and any
     other call the agent returns is refused and listed under ``refused_during_requests``. A
     tool whose contract leaves ``effects`` empty is asked: the asked tool runs only in the test
-world, which is reset after the check, so an effect the contract did not name changes only
-that world, never a real system (tools that leave the world are never asked). A callback agent
+    world, which is reset after the check, so an effect the contract did not name changes only
+    that world, never a real system (tools that leave the world are never asked). A callback agent
     runs its own tools before answering, which the harness cannot stop; the world is reset
     after the check. Routing is read from the world's side as in the conversation. Never
     raises.
@@ -621,6 +616,7 @@ that world, never a real system (tools that leave the world are never asked). A 
             ]
         except Exception as exc:  # noqa: BLE001 - an unanswered request leaves the tool unobserved
             logger.info("readiness request for %s failed: %s", tool.name, type(exc).__name__)
+            logger.debug("the failure in full", exc_info=True)
             failed = [{"tool": tool.name, "reason": "request_failed"}]
             body["unobserved"].extend(failed)
             _note_request(
@@ -743,7 +739,23 @@ def _tool_fingerprint(candidate_hash: str, contract, tool) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _request_ledger(authoring: Path) -> dict:
+class AskedTool(TypedDict):
+    """One tool asked for by an earlier attempt of the check: what the answer holds for, and what it showed."""
+
+    fingerprint: str
+    tools: list[RoutedTool]
+    unobserved: list[UnobservedTool]
+
+
+class RequestLedger(TypedDict):
+    """The tool requests this check's attempts have sent, so all of them stay within one bound."""
+
+    asked: dict[str, AskedTool]
+    requests: int
+    seconds: float
+
+
+def _request_ledger(authoring: Path) -> RequestLedger:
     """The tool requests earlier attempts of this check sent, and the time they took."""
     path = authoring / "generic-harness" / TOOL_REQUESTS
     try:
@@ -761,11 +773,11 @@ def _request_ledger(authoring: Path) -> dict:
 
 
 def _note_request(
-    ledger: dict,
+    ledger: RequestLedger,
     tool: str,
     fingerprint: str,
-    tools: list,
-    unobserved: list,
+    tools: list[RoutedTool],
+    unobserved: list[UnobservedTool],
     spent: float,
 ) -> None:
     ledger["asked"][tool] = {
@@ -776,7 +788,7 @@ def _note_request(
     ledger["seconds"] += max(0.0, spent)
 
 
-def _save_ledger(authoring: Path, ledger: dict) -> None:
+def _save_ledger(authoring: Path, ledger: RequestLedger) -> None:
     path = authoring / "generic-harness" / TOOL_REQUESTS
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

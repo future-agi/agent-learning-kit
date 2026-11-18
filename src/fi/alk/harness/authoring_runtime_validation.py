@@ -1339,18 +1339,6 @@ async def validate_once(
                             redaction_values=redaction_values,
                             evidence_seam=manifest.runtime.evidence_seam,
                         )
-                        await request_uncovered_tools(
-                            interface=interface,
-                            endpoint=endpoint.address,
-                            runtime=runtime,
-                            contract=contract,
-                            authoring=authoring,
-                            bundle=bundle,
-                            source=source,
-                            secret_values=target_secret_values,
-                            candidate_hash=_generic_candidate_hash(source, authoring),
-                            local_auth_values=getattr(runtime, "_local_auth_values", None),
-                        )
                     else:
                         since = time.time()
                         await probe_chat_ingress(
@@ -1373,6 +1361,7 @@ async def validate_once(
                             called = call_runner.collect_file_tool_calls(runtime)
                         except Exception as unread:  # noqa: BLE001 - no trace, nothing observed
                             logger.warning("agent's tool trace not read: %s", type(unread).__name__)
+                            logger.debug("the failure in full", exc_info=True)
                             called = ()
                         record_tool_routing(
                             authoring,
@@ -1383,18 +1372,19 @@ async def validate_once(
                             reported=called,
                             bundle=bundle,
                         )
-                        await request_uncovered_tools(
-                            interface=interface,
-                            endpoint=endpoint.address,
-                            runtime=runtime,
-                            contract=contract,
-                            authoring=authoring,
-                            bundle=bundle,
-                            source=source,
-                            secret_values=target_secret_values,
-                            candidate_hash=_generic_candidate_hash(source, authoring),
-                            local_auth_values=getattr(runtime, "_local_auth_values", None),
-                        )
+                    # Whichever conversation qualified the agent, each tool it did not show is asked once.
+                    await request_uncovered_tools(
+                        interface=interface,
+                        endpoint=endpoint.address,
+                        runtime=runtime,
+                        contract=contract,
+                        authoring=authoring,
+                        bundle=bundle,
+                        source=source,
+                        secret_values=target_secret_values,
+                        candidate_hash=_generic_candidate_hash(source, authoring),
+                        local_auth_values=getattr(runtime, "_local_auth_values", None),
+                    )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"
             await provider.reset(runtime, work_directory=work)

@@ -62,9 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         _read(args.source.resolve(), args.output.resolve(), args.name)
-    except (
-        Exception
-    ) as exc:  # noqa: BLE001 - a failed reading leaves the version unread
+    except Exception as exc:  # noqa: BLE001 - a failed reading leaves the version unread
         (args.output / AGENT_DOCUMENT).unlink(missing_ok=True)
         print(f"agent reading failed: {type(exc).__name__}", file=sys.stderr)
     return 0

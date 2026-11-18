@@ -134,6 +134,7 @@ def record(
         return body
     except Exception as unwritten:  # noqa: BLE001 - the record never changes how the run ends
         logger.info("failure record not written: %s", type(unwritten).__name__)
+        logger.debug("the failure in full", exc_info=True)
         return None
 
 
