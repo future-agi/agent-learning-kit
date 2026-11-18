@@ -779,6 +779,57 @@ def test_a_dependency_the_build_installs_beyond_the_pyproject_keeps_todays_route
     todays_route(manifest, output, body)
 
 
+@pytest.mark.parametrize(
+    "extra",
+    [
+        pytest.param(
+            {
+                f"{DEEP}/pyproject.toml": "[build-system]\nrequires=['poetry-core']\n"
+                "build-backend='poetry.core.masonry.api'\n"
+                "[tool.poetry]\nname='x'\nversion='1'\n"
+                "[tool.poetry.dependencies]\npython='^3.12'\nlanggraph='*'\nlanggraph-cli='*'\n",
+            },
+            id="poetry-core-without-a-lock",
+        ),
+        pytest.param(
+            {
+                f"{DEEP}/pyproject.toml": "[build-system]\nrequires=['setuptools']\n"
+                "build-backend='setuptools.build_meta'\n",
+                f"{DEEP}/setup.cfg": "[metadata]\nname = x\n[options]\n"
+                "install_requires =\n    langgraph\n    langgraph-cli[inmem]\n",
+            },
+            id="setuptools-setup-cfg",
+        ),
+        pytest.param(
+            {
+                f"{DEEP}/pyproject.toml": "[project]\nname='x'\nversion='1'\n"
+                "dynamic=['dependencies']\n",
+            },
+            id="dynamic-dependencies",
+        ),
+    ],
+)
+def test_a_pip_project_install_the_pyproject_does_not_declare_keeps_todays_route(tmp_path, extra):
+    source = deep_source(tmp_path, requirements=None, extra=extra)
+    root, run_folder, runtime = _scoped(source)
+    parsed = bundle_author_v2.Runtime.model_validate(runtime)
+    component = bundle_author_v2._runtime_component(root, parsed.workdir)
+    assert bundle_author_v2._install_strategy(component, parsed) == "pip-project"
+    assert not bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
+    body = deep_reading()
+    manifest, output = bundled(tmp_path, source, DEEP, contract=body)
+    todays_route(manifest, output, body)
+
+
+def test_a_pip_project_install_with_static_dependencies_still_takes_the_graph_route(tmp_path):
+    source = deep_source(tmp_path, requirements=None, extra={f"{DEEP}/pyproject.toml": PROJECT})
+    root, run_folder, runtime = _scoped(source)
+    parsed = bundle_author_v2.Runtime.model_validate(runtime)
+    component = bundle_author_v2._runtime_component(root, parsed.workdir)
+    assert bundle_author_v2._install_strategy(component, parsed) == "pip-project"
+    assert bundle_author_v2._langgraph_command_cannot_run(root, run_folder, runtime)
+
+
 def test_a_requirements_txt_beside_a_pyproject_without_the_cli_still_takes_the_graph_route(tmp_path):
     source = deep_source(tmp_path, extra={f"{DEEP}/pyproject.toml": PROJECT})
     root, run_folder, runtime = _scoped(source)

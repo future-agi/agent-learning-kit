@@ -2031,6 +2031,13 @@ def _langgraph_command_cannot_run(
             # The build installs from a poetry project or a `setup.py`, which are not read here;
             # an install strategy the build can't pick at all is a doubt too.
             return False
+        if strategy == "pip-project":
+            # `pip install .` installs whatever the build backend declares. Only a `[project]`
+            # table with static `dependencies` is read here; a poetry-core or setuptools
+            # (`setup.cfg`) pyproject, or `dynamic = ["dependencies"]`, may install the CLI unseen.
+            project = pyproject.get("project")
+            if not isinstance(project, dict) or "dependencies" in (project.get("dynamic") or []):
+                return False
         path = run_folder / "langgraph.json"
         if not path.is_file() or path.stat().st_size > _LANGGRAPH_JSON_LARGEST:
             return False
