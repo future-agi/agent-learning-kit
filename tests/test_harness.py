@@ -35,6 +35,11 @@ from fi.alk.harness import (
 )
 
 
+def _tool_error(result) -> bool:
+    """An MCP tool result's error flag: `isError` before mcp 2, `is_error` after."""
+    return bool(getattr(result, "is_error", getattr(result, "isError", False)))
+
+
 def _contract(**overrides) -> AgentContract:
     payload = {
         "agent": "drive_thru",
@@ -4685,16 +4690,20 @@ def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
     assert denied != {}
 
 
-def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path):
+def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path, monkeypatch):
     from fi.alk.harness.backends import ConversationSession, SessionSpec
     from fi.alk.harness.backends.claude import ClaudeBackend
 
+    # The kit refuses to spend on a Claude model, so the session runs a Gemini model through
+    # the gateway, as a hosted run does.
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://gateway.futureagi.test")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "internal-key")
     transcript_store = object()
     spec = SessionSpec(
         system_prompt="hosted",
         builtins=("Read", "AskUserQuestion"),
         cwd=str(tmp_path),
-        model="claude-sonnet-4-6",
+        model="vertex_ai/gemini-3.7-flash",
         conversation=ConversationSession(
             app_name="alk-harness",
             user_id="conversation-user",
@@ -4711,7 +4720,6 @@ def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path
 
     assert options.tools == ["Read", "AskUserQuestion"]
     assert options.strict_mcp_config is True
-    assert "AskUserQuestion" not in options.allowed_tools
     assert options.setting_sources == []
     assert options.include_partial_messages is True
     assert options.resume == "provider-session-id"
@@ -4743,6 +4751,54 @@ def test_claude_backend_routes_gemini_through_agentcc(monkeypatch):
     assert options.env["ANTHROPIC_MODEL"] == model
     assert options.env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "1"
 
+
+def test_gateway_mode_switches_off_every_other_claude_provider_route(monkeypatch):
+    from fi.alk.harness.config import provider_env
+
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://gateway.futureagi.test")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "internal-key")
+
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+
+    # Set in the process around the kit, any of these would send the CLI somewhere else.
+    for name in (
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "ANTHROPIC_UNIX_SOCKET",
+    ):
+        assert env[name] == "", name
+
+
+
+@pytest.mark.parametrize("mode", ["vertex", "agentcc"])
+def test_every_mode_switches_off_the_claude_routes_it_does_not_use(monkeypatch, mode):
+    from fi.alk.harness.config import provider_env
+
+    for name in ("ALK_CLAUDE_GATEWAY_URL", "ALK_CLAUDE_GATEWAY_API_KEY", "AGENTCC_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    if mode == "agentcc":
+        monkeypatch.setenv("AGENTCC_API_KEY", "sk-agentcc-test")
+        monkeypatch.setenv("AGENTCC_BASE_URL", "https://gateway.example.test/")
+
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+
+    # Set in the process around the kit, any of these would send the CLI somewhere else.
+    assert env["CLAUDE_CODE_USE_VERTEX"] == ("1" if mode == "vertex" else "0")
+    for name in (
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "ANTHROPIC_UNIX_SOCKET",
+    ):
+        assert env.get(name) == "", name
 
 def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
     from fi.alk.harness.build import environment_turns_for, turns_for
@@ -4922,23 +4978,65 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.contract import AgentContract, ToolSpec
     from fi.alk.harness.scenario import Persona, Scenario, Step
 
+    import typing
+
     from pydantic import BaseModel
+
+    def nested_fields(model: type[BaseModel], seen: set) -> set[str]:
+        # The contract's own sections (runtime.interface.local_auth and so on) are models too,
+        # and a skill names their fields as well.
+        if model in seen:
+            return set()
+        seen.add(model)
+        names = set(model.model_fields)
+        for field in model.model_fields.values():
+            stack = [field.annotation]
+            while stack:
+                annotation = stack.pop()
+                if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+                    names |= nested_fields(annotation, seen)
+                stack.extend(typing.get_args(annotation))
+        return names
+
+    def fields_of(*models: type[BaseModel]) -> set[str]:
+        seen: set = set()
+        names: set[str] = set()
+        for model in models:
+            names |= nested_fields(model, seen)
+        return names
 
     from fi.alk.harness import actors as actors_module
     from fi.alk.harness import contract as contract_module
-    from fi.alk.harness.catalogue import CONTRACT_SCHEMA
-    from fi.alk.harness.understand import READER
 
-    fields = {READER, *CONTRACT_SCHEMA["verifier"]["enum"]}
-    # Every model the contract and the actors are built from: the stages fill their fields too.
+    # Every model the contract and the actors are built from: each stage fills their fields too.
     contract_models = [
         one
         for module in (contract_module, actors_module)
         for one in vars(module).values()
         if isinstance(one, type) and issubclass(one, BaseModel)
     ]
-    for model in (AgentContract, ToolSpec, Scenario, Persona, Step, SubGoal, *contract_models):
-        fields |= set(model.model_fields)
+    # Each skill may name the fields of the models it writes, and no others.
+    stage_fields = {
+        "understand-agent": fields_of(AgentContract, ToolSpec, *contract_models),
+        "build-environment": fields_of(
+            AgentContract, ToolSpec, SubGoal, Scenario, Step, *contract_models
+        ),
+        "write-scenarios": fields_of(Scenario, Persona, Step, SubGoal, ToolSpec, *contract_models),
+        "run-scenarios": fields_of(Scenario, Persona, Step, SubGoal, ToolSpec, *contract_models),
+    }
+    # The sub-agent a stage briefs is named by its own constant.
+    from fi.alk.harness.simulator_voice import _CALLER_PHONE_KEYS
+    from fi.alk.harness.understand import READER
+
+    # And the values a sub-goal's fields offer, as the catalogue's schema lists them.
+    from fi.alk.harness.catalogue import CONTRACT_SCHEMA
+
+    offered = {
+        value
+        for spec in CONTRACT_SCHEMA.values()
+        if isinstance(spec, dict)
+        for value in spec.get("enum", ())
+    }
     # Names from the check-writing examples the skills contain.
     from fi.alk.harness.contract import CALL_DIRECTIONS, MODALITIES
     from fi.alk.harness.scenario import CALLER_AWARENESS, FIXTURE_ORIGINS
@@ -4952,7 +5050,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.scenario import _AXIS_LABELS, _LEVEL_LABELS
 
     ignore = (
-        fields
+        offered
         | set(MODALITIES)
         | set(CALL_DIRECTIONS)
         | set(CALLER_AWARENESS)
@@ -4965,6 +5063,12 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         | {"origin", "matching"}
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
         | {"book_ride", "cancel_ride", "verify_otp", "bookings"}
+        # The scenario skill's illustrations: tools of an imagined agent, a task named from a
+        # use case, and two field names in a PII example.
+        | {"create_booking", "cancel_booking", "verify_code"}
+        | {"cancel_subscription", "reset_password"}
+        | {"company", "pan"}
+        | set(_CALLER_PHONE_KEYS)
         | {"social_engineering_resisted", "true", "or"}
     )
 
@@ -4978,8 +5082,8 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         mentioned = set(re.findall(r"`([a-z_][a-z0-9_]*)\(?`", text))
         unknown = {
             name
-            for name in mentioned - tools - ignore
-            if name not in {"route_to_stage", "AskUserQuestion"}
+            for name in mentioned - tools - ignore - stage_fields[stage]
+            if name not in {"route_to_stage", "AskUserQuestion", READER}
         }
         assert not unknown, (
             f"{stage}/SKILL.md names tools that do not exist: {sorted(unknown)}"
@@ -6504,8 +6608,8 @@ def test_connect_only_provider_world_cannot_create_shadow_state(tmp_path):
     seed_result = asyncio.run(
         call("seed", {"table": "appointments", "rows": [{"id": "fake"}]})
     )
-    assert schema_result.isError
-    assert seed_result.isError
+    assert _tool_error(schema_result)
+    assert _tool_error(seed_result)
     assert world.state() == {}
     assert world.handlers == {}
     assert world.runtime_tools == {"book_appointment"}
@@ -8919,7 +9023,7 @@ def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(
         answer = await handler.handler(
             None, CallToolRequestParams(name="save_scenarios", arguments={})
         )
-        return answer.isError, answer.content[0].text
+        return _tool_error(answer), answer.content[0].text
 
     first, second = (asyncio.run(save()) for _ in range(2))
     assert first[0] and "one pass, not a rewrite" in first[1]
@@ -9032,7 +9136,7 @@ def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
         answer = await handler.handler(
             None, CallToolRequestParams(name="drop_scenario", arguments=arguments)
         )
-        return answer.isError, answer.content[0].text
+        return _tool_error(answer), answer.content[0].text
 
     refused = asyncio.run(drop({"name": "*"}))
     by_name = asyncio.run(drop({"name": saved[0].name}))

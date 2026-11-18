@@ -342,19 +342,93 @@ def _run_one_turn(root_agent) -> list:
     return reached
 
 
-@pytest.mark.parametrize("base_url", [None, "", "   "])
-def test_a_key_set_after_import_is_refused_at_the_first_model_call(
-    load_example, monkeypatch, base_url
-) -> None:
+def _tool_turns(root_agent, turns: list[tuple[str, str, dict]]) -> list[str]:
+    """Run each (session, tool, arguments) as one turn through ADK's own runner, on its own
+    session, with a model that calls that tool once; return what each call answered."""
+    import asyncio
+
+    from google.adk.models.base_llm import BaseLlm
+    from google.adk.models.llm_response import LlmResponse
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types
+
+    plan: list[tuple[str, dict]] = []
+
+    class Scripted(BaseLlm):
+        async def generate_content_async(self, llm_request, stream=False):
+            last = llm_request.contents[-1].parts or []
+            if any(part.function_response for part in last):
+                yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="ok")]))
+                return
+            name, arguments = plan[-1]
+            call = types.FunctionCall(name=name, args=arguments)
+            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(function_call=call)]))
+
+    answers: list[str] = []
+
+    async def main() -> None:
+        root_agent.model = Scripted(model="scripted")
+        sessions = InMemorySessionService()
+        runner = Runner(app_name=APP, agent=root_agent, session_service=sessions)
+        opened = {}
+        for session_name, tool_name, arguments in turns:
+            if session_name not in opened:
+                opened[session_name] = await sessions.create_session(
+                    app_name=APP, user_id="customer"
+                )
+            plan.append((tool_name, arguments))
+            message = types.Content(role="user", parts=[types.Part(text="go")])
+            async for event in runner.run_async(
+                user_id="customer", session_id=opened[session_name].id, new_message=message
+            ):
+                for part in (event.content.parts if event.content else None) or []:
+                    if part.function_response:
+                        answers.append(str(part.function_response.response.get("result")))
+        await runner.close()
+
+    asyncio.run(main())
+    return answers
+
+
+def test_each_conversation_has_its_own_orders(load_example) -> None:
     agent = load_example()
-    monkeypatch.setenv("OPENAI_API_KEY", "secret-canary-key")
-    if base_url is not None:
-        monkeypatch.setenv("OPENAI_BASE_URL", base_url)
 
-    with pytest.raises(RuntimeError, match="OPENAI_BASE_URL") as refused:
-        _run_one_turn(agent.root_agent)
+    # Interleaved: a return started in one session is not seen by the other.
+    answers = _tool_turns(
+        agent.root_agent,
+        [
+            ("one", START_RETURN, {"order_id": "A1001", "reason": "too small"}),
+            ("two", LOOK_UP_ORDER, {"order_id": "A1001"}),
+            ("one", LOOK_UP_ORDER, {"order_id": "A1001"}),
+        ],
+    )
 
-    assert "secret-canary-key" not in str(refused.value)
+    assert answers[0].startswith("Return started")
+    assert answers[1].endswith("return: none.")
+    assert answers[2].endswith("return: too small.")
+
+
+def test_a_key_set_after_import_is_refused_at_the_first_model_call(
+    load_example, monkeypatch
+) -> None:
+    def load_then_set(**environment):
+        # Imported with nothing set; the key arrives afterwards.
+        agent = load_example()
+        for name, value in environment.items():
+            monkeypatch.setenv(name, value)
+        return agent
+
+    assert_refuses_key_without_base_url(
+        load_then_set, lambda agent: _run_one_turn(agent.root_agent), monkeypatch
+    )
+
+
+def test_the_model_gets_the_key_and_base_url_stripped(load_example) -> None:
+    agent = load_example(OPENAI_BASE_URL="  http://one.test/v1  ", OPENAI_API_KEY="  one  ")
+
+    assert agent.root_agent.model._additional_args["api_base"] == "http://one.test/v1"
+    assert agent.root_agent.model._additional_args["api_key"] == "one"
 
 
 def test_a_model_call_with_a_url_set_at_call_time_goes_through(
@@ -428,4 +502,5 @@ def test_example_ignores_adks_session_store_and_documents_the_start() -> None:
     assert "adk web --port 8080 ." in readme
     for name in ENVIRONMENT:
         assert name in readme
-    assert "OPENAI_API_BASE alone isn't read" in readme
+    assert "The check reads `OPENAI_BASE_URL` only" in readme
+    assert "A blank value counts as unset" in readme
