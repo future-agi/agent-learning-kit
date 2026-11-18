@@ -16,6 +16,9 @@ class JudgeVerdict(TypedDict):
 class _PlayedControl(TypedDict):
     name: str
     why: str
+    # Whether every step of the control ran: False when it was not played, or a step was assumed (recorded unrun).
+    ran: bool
+    # True or False only for a control that ran; None otherwise, never evidence either way.
     failed: bool | None
     held: list[str]
     assumed: list[str]

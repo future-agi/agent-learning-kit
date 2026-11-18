@@ -187,7 +187,7 @@ async def prove_live(
                     outcomes = await asyncio.to_thread(_outcomes, scenario, catalogue, world, control_calls)
                 except Exception as exc:  # noqa: BLE001 - a control that cannot be played is no evidence, the case still is
                     controls.append(
-                        {"name": control.name, "why": control.why, "failed": None, "held": [], "assumed": [],
+                        {"name": control.name, "why": control.why, "ran": False, "failed": None, "held": [], "assumed": [],
                          "error": redact_outbound_text(f"{type(exc).__name__}: {exc}")[:300]}
                     )
                     continue

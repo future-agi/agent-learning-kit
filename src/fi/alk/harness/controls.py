@@ -33,7 +33,9 @@ def play_controls(
     played: list[ControlResult] = []
     for control in getattr(scenario, "negative_controls", None) or []:
         if not checks:
-            played.append({"name": control.name, "why": control.why, "failed": None, "held": [], "assumed": []})
+            played.append(
+                {"name": control.name, "why": control.why, "ran": False, "failed": None, "held": [], "assumed": []}
+            )
             continue
         world, calls, _refused, assumed = run(scenario, world_root, with_solution=True, steps=control.steps)
         try:
@@ -46,12 +48,16 @@ def play_controls(
 
 def played_control(control: NegativeControl, outcomes: Sequence[Outcome], assumed: list[str]) -> ControlResult:
     """A control as played: it fails when a check it names (every check when it names none) fails. A check that raised
-    under it is broken, not failing: no evidence. With no outcomes it was not played."""
+    under it is broken, not failing: no evidence. With no outcomes it was not played, and with a step assumed (recorded
+    unrun, no call made) it did not run as written: a check failing then shows nothing about the wrong behaviour, so
+    neither reads failed."""
     named = set(control.must_fail) or {one.name for one in outcomes}
+    ran = bool(outcomes) and not assumed
     return {
         "name": control.name,
         "why": control.why,
-        "failed": any(not one.held and not one.broken for one in outcomes if one.name in named) if outcomes else None,
+        "ran": ran,
+        "failed": any(not one.held and not one.broken for one in outcomes if one.name in named) if ran else None,
         "held": [one.name for one in outcomes if one.held],
         "broken": [one.name for one in outcomes if one.broken and one.name in named],
         "assumed": assumed,
@@ -90,6 +96,7 @@ def play_judged_controls(
         entry: ControlResult = {
             "name": control.name,
             "why": control.why,
+            "ran": False,
             "failed": None,
             "held": [],
             "assumed": [],
@@ -114,6 +121,8 @@ def play_judged_controls(
         finally:
             world.close()
         verdicts = [one["verdict"] for one in entry["verdicts"].values()]
+        # Judged on its transcript: it ran when the judge decided at least one sub-goal.
+        entry["ran"] = any(one != "inconclusive" for one in verdicts)
         entry["held"] = [name for name, one in entry["verdicts"].items() if one["verdict"] == "pass"]
         if "fail" in verdicts:
             entry["failed"] = True

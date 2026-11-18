@@ -454,3 +454,60 @@ def test_forgetting_live_results_keeps_the_other_cases(tmp_path):
     live_proof.forget_live(tmp_path, None)
     assert live_proof.load_live(tmp_path) == {}
     live_proof.forget_live(tmp_path / "absent", None)
+
+
+# A support desk whose tools its own `tools-api` service serves, as its sealed contract records them: each tool's route
+# is on its entrypoint (`endpoint`), never on the tool itself.
+_SERVICE_DESK = {
+    "agent": "support",
+    "tools": [{"name": name, "args": ["order_id"]} for name in ("get_order", "list_refunds", "issue_refund")]
+    + [{"name": "summarise", "args": []}, {"name": "build_reply", "args": []}, {"name": "search_kb", "args": []}],
+    "tool_entrypoints": [
+        {"tool": "get_order", "mode": "service", "service": "tools-api", "endpoint": "orders/get", "method": "POST",
+         "module": "ledger", "callable": "_order"},
+        {"tool": "list_refunds", "mode": "service", "service": "tools-api", "endpoint": "/refunds/list/"},
+        {"tool": "issue_refund", "mode": "service", "service": "tools-api", "endpoint": "refunds/issue"},
+        {"tool": "summarise", "mode": "import", "module": "agent", "callable": "summarise"},
+        {"tool": "build_reply", "mode": "construct", "module": "agent", "callable": "reply", "factory": "Agent()"},
+    ],
+}
+
+
+def test_every_entrypoint_mode_reads_its_route_from_the_sealed_contract():
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract.model_validate(_SERVICE_DESK)
+    endpoints = {"tool_proxy": "http://proxy", "mcp_toolbox": "http://toolbox"}
+
+    bound = live_proof.service_endpoints(contract, endpoints, {"search_kb", "summarise"})
+
+    # Service tools play on their entrypoint's route behind the proxy; a tool the toolbox serves plays there; tools in
+    # the agent's own process (import, construct) have no seam outside it and stay unbound.
+    assert bound == {
+        "get_order": "orders/get",
+        "list_refunds": "refunds/list",
+        "issue_refund": "refunds/issue",
+        "search_kb": "mcp:search_kb",
+    }
+    world = SimpleNamespace(runtime_tools=set(), endpoint_for={})
+    world.runtime_tools, world.endpoint_for = set(contract.tool_names()) | set(bound), dict(bound)
+    assert [name for name in sorted(contract.tool_names()) if module.executes(world, name)] == [
+        "get_order", "issue_refund", "list_refunds", "search_kb",
+    ]
+
+
+def test_a_control_whose_steps_never_ran_is_not_read_as_failed():
+    from fi.alk.harness.checks import Outcome
+    from fi.alk.harness.controls import played_control
+
+    wrong = control("wrong_order", "looks up the wrong order", [LOOKUP_O10])
+    failing = [Outcome("looked_up", False, "no lookup call")]
+
+    unrun = played_control(wrong, failing, ["lookup_order"])
+    assert unrun["ran"] is False and unrun["failed"] is None
+
+    ran = played_control(wrong, failing, [])
+    assert ran["ran"] is True and ran["failed"] is True
+
+    proof = Proof(controls=[unrun])
+    assert proof.ran_controls == [] and proof.controls_failed is False and proof.proved is False
