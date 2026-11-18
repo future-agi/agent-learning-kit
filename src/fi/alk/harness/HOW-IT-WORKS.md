@@ -65,7 +65,7 @@ calls `submit_contract`.
 
 | Field | Why it matters |
 |---|---|
-| `tools[]` — name, `args`, `arg_types`, `arg_values`, description | The agent's action space. `arg_values` are the real permitted values — the menu, the enum, the lookup |
+| `tools[]` — name, `args`, `arg_types`, `arg_values`, `arg_units`, description | The agent's action space. `arg_values` are the real permitted values — the menu, the enum, the lookup |
 | `hard_constraints[]` | Rules the agent must follow. Told to the agent under test, and graded by the judge |
 | `base_environment` | Its real starting data, reproduced row for row |
 | `real_use_cases[]` | What it is actually for |
@@ -80,10 +80,11 @@ conversation**, so the model corrects and resubmits rather than a bad contract l
 
 A browser reading gets one second look first, naming any browser, crawling or
 computer-use tool the code check found in the source. So does a chat or voice reading of source
-where the check found one. The next submission stands: a browser answer is refused to
+where the check found one, or where the check stopped before reading all of it. The next
+submission stands: a browser answer is refused to
 `failure.json` and the build exits 78, and a chat or voice answer is saved. The look gives a value
 to send back, which only tells apart calls in one model message: those run before the model reads
-any result. The rule and its state are `SecondLook` in `agent_type_check.py`. A browser answer to a chat or voice look is refused at once, since that look said browser stops the build. When calls in one message run one after another, or together once the first scan is done, a later call is taken as the answer before the model has read the look.
+any result. The rule and its state are `SecondLook` in `agent_type_check.py`. A browser answer to a chat or voice look is refused at once, since that look said browser stops the build. When calls in one message run one after another, or together once the first scan is done, a later call is taken as the answer before the model has read the look. Once an answer with the value has come back, a later browser answer without it gets a look again, so answers that keep switching cost turns, up to the reading's turn limit (70, or 140 for a generic job read unattended), never a refusal without a look.
 
 **How it is changed later** (`amend.py`). The contract is not frozen, but every change is
 recorded with a reason in `amendments[]`, so months later you can still tell what came from the
@@ -267,6 +268,28 @@ This is what the environment was built for. The previous run's known issues — 
 always succeed, including removing an item that was never added"*, *"mock responses do not vary by
 argument"*, *"world state does not change unless a scenario sets `state_updates`"* — are all the
 same defect, and a world that really holds rows and can really refuse answers all three.
+
+### Worker events
+
+Every row of a call's sealed tool trace carries `worker_events`: what the row means for the app's
+workers, in one shape whatever the framework (`world/runtime.py::worker_events`). A row gives one
+event, or two for a hand-off whose worker came back.
+
+| Field | Meaning |
+|---|---|
+| `type` | `tool_call`, `delegated` (work handed to a worker), `transferred` (control passed; nothing returns) or `returned` |
+| `id` | The event's id; a `returned` event shares its hand-off's id |
+| `worker_id` | The worker that made the tool call, or the worker handed the work: the contract's worker id when the name the framework gives it matches a declared worker's `name`, else that name; `null` when the runtime did not say |
+| `worker_name` | The name the runtime gave that worker, as it gave it |
+| `by`, `by_name` | Hand-offs and returns only: the worker that handed the work over, as `worker_id` and `worker_name` |
+| `parent_id` | The `id` of the hand-off this event ran in; empty at the top level or when unknown |
+| `relationship` | `observed` when the runtime's record links the event to `parent_id`, otherwise `unknown` |
+| `tool` | The tool call's name, or the name of the call that made the hand-off |
+| `at` | When it started (a `returned` event: when the worker came back), seconds since the epoch |
+| `ended_at`, `status` | Tool calls: when the call ended (`null` if unknown) and `ok`, `error` or `refused`; `returned` events carry `status` too |
+
+A hand-off still out when the call ended has no `returned` event. Runs sealed before this field
+existed do not have it.
 
 ---
 

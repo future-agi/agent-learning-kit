@@ -21,6 +21,7 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
+from .job import routed_through_gateway
 from .process_preflight import preflight_bundle
 from .runtime_selection import ComposeSelection, select_runtime
 
@@ -30,6 +31,19 @@ def enabled() -> bool:
         os.environ.get("ALK_COMPOSE_BROKER_SOCKET")
         or os.environ.get("ALK_TRUSTED_COMPOSE_SOCKET")
     )
+
+
+def _disable_agents_sdk_tracing(service: dict) -> None:
+    environment = service.get("environment")
+    if isinstance(environment, dict):
+        environment["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
+        return
+    kept = [
+        item
+        for item in environment or []
+        if not (isinstance(item, str) and item.partition("=")[0] == "OPENAI_AGENTS_DISABLE_TRACING")
+    ]
+    service["environment"] = [*kept, "OPENAI_AGENTS_DISABLE_TRACING=1"]
 
 
 def runtime_capability_briefing() -> str:
@@ -129,13 +143,16 @@ def validate_source(
 
 def compile_bundle(*, source, job, authoring, output, contract, include_scenarios=True):
     from .bundle_author_v2 import (
+        EnvironmentPlanV2,
         _copy_scenarios,
         _copy_sub_goal_catalogue,
         _copy_chat_authoring,
         _compile_source_tool_handlers,
         _files,
+        door_outcome,
         source_fingerprint,
     )
+    from .world_door import DOOR_FILE
 
     runtime = contract.get("runtime") or {}
     from .contract import (
@@ -185,6 +202,9 @@ def compile_bundle(*, source, job, authoring, output, contract, include_scenario
         }
     if directories:
         document["x-alk-directories"] = directories
+    if routed_through_gateway(job.agent.config.get("target_model")):
+        # The Agents SDK's own trace export would send the gateway key to OpenAI.
+        _disable_agents_sdk_tracing(document["services"][selection.control_service])
     base = selection.compose_file.parent
 
     from .contract import RuntimeSecretFile
@@ -252,6 +272,17 @@ def compile_bundle(*, source, job, authoring, output, contract, include_scenario
             _copy_sub_goal_catalogue(authoring, temporary)
         _copy_chat_authoring(authoring, temporary, include_simulator=include_scenarios)
         _compile_source_tool_handlers(contract, temporary)
+        # A compose build runs no door of the world's in front of the agent's tools: sealed as a native build seals it.
+        no_door = EnvironmentPlanV2(packaging="compose", control_service=None, processes=(), capabilities={}, readiness=())
+        (temporary / DOOR_FILE).write_text(
+            json.dumps(door_outcome(no_door, contract), sort_keys=True) + "\n", encoding="utf-8"
+        )
+        if include_scenarios:
+            from .call_runner import write_worker_limits
+
+            # Sealed as on a native build, after door.json, so the platform reads each worker's flag and what each
+            # scenario relies on.
+            write_worker_limits(temporary)
         (temporary / "compose.json").write_text(json.dumps(document, indent=2))
         manifest = EnvironmentBundleV2(
             schema_version=BUNDLE_V2_SCHEMA_VERSION,

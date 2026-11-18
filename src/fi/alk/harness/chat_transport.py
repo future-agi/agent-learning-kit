@@ -15,6 +15,7 @@ def create_chat_wrapper(
     metadata=None,
     wrapper_type=HTTPAgentWrapper,
     total_timeout=None,
+    headers=None,
 ):
     setup_secrets = dict(interface.setup_secrets)
     if interface.local_auth:
@@ -36,6 +37,7 @@ def create_chat_wrapper(
         include_tools=interface.include_tools,
         request_template=interface.request_template,
         response_path=interface.response_path,
+        sse=interface.sse.model_dump(mode="python") if interface.sse else None,
         setup_requests=[
             item.model_dump(mode="python") for item in interface.setup_requests
         ],
@@ -57,6 +59,8 @@ def create_chat_wrapper(
             if interface.completed_tool_events
             else None,
         )
+        if headers:
+            options["headers"] = dict(headers)
         if interface.local_auth:
             options["private_response_values"] = local_auth_values
         if total_timeout is not None:

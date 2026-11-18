@@ -11,19 +11,27 @@ rather than a bad contract reaching disk.
 
 from __future__ import annotations
 
+import collections.abc
 import json
+import logging
+import os
 import re
 import shlex
+import threading
+import typing
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from fi.simulate.agent.wrappers.http_events import (
     CompletedToolEvents,
     CompletedToolRows,
 )
+from fi.simulate.agent.wrappers.http_stream import HTTPStreamSpec
 
+from ..providers.agent import _redact
 from .observations import HttpObservation
 
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
@@ -127,6 +135,12 @@ class ToolSpec(BaseModel):
     def _normalize_args(cls, payload: Any) -> Any:
         if not isinstance(payload, dict):
             return payload
+        if isinstance(payload.get("returns"), list):
+            payload["returns"] = {str(one): "" for one in payload["returns"]}
+        if isinstance(payload.get("returns"), dict):
+            payload["returns"] = {str(k): str(v) for k, v in payload["returns"].items()}
+        elif "returns" in payload:
+            payload.pop("returns")
         if not payload.get("args"):
             for alias in ("parameters", "arguments", "params", "arg_names"):
                 value = payload.get(alias)
@@ -158,6 +172,14 @@ class ToolSpec(BaseModel):
     args: list[str] = Field(default_factory=list)
     arg_types: dict[str, str] = Field(default_factory=dict)
     arg_values: dict[str, Any] = Field(default_factory=dict)
+    # The unit or format a field is written in, where the name alone does not say: `timeout` -> "milliseconds".
+    arg_units: dict[str, str] = Field(default_factory=dict)
+    # What the tool hands back, by output field: its type and, where the name does not say it, its unit or format.
+    returns: dict[str, str] = Field(default_factory=dict)
+    # The world's tables the tool reads, and the ones it adds to, changes or deletes from, declared from its code.
+    # Empty means not recorded.
+    tables_read: list[str] = Field(default_factory=list)
+    tables_changed: list[str] = Field(default_factory=list)
     description: str = ""
     # Tools that must have run before this one stops refusing, and only for state the agent builds
     # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
@@ -196,7 +218,17 @@ class ToolEntry(BaseModel):
     service: str = ""
     endpoint: str = ""
     method: str = "POST"
+    # `read` when the tool only reads (a lookup, a search, a list), `write` when it changes anything. Empty reads the
+    # HTTP method: GET, HEAD and OPTIONS read, everything else counts as a write.
+    effect: str = ""
+    # Set at seal time when the world's door is bound to this tool but cannot stand in front of it (why, in words);
+    # empty when it can. The platform reads it so a fault or acting actor on the tool is held back, not run.
+    door_unreached: str = ""
     notes: str = ""
+
+
+# What a separate worker's id may hold: it names the worker's channel placeholder (`WORKER_CHANNEL_<id>`).
+_CHANNEL_WORKER_ID = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 class DeclaredWorker(BaseModel):
@@ -210,6 +242,14 @@ class DeclaredWorker(BaseModel):
     name: str = ""
     # The contract tools this worker holds, by name.
     tools: list[str] = Field(default_factory=list)
+    # The ones it may use, when that is narrower than what its code holds; empty means all of `tools`.
+    allowed_tools: list[str] = Field(default_factory=list)
+    # separate: its calls reach the world on its own channel (attributed, not isolated); shared: told apart from none.
+    binding: Literal["separate", "shared"] = "shared"
+    # For a separate worker, the environment variable its tool client reads as the base address of its tools.
+    address_env: str = ""
+    # The process that serves this worker alone, which the harness ends past its deadline; empty inside the app's one.
+    process: str = ""
 
 
 class PromptSource(BaseModel):
@@ -218,6 +258,21 @@ class PromptSource(BaseModel):
     path: str
     start_line: int
     end_line: int
+
+
+class ModelSource(BaseModel):
+    """The model the agent talks to the person with, and the line its name is written on."""
+
+    provider: str = ""
+    name: str = ""
+    path: str = ""
+    line: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bare_name(cls, value: Any) -> Any:
+        # A bare string is the name alone; the save then asks for path and line.
+        return {"name": value} if isinstance(value, str) else value
 
 
 class DataStore(BaseModel):
@@ -264,6 +319,8 @@ class DataStore(BaseModel):
     schema_from: str = ""
     loaded_by: str = ""
     loader_module: str = ""
+    # When the loader runs: "start" (once, as the agent starts) or "each_call"; empty when unknown.
+    loads: str = ""
 
     def has_seam(self) -> bool:
         """Whether there is any way to point this agent at our store.
@@ -483,6 +540,12 @@ class RuntimeInterface(BaseModel):
         "list-index segments selecting assistant text. Negative indexes are supported, "
         "e.g. output.-1.content.0.text. Bracket indexing and JSONPath expressions are not supported.",
     )
+    sse: HTTPStreamSpec | None = Field(
+        default=None,
+        description="Live JSON server-sent events for this source endpoint. Declare explicit "
+        "completion and optional failure predicates; EOF alone never completes a turn. Paths "
+        "select from {event, data, id}, and text rules assemble delta, cumulative, or final text.",
+    )
     headers_template: dict[str, str] = Field(
         default_factory=dict,
         description="Chat headers rendered after setup completes, using setup captures or local "
@@ -616,6 +679,8 @@ class RuntimeInterface(BaseModel):
                 )
             if self.protocol == "json_template" and self.request_template is None:
                 raise ValueError("runtime_json_template_requires_request_template")
+            if self.sse is not None and self.protocol != "json_template":
+                raise ValueError("runtime_sse_requires_json_template")
             available = set(_RUNTIME_TEMPLATE_INPUTS)
             if self.local_auth:
                 available.add(self.local_auth.template_variable)
@@ -658,6 +723,8 @@ class RuntimeInterface(BaseModel):
                 )
         if self.kind == "websocket" and self.protocol != "fi.alk":
             raise ValueError("runtime_websocket_protocol_unsupported: expected fi.alk")
+        if self.sse is not None and self.kind != "http":
+            raise ValueError("runtime_sse_requires_http")
         return self
 
 
@@ -835,6 +902,30 @@ class Runtime(BaseModel):
     # prompt. Empty is valid for voice/browser agents and for contracts that are not backed by a
     # repository.
     interface: RuntimeInterface | None = None
+
+    # The folder of the repository this agent lives in. The harness records it when the
+    # contract is saved, so it is kept out of the schema the model writes against and out of
+    # the dump when empty.
+    source_subfolder: SkipJsonSchema[str] = ""
+
+    @field_validator("source_subfolder")
+    @classmethod
+    def _folder_inside_the_source(cls, folder: str) -> str:
+        # Checked at the save, and again by its spelling when a bundle's contract is loaded: the
+        # run puts this folder on the import path, so it is never absolute or climbs with `..`.
+        # A folder that is a link out of the source is caught at the save (`agent_folder`).
+        if folder and (
+            folder.startswith("/") or any(part in ("", ".", "..") for part in folder.split("/"))
+        ):
+            raise ValueError("runtime_source_subfolder_invalid")
+        return folder
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_subfolder(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if not data.get("source_subfolder"):
+            data.pop("source_subfolder", None)
+        return data
 
     @model_validator(mode="after")
     def _validate_selection(self) -> "Runtime":
@@ -1069,6 +1160,20 @@ def _reached(one: Dependency) -> str:
     return "; ".join(said)
 
 
+def prompt_quote(payload: Any) -> str:
+    """The quote of the prompt as AgentContract reads it from a payload: under its own name or
+    the first alias that has one, a list joined by lines. The save holds it before validating."""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("system_prompt_excerpt", *_ALIASES["system_prompt_excerpt"]):
+        value = payload.get(key)
+        if value:
+            if isinstance(value, list):
+                return "\n".join(str(item) for item in value)
+            return value if isinstance(value, str) else str(value)
+    return ""
+
+
 class AgentContract(BaseModel):
     """What the agent verifiably is. Nothing downstream may contradict this."""
 
@@ -1127,6 +1232,12 @@ class AgentContract(BaseModel):
     system_prompt_excerpt: str = ""
     # When given, the excerpt is replaced by these lines copied from the source as written.
     system_prompt_from: list[PromptSource] = Field(default_factory=list)
+    # Set by the save, never by the reading: lines named for the prompt that twice didn't hold
+    # the quote given for it. The quote went out instead, or, when the quote was too short to
+    # stand for the prompt, the lines did, unconfirmed. Empty for nearly every contract.
+    unconfirmed_prompt_from: list[PromptSource] = Field(default_factory=list)
+    # None is unknown. Kept only when its name was found on the line cited in the source.
+    model: ModelSource | None = None
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
     # Empty for an agent that hands no work to other agents.
@@ -1162,6 +1273,18 @@ class AgentContract(BaseModel):
     # than blended in, and whoever reads it later can tell the two apart.
     amendments: list[str] = Field(default_factory=list)
     instrumentation: str = "none"
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_model(self, handler: Any) -> dict[str, Any]:
+        # A contract with no model writes the same bytes as before the field existed, so its
+        # setup fingerprint is unchanged.
+        data = handler(self)
+        if data.get("model") is None:
+            data.pop("model", None)
+        # The same for the record of unconfirmed prompt lines, kept only when there are some.
+        if not data.get("unconfirmed_prompt_from"):
+            data.pop("unconfirmed_prompt_from", None)
+        return data
 
     @model_validator(mode="after")
     def _resolvable_workers(self) -> AgentContract:
@@ -1212,6 +1335,10 @@ class AgentContract(BaseModel):
                         ("refuses", tool.refuses),
                         ("effects", tool.effects),
                         ("arguments from", ", ".join(f"{arg} <- {source}" for arg, source in tool.inputs_from.items())),
+                        ("units", ", ".join(f"{arg} in {unit}" for arg, unit in sorted(tool.arg_units.items()))),
+                        ("returns", ", ".join(f"{field}: {kind}" for field, kind in tool.returns.items())),
+                        ("reads tables (declared)", ", ".join(tool.tables_read)),
+                        ("changes tables (declared)", ", ".join(tool.tables_changed)),
                     )
                     if text
                 )
@@ -1280,9 +1407,18 @@ class AgentContract(BaseModel):
             )
         if self.workers:
             parts.append(
-                "WORKERS (agents this one hands work to, and the tools each holds):\n  - "
+                "WORKERS (agents this one hands work to, and the tools each holds). Each one whose work the world can "
+                "show gets its own checks: a sub-goal with `subject: worker:<id>` (see 'When the agent hands work to "
+                "workers'):\n  - "
                 + "\n  - ".join(
                     f"{one.id} ({one.name or one.id}): {', '.join(one.tools) or 'no tools'}"
+                    + (
+                        f"; may use only {', '.join(one.allowed_tools)}"
+                        if one.allowed_tools and set(one.allowed_tools) != set(one.tools)
+                        else ""
+                    )
+                    + ("; its own channel to the world" if one.binding == "separate" else "")
+                    + f"; its checks take subject worker:{one.id}"
                     for one in self.workers
                 )
             )
@@ -1368,6 +1504,315 @@ class AgentContract(BaseModel):
         """Whether this tool has code of its own that should be run instead of replaced."""
         found = self.entry_for(tool)
         return bool(found and found.mode in ("import", "construct", "service"))
+
+
+# Which parts of the contract are prose, written by the reader in its own words, and which are
+# read as written by the build, the world or the runtime. Prose is cleaned of URL credentials
+# (userinfo, query and fragment) whenever the contract is saved; the rest is never changed.
+# A test walks every model the contract reaches and fails on a field in neither tuple.
+FREE_TEXT = (
+    "AgentContract.one_liner",
+    "AgentContract.system_prompt_excerpt",
+    "AgentContract.hard_constraints",
+    "AgentContract.implementation",
+    "AgentContract.real_use_cases",
+    "AgentContract.caller_identity",
+    "AgentContract.notes",
+    "AgentContract.open_questions",
+    "AgentContract.amendments",
+    "ToolSpec.description",
+    "ToolSpec.refuses",
+    "ToolSpec.effects",
+    # What a tool hands back, by output field: each value is a description a person or model
+    # writes, and the contract only ever shows it (the build, the world and the checks never match
+    # it), so the values are cleaned. The field names are kept.
+    "ToolSpec.returns",
+    "ToolEntry.notes",
+    "Dependency.what",
+)
+# A field that holds models is kept for itself, and its models' fields are classified in their
+# own right. A name without a dot is a whole technical model, every field of it kept.
+KEPT_AS_WRITTEN = (
+    "AgentContract.agent",
+    "AgentContract.modality",
+    "AgentContract.call_direction",
+    "AgentContract.agent_languages",
+    "AgentContract.conversational",
+    "AgentContract.system_prompt_from",
+    "AgentContract.unconfirmed_prompt_from",
+    # The model name the code cites, with its file and line: read as written, like the prompt lines.
+    "AgentContract.model",
+    "AgentContract.tools",
+    "AgentContract.data_schema",
+    "AgentContract.base_environment",
+    "AgentContract.dependencies",
+    "AgentContract.runtime_dependencies",
+    "AgentContract.tool_entrypoints",
+    # world/runtime.py matches its quoted markers against tool results, so cleaning it would
+    # change what counts as a refusal.
+    "AgentContract.refusal_signature",
+    "AgentContract.data_store",
+    "AgentContract.runtime",
+    "AgentContract.chosen_evals",
+    "AgentContract.instrumentation",
+    # Names: a worker's id and name are matched against the spans the app exports, and its tools
+    # against the contract's tool names, so they are read as written.
+    "AgentContract.workers",
+    "DeclaredWorker.id",
+    "DeclaredWorker.name",
+    "DeclaredWorker.tools",
+    # Tool names, a binding kind, an environment variable's name and a process name: read as written.
+    "DeclaredWorker.allowed_tools",
+    "DeclaredWorker.binding",
+    "DeclaredWorker.address_env",
+    "DeclaredWorker.process",
+    "ToolSpec.name",
+    "ToolSpec.args",
+    "ToolSpec.arg_types",
+    # A unit or format each field is written in ("milliseconds"): the actor and the world read it
+    # as written, and its keys are checked against `args`.
+    "ToolSpec.arg_units",
+    # The world answers with these as written.
+    "ToolSpec.arg_values",
+    "ToolSpec.requires",
+    "ToolSpec.inputs_from",
+    # Names of the world's tables, matched against the tables a proof run changed
+    # (tool_certification) and against the world's schema.
+    "ToolSpec.tables_read",
+    "ToolSpec.tables_changed",
+    "ToolEntry.tool",
+    "ToolEntry.mode",
+    "ToolEntry.module",
+    "ToolEntry.callable",
+    "ToolEntry.factory",
+    "ToolEntry.first_arg",
+    "ToolEntry.service",
+    # The tool proxy calls it as written.
+    "ToolEntry.endpoint",
+    "ToolEntry.method",
+    # A flag, `read` or `write`, compared as written (the tool proxy, the world's door and the
+    # read-only check), so it is never prose even though it sits beside `notes`.
+    "ToolEntry.effect",
+    # Set by the seal from the kit's own constant text, not written by a reader; the platform
+    # tests it for emptiness and quotes it as set.
+    "ToolEntry.door_unreached",
+    "Dependency.name",
+    "Dependency.kind",
+    "Dependency.used_by",
+    "Dependency.engine",
+    "Dependency.version",
+    "Dependency.reached",
+    "PromptSource",
+    "ModelSource",
+    "Reached",
+    "DataStore",
+    "Runtime",
+    "HttpObservation",
+    "ObservationParameter",
+    "RuntimeSecretFile",
+    "RuntimeConfigFile",
+    "RuntimeInterface",
+    "CompletedToolEvents",
+    "CompletedToolFailureEvent",
+    "CompletedToolRows",
+    "LocalHttpAuth",
+    "RuntimeHttpFailureRule",
+    "RuntimeHttpSetupRequest",
+    # The live SSE endpoint's rules (fi.simulate): a JSON path, a mode and the values a frame is
+    # matched against, all compared with the frames as written.
+    "HTTPStreamSpec",
+    "HTTPStreamText",
+    "HTTPStreamMatch",
+)
+CONTRACT_FILE = "contract.json"
+# What a reading was made from, saved beside its contract and outside the model: a build handed
+# that reading is told apart from one that read the agent itself by this key alone, so every
+# later save of the contract keeps it.
+READING_RECORD = "reading_inputs"
+_SEQUENCES = (
+    list,
+    tuple,
+    set,
+    frozenset,
+    collections.abc.Sequence,
+    collections.abc.MutableSequence,
+)
+_MAPPINGS = (dict, collections.abc.Mapping, collections.abc.MutableMapping)
+
+
+def _walks_as_sequence(origin: Any) -> bool:
+    """Whether _holders walks a field of this origin as a sequence: any subclass of those above
+    (an abc registration counts), but never text."""
+    return (
+        isinstance(origin, type)
+        and issubclass(origin, _SEQUENCES)
+        and not issubclass(origin, (str, bytes, bytearray))
+    )
+
+
+def _walks_as_mapping(origin: Any) -> bool:
+    """Whether _holders walks a field of this origin as a mapping: any subclass of those above,
+    such as an OrderedDict."""
+    return isinstance(origin, type) and issubclass(origin, _MAPPINGS)
+
+
+def _holders(contract: AgentContract, body: dict[str, Any], model: str) -> list[tuple[Any, Any]]:
+    """Each (saved form, held object) of one free-text model, wherever the contract holds it.
+
+    The walk follows each field's type, so a model is found in a field of any shape: a list, a
+    tuple or a Sequence, a dict's or a Mapping's values (a subclass of each, such as an
+    OrderedDict, too), an Optional or a Union, or inside another model, and an empty one is
+    passed over. A model kept whole is not looked inside. The contract itself is
+    ``AgentContract``.
+    """
+    if model == "AgentContract":
+        return [(body, contract)]
+    pairs: list[tuple[Any, Any]] = []
+    seen: set[int] = set()
+
+    def walk(annotation: Any, saved: Any, held: Any) -> None:
+        if saved is None or held is None:
+            return
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            if isinstance(held, BaseModel):
+                if not isinstance(held, annotation):
+                    return
+                annotation = type(held)
+            if annotation.__name__ in KEPT_AS_WRITTEN or not isinstance(saved, dict):
+                return
+            if annotation.__name__ == model and id(saved) not in seen:
+                seen.add(id(saved))
+                pairs.append((saved, held))
+            for key, field in annotation.model_fields.items():
+                inner = held.get(key) if isinstance(held, dict) else getattr(held, key, None)
+                walk(field.annotation, saved.get(key), inner)
+            return
+        origin, arguments = typing.get_origin(annotation), typing.get_args(annotation)
+        if _walks_as_sequence(origin):
+            # model_dump keeps a tuple a tuple. A tuple[A, B] has a type for each place.
+            if arguments and isinstance(saved, (list, tuple)) and isinstance(held, (list, tuple)):
+                fixed = origin is tuple and not (len(arguments) == 2 and arguments[1] is Ellipsis)
+                for index, (saved_item, held_item) in enumerate(zip(saved, held)):
+                    if not fixed or index < len(arguments):
+                        walk(arguments[index if fixed else 0], saved_item, held_item)
+        elif _walks_as_mapping(origin):
+            if len(arguments) == 2 and isinstance(saved, dict) and isinstance(held, dict):
+                for key, held_item in held.items():
+                    walk(arguments[1], saved.get(key), held_item)
+        else:
+            # Optional, Union and Annotated: each type it may be.
+            for argument in arguments:
+                walk(argument, saved, held)
+
+    walk(type(contract), body, contract)
+    return pairs
+
+
+def _saved_record(path: Path) -> dict[str, Any]:
+    """The reading's record in the contract saved at ``path``, as ``{key: value}``; empty when
+    there is no file, no record in it, or it can't be read as a JSON object."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        # The save goes on without it, so a seeded build saves as an unseeded one: log the error
+        # in full. The file is the kit's own contract, not the customer's source.
+        logging.getLogger(__name__).warning(
+            "reading record not carried; class: %s", type(exc).__name__, exc_info=True
+        )
+        return {}
+    # A contract that never held a record is not parsed again.
+    if READING_RECORD.encode() not in raw:
+        return {}
+    try:
+        saved = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return {}
+    if not isinstance(saved, dict) or READING_RECORD not in saved:
+        return {}
+    return {READING_RECORD: saved[READING_RECORD]}
+
+
+def write_contract(
+    contract: AgentContract,
+    destination: Path,
+    *,
+    shape: collections.abc.Callable[[Any, Any], Any] | None = None,
+) -> AgentContract:
+    """Save the contract to ``destination/contract.json``, its free text cleaned of URL credentials.
+
+    Every writer of the contract goes through here, so no saved contract holds a URL's password,
+    query or fragment in its prose. The file is written beside its place, synced and moved in,
+    so a write that fails partway leaves the earlier contract as it was. Only then are the
+    cleaned values copied back onto ``contract`` itself, in place: the stage and its tools hold
+    that object, and a fresh one would leave them working from the raw text. It is returned too.
+
+    The record of what a reading was made from is not part of the model. When the contract
+    already saved at ``destination`` holds one, the new save keeps its value, first, as the
+    reading put it; a save where none is held writes none.
+
+    ``shape``, when given, is applied to what is written and the contract saved before it (an
+    edit's save keeps the saved file's shape, with no new empty fields).
+    """
+    body = contract.model_dump()
+    places: list[tuple[Any, Any, Any, str]] = []
+    for name in FREE_TEXT:
+        model, field = name.split(".")
+        for saved, held in _holders(contract, body, model):
+            if isinstance(saved, dict) and isinstance(saved.get(field), (str, list)):
+                places.append((saved, held, saved[field], field))
+            elif isinstance(saved, dict) and isinstance(saved.get(field), dict):
+                # A mapping of prose (a tool's `returns`): each value is cleaned as a text of its
+                # own, never by its key, so an output field named `token` keeps its description.
+                kept = held.get(field) if isinstance(held, dict) else getattr(held, field, None)
+                if isinstance(kept, dict):
+                    for key, value in saved[field].items():
+                        if isinstance(value, str):
+                            places.append((saved[field], kept, value, key))
+    # One call for the whole save, over a list with no keys: only the URL rule applies, and a
+    # refused URL is logged once per save rather than once per string.
+    values = [value for _, _, value, _ in places]
+    cleaned = _redact(values)
+    for (saved, _, _, field), value in zip(places, cleaned):
+        saved[field] = value
+
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / CONTRACT_FILE
+    partial = destination / f".{CONTRACT_FILE}.{os.getpid()}.{threading.get_ident()}"
+    written = {**_saved_record(path), **body}
+    if shape is not None:
+        try:
+            before = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            before = None
+        if isinstance(before, dict):
+            written = shape(written, before)
+    try:
+        partial.write_text(
+            json.dumps(written, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        # Synced before the move, so the move never publishes a file the disk does not hold.
+        descriptor = os.open(partial, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(partial, path)
+    finally:
+        partial.unlink(missing_ok=True)
+
+    for saved, held, _, field in places:
+        value = saved[field]
+        current = held.get(field) if isinstance(held, dict) else getattr(held, field, None)
+        if isinstance(current, list) and isinstance(value, list):
+            current[:] = value
+        elif isinstance(held, dict):
+            held[field] = value
+        else:
+            setattr(held, field, value)
+    return contract
 
 
 def runtime_owns_tools(contract: AgentContract) -> bool:
@@ -1478,6 +1923,11 @@ def validate_contract(contract: AgentContract) -> list[str]:
             problems.append(
                 f"tool[{tool.name}]:types-for-unknown-args:{','.join(unknown)}"
             )
+        unknown_units = sorted(set(tool.arg_units) - set(tool.args))
+        if unknown_units:
+            problems.append(
+                f"tool[{tool.name}]:units-for-unknown-args:{','.join(unknown_units)}"
+            )
     # Conversational agents may expose no tools. Zero-argument tools are also legitimate;
     # cardinality alone is not evidence that authoring omitted something.
     if not contract.real_use_cases:
@@ -1508,6 +1958,35 @@ def validate_contract(contract: AgentContract) -> list[str]:
                 f"worker[{index}]:no-id: give this worker the id the agent's source uses for it, "
                 "one that no other worker has."
             )
+        beyond = sorted(set(worker.allowed_tools) - set(worker.tools))
+        if beyond:
+            problems.append(
+                f"worker[{index}]:allowed-tools-it-does-not-hold:{','.join(beyond)}: a worker may be allowed "
+                "only tools it holds."
+            )
+        if worker.binding == "separate" and worker.id.strip():
+            # A separate worker reaches the world through its own channel, named from its id and its address variable.
+            if not _CHANNEL_WORKER_ID.fullmatch(worker.id):
+                problems.append(
+                    f"worker[{index}]:id-not-usable-for-a-channel:{worker.id}: a separate worker's id may hold only "
+                    "letters, digits, '_', '.' and '-'."
+                )
+            if not worker.address_env.strip():
+                problems.append(
+                    f"worker[{index}]:separate-without-address-env: name the environment variable its tool client "
+                    "reads as the base address of its tools, or record it as shared."
+                )
+    addresses = [
+        worker.address_env.strip()
+        for worker in contract.workers
+        if worker.binding == "separate" and worker.address_env.strip()
+    ]
+    shared_address = sorted({one for one in addresses if addresses.count(one) > 1})
+    if shared_address:
+        problems.append(
+            f"duplicate-worker-address-env:{','.join(shared_address)}: two separate workers cannot read one address "
+            "variable, or the world cannot tell them apart; record them as shared or give each its own variable."
+        )
     worker_ids = [worker.id for worker in contract.workers if worker.id.strip()]
     repeated = sorted({one for one in worker_ids if worker_ids.count(one) > 1})
     if repeated:

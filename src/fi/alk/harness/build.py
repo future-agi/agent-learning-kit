@@ -18,7 +18,13 @@ from typing import Any
 
 from .backends import SessionSpec
 from .catalogue import Catalogue
-from .config import artifact_dir, chosen_model, load_skill, provisioning
+from .config import (
+    artifact_dir,
+    chosen_model,
+    discovered_skills,
+    load_skill,
+    provisioning,
+)
 from .contract import AgentContract, runtime_owns_tools
 from .session import Stage
 from .world.snapshot import saved as world_saved
@@ -83,6 +89,12 @@ def blockers(
         if entry is None or entry.mode in ("", "generate", "unreachable"):
             if runtime_owned:
                 continue
+            if entry is not None and source_root:
+                from .tool_certification import framework_coordination
+
+                if framework_coordination(tool, entry, contract, Path(source_root)):
+                    # The framework injects it to coordinate the workers; its calls are observed in the run.
+                    continue
             problems.append(
                 f"{tool.name}: no runnable shipped entrypoint was identified; expose the real "
                 "implementation as an importable callable or an HTTP service, then point the "
@@ -316,6 +328,8 @@ def open_stage(
         system_prompt=(
             f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
             + environment_note
+            # The stage that can add actors is told when one is worth adding.
+            + discovered_skills()
         ),
         # No file tools and no shell. Everything this stage can do goes through a tool that
         # executes it and reports back, which is what makes the guardrails meaningful.

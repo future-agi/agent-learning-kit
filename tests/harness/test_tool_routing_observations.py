@@ -526,62 +526,53 @@ def test_a_record_naming_only_a_shared_last_segment_credits_no_tool(tmp_path):
     ]
 
 
-def test_the_tool_proxy_logs_the_full_path_of_each_call(monkeypatch):
-    import importlib.util
+def test_the_world_door_logs_the_full_path_of_each_call():
+    from fi.alk.harness.world_door import DictRoster, Executed, MemoryLog, ToolCall, WorldDoor
+
+    class Executor:
+        def run(self, call):
+            return Executed(200, {})
+
+    door = WorldDoor(Executor(), MemoryLog(), DictRoster({}))
+    door.enter(
+        ToolCall(action="orders.search", name="search", path="/orders/search?page=1", method="POST")
+    )
+
+    [row] = door.events()
+    assert (row["name"], row["endpoint"]) == ("search", "/orders/search")
+
+
+def test_the_action_log_table_writes_the_endpoint_column(monkeypatch):
     import sys
-    import threading
-    import urllib.request
     from contextlib import contextmanager
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from pathlib import Path
 
-    class Upstream(BaseHTTPRequestHandler):
-        def log_message(self, *_args):
-            return
+    from fi.alk.harness.world_door import PostgresLog
 
-        def do_POST(self):  # noqa: N802
-            self.rfile.read(int(self.headers.get("content-length") or 0))
-            self.send_response(200)
-            self.send_header("content-length", "2")
-            self.end_headers()
-            self.wfile.write(b"{}")
+    written = []
 
-    logged = []
+    class Connection:
+        description = None
+
+        def execute(self, statement, values=None):
+            if statement.startswith("SELECT * FROM _alk_tool_trace LIMIT 0"):
+                return SimpleNamespace(
+                    description=[(name,) for name in ("name", "arguments", "result", "ok", "error", "at", "endpoint")]
+                )
+            written.append((statement, values))
+            return SimpleNamespace(description=None)
 
     @contextmanager
     def connect(*_args, **_kwargs):
-        yield SimpleNamespace(
-            execute=lambda statement, values: logged.append((statement, values))
-        )
+        yield Connection()
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
-    threading.Thread(target=upstream.serve_forever, daemon=True).start()
-    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=connect))
-    monkeypatch.setenv("PORT", "0")
-    monkeypatch.setenv("UPSTREAM_URL", f"http://127.0.0.1:{upstream.server_port}")
-    monkeypatch.setenv("DATABASE_URL", "unused")
-    path = Path(chat_readiness.__file__).with_name("tool_trace_proxy.py")
-    spec = importlib.util.spec_from_file_location("tool_trace_proxy_under_test", path)
-    proxy_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(proxy_module)
-    proxy = ThreadingHTTPServer(("127.0.0.1", 0), proxy_module.Handler)
-    threading.Thread(target=proxy.serve_forever, daemon=True).start()
-    try:
-        urllib.request.urlopen(
-            urllib.request.Request(
-                f"http://127.0.0.1:{proxy.server_port}/orders/search?page=1",
-                data=b"{}",
-                method="POST",
-            ),
-            timeout=5,
-        ).read()
-    finally:
-        proxy.shutdown()
-        upstream.shutdown()
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=connect, Error=Exception))
+    PostgresLog("unused").write(
+        {"name": "search", "arguments": {}, "result": {}, "ok": True, "error": None, "at": 1.0,
+         "actor_id": "agent", "endpoint": "/orders/search"}
+    )
 
-    statement, values = logged[0]
+    [(statement, values)] = written
     assert "endpoint" in statement
-    assert values[0] == "search"
     assert "/orders/search" in values
 
 

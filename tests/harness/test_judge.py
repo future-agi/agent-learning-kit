@@ -988,3 +988,18 @@ def test_with_no_transcript_the_judge_is_pointed_at_the_recording(
         judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording))
     ) == (True, "it confirmed")
     assert "Decide from the recording, the actions and the records." in said[0]
+
+
+def test_the_judge_reads_who_else_took_part_only_when_someone_did():
+    actors = {
+        "summary": [{"actor": "mia", "name": "Mia", "triggered": True, "delivered": 1}],
+        "actions": [{"actor_id": "mia", "name": "refunds.approve", "outcome": "committed"}],
+        "briefs": {"mia": "You are Mia, the manager."},
+    }
+    with_actors = judge_module.CallEvidence(None, [], None, "native", actors=actors)
+    tools = {one.name: one for one in with_actors.tools()}
+    read = asyncio.run(tools["read_actors"].handler({}))["content"][0]["text"]
+    assert json.loads(read) == actors
+    # Read before deciding, like any evidence the judge asked for.
+    assert with_actors.fetched == {"actors"}
+    assert "read_actors" not in {one.name for one in judge_module.CallEvidence(None, [], None, "native").tools()}

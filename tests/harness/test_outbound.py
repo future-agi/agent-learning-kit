@@ -3773,3 +3773,14 @@ def test_artifacts_client_push_manifest_rejects_an_unknown_artifact_reference() 
     result = client.push_manifest(manifest)
     assert not result.delivered
     assert result.error is not None and result.error.code == "artifact_unknown"
+
+
+def test_a_worker_s_sub_goal_names_its_subject_and_a_task_sub_goal_is_unchanged() -> None:
+    worker = {"name": "w", "held": True, "reason": None, "judged": False, "subject": "worker:refund"}
+    task = {"name": "n", "held": True, "reason": None, "judged": False}
+    receipt = _passed_receipt(sub_goals=[worker, task])
+    plain = _passed_receipt()
+
+    assert receipt["sub_goals"][0]["subject"] == "worker:refund"
+    assert "subject" not in receipt["sub_goals"][1] and "subject" not in plain["sub_goals"][0]
+    ResultReceiptDraft.model_validate(receipt)

@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from .isolated_process import run_worker
+from .isolated_process import run_worker, stop_requested
 
 
 async def main() -> None:
@@ -25,7 +25,8 @@ async def main() -> None:
         force=True,
     )
     logging.getLogger(__name__).info("voice worker started")
-    report = await _default_place_call(spec)
+    # On the person's stop the engine hangs up at the next turn boundary and still reports the call it kept.
+    report = await _default_place_call(spec, stop_when=lambda _messages, _persona: stop_requested())
     output = Path(sys.argv[1])
     fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
