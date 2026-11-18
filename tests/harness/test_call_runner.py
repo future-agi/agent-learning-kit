@@ -2264,6 +2264,8 @@ def test_tool_trace_parsed_json_result_is_not_truncated(monkeypatch) -> None:
 def test_tool_trace_holds_only_the_agents_calls(monkeypatch) -> None:
     """A world actor's action shares the trace table with the agent's calls; it is never graded as the agent's,
     and never fires an actor waiting on one of the agent's tools."""
+    # The voice call actor imports LiveKit, which the newest-dependencies CI row doesn't install.
+    pytest.importorskip("livekit")
     from fi.simulate.simulation.engines.call_actor_voice import world_access
 
     columns = [
