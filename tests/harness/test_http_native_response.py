@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from fi.alk.harness.chat_call_runner import _HostedChatTarget
+from fi.alk.harness.chat_call_runner import HostedChatTarget
 from fi.alk.harness.chat_transport import create_chat_wrapper
 from fi.alk.harness.contract import RuntimeInterface, RuntimeHttpFailureRule
 from fi.simulate.agent.wrapper import AgentInput
@@ -152,7 +152,7 @@ def test_response_tools_recorded_once_and_never_reexecuted(native_app, paired):
     wrapper = create_chat_wrapper(config, base, secret_values={})
     world = SimpleNamespace(calls=[])
     contract = SimpleNamespace(runtime=SimpleNamespace(interface=config))
-    target = _HostedChatTarget(
+    target = HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,

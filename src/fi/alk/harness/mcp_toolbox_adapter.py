@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import keyword
+import logging
 import os
 import time
 import unicodedata
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _signature(parameters: list[dict[str, Any]]) -> str:
@@ -84,8 +87,8 @@ def _execute(
                         started,
                     ),
                 )
-        except Exception:  # noqa: BLE001 - the log must never change the tool's response
-            pass
+        except Exception as unlogged:  # noqa: BLE001 - the log must never change the tool's response
+            logger.warning("call log not written: %s", type(unlogged).__name__)
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         with trace_path.open("a", encoding="utf-8") as trace:
             trace.write(

@@ -33,7 +33,7 @@ from .contract import validate_contract
 from .outbound import _redact_validation_error
 from .proofs import load_proofs, record_proof, record_unprovable
 from .prove import NO_NEGATIVE_CONTROL, prepared, prove
-from .scenario import Scenario, _slug
+from .scenario import Scenario, scenario_slug
 from .scenario_tools import load_scenarios, refuses_keeping, write_scenarios
 from .seed_rows import missing_seed_rows
 from .source_data_invariants import (
@@ -895,7 +895,7 @@ def _settle_drops(
 def rename_refusal(workspace: Path, payload: dict[str, Any]) -> str:
     """Why a submitted scenario renames one already in the suite, or "" when it does not."""
     name = str(payload.get("name") or "").strip()
-    key = str(payload.get("scenario_key") or "").strip() or _slug(name)
+    key = str(payload.get("scenario_key") or "").strip() or scenario_slug(name)
     for one in load_scenarios(workspace):
         if one.scenario_key == key and one.name != name:
             return f"Not kept: {name} would rename {one.name}. A rebuild never renames a scenario."

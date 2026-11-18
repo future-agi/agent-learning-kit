@@ -1,12 +1,17 @@
 """Private chat ingress and workflow readiness checks."""
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
+import logging
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import TypedDict
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -14,9 +19,15 @@ from fi._diagnostics import _SECRET_FIELD, sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
 
 from .chat_transport import create_chat_wrapper
+from .contract import AgentContract, RuntimeInterface
 from .diagnostics import HarnessDiagnostic
 from .job import FailureCause, HarnessStage
-from .world.runtime import graded_calls, trace_row
+from . import call_runner, chat_call_runner
+from .environment import ToolExecutionResult
+from .process_runtime import EnvironmentRuntime
+from .world.runtime import Call, graded_calls, trace_row
+
+logger = logging.getLogger(__name__)
 
 
 def _chat_target_cause(trace):
@@ -275,19 +286,37 @@ class _PrivateWorkflowArtifacts:
 TOOL_ROUTING = "tool-routing-observations.json"
 
 
-def world_call_log(runtime, since=0.0):
+class RoutedTool(TypedDict, total=False):
+    """One tool in `tool-routing-observations.json`: routed (with its calls and outcomes) or not received."""
+
+    tool: str
+    routed: bool
+    calls: int
+    outcomes: list[str]
+    reason: str
+    source: str
+
+
+class UnobservedTool(TypedDict, total=False):
+    """A tool whose routing could not be observed, and why."""
+
+    tool: str
+    reason: str
+    source: str
+
+
+def world_call_log(runtime: EnvironmentRuntime, since: float = 0.0) -> list[Call]:
     """The calls the test world itself received since ``since``: its call log, written by
     the world's own surfaces (the tool proxy in front of a tools service, the MCP toolbox),
     never by the agent."""
-    from .call_runner import _collect_tool_trace_calls
-
     try:
-        return [call for call in _collect_tool_trace_calls(runtime) if call.at >= since]
-    except Exception:  # noqa: BLE001 - no log to read, nothing received
+        return [call for call in call_runner.collect_tool_trace_calls(runtime) if call.at >= since]
+    except Exception as unread:  # noqa: BLE001 - routing is an observation: a log that cannot be read is none received
+        logger.info("world call log not read: %s", type(unread).__name__)
         return []
 
 
-def received_calls(logged, ran) -> list:
+def received_calls(logged: Sequence[Call], ran: Sequence[Call]) -> list[Call]:
     """What the world received: its call log, then each call the harness ran at the world that the log does not
     already hold (a door that mirrors its calls into the log writes them there too)."""
     unmatched = [(call.name, call.arguments) for call in logged]
@@ -353,7 +382,14 @@ def _outcome(call) -> str:
     return "ok" if getattr(call, "ok", True) else "error"
 
 
-def _routing(contract, runtime, *, received, reported, bundle=None):
+def _routing(
+    contract: AgentContract,
+    runtime: EnvironmentRuntime,
+    *,
+    received: Sequence[Call],
+    reported: Sequence[Call],
+    bundle: Path | None = None,
+) -> tuple[list[RoutedTool], list[UnobservedTool]]:
     """Routing read from the world's side only. A tool the world received is routed. A tool
     the agent reports calling that the world logs but never received is not routed, unless a
     received call could have been it or another tool. Any other reported tool runs inside the
@@ -367,7 +403,7 @@ def _routing(contract, runtime, *, received, reported, bundle=None):
             arrived.setdefault(next(iter(candidates)), []).append(call)
         else:
             ambiguous |= candidates
-    tools = [
+    tools: list[RoutedTool] = [
         {
             "tool": tool,
             "routed": True,
@@ -376,7 +412,7 @@ def _routing(contract, runtime, *, received, reported, bundle=None):
         }
         for tool, calls in arrived.items()
     ]
-    unobserved = []
+    unobserved: list[UnobservedTool] = []
     logged = _logged_tools(contract, runtime, bundle)
     claimed = {
         tool for call in reported for tool in names(call) if len(names(call)) == 1
@@ -400,7 +436,14 @@ def _write_routing(authoring: Path, body) -> None:
 
 
 def record_tool_routing(
-    authoring: Path, scenario_key: str, contract, runtime, *, received, reported, bundle=None
+    authoring: Path,
+    scenario_key: str,
+    contract: AgentContract | None,
+    runtime: EnvironmentRuntime,
+    *,
+    received: Sequence[Call],
+    reported: Sequence[Call],
+    bundle: Path | None = None,
 ) -> None:
     """Which tools the qualification conversation routed to the test world, beside the tool
     certification: what readiness reads as observed routing, per tool. ``received`` is what
@@ -476,19 +519,19 @@ TOOL_REQUEST_SECONDS = 300.0
 
 async def request_uncovered_tools(
     *,
-    interface,
-    endpoint,
-    runtime,
-    contract,
+    interface: RuntimeInterface,
+    endpoint: str,
+    runtime: EnvironmentRuntime,
+    contract: AgentContract,
     authoring: Path,
     bundle: Path,
     source: Path | None,
-    secret_values,
+    secret_values: Mapping[str, str],
     candidate_hash: str,
-    local_auth_values=None,
-    timeout=120.0,
-    budget=TOOL_REQUEST_SECONDS,
-    limit=TOOL_REQUEST_LIMIT,
+    local_auth_values: Mapping[str, str] | None = None,
+    timeout: float = 120.0,
+    budget: float = TOOL_REQUEST_SECONDS,
+    limit: int = TOOL_REQUEST_LIMIT,
 ) -> None:
     """Ask the agent once for each tool the qualification conversation did not show.
 
@@ -508,9 +551,6 @@ that world, never a real system (tools that leave the world are never asked). A 
     after the check. Routing is read from the world's side as in the conversation. Never
     raises.
     """
-    from .call_runner import _collect_file_tool_calls
-    from .chat_call_runner import _HostedChatTarget, _tool_world
-
     path = authoring / "generic-harness" / TOOL_ROUTING
     try:
         body = json.loads(path.read_text(encoding="utf-8"))
@@ -550,9 +590,9 @@ that world, never a real system (tools that leave the world are never asked). A 
         since = time.time()
         started = time.monotonic()
         try:
-            traced = len(_collect_file_tool_calls(runtime))
+            traced = len(call_runner.collect_file_tool_calls(runtime))
             key = f"tool-request-{uuid4().hex}"
-            target = _HostedChatTarget(
+            target = chat_call_runner.HostedChatTarget(
                 wrapper=create_chat_wrapper(
                     interface,
                     endpoint,
@@ -563,7 +603,7 @@ that world, never a real system (tools that leave the world are never asked). A 
                 ),
                 contract=contract,
                 world=_OnlyAsked(
-                    _tool_world(bundle, contract, runtime, source),
+                    chat_call_runner.tool_world(bundle, contract, runtime, source),
                     tool.name,
                     deadline=time.monotonic() + request_timeout,
                 ),
@@ -577,9 +617,10 @@ that world, never a real system (tools that leave the world are never asked). A 
                 raise TimeoutError(f"{tool.name} outlasted the readiness request deadline")
             reported = [
                 *target.world.calls,
-                *_collect_file_tool_calls(runtime)[traced:],
+                *call_runner.collect_file_tool_calls(runtime)[traced:],
             ]
-        except Exception:  # noqa: BLE001 - an unanswered request leaves the tool unobserved
+        except Exception as exc:  # noqa: BLE001 - an unanswered request leaves the tool unobserved
+            logger.info("readiness request for %s failed: %s", tool.name, type(exc).__name__)
             failed = [{"tool": tool.name, "reason": "request_failed"}]
             body["unobserved"].extend(failed)
             _note_request(
@@ -636,9 +677,6 @@ class _OnlyAsked:
         return getattr(self._world, name)
 
     def handle_tool_call(self, tool_call, **context):
-        from .environment import ToolExecutionResult
-        from .world.runtime import Call
-
         name = str(
             tool_call.get("name") or (tool_call.get("function") or {}).get("name") or ""
         )

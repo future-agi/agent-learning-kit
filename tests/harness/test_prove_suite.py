@@ -5,19 +5,18 @@ from __future__ import annotations
 import json
 import time
 
-from fi.alk.harness import catalogue as catalogue_module
 from fi.alk.harness import prove as module
-from fi.alk.harness import scenario_tools
+from fi.alk.harness import prove_suite as suite_module
 from fi.alk.harness.prove_suite import main, prove_suite
 
 from proof_world import REFUND_CATALOGUE, catalogue, install, refund_case
 
 
 def _suite(monkeypatch, cases):
-    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: cases)
-    monkeypatch.setattr(catalogue_module, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
-    monkeypatch.setattr(module, "_load_contract", lambda root: None)
-    monkeypatch.setattr(module, "_load_actors", lambda root: [])
+    monkeypatch.setattr(suite_module, "load_scenarios", lambda path: cases)
+    monkeypatch.setattr(suite_module, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
+    monkeypatch.setattr(suite_module, "load_proof_contract", lambda root: None)
+    monkeypatch.setattr(suite_module, "load_world_actors", lambda root: [])
 
 
 def test_writes_every_key_and_survives_one_crash(monkeypatch, tmp_path):
@@ -31,7 +30,7 @@ def test_writes_every_key_and_survives_one_crash(monkeypatch, tmp_path):
             raise ValueError("the world exploded\nsecond line")
         return real(scenario, *args, **kwargs)
 
-    monkeypatch.setattr(module, "prove", flaky)
+    monkeypatch.setattr(suite_module, "prove", flaky)
     output = tmp_path / "out" / "scenario-proofs.json"
     assert main(["--authoring", str(tmp_path), "--output", str(output)]) == 0
     proofs = json.loads(output.read_text(encoding="utf-8"))
@@ -72,7 +71,7 @@ def test_keys_prove_only_the_named_cases(monkeypatch, tmp_path):
         proved.append(scenario.scenario_key)
         return real(scenario, *args, **kwargs)
 
-    monkeypatch.setattr(module, "prove", counting)
+    monkeypatch.setattr(suite_module, "prove", counting)
     output = tmp_path / "proofs.json"
     assert main(["--authoring", str(tmp_path), "--output", str(output), "--keys", "b, c"]) == 0
     assert proved == ["b", "c"]

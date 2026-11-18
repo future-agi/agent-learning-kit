@@ -541,7 +541,7 @@ def handler_sources(bundle_dir: Path, contract: AgentContract) -> dict[str, str]
     return sources
 
 
-def _tool_world(
+def tool_world(
     bundle_dir: Path,
     contract: AgentContract,
     runtime: EnvironmentRuntime,
@@ -726,7 +726,7 @@ def _record_completed_tool_call(
     )
 
 
-class _HostedChatTarget:
+class HostedChatTarget:
     """The already-running Bundle V2 chat process, exposed as the normal conversation target.
 
     ``converse`` owns the simulated customer's turns.  This target owns only the submitted
@@ -978,7 +978,7 @@ def _resolved_chat_actors(
 
 
 async def _drive_conversation(
-    target: _HostedChatTarget,
+    target: HostedChatTarget,
     scenario: ConversationScenario,
     contract: AgentContract,
     bundle_dir: Path,
@@ -1001,7 +1001,7 @@ class HostedChatCallRunner:
 
         self._adapter = adapter
         self._context = context
-        # The last conversation's calls the harness ran at the world (``_HostedChatTarget``).
+        # The last conversation's calls the harness ran at the world (``HostedChatTarget``).
         self.received: list[Call] = []
         self._records = TrialRecords(sealed_seed(context.work_directory))
         contract_path = context.bundle_dir / "contract.json"
@@ -1055,7 +1055,7 @@ class HostedChatCallRunner:
             source_key,
         )
         document = with_caller_actor(document, self._context.bundle_dir)
-        target_world = _tool_world(
+        target_world = tool_world(
             self._context.bundle_dir,
             self._contract,
             runtime,
@@ -1202,7 +1202,7 @@ class HostedChatCallRunner:
                 deadline, deadlines = None, {}
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
             await asyncio.to_thread(_set_trial_faults, runtime, faults, deadline, deadlines)
-        target = _HostedChatTarget(
+        target = HostedChatTarget(
             wrapper=wrapper,
             contract=self._contract,
             world=target_world,

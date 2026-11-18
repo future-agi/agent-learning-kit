@@ -6,10 +6,8 @@ import asyncio
 import copy
 from types import SimpleNamespace
 
-from fi.alk.harness import catalogue as catalogue_module
 from fi.alk.harness import live_proof
 from fi.alk.harness import prove as module
-from fi.alk.harness import scenario_tools
 from fi.alk.harness.contract import ToolEntry
 from fi.alk.harness.prove import Proof
 from fi.alk.harness.world.runtime import Call
@@ -182,8 +180,8 @@ def _contract(modes: dict[str, str]):
 
 
 def _prove(monkeypatch, tmp_path, modes, goals=REFUND_CATALOGUE, **options):
-    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: [refund_case()])
-    monkeypatch.setattr(catalogue_module, "load_catalogue", lambda path: catalogue(**goals))
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [refund_case()])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**goals))
     monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
     stack = Stack()
     results = asyncio.run(
@@ -381,8 +379,8 @@ def test_a_toolbox_tool_is_played_on_the_toolbox_the_agent_reaches(monkeypatch, 
 
 
 def test_a_toolbox_case_is_proved_on_the_live_runtime(monkeypatch, tmp_path):
-    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: [refund_case()])
-    monkeypatch.setattr(catalogue_module, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [refund_case()])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
     monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
     stack = Stack()
     toolbox = _Toolbox(monkeypatch, tmp_path, stack.store)

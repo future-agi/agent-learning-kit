@@ -166,7 +166,7 @@ def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> N
         + "\n",
         encoding="utf-8",
     )
-    calls = cr._collect_file_tool_calls(
+    calls = cr.collect_file_tool_calls(
         _runtime(metadata={"tool_trace_path": str(trace)})
     )
     assert [call.name for call in calls] == ["process_request", "write_record"]
@@ -202,7 +202,7 @@ def test_the_sealed_trace_row_keeps_the_runtime_worker_task_and_event_ids(
     )
     observed, plain = (
         trace_row(call)
-        for call in cr._collect_file_tool_calls(
+        for call in cr.collect_file_tool_calls(
             _runtime(metadata={"tool_trace_path": str(trace)})
         )
     )
@@ -382,7 +382,7 @@ def test_a_runtime_s_hand_off_keeps_when_the_worker_returned_and_is_never_graded
             "kind": "handoff",
         },
     )
-    calls = cr._collect_file_tool_calls(
+    calls = cr.collect_file_tool_calls(
         _runtime(metadata={"tool_trace_path": str(trace)})
     )
     (row,) = (trace_row(call) for call in calls)
@@ -404,7 +404,7 @@ def test_a_span_that_recorded_no_arguments_reads_as_none_not_as_raw_text(
         {**_SPAN_LINES[1], "arguments": "", "output": ""},
         {"name": "note", "arguments": "not json", "output": "", "is_error": False},
     )
-    calls = cr._collect_file_tool_calls(
+    calls = cr.collect_file_tool_calls(
         _runtime(metadata={"tool_trace_path": str(trace)})
     )
     assert [(c.name, c.arguments) for c in calls] == [
@@ -420,7 +420,7 @@ def test_a_process_agent_s_seam_calls_keep_their_evidence_and_take_the_agent_fro
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seam: EvidenceSeam | None
 ) -> None:
     trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPAN_LINES)
-    for reader in ("_collect_tool_trace_calls", "_collect_http_tool_calls"):
+    for reader in ("collect_tool_trace_calls", "_collect_http_tool_calls"):
         monkeypatch.setattr(cr, reader, lambda runtime, **_: tuple(_observed()))
     _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=seam)
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
@@ -441,7 +441,7 @@ def test_a_result_traced_as_the_text_of_a_dict_reaches_checks_as_the_dict(tmp_pa
         ),
         encoding="utf-8",
     )
-    calls = cr._collect_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    calls = cr.collect_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
     assert [call.result for call in calls] == [{"verified": True}, {"verified": True}, "sent"]
 
 
@@ -474,7 +474,7 @@ def test_file_tool_trace_merges_agent_line_with_livekit_hook_time(
             "source": "livekit",
         },
     )
-    calls = cr._collect_file_tool_calls(
+    calls = cr.collect_file_tool_calls(
         _runtime(metadata={"tool_trace_path": str(trace)})
     )
     assert [(call.arguments, call.result, call.at) for call in calls] == [
@@ -627,7 +627,7 @@ def test_file_tool_trace_keeps_a_rejected_call_apart_from_a_same_name_success(
             "source": "livekit",
         },
     )
-    calls = cr._collect_file_tool_calls(
+    calls = cr.collect_file_tool_calls(
         _runtime(metadata={"tool_trace_path": str(trace)})
     )
     assert sorted((call.at, call.ok, call.result) for call in calls) == [
@@ -1557,7 +1557,7 @@ def test_non_completed_tool_trace_call_preserves_evidence_and_uploads_trace(
         at="2026-01-01T00:00:01.000Z",
     )
     monkeypatch.setattr(
-        cr, "_collect_tool_trace_calls", lambda runtime, **_: (captured,)
+        cr, "collect_tool_trace_calls", lambda runtime, **_: (captured,)
     )
 
     async def place_call(spec):
@@ -2098,7 +2098,7 @@ def test_tool_trace_keeps_the_door_s_outcome_apart_from_a_failure(monkeypatch) -
         ("legacy", {}, None, False, "not found", 4.0, None, None),
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
-    calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
+    calls = cr.collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
     assert [(c.name, c.refused, c.refusal_code) for c in calls] == [
         ("cancel_order", True, "world_rule"),
         ("refund", True, "not_permitted"),
@@ -2119,7 +2119,7 @@ def test_tool_trace_translates_rows_and_applies_v1_refused_rule(monkeypatch) -> 
     monkeypatch.setitem(sys.modules, "psycopg", fake)
 
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    calls = cr._collect_tool_trace_calls(runtime)
+    calls = cr.collect_tool_trace_calls(runtime)
 
     assert calls == (
         Call(
@@ -2149,7 +2149,7 @@ def test_tool_trace_keeps_the_path_the_tool_proxy_logged(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
 
-    assert cr._collect_tool_trace_calls(runtime)[0].endpoint == "/orders/search"
+    assert cr.collect_tool_trace_calls(runtime)[0].endpoint == "/orders/search"
 
 
 def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(
@@ -2162,7 +2162,7 @@ def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(
     ]
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(agent_rows, old))
-    before = cr._collect_tool_trace_calls(runtime)
+    before = cr.collect_tool_trace_calls(runtime)
 
     columns = [*old, "action_id", "actor_id", "worker_id", "outcome"]
     rows = [
@@ -2182,7 +2182,7 @@ def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(
         (*agent_rows[1], "a3", "agent", None, "refused"),
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
-    after = cr._collect_tool_trace_calls(runtime)
+    after = cr.collect_tool_trace_calls(runtime)
     # The new rows also say which channel each call came in on (a null worker_id is the shared address).
     assert [one.channel for one in after] == ["", ""]
     assert [replace(one, channel=None) for one in after] == list(before)
@@ -2196,22 +2196,22 @@ def test_tool_trace_read_failure_degrades_to_no_calls_never_crashes(
     degrade to `()`, never raise past this function."""
     monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    assert cr._collect_tool_trace_calls(runtime) == ()
+    assert cr.collect_tool_trace_calls(runtime) == ()
 
 
 def test_tool_trace_missing_endpoint_degrades_to_no_calls() -> None:
     runtime = _runtime(endpoints={})
-    assert cr._collect_tool_trace_calls(runtime) == ()
+    assert cr.collect_tool_trace_calls(runtime) == ()
 
 
 def test_a_strict_tool_trace_read_says_the_capture_failed(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
     with pytest.raises(cr.ToolCaptureFailed, match="tool_trace read failed"):
-        cr._collect_tool_trace_calls(
+        cr.collect_tool_trace_calls(
             _runtime(endpoints={"database": _postgres_endpoint()}), strict=True
         )
     with pytest.raises(cr.ToolCaptureFailed, match="no world database"):
-        cr._collect_tool_trace_calls(_runtime(endpoints={}), strict=True)
+        cr.collect_tool_trace_calls(_runtime(endpoints={}), strict=True)
 
 
 def test_a_strict_trace_file_read_fails_only_on_a_file_it_cannot_read(
@@ -2220,16 +2220,16 @@ def test_a_strict_trace_file_read_fails_only_on_a_file_it_cannot_read(
     trace = tmp_path / "agent-tool-calls.jsonl"
     runtime = _runtime(metadata={"tool_trace_path": str(trace)})
     # No file: the agent called no tool, or nothing wrote one. Neither is a failed read.
-    assert cr._collect_file_tool_calls(runtime, strict=True) == ()
+    assert cr.collect_file_tool_calls(runtime, strict=True) == ()
     _trace_lines(trace, {"name": "lookup", "arguments": {}})
 
     def refuse(*_args: Any, **_kwargs: Any) -> str:
         raise PermissionError("denied")
 
     monkeypatch.setattr(type(trace), "read_text", refuse)
-    assert cr._collect_file_tool_calls(runtime) == ()
+    assert cr.collect_file_tool_calls(runtime) == ()
     with pytest.raises(cr.ToolCaptureFailed, match="tool_trace file unreadable"):
-        cr._collect_file_tool_calls(runtime, strict=True)
+        cr.collect_file_tool_calls(runtime, strict=True)
 
 
 @pytest.mark.parametrize(
@@ -2255,12 +2255,12 @@ def test_a_trace_file_with_no_readable_record_is_a_failed_capture(
     runtime = _runtime(metadata={"tool_trace_path": str(trace)})
 
     # Lenient reads drop what they cannot parse, as before.
-    assert [call.name for call in cr._collect_file_tool_calls(runtime)] == names
+    assert [call.name for call in cr.collect_file_tool_calls(runtime)] == names
     if failed:
         with pytest.raises(cr.ToolCaptureFailed, match="no readable record"):
-            cr._collect_file_tool_calls(runtime, strict=True)
+            cr.collect_file_tool_calls(runtime, strict=True)
     else:
-        calls = cr._collect_file_tool_calls(runtime, strict=True)
+        calls = cr.collect_file_tool_calls(runtime, strict=True)
         assert [call.name for call in calls] == names
 
 
@@ -2421,7 +2421,7 @@ def test_tool_trace_result_string_form_is_truncated_at_2000_chars(monkeypatch) -
     rows = [("t", {}, long_string, True, "", 1.0)]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    calls = cr._collect_tool_trace_calls(runtime)
+    calls = cr.collect_tool_trace_calls(runtime)
     assert len(calls) == 1
     assert len(calls[0].result) == 2000
 
@@ -2435,7 +2435,7 @@ def test_tool_trace_parsed_json_result_is_not_truncated(monkeypatch) -> None:
     rows = [("t", {}, big_list, True, "", 1.0)]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    calls = cr._collect_tool_trace_calls(runtime)
+    calls = cr.collect_tool_trace_calls(runtime)
     assert calls[0].result == big_list
 
 
@@ -2462,7 +2462,7 @@ def test_tool_trace_holds_only_the_agents_calls(monkeypatch) -> None:
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    assert [one.name for one in cr._collect_tool_trace_calls(runtime)] == [
+    assert [one.name for one in cr.collect_tool_trace_calls(runtime)] == [
         "read_record",
         "update",
     ]
@@ -3047,7 +3047,7 @@ def test_actor_rows_are_sealed_named_and_with_their_outcome_and_the_agent_s_are_
             "on_behalf_of": None,
         }
     ]
-    assert [call.name for call in cr._collect_tool_trace_calls(runtime)] == [
+    assert [call.name for call in cr.collect_tool_trace_calls(runtime)] == [
         "request_approval"
     ]
     assert cr._actor_rows(runtime, tmp_path / "no-actors") == []
@@ -3075,7 +3075,7 @@ def test_with_actors_the_agent_s_sealed_calls_carry_their_own_action_ids_to_link
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    calls = cr._collect_tool_trace_calls(runtime)
+    calls = cr.collect_tool_trace_calls(runtime)
     assert cr._agent_marks(runtime, bundle, calls) == [
         {"action_id": "a1", "outcome": "committed"},
         {"action_id": "a3", "outcome": "refused"},
@@ -3810,7 +3810,7 @@ def test_a_worker_s_call_carries_the_worker_and_why_the_world_refused_it(monkeyp
         ("issue_refund", {"id": "1"}, None, False, "late", 101.0, "a2", "agent", "refund", "refused", "deadline_passed"),
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
-    calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
+    calls = cr.collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
     assert [(one.worker_id, one.refusal_code) for one in calls] == [("order_lookup", ""), ("refund", "deadline_passed")]
 
 
@@ -3836,7 +3836,7 @@ def test_a_logged_call_is_graded_under_the_agent_s_own_tool_name_when_the_world_
         ("get_deal", {"id": 8}, {}, True, "", 2.0, "agent", None),
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
-    calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
+    calls = cr.collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
     assert [one.name for one in calls] == ["list_refunds", "get_deal"]
 
 
@@ -3918,7 +3918,7 @@ def test_a_worker_s_call_whose_answer_differs_from_the_door_s_row_is_still_a_byp
     ids=["record-says-refused", "record-says-answered"],
 )
 def test_a_call_the_door_refused_on_the_shared_address_is_the_worker_s_bypass(tmp_path, worker_record) -> None:
-    # Plan rows 147, 154b (order 1048's shape): the Refund worker called the world on the shared address and the door
+    # The Refund worker called the world on the shared address and the door
     # refused it there, so the door's row names no worker; the worker's own event names it.
     refused = replace(
         _door_call("issue_refund", "", 1794927459.8243933, amount=75.0, order_id="1048"),
@@ -3964,12 +3964,12 @@ def test_a_door_row_from_before_channels_is_not_a_bypass(monkeypatch) -> None:
     rows = [{"name": "issue_refund", "arguments": {}, "ok": True, "at": 1.0}]
     monkeypatch.setattr(cr, "read_tool_trace", lambda _address: rows)
     monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda _runtime: type("E", (), {"address": "x"})())
-    (call,) = cr._collect_tool_trace_calls(object())
+    (call,) = cr.collect_tool_trace_calls(object())
     assert call.channel is None
     assert cr.channel_bypasses([replace(call, worker_id="refund")], _RETURNS_WORKERS) == []
     # A row from a door that records channels: the shared address reads "".
     monkeypatch.setattr(cr, "read_tool_trace", lambda _address: [{**rows[0], "worker_id": None}])
-    (shared,) = cr._collect_tool_trace_calls(object())
+    (shared,) = cr.collect_tool_trace_calls(object())
     assert shared.channel == ""
 
 
@@ -4211,7 +4211,7 @@ def test_a_worker_s_door_row_and_its_span_are_one_call(monkeypatch) -> None:
                   worker_label="Refund worker", runtime_ids={"event_id": "s2"}),
     ]
     monkeypatch.setattr(cr, "_read_file_tool_calls", lambda _runtime, **_: ([], spans))
-    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda _runtime, **_: tuple(door))
+    monkeypatch.setattr(cr, "collect_tool_trace_calls", lambda _runtime, **_: tuple(door))
     calls = cr.collect_seam_calls(
         _runtime(), cr.EvidenceSeam.TOOL_TRACE, worker_names={"refund": "Refund worker", "order_lookup": "Lookup"}
     )

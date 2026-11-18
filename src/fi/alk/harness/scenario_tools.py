@@ -97,7 +97,7 @@ from .scenario import (
     redteam_problems,
     level_name,
     _pinned_identity,
-    _slug,
+    scenario_slug,
     unused_key,
     used_keys,
     with_unique_keys,
@@ -1865,7 +1865,7 @@ def accept_scenario(
         scenario.scenario_key = previous.scenario_key
     else:
         scenario.scenario_key = unused_key(
-            _slug(scenario.name) if named else scenario.scenario_key, keys
+            scenario_slug(scenario.name) if named else scenario.scenario_key, keys
         )
     if used is not None:
         used.add(scenario.scenario_key)
@@ -1879,7 +1879,7 @@ def accept_scenario(
             suffix += 1
         renamed = f"{stem}-{suffix}"
         scenario = scenario.model_copy(
-            update={"name": renamed, "scenario_key": unused_key(_slug(renamed), keys)}
+            update={"name": renamed, "scenario_key": unused_key(scenario_slug(renamed), keys)}
         )
         if used is not None:
             used.add(scenario.scenario_key)

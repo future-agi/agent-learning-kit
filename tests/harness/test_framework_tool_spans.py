@@ -86,7 +86,7 @@ def _sealed(tmp_path: Path) -> list[dict]:
         endpoints={},
         metadata={"tool_trace_path": str(tmp_path / "calls.jsonl")},
     )
-    return [trace_row(call) for call in call_runner._collect_file_tool_calls(runtime)]
+    return [trace_row(call) for call in call_runner.collect_file_tool_calls(runtime)]
 
 
 def _placed(rows: list[dict]) -> list[tuple]:

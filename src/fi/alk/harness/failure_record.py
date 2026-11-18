@@ -19,10 +19,16 @@ is never recorded.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
+
+from .outbound import redact_outbound_text
+from .process_runtime import ProcessRuntimeError
+
+logger = logging.getLogger(__name__)
 
 FAILURE_RECORD = Path(os.environ.get("ALK_FAILURE_RECORD", "/work/failure.json"))
 SCHEMA_VERSION = 1
@@ -47,10 +53,20 @@ _TYPED = re.compile(
 )
 
 
+class FailureRecord(TypedDict):
+    """What `record` writes: whose failure the harness believes it was, and one redacted line of its own text."""
+
+    schema_version: int
+    domain: str
+    phase: str
+    stage: str | None
+    code: str | None
+    process: str | None
+    message: str
+
+
 def _typed(exc: BaseException) -> tuple[str, str, str | None, str] | None:
     """``(stage, code, process, detail)`` of the process failure behind ``exc``."""
-    from .process_runtime import ProcessRuntimeError
-
     seen: set[int] = set()
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
@@ -98,15 +114,13 @@ def _domain(
 
 def record(
     phase: str, exc: BaseException, path: Path | None = None
-) -> dict[str, Any] | None:
+) -> FailureRecord | None:
     """Write this failure in place of any earlier one. Never raises."""
-    from .outbound import redact_outbound_text
-
     target = path or FAILURE_RECORD
     try:
         typed = _typed(exc)
         line = " ".join(redact_outbound_text(_own_text(exc)).split())
-        body = {
+        body: FailureRecord = {
             "schema_version": SCHEMA_VERSION,
             "domain": _domain(phase, typed, _diagnostic_codes(exc)),
             "phase": phase,
@@ -118,7 +132,8 @@ def record(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(body, sort_keys=True) + "\n", encoding="utf-8")
         return body
-    except Exception:  # noqa: BLE001 - the record never changes how the run ends
+    except Exception as unwritten:  # noqa: BLE001 - the record never changes how the run ends
+        logger.info("failure record not written: %s", type(unwritten).__name__)
         return None
 
 

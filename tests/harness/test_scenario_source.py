@@ -913,7 +913,7 @@ def test_setup_and_ready_still_allow_empty_source_after_the_r1_2_fix(
 
 def test_mutation_vacuous_empty_check_pass_is_caught(tmp_path: Path) -> None:
     # Mutation table (R1-2): simulates deleting `allow_empty=False` from the `check` call site in
-    # `_load_one`, i.e. reverting to the pre-fix behavior where an existing-but-empty check file
+    # `load_one`, i.e. reverting to the pre-fix behavior where an existing-but-empty check file
     # silently compiled to a no-op "held" callable -- a vacuous deterministic pass.
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(
@@ -1015,7 +1015,7 @@ def test_plain_subgoal_names_are_unaffected_by_the_r1_3_fix(tmp_path: Path) -> N
 def test_mutation_subgoal_name_sanitization_reproduces_the_bundle_escape(
     tmp_path: Path,
 ) -> None:
-    # Mutation table (R1-3): simulates deleting the `_validate_subgoal_name` call in `_load_one` --
+    # Mutation table (R1-3): simulates deleting the `_validate_subgoal_name` call in `load_one` --
     # an absolute-path sub_goal name would once again resolve `check_path` to a file entirely
     # outside `checks/` (and outside the sealed bundle), reading and compiling it.
     outside = tmp_path / "outside.py"
@@ -1697,17 +1697,17 @@ def test_mutation_skip_compile_check_is_killed(tmp_path: Path) -> None:
 
 
 def test_mutation_judged_flag_dropped_is_killed_by_5b_verdict_assertions() -> None:
-    # Mutant: `_load_one` always sets `judged=""`, as if the "no checks/<name>.py -> judged"
+    # Mutant: `load_one` always sets `judged=""`, as if the "no checks/<name>.py -> judged"
     # branch were deleted.
     #
     # R1-6/R1-8 fold-in (p12-review-r1.md LOW findings): the original version of this test named
     # the 5b consumer-proof test in its own identifier but never actually ran it -- it asserted on
-    # `_load_one`'s output directly instead, which is true but does not exercise the killing
+    # `load_one`'s output directly instead, which is true but does not exercise the killing
     # assertion it claims to. This version runs the REAL
     # `test_consumer_proof_real_scheduler_evaluates_wrapped_scenarios` under the patch and checks
     # THAT it raises. No `async def`/`asyncio.run` wrapper needed either (R1-8): that test already
     # drives its own `asyncio.run` internally, and nothing here awaits anything.
-    original_load_one = ss._load_one
+    original_load_one = ss.load_one
 
     def _dropped_judged(folder: Path, **_read_as_the_real_one_is):
         compiled = original_load_one(folder)
@@ -1723,7 +1723,7 @@ def test_mutation_judged_flag_dropped_is_killed_by_5b_verdict_assertions() -> No
             ready=compiled.ready,
         )
 
-    with mock.patch.object(ss, "_load_one", _dropped_judged):
+    with mock.patch.object(ss, "load_one", _dropped_judged):
         with pytest.raises(AssertionError):
             test_consumer_proof_real_scheduler_evaluates_wrapped_scenarios()
 
@@ -1741,7 +1741,7 @@ def test_mutation_empty_key_reader_synthesizing_a_key_is_caught(tmp_path: Path) 
     real = ss.load_scenarios(tmp_path)[0]
     assert real.scenario_key == ""  # baseline: verbatim carry holds
 
-    original_load_one = ss._load_one
+    original_load_one = ss.load_one
 
     def _synthesizes_key(folder: Path, **_read_as_the_real_one_is):
         compiled = original_load_one(folder)
@@ -1754,7 +1754,7 @@ def test_mutation_empty_key_reader_synthesizing_a_key_is_caught(tmp_path: Path) 
             ready=compiled.ready,
         )
 
-    with mock.patch.object(ss, "_load_one", _synthesizes_key):
+    with mock.patch.object(ss, "load_one", _synthesizes_key):
         mutant = ss.load_scenarios(tmp_path)[0]
         assert mutant.scenario_key != ""  # the mutant's defect: no longer verbatim
 

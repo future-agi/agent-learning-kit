@@ -15,7 +15,14 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
+from .backends import tool
+from .catalogue import Catalogue
+from .contract import AgentContract
+from .judge import NoGateway, chat_completion
 from .leaks import normalise
+from .proof_records import PolicyCheck, SourceResult
+from .scenario import Scenario
+from .tools import schema
 
 # Kinds whose resolution ALK decides; the rest are left to the platform.
 ALK_RESOLVED_KINDS = frozenset({"rule", "file", "requirement", "assumption"})
@@ -35,14 +42,14 @@ def _file(world_root: Path, ref: str) -> Path | None:
     return None
 
 
-def resolve_sources(scenario: Any, contract: Any, world_root: Path) -> list[dict[str, Any]]:
+def resolve_sources(scenario: Scenario, contract: AgentContract | None, world_root: Path) -> list[SourceResult]:
     """One entry per cited source: `{kind, ref, resolved, problem, ...}`; `resolved` None means
     the platform decides it."""
     rules = list(getattr(contract, "hard_constraints", None) or []) if contract is not None else []
-    resolved: list[dict[str, Any]] = []
+    resolved: list[SourceResult] = []
     for source in getattr(scenario, "sources", None) or []:
         kind, ref, quote = source.kind, source.ref, source.quote
-        entry: dict[str, Any] = {"kind": kind, "ref": ref, "resolved": True, "problem": ""}
+        entry: SourceResult = {"kind": kind, "ref": ref, "resolved": True, "problem": ""}
         if kind == "rule":
             wanted = normalise(quote)
             matched = next((at for at, rule in enumerate(rules) if wanted and wanted in normalise(rule)), None)
@@ -71,12 +78,12 @@ def resolve_sources(scenario: Any, contract: Any, world_root: Path) -> list[dict
     return resolved
 
 
-def unresolved(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def unresolved(entries: list[SourceResult]) -> list[SourceResult]:
     """The entries ALK resolved and found false."""
     return [one for one in entries if one["kind"] in ALK_RESOLVED_KINDS and one.get("resolved") is False]
 
 
-def expected_outcome(scenario: Any, catalogue: Any) -> str:
+def expected_outcome(scenario: Scenario, catalogue: Catalogue) -> str:
     """What the case expects, in words: each of its sub-goals' `what`."""
     lines = []
     for name in getattr(scenario, "sub_goals", None) or []:
@@ -98,10 +105,6 @@ _CONFLICT_PROMPT = (
 
 def _harness_conflict_judge(expected: str, rule: str) -> tuple[bool | None, str]:
     """One forced judge call at temperature 0: (conflict, why). None when no judge can run here."""
-    from .backends import tool
-    from .judge import NoGateway, _complete
-    from .tools import schema
-
     @tool(
         "decide",
         "Whether the expected outcome contradicts the rule.",
@@ -112,7 +115,7 @@ def _harness_conflict_judge(expected: str, rule: str) -> tuple[bool | None, str]
 
     conversation = [{"role": "user", "content": _CONFLICT_PROMPT.format(expected=expected, rule=rule)}]
     try:
-        message = _complete(conversation, [decide], True, temperature=0)
+        message = chat_completion(conversation, [decide], True, temperature=0)
     except NoGateway:
         return None, ""
     for call in message.get("tool_calls") or []:
@@ -149,13 +152,13 @@ def _save_checks(world_root: Path, checks: dict[str, dict[str, Any]]) -> None:
 
 
 def policy_conflicts(
-    scenario: Any,
-    catalogue: Any,
+    scenario: Scenario,
+    catalogue: Catalogue,
     rules: list[str],
     world_root: Path,
     *,
     judge: Callable[[str, str], tuple[bool | None, str]] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[PolicyCheck]:
     """For each cited rule that resolves, whether the case's expected outcome contradicts it:
     `{rule, ref, conflict, why}`. `conflict` None means no judge could decide it here."""
     expected = expected_outcome(scenario, catalogue)
@@ -164,7 +167,7 @@ def policy_conflicts(
     decide = judge or _harness_conflict_judge
     cache = _load_checks(world_root)
     changed = False
-    found: list[dict[str, Any]] = []
+    found: list[PolicyCheck] = []
     for entry in resolve_sources(scenario, None if not rules else _Rules(rules), world_root):
         if entry["kind"] != "rule" or entry.get("resolved") is not True:
             continue

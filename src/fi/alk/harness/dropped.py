@@ -16,16 +16,52 @@ import json
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
+from .contract import AgentContract
+from .proof_records import ProofEntry
 from .prove import NO_NEGATIVE_CONTROL
-from .scenario import Scenario, _slug
+from .scenario import Scenario, scenario_slug
 
 DROPPED = "dropped.json"
 FORMAT = 1
 
 
-def load(workspace: Path) -> dict[str, dict[str, Any]]:
+class Capabilities(TypedDict):
+    """What a scenario needs, or what of it is gone: tools its reference solution calls, sub-goals it names."""
+
+    tools: list[str]
+    sub_goals: list[str]
+
+
+class _Dropped(TypedDict):
+    name: str
+    capabilities: Capabilities
+    missing: Capabilities
+    agent_version: str
+    reason: str
+    last_suite_version: str
+    # The scenario's last content, as its scenario file holds it.
+    content: dict[str, Any]
+
+
+class DropRecord(_Dropped, total=False):
+    """One dropped scenario in ``dropped.json``: what it needed, what was gone, why, and its last content."""
+
+    restored_at: str
+    restore_failed: str
+
+
+class Settled(TypedDict, total=False):
+    """A restore as the rebuild's result lists it."""
+
+    key: str
+    name: str
+    why: str
+    proof: str
+
+
+def load(workspace: Path) -> dict[str, DropRecord]:
     """Each dropped scenario's record, by its key; empty when nothing was dropped."""
     try:
         body = json.loads((Path(workspace) / DROPPED).read_text(encoding="utf-8"))
@@ -37,7 +73,7 @@ def load(workspace: Path) -> dict[str, dict[str, Any]]:
     return {str(key): dict(one) for key, one in held.items() if isinstance(one, dict)}
 
 
-def save(workspace: Path, records: Mapping[str, Mapping[str, Any]]) -> None:
+def save(workspace: Path, records: Mapping[str, DropRecord]) -> None:
     """Write the records; with none left the file goes, so an untouched suite stays unchanged."""
     path = Path(workspace) / DROPPED
     if not records:
@@ -79,7 +115,7 @@ def missing(
 
 
 def reason(gone: Mapping[str, Iterable[str]], agent_version: str = "") -> str:
-    """Why the scenario was dropped, for a person: "agent v5 no longer has `cancel_booking`"."""
+    """Why the scenario was dropped, for a person: "agent v5 no longer has `<tool>`"."""
     agent = f"agent {agent_version}" if agent_version else "the agent"
     parts = []
     tools = list(gone.get("tools") or [])
@@ -104,14 +140,14 @@ def record_drops(
     sub_goals: set[str],
     agent_version: str = "",
     suite_version: str = "",
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, DropRecord]:
     """Record each scenario of ``before`` the suite no longer holds because a capability it needs
     is gone, and return those records by key. ``before`` is each scenario's content when the turn
     began; ``present`` the keys the suite holds now."""
     records = load(workspace)
     # One recorded by an earlier report of this turn and kept again after it is not dropped.
     kept_again = {key for key in set(before) & present if key in records}
-    recorded: dict[str, dict[str, Any]] = {}
+    recorded: dict[str, DropRecord] = {}
     for key in sorted(set(before) - present):
         try:
             scenario = Scenario.model_validate(dict(before[key]))
@@ -142,7 +178,7 @@ def record_drops(
 
 
 def restorable(
-    records: Mapping[str, Mapping[str, Any]], tools: set[str], sub_goals: set[str]
+    records: Mapping[str, DropRecord], tools: set[str], sub_goals: set[str]
 ) -> list[str]:
     """The dropped keys whose every needed capability is back."""
     return sorted(
@@ -153,7 +189,7 @@ def restorable(
     )
 
 
-def argument_changes(scenario: Scenario, contract: Any) -> list[str]:
+def argument_changes(scenario: Scenario, contract: AgentContract | None) -> list[str]:
     """Steps of the reference solution passing arguments the tool no longer takes, or naming a
     tool the contract lacks."""
     if contract is None:
@@ -179,7 +215,7 @@ def restore(
     *,
     tools: set[str],
     sub_goals: set[str],
-) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+) -> tuple[dict[str, DropRecord], dict[str, str]]:
     """Put each dropped scenario whose capabilities are all back into ``kept`` under its own key,
     from its last content: ({key: its record} for those restored, {key: why not} for those that
     could not be put back).
@@ -190,7 +226,7 @@ def restore(
     records = load(workspace)
     keys = {one.scenario_key for one in kept}
     names = {one.name: one.scenario_key for one in kept}
-    restored: dict[str, dict[str, Any]] = {}
+    restored: dict[str, DropRecord] = {}
     refused: dict[str, str] = {}
     for key in restorable(records, tools, sub_goals):
         if key in keys:
@@ -224,7 +260,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _unproved(record: Mapping[str, Any], proof: Mapping[str, Any] | None) -> str:
+def _unproved(record: DropRecord, proof: ProofEntry | None) -> str:
     """Why a restored scenario's proof does not bring it back, or "" when it does: proved, or kept as written
     because this lane could not run a step. Only a proof made since the restore counts."""
     since = str(record.get("restored_at") or "")
@@ -241,11 +277,11 @@ def _unproved(record: Mapping[str, Any], proof: Mapping[str, Any] | None) -> str
 
 def finish_restore(
     workspace: Path,
-    restored: Mapping[str, Mapping[str, Any]],
+    restored: Mapping[str, DropRecord],
     problems: list[dict[str, Any]],
     present: set[str],
-    proofs: Mapping[str, Mapping[str, Any]] | None = None,
-) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, Any]]]:
+    proofs: Mapping[str, ProofEntry] | None = None,
+) -> tuple[list[Settled], list[Settled], list[dict[str, Any]]]:
     """Settle what this rebuild restored: (restored, failed, the gate's other problems).
 
     ``restored`` is each restored scenario's record as ``restore`` returned it, so settling again
@@ -262,8 +298,8 @@ def finish_restore(
         for one in problems
         if one.get("kind") == "scenario"
     }
-    done: list[dict[str, str]] = []
-    failed: list[dict[str, str]] = []
+    done: list[Settled] = []
+    failed: list[Settled] = []
     for key in sorted(restored):
         record = dict(restored[key])
         proof = (proofs or {}).get(key)
@@ -293,7 +329,7 @@ def finish_restore(
     return done, failed, others
 
 
-def failed_restores(workspace: Path, keys: Iterable[str]) -> list[dict[str, str]]:
+def failed_restores(workspace: Path, keys: Iterable[str]) -> list[Settled]:
     """The failed restore of each of ``keys`` that has one, as the result lists it."""
     records = load(workspace)
     return [
@@ -312,7 +348,7 @@ def submit_refusal(
     one is already in the suite, so submitting it again is an edit and is allowed.
     """
     name = str(payload.get("name") or "").strip()
-    key = str(payload.get("scenario_key") or "").strip() or _slug(name)
+    key = str(payload.get("scenario_key") or "").strip() or scenario_slug(name)
     if key in present:
         return ""
     record = load(workspace).get(key)
@@ -325,7 +361,7 @@ def submit_refusal(
     )
 
 
-def restore_note(workspace: Path, contract: Any, sub_goals: set[str]) -> str:
+def restore_note(workspace: Path, contract: AgentContract | None, sub_goals: set[str]) -> str:
     """The rebuild message's line on the scenarios this rebuild restores, or ""."""
     tools = contract.tool_names() if contract is not None else set()
     records = load(workspace)

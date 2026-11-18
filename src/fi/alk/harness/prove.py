@@ -27,9 +27,11 @@ Only a scenario that clears all three is kept. That is the green light.
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
@@ -37,10 +39,16 @@ from typing import Any, Sequence
 from .actors import load_actors
 from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
+from .contract import AgentContract
+from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
 from .folder import apply_setup, check_ready
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
 from .world.snapshot import read_manifest, restore
+from .grounding import policy_conflicts, resolve_sources, unresolved
+from .judge import judge_sub_goal
+from .leaks import leaks
+from .understand import load
 
 
 # The lane could not execute something; the case runs labelled "kept as written", never as proved.
@@ -86,26 +94,26 @@ class Proof:
     unchecked: list[str] = field(default_factory=list)
     # Each negative control played: {name, why, failed, held, assumed}. A control with assumed
     # steps did not run: its tools have no endpoint, so the world never changed.
-    controls: list[dict[str, Any]] = field(default_factory=list)
+    controls: list[ControlResult] = field(default_factory=list)
     # "no_change" when the reference leaves the world as doing nothing does: a refusal case.
     outcome: str = "change"
     # Visible text repeating grader-only material: {who, field, grader_field, excerpt}.
-    leaks: list[dict[str, str]] = field(default_factory=list)
+    leaks: list[LeakRecord] = field(default_factory=list)
     # Each cited source and whether it resolved: {kind, ref, resolved, problem, ...}.
-    sources: list[dict[str, Any]] = field(default_factory=list)
+    sources: list[SourceResult] = field(default_factory=list)
     # Each cited rule checked against the expected outcome: {rule, ref, conflict, why}.
-    policy_checks: list[dict[str, Any]] = field(default_factory=list)
+    policy_checks: list[PolicyCheck] = field(default_factory=list)
     # What each deterministic check reads: "tool_calls" when it uses `calls`, "world_state" when it
     # uses `world`. The platform compares it with what the agent gives the harness.
     evidence: dict[str, list[str]] = field(default_factory=dict)
 
     @property
-    def conflicts(self) -> list[dict[str, Any]]:
+    def conflicts(self) -> list[PolicyCheck]:
         """Cited rules the judge found the expected outcome contradicts."""
         return [one for one in self.policy_checks if one.get("conflict") is True]
 
     @property
-    def ran_controls(self) -> list[dict[str, Any]]:
+    def ran_controls(self) -> list[ControlResult]:
         """Controls played by code to a pass or fail; one that could not be played (no checks, a
         crash) is no evidence either way."""
         return [
@@ -115,7 +123,7 @@ class Proof:
         ]
 
     @property
-    def judged_controls(self) -> list[dict[str, Any]]:
+    def judged_controls(self) -> list[ControlResult]:
         """Controls the judge decided: played through the judge, which said fail or pass."""
         return [one for one in self.controls if one.get("judged") and one.get("failed") is not None]
 
@@ -126,9 +134,7 @@ class Proof:
         return bool(ran) and all(one.get("failed") for one in ran)
 
     @property
-    def unresolved_sources(self) -> list[dict[str, Any]]:
-        from .grounding import unresolved
-
+    def unresolved_sources(self) -> list[SourceResult]:
         return unresolved(self.sources)
     # The reference solution's trial, for comparing tools' declared tables with what changed: the calls the world took
     # in order, the tables that ended different from the start, and why it cannot say which tool changed them.
@@ -387,7 +393,7 @@ def check_evidence(source: str) -> list[str]:
     return found
 
 
-def _checks_for(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str]]:
+def checks_for(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str]]:
     """The deterministic checks this scenario is graded by, in catalogue order."""
     chosen: list[tuple[str, str]] = []
     for name in scenario.sub_goals:
@@ -695,8 +701,6 @@ def native_runtime(world_root: Path) -> bool:
 
 
 def workspace_bindings(world_root: Path) -> dict[str, str]:
-    from .understand import load
-
     contract = load(world_root)
     return dict(contract.runtime.workspaces) if contract and contract.runtime else {}
 
@@ -715,7 +719,7 @@ def _file_calls(tree: ast.AST) -> list[ast.Call]:
 
 def workspace_fixture(scenario: Scenario, catalogue: Catalogue) -> bool:
     sources = [scenario.setup_code, scenario.ready_code]
-    sources.extend(source for _, source in _checks_for(scenario, catalogue))
+    sources.extend(source for _, source in checks_for(scenario, catalogue))
     for source in sources:
         try:
             if _file_calls(ast.parse(source)):
@@ -738,7 +742,7 @@ def workspace_fixture_problems(
     reads = False
     problems = []
     sources = [("setup", scenario.setup_code), ("ready", scenario.ready_code)]
-    sources.extend(("check", source) for _, source in _checks_for(scenario, catalogue))
+    sources.extend(("check", source) for _, source in checks_for(scenario, catalogue))
     for entry, source in sources:
         if not source.strip():
             continue
@@ -955,9 +959,9 @@ def _controls(
     world_root: Path,
     checks: list[tuple[str, str]],
     reference: Any,
-) -> list[dict[str, Any]]:
+) -> list[ControlResult]:
     """Play each negative control like a solution; a control fails when a check it names fails."""
-    played: list[dict[str, Any]] = []
+    played: list[ControlResult] = []
     for control in getattr(scenario, "negative_controls", None) or []:
         if not checks:
             played.append({"name": control.name, "why": control.why, "failed": None, "held": [], "assumed": []})
@@ -990,10 +994,6 @@ JUDGED_ONLY_TEXT = (
 
 def _harness_judge(goal: Any, world: Any, calls: list[Call], messages: list[dict[str, str]], scenario: Any) -> Any:
     """The harness judge on one sub-goal, run on its own loop so it works from sync and async callers."""
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
-
-    from .judge import judge_sub_goal
 
     def decide() -> Any:
         return asyncio.run(judge_sub_goal(goal, world, calls, messages=messages, scenario=scenario))
@@ -1004,7 +1004,7 @@ def _harness_judge(goal: Any, world: Any, calls: list[Call], messages: list[dict
 
 def _judged_controls(
     scenario: Scenario, catalogue: Catalogue, world_root: Path, *, judge: Any = None
-) -> list[dict[str, Any]]:
+) -> list[ControlResult]:
     """Play each control of a judged-only case through the judge: its steps on a set-up world and its
     transcript as what was said. It fails when the judge fails a sub-goal it names. A control with no
     transcript gives the judge nothing the wrong agent said, so it is not played and reads not run."""
@@ -1014,9 +1014,9 @@ def _judged_controls(
         for name in scenario.sub_goals
         if (goal := catalogue.named(name)) is not None and not goal.deterministic()
     }
-    played: list[dict[str, Any]] = []
+    played: list[ControlResult] = []
     for control in getattr(scenario, "negative_controls", None) or []:
-        entry: dict[str, Any] = {
+        entry: ControlResult = {
             "name": control.name,
             "why": control.why,
             "failed": None,
@@ -1073,7 +1073,8 @@ def _base_state(world_root: Path) -> Any:
     """The world before any setup, or None when it cannot be restored here."""
     try:
         world = restore(world_root)
-    except Exception:  # noqa: BLE001 - a world only the live runtime holds has no base state here
+    except Exception as exc:  # noqa: BLE001 - a world only the live runtime holds has no base state here
+        logger.info("no base state for the proof: %s", type(exc).__name__)
         return None
     try:
         return _end_state(world)
@@ -1081,23 +1082,20 @@ def _base_state(world_root: Path) -> Any:
         world.close()
 
 
-def _load_contract(world_root: Path) -> Any:
+def load_proof_contract(world_root: Path) -> AgentContract | None:
+    """The world's contract; none (the defaults: conversational, no rules) when it is absent or cannot be read."""
     try:
-        from .understand import load
-
         return load(world_root)
-    except Exception:  # noqa: BLE001 - no contract means the defaults: conversational, no rules
+    except (OSError, ValueError) as exc:
+        logger.info("contract not read for the proof: %s", type(exc).__name__)
         return None
 
 
-def _load_actors(world_root: Path) -> list[dict[str, Any]]:
-    try:
-        from .actors import load_actors  # type: ignore[import-not-found]
-    except ImportError:
-        return []
+def load_world_actors(world_root: Path) -> list[dict[str, Any]]:
     try:
         loaded = load_actors(world_root)
-    except Exception:  # noqa: BLE001 - an unreadable cast skips the actor audience
+    except (OSError, ValueError) as exc:
+        logger.info("actors not read for the proof, so no actor's view is checked: %s", type(exc).__name__)
         return []
     return [one if isinstance(one, dict) else getattr(one, "model_dump", lambda: {})() for one in loaded or []]
 
@@ -1117,14 +1115,11 @@ def prove(
     `judge(goal, world, calls, messages, scenario) -> (held, explanation)` decides a judged-only
     case's controls; None uses the harness judge. `conflict_judge(expected, rule) -> (conflict, why)`
     decides whether a cited rule contradicts the expected outcome; None uses the harness judge."""
-    from .grounding import policy_conflicts, resolve_sources
-    from .leaks import leaks
-
     proof = Proof()
     if contract is None:
-        contract = _load_contract(world_root)
+        contract = load_proof_contract(world_root)
     if actors is None:
-        actors = _load_actors(world_root)
+        actors = load_world_actors(world_root)
     # Before any gate or early return, so a leak or a false citation is reported whatever the gates say.
     world_state = None if native_runtime(world_root) else _base_state(world_root)
     proof.leaks = [
@@ -1134,7 +1129,7 @@ def prove(
     proof.sources = resolve_sources(scenario, contract, world_root)
     rules = [str(one) for one in (getattr(contract, "hard_constraints", None) or [])] if contract is not None else []
     proof.policy_checks = policy_conflicts(scenario, catalogue, rules, world_root, judge=conflict_judge) if rules else []
-    checks = _checks_for(scenario, catalogue)
+    checks = checks_for(scenario, catalogue)
     proof.evidence = {name: check_evidence(source) for name, source in checks}
     if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
         proof.deferred = True

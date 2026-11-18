@@ -800,15 +800,15 @@ Every scenario carries at least one negative control in `negative_controls`: a w
 written for this task, that its checks must fail. Each is `{name, why, steps, must_fail}`; `steps` is
 played exactly like `solution`.
 
-- Make it specific to the task: the refund issued twice, a refund on the 20-day order, the wrong
-  record looked up. A control that fails for a reason unrelated to the task proves nothing.
+- Make it specific to the task: the action done twice, the action taken on a record the rules
+  exclude, the wrong record looked up. A control that fails for a reason unrelated to the task proves nothing.
 - "Do nothing" is never a control. The third gate already covers it.
 - On a no-change (refusal) scenario, the control performs the forbidden change, and the checks must
   fail it. The checks of such a scenario may hold on an untouched world; the control is what shows
   they can fail.
 - A no-change scenario whose solution looks a record up with a fixed id also checks that the right
-  record was read (for example `any(c.name == "lookup_order" and c.arguments.get("order_id") ==
-  "O-20" for c in calls)`), or leaves that argument out of `fixed`. A read-only lookup with a wrong id
+  record was read (for example `any(c.name == "<the lookup tool>" and same_id(c.arguments.get("<its id
+  argument>"), "<the fixed id>") for c in calls)`), or leaves that argument out of `fixed`. A read-only lookup with a wrong id
   ends in the same state, so nothing else notices it.
 - A control whose checks still all pass is refused with the checks to tighten.
 - A case only a judge can grade (no code check reads its world) is kept as written, never proved,
@@ -831,7 +831,7 @@ requirement you cannot cite, add an `assumption` source whose `quote` says what 
 Set `must_pass: true` on a case when the person asks for it to block a release, or names it as one
 that must never fail. A failed must-pass case is named on the run's result. Leave it false otherwise.
 
-## Never put the answer where the caller or the agent can read it
+## Never put the answer where the simulated person or the agent can read it
 
 The grader-only material is each sub-goal's `what`, `judged`, `reference`, `verifier` and
 `comparison`, the values a check compares against that the world does not hold, `tests`, each
@@ -840,7 +840,7 @@ simulated person or the agent is given: the instruction, the variables, the pers
 message, or an actor's brief and knowledge. A scenario that repeats eight words of a sub-goal, a
 multi-word sub-goal name or a computed expected value in those fields is refused with the excerpt.
 On a conversational agent, the opening message must not repeat the instruction either: the
-instruction is the caller's, never the agent's.
+instruction is the simulated person's, never the agent's.
 
 ## What will be refused, and what to do
 

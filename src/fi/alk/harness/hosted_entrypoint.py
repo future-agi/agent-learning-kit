@@ -2068,7 +2068,7 @@ def default_install_sigterm_handler(cancel_state: CancelState) -> Callable[[], N
     return install_sigterm_handler(cancel_state)
 
 
-def _resolve_hosted_public_url(
+def resolve_hosted_public_url(
     capabilities: ob.HostedCapabilities,
     transport: ob.Transport,
     *,
@@ -2143,7 +2143,7 @@ class HostedEntrypointDeps:
     ] = field(
         default=lambda capabilities, transport: ProcessRuntimeProvider(
             **hosted_user_resolution(),
-            public_url_resolver=lambda port, ttl: _resolve_hosted_public_url(
+            public_url_resolver=lambda port, ttl: resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl
             ),
             provider_attempt_id=capabilities.attempt_id,

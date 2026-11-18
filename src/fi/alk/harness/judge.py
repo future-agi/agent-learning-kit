@@ -386,7 +386,7 @@ async def run_judge_conversation(
         forced = step == steps - 1
         evidence.delivered()
         try:
-            reply = await asyncio.to_thread(_complete, conversation, tools, forced)
+            reply = await asyncio.to_thread(chat_completion, conversation, tools, forced)
         except NoGateway:
             raise
         except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
@@ -453,7 +453,7 @@ async def request_final_verdicts(
     evidence.looked.update({"listen", "transcript"})
     try:
         try:
-            reply = await asyncio.to_thread(_complete, messages, [decide], True)
+            reply = await asyncio.to_thread(chat_completion, messages, [decide], True)
         except NoGateway:
             raise
         except Exception:
@@ -461,7 +461,7 @@ async def request_final_verdicts(
                 raise
             # The recording itself was refused: decide from the transcript.
             unplayable = [*messages[:2], {"role": "user", "content": _UNPLAYABLE}]
-            reply = await asyncio.to_thread(_complete, unplayable, [decide], True)
+            reply = await asyncio.to_thread(chat_completion, unplayable, [decide], True)
         for call in reply.get("tool_calls") or []:
             await _run([decide], call)
     except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
@@ -657,7 +657,7 @@ def _transcript(messages: Sequence[Any]) -> str:
     return body if len(body) <= _TRANSCRIPT_LIMIT else "...\n" + body[-_TRANSCRIPT_LIMIT:]
 
 
-def _complete(
+def chat_completion(
     conversation: list[dict[str, Any]], tools: Sequence[Any], forced: bool, *, temperature: float | None = None
 ) -> dict[str, Any]:
     """One turn of the judge on the gateway's OpenAI-compatible chat completions."""

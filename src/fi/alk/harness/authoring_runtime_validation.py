@@ -22,7 +22,14 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import failure_record
+import fi.alk
+
+from . import bundle_v2, call_runner, failure_record, hosted_entrypoint, judge, live_proof
+from .contract import AgentContract
+from .catalogue import load_catalogue
+from .certification import CheckStatus
+from .generated_runtime import installed_frameworks
+from .privilege import isolation_mode
 
 if TYPE_CHECKING:
     from .job import FailureCause
@@ -133,7 +140,6 @@ def _write_runtime_evidence(
         GenericHarnessArtifactStore,
         RuntimeValidationEvidence,
     )
-    from .privilege import isolation_mode
 
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     limitations = [
@@ -270,7 +276,7 @@ def _database_lanes() -> int:
     return max(1, min(cpus, int(quota)) if quota else cpus)
 
 
-def _world_state_digest(world) -> str:
+def world_state_digest(world) -> str:
     """Return a value-level baseline fingerprint without persisting world contents."""
 
     state = world.read_only().state()
@@ -365,8 +371,6 @@ def _make_local_seed_files_readable(bundle: Path) -> None:
 
 
 def _has_judged_sub_goals(authoring: Path) -> bool:
-    from .catalogue import load_catalogue
-
     for root in (authoring, authoring / "environment-bundle"):
         try:
             catalogue = load_catalogue(root)
@@ -379,24 +383,18 @@ def _has_judged_sub_goals(authoring: Path) -> bool:
 
 def _with_judge_check(checks, authoring: Path):
     """``checks`` with whether the judge answered, only when a judged sub-goal needs it."""
-    from .certification import CheckStatus
-    from .judge import judge_reachable
-
     if not _has_judged_sub_goals(authoring):
         return checks
-    return checks.model_copy(update={"judge_reachable": CheckStatus(judge_reachable())})
+    return checks.model_copy(update={"judge_reachable": CheckStatus(judge.judge_reachable())})
 
 
 def _harness_version() -> str | None:
-    from fi.alk import __version__
-
-    return None if __version__.startswith("0.0.0+") else __version__
+    return None if fi.alk.__version__.startswith("0.0.0+") else fi.alk.__version__
 
 
 def _write_generic_certificate(
     job, authoring: Path, repairs, source: Path | None = None
 ) -> None:
-    from .generated_runtime import installed_frameworks
     from .certification import (
         CertificationAuthoring,
         CertificationCompiler,
@@ -749,7 +747,7 @@ class _GeneratedWorldActionAdapter:
         )
 
     def checkpoint(self) -> str:
-        return _world_state_digest(self.world)
+        return world_state_digest(self.world)
 
     def reset(self) -> None:
         self.world.revert(self.baseline)
@@ -770,7 +768,7 @@ async def _probe_runtime_readiness(
             "runtime", "generated_runtime_plan_invalid: unsupported chat ingress"
         )
     baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
-    baseline_digest = _world_state_digest(baseline) if compare_baseline else None
+    baseline_digest = world_state_digest(baseline) if compare_baseline else None
     receipt = {
         "status": "failed",
         "candidate_hash": _generic_candidate_hash(source, authoring),
@@ -797,7 +795,7 @@ async def _probe_runtime_readiness(
                 await provider.reset(runtime, work_directory=work)
                 if compare_baseline:
                     restored = await factory.create(runtime, rng=random.Random(job.seed or 0))
-                    if _world_state_digest(restored) != baseline_digest:
+                    if world_state_digest(restored) != baseline_digest:
                         raise RuntimeValidationError(
                             "environment", "Readiness reset did not restore the baseline"
                         )
@@ -846,7 +844,7 @@ def _prepare_runtime_work(job, work: Path, secrets_path: Path, *, local_runtime:
 def _runtime_provider(job, secrets: Path, authoring: Path, *, local_runtime: bool, generic: bool):
     """The process runtime provider validation starts the bundle with."""
     from . import outbound
-    from .hosted_entrypoint import _resolve_hosted_public_url, job_secret_purposes
+    from .hosted_entrypoint import resolve_hosted_public_url, job_secret_purposes
     from .process_runtime import (
         ProcessRuntimeProvider,
         default_user_resolver,
@@ -869,7 +867,7 @@ def _runtime_provider(job, secrets: Path, authoring: Path, *, local_runtime: boo
         public_url_resolver=(
             None
             if capabilities is None
-            else lambda port, ttl: _resolve_hosted_public_url(
+            else lambda port, ttl: resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl
             )
         ),
@@ -1205,7 +1203,7 @@ async def validate_once(
                     )
                 world = await factory.create(against, rng=random.Random(job.seed or 0))
                 if generic and not external_provider:
-                    current_digest = _world_state_digest(world)
+                    current_digest = world_state_digest(world)
                     if baseline_state_digest is None:
                         baseline_state_digest = current_digest
                     elif current_digest != baseline_state_digest:
@@ -1377,12 +1375,11 @@ async def validate_once(
                             scenario_id=representative.scenario_id,
                             timeout=agent_chat_timeout_seconds(job) or _chat_target_timeout_seconds(),
                         )
-                        from .call_runner import _collect_file_tool_calls
-
                         # A test message can call tools too; then ask for the rest.
                         try:
-                            called = _collect_file_tool_calls(runtime)
-                        except Exception:  # noqa: BLE001 - no trace, nothing observed
+                            called = call_runner.collect_file_tool_calls(runtime)
+                        except Exception as unread:  # noqa: BLE001 - no trace, nothing observed
+                            logger.warning("agent's tool trace not read: %s", type(unread).__name__)
                             called = ()
                         record_tool_routing(
                             authoring,
@@ -1477,7 +1474,7 @@ async def validate_once(
             if generic:
                 # A scenario that already passed against this exact baseline, bundle and
                 # invariants passes again, so a repair re-checks only what failed or changed.
-                baseline_state_digest = _world_state_digest(baseline)
+                baseline_state_digest = world_state_digest(baseline)
                 passed_path = authoring / "generic-harness" / "setup-checks-passed.json"
                 passed = (
                     set(json.loads(passed_path.read_text(encoding="utf-8")))
@@ -1508,10 +1505,8 @@ async def validate_once(
             if not readiness_only:
                 # While the stack is up, play each case's reference and controls through the
                 # service-backed and MCP Toolbox tools for real; never fails validation.
-                from .live_proof import prove_live
-
                 try:
-                    live = await prove_live(
+                    live = await live_proof.prove_live(
                         authoring=authoring,
                         contract=AgentContract.model_validate_json(
                             (bundle / "contract.json").read_text(encoding="utf-8")
@@ -1533,7 +1528,7 @@ async def validate_once(
                 )
                 if (
                     baseline_state_digest is None
-                    or _world_state_digest(reset_world) != baseline_state_digest
+                    or world_state_digest(reset_world) != baseline_state_digest
                 ):
                     raise RuntimeValidationError(
                         "environment",
@@ -1669,14 +1664,12 @@ async def prove_on_sealed_runtime(
     """Start the pair's sealed bundle and play its cases on it, as certification does, without
     certifying again: no compile, no setup pass, no repair. `{}` when the bundle serves no tool a
     case could be played on; the cases then keep their offline proofs."""
-    from .bundle_v2 import RuntimeKindV2, load_bundle_v2
-    from .contract import AgentContract
-    from .hosted_entrypoint import ProcessWorldFactory
-    from .live_proof import MCP_TOOLBOX, TOOL_PROXY, prove_live
-
     bundle = authoring / "environment-bundle"
-    manifest = load_bundle_v2(bundle)
-    if manifest.runtime.kind is RuntimeKindV2.COMPOSE or not {TOOL_PROXY, MCP_TOOLBOX} & set(manifest.capabilities):
+    manifest = bundle_v2.load_bundle_v2(bundle)
+    if manifest.runtime.kind is bundle_v2.RuntimeKindV2.COMPOSE or not {
+        live_proof.TOOL_PROXY,
+        live_proof.MCP_TOOLBOX,
+    } & set(manifest.capabilities):
         return {}
     contract = AgentContract.model_validate_json((bundle / "contract.json").read_text(encoding="utf-8"))
     generic = bool(isinstance(getattr(job, "metadata", None), dict) and job.metadata.get("generic_harness_v1") is True)
@@ -1688,12 +1681,12 @@ async def prove_on_sealed_runtime(
             runtimes = await provider.provision(
                 manifest, source=source, bundle_dir=bundle, work_directory=work, instances=1
             )
-            return await prove_live(
+            return await live_proof.prove_live(
                 authoring=authoring,
                 contract=contract,
                 runtime=runtimes[0],
                 provider=provider,
-                factory=ProcessWorldFactory(work, bundle),
+                factory=hosted_entrypoint.ProcessWorldFactory(work, bundle),
                 work=work,
                 seed=job.seed or 0,
                 keys=keys,
