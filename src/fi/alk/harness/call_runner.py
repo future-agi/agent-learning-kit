@@ -1983,7 +1983,7 @@ def worker_stop_outcomes(
     notices = (
         [{
             "code": WORKER_STOPPED_AT_DEADLINE,
-            "message": "Stopped at their deadline: " + ", ".join(stopped) + ". Their own checks read partial.",
+            "message": "Stopped at their time limit: " + ", ".join(stopped) + ". Their own checks show partial results.",
             "workers": stopped,
         }]
         if stopped
@@ -2281,29 +2281,30 @@ def trial_worker_deadlines(
         return deadline, deadlines, []
     if cause == "in_process":
         message = (
-            f"{limit} cannot be held for this agent's workers: the world's door inside the agent stops a worker it "
-            "runs at its deadline but cannot tell the workers' calls apart, so this trial's checks were not graded."
+            f"{limit} can't be enforced for this agent's participants: they run inside the app, so their calls can't "
+            "be told apart. This trial's checks were not graded."
         )
     elif cause == "shared_worker":
         message = (
-            f"{limit} cannot be held for a worker wired as shared, because the world cannot tell its calls apart, so "
-            "this trial's checks were not graded. Record the worker as separate and rebuild the environment."
+            f"{limit} can't be enforced for a participant that shares the app's connection, because its calls can't "
+            "be told apart. This trial's checks were not graded. Give the participant its own connection and rebuild "
+            "the environment."
         )
     elif cause == "tool_service_not_fronted":
         message = (
-            "This agent's tool service does not run behind the world's door in this environment, so no worker's "
-            "deadline or permitted actions were enforced in this trial, and its checks were not graded."
+            "This agent's tool service doesn't run through the test environment here, so no participant's limits "
+            "were enforced in this trial, and its checks were not graded."
         )
     elif cause == "sealed_before_worker_limits":
         message = (
-            "This environment was sealed before worker limits, so no worker's deadline or permitted actions were "
-            "enforced in this trial, and its checks were not graded. Rebuild the environment to enforce them."
+            "This environment was built before participant limits existed, so none were enforced in this trial, "
+            "and its checks were not graded. Rebuild the environment to enforce them."
         )
     else:
         message = (
-            "This agent's tools are not reached through the world's tool proxy, so no worker's deadline or permitted "
-            "actions were enforced in this trial, and its checks were not graded. Limits are held only for tools the "
-            "agent calls over HTTP through the world's door."
+            "This agent's tools aren't called through the test environment, so no participant's limits were "
+            "enforced in this trial, and its checks were not graded. Limits can be enforced only for tools the agent "
+            "calls over HTTP."
         )
     return deadline, deadlines, [{"code": WORKER_LIMITS_NOT_ENFORCED, "message": message}]
 
@@ -2353,8 +2354,8 @@ def limits_not_held(document: Mapping[str, Any], bundle_dir: Path | str | None) 
 WORKER_DEADLINE_NOT_ENFORCED = "worker_deadline_not_enforced"
 # Why the door inside the agent could not hold a listed worker's deadline: the worker never ran as a task of its own.
 _NOT_ITS_OWN_TASK = (
-    "it did not run as a task of its own in this trial (a hand-off, run_streamed or run_sync, a LangGraph invoke, a "
-    "swarm subgraph node, or an unnamed graph), so the world's door inside the agent could not stop it"
+    "it didn't run on its own in this trial (it ran as a hand-off, run_streamed or run_sync, a LangGraph invoke, a "
+    "swarm subgraph node, or an unnamed graph), so it couldn't be stopped at its time limit"
 )
 
 
@@ -2371,7 +2372,7 @@ def deadlines_not_enforced(
     if not due:
         return []
     ran = read_worker_runs(runtime, since)
-    reason = _NOT_ITS_OWN_TASK if ran is not None else "the runs the world's door inside the agent saw could not be read"
+    reason = _NOT_ITS_OWN_TASK if ran is not None else "whether it ran on its own couldn't be read"
     return [{"worker": one, "reason": reason} for one in due if one not in (ran or set())]
 
 
@@ -2392,7 +2393,7 @@ def unenforced_deadline_notices(unenforced: Sequence[Mapping[str, str]]) -> list
         return []
     return [{
         "code": WORKER_DEADLINE_NOT_ENFORCED,
-        "message": "; ".join(f"{one['worker']}'s deadline was not enforced: {one['reason']}" for one in unenforced)
+        "message": "; ".join(f"{one['worker']}'s time limit wasn't enforced: {one['reason']}" for one in unenforced)
         + ". Their own checks were not graded.",
         "workers": [one["worker"] for one in unenforced],
     }]
@@ -2404,7 +2405,7 @@ def faults_not_held(faults: Sequence[Any], calls: Sequence[Call], bundle_dir: Pa
     if not faults or _door_record(bundle_dir).get("reason") != "tool_service_not_fronted":
         return []
     return fault_notices(
-        faults, None, calls, unreachable="this agent's tool service does not run behind the world's door"
+        faults, None, calls, unreachable="this agent's tool service doesn't run through the test environment"
     )
 
 
@@ -2447,9 +2448,9 @@ def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | st
             late |= ids - stopped
         tools = scenario_worker_subjects(document, bundle_dir) & limited_workers(bundle_dir)
         if deadline:
-            return "A worker deadline", late | tools
+            return "A participant's time limit", late | tools
         if relies_on_worker_limits(document, bundle_dir):
-            return "A worker's permitted tools", tools
+            return "A participant's allowed tools", tools
         return "", set()
     if not workers:
         # A contract that declares no workers: the budget's worker names were checked at authoring.
@@ -2464,9 +2465,9 @@ def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | st
         str(one.get("id")) for one in workers if one.get("binding") != "separate" and one.get("allowed_tools")
     } & scenario_worker_subjects(document, bundle_dir)
     if late:
-        return "A worker deadline", late | tools
+        return "A participant's time limit", late | tools
     if tools:
-        return "A worker's permitted tools", tools
+        return "A participant's allowed tools", tools
     return "", set()
 
 
@@ -2527,7 +2528,7 @@ def trial_relies_on_worker_limits(document: Mapping[str, Any], bundle_dir: Path 
 # Each declared worker's `limited` flag and, per scenario, whether the run holds its trial as not graded, sealed for
 # the platform so it reads the run's own answer rather than deciding it again.
 WORKER_LIMITS_FILE = "worker-limits.json"
-_SEALED_LIMIT = {"A worker deadline": "deadline", "A worker's permitted tools": "permitted_tools", "": "all"}
+_SEALED_LIMIT = {"A participant's time limit": "deadline", "A participant's allowed tools": "permitted_tools", "": "all"}
 
 
 def write_worker_limits(bundle_dir: Path) -> None:
@@ -2807,8 +2808,8 @@ def channel_bypass_notices(calls: Sequence[Call], bundle_dir: Any) -> list[dict[
         {
             "code": WORKER_CHANNEL_BYPASSED,
             "message": (
-                f"{', '.join(names.get(one, one) for one in ids)} reached the world without their own channel, so "
-                "their limits were not held for those calls; their own checks were not graded."
+                f"{', '.join(names.get(one, one) for one in ids)} used the app's connection instead of their own, so "
+                "their limits weren't enforced for those calls; their own checks were not graded."
             ),
             "workers": ids,
         }

@@ -2225,7 +2225,7 @@ def test_a_chat_agent_without_a_tool_proxy_says_its_workers_permissions_were_not
         {"name": "refund_refused", "subject": "worker:refund"}, {"name": "task_done", "subject": "task"}]}))
     [notice] = chat._unproxied_worker_notices({"sub_goals": ["refund_refused"]}, tmp_path)
     assert notice["code"] == "worker_limits_not_enforced"
-    assert "permitted actions" in notice["message"]
+    assert "participant's limits" in notice["message"]
     # A scenario that checks only the task is graded: it relies on no worker's limits.
     assert chat._unproxied_worker_notices({"sub_goals": ["task_done"]}, tmp_path) == []
 

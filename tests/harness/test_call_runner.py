@@ -3580,7 +3580,7 @@ def test_permitted_tools_on_a_shared_worker_the_scenario_does_not_rely_on_do_not
     assert cr.limits_not_held(about_writer, tmp_path) == []
     # Relying on the reader's permitted tools holds it, naming the reader alone.
     about_reader = {"worker_budget_seconds": {"writer": 5}, "sub_goals": ["reader_refused"]}
-    assert cr._limits_not_held_cause(about_reader, tmp_path) == ("A worker's permitted tools", "shared_worker", ["reader"])
+    assert cr._limits_not_held_cause(about_reader, tmp_path) == ("A participant's allowed tools", "shared_worker", ["reader"])
 
 
 def test_a_deadline_only_scenario_on_a_shared_worker_with_allowed_tools_is_not_held_for_permitted_tools(tmp_path):
@@ -3592,10 +3592,10 @@ def test_a_deadline_only_scenario_on_a_shared_worker_with_allowed_tools_is_not_h
     # One deadline for all reaches the shared reader too, whose calls the world cannot tell apart: held for the
     # deadline, never for its permitted tools, which no sub-goal judges.
     assert cr._limits_not_held_cause({"worker_budget_seconds": 30}, tmp_path) == (
-        "A worker deadline", "shared_worker", ["reader"])
+        "A participant's time limit", "shared_worker", ["reader"])
     # A deadline naming the shared reader is held for the deadline, not for its permitted tools.
     assert cr._limits_not_held_cause({"worker_budget_seconds": {"reader": 5}}, tmp_path) == (
-        "A worker deadline", "shared_worker", ["reader"])
+        "A participant's time limit", "shared_worker", ["reader"])
 
 
 def test_one_deadline_for_all_holds_a_relied_on_shared_worker_even_beside_a_separate_one(tmp_path):
@@ -3609,7 +3609,7 @@ def test_one_deadline_for_all_holds_a_relied_on_shared_worker_even_beside_a_sepa
     (tmp_path / "generated" / "tool-proxy").mkdir(parents=True)
     (tmp_path / "generated" / "tool-proxy" / "door.json").write_text(json.dumps({"worker_deadlines": "per_worker"}))
     document = {"worker_budget_seconds": 30, "sub_goals": ["reader_answered"]}
-    assert cr._limits_not_held_cause(document, tmp_path) == ("A worker deadline", "shared_worker", ["reader"])
+    assert cr._limits_not_held_cause(document, tmp_path) == ("A participant's time limit", "shared_worker", ["reader"])
 
 
 def test_the_bundle_seals_each_worker_s_limited_flag_and_what_each_scenario_relies_on(tmp_path):

@@ -2612,7 +2612,7 @@ class HostedScheduler:
                 _failure(
                     WORKER_LIMITS_NOT_ENFORCED,
                     "inconclusive: scenario problem, not the agent's: "
-                    + (unenforced or "worker limits were not enforced in this trial"),
+                    + (unenforced or "participant limits weren't enforced in this trial"),
                 ),
                 sub_goals=tuple(
                     SubGoalResult(name=goal.name, held=None, reason=None, judged=goal.judged != "")
@@ -2716,23 +2716,23 @@ class HostedScheduler:
             worker = getattr(goal, "worker", "")
             if worker and worker in bypassed:
                 sub_goal_results.append(
-                    _worker_unmeasured(goal, f"not graded: {worker} reached the world without its own channel")
+                    _worker_unmeasured(goal, f"not graded: {worker} used the app's connection instead of its own")
                 )
                 continue
             if worker and worker in unenforced:
                 sub_goal_results.append(
-                    _worker_unmeasured(goal, f"not graded: the deadline of {worker} was not enforced in this trial")
+                    _worker_unmeasured(goal, f"not graded: the time limit of {worker} wasn't enforced in this trial")
                 )
                 continue
             # Matched by contract id or by the framework's name for it, as spans carry the framework's name.
             lane = [one for one in calls if is_worker_call(one, worker, worker_names.get(worker, ""))] if worker else calls
             # A worker past its deadline keeps its partial evidence as its own outcome (the plan's hand-off journey).
             inconclusive = (
-                f"worker {worker} made no tool call the world recorded"
+                f"participant {worker} made no tool call the test environment recorded"
                 if not lane
-                else f"worker {worker} passed its deadline, so its result is partial"
+                else f"participant {worker} passed its time limit, so its result is partial"
                 if worker in stopped or any(getattr(one, "refusal_code", "") == "deadline_passed" for one in lane)
-                else f"the world could not read the limits of worker {worker}"
+                else f"the limits of participant {worker} couldn't be read"
                 if any(getattr(one, "refusal_code", "") == LIMITS_UNREADABLE for one in lane)
                 else ""
             ) if worker else ""

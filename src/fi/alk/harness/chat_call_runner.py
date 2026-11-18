@@ -194,8 +194,8 @@ def _unproxied_worker_notices(document: Mapping[str, Any], bundle_dir: Any = Non
         return []
     return [{
         "code": WORKER_LIMITS_NOT_ENFORCED,
-        "message": "This agent's tools are not reached through the world's tool proxy, so no worker's deadline or "
-        "permitted actions were enforced in this trial, and its checks were not graded.",
+        "message": "This agent's tools aren't called through the test environment, so no participant's limits were "
+        "enforced in this trial, and its checks were not graded.",
     }]
 
 

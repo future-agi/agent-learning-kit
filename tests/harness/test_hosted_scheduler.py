@@ -4979,7 +4979,7 @@ def test_a_worker_s_check_reads_only_that_worker_s_calls_and_without_any_is_inco
     assert (lookup.subject, task.subject, audit.subject) == ("worker:order_lookup", "task", "worker:audit")
     # Absence is never a pass: a worker with nothing in the world's log cannot be graded.
     assert (audit.verdict, audit.held) == ("inconclusive", None)
-    assert audit.reason == "Inconclusive: worker audit made no tool call the world recorded"
+    assert audit.reason == "Inconclusive: participant audit made no tool call the test environment recorded"
 
 
 def test_a_worker_s_failed_check_is_reported_beside_the_task_s_verdict_not_folded_into_it() -> None:
@@ -5031,7 +5031,7 @@ def test_a_worker_that_passed_its_deadline_has_its_own_checks_inconclusive_and_t
     )
     refund, lookup, task = receipt.sub_goals
     assert (refund.verdict, lookup.verdict, task.verdict) == ("inconclusive", "pass", "pass")
-    assert refund.reason == "Inconclusive: worker refund passed its deadline, so its result is partial"
+    assert refund.reason == "Inconclusive: participant refund passed its time limit, so its result is partial"
 
 
 def test_a_worker_stopped_at_its_deadline_reads_partial_even_with_no_later_refusal() -> None:
@@ -5055,7 +5055,7 @@ def test_a_worker_stopped_at_its_deadline_reads_partial_even_with_no_later_refus
     )
     refund, task = receipt.sub_goals
     assert (refund.verdict, task.verdict) == ("inconclusive", "pass")
-    assert refund.reason == "Inconclusive: worker refund passed its deadline, so its result is partial"
+    assert refund.reason == "Inconclusive: participant refund passed its time limit, so its result is partial"
 
 
 def test_a_worker_s_check_is_graded_on_the_calls_its_framework_names_it_by() -> None:
@@ -5146,7 +5146,7 @@ def test_a_bypass_leaves_that_worker_s_checks_unmeasured_and_grades_the_task() -
     # The worker's own check is not graded; the task reads the world whichever address was used.
     assert ran == ["task"]
     assert (worker.held, worker.verdict) == (None, "unmeasured")
-    assert "reached the world without its own channel" in worker.reason
+    assert "used the app's connection instead of its own" in worker.reason
     assert (task.held, task.verdict, receipt.status) == (False, "fail", "failed")
 
 
@@ -5164,7 +5164,7 @@ def test_a_listed_worker_the_in_process_door_cannot_stop_has_its_deadline_not_en
     # The door's hook never saw the worker run as a task of its own (a hand-off): its deadline is not enforced.
     monkeypatch.setattr(cr, "read_worker_runs", lambda _runtime, _since=None: set())
     [record] = cr.deadlines_not_enforced(object(), document, tmp_path)
-    assert record["worker"] == "refund" and "task of its own" in record["reason"]
+    assert record["worker"] == "refund" and "run on its own" in record["reason"]
     outcome = replace(
         _call_outcome(turns=2, calls=(hs.Call(name="issue_refund", arguments={}, worker_id="refund"),)),
         notices=tuple(cr.unenforced_deadline_notices([record])),
@@ -5180,7 +5180,7 @@ def test_a_listed_worker_the_in_process_door_cannot_stop_has_its_deadline_not_en
     worker, task = receipt.sub_goals
     assert ran == ["task"]
     assert (worker.held, worker.verdict) == (None, "unmeasured")
-    assert "deadline of refund was not enforced" in worker.reason
+    assert "time limit of refund wasn't enforced" in worker.reason
     # Not held: the rest of the trial is graded.
     assert receipt.failure is None or receipt.failure.code != "worker_limits_not_enforced"
     assert (task.held, task.verdict, receipt.status) == (False, "fail", "failed")
