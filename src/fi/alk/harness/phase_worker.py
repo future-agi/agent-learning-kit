@@ -26,9 +26,12 @@ async def main() -> None:
         WorldUnavailable,
         WorldUsageError,
     )
+    from .checks import check_namespace
+    from .isolated_process import CHANNEL_FD_ENV
     from .world.handle import HostedWorld
     from .world.runtime import Call
     from .world.stores.postgres import AttachedPostgresStore
+    from .world.workspace_channel import WorkspaceClient
 
     payload = json.load(sys.stdin)
     state = payload["world"]
@@ -44,6 +47,10 @@ async def main() -> None:
             )
             http_client = world
         else:
+            # The harness serves the workspace files: under per-user isolation this
+            # process cannot open them.
+            channel_fd = os.environ.get(CHANNEL_FD_ENV)
+            workspaces = WorkspaceClient(int(channel_fd)) if channel_fd else None
             world = HostedWorld(
                 AttachedPostgresStore(state["dsn"]),
                 state["world_index"],
@@ -51,14 +58,15 @@ async def main() -> None:
                 state["baseline"],
                 # The parent already validated this handle before scenario execution.
                 _validate_baseline=False,
-                workspace_roots=state.get("workspace_roots", {}),
+                workspace_channel=workspaces,
                 endpoints=state.get("endpoints", {}),
                 observations=state.get("observations", {}),
             )
             http_client = world._http_client
         http_client._restore_private_http_state(payload.get("private_http", {}))
         handle = world.read_only() if state["read_only"] else world
-        namespace: dict[str, Any] = {}
+        # The same names a check is given while authoring (`same_id`), so a proved check runs the same here.
+        namespace: dict[str, Any] = check_namespace()
         exec(compile(payload["source"], "<scenario-phase>", "exec"), namespace)  # noqa: S102 - isolated scenario execution
         args = [handle]
         if "calls" in payload:

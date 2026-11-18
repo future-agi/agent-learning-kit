@@ -208,6 +208,11 @@ def save(
                 # be able to import the tools it was bound to, and a scenario run happens
                 # long after the build stage that found the path.
                 "source_root": world.source_root,
+                **(
+                    {"source_subfolder": world.source_subfolder}
+                    if getattr(world, "source_subfolder", "")
+                    else {}
+                ),
                 "source_provenance": source_provenance(world.source_root),
                 # A run refuses legacy/demo worlds whose handlers were authored by the harness.
                 # New worlds can only acquire handlers through adopt_tool, and a source root is
@@ -314,7 +319,7 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
     # is importable again, and the frozen state is what those tools act on.
     reached = str(manifest.get("source_root") or "")
     if reached:
-        world.reach(reached)
+        world.reach(reached, str(manifest.get("source_subfolder") or ""))
     frozen_state = root / STATE
     if frozen_state.exists():
         world.state_object = json.loads(frozen_state.read_text(encoding="utf-8"))
