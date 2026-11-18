@@ -18,6 +18,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Mapping
 
+from ..source_model import is_harness_table
 from .runtime import GeneratedWorld
 
 DATABASE = "world.sqlite"
@@ -363,10 +364,20 @@ def apply_overlay(world: GeneratedWorld, overlay: Mapping[str, Any] | None) -> i
     return written
 
 
-def world_state_digest(world) -> str:
-    """Return a value-level baseline fingerprint without persisting world contents."""
+def source_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    """A world's state without the harness's own tables: the call log and the door's tables change on every call, a
+    read included, so they never show whether the world itself changed."""
+    return {table: rows for table, rows in state.items() if not is_harness_table(table)}
+
+
+def world_state_digest(world, *, source_only: bool = False) -> str:
+    """Return a value-level baseline fingerprint without persisting world contents. ``source_only`` leaves out the
+    harness's own tables (`source_state`), for asking whether something changed the world rather than whether it was
+    restored exactly."""
 
     state = world.read_only().state()
+    if source_only:
+        state = source_state(state)
     canonical = {
         table: sorted(
             rows,
