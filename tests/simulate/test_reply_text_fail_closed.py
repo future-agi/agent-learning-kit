@@ -33,7 +33,9 @@ def _call(reply, **options):
         new_message={"role": "user", "content": "hi"},
     )
     result = asyncio.run(wrap_agent(Agent(), **options).call(agent_input))
-    return result if isinstance(result, AgentResponse) else AgentResponse(content=result)
+    return (
+        result if isinstance(result, AgentResponse) else AgentResponse(content=result)
+    )
 
 
 def _text(reply, **options):
@@ -67,7 +69,10 @@ def test_a_block_or_message_that_is_not_answer_text_gives_nothing(reply):
 
 def test_a_message_type_without_content_gives_nothing_and_an_error_record_gives_its_text():
     assert _text({"type": "user", "id": 1}) == ""
-    assert _text({"status": "error", "message": {"type": "text", "text": "Rate limited"}}) == "Rate limited"
+    assert (
+        _text({"status": "error", "message": {"type": "text", "text": "Rate limited"}})
+        == "Rate limited"
+    )
 
 
 @pytest.mark.parametrize(
@@ -104,10 +109,28 @@ def test_a_value_nothing_can_read_gives_no_text(reply):
     [
         ({"role": "user", "name": "n"}, ""),
         ({"order": "A1", "total": 3}, '{"order": "A1", "total": 3}'),
-        ([{"order_id": "A1"}, {"order_id": "B2"}], '[{"order_id": "A1"}, {"order_id": "B2"}]'),
-        ({"result": {"order": "A1", "parts": ["bolt", "nut"]}}, '{"order": "A1", "parts": ["bolt", "nut"]}'),
-        ({"result": {"message": "hello", "code": 200}}, '{"message": "hello", "code": 200}'),
-        ({"id": 7, "result": {"status": "error", "note": {"type": "text", "text": "Rate limited"}}}, "Rate limited"),
+        (
+            [{"order_id": "A1"}, {"order_id": "B2"}],
+            '[{"order_id": "A1"}, {"order_id": "B2"}]',
+        ),
+        (
+            {"result": {"order": "A1", "parts": ["bolt", "nut"]}},
+            '{"order": "A1", "parts": ["bolt", "nut"]}',
+        ),
+        (
+            {"result": {"message": "hello", "code": 200}},
+            '{"message": "hello", "code": 200}',
+        ),
+        (
+            {
+                "id": 7,
+                "result": {
+                    "status": "error",
+                    "note": {"type": "text", "text": "Rate limited"},
+                },
+            },
+            "Rate limited",
+        ),
     ],
     ids=[
         "chat-role-without-content",
@@ -118,7 +141,9 @@ def test_a_value_nothing_can_read_gives_no_text(reply):
         "text-block-inside-a-record-is-found",
     ],
 )
-def test_plain_data_stays_json_and_a_message_like_value_gives_only_its_text(reply, expected):
+def test_plain_data_stays_json_and_a_message_like_value_gives_only_its_text(
+    reply, expected
+):
     assert _text(reply) == expected
 
 
@@ -156,7 +181,10 @@ def test_the_plain_data_dump_drops_the_known_reasoning_keys(reply, expected):
 
 
 def test_output_key_value_is_scrubbed_too():
-    assert _text({"out": {"order": "A1", "signature": "s"}}, output_key="out") == '{"order": "A1"}'
+    assert (
+        _text({"out": {"order": "A1", "signature": "s"}}, output_key="out")
+        == '{"order": "A1"}'
+    )
 
 
 def test_an_unreadable_reply_records_its_type_and_key_names_only():
