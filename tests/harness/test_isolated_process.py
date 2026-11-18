@@ -63,6 +63,9 @@ def worker_env(tmp_path: Path) -> dict[str, str]:
         "import json, os, sys, time, subprocess\n"
         "from pathlib import Path\n"
         "p = json.load(sys.stdin)\n"
+        "if p.get('output'):\n"
+        " print('worker stdout', flush=True)\n"
+        " print('worker stderr', file=sys.stderr, flush=True)\n"
         "if p.get('child'):\n"
         " subprocess.Popen([sys.executable, '-c', p['child']])\n"
         "if p.get('started'): Path(p['started']).touch()\n"
@@ -70,6 +73,24 @@ def worker_env(tmp_path: Path) -> dict[str, str]:
         "Path(sys.argv[1]).write_text(json.dumps({'marker': os.environ['MARKER'], 'tmp': os.environ['TMPDIR']}))\n"
     )
     return {**os.environ, "PYTHONPATH": str(tmp_path), "MARKER": "parent"}
+
+
+@pytest.mark.parametrize("suppress", [False, True])
+def test_worker_output_is_inherited_unless_suppressed(tmp_path, worker_env, capfd, suppress):
+    options = {"suppress_output": True} if suppress else {}
+    result = asyncio.run(
+        run_json_worker(
+            "fixture_worker",
+            {"output": True},
+            environ=worker_env,
+            work_directory=tmp_path,
+            **options,
+        )
+    )
+    assert result["marker"] == "parent"
+    captured = capfd.readouterr()
+    assert captured.out == ("" if suppress else "worker stdout\n")
+    assert captured.err == ("" if suppress else "worker stderr\n")
 
 
 def test_concurrent_workers_have_private_environment_and_scratch(tmp_path, worker_env):
@@ -192,3 +213,14 @@ def test_uncooperative_worker_is_killed_after_cleanup_deadline():
                 await process.wait()
 
     asyncio.run(run())
+
+
+def test_a_worker_imports_the_same_code_as_its_parent_under_a_filtered_environment(tmp_path, worker_env, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", worker_env["PYTHONPATH"])
+    filtered = {key: value for key, value in worker_env.items() if key != "PYTHONPATH"}
+
+    result = asyncio.run(
+        run_json_worker("fixture_worker", {}, environ=filtered, work_directory=tmp_path)
+    )
+
+    assert result["marker"] == "parent"

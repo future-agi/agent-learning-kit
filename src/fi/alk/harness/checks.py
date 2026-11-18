@@ -23,6 +23,9 @@ two would let a typo read as a finding about the agent.
 
 from __future__ import annotations
 
+import ast
+import inspect
+import re
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -43,11 +46,118 @@ class Outcome:
         return f"  [{mark}] {self.name}" + (f" — {self.said}" if self.said else "")
 
 
+def reference_of(solution: Sequence[Any]) -> list[dict[str, Any]]:
+    """The reference a check is given: each step's tool and only the arguments it marks fixed."""
+    steps = []
+    for step in solution or ():
+        step = step if isinstance(step, dict) else step.model_dump()
+        arguments = dict(step.get("arguments") or {})
+        fixed = step.get("fixed")
+        if isinstance(fixed, (dict, list)):
+            arguments = {name: value for name, value in arguments.items() if name in fixed}
+        steps.append({"tool": step.get("tool"), "arguments": arguments})
+    return steps
+
+
+def takes_reference(checker: object) -> bool:
+    """Whether a check, or its source, is written `check(world, calls, reference)`."""
+    source = checker if isinstance(checker, str) else getattr(checker, "_alk_source", None)
+    if source:
+        entry = getattr(checker, "_alk_entry", "check")
+        try:
+            body = ast.parse(source).body
+        except SyntaxError:
+            return False
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == entry:
+                return len(node.args.args) >= 3
+        return False
+    try:
+        return len(inspect.signature(checker).parameters) >= 3
+    except (TypeError, ValueError):
+        return False
+
+
+def check_reads(checker: object) -> tuple[str, ...]:
+    """The evidence a check reads, from its own code: `world_state` when it reads the world, `tool_calls` when it
+    reads the agent's calls or the world's action log (`world.events`). A check whose code cannot be read is taken to
+    read both."""
+    both = ("world_state", "tool_calls")
+    source = checker if isinstance(checker, str) else getattr(checker, "_alk_source", None)
+    if not source:
+        return both
+    try:
+        body = ast.parse(source).body
+    except SyntaxError:
+        return both
+    entry = getattr(checker, "_alk_entry", "check")
+    function = next(
+        (node for node in body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == entry),
+        None,
+    )
+    if function is None:
+        return both
+    params = [one.arg for one in function.args.args]
+    world, calls = (params + ["", ""])[:2]
+    names = [node.id for node in ast.walk(function) if isinstance(node, ast.Name)]
+    used = set(names)
+    log_reads = sum(
+        1
+        for node in ast.walk(function)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "events"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == world
+    )
+    reads_log = log_reads > 0
+    receivers = sum(
+        1
+        for node in ast.walk(function)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == world
+    )
+    if world and names.count(world) > receivers:
+        # The world handed to a helper or another name: what that reads is not followed, so it may read either.
+        return both
+    out = []
+    # The world read for anything but its action log is its state.
+    if world and names.count(world) > log_reads:
+        out.append("world_state")
+    if (calls and calls in used) or reads_log:
+        out.append("tool_calls")
+    return tuple(out)
+
+
+_ID_NOISE = re.compile(r"[\s\-_.:/#]")
+
+
+def same_id(first: Any, second: Any) -> bool:
+    """Whether two identifiers name the same record however they were typed or spoken.
+
+    Only separators and case are ignored, so a different number is still different."""
+    if first is None or second is None:
+        return False
+    mine, theirs = _ID_NOISE.sub("", str(first)).casefold(), _ID_NOISE.sub("", str(second)).casefold()
+    # An empty id names no record, so it never matches, not even another empty one.
+    return bool(mine) and mine == theirs
+
+
+def check_namespace() -> dict[str, Any]:
+    """The names every check is given when it runs, wherever it runs (authoring, a hosted trial's phase worker, an
+    injected local world): the helpers authoring tells checks to use, such as ``same_id``. One set, so a check that
+    proves while authoring never fails on a name a trial does not give it."""
+    return {"same_id": same_id}
+
+
 def run_check(
-    source: str, world: GeneratedWorld, calls: Sequence[Call], *, name: str = "check"
+    source: str,
+    world: GeneratedWorld,
+    calls: Sequence[Call],
+    *,
+    name: str = "check",
+    reference: Sequence[dict[str, Any]] = (),
 ) -> Outcome:
-    """Execute one check against what the run left behind."""
-    namespace: dict[str, Any] = {}
+    """Execute one check against what the run left behind, with the reference when it takes one."""
+    namespace = check_namespace()
     try:
         exec(compile(source, f"<check:{name}>", "exec"), namespace)
     except Exception as failed:
@@ -62,7 +172,11 @@ def run_check(
         )
 
     try:
-        said = checker(world, list(calls))
+        said = (
+            checker(world, list(calls), list(reference))
+            if takes_reference(checker)
+            else checker(world, list(calls))
+        )
     except Exception as failed:
         # The check is at fault, not the agent. A KeyError in an assertion is our bug, and
         # scoring it against the agent is how a harness invents findings.
@@ -108,7 +222,7 @@ def run_world_check(
     """
     import inspect
 
-    namespace: dict[str, Any] = {}
+    namespace = check_namespace()
     try:
         exec(compile(source, f"<world-check:{name}>", "exec"), namespace)
     except Exception as failed:

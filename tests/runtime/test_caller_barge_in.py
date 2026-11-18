@@ -488,3 +488,16 @@ def test_audio_overlap_requires_energy_on_both_recorded_channels(tmp_path) -> No
     controller.measure_audio(str(path), started)
     assert controller.events[0]["audio_overlap_ms"] >= 250
     assert controller.summary()["audio_verified_overlaps"] == 1
+
+
+def test_the_shared_seeding_keeps_every_barge_in_draw() -> None:
+    import hashlib
+    import random
+
+    from fi.simulate.simulation.call_actors import seeded
+
+    for run_id in ("run-1", "", "multi|part"):
+        before = random.Random(
+            int.from_bytes(hashlib.sha256(run_id.encode()).digest()[:8], "big")
+        )
+        assert seeded(run_id).random() == before.random()

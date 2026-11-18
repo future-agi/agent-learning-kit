@@ -32,15 +32,18 @@ import asyncio
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
 import types
+import venv
 from dataclasses import replace as dc_replace
 from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+from pydantic import ValidationError
 
 from fi.alk.harness.bundle import CapabilityProtocol
 from fi.alk.harness.bundle_v2 import (
@@ -51,14 +54,26 @@ from fi.alk.harness.bundle_v2 import (
     SecretPurpose,
     SourceProcess,
 )
+from fi.alk.harness import privilege
 from fi.alk.harness import process_runtime as pr
-from fi.alk.harness.job import FailureDomain
+from fi.alk.harness.job import (
+    AgentConnection,
+    ExecutionMode,
+    FailureCause,
+    FailureDomain,
+    HarnessJob,
+    HarnessJobMetadata,
+    RepositorySource,
+    SourceKind,
+    SourceVisibility,
+)
 from fi.alk.harness.provider_lifecycle import (
     ProviderCleanupReceipt,
     ProviderProvisionReceipt,
     ProviderResource,
     ProviderTarget,
 )
+from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
 # --- shared manifest builder -----------------------------------------------------------------
 #
@@ -557,6 +572,35 @@ def test_job_id_placeholder_scopes_external_dispatch_identity() -> None:
     assert rendered == "agent-job-123-w2"
 
 
+def test_job_id_comes_from_the_platform_job_file(tmp_path: Path) -> None:
+    (tmp_path / "job.json").write_text('{"job_id": " job-123 "}', encoding="utf-8")
+    assert pr._read_job_id(tmp_path) == "job-123"
+
+
+@pytest.mark.parametrize(
+    "job_file", [None, '{"runtime": {"cpu_units": 1}}', "not json"]
+)
+def test_a_missing_job_id_never_falls_back_to_a_shared_dispatch_name(
+    tmp_path: Path, job_file: str | None
+) -> None:
+    if job_file is not None:
+        (tmp_path / "job.json").write_text(job_file, encoding="utf-8")
+    first, second = pr._read_job_id(tmp_path), pr._read_job_id(tmp_path)
+    assert first.startswith("local-") and second.startswith("local-")
+    assert first != second
+
+
+def test_each_attempt_of_a_job_gets_its_own_dispatch_identity() -> None:
+    """A retry or rerun is a new attempt of the same job; the superseded attempt's sandbox can
+    still be registered with LiveKit, so the two must never share a dispatch name."""
+    first = pr._dispatch_identity("job-123", "attempt-a")
+    second = pr._dispatch_identity("job-123", "attempt-b")
+    assert first != second
+    assert "job-123" in first and "job-123" in second
+    # Without an attempt (local runs), the job identity is used as before.
+    assert pr._dispatch_identity("job-123", None) == "job-123"
+
+
 def test_an_unresolvable_token_is_an_internal_error_not_a_preflight_code() -> None:
     """`preflight_bundle` already validated every token against the closed vocabulary before this
     ever runs — a token this function cannot resolve is a bug, not a bundle defect, so it is NOT
@@ -1001,6 +1045,7 @@ def test_a_nonzero_build_step_is_build_failed(tmp_path: Path) -> None:
             source_root=tmp_path / "source",
             build_root=tmp_path / "build",
             run=fake_run,
+            secret_values={},
         )
     assert excinfo.value.stage == "build"
     assert excinfo.value.code == "build_failed"
@@ -1015,11 +1060,16 @@ def test_transient_package_network_failure_is_retried_in_place(tmp_path: Path) -
     def fake_run(step, *, cwd, env, **kwargs):
         calls.append(step)
         if len(calls) < 3:
+            detail = (
+                "operation timed out"
+                if len(calls) == 1
+                else "Failed to download distribution due to network timeout"
+            )
             return subprocess.CompletedProcess(
                 step,
                 2,
                 stdout="",
-                stderr="Failed to fetch package: client error (Connect): operation timed out",
+                stderr=f"Failed to fetch package: client error (Connect): {detail}",
             )
         return subprocess.CompletedProcess(step, 0, stdout="", stderr="")
 
@@ -1128,6 +1178,33 @@ def test_a_build_step_that_times_out_is_build_failed(tmp_path: Path) -> None:
             build_step_timeout_seconds=5,
         )
     assert excinfo.value.code == "build_failed"
+
+
+def test_build_timeout_stops_descendant_processes(tmp_path: Path) -> None:
+    (tmp_path / "source" / "svc").mkdir(parents=True)
+    marker = tmp_path / "orphan-ran"
+    child = (
+        "import time; from pathlib import Path; time.sleep(0.4); "
+        f"Path({str(marker)!r}).write_text('orphan')"
+    )
+    parent = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(10)"
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError, match="timeout"):
+        pr.build_process_tree(
+            _source_process(
+                working_directory="svc",
+                build_commands=[[sys.executable, "-c", parent]],
+            ),
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            build_step_timeout_seconds=0.1,
+        )
+
+    time.sleep(0.5)
+    assert not marker.exists()
 
 
 # --- F5: typed copy-phase failures ----------------------------------------------------------------
@@ -1316,6 +1393,7 @@ def test_legitimate_process_names_are_unaffected_by_the_containment_check(
 
 def test_build_process_tree_chowns_the_copied_tree_to_the_resolved_user(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """F1, p5-round1-review — BLOCKER. The build tree (root AND every copied file, not just the
     directory) is chowned to the process's declared `user` after copy. `os.chown` to a foreign uid
@@ -1331,11 +1409,49 @@ def test_build_process_tree_chowns_the_copied_tree_to_the_resolved_user(
         source_root=tmp_path / "source",
         build_root=tmp_path / "build",
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     build_dir = tmp_path / "build" / "svc"
     assert (str(build_dir), 1234, 5678) in chowned
     assert (str(build_dir / "main.py"), 1234, 5678) in chowned
+
+
+def test_build_process_tree_never_reaches_through_a_folder_swapped_mid_walk(
+    tmp_path: Path,
+    chown_path,
+) -> None:
+    """A process of the declared user may already write in the tree while it is given away: it
+    swaps a folder for a symlink to the harness's files between two of the folder's entries. A
+    walk that re-owns each entry by its full path then re-owns the harness's files."""
+    package = tmp_path / "source" / "svc" / "pkg"
+    package.mkdir(parents=True)
+    held_back = tmp_path / "bundle" / "scenarios"
+    held_back.mkdir(parents=True)
+    for name in ("a.py", "b.py"):
+        (package / name).write_text("")
+        (held_back / name).write_text("held-back case\n")
+    built_package = tmp_path / "build" / "svc" / "pkg"
+    reached: list[Path] = []
+
+    def chown(path, uid, gid, dir_fd=None):
+        target = Path(os.path.realpath(chown_path(path, dir_fd)))
+        reached.append(target)
+        if target.parent == built_package.resolve() and not built_package.is_symlink():
+            built_package.rename(built_package.with_name("pkg.old"))
+            built_package.symlink_to(held_back, target_is_directory=True)
+
+    pr.build_process_tree(
+        _source_process(working_directory="svc", build_commands=[]),
+        source_root=tmp_path / "source",
+        build_root=tmp_path / "build",
+        user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
+        chown=chown,
+    )
+
+    assert built_package.is_symlink()  # the swap happened mid-walk
+    assert [path for path in reached if path.parent == held_back.resolve()] == []
 
 
 def test_build_commands_run_under_the_resolved_user(tmp_path: Path) -> None:
@@ -1356,7 +1472,7 @@ def test_build_commands_run_under_the_resolved_user(tmp_path: Path) -> None:
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
         # `chown` faked too — real `os.chown` to a fake uid needs root, which this lane does not
         # have; the chown call itself is asserted separately (`test_build_process_tree_chowns_...`).
-        chown=lambda path, uid, gid: None,
+        chown=lambda *_, **__: None,
     )
     assert captured["user"] == 1234
     assert captured["group"] == 5678
@@ -1396,6 +1512,7 @@ def test_build_process_tree_raises_when_user_is_required_but_not_resolvable(
 
 def test_spawn_source_process_applies_the_resolved_user_to_the_runner(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """Tests: assert the resolved user IS applied — the fake runner records `user=`."""
     build_dir = tmp_path / "build" / "svc"
@@ -1422,7 +1539,9 @@ def test_spawn_source_process_applies_the_resolved_user_to_the_runner(
         secret_purposes={},
         runner=fake_runner,
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     assert captured["user"] == 1234
     assert captured["group"] == 5678
@@ -1491,6 +1610,7 @@ def test_spawn_source_process_raises_when_user_is_required_but_not_resolvable(
 
 def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     manifest = _manifest()
     postgres = manifest.processes[0]
@@ -1511,7 +1631,9 @@ def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(
         runner=lambda *a, **k: FakeHandle(),
         sync_run=fake_sync_run,
         user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     assert (str(data_dir), 2222, 3333) in chowned
     # The pwfile is chowned to the same user too — `initdb` runs as that user (below) and must be
@@ -1524,6 +1646,7 @@ def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(
 
 def test_spawn_managed_process_chowns_a_pre_populated_data_dir_recursively(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """B6, p6-review-r1: `data_dir` is empty on the very FIRST spawn (`initdb` itself creates
     everything under it as the already-correct user), but `freeze_baseline`'s `datadir_copy`
@@ -1552,7 +1675,9 @@ def test_spawn_managed_process_chowns_a_pre_populated_data_dir_recursively(
         runner=lambda *a, **k: FakeHandle(),
         sync_run=_fake_sync_run,
         user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
-        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+        chown=lambda path, uid, gid, dir_fd=None: chowned.append(
+            (str(chown_path(path, dir_fd)), uid, gid)
+        ),
     )
     chowned_paths = {path for path, _, _ in chowned}
     assert str(data_dir) in chowned_paths
@@ -1639,7 +1764,7 @@ def test_default_process_runner_does_not_chown_the_log_when_no_user_is_given(
         cwd=tmp_path,
         env={"PATH": "/usr/bin:/bin"},
         log_path=tmp_path / "logs" / "proc.log",
-        chown=lambda *args: chowned.append(args),
+        chown=lambda *args, **kwargs: chowned.append(args),
     )
     _reap(handle)
     assert chowned == []
@@ -1709,6 +1834,52 @@ def test_a_process_not_claiming_the_purpose_does_not_receive_the_secret(
     )
     _reap(handle.handle)
     assert handle.handle.captured_output() == "SECRET=<none>"
+
+
+@pytest.mark.parametrize("purpose", ["target_provider", "simulator_provider"])
+def test_spawn_source_process_projects_only_target_vertex_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, purpose: str
+) -> None:
+    for name in (
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEXAI_LOCATION",
+        "VERTEXAI_PROJECT",
+    ):
+        monkeypatch.setenv(name, "controller-value")
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    process = _source_process(
+        run_command=[
+            sys.executable,
+            "-c",
+            "import json, os; print(json.dumps({k: os.environ.get(k) for k in ['VERTEXAI_LOCATION', 'VERTEXAI_PROJECT']}))",
+        ],
+        secret_purposes=["target_provider"],
+    )
+    handle = pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=tmp_path / "world",
+        world_index=0,
+        port_plan=_solo_port_plan("svc"),
+        configuration_addresses={},
+        secret_values={
+            "GOOGLE_CLOUD_LOCATION": "global",
+            "GOOGLE_CLOUD_PROJECT": "target-project",
+        },
+        secret_purposes={
+            "GOOGLE_CLOUD_LOCATION": purpose,
+            "GOOGLE_CLOUD_PROJECT": purpose,
+        },
+    )
+    _reap(handle.handle)
+    expected = (
+        {"VERTEXAI_LOCATION": "global", "VERTEXAI_PROJECT": "target-project"}
+        if purpose == "target_provider"
+        else {"VERTEXAI_LOCATION": None, "VERTEXAI_PROJECT": None}
+    )
+    assert json.loads(handle.handle.captured_output()) == expected
 
 
 def test_spawn_source_process_materializes_uploaded_google_credentials(
@@ -1785,14 +1956,23 @@ def test_spawn_source_process_rematerializes_google_credentials_after_world_rese
     assert credential_path.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.parametrize(
+    "raw, message", [("not-json", "not valid JSON"), ("[]", "must contain an object")]
+)
 def test_spawn_source_process_rejects_invalid_uploaded_google_credentials(
-    tmp_path: Path,
+    tmp_path: Path, raw: str, message: str
 ) -> None:
     build_dir = tmp_path / "build" / "agent"
     build_dir.mkdir(parents=True)
     process = _source_process(secret_purposes=["target_provider"])
 
-    with pytest.raises(pr.ProcessRuntimeError, match="not valid JSON") as excinfo:
+    invoked = []
+
+    def runner(*args, **kwargs):
+        invoked.append(True)
+        return FakeHandle()
+
+    with pytest.raises(pr.ProcessRuntimeError, match=message) as excinfo:
         pr.spawn_source_process(
             process,
             build_dir=build_dir,
@@ -1800,10 +1980,11 @@ def test_spawn_source_process_rejects_invalid_uploaded_google_credentials(
             world_index=0,
             port_plan=_solo_port_plan("svc"),
             configuration_addresses={},
-            secret_values={"GOOGLE_APPLICATION_CREDENTIALS_JSON": "not-json"},
+            secret_values={"GOOGLE_APPLICATION_CREDENTIALS_JSON": raw},
             secret_purposes={"GOOGLE_APPLICATION_CREDENTIALS_JSON": "target_provider"},
-            runner=lambda *args, **kwargs: FakeHandle(),
+            runner=runner,
         )
+    assert invoked == []
     assert excinfo.value.code == "spawn_failed"
     assert excinfo.value.domain is FailureDomain.AGENT
 
@@ -1832,6 +2013,42 @@ def test_spawn_source_process_creates_the_per_world_scratch_directory(
         runner=fake_runner,
     )
     assert world_dir.is_dir()
+
+
+@pytest.mark.parametrize(("mode", "expected"), [("per_user", 0o711), ("fixed_user", 0o700)])
+def test_the_harness_s_workers_can_pass_through_a_world_dir_only_under_isolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, expected: int
+) -> None:
+    """The harness's workers hold no capabilities, yet open what the process writes into its own
+    world directory (its tool-call trace) by name. Under per-user isolation that directory is the
+    process's, so it lets them pass through; with one fixed user it stays as it was."""
+    monkeypatch.setattr(privilege, "_mode", privilege.IsolationMode(mode))
+    build_dir = tmp_path / "build" / "svc"
+    build_dir.mkdir(parents=True)
+    world_dir = tmp_path / "worlds" / "w0" / "svc"
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        return FakeHandle()
+
+    previous = os.umask(0o077)
+    try:
+        pr.spawn_source_process(
+            _source_process(),
+            build_dir=build_dir,
+            world_dir=world_dir,
+            world_index=0,
+            port_plan=_solo_port_plan("svc"),
+            configuration_addresses={},
+            secret_values={},
+            secret_purposes={},
+            runner=fake_runner,
+            user_resolver=_fake_user_resolver({"svc-tools": (4444, 5555)}),
+            chown=lambda *_, **__: None,
+        )
+    finally:
+        os.umask(previous)
+
+    assert world_dir.stat().st_mode & 0o777 == expected
 
 
 def test_spawn_source_process_cwd_is_the_build_tree_not_the_world_scratch_dir(
@@ -2095,8 +2312,37 @@ def test_wait_for_dependency_requires_every_readiness_probe_backing_the_process(
     assert ready["/health"] and ready["/admin/health"]
 
 
-def test_depends_on_readiness_probe_timeout_is_a_typed_error() -> None:
-    manifest = _manifest()
+def _control(name: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """A `_body` mutation making `name` the control service, with the users each role carries."""
+
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["runtime"] = {**body["runtime"], "control_service": name}
+        body["processes"] = [
+            {**process, "user": "svc-agent" if process["name"] == name else "svc-tools"}
+            if process["kind"] == "source"
+            else process
+            for process in body["processes"]
+        ]
+        return body
+
+    return mutate
+
+
+# Only the control service is the agent. The crashing process here is `tools-api`: as the control
+# service its failure is the agent's named cause; as a helper beside the agent it names none.
+_EXITED = [
+    pytest.param("tools-api", FailureCause.AGENT_EXITED_BEFORE_READY, id="the agent"),
+    pytest.param("agent", None, id="a helper service"),
+]
+_STALLED = [
+    pytest.param("tools-api", FailureCause.AGENT_NOT_READY_IN_TIME, id="the agent"),
+    pytest.param("agent", None, id="a helper service"),
+]
+
+
+@pytest.mark.parametrize(("control", "cause"), _STALLED)
+def test_depends_on_readiness_probe_timeout_is_a_typed_error(control, cause) -> None:
+    manifest = _manifest(_control(control))
     plan = pr.plan_ports(manifest, instances=1)
     spawned = pr.SpawnedWorldProcess("tools-api", FakeHandle(), 15001, 0)
     ticks = {"t": 0.0}
@@ -2113,10 +2359,14 @@ def test_depends_on_readiness_probe_timeout_is_a_typed_error() -> None:
         )
     assert excinfo.value.stage == "depends_on"
     assert excinfo.value.code == "depends_on_timeout"
+    assert excinfo.value.cause is cause
 
 
-def test_depends_on_readiness_fails_immediately_when_source_process_exits() -> None:
-    manifest = _manifest()
+@pytest.mark.parametrize(("control", "cause"), _EXITED)
+def test_depends_on_readiness_fails_immediately_when_source_process_exits(
+    control, cause
+) -> None:
+    manifest = _manifest(_control(control))
     plan = pr.plan_ports(manifest, instances=1)
     handle = FakeHandle("RuntimeError: prompt service rejected credentials\n")
     handle.terminated = True
@@ -2136,8 +2386,84 @@ def test_depends_on_readiness_fails_immediately_when_source_process_exits() -> N
 
     assert excinfo.value.code == "spawn_failed"
     assert excinfo.value.domain is pr.FailureDomain.AGENT
+    assert excinfo.value.cause is cause
     assert "prompt service rejected credentials" in str(excinfo.value)
     assert sleeps == []
+
+
+@pytest.mark.parametrize(("control", "cause"), _EXITED)
+def test_an_agent_that_crashes_at_import_reads_exited_before_ready(
+    tmp_path: Path, control, cause
+) -> None:
+    """A real process that raises while importing: the cause is closed, the text stays local."""
+    manifest = _manifest(
+        lambda body: _control(control)(
+            {
+                **body,
+                "readiness": [],
+                "processes": [
+                    body["processes"][0],
+                    {
+                        **body["processes"][1],
+                        "started_check": {"port": True, "timeout_seconds": 10},
+                    },
+                    body["processes"][2],
+                ],
+            }
+        )
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    handle = pr.default_process_runner(
+        [sys.executable, "-c", "raise RuntimeError('crashed at import')"],
+        cwd=tmp_path,
+        env={},
+        log_path=tmp_path / "tools-api.log",
+    )
+    spawned = pr.SpawnedWorldProcess(
+        "tools-api", handle, plan.port_for("tools-api", 0), 0
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.wait_for_dependency(
+            manifest, "tools-api", world_index=0, port_plan=plan, spawned=spawned
+        )
+
+    assert excinfo.value.code == "spawn_failed"
+    assert excinfo.value.cause is cause
+    assert "crashed at import" in str(excinfo.value)
+
+
+def test_a_managed_engine_that_exits_before_ready_has_no_agent_cause() -> None:
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "readiness": [
+                {
+                    "capability": "database",
+                    "timeout_seconds": 5,
+                    "interval_seconds": 0.1,
+                }
+            ],
+        }
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    handle = FakeHandle()
+    handle.terminated = True
+    spawned = pr.SpawnedWorldProcess("postgres", handle, 15000, 0)
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.wait_for_dependency(
+            manifest,
+            "postgres",
+            world_index=0,
+            port_plan=plan,
+            spawned=spawned,
+            prober=lambda **kwargs: False,
+            sleep=lambda s: None,
+        )
+
+    assert excinfo.value.domain is pr.FailureDomain.INFRASTRUCTURE
+    assert excinfo.value.cause is None
 
 
 def test_started_check_log_marker_variant_waits_for_the_marker() -> None:
@@ -2293,21 +2619,24 @@ def test_started_check_port_variant_dials_the_world_specific_formula_port(
     assert dialed == [("localhost", expected_port)]
 
 
-def test_started_check_port_variant_timeout_when_nothing_listens() -> None:
+@pytest.mark.parametrize(("control", "cause"), _STALLED)
+def test_started_check_port_variant_timeout_when_nothing_listens(control, cause) -> None:
     manifest = _manifest(
-        lambda body: {
-            **body,
-            "readiness": [],
-            "processes": [
-                body["processes"][0],
-                {
-                    **body["processes"][1],
-                    "fixed_port": 1,
-                    "started_check": {"port": True, "timeout_seconds": 1},
-                },
-                body["processes"][2],
-            ],
-        }
+        lambda body: _control(control)(
+            {
+                **body,
+                "readiness": [],
+                "processes": [
+                    body["processes"][0],
+                    {
+                        **body["processes"][1],
+                        "fixed_port": 1,
+                        "started_check": {"port": True, "timeout_seconds": 1},
+                    },
+                    body["processes"][2],
+                ],
+            }
+        )
     )
     plan = pr.plan_ports(manifest, instances=1)
     spawned = pr.SpawnedWorldProcess("tools-api", FakeHandle(), 1, 0)
@@ -2323,6 +2652,7 @@ def test_started_check_port_variant_timeout_when_nothing_listens() -> None:
             sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
         )
     assert excinfo.value.code == "depends_on_timeout"
+    assert excinfo.value.cause is cause
 
 
 def test_spawn_world_spawns_in_dependency_order_and_waits_between(
@@ -2362,6 +2692,56 @@ def test_spawn_world_spawns_in_dependency_order_and_waits_between(
     assert spawn_order.index("node") < spawn_order.index(
         "python3"
     )  # agent's run_command[0]
+
+
+@pytest.mark.parametrize(("control", "cause"), _EXITED)
+def test_spawn_world_keeps_the_cause_of_a_source_process_that_crashes_at_import(
+    tmp_path: Path, control, cause
+) -> None:
+    manifest = _manifest(
+        lambda body: _control(control)(
+            {
+                **body,
+                "readiness": [],
+                "processes": [
+                    body["processes"][0],
+                    {
+                        **body["processes"][1],
+                        "started_check": {"port": True, "timeout_seconds": 10},
+                    },
+                    body["processes"][2],
+                ],
+            }
+        )
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    credentials = pr.generate_engine_credentials(manifest, token=lambda: "PW")
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        if argv[0] != "node":
+            return FakeHandle()
+        return pr.default_process_runner(
+            [sys.executable, "-c", "raise RuntimeError('crashed at import')"],
+            cwd=tmp_path,
+            env={},
+            log_path=log_path,
+        )
+
+    context = pr.SpawnContext(
+        work_directory=tmp_path,
+        port_plan=plan,
+        credentials=credentials,
+        secret_values={},
+        secret_purposes={},
+        runner=runner,
+        sync_run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0),
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.spawn_world(manifest, world_index=0, context=context)
+
+    assert excinfo.value.process == "tools-api"
+    assert excinfo.value.cause is cause
 
 
 def test_spawn_world_waits_for_terminal_source_started_check(tmp_path: Path) -> None:
@@ -3329,6 +3709,316 @@ def test_canonical_seed_replays_bundled_discovery_without_authoring_directory(
         assert applied[0].source_schema_hash == discovered.fingerprint
 
 
+@pytest.mark.parametrize(
+    ("built_with", "live_adds", "applies", "wider_log"),
+    [
+        ((), ("_alk_actors",), True, False),
+        ((), ("_alk_actors",), True, True),
+        (("_alk_actors",), ("_alk_actors",), True, False),
+        ((), ("orders",), False, False),
+    ],
+    ids=[
+        "actors-added-after-build",
+        "actor-columns-on-the-log",
+        "built-with-actors",
+        "agent-schema-changed",
+    ],
+)
+def test_canonical_seed_checks_the_world_as_built_whatever_alk_adds_later(
+    tmp_path: Path,
+    monkeypatch,
+    built_with: tuple[str, ...],
+    live_adds: tuple[str, ...],
+    applies: bool,
+    wider_log: bool,
+) -> None:
+    from contextlib import nullcontext
+
+    from fi.alk.harness.compile import postgres as compiler
+    from fi.alk.harness.source_model import (
+        LogicalType,
+        SourceColumn,
+        SourceModel,
+        SourceTable,
+    )
+    from fi.alk.harness.source_schema import postgres as schema
+    from fi.alk.harness.world_ir import WorldIR
+
+    def table(name: str, *more: str) -> SourceTable:
+        columns = tuple(
+            SourceColumn(
+                name=one,
+                logical_type=LogicalType.STRING,
+                native_type="text",
+                nullable=one != "id",
+                has_default=False,
+            )
+            for one in ("id", *more)
+        )
+        return SourceTable(name=name, columns=columns, primary_key=("id",))
+
+    digest = "sha256:" + "a" * 64
+    built = ("_alk_tool_trace", "items", *built_with)
+    recorded = SourceModel.create(
+        source_digest=digest, engine="postgres", tables=tuple(map(table, built))
+    )
+    live_tables = tuple(map(table, (*built, *live_adds)))
+    if wider_log:
+        # Seeded with an actor, the action log has the actor columns the build's log lacked.
+        live_tables = (
+            table("_alk_tool_trace", "actor_id", "outcome"),
+            *live_tables[1:],
+        )
+    live = SourceModel.create(
+        source_digest=digest, engine="postgres", tables=live_tables
+    )
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "source-model.json").write_text(recorded.model_dump_json())
+    (seed / "world-ir.json").write_text(
+        WorldIR.create(
+            source_model_fingerprint=recorded.fingerprint, tables=()
+        ).model_dump_json()
+    )
+    applied = []
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        types.SimpleNamespace(connect=lambda **_: nullcontext(object())),
+    )
+    monkeypatch.setattr(schema, "inspect_postgres", lambda *_args, **_kwargs: live)
+    monkeypatch.setattr(
+        compiler,
+        "apply_postgres",
+        lambda _connection, compiled: applied.append(compiled),
+    )
+
+    def seed_world():
+        pr.apply_postgres_world_ir(
+            seed / "world-ir.json",
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            source_digest=digest,
+        )
+
+    if applies:
+        seed_world()
+        assert applied[0].source_schema_hash == recorded.fingerprint
+    else:
+        with pytest.raises(
+            pr.GenericWorldSeedError, match="source_model_fingerprint_mismatch"
+        ):
+            seed_world()
+        assert not applied
+
+
+@pytest.mark.parametrize(
+    ("built", "live", "applies"),
+    [
+        (("items",), ("_alk_tool_trace", "items"), True),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace+", "items"), True),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace", "items"), True),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace", "items", "orders"), False),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace", "items+"), False),
+    ],
+    ids=[
+        "log-the-build-did-not-record",
+        "log-widened-since-the-build",
+        "same-harness",
+        "agent-table-added",
+        "agent-column-added",
+    ],
+)
+def test_canonical_seed_reads_the_harness_tables_as_the_build_recorded_them(
+    tmp_path: Path, monkeypatch, built: tuple[str, ...], live: tuple[str, ...], applies: bool
+) -> None:
+    """Certify-only seeds a saved World IR under whatever harness runs it: the harness's own
+    `_alk_` tables never change the fingerprint, any change to the agent's schema does."""
+    from contextlib import nullcontext
+
+    from fi.alk.harness.compile import postgres as compiler
+    from fi.alk.harness.source_model import LogicalType, SourceColumn, SourceModel, SourceTable
+    from fi.alk.harness.source_schema import postgres as schema
+    from fi.alk.harness.world_ir import WorldIR
+
+    def table(spec: str) -> SourceTable:
+        name = spec.rstrip("+")
+        names = ("id", "extra") if spec.endswith("+") else ("id",)
+        columns = tuple(
+            SourceColumn(
+                name=one,
+                logical_type=LogicalType.STRING,
+                native_type="text",
+                nullable=one != "id",
+                has_default=False,
+            )
+            for one in names
+        )
+        return SourceTable(name=name, columns=columns, primary_key=("id",))
+
+    digest = "sha256:" + "b" * 64
+    recorded = SourceModel.create(source_digest=digest, engine="postgres", tables=tuple(map(table, built)))
+    inspected = SourceModel.create(source_digest=digest, engine="postgres", tables=tuple(map(table, live)))
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "source-model.json").write_text(recorded.model_dump_json())
+    (seed / "world-ir.json").write_text(
+        WorldIR.create(source_model_fingerprint=recorded.fingerprint, tables=()).model_dump_json()
+    )
+    applied = []
+    monkeypatch.setitem(
+        sys.modules, "psycopg", types.SimpleNamespace(connect=lambda **_: nullcontext(object()))
+    )
+    monkeypatch.setattr(schema, "inspect_postgres", lambda *_args, **_kwargs: inspected)
+    monkeypatch.setattr(compiler, "apply_postgres", lambda _connection, compiled: applied.append(compiled))
+
+    def seed_world():
+        pr.apply_postgres_world_ir(
+            seed / "world-ir.json",
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            source_digest=digest,
+        )
+
+    if applies:
+        seed_world()
+        assert applied[0].source_schema_hash == recorded.fingerprint
+    else:
+        with pytest.raises(pr.GenericWorldSeedError):
+            seed_world()
+        assert not applied
+
+
+@pytest.mark.parametrize(
+    ("extra_table", "seeds"),
+    [("_alk_tool_trace", True), ("harness_seed_sentinel", True), ("audit_log", False)],
+)
+def test_canonical_seed_reads_past_the_harness_tables_in_the_live_schema(
+    tmp_path: Path, monkeypatch, extra_table: str, seeds: bool
+) -> None:
+    from contextlib import nullcontext
+
+    from fi.alk.harness.compile import postgres as compiler
+    from fi.alk.harness.source_model import (
+        LogicalType,
+        SourceColumn,
+        SourceModel,
+        SourceTable,
+    )
+    from fi.alk.harness.source_schema import postgres as schema
+    from fi.alk.harness.world_ir import WorldIR
+
+    def table(name: str) -> SourceTable:
+        column = SourceColumn(
+            name="id",
+            logical_type=LogicalType.STRING,
+            native_type="text",
+            nullable=False,
+            has_default=False,
+        )
+        return SourceTable(name=name, columns=(column,), primary_key=("id",))
+
+    discovered = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        engine_version="16",
+        tables=(table("orders"),),
+    )
+    inspected = SourceModel.create(
+        source_digest=discovered.source_digest,
+        engine="postgres",
+        engine_version="16",
+        tables=(table(extra_table), table("orders")),
+    )
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "source-model.json").write_text(discovered.model_dump_json())
+    world = WorldIR.create(source_model_fingerprint=discovered.fingerprint, tables=())
+    (seed / "world-ir.json").write_text(world.model_dump_json())
+    applied = []
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        types.SimpleNamespace(connect=lambda **_: nullcontext(object())),
+    )
+    monkeypatch.setattr(schema, "inspect_postgres", lambda *_args, **_kwargs: inspected)
+    monkeypatch.setattr(
+        compiler,
+        "apply_postgres",
+        lambda _connection, compiled: applied.append(compiled),
+    )
+
+    def replay():
+        pr.apply_postgres_world_ir(
+            seed / "world-ir.json",
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            source_digest=discovered.source_digest,
+        )
+
+    if seeds:
+        replay()
+        assert applied[0].source_schema_hash == discovered.fingerprint
+    else:
+        with pytest.raises(
+            pr.GenericWorldSeedError, match="source_model_fingerprint_mismatch"
+        ):
+            replay()
+        assert not applied
+
+
+def test_canonical_seed_names_a_source_model_recorded_for_other_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from contextlib import nullcontext
+
+    from fi.alk.harness.source_model import SourceModel
+    from fi.alk.harness.source_schema import postgres as schema
+    from fi.alk.harness.world_ir import WorldIR
+
+    recorded = SourceModel.create(source_digest="sha256:" + "a" * 64, engine="none")
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "source-model.json").write_text(recorded.model_dump_json())
+    world = WorldIR.create(source_model_fingerprint=recorded.fingerprint, tables=())
+    (seed / "world-ir.json").write_text(world.model_dump_json())
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        types.SimpleNamespace(connect=lambda **_: nullcontext(object())),
+    )
+    monkeypatch.setattr(
+        schema,
+        "inspect_postgres",
+        lambda *_args, source_digest, **_kwargs: SourceModel.create(
+            source_digest=source_digest, engine="postgres"
+        ),
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        pr.apply_seed_file(
+            pr.ManagedEngine.POSTGRES,
+            seed / "world-ir.json",
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            process_name="world-db",
+            sync_run=lambda *args, **kwargs: pytest.fail("must not execute"),
+            source_digest="b" * 64,
+        )
+
+    assert [item.code for item in raised.value.diagnostics] == [
+        "source_model_digest_conflict"
+    ]
+    assert str(raised.value).endswith(
+        "canonical World IR could not be compiled or applied: "
+        "source_model_digest_conflict"
+    )
+
+
 def test_typed_postgres_seed_persists_the_accepted_source_and_world(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -4041,7 +4731,7 @@ def test_freeze_baseline_seed_commands_run_under_the_stores_declared_user(
     ctx = dc_replace(
         ctx,
         user_resolver=_fake_user_resolver({"svc-data": (4444, 5555)}),
-        chown=lambda path, uid, gid: (
+        chown=lambda *_, **__: (
             None
         ),  # a fake uid needs no real os.chown to prove the point.
     )
@@ -4283,6 +4973,7 @@ def test_write_build_output_shape(tmp_path: Path) -> None:
             "inputs_digest": "sha256:" + "a" * 64,
             "baseline_reference": "alk_baseline_postgres",
             "row_counts": {"riders": 3},
+            "seed_digest": {},
         }
     ]
 
@@ -4532,7 +5223,7 @@ def test_world_clone_empty_strategy_reseed_runs_under_the_stores_declared_user(
     ctx = dc_replace(
         ctx,
         user_resolver=_fake_user_resolver({"svc-data": (6666, 7777)}),
-        chown=lambda path, uid, gid: (
+        chown=lambda *_, **__: (
             None
         ),  # a fake uid needs no real os.chown to prove the point.
     )
@@ -5237,6 +5928,231 @@ def test_environment_backed_provider_is_created_exposed_and_destroyed(
 
     asyncio.run(provider.close(work_directory=tmp_path))
     assert lifecycle_calls == ["provision", "destroy"]
+
+
+def _vapi_receipt(context: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "schema_version": "1",
+            "provider": "vapi",
+            "attempt_id": context["attempt_id"],
+            "world_id": context["world_id"],
+            "target": {"kind": "assistant", "id": "asst-test"},
+            "resources": [{"kind": "assistant", "id": "asst-test", "owned": True}],
+            "cleanup": {
+                "receipt_version": "1",
+                "idempotency_key": context["idempotency_key"],
+            },
+        }
+    )
+
+
+def _lifecycle_provider(
+    tmp_path: Path, lifecycle_run: Callable[..., subprocess.CompletedProcess], output: str
+) -> tuple[Any, Any, Path, Path]:
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "metadata": {
+                "provider_lifecycle": {
+                    "type": "vapi",
+                    "scope": "world",
+                    "process": "agent",
+                    "public_capability": "tools",
+                    "provision": {"command": ["python", "provider.py", "provision"]},
+                    "destroy": {"command": ["python", "provider.py", "destroy"]},
+                    "required_secrets": ["VAPI_API_KEY"],
+                    "output": output,
+                }
+            },
+        }
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    (source / "provider.py").write_text("# lifecycle", encoding="utf-8")
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps({"VAPI_API_KEY": "test-secret"}), encoding="utf-8")
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path,
+        secret_purpose_map={"VAPI_API_KEY": "target_provider"},
+        sync_run=lifecycle_run,
+        public_url_resolver=lambda port, _ttl: f"https://signed.example/{port}",
+    )
+    return provider, manifest, source, bundle_dir
+
+
+def _provision_one(provider: Any, manifest: Any, source: Path, bundle_dir: Path, work: Path):
+    return asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=work,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
+
+
+def test_a_nested_receipt_is_read_below_its_lifecycle_folder(tmp_path: Path) -> None:
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[-1] == "provision":
+            context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+            Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"]).write_text(_vapi_receipt(context))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, lifecycle_run, "receipts/deep/provider-target.json"
+    )
+
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+
+    assert runtimes[0].metadata["provider_target_id"] == "asst-test"
+    asyncio.run(provider.close(work_directory=tmp_path))
+
+
+def test_a_receipt_reached_through_a_linked_folder_is_refused(tmp_path: Path) -> None:
+    # The lifecycle command owns the folders below its lifecycle folder: it swaps one for a link
+    # to a valid receipt of its choosing elsewhere.
+    elsewhere = tmp_path / "elsewhere"
+
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[-1] == "provision":
+            context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+            output = Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"])
+            (elsewhere / "deep").mkdir(parents=True)
+            (elsewhere / "deep" / output.name).write_text(_vapi_receipt(context))
+            receipts = output.parent.parent
+            receipts.rename(tmp_path / "receipts-moved")
+            receipts.symlink_to(elsewhere, target_is_directory=True)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, lifecycle_run, "receipts/deep/provider-target.json"
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError, match="provider_provision_receipt_invalid"):
+        _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+
+
+def test_a_re_provision_never_writes_its_context_through_a_link(tmp_path: Path) -> None:
+    # After the first provision the lifecycle folder is the lifecycle user's. A process of that
+    # user can leave a link where the next provision writes its context.
+    held_back = tmp_path / "held-back.yaml"
+    held_back.write_text("held-back case\n", encoding="utf-8")
+
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[-1] == "provision":
+            context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+            Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"]).write_text(_vapi_receipt(context))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, lifecycle_run, "provider-target.json"
+    )
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    context_path = tmp_path / "provider" / "w0" / "context.json"
+    provider._destroy_provider_target(0)
+    context_path.unlink()
+    context_path.symlink_to(held_back)
+
+    provider._ensure_provider_target(0, runtimes[0])
+
+    assert held_back.read_text(encoding="utf-8") == "held-back case\n"
+    assert not context_path.is_symlink()
+    assert stat.S_IMODE(context_path.stat().st_mode) == 0o600
+    assert json.loads(context_path.read_text())["world_id"] == "0"
+    asyncio.run(provider.close(work_directory=tmp_path))
+
+
+def _nested_receipt_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    if argv[-1] == "provision":
+        context = json.loads(Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text())
+        Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"]).write_text(_vapi_receipt(context))
+    return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+
+def _link_the_receipt_folder(tmp_path: Path) -> None:
+    """What a process of the lifecycle user can do to the folders it owns."""
+    receipts = tmp_path / "provider" / "w0" / "receipts"
+    receipts.rename(tmp_path / "receipts-moved")
+    (tmp_path / "elsewhere").mkdir()
+    receipts.symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+
+
+def test_teardown_stops_a_world_whatever_its_lifecycle_user_left_in_its_folder(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "receipts/deep/provider-target.json"
+    )
+    _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    handles = [
+        spawned.handle
+        for name, spawned in provider._world_handles[0].items()
+        if name not in provider._job_shared_handles  # a job's shared engine outlives a world
+    ]
+    _link_the_receipt_folder(tmp_path)
+
+    provider._teardown_world(0)
+
+    assert handles and all(handle.terminated for handle in handles)
+    assert "provider_lifecycle_output_unsafe" in caplog.text
+    assert list((tmp_path / "elsewhere").iterdir()) == []
+
+
+def test_teardown_stops_a_world_with_a_folder_where_its_destroy_log_goes(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "provider-target.json"
+    )
+    _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    handles = [
+        spawned.handle
+        for name, spawned in provider._world_handles[0].items()
+        if name not in provider._job_shared_handles
+    ]
+    (tmp_path / "provider" / "w0" / "destroy.log").mkdir()
+
+    provider._teardown_world(0)
+
+    assert handles and all(handle.terminated for handle in handles)
+    assert "provider cleanup failed for world 0" in caplog.text
+
+
+def test_a_re_provision_through_a_linked_output_folder_fails_as_the_environment(
+    tmp_path: Path,
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "receipts/deep/provider-target.json"
+    )
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    provider._destroy_provider_target(0)
+    _link_the_receipt_folder(tmp_path)
+
+    with pytest.raises(pr.ProcessRuntimeError, match="provider_lifecycle_output_unsafe") as info:
+        provider._ensure_provider_target(0, runtimes[0])
+
+    assert info.value.domain is FailureDomain.ENVIRONMENT
+    assert list((tmp_path / "elsewhere").iterdir()) == []
+
+
+def test_a_re_provision_with_a_folder_where_its_context_goes_fails_as_the_environment(
+    tmp_path: Path,
+) -> None:
+    provider, manifest, source, bundle_dir = _lifecycle_provider(
+        tmp_path, _nested_receipt_run, "provider-target.json"
+    )
+    runtimes = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    provider._destroy_provider_target(0)
+    context_path = tmp_path / "provider" / "w0" / "context.json"
+    context_path.unlink()
+    context_path.mkdir()
+
+    with pytest.raises(pr.ProcessRuntimeError) as info:
+        provider._ensure_provider_target(0, runtimes[0])
+
+    assert info.value.domain is FailureDomain.ENVIRONMENT
 
 
 def test_provider_provision_failure_surfaces_redacted_provider_output(
@@ -6599,7 +7515,7 @@ def test_spawn_managed_process_data_dir_setup_failure_is_typed_spawn_failed(
     postgres = manifest.processes[0]
     creds = pr.EngineCredentials(username="harness", password="pw")
 
-    def failing_chown(path: Path, uid: int, gid: int) -> None:
+    def failing_chown(path: Path, uid: int, gid: int, *, dir_fd: int | None = None) -> None:
         raise PermissionError("simulated: svc-control cannot chown this path")
 
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
@@ -6687,6 +7603,32 @@ def _rabbitmq_process() -> Any:
             "depends_on": [],
         }
     )
+
+
+def test_a_managed_engine_runs_with_its_declared_user_s_home(tmp_path: Path, monkeypatch) -> None:
+    """Under per-user isolation the harness's HOME is not the engine's to write. RabbitMQ's Erlang
+    keeps its cookie there, and a broker given the harness's HOME crashes at boot."""
+    monkeypatch.setenv("HOME", "/home/svc-control")
+    captured_env: dict[str, str] = {}
+
+    def recording_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured_env.update(env)
+        return FakeHandle()
+
+    pr.spawn_managed_process(
+        _rabbitmq_process(),
+        port=15003,
+        data_dir=tmp_path / "queue",
+        credentials=pr.EngineCredentials(username="harness", password="pw"),
+        runner=recording_runner,
+        sync_run=_fake_sync_run,
+        user_resolver=lambda name: types.SimpleNamespace(
+            pw_uid=2003, pw_gid=2003, pw_dir=f"/home/{name}"
+        ),
+        chown=lambda *_, **__: None,
+    )
+
+    assert captured_env["HOME"] == "/home/svc-data"
 
 
 def test_spawn_managed_process_rabbitmq_conf_carries_credentials(
@@ -7110,6 +8052,7 @@ def test_terminate_and_wait_logs_when_the_process_survives_even_kill(
 
 def test_spawn_managed_process_chmods_before_chowning_the_data_dir(
     tmp_path: Path,
+    chown_path,
 ) -> None:
     """N14, p6-review-r2: `chmod` after `chown` cannot succeed once ownership has moved — `svc-
     control` still owns `data_dir` at chmod time and it is free; after chown, a non-root `svc-
@@ -7121,8 +8064,8 @@ def test_spawn_managed_process_chmods_before_chowning_the_data_dir(
     data_dir = tmp_path / "pg"
     mode_at_chown_time: list[int] = []
 
-    def recording_chown(path: Path, uid: int, gid: int) -> None:
-        if path == data_dir:
+    def recording_chown(path: Path, uid: int, gid: int, *, dir_fd: int | None = None) -> None:
+        if chown_path(path, dir_fd) == data_dir:
             mode_at_chown_time.append(data_dir.stat().st_mode & 0o777)
 
     pr.spawn_managed_process(
@@ -7453,6 +8396,36 @@ def test_spawn_source_process_injects_sitecustomize_for_worker_isolation_alone(
     assert (world_dir / "sitecustomize.py").is_file()
 
 
+def test_spawn_source_process_injects_sitecustomize_for_the_openai_agents_mark_alone(
+    tmp_path: Path,
+) -> None:
+    build_dir = tmp_path / "build" / "svc"
+    build_dir.mkdir(parents=True)
+    captured: dict[str, Any] = {}
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured.update(argv=argv, env=env)
+        return FakeHandle()
+
+    process = _source_process(
+        environment={"ALK_OPENAI_AGENTS_CHAT_COMPLETIONS": "1"}
+    ).model_copy(update={"run_command": [".venv/bin/python", "agent.py"]})
+    world_dir = tmp_path / "worlds" / "w0" / "svc"
+    pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=_solo_port_plan("svc"),
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
+    )
+    assert captured["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(world_dir)
+    assert (world_dir / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
+
+
 def test_dispatch_metadata_sets_the_key_only_for_exactly_one_distinct_name(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -7516,6 +8489,42 @@ def test_provision_surfaces_dispatch_identity_on_runtime_metadata(
         {"livekit_agent_name": "agent-w0"},
         {"livekit_agent_name": "agent-w1"},
     ]
+
+
+def test_provision_gives_each_attempt_its_own_dispatch_name(tmp_path: Path) -> None:
+    """A retry of the same job must register a different LiveKit agent name than the attempt it
+    supersedes, whose sandbox may still be running."""
+
+    def add_dispatch_env(body: dict[str, Any]) -> dict[str, Any]:
+        for process in body["processes"]:
+            if process["name"] == "agent":
+                process["environment"]["LIVEKIT_AGENT_NAME"] = (
+                    "agent-{{JOB_ID}}-w{{WORLD_INDEX}}"
+                )
+        return body
+
+    names = []
+    for attempt in ("attempt-aaaa", "attempt-bbbb"):
+        work = tmp_path / attempt
+        work.mkdir()
+        (work / "job.json").write_text('{"job_id": "job-123"}', encoding="utf-8")
+        source, bundle_dir = _provision_dirs(work)
+        provider = _sql_spy_provider(
+            secrets_path=work / "secrets.json", provider_attempt_id=attempt
+        )
+        runtimes = asyncio.run(
+            provider.provision(
+                _manifest(add_dispatch_env),
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=work,
+                instances=1,
+                require_declared_user=False,
+            )
+        )
+        names.append(runtimes[0].metadata["livekit_agent_name"])
+    assert names[0] != names[1]
+    assert all(name.startswith("agent-job-123-") for name in names)
 
 
 # ============================================================================================
@@ -8818,3 +9827,1732 @@ def test_every_world_can_run_the_environment_its_build_created(tmp_path: Path) -
     for cwd in cwds:
         assert (cwd / ".venv" / "bin" / "serve").is_file()
         assert (cwd / "main.py").is_file()
+
+
+# ==========================================================================================# The platform's per-run environment for customer code (`job.json` `metadata`).
+#
+# The platform decides at launch whether a run exports its traces and writes the answer into
+# job.json; the guest only applies it. No database anywhere below: every spawn is a fake runner,
+# and the few real interpreters only run a handful of lines of Python.
+# =================================================================================================
+
+_MARK = (
+    "project_name=Our%20Agent,fi.simulation.origin=simulation,"
+    "fi.simulation.job_id=job-1,fi.simulation.run_id=run-1"
+)
+_EXPORT = {"OTEL_RESOURCE_ATTRIBUTES": _MARK, "FI_SIMULATION_EXPORT": "our_keys"}
+_LIVEKIT_HOOK = Path(pr.__file__).with_name("livekit_tool_trace_bootstrap.py")
+_MARK_HOOK = Path(pr.__file__).with_name("simulation_mark_bootstrap.py")
+
+
+def _spawn(
+    root: Path,
+    process: SourceProcess,
+    customer_code_environment: dict[str, str] | None = None,
+    *,
+    secret_values: dict[str, str] | None = None,
+    secret_purposes: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Spawn `process` once under `root` with a fake runner; returns what the runner was handed
+    (`argv`, `cwd`, `env`) and the process's `world_dir`."""
+    build_dir = root / "build" / process.name
+    build_dir.mkdir(parents=True, exist_ok=True)
+    captured: dict[str, Any] = {}
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured.update(argv=argv, cwd=Path(cwd), env=env)
+        return FakeHandle()
+
+    world_dir = root / "worlds" / "w0" / process.name
+    pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=_solo_port_plan(process.name),
+        configuration_addresses={},
+        secret_values=secret_values or {},
+        secret_purposes=secret_purposes or {},
+        runner=fake_runner,
+        customer_code_environment=customer_code_environment,
+    )
+    captured["world_dir"] = world_dir
+    return captured
+
+
+def _sdk_reads(variable: str) -> dict[str, Any]:
+    """The attributes OpenTelemetry's own environment detector makes of `variable`."""
+    from opentelemetry.sdk.resources import OTELResourceDetector
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("OTEL_RESOURCE_ATTRIBUTES", variable)
+        patch.delenv("OTEL_SERVICE_NAME", raising=False)
+        return dict(OTELResourceDetector().detect().attributes)
+
+
+def test_crewai_observer_is_copied_per_world_and_preserved_on_reset(tmp_path: Path) -> None:
+    process = _source_process(environment={
+        "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl", "ALK_CREWAI_TOOL_TRACE": "1",
+    })
+    expected = Path(pr.__file__).with_name("crewai_runtime_observer_bootstrap.py").read_bytes()
+    for name in ("first", "second", "first"):
+        captured = _spawn(tmp_path / name, process)
+        observer = captured["world_dir"] / "crewai_runtime_observer_bootstrap.py"
+        assert observer.read_bytes() == expected
+        assert observer.stat().st_mode & 0o777 == 0o444
+        assert captured["env"]["HARNESS_TOOL_TRACE"] == str(captured["world_dir"] / "calls.jsonl")
+        assert (captured["world_dir"] / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
+
+
+def _hosted_job(secret_refs: dict[str, SecretRef]) -> HarnessJob:
+    return HarnessJob(
+        job_id="job-1",
+        run_id="run-1",
+        execution=ExecutionMode.HOSTED,
+        source=RepositorySource(
+            kind=SourceKind.GITHUB,
+            repository="org/repo",
+            visibility=SourceVisibility.PUBLIC,
+            commit_sha="a" * 40,
+        ),
+        agent=AgentConnection(connector="vapi", secret_refs=secret_refs),
+        scenario_count=2,
+        seed=1234,
+        runtime=RuntimeRequirements(
+            isolation=RuntimeIsolation.DEDICATED_VM, cpu_units=1
+        ),
+    )
+
+
+def test_mark_appends_to_the_customers_resource_attributes(
+    tmp_path: Path,
+) -> None:
+    theirs = "service.name=cust,deployment.environment=prod"
+    process = _source_process(
+        name="agent", environment={"OTEL_RESOURCE_ATTRIBUTES": theirs}
+    )
+
+    # Their value first, then ours whole: OpenTelemetry reads left to right, so ours wins a
+    # shared key and the variable is never parsed or re-ordered here.
+    captured = _spawn(tmp_path / "with-theirs", process, _EXPORT)
+    assert captured["env"]["OTEL_RESOURCE_ATTRIBUTES"] == f"{theirs},{_MARK}"
+
+    # No value of their own (or only blanks): ours alone, with no stray comma.
+    for index, environment in enumerate(({}, {"OTEL_RESOURCE_ATTRIBUTES": "   "})):
+        bare = _source_process(name="agent", environment=environment)
+        captured = _spawn(tmp_path / f"bare-{index}", bare, _EXPORT)
+        assert captured["env"]["OTEL_RESOURCE_ATTRIBUTES"] == _MARK
+
+    # A dict without the name leaves their value exactly as rendered.
+    captured = _spawn(
+        tmp_path / "no-name", process, {"FI_SIMULATION_EXPORT": "our_keys"}
+    )
+    assert captured["env"]["OTEL_RESOURCE_ATTRIBUTES"] == theirs
+
+
+def test_export_environment_order_our_project_name_wins_and_mark_wins(
+    tmp_path: Path,
+) -> None:
+    theirs = (
+        "project_name=Their%20Project,service.name=cust,fi.simulation.origin=forged"
+    )
+    process = _source_process(
+        name="agent",
+        environment={
+            "OTEL_RESOURCE_ATTRIBUTES": theirs,
+            # A sample the authoring model copied from an `.env.example`.
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://localhost:4318/v1/traces",
+            "FI_BASE_URL": "https://their.example",
+        },
+    )
+    export = {
+        **_EXPORT,
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+        "FI_BASE_URL": "https://collector.example",
+    }
+
+    env = _spawn(tmp_path / "our-keys", process, export)["env"]
+
+    # Their pairs, then our project name, then the mark: read the way OpenTelemetry reads it.
+    assert env["OTEL_RESOURCE_ATTRIBUTES"] == f"{theirs},{_MARK}"
+    seen = _sdk_reads(env["OTEL_RESOURCE_ATTRIBUTES"])
+    assert seen["project_name"] == "Our Agent"
+    assert seen["fi.simulation.origin"] == "simulation"
+    assert seen["fi.simulation.job_id"] == "job-1"
+    assert seen["fi.simulation.run_id"] == "run-1"
+    assert seen["service.name"] == "cust"
+
+    # Every other name replaces the rendered value; the generic endpoint was not named, so it
+    # stays and loses to the traces-only name by OpenTelemetry's own precedence.
+    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://localhost:4318"
+    assert (
+        env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+        == "https://collector.example/v1/traces"
+    )
+    assert env["FI_BASE_URL"] == "https://collector.example"
+    assert env["FI_SIMULATION_EXPORT"] == "our_keys"
+
+    # Their own OpenTelemetry setup: the dict names our traces endpoint but no base URL, so
+    # the endpoint is ours and their FI_BASE_URL survives.
+    opentelemetry = {
+        **_EXPORT,
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+    }
+    env = _spawn(tmp_path / "no-base-url", process, opentelemetry)["env"]
+    assert env["FI_BASE_URL"] == "https://their.example"
+    assert (
+        env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+        == "https://collector.example/v1/traces"
+    )
+    assert env["FI_SIMULATION_EXPORT"] == "our_keys"
+
+    # Their own configuration (the platform set the mark alone): both of theirs survive.
+    mark_only = {"OTEL_RESOURCE_ATTRIBUTES": _MARK}
+    env = _spawn(tmp_path / "mark-only", process, mark_only)["env"]
+    assert env["FI_BASE_URL"] == "https://their.example"
+    assert (
+        env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] == "http://localhost:4318/v1/traces"
+    )
+    assert "FI_SIMULATION_EXPORT" not in env
+
+    # A name they never rendered is simply added.
+    env = _spawn(tmp_path / "unrendered", _source_process(name="agent"), export)["env"]
+    assert (
+        env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+        == "https://collector.example/v1/traces"
+    )
+
+
+def test_observability_export_secrets_reach_every_exporting_customer_process(
+    tmp_path: Path,
+) -> None:
+    headers = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
+    secret_values = {
+        headers: "X-Api-Key=export-key,X-Secret-Key=export-secret",
+        "FI_API_KEY": "export-key",
+        "LIVEKIT_API_KEY": "customer-livekit",
+        "SIMULATOR_DEEPGRAM_API_KEY": "simulator-only",
+        "CHECKOUT_TOKEN": "gateway-only",
+    }
+    secret_purposes = {
+        headers: "observability_export",
+        "FI_API_KEY": "observability_export",
+        "LIVEKIT_API_KEY": "target_provider",
+        "SIMULATOR_DEEPGRAM_API_KEY": "simulator_provider",
+        "CHECKOUT_TOKEN": "source_checkout",
+    }
+    claiming = _source_process(
+        name="agent", secret_purposes=[SecretPurpose.TARGET_PROVIDER]
+    )
+    claiming_nothing = _source_process(name="tools-api")
+
+    for process in (claiming, claiming_nothing):
+        injected = pr.select_process_secrets(
+            process,
+            secret_values=secret_values,
+            secret_purposes=secret_purposes,
+            include_observability_export=True,
+        )
+        # Claimed or not, the export pair is in; the other gateway-only purposes stay out.
+        assert injected[headers] == secret_values[headers]
+        assert injected["FI_API_KEY"] == "export-key"
+        assert "SIMULATOR_DEEPGRAM_API_KEY" not in injected
+        assert "CHECKOUT_TOKEN" not in injected
+    assert "LIVEKIT_API_KEY" in pr.select_process_secrets(
+        claiming,
+        secret_values=secret_values,
+        secret_purposes=secret_purposes,
+        include_observability_export=True,
+    )
+    assert "LIVEKIT_API_KEY" not in pr.select_process_secrets(
+        claiming_nothing,
+        secret_values=secret_values,
+        secret_purposes=secret_purposes,
+        include_observability_export=True,
+    )
+
+    for process in (claiming, claiming_nothing):
+        env = _spawn(
+            tmp_path / process.name,
+            process,
+            _EXPORT,
+            secret_values=secret_values,
+            secret_purposes=secret_purposes,
+        )["env"]
+        assert env[headers] == secret_values[headers]
+        assert env["FI_API_KEY"] == "export-key"
+        assert "SIMULATOR_DEEPGRAM_API_KEY" not in env
+        assert "CHECKOUT_TOKEN" not in env
+        assert ("LIVEKIT_API_KEY" in env) is (process is claiming)
+
+    # The job model accepts the purpose, with the platform's own manager only (as for the
+    # simulator's keys), and refuses the customer's vault.
+    alias = headers
+    job = _hosted_job(
+        {
+            alias: SecretRef(
+                manager="platform-config", key=alias, purpose="observability_export"
+            )
+        }
+    )
+    assert job.agent.secret_refs[alias].purpose == "observability_export"
+    with pytest.raises(ValueError, match="hosted_secret_manager_unsupported"):
+        _hosted_job(
+            {
+                alias: SecretRef(
+                    manager="platform-vault", key=alias, purpose="observability_export"
+                )
+            }
+        )
+
+
+def test_observability_export_secrets_wait_for_a_mode(tmp_path: Path) -> None:
+    headers = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
+    secret_values = {headers: "X-Api-Key=export-key", "FI_API_KEY": "export-key"}
+    secret_purposes = {
+        headers: "observability_export",
+        "FI_API_KEY": "observability_export",
+    }
+    process = _source_process(name="agent")
+
+    # Our key goes only where the platform decided a mode; the default is none, and a bundle
+    # that claims the purpose itself (preflight refuses that) gets none either.
+    claiming = _source_process(
+        name="agent", secret_purposes=[SecretPurpose.OBSERVABILITY_EXPORT]
+    )
+    for candidate in (process, claiming):
+        assert (
+            pr.select_process_secrets(
+                candidate, secret_values=secret_values, secret_purposes=secret_purposes
+            )
+            == {}
+        )
+
+    # A dict that holds other names but not the mode is no decision to export.
+    for environment in (
+        None,
+        {},
+        {"OTEL_RESOURCE_ATTRIBUTES": _MARK, "FI_BASE_URL": "https://collector.example"},
+    ):
+        env = _spawn(
+            tmp_path / "no-mode",
+            process,
+            environment,
+            secret_values=secret_values,
+            secret_purposes=secret_purposes,
+        )["env"]
+        assert headers not in env
+        assert "FI_API_KEY" not in env
+
+
+def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporting_process(
+    tmp_path: Path,
+) -> None:
+    # The platform's decision places the hook, for every customer process.
+    for name in ("agent", "tools-api"):
+        process = _source_process(
+            name=name, environment={"PYTHONPATH": "/customer/lib"}
+        )
+        captured = _spawn(
+            tmp_path / name,
+            process,
+            _EXPORT,
+        )
+        world = captured["world_dir"]
+        assert captured["env"]["PYTHONPATH"].split(os.pathsep) == [
+            str(world),
+            "/customer/lib",
+        ]
+        assert sorted(path.name for path in world.iterdir()) == [
+            "simulation_mark_bootstrap.py",
+            "simulation_measure.py",
+            "simulation_worker_events.py",
+            "sitecustomize.py",
+        ]
+        assert (
+            world / "simulation_mark_bootstrap.py"
+        ).read_bytes() == _MARK_HOOK.read_bytes()
+        assert (world / "simulation_measure.py").read_bytes() == (
+            _MARK_HOOK.with_name("simulation_measure.py").read_bytes()
+        )
+        for written in world.iterdir():
+            assert stat.S_IMODE(written.stat().st_mode) == 0o444
+
+    # No mode, no hook and no path change: not for an empty dict, not for the customer's own
+    # configuration (the platform set the mark alone), not for any name but the mode's.
+    process = _source_process(name="agent")
+    baseline = _spawn(tmp_path / "no-mode", process)["env"]
+    for environment in (
+        {},
+        None,
+        {"OTEL_RESOURCE_ATTRIBUTES": "fi.simulation.origin=simulation"},
+        {"FI_BASE_URL": "https://collector.example"},
+    ):
+        captured = _spawn(tmp_path / "no-mode", process, environment)
+        assert list(captured["world_dir"].iterdir()) == []
+        assert "PYTHONPATH" not in captured["env"]
+    # An empty dict leaves the environment exactly as it is without one, and "no decision"
+    # adds no name of the feature however it is spelled.
+    assert _spawn(tmp_path / "no-mode", process, {})["env"] == baseline
+    for environment in ({}, None):
+        captured = _spawn(tmp_path / "no-mode", process, environment)
+        assert not [
+            name
+            for name in captured["env"]
+            if name.startswith(("OTEL_", "FI_SIMULATION_"))
+        ]
+        assert "FI_BASE_URL" not in captured["env"]
+        assert list(captured["world_dir"].iterdir()) == []
+
+    # Both hooks due: one file, the LiveKit one unchanged (it carries the import itself), and
+    # the world directory is prepended once.
+    both = _source_process(
+        name="agent",
+        environment={
+            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl",
+            "PYTHONPATH": "/customer/lib",
+        },
+    )
+    captured = _spawn(tmp_path / "both", both, _EXPORT)
+    world = captured["world_dir"]
+    assert (world / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
+    assert (world / "simulation_mark_bootstrap.py").read_bytes() == (
+        _MARK_HOOK.read_bytes()
+    )
+    assert captured["env"]["PYTHONPATH"].split(os.pathsep) == [
+        str(world),
+        "/customer/lib",
+    ]
+
+    # LiveKit alone: its file, and the mark module beside it for the hand-on to the next
+    # `sitecustomize`; the path is the same.
+    captured = _spawn(tmp_path / "livekit-only", both)
+    world = captured["world_dir"]
+    assert (world / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
+    assert (world / "simulation_mark_bootstrap.py").read_bytes() == _MARK_HOOK.read_bytes()
+
+    # Framework observation reads spans through the mark module, exported or not.
+    observed = both.model_copy(
+        update={"environment": {**both.environment, "ALK_OBSERVE_FRAMEWORKS": "1"}}
+    )
+    captured = _spawn(tmp_path / "observed", observed)
+    assert (
+        captured["world_dir"] / "simulation_mark_bootstrap.py"
+    ).read_bytes() == _MARK_HOOK.read_bytes()
+
+    # A reset spawns again in the same directory, whose files the process's own user now owns
+    # read-only: they are reused, never rewritten.
+    exporting = _source_process(name="agent")
+    captured = _spawn(tmp_path / "reset", exporting, _EXPORT)
+    world = captured["world_dir"]
+    world.chmod(0o555)
+    try:
+        again = _spawn(tmp_path / "reset", exporting, _EXPORT)
+    finally:
+        world.chmod(0o755)
+    assert again["env"]["PYTHONPATH"] == str(world)
+
+
+def test_mark_hook_that_cannot_be_written_fails_the_spawn(tmp_path: Path) -> None:
+    exporting = {
+        "FI_SIMULATION_EXPORT": "our_keys",
+        "OTEL_RESOURCE_ATTRIBUTES": "fi.simulation.origin=simulation",
+    }
+    process = _source_process(name="agent")
+    started: list[Any] = []
+
+    def recording_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        started.append(argv)
+        return FakeHandle()
+
+    def spawn_once(
+        root: Path,
+        customer_code_environment: dict[str, str],
+        *,
+        read_only_world: bool = False,
+    ) -> Path:
+        (root / "build" / process.name).mkdir(parents=True)
+        world_dir = root / "worlds" / "w0" / process.name
+        world_dir.mkdir(parents=True)
+        if read_only_world:
+            world_dir.chmod(0o555)
+        try:
+            pr.spawn_source_process(
+                process,
+                build_dir=root / "build" / process.name,
+                world_dir=world_dir,
+                world_index=0,
+                port_plan=_solo_port_plan(process.name),
+                configuration_addresses={},
+                secret_values={},
+                secret_purposes={},
+                runner=recording_runner,
+                customer_code_environment=customer_code_environment,
+            )
+        finally:
+            # Left at 0555, the test's own temporary-directory cleanup could not remove it.
+            world_dir.chmod(0o755)
+        return world_dir
+
+    # An exporting process whose mark cannot be placed would send traces under our keys with
+    # nothing to tell them apart, so the run must stop before the process exists.
+    # The SDK's own copy of the module being gone is one way the placement fails.
+    real_read_bytes = Path.read_bytes
+
+    def read_bytes_without_the_mark_module(self: Path) -> bytes:
+        if self.name == "simulation_mark_bootstrap.py":
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real_read_bytes(self)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Path, "read_bytes", read_bytes_without_the_mark_module)
+        with pytest.raises(pr.ProcessRuntimeError) as missing:
+            spawn_once(tmp_path / "sdk-copy-missing", exporting)
+    assert missing.value.code == "spawn_failed"
+    assert "simulation_mark_bootstrap.py" in str(missing.value)
+    assert started == []
+
+    # Mode bits do not refuse a write to root, so the unwritable directory proves nothing
+    # there; the missing-module case above still ran.
+    if os.geteuid() != 0:
+        with pytest.raises(pr.ProcessRuntimeError) as unwritable:
+            spawn_once(tmp_path / "unwritable", exporting, read_only_world=True)
+        assert unwritable.value.code == "spawn_failed"
+        assert started == []
+
+        # The same directory costs nothing when no hook is due, so the failure above comes from
+        # placing the hook and not from the directory itself.
+        world_dir = spawn_once(tmp_path / "control", {}, read_only_world=True)
+        assert len(started) == 1
+        assert list(world_dir.iterdir()) == []
+
+
+_OTEL_CLOSURE = """
+import importlib.metadata, json, re, sys
+from pathlib import Path
+before = set(sys.modules)
+import opentelemetry.sdk.resources
+distributions = importlib.metadata.packages_distributions()
+modules, metadata = {}, set()
+for name in sorted(set(sys.modules) - before):
+    top = name.partition(".")[0]
+    if top in modules or top == "fi" or top in sys.stdlib_module_names:
+        continue
+    module = sys.modules[top]
+    where = getattr(module, "__file__", None)
+    if where:
+        modules[top] = ["link", where.removesuffix("/__init__.py")]
+    elif getattr(module, "__path__", None):
+        modules[top] = ["merge", list(module.__path__)]
+    else:
+        continue
+    # The SDK asks for its own version at import, so each distribution's metadata comes too.
+    for distribution in distributions.get(top, []):
+        wanted = re.sub(r"[-_.]+", "_", distribution).lower()
+        site = Path(importlib.metadata.distribution(distribution).locate_file(""))
+        for info in site.glob("*.dist-info"):
+            if re.sub(r"[-_.]+", "_", info.name.removesuffix(".dist-info").rsplit("-", 1)[0]).lower() == wanted:
+                metadata.add(str(info))
+print(json.dumps({"modules": modules, "metadata": sorted(metadata)}))
+"""
+
+
+def _library_path_env() -> dict[str, str]:
+    """A CPython built as a shared library (CI's setup-python on Linux) cannot start without the
+    loader path its runner exports, and the environments below are deliberately bare."""
+    value = os.environ.get("LD_LIBRARY_PATH")
+    return {"LD_LIBRARY_PATH": value} if value is not None else {}
+
+
+def _interpreter_without_fi(directory: Path) -> Path:
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(directory)
+    python = directory / "bin" / "python"
+    probe = subprocess.run(
+        [str(python), "-c", "import fi"],
+        cwd=directory.parent,
+        env={"PATH": os.environ.get("PATH", ""), **_library_path_env()},
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode != 0 and "No module named 'fi'" in probe.stderr
+    return python
+
+
+def _opentelemetry_only_site(target: Path) -> Path:
+    """A directory with OpenTelemetry's SDK and what it imports, and nothing of ours, so the
+    interpreter above can import the SDK without being able to import `fi`."""
+    target.mkdir(parents=True)
+    probe = subprocess.run(
+        [sys.executable, "-c", _OTEL_CLOSURE],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    closure = json.loads(probe.stdout)
+    for info in closure["metadata"]:
+        (target / Path(info).name).symlink_to(info)
+    for name, (kind, where) in closure["modules"].items():
+        if kind == "link":
+            (target / Path(where).name).symlink_to(where)
+            continue
+        merged = target / name
+        merged.mkdir()
+        for directory in where:
+            for child in Path(directory).iterdir():
+                if child.name != "__pycache__" and not (merged / child.name).exists():
+                    (merged / child.name).symlink_to(child)
+    return target
+
+
+_CUSTOMER_SCRIPT = """
+import json
+try:
+    import fi
+    fi_importable = True
+except ImportError:
+    fi_importable = False
+from opentelemetry.sdk.resources import Resource
+import agent_tools
+attributes = dict(
+    Resource(attributes={"project_name": "theirs", "service.name": "svc"}).attributes
+)
+print(json.dumps({
+    "fi_importable": fi_importable,
+    "attributes": attributes,
+    "tool": agent_tools.get_weather("Paris"),
+}))
+"""
+
+
+def test_livekit_hook_and_mark_hook_share_one_file(tmp_path: Path) -> None:
+    python = _interpreter_without_fi(tmp_path / "venv")
+    site = _opentelemetry_only_site(tmp_path / "otel-site")
+    # The repository's own `sitecustomize.py`, which our file shadows and so must hand on to.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "sitecustomize.py").write_text(
+        "import os\n"
+        "with open(os.environ['REPO_HOOK_LOG'], 'a') as log:\n"
+        "    log.write(__name__ + '\\n')\n"
+    )
+    repo_log = tmp_path / "repo-hook.log"
+    environment = {
+        "PYTHONPATH": os.pathsep.join([str(site), str(repo)]),
+        "REPO_HOOK_LOG": str(repo_log),
+        "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl",
+        "ALK_TOOL_TRACE_BINDINGS": json.dumps(
+            [
+                {
+                    "name": "get_weather",
+                    "module": "agent_tools",
+                    "callable": "get_weather",
+                }
+            ]
+        ),
+    }
+
+    def run(captured: dict[str, Any]) -> subprocess.CompletedProcess:
+        (captured["cwd"] / "agent_tools.py").write_text(
+            "def get_weather(location):\n    return f'sunny in {location}'\n"
+        )
+        return subprocess.run(
+            captured["argv"],
+            cwd=captured["cwd"],
+            env={**captured["env"], **_library_path_env()},
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def trace_of(captured: dict[str, Any]) -> list[dict[str, Any]]:
+        path = captured["world_dir"] / "calls.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+    process = _source_process(
+        name="agent",
+        run_command=[str(python), "-c", _CUSTOMER_SCRIPT],
+        environment=environment,
+    )
+
+    # Both hooks due: one `sitecustomize.py`, the LiveKit file, and both apply in an
+    # interpreter that cannot import `fi`.
+    captured = _spawn(tmp_path / "both", process, _EXPORT)
+    assert (
+        captured["world_dir"] / "sitecustomize.py"
+    ).read_bytes() == _LIVEKIT_HOOK.read_bytes()
+    result = run(captured)
+    assert result.returncode == 0, result.stderr
+    assert repo_log.read_text().splitlines() == ["_alk_chained_sitecustomize"]
+    reported = json.loads(result.stdout)
+    assert reported["fi_importable"] is False
+    assert reported["attributes"] == {
+        "project_name": "Our Agent",
+        "service.name": "svc",
+        "fi.simulation.origin": "simulation",
+        "fi.simulation.job_id": "job-1",
+        "fi.simulation.run_id": "run-1",
+    }
+    assert result.stderr.splitlines() == ["simulation mark hook: applied"]
+    assert any(
+        record["name"] == "get_weather" and record["output"] == "sunny in Paris"
+        for record in trace_of(captured)
+    )
+
+    # The mark module missing: the LiveKit hook still applies and the mark is simply not made.
+    (captured["world_dir"] / "simulation_mark_bootstrap.py").unlink()
+    (captured["world_dir"] / "calls.jsonl").unlink()
+    result = run(captured)
+    assert result.returncode == 0, result.stderr
+    reported = json.loads(result.stdout)
+    assert reported["attributes"] == {"project_name": "theirs", "service.name": "svc"}
+    assert result.stderr == ""
+    assert any(
+        record["name"] == "get_weather" and record["output"] == "sunny in Paris"
+        for record in trace_of(captured)
+    )
+
+    # Without LiveKit's markers the small file does the same job in the same interpreter.
+    small = _source_process(
+        name="agent",
+        run_command=[str(python), "-c", _CUSTOMER_SCRIPT],
+        environment={
+            "PYTHONPATH": environment["PYTHONPATH"],
+            "REPO_HOOK_LOG": str(repo_log),
+        },
+    )
+    captured = _spawn(tmp_path / "small", small, _EXPORT)
+    repo_log.unlink()
+    result = run(captured)
+    assert result.returncode == 0, result.stderr
+    assert repo_log.read_text().splitlines() == ["_alk_chained_sitecustomize"]
+    assert json.loads(result.stdout)["attributes"]["project_name"] == "Our Agent"
+    assert result.stderr.splitlines() == ["simulation mark hook: applied"]
+
+
+_BROKEN_MARK_MODULES = {
+    "syntax_error": "def broken(:\n",
+    "install_raises": "def install():\n    raise RuntimeError('do-not-log-this')\n",
+    "import_error": "import module_that_does_not_exist\n",
+}
+_TRACED_SCRIPT = "import agent_tools; print(agent_tools.get_weather('Paris'))"
+
+
+def _run_spawned(captured: dict[str, Any]) -> subprocess.CompletedProcess:
+    (captured["cwd"] / "agent_tools.py").write_text(
+        "def get_weather(location):\n    return f'sunny in {location}'\n"
+    )
+    return subprocess.run(
+        captured["argv"],
+        cwd=captured["cwd"],
+        env={**captured["env"], **_library_path_env()},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def _replace_mark_module(world: Path, source: str) -> None:
+    module = world / "simulation_mark_bootstrap.py"
+    module.unlink()
+    module.write_text(source)
+
+
+@pytest.mark.parametrize("source", sorted(_BROKEN_MARK_MODULES))
+def test_livekit_hook_keeps_tracing_and_says_so_when_the_mark_module_is_broken(
+    tmp_path: Path, source: str
+) -> None:
+    process = _source_process(
+        name="agent",
+        run_command=[sys.executable, "-c", _TRACED_SCRIPT],
+        environment={
+            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl",
+            "ALK_TOOL_TRACE_BINDINGS": json.dumps(
+                [
+                    {
+                        "name": "get_weather",
+                        "module": "agent_tools",
+                        "callable": "get_weather",
+                    }
+                ]
+            ),
+        },
+    )
+    captured = _spawn(tmp_path, process, _EXPORT)
+    world = captured["world_dir"]
+    assert (world / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
+    _replace_mark_module(world, _BROKEN_MARK_MODULES[source])
+
+    result = _run_spawned(captured)
+
+    # The process runs and its tool call is still traced; the one fixed line says the mark
+    # is not made, and nothing of the module or its error.
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "sunny in Paris"
+    assert result.stderr == "simulation mark hook: failed\n"
+    records = [
+        json.loads(line) for line in (world / "calls.jsonl").read_text().splitlines()
+    ]
+    assert any(
+        record["name"] == "get_weather" and record["output"] == "sunny in Paris"
+        for record in records
+    )
+
+
+@pytest.mark.parametrize("source", sorted(_BROKEN_MARK_MODULES))
+def test_small_mark_hook_says_so_when_the_mark_module_is_broken(
+    tmp_path: Path, source: str
+) -> None:
+    process = _source_process(
+        name="agent",
+        run_command=[sys.executable, "-c", _TRACED_SCRIPT],
+    )
+    captured = _spawn(tmp_path, process, _EXPORT)
+    world = captured["world_dir"]
+    assert sorted(path.name for path in world.iterdir()) == [
+        "simulation_mark_bootstrap.py",
+        "simulation_measure.py",
+        "simulation_worker_events.py",
+        "sitecustomize.py",
+    ]
+    _replace_mark_module(world, _BROKEN_MARK_MODULES[source])
+
+    result = _run_spawned(captured)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "sunny in Paris"
+    assert result.stderr == "simulation mark hook: failed\n"
+
+
+_EXPORT_HEADERS = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
+
+
+def _provision_from_job_json(
+    tmp_path: Path,
+    customer_code_environment: object,
+    egress_allowed_hosts: list[str] | None = None,
+) -> tuple[
+    list[tuple[list[str], dict[str, str]]], list[tuple[list[str], dict[str, str]]]
+]:
+    """Provision two worlds of a bundle whose secrets hold an export alias and a target
+    provider's, with `job.json` carrying `customer_code_environment` as given; returns what
+    the runner started and what the build steps ran with (`argv`, `env`)."""
+    headers = _EXPORT_HEADERS
+    (tmp_path / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-1",
+                "agent": {
+                    "secret_refs": {
+                        "LIVEKIT_API_KEY": {
+                            "manager": "platform-vault",
+                            "key": "LIVEKIT_API_KEY",
+                            "purpose": "target_provider",
+                        },
+                        headers: {
+                            "manager": "platform-config",
+                            "key": headers,
+                            "purpose": "observability_export",
+                        },
+                    }
+                },
+                "metadata": {
+                    "customer_code_environment": customer_code_environment,
+                    **(
+                        {"egress_allowed_hosts": egress_allowed_hosts}
+                        if egress_allowed_hosts is not None
+                        else {}
+                    ),
+                },
+            }
+        )
+    )
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(
+        json.dumps(
+            {
+                "LIVEKIT_API_KEY": "customer-livekit",
+                headers: "X-Api-Key=a,X-Secret-Key=b",
+            }
+        )
+    )
+    spawned: list[tuple[list[str], dict[str, str]]] = []
+    built: list[tuple[list[str], dict[str, str]]] = []
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        spawned.append((list(argv), dict(env)))
+        return FakeHandle()
+
+    def sync_run(argv, **kwargs):
+        built.append((list(argv), dict(kwargs.get("env") or {})))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path, runner=runner, sync_run=sync_run
+    )
+    asyncio.run(
+        provider.provision(
+            _manifest(),
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=2,
+            require_declared_user=False,
+        )
+    )
+
+    return spawned, built
+
+
+def test_mark_read_from_job_json_reaches_every_source_process(tmp_path: Path) -> None:
+    """The whole chain a hosted run takes: `job.json` -> `provision` -> `SpawnContext` ->
+    `spawn_world` -> `spawn_source_process`, for every world and every customer process."""
+    headers = _EXPORT_HEADERS
+    customer_code_environment = {
+        **_EXPORT,
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+    }
+    spawned, built = _provision_from_job_json(tmp_path, customer_code_environment)
+
+    customer = {
+        "tools-api": ["node", "server.js"],
+        "agent": ["python3", "agent.py"],
+    }
+    seen = [(argv, env) for argv, env in spawned if argv in customer.values()]
+    # Two worlds, two customer processes each (a world may be spawned more than once).
+    assert {argv[0] for argv, _ in seen} == {"node", "python3"}
+    assert len({env["PYTHONPATH"] for _, env in seen}) == 4
+    for argv, env in seen:
+        assert env["OTEL_RESOURCE_ATTRIBUTES"] == _MARK
+        assert env["FI_SIMULATION_EXPORT"] == "our_keys"
+        assert (
+            env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+            == "https://collector.example/v1/traces"
+        )
+        # The export key reaches the process that claims nothing as well as the one that
+        # claims the target provider's.
+        assert env[headers] == "X-Api-Key=a,X-Secret-Key=b"
+        assert ("LIVEKIT_API_KEY" in env) is (argv == customer["agent"])
+        world = Path(env["PYTHONPATH"].split(os.pathsep)[0])
+        assert (world / "sitecustomize.py").is_file()
+        assert (world / "simulation_mark_bootstrap.py").is_file()
+
+    # Build steps ran, and none of them saw any of it: not a name of the platform's dict, not
+    # an export alias, not the hook's path change.
+    build_steps = (["npm", "ci"], ["pip", "install", "-r", "requirements.txt"])
+    steps = [env for argv, env in built if argv in build_steps]
+    assert len(steps) == 2
+    for env in steps:
+        # A captured environment that is a real one, so the absences below mean something.
+        assert "PATH" in env
+        for name in (
+            *customer_code_environment,
+            headers,
+            "LIVEKIT_API_KEY",
+            "PYTHONPATH",
+        ):
+            assert name not in env
+
+
+def test_a_controlled_run_points_only_the_agent_at_the_refusing_proxy(tmp_path: Path) -> None:
+    """`job.json` naming the allowed hosts gives the agent process HTTP(S)_PROXY at a refusing proxy and NO_PROXY
+    covering loopback, the world's own hosts and every allowed domain; without it nothing changes."""
+    allowed = ["api.openai.com", "*.hf.co", "platform.example"]
+    controlled = tmp_path / "controlled"
+    controlled.mkdir()
+    spawned, _ = _provision_from_job_json(controlled, {}, allowed)
+    agents = [env for argv, env in spawned if argv == ["python3", "agent.py"]]
+    tools = [env for argv, env in spawned if argv == ["node", "server.js"]]
+    assert agents and tools
+    for env in agents:
+        assert env["HTTP_PROXY"] == env["HTTPS_PROXY"] == env["https_proxy"]
+        assert env["NODE_USE_ENV_PROXY"] == "1"
+        assert env["HTTP_PROXY"].startswith("http://127.0.0.1:")
+        excluded = env["NO_PROXY"].split(",")
+        assert env["no_proxy"] == env["NO_PROXY"]
+        for host in ("localhost", "127.0.0.1", "::1", "api.openai.com", ".hf.co", "platform.example"):
+            assert host in excluded
+    # Each world has its own proxy, so a refusal lands in that world's action log.
+    assert len({env["HTTP_PROXY"] for env in agents}) == 2
+    for env in tools:
+        assert "HTTP_PROXY" not in env and "NO_PROXY" not in env
+
+    unrestricted = tmp_path / "unrestricted"
+    unrestricted.mkdir()
+    spawned, _ = _provision_from_job_json(unrestricted, {})
+    for argv, env in spawned:
+        assert "HTTP_PROXY" not in env and "HTTPS_PROXY" not in env and "NO_PROXY" not in env
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [[], None, {"FI_SIMULATION_EXPORT": 1}],
+    ids=["list", "null", "non_string_value"],
+)
+def test_a_malformed_customer_code_environment_in_job_json_injects_no_export_key(
+    tmp_path: Path, malformed: object
+) -> None:
+    spawned, _ = _provision_from_job_json(tmp_path, malformed)
+
+    customer = (["node", "server.js"], ["python3", "agent.py"])
+    seen = [env for argv, env in spawned if argv in customer]
+    assert len(seen) >= 4
+    for env in seen:
+        assert _EXPORT_HEADERS not in env
+        assert "FI_SIMULATION_EXPORT" not in env
+        assert "OTEL_RESOURCE_ATTRIBUTES" not in env
+        # No hook either: nothing on the path holds the files that would mark the process.
+        for entry in filter(None, env.get("PYTHONPATH", "").split(os.pathsep)):
+            assert not (Path(entry) / "sitecustomize.py").exists()
+            assert not (Path(entry) / "simulation_mark_bootstrap.py").exists()
+
+
+@pytest.mark.parametrize(
+    "document, expected",
+    [
+        (None, {}),
+        (b"not json", {}),
+        (b"\xff\xfe\x00", {}),
+        (b"[]", {}),
+        (b"{}", {}),
+        (b'{"metadata": []}', {}),
+        (b'{"metadata": {}}', {}),
+        (b'{"metadata": {"customer_code_environment": []}}', {}),
+        (b'{"metadata": {"customer_code_environment": null}}', {}),
+        (b'{"metadata": {"customer_code_environment": {}}}', {}),
+        (
+            b'{"metadata": {"customer_code_environment": {"FI_SIMULATION_EXPORT": 1}}}',
+            {},
+        ),
+        (
+            b'{"metadata": {"customer_code_environment": {"A": "x", "B": null}}}',
+            {},
+        ),
+        (
+            b'{"metadata": {"customer_code_environment": {"A_B": "x", "FI_SIMULATION_EXPORT": "our_keys"}}}',
+            {"A_B": "x", "FI_SIMULATION_EXPORT": "our_keys"},
+        ),
+    ],
+)
+def test_customer_code_environment_is_empty_unless_job_json_holds_a_dict_of_strings(
+    tmp_path: Path, document: bytes | None, expected: dict[str, str]
+) -> None:
+    if document is not None:
+        (tmp_path / "job.json").write_bytes(document)
+    assert pr._read_customer_code_environment(tmp_path) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        [],
+        None,
+        "text",
+        {"TEST_KEY_NAME": 7, "TEST_OTHER": "test-value-text"},
+        {"TEST_KEY_NAME": "test-value-text", "TEST_OTHER": None},
+    ],
+)
+def test_a_malformed_customer_code_environment_is_ignored_with_one_warning_that_names_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, value: object
+) -> None:
+    (tmp_path / "job.json").write_text(
+        json.dumps({"metadata": {"customer_code_environment": value}})
+    )
+    with caplog.at_level("WARNING", logger=pr.logger.name):
+        assert pr._read_customer_code_environment(tmp_path) == {}
+    warnings = [record for record in caplog.records if record.name == pr.logger.name]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert (
+        message
+        == "the job's customer code environment is not a map of text to text; ignored"
+    )
+    # Neither the key of the setting nor anything the customer's environment held is logged.
+    for forbidden in (
+        "customer_code_environment",
+        "TEST_KEY_NAME",
+        "TEST_OTHER",
+        "test-value-text",
+    ):
+        assert forbidden not in message
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        None,
+        b"not json",
+        b"[]",
+        b"{}",
+        b'{"metadata": []}',
+        b'{"metadata": {}}',
+        b'{"metadata": {"other": 1}}',
+        b'{"metadata": {"customer_code_environment": {}}}',
+    ],
+)
+def test_a_missing_file_metadata_or_key_is_not_worth_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, document: bytes | None
+) -> None:
+    if document is not None:
+        (tmp_path / "job.json").write_bytes(document)
+    with caplog.at_level("WARNING", logger=pr.logger.name):
+        assert pr._read_customer_code_environment(tmp_path) == {}
+    assert [record for record in caplog.records if record.name == pr.logger.name] == []
+
+
+def test_the_job_metadata_model_types_the_customer_code_environment() -> None:
+    typed = HarnessJobMetadata.model_validate({"customer_code_environment": {"A": "x"}})
+    assert typed.customer_code_environment == {"A": "x"}
+    assert HarnessJobMetadata.model_validate({}).customer_code_environment == {}
+    # An entry the model does not name is not its business.
+    assert (
+        HarnessJobMetadata.model_validate(
+            {"execution_manifest": [1]}
+        ).customer_code_environment
+        == {}
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [[], None, "text", {"A": 1}, {"A": None}],
+    ids=["list", "null", "text", "non_string_value", "null_value"],
+)
+def test_the_job_metadata_model_rejects_a_customer_code_environment_of_the_wrong_shape(
+    value: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        HarnessJobMetadata.model_validate({"customer_code_environment": value})
+
+
+def _platform_write(payload: dict[str, Any], mark: dict[str, str]) -> dict[str, Any]:
+    """The platform's write of the mark into a job document.
+
+    A line-for-line copy of `_with_simulation_mark` in future-agi
+    `futureagi/simulate/services/hosted_harness_gateway.py`. This repository cannot see that
+    file, so a change there must be mirrored here by hand; a change on this side (the key, the
+    model, the reader) fails `test_the_platforms_job_json_write_is_read_as_written`.
+    """
+    document = dict(payload)
+    metadata = dict(document.get("metadata") or {})
+    metadata["customer_code_environment"] = dict(mark)
+    document["metadata"] = metadata
+    return document
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"job_id": "job-1", "metadata": {"execution_manifest": "x"}},
+        {"job_id": "job-1"},
+    ],
+    ids=["with_metadata", "no_metadata"],
+)
+def test_the_platforms_job_json_write_is_read_as_written(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, payload: dict[str, Any]
+) -> None:
+    mark = {
+        "OTEL_RESOURCE_ATTRIBUTES": _MARK,
+        "FI_SIMULATION_EXPORT": "our_keys",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+    }
+    (tmp_path / "job.json").write_text(json.dumps(_platform_write(payload, mark)))
+
+    with caplog.at_level("WARNING", logger=pr.logger.name):
+        assert pr._read_customer_code_environment(tmp_path) == mark
+    assert [record for record in caplog.records if record.name == pr.logger.name] == []
+    # The write left the rest of the document's metadata as it was.
+    written = json.loads((tmp_path / "job.json").read_text())
+    assert written["job_id"] == "job-1"
+    assert {
+        key: value
+        for key, value in written["metadata"].items()
+        if key != "customer_code_environment"
+    } == (payload.get("metadata") or {})
+
+
+def test_the_platforms_unmarked_job_json_write_is_read_as_no_environment(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    (tmp_path / "job.json").write_text(
+        json.dumps(_platform_write({"job_id": "job-1"}, {}))
+    )
+    with caplog.at_level("WARNING", logger=pr.logger.name):
+        assert pr._read_customer_code_environment(tmp_path) == {}
+    assert [record for record in caplog.records if record.name == pr.logger.name] == []
+
+
+def test_spawn_context_carries_no_customer_code_environment_by_default(
+    tmp_path: Path,
+) -> None:
+    def context() -> pr.SpawnContext:
+        return pr.SpawnContext(
+            work_directory=tmp_path,
+            port_plan=_solo_port_plan("svc"),
+            credentials={},
+            secret_values={},
+            secret_purposes={},
+        )
+
+    assert context().customer_code_environment == {}
+    assert (
+        context().customer_code_environment is not context().customer_code_environment
+    )
+
+
+def test_call_file_variable_set_for_exporting_processes_only(tmp_path: Path) -> None:
+    process = _source_process(name="agent")
+    captured = _spawn(tmp_path / "export", process, _EXPORT)
+    assert captured["env"]["FI_SIMULATION_CALL_FILE"] == str(
+        pr.simulation_call_file(tmp_path / "export", 0)
+    )
+
+    for index, environment in enumerate(
+        (None, {}, {"OTEL_RESOURCE_ATTRIBUTES": _MARK})
+    ):
+        env = _spawn(tmp_path / f"no-mode-{index}", process, environment)["env"]
+        assert "FI_SIMULATION_CALL_FILE" not in env
+
+    provisioned = tmp_path / "provisioned"
+    provisioned.mkdir()
+    spawned, built = _provision_from_job_json(provisioned, {**_EXPORT})
+    customer = (["node", "server.js"], ["python3", "agent.py"])
+    named = {
+        env["FI_SIMULATION_CALL_FILE"] for argv, env in spawned if argv in customer
+    }
+    assert named == {
+        str(pr.simulation_call_file(provisioned, index)) for index in (0, 1)
+    }
+    steps = [env for argv, env in built if argv[0] in ("npm", "pip")]
+    assert steps and all("FI_SIMULATION_CALL_FILE" not in env for env in steps)
+
+
+def _clone_provider(strategies, *, shared=True):
+    store = types.SimpleNamespace
+    provider = pr.ProcessRuntimeProvider()
+    provider._manifest = store(
+        seed=store(
+            stores=[
+                store(capability=f"db{index}", baseline=store(strategy=strategy))
+                for index, strategy in enumerate(strategies)
+            ]
+        ),
+        capabilities={
+            f"db{index}": store(service=f"postgres{index}")
+            for index in range(len(strategies))
+        },
+    )
+    statements = []
+    provider._context = store(
+        credentials={"postgres0": store(username="harness", password="pw")},
+        port_plan=store(port_for=lambda name, world_index: 14000),
+        sql_runner=lambda **kwargs: statements.append(kwargs["statement"]) or [],
+        require_declared_user=False,
+    )
+    provider._build_output = store(
+        stores=[store(process_name="postgres0", baseline_reference="baseline_t")]
+    )
+    provider._job_shared_handles = {"postgres0": object()} if shared else {}
+    runtime = pr.EnvironmentRuntime(
+        runtime_id="r",
+        world_index=0,
+        bundle_digest="d",
+        state=pr.RuntimeState.READY,
+        endpoints={
+            "db": pr.RuntimeEndpoint(
+                capability="db0",
+                protocol="postgres",
+                address="postgresql://harness:p%40w@localhost:14000/w0",
+            ),
+            "api": pr.RuntimeEndpoint(
+                capability="api", protocol="http", address="http://localhost:15001"
+            ),
+        },
+    )
+    return provider, runtime, statements
+
+
+def test_clone_world_database_points_a_copy_at_a_fresh_baseline_clone():
+    provider, runtime, statements = _clone_provider([pr.BaselineStrategy.TEMPLATE_DATABASE])
+
+    lane = asyncio.run(provider.clone_world_database(runtime, "lane3"))
+
+    assert lane.endpoints["db"].address == "postgresql://harness:p%40w@localhost:14000/lane3"
+    assert lane.endpoints["api"] == runtime.endpoints["api"]
+    assert runtime.endpoints["db"].address.endswith("/w0")
+    assert statements[1:] == [
+        'DROP DATABASE IF EXISTS "lane3"',
+        'CREATE DATABASE "lane3" TEMPLATE "baseline_t"',
+    ]
+
+
+@pytest.mark.parametrize(
+    "strategies,shared",
+    [
+        ([pr.BaselineStrategy.DATADIR_COPY], True),
+        ([pr.BaselineStrategy.TEMPLATE_DATABASE] * 2, True),
+        ([pr.BaselineStrategy.TEMPLATE_DATABASE], False),
+    ],
+)
+def test_clone_world_database_declines_every_other_world_shape(strategies, shared):
+    provider, runtime, statements = _clone_provider(strategies, shared=shared)
+
+    assert asyncio.run(provider.clone_world_database(runtime, "lane0")) is None
+    assert statements == []
+def test_build_failure_retains_redacted_output_and_late_error(tmp_path: Path) -> None:
+    (tmp_path / "source" / "svc").mkdir(parents=True)
+    retained = []
+    secret = "private-provider-value-123456"
+
+    def fake_run(step, **kwargs):
+        return subprocess.CompletedProcess(
+            step,
+            1,
+            stdout="build stdout",
+            stderr="prefix\n" * 1000 + secret + "\nnode-gyp: make is missing",
+        )
+
+    with pytest.raises(pr.ProcessRuntimeError) as caught:
+        pr.build_process_tree(
+            _source_process(
+                working_directory="svc", build_commands=[["bun", "install"]]
+            ),
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            run=fake_run,
+            secret_values={"API_KEY": secret},
+            retain_process_log=lambda path: retained.append(path.read_text()),
+        )
+    assert "make is missing" in str(caught.value)
+    assert secret not in str(caught.value)
+    assert len(retained) == 1 and "make is missing" in retained[0]
+    assert secret not in retained[0] and "<redacted>" in retained[0]
+    assert len(retained[0]) <= 8192
+
+
+def test_build_timeout_retains_partial_output(tmp_path: Path) -> None:
+    (tmp_path / "source" / "svc").mkdir(parents=True)
+    retained = []
+
+    def fake_run(step, **kwargs):
+        raise subprocess.TimeoutExpired(
+            step, 5, output=b"partial install output", stderr=b"last compiler line"
+        )
+
+    with pytest.raises(pr.ProcessRuntimeError, match="last compiler line"):
+        pr.build_process_tree(
+            _source_process(
+                working_directory="svc", build_commands=[["bun", "install"]]
+            ),
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            run=fake_run,
+            retain_process_log=lambda path: retained.append(path.read_text()),
+            build_step_timeout_seconds=5,
+            secret_values={},
+        )
+    assert len(retained) == 1
+    assert "partial install output" in retained[0]
+
+
+def test_build_pipeline_preserves_logs_after_workspace_cleanup(tmp_path: Path) -> None:
+    import shutil
+    from fi.alk.harness.process_diagnostics import retain_process_log
+
+    source = tmp_path / "source"
+    source.mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    destination = tmp_path / "retained"
+    secret = "native-build-secret-234567"
+    process = _source_process(
+        build_commands=[
+            [
+                sys.executable,
+                "-c",
+                "import sys; print('build started'); print('compiler failure: "
+                + secret
+                + "',file=sys.stderr); sys.exit(1)",
+            ]
+        ]
+    )
+    manifest = _manifest().model_copy(update={"processes": [process]})
+    context = pr.SpawnContext(
+        work_directory=work,
+        port_plan=pr.plan_ports(_manifest(), instances=1),
+        credentials={},
+        secret_values={"API_KEY": secret},
+        secret_purposes={},
+        retain_process_log=lambda path: retain_process_log(
+            path, work=work, destination=destination, secrets={"API_KEY": secret}
+        ),
+    )
+    with pytest.raises(pr.ProcessRuntimeError, match="compiler failure"):
+        pr.build_process_trees(manifest, source_root=source, context=context)
+    shutil.rmtree(work)
+    logs = list((destination / "process-logs").glob("*.log"))
+    assert len(logs) == 1
+    text = logs[0].read_text()
+    assert "build started" in text and "compiler failure" in text
+    assert secret not in text and "<redacted>" in text
+
+
+def test_build_retries_retain_only_failed_attempts(tmp_path: Path) -> None:
+    (tmp_path / "source").mkdir()
+    retained = []
+    results = iter(
+        [
+            subprocess.CompletedProcess(
+                ["bun"], 1, stderr="Temporary failure in name resolution"
+            ),
+            subprocess.CompletedProcess(
+                ["bun"], 0, stdout="native dependency built successfully"
+            ),
+        ]
+    )
+    pr.build_process_tree(
+        _source_process(build_commands=[["bun", "install"]]),
+        source_root=tmp_path / "source",
+        build_root=tmp_path / "build",
+        run=lambda *args, **kwargs: next(results),
+        sleep=lambda _: None,
+        secret_values={},
+        retain_process_log=lambda path: retained.append(path.read_text()),
+    )
+    assert len(retained) == 1
+    assert "Temporary failure" in retained[0] and "attempt 1" in retained[0]
+
+
+def test_build_evidence_omits_unknown_credential_context(tmp_path: Path) -> None:
+    retained = []
+    evidence = pr._build_step_evidence(
+        "unknown-sensitive-stdout",
+        "unknown-sensitive-stderr",
+        step=["installer", "unknown-sensitive-command"],
+        process="agent",
+        attempt=0,
+        directory=tmp_path,
+        secret_values=None,
+        retain_log=lambda path: retained.append(path.read_text()),
+    )
+    assert "credential context unavailable" in evidence
+    assert "unknown-sensitive" not in evidence
+    assert retained == [evidence]
+
+
+def test_native_config_is_private_runtime_file_and_environment_on_every_spawn(tmp_path):
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "owned.txt").write_text("source")
+    script = """import json, os, pathlib, stat
+p = pathlib.Path('settings/runtime.env')
+values = {k: json.loads(v) for k, v in (line.split('=', 1) for line in p.read_text().splitlines())}
+assert values == {'MODE': 'testing', 'API_KEY': os.environ['SUPPLIED_KEY']}
+assert os.environ['API_KEY'] == values['API_KEY']
+assert os.environ['MODE'] == 'testing'
+assert stat.S_IMODE(p.stat().st_mode) == 0o600
+assert pathlib.Path('state').is_dir()
+print('configured')
+"""
+    process = _source_process(
+        run_command=["python3", "-c", script],
+        secret_purposes=["target_provider"],
+        config_files={
+            "settings/runtime.env": {
+                "values": {"MODE": "testing"},
+                "secret_aliases": {"API_KEY": "SUPPLIED_KEY"},
+            }
+        },
+        directories=["state"],
+    )
+    assert "private-value" not in process.model_dump_json()
+    for index in (0, 1, 0):
+        spawned = pr.spawn_source_process(
+            process,
+            build_dir=build,
+            world_dir=tmp_path / f"world-{index}",
+            world_index=index,
+            port_plan=_solo_port_plan("svc"),
+            configuration_addresses={},
+            secret_values={"SUPPLIED_KEY": "private-value"},
+            secret_purposes={"SUPPLIED_KEY": "target_provider"},
+        )
+        _reap(spawned.handle)
+        assert spawned.handle.captured_output() == "configured\n"
+    assert not (build / "settings").exists()
+    assert (build / "owned.txt").read_text() == "source"
+
+
+@pytest.mark.parametrize(
+    "problem", ["unknown_alias", "wrong_purpose", "source_file", "symlink"]
+)
+def test_native_config_rejects_unavailable_secret_and_source_overwrite(
+    tmp_path, problem
+):
+    build = tmp_path / "build"
+    build.mkdir()
+    if problem == "source_file":
+        (build / ".env").write_text("source-content")
+    if problem == "symlink":
+        (build / ".env").symlink_to(tmp_path / "outside.env")
+    process = _source_process(
+        secret_purposes=["target_provider"],
+        config_files={".env": {"secret_aliases": {"API_KEY": "KEY"}}},
+    )
+    with pytest.raises(
+        pr.ProcessRuntimeError, match="could not materialize runtime config"
+    ):
+        pr.spawn_source_process(
+            process,
+            build_dir=build,
+            world_dir=tmp_path / "world",
+            world_index=0,
+            port_plan=_solo_port_plan("svc"),
+            configuration_addresses={},
+            secret_values={}
+            if problem == "unknown_alias"
+            else {"KEY": "private-value"},
+            secret_purposes={
+                "KEY": "source_checkout"
+                if problem == "wrong_purpose"
+                else "target_provider"
+            },
+        )
+    assert not (tmp_path / "outside.env").exists()
+    if problem == "source_file":
+        assert (build / ".env").read_text() == "source-content"
+
+
+@pytest.mark.parametrize("path", ["../outside.env", "/tmp/outside.env", ".git/config.env"])
+def test_native_config_resource_path_rejects_escape_at_model_boundary(path):
+    with pytest.raises(ValueError, match="runtime_resource_path_invalid"):
+        _source_process(config_files={path: {"values": {"MODE": "test"}}})
+
+
+# --- A repository's own `sitecustomize` runs once, whichever hook file the kit placed first ----
+
+_GATEWAY_MARK = {"ALK_OPENAI_AGENTS_CHAT_COMPLETIONS": "1"}
+
+
+def _repository_marker_hook(root: Path, body: str | None = None) -> tuple[Path, Path]:
+    repo = root / "repo"
+    repo.mkdir()
+    marker = root / "repo-hook.log"
+    (repo / "sitecustomize.py").write_text(
+        body
+        or (
+            "import os\n"
+            "with open(os.environ['REPO_HOOK_LOG'], 'a') as log:\n"
+            "    log.write('ran\\n')\n"
+        )
+    )
+    return repo, marker
+
+
+def _start(captured: dict[str, Any], repo: Path, marker: Path, code: str = "pass"):
+    env = {
+        key: value
+        for key, value in captured["env"].items()
+        if not key.startswith(("OTEL_EXPORTER", "PYTHONVERBOSE"))
+    }
+    env["PYTHONPATH"] = os.pathsep.join([str(captured["world_dir"]), str(repo)])
+    env["REPO_HOOK_LOG"] = str(marker)
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+_CHAIN_AGAIN = (
+    "import simulation_mark_bootstrap as m\n"
+    "m._chain()\n"
+)
+
+# What the repository hook logged at start-up, before the test's own _chain() call.
+_LOG_AT_START = (
+    "import json, os\n"
+    "with open(os.environ['REPO_HOOK_LOG']) as log:\n"
+    "    print(json.dumps(log.read().splitlines()))\n"
+)
+
+_INSTALLED_STATE = (
+    "import json, sys\n"
+    "print(json.dumps([type(f).__name__ for f in sys.meta_path]))\n"
+    "print(json.dumps(m._PATCHES, default=repr))\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("environment", "customer"),
+    [
+        pytest.param(dict(_GATEWAY_MARK), None, id="gateway_without_export"),
+        pytest.param(
+            {"HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl"}, None, id="traced_without_export"
+        ),
+        pytest.param(dict(_GATEWAY_MARK), _EXPORT, id="gateway_with_export"),
+    ],
+)
+def test_a_repository_sitecustomize_runs_exactly_once(
+    tmp_path: Path, environment: dict[str, str], customer: dict[str, str] | None
+) -> None:
+    captured = _spawn(
+        tmp_path / "w", _source_process(environment=environment), customer
+    )
+    assert (captured["world_dir"] / "simulation_mark_bootstrap.py").is_file()
+    repo, marker = _repository_marker_hook(tmp_path)
+    result = _start(
+        captured, repo, marker, _LOG_AT_START + _CHAIN_AGAIN + _INSTALLED_STATE
+    )
+    assert result.returncode == 0, result.stderr
+    at_start, finders, patches = result.stdout.splitlines()
+    # It ran at start-up, through the kit's chain, not through the test's own call.
+    assert json.loads(at_start) == ["ran"]
+    assert marker.read_text().splitlines() == ["ran"]
+    # Where OpenTelemetry is installed (CI), a run with patches logs that they applied; nothing
+    # else may reach stderr.
+    assert set(result.stderr.splitlines()) <= {"simulation mark hook: applied"}
+    if customer is None and "HARNESS_TOOL_TRACE" not in environment:
+        assert result.stderr == ""
+        # A gateway run without an export: install() does nothing but chain.
+        assert "_MarkFinder" not in json.loads(finders)
+        assert json.loads(patches) == {}
+    elif customer is None:
+        # A traced run without an export patches only the tracer.
+        assert list(json.loads(patches)) == ["opentelemetry.sdk.trace"]
+
+
+def test_a_failing_repository_hook_is_reported_and_the_kit_hook_still_traces(
+    tmp_path: Path,
+) -> None:
+    captured = _spawn(
+        tmp_path / "w",
+        _source_process(
+            environment={
+                "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl",
+                "ALK_TOOL_TRACE_BINDINGS": json.dumps(
+                    [{"name": "lookup", "module": "agent", "callable": "lookup"}]
+                ),
+            }
+        ),
+    )
+    repo, marker = _repository_marker_hook(
+        tmp_path, "raise RuntimeError('repository hook')\n"
+    )
+    (tmp_path / "agent.py").write_text("def lookup():\n    return 'found'\n")
+    trace = captured["world_dir"] / "calls.jsonl"
+    env = {**captured["env"], "PYTHONPATH": os.pathsep.join(
+        [str(captured["world_dir"]), str(repo), str(tmp_path)]
+    )}
+    result = subprocess.run(
+        [sys.executable, "-c", "import agent; print(agent.lookup())"],
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "found"
+    assert "Error in sitecustomize" in result.stderr
+    assert "RuntimeError: repository hook" in result.stderr
+    assert "simulation mark hook: failed" not in result.stderr
+    assert [json.loads(line)["name"] for line in trace.read_text().splitlines()] == [
+        "lookup"
+    ]
+
+
+def test_without_a_repository_hook_nothing_is_said_or_run(tmp_path: Path) -> None:
+    captured = _spawn(
+        tmp_path / "w", _source_process(environment=dict(_GATEWAY_MARK))
+    )
+    repo = tmp_path / "empty"
+    repo.mkdir()
+    result = _start(captured, repo, tmp_path / "never.log")
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert not (tmp_path / "never.log").exists()
+
+
+def test_a_pythons_own_sitecustomize_runs_once_after_the_kit_hook(tmp_path: Path) -> None:
+    captured = _spawn(
+        tmp_path / "w", _source_process(environment=dict(_GATEWAY_MARK))
+    )
+    directory = tmp_path / "own-venv"
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(directory)
+    python = directory / "bin" / "python"
+    site_dir = Path(
+        subprocess.run(
+            [str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={"PATH": os.environ.get("PATH", ""), **_library_path_env()},
+        ).stdout.strip()
+    )
+    (site_dir / "sitecustomize.py").write_text(
+        "import os, sys\n"
+        "with open(os.environ['REPO_HOOK_LOG'], 'a') as log:\n"
+        "    log.write('own after-kit=%s\\n' % getattr(sys, '_alk_sitecustomize_chained', False))\n"
+    )
+    marker = tmp_path / "own-hook.log"
+    env = {
+        key: value
+        for key, value in captured["env"].items()
+        if not key.startswith(("OTEL_EXPORTER", "PYTHONVERBOSE"))
+    }
+    env["PYTHONPATH"] = str(captured["world_dir"])
+    env["REPO_HOOK_LOG"] = str(marker)
+    env.update(_library_path_env())
+    result = subprocess.run(
+        [str(python), "-c", "pass"], env=env, capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    # The kit's hook came first (it had already set its flag), and the venv's own ran once.
+    assert marker.read_text().splitlines() == ["own after-kit=True"]
+
+
+def test_the_mark_module_is_written_only_beside_a_hook(tmp_path: Path) -> None:
+    hooked = _spawn(tmp_path / "a", _source_process(environment=dict(_GATEWAY_MARK)))
+    assert (hooked["world_dir"] / "simulation_mark_bootstrap.py").read_bytes() == (
+        _MARK_HOOK.read_bytes()
+    )
+    bare = _spawn(tmp_path / "b", _source_process())
+    assert not (bare["world_dir"] / "simulation_mark_bootstrap.py").exists()
+    assert not (bare["world_dir"] / "sitecustomize.py").exists()
+
+
+def test_the_agents_sdk_tracing_switch_alone_places_no_hook(tmp_path: Path) -> None:
+    captured = _spawn(
+        tmp_path / "w",
+        _source_process(environment={"OPENAI_AGENTS_DISABLE_TRACING": "1"}),
+    )
+    assert captured["env"]["OPENAI_AGENTS_DISABLE_TRACING"] == "1"
+    assert not (captured["world_dir"] / "sitecustomize.py").exists()
+
+
+@pytest.mark.parametrize(
+    ("agent_env", "traced_by"),
+    [({}, "mcp-toolbox"), ({"HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl"}, "agent")],
+    ids=["an older seal traces in its tools service", "the control service traces itself"],
+)
+def test_the_tool_trace_is_read_from_the_process_that_writes_it(tmp_path: Path, agent_env, traced_by) -> None:
+    from types import SimpleNamespace
+
+    toolbox = SimpleNamespace(
+        name="mcp-toolbox",
+        environment={"DATABASE_URL": "{{WORLD_DATABASE_URL}}", "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl"},
+    )
+    agent = SimpleNamespace(name="agent", environment={"HARNESS_MODE": "1", **agent_env})
+    provider = object.__new__(pr.ProcessRuntimeProvider)
+    provider._manifest = SimpleNamespace(
+        processes=[SimpleNamespace(name="world-db", environment=None), agent, toolbox],
+        runtime=SimpleNamespace(control_service="agent"),
+    )
+    provider._context = SimpleNamespace(work_directory=tmp_path, dispatch_id="", job_id="job-1")
+
+    metadata = provider._control_metadata(0)
+
+    assert metadata["tool_trace_path"] == str(tmp_path / "worlds" / "w0" / traced_by / "agent-tool-calls.jsonl")

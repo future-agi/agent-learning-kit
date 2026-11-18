@@ -11,10 +11,14 @@ environment, which is also how the rest of the platform resolves them.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
+from fi import agentcc
+
 from .backends import SessionSpec, resolve
+from .backends.files import SECRET_REFUSAL, above_secrets, secret_path
 
 # The first backend's default, kept importable because callers and tests name it. The model a
 # run actually gets comes from chosen_model, which asks the selected backend.
@@ -34,10 +38,7 @@ def credentials_hint() -> str:
     which is a legitimate setup and an easy accident. The accident produces a provider auth
     error several layers down, so it is worth saying out loud which one is in play.
     """
-    if (
-        os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
-        or os.environ.get("AGENTCC_API_KEY", "").strip()
-    ):
+    if os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip() or agentcc.gateway():
         return "credentials: Agent Command Center virtual key"
     named = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if named:
@@ -122,9 +123,7 @@ def refuse_a_model_we_cannot_afford(model: str) -> None:
 
 def behind_gateway(model: str) -> bool:
     """Whether this model is reached through Agent Command Center rather than the CLI's own route."""
-    return bool(os.environ.get("AGENTCC_API_KEY", "").strip()) and "claude" not in (
-        model or ""
-    ).lower()
+    return agentcc.gateway() is not None and "claude" not in (model or "").lower()
 
 
 def gateway_wire_model(model: str) -> str:
@@ -132,6 +131,20 @@ def gateway_wire_model(model: str) -> str:
     if not behind_gateway(model):
         return model
     return os.environ.get("AGENTCC_CLAUDE_MODEL_ALIAS", "").strip() or model
+
+
+# Each switches the CLI to another provider or transport. ClaudeAgentOptions.env is merged over
+# the parent's, so whichever route a session takes, the others set around the kit are blanked,
+# or one of them could take the turn instead.
+_OTHER_CLAUDE_ROUTES = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_GATEWAY",
+    "ANTHROPIC_UNIX_SOCKET",
+)
 
 
 def provider_env(model: str | None = None) -> dict[str, str]:
@@ -149,20 +162,16 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     chosen = chosen_model(model)
     refuse_a_model_we_cannot_afford(chosen)
     # Agent Command Center speaks Anthropic Messages in front of the model this run chose.
-    agentcc_key = os.environ.get("AGENTCC_API_KEY", "").strip()
-    if agentcc_key and not os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip():
-        base_url = (
-            os.environ.get("AGENTCC_BASE_URL", "https://gateway.futureagi.com")
-            .strip()
-            .rstrip("/")
-        )
+    gateway = agentcc.gateway()
+    if gateway is not None and not os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip():
         wire = gateway_wire_model(chosen)
         return {
             # Bearer token, which is how a virtual key authenticates (API_KEY would use x-api-key).
-            "ANTHROPIC_AUTH_TOKEN": agentcc_key,
-            "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_AUTH_TOKEN": gateway.api_key,
+            "ANTHROPIC_BASE_URL": gateway.base_url,
             # ClaudeAgentOptions.env is merged over the parent's, so a parent's Vertex flag must be undone.
             "CLAUDE_CODE_USE_VERTEX": "0",
+            **dict.fromkeys(_OTHER_CLAUDE_ROUTES, ""),
             # The SDK cannot look up a non-Claude context window, so it is declared.
             **(
                 {}
@@ -200,8 +209,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
         env.update(
             {
                 "CLAUDE_CODE_USE_VERTEX": "",
-                "CLAUDE_CODE_USE_BEDROCK": "",
-                "CLAUDE_CODE_USE_FOUNDRY": "",
+                **dict.fromkeys(_OTHER_CLAUDE_ROUTES, ""),
                 "ANTHROPIC_API_KEY": "",
                 "ANTHROPIC_BASE_URL": gateway_url.rstrip("/"),
                 "ANTHROPIC_AUTH_TOKEN": gateway_key,
@@ -212,25 +220,8 @@ def provider_env(model: str | None = None) -> dict[str, str]:
         )
         return env
 
-    agentcc_key = os.environ.get("AGENTCC_API_KEY", "").strip()
-    if agentcc_key:
-        base_url = (
-            os.environ.get("AGENTCC_BASE_URL", "https://gateway.futureagi.com")
-            .strip()
-            .rstrip("/")
-        )
-        env.update(
-            {
-                # AUTH_TOKEN is sent as a Bearer token, which is how AgentCC virtual keys
-                # authenticate. API_KEY would instead use Anthropic's x-api-key header.
-                "ANTHROPIC_AUTH_TOKEN": agentcc_key,
-                "ANTHROPIC_BASE_URL": base_url,
-                "CLAUDE_CODE_USE_VERTEX": "0",
-            }
-        )
-        return env
-
     env["CLAUDE_CODE_USE_VERTEX"] = "1"
+    env.update(dict.fromkeys(_OTHER_CLAUDE_ROUTES, ""))
     env["CLOUD_ML_REGION"] = os.environ.get("CLOUD_ML_REGION", "us-east5")
     for passthrough in (
         "ANTHROPIC_VERTEX_PROJECT_ID",
@@ -286,6 +277,85 @@ UNWANTED = (
 )
 
 
+_SECRET_COMMANDS = re.compile(
+    r"\b(env|printenv|export\s+-p|declare\s+-[a-z]*x|set)\s*($|[|;&>])|/proc/"
+    r"|\b(ps|pgrep|pkill|top|htop)\b"
+    r"|\$\{?[A-Za-z_]*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[A-Za-z_]*\}?"
+    r"|os\.environ|getenv|process\.env|/run/futureagi|/run/secrets|\.env\b|\.claude/"
+    r"|GOOGLE_APPLICATION_CREDENTIALS|simulator-secrets|-sa\.json",
+    re.IGNORECASE,
+)
+
+
+# What only the checked tools may change: a hand edit here would skip the proof that makes it true.
+_PROVED_FILES = re.compile(
+    r"(^|/)(scenarios(/|\.json$)|sub_goals\.json$|contract\.json$|coverage\.json$"
+    r"|environment-bundle/|generic-harness/|runtime-validation\.json$|world\.(py|sqlite)$"
+    r"|simulator_prompt\.md$|handlers/)"
+    r"|^/work/source(/|$)"
+)
+
+
+# A shell command that writes, and a proved file named in it.
+_SHELL_WRITES = re.compile(
+    r"(>|\btee\b|sed\s+-i|\bperl\s+-[a-z]*i|\bmv\b|\bcp\b|\brm\b|\btruncate\b|\bsqlite3\b"
+    r"|write_text|write_bytes|\.write\(|json\.dump\(|open\([^)]*['\"][wa])"
+)
+_PROVED_NAMES = re.compile(
+    r"scenarios(/|\.json)|sub_goals\.json|contract\.json|coverage\.json|environment-bundle"
+    r"|generic-harness|runtime-validation\.json|world\.(py|sqlite)|simulator_prompt\.md|handlers/"
+    r"|/work/source"
+)
+
+
+def secret_refusal(tool: str, arguments: dict[str, Any], cwd: str | None = None) -> str:
+    """Why this call would expose a secret or skip a proof, or empty when it would not. ``cwd`` is
+    the session's own folder, from the hook's payload: a relative path resolves there, as the
+    tool itself resolves it, not in the harness's folder."""
+    if tool in ("Write", "Edit") and _PROVED_FILES.search(str(arguments.get("file_path") or "")):
+        return (
+            "That file is part of the proved environment and only changes through the tool that "
+            "checks it (submit_scenario, drop_scenarios, add_sub_goal, the contract tools). The "
+            "agent's own source is read-only. Use the tool, or write scratch files elsewhere."
+        )
+    if tool == "Bash":
+        command = str(arguments.get("command") or "")
+        if _SECRET_COMMANDS.search(command):
+            return SECRET_REFUSAL
+        if _SHELL_WRITES.search(command) and _PROVED_NAMES.search(command):
+            return (
+                "That command would change part of the proved environment by hand. Those files "
+                "only change through the tools that check them. If no tool can make this change, "
+                "stop and ask the person how to proceed, with the options you see."
+            )
+        return ""
+    paths = [
+        str(arguments.get(key) or "")
+        for key in ("file_path", "path", "notebook_path")
+        if arguments.get(key)
+    ]
+    pattern = str(arguments.get("pattern") or "") if tool == "Glob" else ""
+    base = Path(cwd) if cwd else None
+    if any(secret_path(one, base) for one in [*paths, pattern] if one):
+        return SECRET_REFUSAL
+    if tool in ("Grep", "Glob") and any(above_secrets(one, base) for one in paths):
+        return SECRET_REFUSAL
+    return ""
+
+
+def scrubbed_command(command: str) -> str:
+    """Run a shell command with no inherited environment beyond what finding programs needs."""
+    keep = {
+        name: os.environ[name]
+        for name in ("PATH", "HOME", "LANG", "PYTHONPATH", "TMPDIR")
+        if os.environ.get(name)
+    }
+    import shlex
+
+    assignments = " ".join(f"{name}={shlex.quote(value)}" for name, value in keep.items())
+    return f"env -i {assignments} bash -c {shlex.quote(command)}"
+
+
 def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
     """Deny anything a stage was not given, at the point the SDK actually asks.
 
@@ -306,7 +376,30 @@ def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
         payload: dict[str, Any], _tool_use_id: Any, _context: Any
     ) -> dict[str, Any]:
         name = str(payload.get("tool_name") or "")
-        if not name or name in permitted:
+        if name in permitted:
+            arguments = payload.get("tool_input") or {}
+            refusal = secret_refusal(name, arguments, payload.get("cwd"))
+            if refusal:
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": refusal,
+                    }
+                }
+            if name == "Bash" and arguments.get("command"):
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "updatedInput": {
+                            **arguments,
+                            "command": scrubbed_command(str(arguments["command"])),
+                        },
+                    }
+                }
+            return {}
+        if not name:
             return {}
         return {
             "hookSpecificOutput": {

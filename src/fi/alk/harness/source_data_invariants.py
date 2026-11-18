@@ -11,22 +11,30 @@ import logging
 import asyncio
 import hashlib
 import json
+import os
+import re
 import threading
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from .backends import SessionSpec, tool, tool_server
+from .backends.files import secret_text
 from .config import chosen_model
 from .contract import AgentContract, is_data_free_conversation
 from .session import Stage
+from .source_folder import agent_scope, in_agent_scope, saved_folder
+from .source_model import is_harness_table
 
 ARTIFACT = "source-data-invariants.json"
+BATCHES = "generic-harness/source-data-review-batches.json"
 _SUFFIXES = {".py", ".sql", ".ts", ".js", ".go", ".rs", ".java"}
-_EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build"}
+_EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 
 
-def source_files(root: Path) -> dict[str, Path]:
+def source_files(root: Path, folder: str = "") -> dict[str, Path]:
+    """The source files a check may cite; with a folder, those a sibling folder doesn't own."""
     root = root.resolve()
+    scope = agent_scope(root, folder)
     return {
         path.relative_to(root).as_posix(): path
         for path in sorted(root.rglob("*"))
@@ -37,6 +45,12 @@ def source_files(root: Path) -> dict[str, Path]:
             for part in path.relative_to(root).parts
         )
         and path.resolve().is_relative_to(root)
+        # A link named like code can lead to a credential file; judged where it resolves (TH-9042).
+        and not secret_text(path.resolve().relative_to(root).as_posix())
+        and (
+            scope is None
+            or in_agent_scope(PurePosixPath(path.relative_to(root).as_posix()), scope)
+        )
     }
 
 
@@ -134,6 +148,33 @@ def violations_in_ir(world, checks: list[dict]) -> list[str]:
     return failures
 
 
+_ANY = re.compile(r"=\s*ANY\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)", re.IGNORECASE)
+_LITERAL = re.compile(r"('(?:[^']|'')*')")
+
+
+def sqlite_dialect(sql: str) -> str:
+    """Postgres invariant SQL as SQLite can run it on a saved world, where arrays are JSON.
+
+    Rewrites ILIKE, ``= ANY(array)``, ``::`` casts, ``~`` and ``!~`` (REGEXP, see
+    ``sqlite_regexp``), ``btrim`` and the empty array literal; SQLite refuses anything else.
+    """
+    sql = sql.replace("'{}'", "'[]'")
+    sql = _ANY.sub(r"IN (SELECT value FROM json_each(\1))", sql)
+    parts = _LITERAL.split(sql)
+    for index in range(0, len(parts), 2):
+        part = re.sub(r"\bILIKE\b", "LIKE", parts[index], flags=re.IGNORECASE)
+        part = re.sub(r"::\s*\w+(?:\[\])?", "", part)
+        part = part.replace("!~", " NOT REGEXP ")
+        part = re.sub(r"(?<![<>])~", " REGEXP ", part)
+        parts[index] = re.sub(r"\bbtrim\s*\(", "trim(", part, flags=re.IGNORECASE)
+    return "".join(parts)
+
+
+def sqlite_regexp(pattern: str, value: object) -> bool:
+    """SQLite's REGEXP function, for ``sqlite_dialect``'s ``~``."""
+    return value is not None and re.search(pattern, str(value)) is not None
+
+
 def _first_rows(rows: list, *, most: int = 3, width: int = 60) -> str:
     """A few violating rows, each value trimmed."""
     shown = []
@@ -143,6 +184,43 @@ def _first_rows(rows: list, *, most: int = 3, width: int = 60) -> str:
             "{" + ", ".join(f"{key}: {str(value)[:width]}" for key, value in values) + "}"
         )
     return ": " + "; ".join(shown) if shown else ""
+
+
+def source_lines(files: dict[str, Path]) -> list[str]:
+    return [
+        line
+        for path in files.values()
+        for line in path.read_bytes().decode("utf-8", "replace").splitlines()
+    ]
+
+
+def submitted_rows(rows: list, lines: list[str]) -> list:
+    """Violating rows that are the submitted source's own data: intended cases.
+
+    A row is submitted when it has two or more strings (4+ characters) and all of them occur
+    on one source line, so a generated row or a reused id with a changed value is not."""
+    found = []
+    for row in rows:
+        values = [
+            value
+            for value in (row.values() if isinstance(row, dict) else row)
+            if isinstance(value, str) and len(value) >= 4
+        ]
+        if len(values) >= 2 and any(
+            all(value in line for value in values) for line in lines
+        ):
+            found.append(row)
+    return found
+
+
+async def _submitted(world, check: dict, lines: list[str]) -> list:
+    try:
+        rows = await asyncio.wait_for(
+            asyncio.to_thread(world.query, check["violations_sql"]), timeout=15
+        )
+    except Exception:
+        return []
+    return submitted_rows(rows, lines)
 
 
 async def check_invariants(
@@ -205,10 +283,47 @@ def probe_local_service(services: dict[str, str], args: dict):
 
 logger = logging.getLogger(__name__)
 
+
+def prune_invariant_scopes(authoring: Path) -> list[str]:
+    """Narrow saved invariant scopes to the scenarios on disk; return the checks dropped.
+
+    A check whose whole scope left the suite is dropped: an empty scope means every scenario.
+    """
+    artifact = authoring / ARTIFACT
+    if not artifact.is_file():
+        return []
+    body = json.loads(artifact.read_text())
+    checks = body.get("checks")
+    if not isinstance(checks, list) or not checks:
+        return []
+    present = set()
+    for path in (authoring / "scenarios").glob("*/scenario.json"):
+        scenario = json.loads(path.read_text())
+        present.add(
+            str(
+                scenario.get("scenario_key") or scenario.get("name") or path.parent.name
+            )
+        )
+    kept, dropped = [], []
+    for check in checks:
+        scope = list(check.get("scenarios") or [])
+        if not scope:
+            kept.append(check)
+            continue
+        narrowed = [name for name in scope if name in present]
+        if narrowed:
+            kept.append({**check, "scenarios": narrowed})
+        else:
+            dropped.append(str(check.get("name", "")))
+    if kept != checks:
+        artifact.write_text(json.dumps({**body, "checks": kept}, indent=2) + "\n")
+    return dropped
+
+
 async def author_invariants(
-    source: Path, authoring: Path, world, *, endpoints=None
+    source: Path, authoring: Path, world, *, endpoints=None, reuse_only: bool = False
 ) -> list[dict]:
-    files = source_files(source)
+    files = source_files(source, saved_folder(authoring))
     scenarios = {}
     for path in sorted((authoring / "scenarios").glob("*/scenario.json")):
         body = json.loads(path.read_text())
@@ -217,29 +332,28 @@ async def author_invariants(
             raise ValueError(f"Duplicate scenario key: {key}")
         scenarios[key] = path
     artifact = authoring / ARTIFACT
-    # Do not manufacture SQL data merely to satisfy a SQL-review gate. A graph may have
-    # rich in-process state and tools yet no relational store for a SELECT invariant to
-    # examine. Require the observed runtime world to be empty as well as the contract's
-    # explicit in-process/no-data declaration; tool execution is certified separately.
+    unavailable = "Certify-only: no saved source-data invariant review to reuse"
+    # A non-relational declaration is insufficient on its own: even empty business
+    # tables require SQL review. Private application state is not certified here.
     contract_path = authoring / "contract.json"
     if contract_path.is_file():
         contract = AgentContract.model_validate_json(contract_path.read_text())
-        in_process_store = bool(
-            contract.data_store
-            and contract.data_store.kind.strip().lower() == "in_process"
+        store_kind = (
+            contract.data_store.kind.strip().lower() if contract.data_store else ""
         )
-        if is_data_free_conversation(contract) or in_process_store:
+        non_relational_store = store_kind in {"in_process", "none", "filesystem"}
+        if is_data_free_conversation(contract) or non_relational_store:
             state = await asyncio.to_thread(world.state)
-            business_tables = set(state) - {
-                "harness_seed_sentinel",
-                "_alk_tool_trace",
-            }
+            business_tables = {name for name in state if not is_harness_table(name)}
             if not business_tables:
                 evidence = {
                     "status": "not_applicable",
                     "reason": (
                         "In-process agent state has no runtime SQL business tables"
-                        if in_process_store
+                        if store_kind == "in_process"
+                        else "Declared non-relational store has no runtime SQL business tables; "
+                        "private application state is not certified"
+                        if non_relational_store
                         else "No custom tools, data-store seam, dependencies or runtime business tables"
                     ),
                     "checks": [],
@@ -258,6 +372,10 @@ async def author_invariants(
                     )
                 artifact.write_text(json.dumps(evidence, indent=2) + "\n")
                 return []
+            unavailable = (
+                "Certify-only: the live world has business tables, so the data-free "
+                "source review no longer applies and invariants must be authored again"
+            )
     if artifact.exists():
         checks = json.loads(artifact.read_text())["checks"]
         if not isinstance(checks, list) or not checks:
@@ -272,12 +390,377 @@ async def author_invariants(
                     "Repair removed a scenario covered by a saved invariant"
                 )
         return checks
+    if reuse_only:
+        from .authoring_runtime_validation import RuntimeValidationError
 
+        raise RuntimeValidationError("environment", unavailable)
+
+    world_key = world_digest(authoring)
+    hashes = {key: scenario_digest(path.parent) for key, path in scenarios.items()}
+    earlier = [
+        batch
+        for batch in _read_batches(authoring)
+        if batch.get("world") == world_key
+        and all(_still_evidenced(check, files) for check in batch["checks"])
+    ]
+    covered = {
+        key
+        for batch in earlier
+        for key, digest in batch["scenarios"].items()
+        if hashes.get(key) == digest
+    }
+    batches = earlier + await review_missing(
+        files,
+        {key: path for key, path in scenarios.items() if key not in covered},
+        world,
+        local_services(endpoints),
+        world_key=world_key,
+        earlier=earlier,
+    )
+    result = _merge(batches, hashes)
+    lines = source_lines(files)
+    intended = [
+        check["name"]
+        for check in result
+        if not check["scenarios"] and await _submitted(world, check, lines)
+    ]
+    if intended:
+        logger.warning(
+            "dropping universal checks the submitted source data violates: %s",
+            ", ".join(intended),
+        )
+        result = [check for check in result if check["name"] not in intended]
+    if not result:
+        raise ValueError(
+            "Source data invariant review declared no executable check, so nothing was certified"
+        )
+    artifact.write_text(
+        json.dumps(
+            {
+                "checks": result,
+                "dependency_probes": [probe for batch in batches for probe in batch["probes"]],
+                "tool_execution_proven": False,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    return result
+
+
+def _setting(name: str, default: int) -> int:
+    return max(1, int(os.environ.get(name, str(default)) or default))
+
+
+def _still_evidenced(check: dict, files: dict[str, Path]) -> bool:
+    try:
+        return validate_evidence(check, files)["evidence"] == check["evidence"]
+    except (ValueError, KeyError, OSError):
+        return False
+
+
+def _read_batches(authoring: Path) -> list[dict]:
+    try:
+        return list(json.loads((authoring / BATCHES).read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def _merge(batches: list[dict], hashes: dict[str, str]) -> list[dict]:
+    """Every record's checks; a scoped check only while its scenarios are as reviewed.
+
+    Within one review conversation a later declaration under the same name replaces the earlier
+    one, as it always has. Across conversations a same-named check with different SQL is kept
+    under a numbered name."""
+    by_session: dict[str, dict[str, dict]] = {}
+    for batch in batches:
+        current = {
+            key for key, digest in batch["scenarios"].items() if hashes.get(key) == digest
+        }
+        own = by_session.setdefault(str(batch.get("session") or id(batch)), {})
+        for check in batch["checks"]:
+            scope = list(check.get("scenarios") or [])
+            if all(key in current for key in scope):
+                own[check["name"]] = dict(check, scenarios=scope)
+    merged: dict[str, dict] = {}
+    for own in by_session.values():
+        for check in own.values():
+            held = merged.get(check["name"])
+            if held is None:
+                merged[check["name"]] = check
+            elif held["violations_sql"] == check["violations_sql"]:
+                held["scenarios"] = (
+                    sorted(set(held["scenarios"]) | set(check["scenarios"]))
+                    if held["scenarios"] and check["scenarios"]
+                    else []
+                )
+            else:
+                index = 2
+                while f"{check['name']} ({index})" in merged:
+                    index += 1
+                merged[f"{check['name']} ({index})"] = dict(
+                    check, name=f"{check['name']} ({index})"
+                )
+    return list(merged.values())
+
+
+async def _review(
+    files, scenarios: dict[str, Path], world, services, *, world_key: str, known=()
+) -> dict:
+    digests = {key: scenario_digest(path.parent) for key, path in scenarios.items()}
+    checks, probes = await _review_session(files, scenarios, world, services, known=known)
+    return {
+        "world": world_key,
+        "session": os.urandom(8).hex(),
+        "scenarios": digests,
+        "checks": checks,
+        "probes": probes,
+    }
+
+
+async def review_missing(
+    files: dict[str, Path],
+    missing: dict[str, Path],
+    world,
+    services: dict[str, str],
+    *,
+    world_key: str,
+    earlier: list[dict],
+) -> list[dict]:
+    """Review what earlier reviews of this world do not cover.
+
+    With nothing earlier and a suite that fits one conversation, this is the review exactly as it
+    has always run. Otherwise one conversation per share of the scenarios, each told the checks
+    the world already has and declaring only what its own scenarios need."""
+    size = _setting("ALK_INVARIANT_REVIEW_SHARE", 25)
+    keys = list(missing)
+    shares = [keys[start : start + size] for start in range(0, len(keys), size)]
+    added: list[dict] = []
+    if not earlier:
+        first = shares.pop(0) if shares else []
+        added.append(
+            await _review(
+                files, {key: missing[key] for key in first}, world, services, world_key=world_key
+            )
+        )
+    known = _merge([*earlier, *added], {})
+    slots = asyncio.Semaphore(_setting("ALK_INVARIANT_REVIEW_CONCURRENCY", 16))
+
+    async def one(share: list[str]) -> dict:
+        async with slots:
+            return await _review(
+                files,
+                {key: missing[key] for key in share},
+                world,
+                services,
+                world_key=world_key,
+                known=known,
+            )
+
+    added += await asyncio.gather(*(one(share) for share in shares))
+    return added
+
+
+async def review_while_writing(
+    source: Path,
+    authoring: Path,
+    world,
+    *,
+    endpoints,
+    world_key: str,
+    done,
+    expected: int,
+) -> bool:
+    """Review the world, then each scenario once it is saved, while the rest are written.
+
+    One conversation reviews the world as the review always begins, then is handed each saved
+    scenario. A suite larger than one conversation should hold is shared across more, each told
+    the world's checks. Records go to the batches file keyed by world and scenario content, and
+    validation reviews only what they do not cover. Returns True as soon as the world itself
+    changes, False once the build has finished and what was saved has been reviewed."""
+    files = source_files(source, saved_folder(authoring))
+    services = local_services(endpoints)
+    size = _setting("ALK_INVARIANT_REVIEW_SHARE", 25)
+    count = min(_setting("ALK_INVARIANT_REVIEW_CONCURRENCY", 16), max(1, -(-expected // size)))
+    loop = asyncio.get_running_loop()
+    handled = {
+        key: digest
+        for batch in _read_batches(authoring)
+        if batch.get("world") == world_key
+        for key, digest in batch["scenarios"].items()
+    }
+    shares: list[dict | None] = [None] * count
+    known: list[dict] = _merge(
+        [batch for batch in _read_batches(authoring) if batch.get("world") == world_key], {}
+    )
+    cached: dict[Path, tuple[tuple, str]] = {}
+    world_stamp: list = [None, True]
+
+    def same_world() -> bool:
+        named = ("contract.json", "manifest.json", "world.py", "world.sqlite", "state.json")
+        paths = [*(authoring / name for name in named), *sorted((authoring / "handlers").rglob("*"))]
+        stamp = tuple((str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in paths if p.is_file())
+        if stamp != world_stamp[0]:
+            world_stamp[:] = [stamp, world_digest(authoring) == world_key]
+        return world_stamp[1]
+
+    def digest_of(folder: Path) -> str:
+        # Re-read a scenario only when one of its files changed; a large suite is scanned often.
+        stamp = tuple(
+            (item.stat().st_size, item.stat().st_mtime_ns) if item.is_file() else None
+            for item in (folder / part for part in ("scenario.json", "setup.py", "ready.py"))
+        )
+        if folder not in cached or cached[folder][0] != stamp:
+            cached[folder] = (stamp, scenario_digest(folder))
+        return cached[folder][1]
+
+    def start(index: int) -> dict:
+        share = {"queue": asyncio.Queue(), "busy": True, "reviewed": 0}
+
+        def recorded(turn: dict) -> None:
+            share["busy"] = False
+            share["reviewed"] += len(turn["scenarios"])
+            if not same_world():
+                return
+            path = authoring / BATCHES
+            path.parent.mkdir(parents=True, exist_ok=True)
+            turn = {"world": world_key, **turn}
+            path.write_text(
+                json.dumps([*_read_batches(authoring), turn], indent=2) + "\n", encoding="utf-8"
+            )
+            if not share["reviewed"] and not known:
+                known.extend(_merge([turn], {}))
+
+        share["task"] = asyncio.create_task(
+            _review_session(
+                files, {}, world, services, known=list(known), turns=share["queue"], record=recorded
+            )
+        )
+        shares[index] = share
+        return share
+
+    def live(share: dict | None) -> bool:
+        return share is not None and not share["task"].done()
+
+    try:
+        if not known:
+            first = start(0)
+            while first["busy"] and live(first):
+                await asyncio.sleep(1)
+            if not known:
+                if first["task"].done() and first["task"].exception():
+                    raise first["task"].exception()
+                raise ValueError("the world review declared no executable check")
+        for index in range(count):
+            if shares[index] is None:
+                start(index)
+        finished_at = None
+        while same_world():
+            if done.is_set() and finished_at is None:
+                finished_at = loop.time()
+            saved = sealed_scenarios(authoring)
+            digests = {key: digest_of(path.parent) for key, path in saved.items()}
+            pending: dict[int, list[str]] = {}
+            for key in saved:
+                if handled.get(key) != digests[key]:
+                    index = int(hashlib.sha256(key.encode()).hexdigest(), 16) % count
+                    pending.setdefault(index, []).append(key)
+            for index, share in enumerate(shares):
+                if live(share) and not share["busy"] and share["reviewed"] >= 2 * size:
+                    # A conversation holds a bounded share; a fresh one continues with the world's checks.
+                    share["queue"].put_nowait(None)
+                    start(index)
+            for index, keys in pending.items():
+                share = shares[index]
+                if not live(share) or share["busy"]:
+                    continue
+                chosen = keys[:size]
+                handled.update({key: digests[key] for key in chosen})
+                share["busy"] = True
+                share["queue"].put_nowait({key: saved[key] for key in chosen})
+            if finished_at is not None and (
+                loop.time() - finished_at > 600
+                or (
+                    not any(live(share) and share["busy"] for share in shares)
+                    and all(not live(shares[index]) for index in pending)
+                )
+            ):
+                return False
+            await asyncio.sleep(5)
+        return True
+    finally:
+        tasks = [share["task"] for share in shares if share is not None]
+        for share in shares:
+            if live(share):
+                share["queue"].put_nowait(None)
+        if tasks:
+            _, stuck = await asyncio.wait(tasks, timeout=30)
+            for task in stuck:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def sealed_scenarios(authoring: Path) -> dict[str, Path]:
+    """Scenario documents the build has saved; it saves a scenario only once it is proved."""
+    found: dict[str, Path] = {}
+    for path in sorted((authoring / "scenarios").glob("*/scenario.json")):
+        try:
+            body = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        key = str(body.get("scenario_key") or body.get("name") or path.parent.name)
+        found.setdefault(key, path)
+    return found
+
+
+def scenario_digest(folder: Path) -> str:
+    """What a review reads of one scenario; the document by content, not formatting."""
+    digest = hashlib.sha256()
+    for part in ("scenario.json", "setup.py", "ready.py"):
+        path = folder / part
+        body = path.read_bytes() if path.is_file() else b""
+        if part == "scenario.json" and body:
+            try:
+                document = json.loads(body)
+                # Search labels; the final suite save settles them to the suite's vocabulary.
+                document.pop("keywords", None)
+                body = json.dumps(document, sort_keys=True).encode()
+            except (ValueError, AttributeError):
+                pass
+        digest.update(part.encode() + b"\0" + body + b"\0")
+    return digest.hexdigest()
+
+
+def world_digest(authoring: Path) -> str:
+    """The reviewed world: the contract and the saved world it seeds from."""
+    digest = hashlib.sha256()
+    named = ("contract.json", "manifest.json", "world.py", "world.sqlite", "state.json")
+    for path in [*(authoring / name for name in named), *sorted((authoring / "handlers").rglob("*"))]:
+        if path.is_file():
+            digest.update(path.relative_to(authoring).as_posix().encode() + b"\0")
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+async def _review_session(
+    files: dict[str, Path],
+    scenarios: dict[str, Path],
+    world,
+    services: dict[str, str],
+    *,
+    known=(),
+    turns: asyncio.Queue | None = None,
+    record=None,
+) -> tuple[list[dict], list[dict]]:
+    """One review conversation. With `turns`, each dict taken from it is a further turn over newly
+    saved (or changed) scenarios and `record` gets what each turn reviewed; None ends it."""
+    scenarios = dict(scenarios)
     checks: dict[str, dict] = {}
     reviewed: set[str] = set()
-    services = local_services(endpoints)
     probes = []
     saved = False
+    declared: list[str] = []
+    lines = source_lines(files)
 
     def reply(value):
         return {"content": [{"type": "text", "text": json.dumps(value, default=str)}]}
@@ -418,10 +901,26 @@ async def author_invariants(
             check = validate_evidence(args, files)
             if any(name not in scenarios for name in check["scenarios"]):
                 raise ValueError("Invariant scope names an unknown scenario")
+            if known and not check["scenarios"]:
+                raise ValueError(
+                    "Universal checks for this world are already declared; scope this check "
+                    "to the listed scenarios it is about"
+                )
             rows = await asyncio.wait_for(
                 asyncio.to_thread(world.query, check["violations_sql"]), 15
             )
+            seeded = [] if check["scenarios"] else submitted_rows(rows, lines)
+            if seeded:
+                return reply(
+                    {
+                        "error": "The submitted source's own data violates this check, so "
+                        "those rows are intended cases, not an invariant. Exclude them in "
+                        "the WHERE clause or declare only relationships the submitted data "
+                        "satisfies" + _first_rows(seeded)
+                    }
+                )
             checks[check["name"]] = check
+            declared.append(check["name"])
             return reply(
                 {
                     "declared": check["name"],
@@ -446,7 +945,7 @@ async def author_invariants(
                     "unreviewed": sorted(set(scenarios) - reviewed),
                 }
             )
-        if not checks:
+        if not checks and not known:
             return reply(
                 {
                     "error": "No executable data invariant was declared; review is incomplete"
@@ -476,7 +975,9 @@ async def author_invariants(
         "values returned by one tool and consumed by another, supported discriminators and "
         "required companion records. Do not infer a relationship from column names alone. "
         "Preserve legitimate optional/null/external references and intentionally negative cases; "
-        "do not require all business requests to succeed. Quote exact supporting source. "
+        "do not require all business requests to succeed. Rows present verbatim in the "
+        "submitted seed or source data are intended cases, never violations to repair. "
+        "Quote exact supporting source. "
         "Use probe_dependency against actual local source services to check lookups and raw "
         "API arguments. Read /openapi.json if available and source otherwise. This is a "
         "throwaway world reset after review; effects do not become seed data. Follow values "
@@ -490,7 +991,10 @@ async def author_invariants(
         "Declare SELECT queries returning violating rows (LIMIT 100); zero rows means valid. "
         "Checks must inspect actual records, not SELECT false or fixed counts. A valid check "
         "that currently fails is valuable: declare it unchanged, so the repair harness repairs "
-        "the generated DATA. You cannot modify source, data, or scenario goals here. "
+        "the generated DATA. Rows the agent ships in its own seed data are not generated: they "
+        "are what the agent really runs with, so run a check with query_world before declaring "
+        "it, and never declare one that the agent's own seed rows violate. "
+        "You cannot modify source, data, or scenario goals here. "
         "Review all data-consuming tool implementations before finish_review. These invariants "
         "do NOT certify tool execution. Scenarios:\n"
         + "\n".join(scenarios)
@@ -498,6 +1002,19 @@ async def author_invariants(
         + "\n".join(files)
         + "\nLocal source service keys:\n"
         + "\n".join(services)
+        + (
+            "\nMore scenarios are listed to you during this conversation as they are written; "
+            "review each the same way when it is."
+            if turns is not None
+            else ""
+        )
+        + (
+            "\nThe universal checks for this world are already declared by another review; "
+            "declare only checks scoped to the scenarios listed to you:\n"
+            + "\n".join(f"- {check['name']}: {check['violations_sql']}" for check in known)
+            if known
+            else ""
+        )
     )
     async with Stage(
         SessionSpec(
@@ -509,34 +1026,47 @@ async def author_invariants(
         ),
         name="validate-source-data",
     ) as stage:
-        await stage.say(
-            "Review source data assumptions and save executable invariants."
-        )
-        if not saved:
-            await stage.say(
-                "Review is incomplete. Declare source-evidenced checks and call finish_review."
-            )
+        handed, session, first = dict(scenarios), os.urandom(8).hex(), True
+        while True:
+            digests = {key: scenario_digest(path.parent) for key, path in handed.items()}
+            saved, before = False, len(probes)
+            declared.clear()
+            if first:
+                first = False
+                await stage.say(
+                    "Review source data assumptions and save executable invariants."
+                )
+            else:
+                await stage.say(
+                    "These scenarios were saved, or changed and their checks withdrawn, since you "
+                    "last finished. Review each one's prerequisites against the source as before, "
+                    "declare what they need, and call finish_review:\n" + "\n".join(handed)
+                )
+            if not saved:
+                await stage.say(
+                    "Review is incomplete. Declare source-evidenced checks and call finish_review."
+                )
+            if record is not None:
+                record(
+                    {
+                        "session": session,
+                        "scenarios": digests if saved else {},
+                        "checks": [checks[name] for name in dict.fromkeys(declared) if name in checks],
+                        "probes": probes[before:],
+                    }
+                )
+            handed = await turns.get() if turns is not None else None
+            if handed is None:
+                break
+            for name, check in list(checks.items()):
+                if any(key in handed for key in check["scenarios"]):
+                    del checks[name]
+            scenarios.update(handed)
+            reviewed.difference_update(handed)
     if not saved and checks:
         logger.warning(
             "source data review declared %d checks without calling finish_review; "
             "keeping them rather than discarding the review",
             len(checks),
         )
-        saved = True
-    if not saved:
-        raise ValueError(
-            "Source data invariant review declared no executable check, so nothing was certified"
-        )
-    result = list(checks.values())
-    artifact.write_text(
-        json.dumps(
-            {
-                "checks": result,
-                "dependency_probes": probes,
-                "tool_execution_proven": False,
-            },
-            indent=2,
-        )
-        + "\n"
-    )
-    return result
+    return list(checks.values()), probes

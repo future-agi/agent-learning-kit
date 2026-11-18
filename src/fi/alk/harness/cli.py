@@ -15,14 +15,17 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from ..providers.agent import _redact
 from . import spend
 from . import observability
 from .build import open_stage as build_stage
 from .build import opening as build_opening
 from .build import require_buildable
+from .agent_type_check import EXIT_REFUSED, failure_message
 from .chat import open_conversation
 from .config import (
     artifact_dir,
@@ -30,6 +33,7 @@ from .config import (
     credentials_hint,
     permission_gate,
 )
+from .failure_file import FAILURE_FILE
 from .run.targets import supported as target_kinds
 from .scenarios import load as load_written
 from .scenarios import open_stage as scenario_stage
@@ -37,7 +41,7 @@ from .scenarios import opening as scenario_opening
 from .session import TEXT, Event
 from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported
-from .understand import load, open_stage, opening
+from .understand import SUBMIT_REMINDER, load, open_stage, opening, reading_settings
 from .world.snapshot import saved as world_saved
 
 
@@ -59,7 +63,9 @@ def _source_root(destination: Path, explicit: str = "") -> str:
 
 
 def _render(event: Event) -> None:
-    line = event.line()
+    # The platform keeps the tail of this output, so a URL's password, query and fragment are
+    # dropped first, in one call per event, as emit_model_event drops them from the job's events.
+    line = _redact(event.line())
     if event.kind == TEXT:
         print(line, end="", flush=True)
     else:
@@ -106,7 +112,11 @@ async def _drain_authoring_commands(stage) -> None:
                     emitted.append(event.text)
 
             await stage.say(content, on_event=receive)
-            text = "".join(emitted).strip() or "I’m still working on the active authoring stage."
+            # Sent to the platform's chat as the hosted builder's replies are, so cleaned the same way.
+            text = (
+                _redact("".join(emitted).strip())
+                or "I’m still working on the active authoring stage."
+            )
             await client.emit(
                 "assistant_message",
                 message_id=str(uuid.uuid4()),
@@ -166,11 +176,12 @@ async def _ask_operator(_tool_name: str, payload: dict[str, Any], _context: Any)
 
 
 def _guidance(args: argparse.Namespace) -> str:
-    instructions = [
-        str(item).strip()
-        for item in (getattr(args, "guidance", None) or [])
-        if str(item).strip()
-    ]
+    return guidance_text(getattr(args, "guidance", None) or [])
+
+
+def guidance_text(guidance: Iterable[Any]) -> str:
+    """A job's guidance as every stage that reads it is told it; empty when there is none."""
+    instructions = [str(item).strip() for item in guidance if str(item).strip()]
     if not instructions:
         return ""
     return (
@@ -214,50 +225,12 @@ def _missing_scenario_adjustments(
     ]
 
 
-async def _understand(args: argparse.Namespace) -> int:
-    if args.kind == "provider":
-        source = resolve(
-            args.kind,
-            name=args.name,
-            profile=getattr(args, "provider_profile", None) or {},
-            scratch=args.path,
-        )
-    else:
-        source = resolve(args.kind, name=args.name, root=args.path)
-    job = getattr(args, "job", None)
-    offered = (
-        (getattr(job, "metadata", None) or {}).get("available_evals") if job else None
-    )
-    stage, destination = open_stage(
-        source,
-        out=Path(args.out) if args.out else None,
-        # Unattended, there is nobody to answer, so the model records what it could not
-        # resolve in open_questions rather than blocking on a prompt nobody will see.
-        ask=permission_gate(_ask_operator) if args.interactive else None,
-        available_evals=offered if isinstance(offered, list) else None,
-    )
-
-    print(f"agent: {source.name}  ({source.kind})")
-    print(f"model: {chosen_model()}")
-    print(f"out:   {destination}\n")
-
-    await _converse(
-        stage,
-        opening(source) + _guidance(args),
-        interactive=args.interactive,
-        until=lambda: load(destination) is not None,
-        nudge=(
-            "Nothing was saved: you finished without calling submit_contract. Call it now "
-            "with the contract you worked out."
-        ),
-    )
-
+def after_contract(destination: Path, source_path: Path, job: Any) -> None:
+    """What follows a saved contract: the source model a generic-harness job also records."""
     contract = load(destination)
-    if contract is None:
-        print("\nNo contract was submitted.", file=sys.stderr)
-        return 1
     generic = bool(
-        job is not None
+        contract is not None
+        and job is not None
         and isinstance(getattr(job, "metadata", None), dict)
         and job.metadata.get("generic_harness_v1") is True
     )
@@ -266,15 +239,99 @@ async def _understand(args: argparse.Namespace) -> int:
         from .provision import source_fingerprint
         from .source_discovery import discover_code_source_model
 
-        digest = source_fingerprint(Path(args.path).resolve())
+        digest = source_fingerprint(Path(source_path).resolve())
         if not digest.startswith("sha256:"):
             digest = f"sha256:{digest}"
         source_model = discover_code_source_model(
-            Path(args.path), contract, source_digest=digest
+            Path(source_path), contract, source_digest=digest
         )
         GenericHarnessArtifactStore(destination / "generic-harness").write_source_model(
             source_model
         )
+
+
+def source_model_is_stale(destination: Path, source_path: Path) -> bool:
+    """Whether the recorded source model describes other code than the source here now."""
+    from .certification import GenericHarnessArtifactStore
+    from .provision import source_fingerprint
+
+    store = GenericHarnessArtifactStore(destination / "generic-harness")
+    source = Path(source_path).resolve()
+    if not (store.root / store.SOURCE_MODEL).is_file() or not source.is_dir():
+        return False
+    try:
+        recorded = store.read_source_model().source_digest
+    except (OSError, ValueError):
+        return True
+    return recorded.removeprefix("sha256:") != source_fingerprint(source).removeprefix(
+        "sha256:"
+    )
+
+
+def after_world(source_root: Any, destination: Path, contract: Any) -> Any:
+    """Seal the exact environment once its world exists. Local and hosted execution consume
+    this same internal bundle; the source repository is never a special runtime path after it."""
+    from .bundle import export_session_bundle
+
+    return export_session_bundle(source_root, destination, name=f"{contract.agent}-environment")
+
+
+def _report_failure_file(output: Path) -> None:
+    print(f"\n{failure_message(output)}\n{output / FAILURE_FILE}", file=sys.stderr)
+
+
+async def _understand(args: argparse.Namespace) -> int:
+    job = getattr(args, "job", None)
+    subfolder = (
+        job.source.subfolder
+        if job is not None and getattr(job, "source", None) is not None
+        else None
+    )
+    if args.kind == "provider":
+        source = resolve(
+            args.kind,
+            name=args.name,
+            profile=getattr(args, "provider_profile", None) or {},
+            scratch=args.path,
+        )
+    else:
+        source = resolve(args.kind, name=args.name, root=args.path, subfolder=subfolder)
+    stage, destination = open_stage(
+        source,
+        out=Path(args.out) if args.out else None,
+        # Unattended, there is nobody to answer, so the model records what it could not
+        # resolve in open_questions rather than blocking on a prompt nobody will see.
+        ask=permission_gate(_ask_operator) if args.interactive else None,
+        **reading_settings(job, interactive=args.interactive),
+    )
+
+    print(f"agent: {source.name}  ({source.kind})")
+    print(f"model: {chosen_model()}")
+    print(f"out:   {destination}\n")
+
+    # A person's own new reading starts clean; a job's failure stands for the platform to read.
+    if job is None:
+        (destination / FAILURE_FILE).unlink(missing_ok=True)
+
+    await _converse(
+        stage,
+        opening(source) + _guidance(args),
+        interactive=args.interactive,
+        until=lambda: load(destination) is not None
+        or (destination / FAILURE_FILE).is_file(),
+        nudge=SUBMIT_REMINDER,
+    )
+
+    if (destination / FAILURE_FILE).is_file():
+        _report_failure_file(destination)
+        # A refused reading still cost what its turns did.
+        print(f"spent:    ${stage.spent_usd:.4f}")
+        return EXIT_REFUSED
+    contract = load(destination)
+    if contract is None:
+        print("\nNo contract was submitted.", file=sys.stderr)
+        return 1
+    after_contract(destination, Path(args.path), job)
     print(
         f"\ncontract: {len(contract.tools)} tools, "
         f"{len(contract.hard_constraints)} rules, "
@@ -333,11 +390,14 @@ async def _build(args: argparse.Namespace) -> int:
 
     source_root = _source_root(destination, args.path or "")
     external_runtime = bool(getattr(args, "external_runtime", False))
+    from .build import uses_native_runtime
+    native_runtime = uses_native_runtime(contract, source_root)
     try:
         require_buildable(
             contract,
             source_root,
             external_runtime=external_runtime,
+            native_runtime=native_runtime,
         )
     except RuntimeError as failed:
         print(str(failed), file=sys.stderr)
@@ -346,7 +406,7 @@ async def _build(args: argparse.Namespace) -> int:
     from .provision import ProvisionError, provision_if_present
 
     environment = None
-    if not bool(getattr(args, "skip_source_provision", False)):
+    if not native_runtime and not bool(getattr(args, "skip_source_provision", False)):
         try:
             environment = await asyncio.to_thread(
                 provision_if_present, source_root, destination, contract
@@ -366,6 +426,7 @@ async def _build(args: argparse.Namespace) -> int:
         source_root=source_root,
         deferred_runtime=bool(getattr(args, "skip_source_provision", False)),
         external_runtime=external_runtime,
+        native_runtime=native_runtime,
     )
     deferred_runtime = bool(getattr(args, "skip_source_provision", False))
     await _converse(
@@ -375,6 +436,7 @@ async def _build(args: argparse.Namespace) -> int:
             provisioned=environment is not None,
             deferred_runtime=deferred_runtime,
             external_runtime=external_runtime,
+            native_runtime=native_runtime,
         )
         + _guidance(args),
         interactive=args.interactive,
@@ -388,18 +450,36 @@ async def _build(args: argparse.Namespace) -> int:
     if not world_saved(destination):
         print("\nNo world was saved.", file=sys.stderr)
         return 1
-    # Seal the exact environment now that its generated world exists. Local and hosted
-    # execution consume this same internal bundle; the source repository is never a special
-    # runtime path after this boundary.
-    from .bundle import BundleError, export_session_bundle
+    if native_runtime:
+        if deferred_runtime:
+            print(f"\nworld: {destination}")
+            print("Native source admission and runtime validation follow authoring.")
+            print(f"spent: ${stage.spent_usd:.4f}")
+            return 0
+        from .bundle import BundleError
+        from .certified_compose_runtime import ComposeRuntimeError
+        from .compose_integration import validate_source
+
+        try:
+            await asyncio.to_thread(validate_source, Path(source_root))
+        except (BundleError, ComposeRuntimeError) as failed:
+            print(f"Cannot admit the native source: {failed}", file=sys.stderr)
+            return 1
+        print(f"\nworld: {destination}")
+        print("Native bundle sealing follows scenario authoring.")
+        print(f"spent: ${stage.spent_usd:.4f}")
+        return 0
+
+    if deferred_runtime:
+        print(f"\nworld: {destination}")
+        print("Runtime bundle validation follows scenario authoring.")
+        print(f"spent: ${stage.spent_usd:.4f}")
+        return 0
+
+    from .bundle import BundleError
 
     try:
-        bundle_path, bundle = await asyncio.to_thread(
-            export_session_bundle,
-            source_root,
-            destination,
-            name=f"{contract.agent}-environment",
-        )
+        bundle_path, bundle = await asyncio.to_thread(after_world, source_root, destination, contract)
     except BundleError as failed:
         print(f"Cannot seal the environment bundle: {failed}", file=sys.stderr)
         return 1
@@ -831,7 +911,10 @@ async def _auto(args: argparse.Namespace) -> int:
         if args.out
         else artifact_dir(new_id(name))
     )
-    destination.mkdir(parents=True, exist_ok=False)
+    # A chat started beside this run may already have put its hidden state here.
+    if destination.is_dir() and any(not item.name.startswith(".") for item in destination.iterdir()):
+        raise FileExistsError(f"authoring destination is not empty: {destination}")
+    destination.mkdir(parents=True, exist_ok=True)
     from fi.simulate.runtime.events import CanonicalEvent
 
     from .events import BufferedEventSink, EventOutbox
@@ -901,12 +984,15 @@ async def _auto(args: argparse.Namespace) -> int:
             for key in ("target", "label", "call_id", "is_error", "path", "outcome", "cost_usd")
             if key in detail
         }
+        # The job response carries these, so a URL's password or query is dropped first, in
+        # one call, before the text is cut.
+        text, safe_detail = _redact([event.text or None, safe_detail])
         emit(
             "harness.activity",
             str(detail.get("stage") or "authoring"),
             event_kind=event.kind,
             tool=event.tool or None,
-            text=event.text[:2000] if event.text else None,
+            text=text[:2000] if text else None,
             detail=safe_detail,
         )
 
@@ -939,7 +1025,42 @@ async def _auto(args: argparse.Namespace) -> int:
             f"({len(loaded_connection)} names; values hidden)\n"
         )
 
+    base_guidance = tuple(
+        dict.fromkeys(
+            [
+                *job.authoring_guidance(),
+                *(getattr(args, "guidance", None) or []),
+            ]
+        )
+    )
     authoring_only = bool(getattr(args, "authoring_only", False))
+    readiness = getattr(args, "runtime_readiness", None)
+
+    async def check_runtime_readiness(stage_args):
+        from .contract import AgentContract
+        from .job import SourceKind
+
+        contract = AgentContract.model_validate_json(
+            (destination / "contract.json").read_text(encoding="utf-8")
+        )
+        if contract.modality == "voice" or job.source.kind is SourceKind.PROVIDER:
+            print("internal chat readiness: not applicable to this target", flush=True)
+            return 0
+        from .authoring_runtime_validation import RuntimeValidationError
+
+        try:
+            await readiness(job, source, destination)
+        except RuntimeValidationError as exc:
+            emit(
+                "harness.stage.failed",
+                "runtime_readiness",
+                status=1,
+                code=f"generic_{exc.phase}_validation_failed",
+                detail=str(exc),
+            )
+            raise
+        return 0
+
     stages = [
         (
             "understand",
@@ -951,7 +1072,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 out=str(destination),
                 interactive=False,
                 model=args.model,
-                guidance=[],
+                guidance=list(base_guidance),
                 job=job,
                 provider_profile=getattr(args, "provider_profile", None),
             ),
@@ -964,7 +1085,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 path=str(source),
                 out=str(destination),
                 interactive=False,
-                guidance=[],
+                guidance=list(base_guidance),
                 # Hosted V2 authoring resolves and provisions the submitted runtime inside the
                 # Daytona guest.  The authoring worker still creates the same logical world and
                 # scenarios, but must not start customer Compose/Docker resources on the control
@@ -984,11 +1105,16 @@ async def _auto(args: argparse.Namespace) -> int:
                 out=str(destination),
                 count=args.count,
                 interactive=False,
-                guidance=[],
+                guidance=list(base_guidance),
                 job=job,
             ),
         ),
     ]
+    if readiness is not None and job.metadata.get("generic_harness_v1") is True:
+        stages.insert(
+            2,
+            ("runtime_readiness", check_runtime_readiness, argparse.Namespace()),
+        )
     if not authoring_only:
         stages.append(
             (
@@ -1019,6 +1145,7 @@ async def _auto(args: argparse.Namespace) -> int:
             label, operation, stage_args = stages[stage_index]
             print(f"\n=== {label} ===", flush=True)
             emit("harness.stage.started", label)
+            stage_guidance = tuple(getattr(stage_args, "guidance", []))
             status = await operation(stage_args)
             # Hosted authoring is unattended, and a successful scenario-stage
             # process is not sufficient evidence that it honoured the requested
@@ -1039,6 +1166,7 @@ async def _auto(args: argparse.Namespace) -> int:
                     # Count alone is the wrong instruction: asked only for a number, the
                     # stage pads with happy paths that satisfy cardinality and measure nothing.
                     stage_args.guidance = [
+                        *stage_guidance,
                         (
                             f"The hosted run requires exactly {wanted} scenarios, but "
                             f"only {written_count} are currently saved. "
@@ -1061,7 +1189,7 @@ async def _auto(args: argparse.Namespace) -> int:
                                 "ones that duplicate a branch another scenario already "
                                 "exercises, not the ones that are hardest to pass."
                             )
-                        )
+                        ),
                     ]
                     emit(
                         "harness.stage.repairing",
@@ -1103,10 +1231,13 @@ async def _auto(args: argparse.Namespace) -> int:
                 while missing and repair_attempt < 2:
                     repair_attempt += 1
                     stage_args.guidance = [
-                        scenario_adjustment_guidance[adjustment_id]
-                        + "\nNo saved scenario currently carries this marker. Correct the "
-                        "suite, preserve unaffected scenarios, and call save_scenarios again."
-                        for adjustment_id in missing
+                        *stage_guidance,
+                        *[
+                            scenario_adjustment_guidance[adjustment_id]
+                            + "\nNo saved scenario currently carries this marker. Correct the "
+                            "suite, preserve unaffected scenarios, and call save_scenarios again."
+                            for adjustment_id in missing
+                        ],
                     ]
                     emit(
                         "harness.stage.repairing",
@@ -1134,6 +1265,25 @@ async def _auto(args: argparse.Namespace) -> int:
                         file=sys.stderr,
                     )
                     status = 1
+            if label == "scenarios" and not status and job.require_tool_workflow:
+                from .contract import AgentContract, validate_tool_workflow
+
+                try:
+                    validate_tool_workflow(
+                        AgentContract.model_validate_json(
+                            (destination / "contract.json").read_text(encoding="utf-8")
+                        )
+                    )
+                except (ValueError, OSError) as exc:
+                    emit(
+                        "harness.stage.failed",
+                        "scenarios",
+                        status=1,
+                        code="required_tool_workflow_unavailable",
+                    )
+                    print(f"\nautomatic authoring stopped: {exc}", file=sys.stderr)
+                    return 1
+
             # A completed call suite returns 2 when the submitted agent fails one or more checks.
             # That is a valid RL result. Earlier stages returning non-zero are harness failures.
             if status and label != "calls":
@@ -1158,7 +1308,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 )
             applying[label] = []
             if hasattr(stage_args, "guidance"):
-                stage_args.guidance = []
+                stage_args.guidance = list(base_guidance)
 
             incoming, adjustment_cursor = _new_adjustments(
                 adjustments_path, adjustment_cursor
@@ -1313,6 +1463,9 @@ async def _chat(args: argparse.Namespace) -> int:
         await conversation.say(said, on_event=_render_observable)
     await conversation.close()
     print(f"\nspent: ${conversation.spent_usd:.4f}")
+    if conversation.out and (conversation.out / FAILURE_FILE).is_file():
+        _report_failure_file(conversation.out)
+        return EXIT_REFUSED
     return 0
 
 

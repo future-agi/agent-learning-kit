@@ -1337,6 +1337,22 @@ def test_github_source_reads_like_a_repository(tmp_path):
     assert "https://github.com/acme/agent" in source.briefing()
 
 
+def test_the_briefing_file_list_leaves_out_credential_files(tmp_path):
+    listed = (
+        ".env.production", ".aws/credentials", "deploy/gcp-sa.json", ".kube/config",
+        "infra/prod.tfvars", ".netrc.bak",
+    )  # fmt: skip
+    for name in (*listed, "agent.py", "deploy/app.yaml"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("canary\n")
+
+    briefing = RepoSource(name="a", root=tmp_path).briefing()
+
+    assert "- agent.py" in briefing and "- deploy/app.yaml" in briefing
+    for name in listed:
+        assert f"- {name}" not in briefing, name
+
+
 def test_spec_source_gets_no_file_tools_because_there_is_nothing_to_read():
     source = SpecSource(
         name="a", system_prompt="you are a bot", tool_schema=[{"name": "t"}]
@@ -2269,11 +2285,64 @@ def test_a_misread_tool_can_be_corrected(tmp_path):
     assert "dropped values recorded for item_id" in said
 
 
-def test_a_tool_the_agent_does_not_have_can_be_removed(tmp_path):
+def test_a_field_s_unit_can_be_recorded_after_the_contract_is_written(tmp_path):
     from fi.alk.harness.amend import fix_tool
 
     contract = _written_contract(tmp_path)
+    done, said = fix_tool(contract, tmp_path, tool_name="add", arg_units={"item_id": "SKU code"}, why="the person said")
+    assert done and "units updated (item_id in SKU code" in said and "the code's unit" in said
+    assert load(tmp_path).tools[0].arg_units == {"item_id": "SKU code"}
+    # The unit is written beside what the code and the stored data say about the field, so a mismatch is in view.
+    written = load(tmp_path)
+    written.tools[0].arg_types["item_id"] = "float"
+    written.data_schema = {"basket": {"item_id": "numeric(10,2)"}}
+    done, said = fix_tool(written, tmp_path, tool_name="add", arg_units={"item_id": "cents"}, why="the person said")
+    assert done and "item_id in cents (the code types it float; basket.item_id is stored as numeric(10,2))" in said
+    refused, said = fix_tool(contract, tmp_path, tool_name="add", arg_units={"amount": "cents"}, why="x")
+    assert not refused and "no argument called amount" in said
+
+
+def test_the_tables_a_tool_reads_and_changes_round_trip_and_read_empty_on_an_older_contract():
+    spec = ToolSpec.model_validate({"name": "update", "tables_read": ["accounts"], "tables_changed": ["ledger"]})
+    again = ToolSpec.model_validate_json(spec.model_dump_json())
+    assert (again.tables_read, again.tables_changed) == (["accounts"], ["ledger"])
+    older = ToolSpec.model_validate({"name": "update"})
+    assert (older.tables_read, older.tables_changed) == ([], [])
+
+
+def test_a_tool_s_returned_fields_are_recorded_and_read_on_its_contract_line(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+
+    # A writer may give the fields as a bare list; it reads as the same thing.
+    assert ToolSpec.model_validate({"name": "refund", "returns": ["refund_id"]}).returns == {"refund_id": ""}
+    assert ToolSpec.model_validate({"name": "refund", "returns": "the new id"}).returns == {}
+    contract = _written_contract(tmp_path)
+    done, said = fix_tool(
+        contract,
+        tmp_path,
+        tool_name="add",
+        returns={"basket_id": "string", "total": "integer, cents, USD"},
+        why="read from the handler's return",
+    )
+    assert done and "returned fields updated" in said
+    written = load(tmp_path)
+    assert written.tools[0].returns == {"basket_id": "string", "total": "integer, cents, USD"}
+    # Every later stage reads the tool from its contract line, so what it hands back is on that line.
+    assert "returns: basket_id: string, total: integer, cents, USD" in written.brief()
+
+
+def test_a_tool_the_agent_does_not_have_can_be_removed(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+    from fi.alk.harness.contract import Dependency, ToolEntry
+
+    contract = _written_contract(tmp_path)
     contract.tools.append(ToolSpec(name="checkout", args=["id"]))
+    contract.tools[0].requires = ["checkout"]
+    contract.dependencies = [Dependency(name="api", used_by=["add", "checkout"])]
+    contract.tool_entrypoints = [
+        ToolEntry(tool="add", mode="service", endpoint="/add"),
+        ToolEntry(tool="checkout", mode="service", endpoint="/checkout"),
+    ]
     done, said = fix_tool(
         contract,
         tmp_path,
@@ -2282,7 +2351,10 @@ def test_a_tool_the_agent_does_not_have_can_be_removed(tmp_path):
         why="no such tool in the source",
     )
     assert done and "1 tools left" in said
-    assert load(tmp_path).tool_names() == {"add"}
+    saved = load(tmp_path)
+    assert saved.tool_names() == {"add"}
+    assert [entry.tool for entry in saved.tool_entrypoints] == ["add"]
+    assert saved.tools[0].requires == [] and saved.dependencies[0].used_by == ["add"]
 
 
 def test_correcting_a_contract_without_saying_why_is_refused(tmp_path):
@@ -2390,12 +2462,14 @@ def test_a_sub_goal_that_settles_nothing_is_rejected():
     assert settled.deterministic()
 
     judged = SubGoal(
-        name="polite", what="stayed polite", judged=(
+        name="polite",
+        what="stayed polite",
+        judged=(
             "Applies when: the agent declines a request.\n"
             "Pass when: it tells the caller why it cannot help.\n"
             "Fail when: it declines without giving any reason.\n"
             "If it does not arise: Pass, because nothing was declined."
-        )
+        ),
     )
     assert validate_sub_goal(judged) == [] and not judged.deterministic()
 
@@ -2678,6 +2752,121 @@ def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
     assert (root / "scenarios" / "adds-a-big-mac" / "scenario.json").exists()
 
 
+def test_a_renamed_scenario_keeps_its_key_and_replaces_the_old_one(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    key = kept[0].scenario_key
+    said = accept_scenario(
+        _delta(name="orders-one-big-mac", scenario_key=key),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    assert not said.get("is_error"), said
+    assert [(one.name, one.scenario_key) for one in kept] == [
+        ("orders-one-big-mac", key)
+    ]
+    assert (root / "scenarios" / "orders-one-big-mac" / "scenario.json").exists()
+    assert not (root / "scenarios" / "adds-a-big-mac").exists()
+
+
+def test_an_edit_under_the_same_name_keeps_the_key_it_was_kept_with(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    key = kept[0].scenario_key
+    accept_scenario(
+        _delta(name="orders-one-big-mac", scenario_key=key),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    accept_scenario(
+        _delta(name="orders-one-big-mac", instruction="Order one Big Mac, please."),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    assert [(one.name, one.scenario_key) for one in kept] == [
+        ("orders-one-big-mac", key)
+    ]
+
+
+def test_a_new_scenario_never_takes_a_key_another_one_holds_or_one_it_made_up(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    key = kept[0].scenario_key
+    accept_scenario(
+        _delta(name="orders-one-big-mac", scenario_key=key),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    accept_scenario(
+        _delta(name="orders-again", scenario_key="not-in-this-suite"),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    keys = {one.name: one.scenario_key for one in kept}
+    assert keys["orders-one-big-mac"] == key
+    assert keys["adds-a-big-mac"] == f"{key}-2"
+    assert keys["orders-again"] == "orders-again"
+
+
+def test_merging_writers_keeps_the_first_holder_of_a_key_and_gives_repeats_their_own():
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenarios import merged
+
+    def one(name, key=""):
+        return Scenario(name=name, instruction="x", scenario_key=key)
+
+    saved = [
+        one("renamed", key="first-name"),
+        one("twin", key="same"),
+        one("twin-too", key="same"),
+    ]
+    suite = merged([saved, [one("first-name")]])
+    assert [(item.name, item.scenario_key) for item in suite] == [
+        ("renamed", "first-name"),
+        ("twin", "same"),
+        ("twin-too", "same-2"),
+        ("first-name", "first-name-2"),
+    ]
+
+
+def test_a_rename_onto_another_scenario_s_name_is_refused(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    accept_scenario(
+        _delta(name="orders-again"), world_root=root, catalogue=catalogue, kept=kept
+    )
+    key = kept[0].scenario_key
+    said = accept_scenario(
+        _delta(name="orders-again", scenario_key=key),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    assert (
+        said.get("is_error")
+        and "already named orders-again" in said["content"][0]["text"]
+    )
+    assert sorted(one.name for one in kept) == ["adds-a-big-mac", "orders-again"]
+
+
 def test_a_scenario_whose_solution_cannot_pass_its_own_checks_is_refused(tmp_path):
     """Either the scenario is impossible or the checks are wrong. Both have happened."""
     from fi.alk.harness.scenario_tools import accept_scenario
@@ -2728,6 +2917,21 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
     assert call.result is None
     assert "assumed rather than executed" in caplog.text
     assert "lookup_rider_by_phone" in caplog.text
+
+
+def test_a_reference_step_runs_unless_it_belongs_to_the_agent_with_nothing_bound():
+    from fi.alk.harness.prove import executes
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    world = GeneratedWorld()
+    world.runtime_tools = {"book_ride", "lookup_rider_by_phone"}
+    world.endpoint_for = {"book_ride": "bookings"}
+    try:
+        assert executes(world, "book_ride")
+        assert not executes(world, "lookup_rider_by_phone")
+        assert executes(world, "add_item")
+    finally:
+        world.close()
 
 
 def test_source_reference_step_separates_agent_arguments_from_dependency_payload():
@@ -3135,6 +3339,10 @@ def test_semantic_worker_trace_preserves_agent_facing_arguments(tmp_path):
                 },
                 "output": json.dumps({"booking_ref": "UBR-71904"}),
                 "is_error": False,
+                "agent_key": "worker-a",
+                "agent_role": "Request processor",
+                "task_id": "task-8",
+                "task_name": "Process request",
             }
         )
         + "\n"
@@ -3147,6 +3355,47 @@ def test_semantic_worker_trace_preserves_agent_facing_arguments(tmp_path):
     assert calls[0].name == "book_ride"
     assert calls[0].arguments["caller_explicitly_confirmed"] is True
     assert calls[0].result == {"booking_ref": "UBR-71904"}
+    assert calls[0].worker_id == "worker-a"
+    assert calls[0].worker_label == "Request processor"
+    assert calls[0].task_id == "task-8"
+    assert calls[0].task_label == "Process request"
+
+
+def test_transcript_actions_identify_the_worker_and_task() -> None:
+    from fi.alk.harness.run.conversation import Transcript
+    from fi.alk.harness.run.simulation import _calls_of
+    from fi.alk.harness.world.runtime import Call
+
+    transcript = Transcript(
+        calls=[
+            Call(
+                name="process_request",
+                arguments={"request": "example"},
+                result={"request_id": "request-1"},
+                worker_id="worker-a",
+                worker_label="Request processor",
+                task_id="task-4",
+                task_label="Process request",
+            )
+        ]
+    )
+
+    assert transcript.actions().startswith(
+        "[Request processor/Process request] process_request("
+    )
+    assert _calls_of(transcript.calls)[0] == {
+        "name": "process_request",
+        "arguments": {"request": "example"},
+        "result": "{'request_id': 'request-1'}",
+        "ok": True,
+        "refused": False,
+        "error": "",
+        "at": 0.0,
+        "worker_id": "worker-a",
+        "worker_label": "Request processor",
+        "task_id": "task-4",
+        "task_label": "Process request",
+    }
 
 
 def test_semantic_worker_trace_collapses_only_local_telemetry_mirror(tmp_path):
@@ -3752,21 +4001,43 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
     downstream shows the difference. The failure is silent, which is why this is checked by
     reflection over the model rather than by remembering to keep a list in step.
     """
-    from pathlib import Path
-
+    import asyncio
     from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.tools import contract_tools
+    from mcp.types import PaginatedRequestParams
     from pydantic import BaseModel
 
-    advertised = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "fi"
-        / "alk"
-        / "harness"
-        / "tools.py"
-    ).read_text(encoding="utf-8")
-    # Set by the amendment tools during later stages, never by whoever submits the contract.
-    ours = {"amendments"}
+    async def advertised_fields():
+        instance = _instance(contract_tools(tmp_path))
+        result = await _request_handler(instance, "tools/list").handler(
+            None, PaginatedRequestParams()
+        )
+        target = next(tool for tool in result.tools if tool.name == "submit_contract")
+        schema = getattr(target, "input_schema", None) or target.inputSchema
+        names = set()
+
+        def visit(node):
+            if isinstance(node, dict):
+                names.update(node.get("properties", {}))
+                for value in node.values():
+                    visit(value)
+            elif isinstance(node, list):
+                for value in node:
+                    visit(value)
+
+        visit(schema)
+        return names
+
+    advertised = asyncio.run(advertised_fields())
+    # Set by the amendment tools during later stages, or by the seal (`door_unreached`), never by
+    # whoever submits the contract.
+    ours = {
+        "amendments",
+        "instrumentation",
+        "source_subfolder",
+        "unconfirmed_prompt_from",
+        "door_unreached",
+    }
 
     def named(model: type[BaseModel]) -> list[str]:
         """Every field the model would have to fill, nested ones included.
@@ -3786,7 +4057,7 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
         {
             name
             for name in named(AgentContract)
-            if name not in ours and f'"{name}"' not in advertised
+            if name not in ours and name not in advertised
         }
     )
     assert not missing, f"submit_contract never mentions: {missing}"
@@ -4318,6 +4589,29 @@ def test_submit_contract_schema_teaches_and_leaves_gating_to_the_gate(tmp_path):
     assert schema["properties"]["tools"]["items"]["properties"]["arg_values"]
 
 
+def test_submit_contract_lets_the_model_mark_a_tool_as_a_read(tmp_path):
+    """The only advertised method is POST, so a tool the model cannot mark `read` counts every lookup as a
+    committed write: duplicate-commit checks and World changes then flag reads. The field has to be on each tool
+    entrypoint itself (where ToolEntry is filled); the reflection test above is satisfied by any property named `effect` anywhere."""
+    import asyncio
+
+    from fi.alk.harness.contract import ToolEntry
+    from fi.alk.harness.tools import contract_tools
+    from mcp.types import PaginatedRequestParams
+
+    instance = _instance(contract_tools(tmp_path))
+
+    async def schema_of():
+        result = await _request_handler(instance, "tools/list").handler(None, PaginatedRequestParams())
+        tool = next(tool for tool in result.tools if tool.name == "submit_contract")
+        return getattr(tool, "input_schema", None) or tool.inputSchema
+
+    item = asyncio.run(schema_of())["properties"]["tool_entrypoints"]["items"]["properties"]
+    assert {"read", "write"} <= set(item["effect"]["enum"])
+    assert item["effect"]["description"]
+    assert ToolEntry(tool="get_order", effect="read").effect == "read"
+
+
 def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
     """No rules and no prompt excerpt on a conversational agent almost always means the prompt
     was not found, so the first submission bounces with directions. The second goes through,
@@ -4340,6 +4634,7 @@ def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
 
     payload = {
         "agent": "quiet",
+        "data_store": {"kind": "sqlite"},
         "tools": [{"name": "act", "args": ["x"]}],
         "real_use_cases": ["do the thing"],
     }
@@ -4448,6 +4743,54 @@ def test_claude_backend_routes_gemini_through_agentcc(monkeypatch):
     assert options.env["ANTHROPIC_MODEL"] == model
     assert options.env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "1"
 
+
+def test_gateway_mode_switches_off_every_other_claude_provider_route(monkeypatch):
+    from fi.alk.harness.config import provider_env
+
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://gateway.futureagi.test")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "internal-key")
+
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+
+    # Set in the process around the kit, any of these would send the CLI somewhere else.
+    for name in (
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "ANTHROPIC_UNIX_SOCKET",
+    ):
+        assert env[name] == "", name
+
+
+
+@pytest.mark.parametrize("mode", ["vertex", "agentcc"])
+def test_every_mode_switches_off_the_claude_routes_it_does_not_use(monkeypatch, mode):
+    from fi.alk.harness.config import provider_env
+
+    for name in ("ALK_CLAUDE_GATEWAY_URL", "ALK_CLAUDE_GATEWAY_API_KEY", "AGENTCC_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    if mode == "agentcc":
+        monkeypatch.setenv("AGENTCC_API_KEY", "sk-agentcc-test")
+        monkeypatch.setenv("AGENTCC_BASE_URL", "https://gateway.example.test/")
+
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+
+    # Set in the process around the kit, any of these would send the CLI somewhere else.
+    assert env["CLAUDE_CODE_USE_VERTEX"] == ("1" if mode == "vertex" else "0")
+    for name in (
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "ANTHROPIC_UNIX_SOCKET",
+    ):
+        assert env.get(name) == "", name
 
 def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
     from fi.alk.harness.build import environment_turns_for, turns_for
@@ -4627,8 +4970,22 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.contract import AgentContract, ToolSpec
     from fi.alk.harness.scenario import Persona, Scenario, Step
 
-    fields = set()
-    for model in (AgentContract, ToolSpec, Scenario, Persona, Step, SubGoal):
+    from pydantic import BaseModel
+
+    from fi.alk.harness import actors as actors_module
+    from fi.alk.harness import contract as contract_module
+    from fi.alk.harness.catalogue import CONTRACT_SCHEMA
+    from fi.alk.harness.understand import READER
+
+    fields = {READER, *CONTRACT_SCHEMA["verifier"]["enum"]}
+    # Every model the contract and the actors are built from: the stages fill their fields too.
+    contract_models = [
+        one
+        for module in (contract_module, actors_module)
+        for one in vars(module).values()
+        if isinstance(one, type) and issubclass(one, BaseModel)
+    ]
+    for model in (AgentContract, ToolSpec, Scenario, Persona, Step, SubGoal, *contract_models):
         fields |= set(model.model_fields)
     # Names from the check-writing examples the skills contain.
     from fi.alk.harness.contract import CALL_DIRECTIONS, MODALITIES
@@ -4694,10 +5051,8 @@ def test_scenario_skill_forbids_mutually_exclusive_terminal_outcomes():
     assert "split them" in text and "separate scenario" in text
 
 
-def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
-    """The world is built from data_schema and base_environment. Without them the build stage has
-    no schema to create and no rows to seed, so every tool call it makes refuses — and that looks
-    like a strict world rather than an empty one."""
+def test_a_structured_store_contract_without_data_is_nudged_once(tmp_path):
+    """A declared record store must surface missing source schema without inventing rows."""
     import asyncio
 
     from fi.alk.harness.tools import contract_tools
@@ -4717,6 +5072,7 @@ def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
 
     payload = {
         "agent": "dataless",
+        "data_store": {"kind": "sqlite"},
         "tools": [{"name": "act", "args": ["x"]}],
         "real_use_cases": ["do the thing"],
         "hard_constraints": ["a rule"],
@@ -6294,35 +6650,180 @@ def test_a_mutation_that_does_not_land_accuses_nobody():
     assert blind(survived) == []
 
 
-def test_an_opening_line_in_the_agents_voice_falls_back_to_the_instruction():
-    """The opening turn is the one with no conversation behind it, and a model asked to speak into
-    that gap sometimes takes the other part.
+ECHOED = "You contact support. You open by asking about your order."
+RETRIED = "Hi, where is my order?"
 
-    Both of these are real opening lines from a run: the agent then replied that no question had
-    been asked, and the scenario failed for a reason that had nothing to do with the agent.
-    """
-    from fi.alk.harness.run.conversation import OPENING, _answered_as_the_agent
 
-    assert _answered_as_the_agent(
-        "Sure! Let me find the database and make that update for you."
-    )
-    assert _answered_as_the_agent(
-        "I'd be happy to look that up! Let me check the database."
-    )
-    assert _answered_as_the_agent("What would you like to know about the database?")
+def _open_a_conversation(monkeypatch, openings, replies=("Done.",), instruction=ECHOED):
+    """Run converse with a caller that remembers every message it was sent, like a real session."""
+    import asyncio
+    from types import SimpleNamespace
 
-    # What a person actually says, which must survive untouched.
-    assert not _answered_as_the_agent("How many of your customers are based in Canada?")
-    assert not _answered_as_the_agent(
-        "I want all track prices changed to 0.99 for the promotion, can you update them?"
-    )
-    assert not _answered_as_the_agent(
-        "Which genre has the highest average listener rating?"
-    )
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import conversation
+    from fi.alk.harness.scenario import Scenario
 
-    # And the instruction that produces the opening says which part to play.
+    openings = iter(openings)
+    caller_saw = []
+    agent_heard = []
+    replies = iter(replies)
+
+    async def noop(*_args):
+        return None
+
+    async def caller_says(prompt):
+        caller_saw.append(prompt)
+        text = next(openings, None)
+        return SimpleNamespace(text=text if text is not None else "Thanks, bye. [DONE]")
+
+    customer = SimpleNamespace(
+        __aenter__=noop,
+        __aexit__=noop,
+        say=caller_says,
+        spent_usd=0.0,
+        simulator_tokens=(0, 0),
+    )
+    monkeypatch.setattr(conversation, "Stage", lambda *_a, **_k: customer)
+
+    async def agent_hears(text):
+        agent_heard.append(text)
+        reply = next(replies, None)
+        if reply is None:
+            raise conversation.TargetConversationEnded("Done.")
+        return reply
+
+    target = SimpleNamespace(open=noop, say=agent_hears, close=noop, spent_usd=0.0)
+    scenario = Scenario(name="s", instruction=instruction)
+    asyncio.run(conversation.converse(target, scenario, AgentContract()))
+    return caller_saw, agent_heard
+
+
+def test_the_opening_ask_says_who_speaks_first_and_in_which_language():
+    """Which part the person plays is set by guidance, not by matching what they wrote."""
+    from fi.alk.harness.run.conversation import OPENING
+
     assert "you speak first" in OPENING
-    assert "not \nthe agent being contacted" in OPENING or "not the agent" in OPENING
+    assert "the person making contact, not the agent being contacted" in OPENING
+    assert "in the language you speak" in OPENING
+
+
+@pytest.mark.parametrize(
+    "instruction, said, sent",
+    [
+        (ECHOED, "", False),
+        (ECHOED, "   \n\t", False),
+        (ECHOED, "[DONE]", False),
+        (ECHOED, "[STUCK]", False),
+        (ECHOED, ECHOED, False),
+        (
+            ECHOED,
+            "  you CONTACT support.  You open by\nasking about your order. ",
+            False,
+        ),
+        (ECHOED, f"Hi! {ECHOED}", False),
+        ("Você quer saber do pedido.", "Voc\u0065\u0302 quer saber do pedido.", False),
+        ("我想取消订单", "我想 取消订单", False),
+        (ECHOED, "Let me explain, my order never came", True),
+        (ECHOED, "Merhaba, siparişim gelmedi.", True),
+        (ECHOED, "你好，我的订单还没到。", True),
+        ("Cancel my order", "Hi, I want to cancel my order.", True),
+        ("hi", "Is this the shop?", True),
+        ("", "Where is my order?", True),
+    ],
+)
+def test_an_opening_is_held_back_only_when_empty_a_marker_or_the_instruction(
+    monkeypatch, instruction, said, sent
+):
+    _, agent_heard = _open_a_conversation(
+        monkeypatch, [said, RETRIED], replies=(), instruction=instruction
+    )
+    assert agent_heard == [said.strip() if sent else RETRIED]
+
+
+@pytest.mark.parametrize(
+    "openings, first",
+    [
+        ([RETRIED], RETRIED),
+        (["", RETRIED], RETRIED),
+        ([ECHOED, RETRIED], RETRIED),
+        ([ECHOED, ECHOED, "Hi there."], "Hi there."),
+        (["", "", "Merhaba."], "Merhaba."),
+        (["", "", ""], "Hello."),
+        ([ECHOED, ECHOED, ECHOED], "Hello."),
+    ],
+)
+def test_an_unusable_opening_is_corrected_then_a_greeting_and_the_instruction_is_never_sent(
+    monkeypatch, openings, first
+):
+    from fi.alk.harness.run.conversation import OPENING
+
+    caller_saw, agent_heard = _open_a_conversation(monkeypatch, openings, replies=())
+    assert agent_heard == [first]
+    # Each retry tells the person their last line was not sent, and the last asks for a greeting
+    # in their own language, so a retry is never the same question with the failure in context.
+    assert caller_saw[0] == OPENING
+    asks = caller_saw[1 : len(openings)]
+    assert all("not sent" in ask for ask in asks)
+    assert len(set(asks)) == len(asks)
+    if len(asks) == 2:
+        assert "greeting, in the language you speak" in asks[1]
+
+
+LONG = "My order " + "never arrived and " * 180 + "I want a refund."
+
+
+@pytest.mark.parametrize(
+    "openings, first",
+    [
+        (["   \n\t", RETRIED], RETRIED),
+        (["[DONE]", RETRIED], RETRIED),
+        ([RETRIED + " [DONE]"], RETRIED),
+        (["مرحبا، طلبي لم يصل بعد"], "مرحبا، طلبي لم يصل بعد"),
+        (["", "", "你好"], "你好"),
+        ([ECHOED, "[STUCK]", "नमस्ते"], "नमस्ते"),
+        ([LONG], LONG.strip()),
+        (
+            ["The website said 'how can I help you' and then crashed."],
+            "The website said 'how can I help you' and then crashed.",
+        ),
+    ],
+)
+def test_openings_in_any_script_or_shape_reach_the_agent_as_the_person_wrote_them(
+    monkeypatch, openings, first
+):
+    _, agent_heard = _open_a_conversation(monkeypatch, openings, replies=())
+    assert agent_heard == [first]
+
+
+def test_after_a_corrected_opening_the_next_turn_is_only_the_agents_reply(monkeypatch):
+    caller_saw, agent_heard = _open_a_conversation(
+        monkeypatch, [ECHOED, RETRIED, "Thanks. [DONE]"], replies=("Let me check.",)
+    )
+    assert agent_heard == [RETRIED]
+    assert caller_saw[2] == "Let me check."
+    assert "not sent" in caller_saw[1]
+
+
+def test_after_an_opening_the_person_did_not_write_their_next_turn_is_told_what_was_said(
+    monkeypatch,
+):
+    caller_saw, agent_heard = _open_a_conversation(
+        monkeypatch,
+        ["", "", "", "My order never came."],
+        replies=("Hi, how can I help?",),
+    )
+    assert agent_heard == ["Hello.", "My order never came."]
+    assert (
+        caller_saw[-1]
+        == "You opened with: Hello.\nThe agent replied: Hi, how can I help?"
+    )
+
+
+def test_an_opening_the_person_wrote_reaches_them_without_a_note(monkeypatch):
+    caller_saw, _ = _open_a_conversation(
+        monkeypatch, [RETRIED, "Thanks. [DONE]"], replies=("Let me check.",)
+    )
+    assert caller_saw[-1] == "Let me check."
 
 
 def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said():
@@ -6610,6 +7111,7 @@ def test_a_target_refuses_a_model_it_cannot_drive(monkeypatch):
     from fi.alk.harness.run.targets import _drivable
 
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
+    monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     _drivable(None)
     _drivable("gemini-3.7-flash")
 
@@ -6984,6 +7486,90 @@ def test_voice_suite_evals_use_the_documented_platform_inputs(monkeypatch):
         ),
     ]
     assert all(verdict.holds for verdict in verdicts)
+
+
+_SUITE_EVAL_URL = "https://bot:hunter2@hooks.example/v1?key=sk-1#frag"
+
+
+def test_suite_eval_agent_prompt_loses_url_credentials(monkeypatch):
+    """B3 (TH-9491): the suite eval's agent_prompt, from a contract no writer cleaned."""
+    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import platform_evals
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+    from fi.alk.harness.run.grade import judge_suite_evals
+    from fi.alk.harness.scenario import Scenario
+
+    sent = []
+
+    def judge_builtin(name, inputs):
+        sent.append(inputs)
+        return {"output": "Pass", "why": "ok", "model": "turing_flash"}
+
+    monkeypatch.setattr(platform_evals, "configured", lambda: True)
+    monkeypatch.setattr(platform_evals, "judge_builtin", judge_builtin)
+    contract = AgentContract(
+        agent="voice-agent",
+        modality="voice",
+        system_prompt_excerpt=f"Post each call to {_SUITE_EVAL_URL} after.",
+    )
+    judge_suite_evals(
+        default_suite_evals(),
+        Scenario(name="s", instruction="i", sub_goals=[]),
+        Transcript(exchanges=[Exchange("agent", "hello")]),
+        contract,
+    )
+
+    prompts = [inputs["agent_prompt"] for inputs in sent if "agent_prompt" in inputs]
+    assert prompts == ["Post each call to https://hooks.example/v1 after."]
+    assert "hunter2" not in json.dumps(sent) and "sk-1" not in json.dumps(sent)
+
+
+def test_suite_eval_rules_stored_on_the_platform_lose_url_credentials(monkeypatch):
+    """B3b (TH-9491): each rule passed to platform_evals.ensure."""
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import grade, platform_evals
+    from fi.alk.harness.run.conversation import Transcript
+    from fi.alk.harness.scenario import Scenario
+
+    ensured = []
+    monkeypatch.setattr(
+        platform_evals, "ensure", lambda name, claim, agent, rules: ensured.append(list(rules))
+    )
+    monkeypatch.setattr(
+        platform_evals, "judge", lambda name, record: {"held": True, "why": "ok", "model": "m"}
+    )
+    contract = AgentContract(
+        agent="desk", hard_constraints=[f"Always post to {_SUITE_EVAL_URL}", "Be brief"]
+    )
+
+    grade._on_platform(
+        [("claim one", "one"), ("claim two", "two")],
+        Scenario(name="s", instruction="i", sub_goals=[]),
+        Transcript(),
+        contract,
+        "",
+    )
+
+    assert ensured == [["Always post to https://hooks.example/v1", "Be brief"]] * 2
+
+
+def test_suite_eval_local_judge_prompt_loses_url_credentials():
+    """B3c (TH-9491): the local judge's prompt, the summary and each rule."""
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run.grade import _judge_prompt
+
+    prompt = _judge_prompt(
+        AgentContract(
+            agent="desk",
+            one_liner=f"Books desks through {_SUITE_EVAL_URL}",
+            hard_constraints=[f"Always post to {_SUITE_EVAL_URL}"],
+        )
+    )
+
+    assert "THE AGENT UNDER TEST: desk - Books desks through https://hooks.example/v1\n" in prompt
+    assert "  - Always post to https://hooks.example/v1" in prompt
+    assert "hunter2" not in prompt and "sk-1" not in prompt
 
 
 def test_hosted_voice_marks_unavailable_required_evals_as_grading_failures(
@@ -7718,16 +8304,22 @@ def test_the_system_prompt_stays_within_budget():
         if sample.exists()
         else AgentContract(agent="budget", one_liner="x", modality="voice")
     )
-    kinds = (pathlib.Path(load_skill.__globals__["SKILLS_ROOT"]) / "kinds" / "voice.md").read_text()
+    kinds = (
+        pathlib.Path(load_skill.__globals__["SKILLS_ROOT"]) / "kinds" / "voice.md"
+    ).read_text()
     sub_agent = (
-        contract.brief(with_data=True, sample_rows=3) + load_skill("write-scenarios") + kinds
+        contract.brief(with_data=True, sample_rows=3)
+        + load_skill("write-scenarios")
+        + kinds
     )
     main_loop = sub_agent + load_skill("plan-suite", preamble=False)
     assert len(sub_agent) <= 90_000, f"sub-agent prompt is {len(sub_agent)} chars"
     assert len(main_loop) <= 130_000, f"main loop prompt is {len(main_loop)} chars"
 
 
-def test_a_sub_goal_defined_after_the_fact_reaches_the_folders_already_written(tmp_path):
+def test_a_sub_goal_defined_after_the_fact_reaches_the_folders_already_written(
+    tmp_path,
+):
     from fi.alk.harness.catalogue import SubGoal
     from fi.alk.harness.folder import folder_for, refresh_check
     from fi.alk.harness.scenario_tools import write_scenarios
@@ -7750,16 +8342,19 @@ def test_a_sub_goal_defined_after_the_fact_reaches_the_folders_already_written(t
         check="def check(world, calls):\n    return None\n",
     )
     assert refresh_check(root, settled) == [scenario.name]
-    assert "def check(world, calls)" in (
-        here / "checks" / "refusal-explained.py"
-    ).read_text()
+    assert (
+        "def check(world, calls)"
+        in (here / "checks" / "refusal-explained.py").read_text()
+    )
 
     judged = SubGoal(name="refusal-explained", what="…", judged="ask a model")
     assert refresh_check(root, judged) == [scenario.name]
     assert not (here / "checks" / "refusal-explained.py").exists()
 
 
-def test_a_save_says_which_scenarios_name_a_check_that_never_reached_the_folder(tmp_path):
+def test_a_save_says_which_scenarios_name_a_check_that_never_reached_the_folder(
+    tmp_path,
+):
     from fi.alk.harness.catalogue import SubGoal
     from fi.alk.harness.folder import folder_for, unchecked_sub_goals
     from fi.alk.harness.scenario_tools import write_scenarios
@@ -7779,7 +8374,9 @@ def test_a_save_says_which_scenarios_name_a_check_that_never_reached_the_folder(
     assert len(said) == 1 and "item-added" in said[0]
 
     catalogue.sub_goals = [
-        one if one.name != "item-added" else SubGoal(name="item-added", what="…", judged="ask")
+        one
+        if one.name != "item-added"
+        else SubGoal(name="item-added", what="…", judged="ask")
         for one in catalogue.sub_goals
     ]
     assert unchecked_sub_goals(root, catalogue) == []
@@ -7804,9 +8401,7 @@ def test_an_overlay_scenario_that_asserts_nothing_is_refused(tmp_path):
         coverage={"task": "order an item", "overlay": "prompt_injection"},
     )
     kept = []
-    said = accept_scenario(
-        attacked, world_root=root, catalogue=catalogue, kept=kept
-    )
+    said = accept_scenario(attacked, world_root=root, catalogue=catalogue, kept=kept)
     assert said.get("is_error"), said
     text = said["content"][0]["text"]
     assert "prompt_injection" in text and "add_sub_goal" in text
@@ -7839,13 +8434,444 @@ def test_an_overlay_scenario_that_asserts_nothing_is_refused(tmp_path):
 def test_a_scenario_placed_nowhere_is_refused_once_a_grid_is_dealt(tmp_path):
     from fi.alk.harness.scenario_tools import _off_the_grid
 
-    grid = {"task": ["book_ride", "cancel_ride"], "overlay": ["none", "prompt_injection"]}
+    grid = {
+        "task": ["book_ride", "cancel_ride"],
+        "overlay": ["none", "prompt_injection"],
+    }
     assert _off_the_grid({}, grid)
     assert _off_the_grid(None, grid)
     assert _off_the_grid({"task": "", "overlay": ""}, grid)
     assert not _off_the_grid({"task": "book_ride", "overlay": "none"}, grid)
     assert not _off_the_grid({}, None)
     assert not _off_the_grid(None, {})
+
+
+def test_an_edit_sends_only_what_changes_and_keeps_the_rest(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, _contract, _catalogue = _built_environment(tmp_path)
+    server, kept = scenario_tools(_contract, root, root, wanted=2)
+    submit = next(one for one in server.tools if one.name == "submit_scenario")
+    edit = next(one for one in server.tools if one.name == "edit_scenario")
+    person = {
+        "persona": {
+            "name": "Asha Rao",
+            "personality": "Friendly and cooperative",
+            "communication_style": "Direct and concise",
+            "initial_message": "Hi, I want a Big Mac.",
+            "languages": ["English"],
+        }
+    }
+    said = asyncio.run(submit.handler(_delta(**person)))
+    assert not said.get("is_error"), said
+    before = kept[0].model_dump(exclude={"name"})
+    key = kept[0].scenario_key
+    renamed = {"scenario_key": key, "name": "orders-one-big-mac"}
+    said = asyncio.run(edit.handler(renamed))
+    assert not said.get("is_error"), said
+    assert [(one.name, one.scenario_key) for one in kept] == [
+        ("orders-one-big-mac", key)
+    ]
+    assert kept[0].model_dump(exclude={"name"}) == before
+    said = asyncio.run(
+        edit.handler({"scenario_key": key, "persona": {"name": "Meera Iyer"}})
+    )
+    assert not said.get("is_error"), said
+    assert kept[0].persona.name == "Meera Iyer"
+    assert kept[0].persona.initial_message == "Hi, I want a Big Mac."
+    assert kept[0].persona.languages == ["English"]
+    same = dict(kept[0].persona.model_dump(exclude_none=True))
+    same.pop("languages")
+    said = asyncio.run(edit.handler({"scenario_key": key, "persona": same}))
+    assert not said.get("is_error"), said
+    assert said["content"][0]["text"].startswith("Nothing changed: orders-one-big-mac")
+    assert "`clear`" in said["content"][0]["text"]
+    assert kept[0].persona.languages == ["English"]
+    unknown = asyncio.run(edit.handler({"scenario_key": "not-here", "name": "x"}))
+    assert unknown.get("is_error") and "not-here" in unknown["content"][0]["text"]
+    assert [one.name for one in kept] == ["orders-one-big-mac"]
+
+
+def test_a_rename_keeps_the_scenario_s_place_and_says_it_was_renamed(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    accept_scenario(
+        _delta(name="orders-again"), world_root=root, catalogue=catalogue, kept=kept
+    )
+    key = kept[0].scenario_key
+    said = accept_scenario(
+        _delta(name="renamed-first", scenario_key=key),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    assert not said.get("is_error"), said
+    assert said["content"][0]["text"].startswith(
+        "adds-a-big-mac renamed to renamed-first."
+    )
+    assert [(one.name, one.scenario_key) for one in kept] == [
+        ("renamed-first", key),
+        ("orders-again", kept[1].scenario_key),
+    ]
+
+
+def test_a_replacement_under_the_same_name_keeps_its_place(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    accept_scenario(
+        _delta(name="orders-again"), world_root=root, catalogue=catalogue, kept=kept
+    )
+    said = accept_scenario(
+        _delta(instruction="Order a single Big Mac."),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    assert said["content"][0]["text"].startswith("adds-a-big-mac replaced.")
+    assert [one.name for one in kept] == ["adds-a-big-mac", "orders-again"]
+    assert kept[0].instruction == "Order a single Big Mac."
+
+
+def test_a_new_name_alone_is_applied_without_proving_the_scenario_again(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness import scenario_tools as tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    server, kept = tools.scenario_tools(contract, root, root, wanted=2)
+    submit = next(one for one in server.tools if one.name == "submit_scenario")
+    edit = next(one for one in server.tools if one.name == "edit_scenario")
+    assert not asyncio.run(submit.handler(_delta())).get("is_error")
+    assert not asyncio.run(submit.handler(_delta(name="orders-again"))).get("is_error")
+    first, second = kept[0].scenario_key, kept[1].scenario_key
+
+    # An older scenario that a gate added since would now refuse still renames.
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("a name-only rename must not prove the scenario again")
+
+    monkeypatch.setattr(tools, "prove", refuse)
+    monkeypatch.setattr(tools, "validate_scenario", refuse)
+    said = asyncio.run(edit.handler({"scenario_key": first, "name": "siparis-tekrari"}))
+    assert not said.get("is_error"), said
+    assert said["content"][0]["text"].startswith(
+        "adds-a-big-mac renamed to siparis-tekrari."
+    )
+    assert [(one.name, one.scenario_key) for one in kept] == [
+        ("siparis-tekrari", first),
+        ("orders-again", second),
+    ]
+    saved = tools.load_scenarios(root)
+    assert sorted(one.name for one in saved) == ["orders-again", "siparis-tekrari"]
+    for _ in range(3):
+        taken = asyncio.run(
+            edit.handler({"scenario_key": first, "name": "orders-again"})
+        )
+        assert taken.get("is_error")
+        assert "already named orders-again" in taken["content"][0]["text"]
+    assert "refusal 3 of this rename" in taken["content"][0]["text"]
+    assert [one.name for one in kept] == ["siparis-tekrari", "orders-again"]
+
+
+def test_an_edit_clears_what_clear_names_and_merges_nested_mappings():
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import edited
+
+    held = Scenario.model_validate(
+        {
+            **_delta(),
+            "fixture": {
+                "origin": "seed",
+                "order": {"item": "big_mac", "size": "large"},
+            },
+            "persona": {
+                "name": "Asha Rao",
+                "accent": "Scottish",
+                "languages": ["English"],
+            },
+        }
+    )
+    change = edited(
+        held,
+        {"clear": ["persona.accent"], "fixture": {"order": {"size": "small"}}},
+    )
+    after = Scenario.model_validate(change)
+    assert (
+        after.persona.accent
+        == Scenario.model_validate(
+            {**_delta(), "persona": {"name": "Asha Rao"}}
+        ).persona.accent
+    )
+    assert after.persona.name == "Asha Rao"
+    assert after.persona.languages == ["English"]
+    assert after.fixture == {
+        "origin": "seed",
+        "order": {"item": "big_mac", "size": "small"},
+    }
+
+
+def test_a_writer_s_rename_never_brings_the_old_name_back_from_the_journal(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario, journalled
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(
+        _delta(), world_root=root, catalogue=catalogue, kept=kept, persist=False
+    )
+    key = kept[0].scenario_key
+    accept_scenario(
+        _delta(name="renamed-first", scenario_key=key),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+        persist=False,
+    )
+    assert [(one.name, one.scenario_key) for one in journalled(root)] == [
+        ("renamed-first", key)
+    ]
+
+
+def _edit_tools(tmp_path, **options):
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, catalogue = _built_environment(tmp_path)
+    server, kept = scenario_tools(contract, root, root, wanted=4, **options)
+    return root, catalogue, kept, {one.name: one for one in server.tools}
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"scenario_key": "k", "persona": {"name": "Meera Iyer"}},
+        {"scenario_key": "k", "clear": ["persona.accent", "fixture", "sub_goals"]},
+        {"scenario_key": "k", "name": "renamed"},
+    ],
+)
+def test_the_edits_edit_scenario_describes_pass_its_schema_on_both_backends(
+    tmp_path, args
+):
+    import jsonschema
+    from claude_agent_sdk import SdkMcpTool, _build_input_schema
+
+    from fi.alk.harness.backends.claude import _gateway_compatible_schema
+
+    *_, tools = _edit_tools(tmp_path)
+    spec = tools["edit_scenario"]
+    sent = _build_input_schema(
+        SdkMcpTool(
+            name=spec.name,
+            description="",
+            input_schema=spec.input_schema,
+            handler=spec.handler,
+        )
+    )
+    jsonschema.validate(instance=args, schema=sent)
+    jsonschema.validate(
+        instance=args, schema=_gateway_compatible_schema(spec.input_schema)
+    )
+
+
+def test_a_writer_s_edit_by_key_replaces_its_scenario_rather_than_copying_it(tmp_path):
+    import asyncio
+
+    _root, _catalogue, kept, tools = _edit_tools(
+        tmp_path, can_save=False, start_from=[]
+    )
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    key = kept[0].scenario_key
+    said = asyncio.run(
+        tools["edit_scenario"].handler(
+            {"scenario_key": key, "instruction": "Order a single Big Mac."}
+        )
+    )
+    assert not said.get("is_error"), said
+    assert [(one.name, one.scenario_key) for one in kept] == [("adds-a-big-mac", key)]
+
+
+def test_a_new_scenario_never_takes_a_key_the_environment_has_used(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario import used_keys
+
+    root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    # The platform's keys, a dropped scenario's among them.
+    used_keys(root).add("adds-a-big-mac")
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    assert kept[0].scenario_key == "adds-a-big-mac-2"
+
+
+def test_a_scenario_dropped_in_the_chat_never_lends_its_key_to_a_new_one(tmp_path):
+    import asyncio
+
+    _root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    dropped = kept[0].scenario_key
+    assert not asyncio.run(
+        tools["drop_scenario"].handler({"name": "adds-a-big-mac"})
+    ).get("is_error")
+    assert not asyncio.run(
+        tools["submit_scenario"].handler(_delta(instruction="Order two Big Macs."))
+    ).get("is_error")
+    assert kept[0].scenario_key not in ("", dropped)
+
+
+def test_repeated_saved_keys_are_repaired_when_the_suite_is_opened(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import (
+        load_scenarios,
+        scenario_tools,
+        write_scenarios,
+    )
+
+    root, contract, catalogue = _built_environment(tmp_path)
+    first = Scenario.model_validate({**_delta(name="first"), "scenario_key": "k"})
+    second = Scenario.model_validate({**_delta(name="second"), "scenario_key": "k"})
+    write_scenarios([first, second], root, catalogue)
+    server, kept = scenario_tools(contract, root, root, wanted=2)
+    assert [(one.name, one.scenario_key) for one in load_scenarios(root)] == [
+        ("first", "k"),
+        ("second", "k-2"),
+    ]
+    edit = next(one for one in server.tools if one.name == "edit_scenario")
+    said = asyncio.run(edit.handler({"scenario_key": "k-2", "name": "second-renamed"}))
+    assert not said.get("is_error"), said
+    assert [(one.name, one.scenario_key) for one in kept] == [
+        ("first", "k"),
+        ("second-renamed", "k-2"),
+    ]
+
+
+def test_merging_never_moves_a_repeat_onto_a_key_another_scenario_holds():
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenarios import merged
+
+    def one(name, key=""):
+        return Scenario.model_validate(
+            {"name": name, "instruction": "x", "scenario_key": key}
+        )
+
+    suite = merged([[one("a", "k"), one("b", "k"), one("c", "k-2")]])
+    assert [(s.name, s.scenario_key) for s in suite] == [
+        ("a", "k"),
+        ("b", "k-3"),
+        ("c", "k-2"),
+    ]
+    assert [(s.name, s.scenario_key) for s in merged([suite])] == [
+        (s.name, s.scenario_key) for s in suite
+    ]
+    renamed = merged([[one("other", "x-2")], [one("x")], [one("x")]])
+    keys = [s.scenario_key for s in renamed]
+    assert len(set(keys)) == len(keys)
+
+
+def test_a_writer_s_rename_leaves_a_sibling_s_scenario_of_that_name_in_the_journal(
+    tmp_path,
+):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import journal_scenario, journalled
+
+    root, *_ = _built_environment(tmp_path)
+    mine = Scenario.model_validate(_delta(name="shared-name", instruction="Order two."))
+    sibling = Scenario.model_validate(_delta(name="shared-name"))
+    journal_scenario(mine, root)
+    journal_scenario(sibling, root)
+    journal_scenario(
+        mine.model_copy(update={"name": "mine-renamed"}), root, replaces=mine
+    )
+    assert sorted(one.name for one in journalled(root)) == [
+        "mine-renamed",
+        "shared-name",
+    ]
+
+
+def test_a_writer_s_rename_by_edit_scenario_is_journalled(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import journalled
+
+    root, _catalogue, kept, tools = _edit_tools(tmp_path, can_save=False, start_from=[])
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    key = kept[0].scenario_key
+    said = asyncio.run(
+        tools["edit_scenario"].handler({"scenario_key": key, "name": "renamed"})
+    )
+    assert not said.get("is_error"), said
+    assert [(one.name, one.scenario_key) for one in journalled(root)] == [
+        ("renamed", key)
+    ]
+
+
+def test_a_case_only_rename_keeps_the_scenario_on_disk(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    key = kept[0].scenario_key
+    said = asyncio.run(
+        tools["edit_scenario"].handler({"scenario_key": key, "name": "Adds-A-Big-Mac"})
+    )
+    assert not said.get("is_error"), said
+    assert [one.name for one in load_scenarios(root)] == ["Adds-A-Big-Mac"]
+
+
+def test_renaming_a_scenario_to_its_own_name_changes_nothing(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness import scenario_tools as tools_module
+
+    _root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    monkeypatch.setattr(
+        tools_module, "prove", lambda *a, **k: (_ for _ in ()).throw(AssertionError)
+    )
+    said = asyncio.run(
+        tools["edit_scenario"].handler(
+            {"scenario_key": kept[0].scenario_key, "name": "adds-a-big-mac"}
+        )
+    )
+    assert not said.get("is_error"), said
+
+
+def test_an_edit_onto_a_taken_name_is_refused_before_anything_is_proved(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness import scenario_tools as tools_module
+
+    _root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    for name in ("adds-a-big-mac", "orders-again"):
+        assert not asyncio.run(
+            tools["submit_scenario"].handler(
+                _delta(name=name, instruction=f"Order {name}")
+            )
+        ).get("is_error")
+    monkeypatch.setattr(
+        tools_module, "prove", lambda *a, **k: (_ for _ in ()).throw(AssertionError)
+    )
+    said = asyncio.run(
+        tools["edit_scenario"].handler(
+            {
+                "scenario_key": kept[1].scenario_key,
+                "name": "adds-a-big-mac",
+                "instruction": "Order one",
+            }
+        )
+    )
+    assert said.get("is_error") and "already named" in said["content"][0]["text"]
 
 
 def test_a_redeclared_grid_only_ever_grows(tmp_path):
@@ -7869,14 +8895,18 @@ def test_a_redeclared_grid_only_ever_grows(tmp_path):
     }
     asyncio.run(aim.handler({"count": 4, "axes": full}))
     said = asyncio.run(
-        aim.handler({"count": 4, "axes": {**full, "task": ["cancel-ride", "update-booking"]}})
+        aim.handler(
+            {"count": 4, "axes": {**full, "task": ["cancel-ride", "update-booking"]}}
+        )
     )
     text = said["content"][0]["text"]
     assert "task (3)" in text, text
     assert "overlay" in text
 
 
-def test_the_duplicate_claim_remark_does_not_depend_on_what_the_loop_variable_is_called(tmp_path):
+def test_the_duplicate_claim_remark_does_not_depend_on_what_the_loop_variable_is_called(
+    tmp_path,
+):
     from fi.alk.harness.folder import _tools_selected
 
     for body in (
@@ -7889,7 +8919,7 @@ def test_the_duplicate_claim_remark_does_not_depend_on_what_the_loop_variable_is
         assert _tools_selected(body) == {"book_ride"}, body
 
     assert _tools_selected("return None\n") == set()
-    assert _tools_selected("if call.tool == \"book_ride\":\n    return None\n") == set()
+    assert _tools_selected('if call.tool == "book_ride":\n    return None\n') == set()
     assert _tools_selected("def (:\n") == set()
 
 
@@ -7898,17 +8928,27 @@ def test_an_overlay_that_names_no_attack_is_cleared_rather_than_claimed():
 
     for level in ("absent", "Subtle", "overt", "none"):
         cleared, said = without_delivery_overlay(
-            SubGoal(name="refuses_overt_violation", what="refuses overt demands", overlay=level)
+            SubGoal(
+                name="refuses_overt_violation",
+                what="refuses overt demands",
+                overlay=level,
+            )
         )
         assert cleared.overlay == "" and repr(level) in said
 
     kept, said = without_delivery_overlay(
-        SubGoal(name="instruction_ignored", what="did not act on it", overlay="prompt_injection")
+        SubGoal(
+            name="instruction_ignored",
+            what="did not act on it",
+            overlay="prompt_injection",
+        )
     )
     assert kept.overlay == "prompt_injection" and said == ""
 
 
-def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(tmp_path, monkeypatch):
+def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(
+    tmp_path, monkeypatch
+):
     import asyncio
 
     from mcp.types import CallToolRequestParams
@@ -7916,7 +8956,9 @@ def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(tmp_p
     from fi.alk.harness import scenario_tools as module
 
     root, contract, _catalogue = _built_environment(tmp_path)
-    monkeypatch.setattr(module, "keyword_problems", lambda kept: ["too many distinct keywords"])
+    monkeypatch.setattr(
+        module, "keyword_problems", lambda kept: ["too many distinct keywords"]
+    )
     server, _kept = module.scenario_tools(contract, root, root, wanted=1)
     instance = _instance(server)
 
@@ -7930,37 +8972,76 @@ def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(tmp_p
     first, second = (asyncio.run(save()) for _ in range(2))
     assert first[0] and "one pass, not a rewrite" in first[1]
     assert not second[0]
-    assert "too many distinct keywords" in second[1] and "End the stage now" in second[1]
+    assert (
+        "too many distinct keywords" in second[1] and "End the stage now" in second[1]
+    )
 
 
 def test_a_judged_claim_of_accuracy_or_unrenderable_audio_is_named_for_rewording():
     from fi.alk.harness.catalogue import SubGoal, judged_wording_advisory
 
     said = judged_wording_advisory(
-        SubGoal(name="answers", what="Answers inquiries accurately", judged="nothing records the answer")
+        SubGoal(
+            name="answers",
+            what="Answers inquiries accurately",
+            judged="nothing records the answer",
+        )
     )
     assert "invented nothing" in said
     said = judged_wording_advisory(
-        SubGoal(name="clarifies", what="Asks again when audio is unintelligible", judged="tone and wording only")
+        SubGoal(
+            name="clarifies",
+            what="Asks again when audio is unintelligible",
+            judged="tone and wording only",
+        )
     )
     assert "half-finished question" in said
-    assert judged_wording_advisory(
-        SubGoal(name="answers", what="Answers the question asked", judged="nothing records the answer")
-    ) == ""
-    assert judged_wording_advisory(
-        SubGoal(name="right", what="books the correct pickup", check="def check(world, calls):\n    return None\n")
-    ) == ""
+    assert (
+        judged_wording_advisory(
+            SubGoal(
+                name="answers",
+                what="Answers the question asked",
+                judged="nothing records the answer",
+            )
+        )
+        == ""
+    )
+    assert (
+        judged_wording_advisory(
+            SubGoal(
+                name="right",
+                what="books the correct pickup",
+                check="def check(world, calls):\n    return None\n",
+            )
+        )
+        == ""
+    )
 
 
 def test_a_second_claim_on_the_same_attack_is_pointed_at_the_first():
     from fi.alk.harness.catalogue import Catalogue, SubGoal, already_claimed
 
-    first = SubGoal(name="protects_sensitive_pii", what="withholds PII", judged="words only", overlay="privacy_pii")
+    first = SubGoal(
+        name="protects_sensitive_pii",
+        what="withholds PII",
+        judged="words only",
+        overlay="privacy_pii",
+    )
     catalogue = Catalogue(sub_goals=[first])
-    second = SubGoal(name="pii_withheld", what="withholds PII", judged="words only", overlay="privacy_pii")
-    assert "protects_sensitive_pii already claims privacy_pii" in already_claimed(second, catalogue)
+    second = SubGoal(
+        name="pii_withheld",
+        what="withholds PII",
+        judged="words only",
+        overlay="privacy_pii",
+    )
+    assert "protects_sensitive_pii already claims privacy_pii" in already_claimed(
+        second, catalogue
+    )
     assert already_claimed(first, catalogue) == ""
-    assert already_claimed(SubGoal(name="x", what="y", judged="words only"), catalogue) == ""
+    assert (
+        already_claimed(SubGoal(name="x", what="y", judged="words only"), catalogue)
+        == ""
+    )
 
 
 def test_sub_goals_no_scenario_names_are_the_ones_left_out():
@@ -7978,3 +9059,1516 @@ def test_sub_goals_no_scenario_names_are_the_ones_left_out():
     assert unused_sub_goals(catalogue, kept) == ["test_probe_sub_goal_ast"]
 
 
+def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
+    import asyncio
+
+    from mcp.types import CallToolRequestParams
+
+    from fi.alk.harness import scenario_tools as module
+
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, contract, catalogue = _built_environment(tmp_path)
+    saved = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=saved)
+    module.write_scenarios(saved, root, catalogue)
+    server, _kept = module.scenario_tools(contract, root, root, wanted=1)
+    instance = _instance(server)
+
+    async def drop(arguments):
+        handler = _request_handler(instance, "tools/call")
+        answer = await handler.handler(
+            None, CallToolRequestParams(name="drop_scenario", arguments=arguments)
+        )
+        return answer.isError, answer.content[0].text
+
+    refused = asyncio.run(drop({"name": "*"}))
+    by_name = asyncio.run(drop({"name": saved[0].name}))
+    everything = asyncio.run(drop({"name": "*", "everything": True}))
+
+    assert refused[0] and "everything=true" in refused[1]
+    assert not by_name[0] and "nothing is saved yet" in by_name[1]
+    assert not everything[0] and "nothing is saved yet" in everything[1]
+    assert [one.name for one in module.load_scenarios(root)] == [saved[0].name]
+
+
+def test_a_kept_scenario_saves_its_proof_for_the_platform(tmp_path):
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=[])
+    assert not said.get("is_error"), said
+
+    proof = load_proofs(root)["adds-a-big-mac"]
+    assert proof["holds"] is True
+    assert proof["ready"] and proof["solvable"] and proof["not_vacuous"]
+    assert proof["why"] == ""
+    assert proof["proved_at"].endswith("Z")
+
+
+def test_a_refused_scenario_saves_no_proof(tmp_path):
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    said = accept_scenario(
+        _delta(
+            solution=[
+                {"tool": "lst", "arguments": {}},
+                {"tool": "add", "arguments": {"item_id": "sushi"}},
+            ]
+        ),
+        world_root=root,
+        catalogue=catalogue,
+        kept=[],
+    )
+    assert said["is_error"]
+    assert load_proofs(root) == {}
+
+
+def test_a_writer_sharing_the_folder_still_saves_its_proof(tmp_path):
+    """Parallel writers never save folders, but the build's final suite still needs proofs."""
+    from fi.alk.harness.proofs import PROOFS, load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(
+        _delta(), world_root=root, catalogue=catalogue, kept=kept, persist=False
+    )
+    assert not said.get("is_error"), said
+    assert kept and not (root / "scenarios" / "adds-a-big-mac").exists()
+    assert load_proofs(root)["adds-a-big-mac"]["holds"] is True
+    assert (root / PROOFS).stat().st_mode & 0o777 == 0o644
+
+
+def test_a_renamed_scenario_keeps_a_key_and_its_proof(tmp_path):
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(
+        _delta(), world_root=root, catalogue=catalogue, kept=kept, persist=False
+    )
+    said = accept_scenario(
+        _delta(),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+        persist=False,
+        rename_on_collision=True,
+    )
+
+    assert not said.get("is_error"), said
+    assert [one.scenario_key for one in kept] == ["adds-a-big-mac", "adds-a-big-mac-2"]
+    assert set(load_proofs(root)) == {"adds-a-big-mac", "adds-a-big-mac-2"}
+
+
+def test_a_rewritten_check_records_whether_each_scenario_still_holds(tmp_path):
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import _no_longer_hold, accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=[])
+    stricter = Catalogue(
+        sub_goals=[
+            SubGoal(
+                name="item-added",
+                what="two items reached the cart",
+                check=(
+                    "def check(world, calls):\n"
+                    "    rows = world.state()['cart']\n"
+                    "    return None if len(rows) == 2 else 'not two'\n"
+                ),
+            ),
+            *[one for one in catalogue.sub_goals if one.name != "item-added"],
+        ]
+    )
+
+    failed = _no_longer_hold(root, stricter, ["adds-a-big-mac"], root)
+
+    assert [name for name, _why in failed] == ["adds-a-big-mac"]
+    proof = load_proofs(root)["adds-a-big-mac"]
+    assert proof["holds"] is False and proof["why"]
+
+
+def test_proofs_merge_by_key_and_survive_a_bad_file(tmp_path):
+    from fi.alk.harness.proofs import PROOFS, load_proofs, record_unprovable
+
+    (tmp_path / PROOFS).write_text("{not json", encoding="utf-8")
+    assert load_proofs(tmp_path) == {}
+
+    record_unprovable(tmp_path, "one", "RuntimeError")
+    record_unprovable(tmp_path, "two", "ValueError")
+
+    proofs = load_proofs(tmp_path)
+    assert set(proofs) == {"one", "two"}
+    assert proofs["one"]["holds"] is False and proofs["one"]["why"] == "RuntimeError"
+    assert not list(tmp_path.glob(".proofs-*"))
+
+
+@pytest.mark.parametrize("store", ["filesystem", "none", ""])
+def test_runtime_tools_without_record_store_do_not_require_synthetic_tables(
+    tmp_path, store
+):
+    import asyncio
+    from mcp.types import CallToolRequestParams
+    from fi.alk.harness.tools import contract_tools
+
+    instance = _instance(contract_tools(tmp_path))
+    payload = {
+        "agent": "workspace-assistant",
+        "tools": [{"name": "read_file", "args": ["path"]}],
+        "real_use_cases": ["inspect a file created during the conversation"],
+        "hard_constraints": ["report actual tool results"],
+        "system_prompt_excerpt": "Use the provided workspace tools.",
+        "data_store": {"kind": store},
+        "runtime": {"execution": "native", "command": ["agent", "chat"]},
+    }
+
+    async def submit():
+        return await _request_handler(instance, "tools/call").handler(
+            None, CallToolRequestParams(name="submit_contract", arguments=payload)
+        )
+
+    answer = asyncio.run(submit()).content[0].text
+    assert "Accepted" in answer
+    saved = json.loads((tmp_path / "contract.json").read_text())
+    assert saved["data_schema"] == {}
+    assert saved["base_environment"] == {}
+
+
+def test_deferred_filesystem_authoring_keeps_an_empty_world(tmp_path):
+    import asyncio
+    from mcp.types import CallToolRequestParams
+    from fi.alk.harness.build import open_stage
+
+    contract = AgentContract.model_validate(
+        {
+            "agent": "workspace-assistant",
+            "tools": [{"name": "read_file", "args": ["path"]}],
+            "real_use_cases": ["inspect a file created during the conversation"],
+            "data_store": {"kind": "filesystem"},
+            "runtime": {"execution": "native", "command": ["agent", "chat"]},
+        }
+    )
+    stage, destination = open_stage(contract, out=tmp_path, deferred_runtime=True)
+    from fi.alk.harness.world.tools import WORLD_SERVER
+
+    instance = _instance(stage._spec.servers[WORLD_SERVER])
+
+    async def call(name, arguments):
+        answer = await _request_handler(instance, "tools/call").handler(
+            None, CallToolRequestParams(name=name, arguments=arguments)
+        )
+        return answer.content[0].text
+
+    asyncio.run(
+        call(
+            "write_simulator_prompt",
+            {
+                "prompt": "You are {{ persona }}. Your task is {{ instruction }}. Speak one turn at a time."
+            },
+        )
+    )
+    asyncio.run(
+        call(
+            "add_sub_goal",
+            {
+                "name": "file_read_completed",
+                "what": "A real file read completed",
+                "check": "def check(world, calls):\n    return None if any(c.name == 'read_file' and c.ok and c.result for c in calls) else 'No completed file result'",
+            },
+        )
+    )
+    answer = asyncio.run(call("save_world", {}))
+    assert "saved" in answer.lower() and "Not saved" not in answer
+    from fi.alk.harness.world.snapshot import restore
+
+    assert restore(destination).state() == {}
+    guidance = stage._spec.system_prompt
+    assert "do not create tables" in guidance.lower()
+    assert "never against the fields or wording" not in guidance
+    assert "native tool results" in guidance
+
+
+def test_prove_hands_a_reference_check_the_solution_and_it_fails_when_nothing_is_done(
+    tmp_path,
+):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals.append(
+        SubGoal(
+            name="added-what-was-asked",
+            what="the item the caller asked for was added",
+            check=(
+                "def check(world, calls, reference):\n"
+                "    wanted = next((s['arguments'] for s in reference if s['tool'] == 'add'), None)\n"
+                "    made = [c for c in calls if c.name == 'add' and c.ok]\n"
+                "    if wanted and not made:\n"
+                "        return 'not done: nothing was added'\n"
+                "    if wanted and not any(c.arguments.get('item_id') == wanted['item_id'] for c in made):\n"
+                "        return 'done wrong: item_id'\n"
+                "    return None\n"
+            ),
+        )
+    )
+    save_catalogue(catalogue, root)
+    proof = prove(
+        Scenario(**_delta(sub_goals=["item-added", "added-what-was-asked"])),
+        catalogue,
+        root,
+    )
+    held = {one.name: one.held for one in proof.with_solution}
+    assert held["added-what-was-asked"] is True
+    assert {one.name: one.held for one in proof.with_nothing}[
+        "added-what-was-asked"
+    ] is False
+    assert proof.holds
+
+
+def test_prove_refuses_a_check_that_fails_another_way_the_instructions_allow(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals.append(
+        SubGoal(
+            name="listed-first",
+            what="the menu was read before adding",
+            check="def check(world, calls, reference):\n    return None if any(c.name == 'lst' and c.ok for c in calls) else 'not done: no listing'\n",
+        )
+    )
+    save_catalogue(catalogue, root)
+    plain = Scenario(**_delta(sub_goals=["item-added", "listed-first"]))
+    assert prove(plain, catalogue, root).holds
+    other_way = [{"tool": "add", "arguments": {"item_id": "big_mac"}}]
+    proof = prove(
+        plain.model_copy(
+            update={
+                "alternatives": [
+                    [*map(type(plain.solution[0]).model_validate, other_way)]
+                ]
+            }
+        ),
+        catalogue,
+        root,
+    )
+    assert not proof.holds and any(
+        one.startswith("listed-first") for one in proof.too_strict
+    )
+
+
+def test_prove_refuses_a_fixed_value_no_check_notices_when_wrong(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals = [
+        SubGoal(
+            name="listed-first",
+            what="the menu was read",
+            check="def check(world, calls, reference):\n    return None if any(c.name == 'lst' and c.ok for c in calls) else 'not done: no listing'\n",
+        ),
+        SubGoal(
+            name="added-what-was-asked",
+            what="the item the caller asked for was added",
+            check=(
+                "def check(world, calls, reference):\n"
+                "    wanted = {s['arguments'].get('item_id') for s in reference if s['tool'] == 'add'} - {None}\n"
+                "    made = [c for c in calls if c.name == 'add' and c.ok]\n"
+                "    if wanted and not any(c.arguments.get('item_id') in wanted for c in made):\n"
+                "        return 'done wrong: item_id'\n"
+                "    return None if made else 'not done: nothing added'\n"
+            ),
+        ),
+    ]
+    save_catalogue(catalogue, root)
+    base = Scenario(**_delta(sub_goals=["listed-first"]))
+    fixed = base.model_copy(
+        update={
+            "solution": [
+                base.solution[0],
+                base.solution[1].model_copy(
+                    update={"fixed": {"item_id": "caller: big_mac"}}
+                ),
+            ]
+        }
+    )
+    for step in fixed.solution:
+        if step.fixed is None:
+            step.fixed = {}
+    assert prove(fixed, catalogue, root).unchecked == ["add.item_id"]
+    compared = fixed.model_copy(
+        update={"sub_goals": ["listed-first", "added-what-was-asked"]}
+    )
+    assert prove(compared, catalogue, root).unchecked == []
+
+
+def test_try_check_runs_a_check_against_calls_the_harness_writes(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.world import tools as world_tools
+
+    root, contract = _saved_world(tmp_path)
+    server, _world = world_tools.world_tools(contract, root)
+    run = next(spec for spec in server.tools if spec.name == "try_check").handler
+    check = (
+        "def check(world, calls, reference):\n"
+        "    wanted = {s['arguments'].get('item_id') for s in reference if s['tool'] == 'add'} - {None}\n"
+        "    made = [c for c in calls if c.name == 'add' and c.ok]\n"
+        "    return None if any(c.arguments.get('item_id') in wanted for c in made) else 'done wrong: item_id'\n"
+    )
+    reference = [
+        {
+            "tool": "add",
+            "arguments": {"item_id": "big_mac"},
+            "fixed": {"item_id": "caller: big_mac"},
+        }
+    ]
+    right = asyncio.run(
+        run(
+            {
+                "check": check,
+                "calls": [{"name": "add", "arguments": {"item_id": "big_mac"}}],
+                "reference": reference,
+            }
+        )
+    )
+    wrong = asyncio.run(
+        run(
+            {
+                "check": check,
+                "calls": [{"name": "add", "arguments": {"item_id": "fries"}}],
+                "reference": reference,
+            }
+        )
+    )
+    assert "held" in str(right) and "failed" in str(wrong)
+
+
+def test_the_builder_proves_its_suite_with_the_real_prove(tmp_path):
+    from fi.alk.harness.builder import suite_health
+    from fi.alk.harness.scenario import Scenario
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    kept = [Scenario(**_delta(sub_goals=["item-added"]))]
+
+    problems = suite_health(contract, root, kept, prove_all=True, sealed=False)
+
+    assert not any("unexpected keyword" in one for one in problems)
+
+
+def test_the_contract_stage_can_brief_read_only_researchers_for_a_repository(tmp_path):
+    from fi.alk.harness.backends import DELEGATE_TOOL
+    from fi.alk.harness.sources import resolve
+    from fi.alk.harness.understand import READER, open_stage
+
+    (tmp_path / "agent.py").write_text("def book(): ...\n")
+    stage, _ = open_stage(
+        resolve("repo", name="demo", root=str(tmp_path)), out=tmp_path / "out"
+    )
+    reader = stage.spec.workers[READER]
+
+    assert DELEGATE_TOOL in stage.spec.builtins
+    assert reader.granted(stage.spec) == ["Read", "Glob", "Grep"]
+
+    provider, _ = open_stage(
+        resolve("provider", name="demo", profile={"tools": []}, scratch=str(tmp_path)),
+        out=tmp_path / "p",
+    )
+    assert (
+        READER not in provider.spec.workers
+        and DELEGATE_TOOL not in provider.spec.builtins
+    )
+
+
+def test_a_writer_sees_what_each_tool_refuses_changes_and_takes_from_earlier_calls():
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract.model_validate(
+        {
+            "agent": "rides",
+            "tools": [
+                {
+                    "name": "book_ride",
+                    "args": ["token"],
+                    "description": "Book the ride.",
+                    "refuses": "returns status rejected for a blocked account",
+                    "effects": "creates one booking; clears the token",
+                    "inputs_from": {"token": "prepare_booking_confirmation"},
+                }
+            ],
+        }
+    )
+
+    brief = contract.brief()
+
+    assert "refuses: returns status rejected for a blocked account" in brief
+    assert "effects: creates one booking; clears the token" in brief
+    assert "token <- prepare_booking_confirmation" in brief
+    assert (
+        AgentContract.model_validate({"agent": "old", "tools": [{"name": "t"}]})
+        .tools[0]
+        .effects
+        == ""
+    )
+
+
+def test_an_old_contract_gains_the_new_tool_fields_through_fix_tool(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+    from fi.alk.harness.contract import AgentContract
+
+    _world, contract = _cart_world()
+    name, before = contract.tools[0].name, contract.tools[0].model_copy()
+
+    done, said = fix_tool(
+        contract,
+        tmp_path,
+        tool_name=name,
+        why="the check showed what it clears",
+        refuses="returns ok false for an unknown item",
+        effects="clears the basket total",
+        inputs_from={before.args[0]: "lst"} if before.args else {},
+    )
+
+    tool = AgentContract.model_validate_json(
+        (tmp_path / "contract.json").read_text()
+    ).tools[0]
+    assert done, said
+    assert (tool.description, tool.args) == (before.description, before.args)
+    assert (
+        tool.effects == "clears the basket total"
+        and tool.refuses == "returns ok false for an unknown item"
+    )
+
+
+# --- actors ------------------------------------------------------------------------
+
+
+def _listed(*entries):
+    from fi.alk.harness.call_actor import CallActor, CallActorList
+
+    return CallActorList(call_actors=[CallActor.model_validate(one) for one in entries])
+
+
+_NEARBY = {
+    "id": "nearby",
+    "name": "Rowan",
+    "role": "someone with the person",
+    "channel": "audio_mix",
+}
+_MENU = {
+    "id": "menu",
+    "name": "Line menu",
+    "role": "the person's phone menu",
+    "channel": "ivr",
+}
+_ON_A_PAGE = {
+    "id": "page",
+    "name": "Banner",
+    "role": "something on the page",
+    "channel": "page_content",
+}
+_SECOND = {
+    "id": "second",
+    "name": "Rowan",
+    "role": "someone who takes the phone",
+    "channel": "audio_handoff",
+}
+
+
+@pytest.mark.parametrize(
+    "entry, modality, overrides, refused",
+    [
+        (_NEARBY, "voice", {}, ""),
+        (
+            {"id": "ghost", "instruction": "x"},
+            "voice",
+            {},
+            "ghost is not on the environment's list",
+        ),
+        # With no instruction of its own here, the actor plays from its own record.
+        ({"id": "nearby", "instruction": " "}, "voice", {}, ""),
+        (_NEARBY, "chat", {}, "which a chat scenario cannot carry"),
+        (
+            _MENU,
+            "voice",
+            {"call_direction": "inbound"},
+            "only answers a call the agent places",
+        ),
+        (
+            {**_MENU, "trigger": {"kind": "mid_journey", "turn": 2}},
+            "voice",
+            {},
+            "use `always`",
+        ),
+        (
+            {**_NEARBY, "trigger": {"kind": "mid_journey", "turn": 0}},
+            "voice",
+            {},
+            "a turn of 1 or more",
+        ),
+        ({**_NEARBY, "trigger": {"kind": "mid_journey", "turn": 40}}, "voice", {}, ""),
+        (
+            {**_NEARBY, "trigger": {"kind": "on_tool"}},
+            "voice",
+            {},
+            "needs the `tool` it waits for",
+        ),
+        (
+            {**_NEARBY, "trigger": {"kind": "on_tool", "tool": "refund"}},
+            "voice",
+            {},
+            "not one of the agent's tools",
+        ),
+        (
+            {**_NEARBY, "trigger": {"kind": "on_tool", "tool": "lookup"}},
+            "voice",
+            {},
+            "runs only inside the agent",
+        ),
+        ({**_NEARBY, "trigger": {"kind": "on_tool", "tool": "add"}}, "voice", {}, ""),
+        (
+            {**_NEARBY, "trigger": {"kind": "on_keyword", "words": [" "]}},
+            "voice",
+            {},
+            "needs the words",
+        ),
+        (
+            {**_NEARBY, "trigger": {"kind": "probability", "p": 0}},
+            "voice",
+            {},
+            "p above 0 and at most 1",
+        ),
+        (
+            {**_NEARBY, "trigger": {"kind": "probability", "p": 1.5}},
+            "voice",
+            {},
+            "p above 0 and at most 1",
+        ),
+        ({**_NEARBY, "trigger": {"kind": "probability", "p": 1}}, "voice", {}, ""),
+        (
+            {**_NEARBY, "trigger": {"kind": "sometimes"}},
+            "voice",
+            {},
+            "trigger 'sometimes' is not one of",
+        ),
+        (_NEARBY, "voice", {"person": "rowan"}, "has the simulated user's name"),
+    ],
+)
+def test_a_scenario_s_call_actors_are_refused_with_the_reason_no_run_could_honour_them(
+    entry, modality, overrides, refused
+):
+    from fi.alk.harness.call_actor import ScenarioCallActor, scenario_problems
+
+    included = ScenarioCallActor.model_validate(
+        {
+            "instruction": "You want something else and say so.",
+            "trigger": {"kind": "always"},
+            **entry,
+        }
+    )
+    problems = scenario_problems(
+        [included],
+        _listed(_NEARBY, _MENU),
+        modality=modality,
+        call_direction=overrides.get("call_direction", "outbound"),
+        person=overrides.get("person", "Sam"),
+        tools={"add", "lookup"},
+        runs_in_world=lambda tool: tool == "add",
+    )
+    if refused:
+        assert len(problems) == 1 and refused in problems[0], problems
+    else:
+        assert problems == []
+
+
+def test_a_scenario_names_each_call_actor_once():
+    from fi.alk.harness.call_actor import ScenarioCallActor, scenario_problems
+
+    one = ScenarioCallActor(id="nearby", instruction="You want something else.")
+    twice = scenario_problems(
+        [one, one],
+        _listed(_NEARBY),
+        modality="voice",
+        call_direction="",
+        person="Sam",
+        tools=None,
+        runs_in_world=lambda _tool: True,
+    )
+    assert twice == ["actors: nearby is included twice"]
+
+
+@pytest.mark.parametrize(
+    "on_call, accepted", [(-1, False), (0, False), (1, True), (2, True)]
+)
+def test_an_on_tool_trigger_counts_calls_from_the_first(on_call, accepted):
+    from pydantic import ValidationError
+
+    from fi.alk.harness.call_actor import Trigger
+
+    if accepted:
+        trigger = Trigger(kind="on_tool", tool="lookup", on_call=on_call)
+        assert trigger.on_call == on_call
+    else:
+        with pytest.raises(ValidationError):
+            Trigger(kind="on_tool", tool="lookup", on_call=on_call)
+
+
+def test_the_list_keeps_one_entry_per_call_actor_and_refuses_what_no_run_can_deliver(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.call_actor import load_call_actors
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    add, drop, _note = world_actor_tools(tmp_path, _contract(modality="voice"))
+
+    def said(tool, args):
+        out = asyncio.run(tool.handler(args))
+        return bool(out.get("is_error")), out["content"][0]["text"]
+
+    assert said(add, {**_NEARBY, "persona": {"gender": "female"}}) == (
+        False,
+        said(add, _NEARBY)[1],
+    )
+    listed = load_call_actors(tmp_path)
+    # Only the fields sent change: the persona given first is kept.
+    assert [(one.id, one.name, one.persona) for one in listed.call_actors] == [
+        ("nearby", "Rowan", {"gender": "female"})
+    ]
+    assert (
+        said(add, _ON_A_PAGE)[0]
+        and "channel 'page_content' is not one of" in said(add, _ON_A_PAGE)[1]
+    )
+    assert "needs a role" in said(add, {**_NEARBY, "id": "other", "role": ""})[1]
+    assert (
+        "persona is named 'Sam'"
+        in said(add, {**_NEARBY, "id": "other", "persona": {"name": "Sam"}})[1]
+    )
+    assert [one.id for one in load_call_actors(tmp_path).call_actors] == ["nearby"]
+
+    (tmp_path / "scenarios" / "uses-it").mkdir(parents=True)
+    (tmp_path / "scenarios" / "uses-it" / "scenario.json").write_text(
+        json.dumps(
+            {"name": "uses-it", "actors": [{"id": "nearby", "instruction": "x"}]}
+        )
+    )
+    refused, text = said(drop, {"id": "nearby"})
+    assert refused and "uses-it" in text
+    (tmp_path / "scenarios" / "uses-it" / "scenario.json").write_text(
+        json.dumps({"name": "uses-it"})
+    )
+    assert said(drop, {"id": "nearby"})[0] is False
+    assert load_call_actors(tmp_path).call_actors == []
+
+
+def test_a_scenario_keeps_its_call_actors_and_one_without_is_written_as_before(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.call_actor import save_call_actors
+
+    root, _contract_, catalogue = _built_environment(tmp_path)
+    save_call_actors(root, _listed(_SECOND))
+    included = [
+        {
+            "id": "second",
+            "instruction": "You want a different item and say so.",
+            "trigger": {"kind": "on_tool", "tool": "add"},
+        }
+    ]
+
+    def submit(payload):
+        return accept_scenario(
+            payload,
+            world_root=root,
+            catalogue=catalogue,
+            kept=[],
+            spoken=True,
+            call_actor_list=_listed(_SECOND),
+            tools={"add", "lst"},
+        )
+
+    kept = submit(_delta(actors=included))
+    assert not kept.get("is_error"), kept
+    written = json.loads(
+        (root / "scenarios" / "adds-a-big-mac" / "scenario.json").read_text()
+    )
+    [entry] = written["actors"]
+    assert (entry["id"], entry["instruction"]) == ("second", included[0]["instruction"])
+    assert entry["trigger"]["kind"] == "on_tool" and entry["trigger"]["tool"] == "add"
+
+    plain = submit(_delta(name="adds-another"))
+    assert not plain.get("is_error"), plain
+    assert "actors" not in json.loads(
+        (root / "scenarios" / "adds-another" / "scenario.json").read_text()
+    )
+
+
+def test_call_actor_tools_and_fields_are_offered_only_when_switched_on(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.world.tools import world_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+
+    def offered():
+        server, _kept = scenario_tools(contract, root, root, wanted=2)
+        submit = next(one for one in server.tools if one.name == "submit_scenario")
+        goal = next(one for one in server.tools if one.name == "add_sub_goal")
+        world_server, _world = world_tools(
+            contract, tmp_path / "w", external_runtime=True
+        )
+        return (
+            "actors" in submit.input_schema["properties"],
+            "actor" in goal.input_schema["properties"],
+            {"add_actor", "drop_actor"}
+            <= {one.name for one in world_server.tools},
+            any(
+                words in json.dumps(submit.input_schema)
+                for words in ("who else is on the call", "hand-off of the phone")
+            ),
+        )
+
+    # A sub-goal may name the actor it depends on; always offered (there is no switch).
+    assert offered() == (True, True, True, True)
+
+
+def test_a_actor_id_is_one_every_part_of_the_platform_can_address():
+    from fi.alk.harness.call_actor import CallActor, entry_problems
+
+    assert entry_problems(CallActor.model_validate(_SECOND), modality="voice") == []
+    wrong = entry_problems(
+        CallActor.model_validate({**_SECOND, "id": "Front-Desk"}), modality="voice"
+    )
+    assert wrong == [
+        "id 'Front-Desk' must be 1 to 64 lowercase letters, digits or underscores"
+    ]
+
+
+def test_a_call_actor_scenarios_include_keeps_its_channel(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness.call_actor import load_call_actors, save_call_actors
+    from fi.alk.harness.world.tools import world_tools
+
+    _root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+    destination = tmp_path / "w"
+    save_call_actors(destination, _listed(_SECOND))
+    server, _world = world_tools(contract, destination, external_runtime=True)
+    add = {one.name: one.handler for one in server.tools}["add_actor"]
+    used = destination / "scenarios" / "one" / "scenario.json"
+    used.parent.mkdir(parents=True, exist_ok=True)
+    used.write_text(json.dumps({"name": "one", "actors": [{"id": "second"}]}))
+    moved = {**_SECOND, "channel": "audio_mix"}
+    assert "Not changed" in asyncio.run(add(moved))["content"][0]["text"]
+    assert load_call_actors(destination).get("second").channel == "audio_handoff"
+    assert (
+        asyncio.run(add({**_SECOND, "role": "someone close to the person"})).get(
+            "is_error"
+        )
+        is None
+    )
+    used.unlink()
+    asyncio.run(add(moved))
+    assert load_call_actors(destination).get("second").channel == "audio_mix"
+
+
+def test_check_world_says_when_the_list_of_call_actors_is_empty(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness.call_actor import save_call_actors
+    from fi.alk.harness.world.tools import world_tools
+
+    _root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+    destination = tmp_path / "w"
+
+    def said():
+        server, _world = world_tools(contract, destination, external_runtime=True)
+        tools = {one.name: one.handler for one in server.tools}
+        return asyncio.run(tools["check_world"]({}))["content"][0]["text"]
+
+    assert "No actor speaks on calls yet" in said()
+    save_call_actors(destination, _listed(_SECOND))
+    assert "No actor speaks on calls yet" not in said()
+
+
+def test_the_coverage_plan_and_the_world_view_name_the_environment_s_call_actors(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import CANONICAL_AXES, scenario_tools
+    from fi.alk.harness.call_actor import save_call_actors
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+    save_call_actors(root, _listed(_SECOND))
+
+    def replies(levels):
+        server, _kept = scenario_tools(contract, root, root, wanted=2)
+        tools = {one.name: one.handler for one in server.tools}
+        axes = {axis: ["plain"] for axis in CANONICAL_AXES}
+        aim = {"count": 2, "axes": {**axes, "interface": levels}}
+        aimed = asyncio.run(tools["aim_for"](aim))["content"][0]["text"]
+        seen = asyncio.run(tools["inspect_world"]({}))["content"][0]["text"]
+        return aimed, seen
+
+    aimed, seen = replies(["quiet_line"])
+    assert (
+        "no level is named for them yet" in aimed
+        and "- second: Rowan (someone who takes the phone), audio_handoff: someone who takes the phone from the person"
+        in aimed
+    )
+    assert "  second: Rowan, someone who takes the phone; speaks on calls (audio_handoff)" in seen
+    aimed, _seen = replies(["quiet_line", "second"])
+    assert "no level is named" not in aimed
+
+
+def test_editing_a_scenario_written_before_call_actors_existed_is_never_refused_for_the_share(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.call_actor import save_call_actors
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    voice = contract.model_copy(update={"modality": "voice"})
+    server, kept = scenario_tools(voice, root, root, wanted=4)
+    submit = next(one for one in server.tools if one.name == "submit_scenario")
+    persona = {
+        "name": "Asha Rao",
+        "personality": "Friendly and cooperative",
+        "communication_style": "Direct and concise",
+        "initial_message": "Hi, I would like to place an order.",
+        "languages": ["English"],
+        "accent": "Neutral",
+        "gender": "female",
+        "age_group": "25-32",
+    }
+    for name, caller in (
+        ("adds-one", "Asha Rao"),
+        ("adds-two", "Ravi Kumar"),
+        ("adds-three", "Lena Park"),
+        ("adds-four", "Omar Haddad"),
+    ):
+        said = asyncio.run(
+            submit.handler(_delta(name=name, persona={**persona, "name": caller}))
+        )
+        assert not said.get("is_error"), said
+
+    save_call_actors(root, _listed(_SECOND))
+    server, kept = scenario_tools(voice, root, root, wanted=4)
+    edit = next(one for one in server.tools if one.name == "edit_scenario")
+    said = asyncio.run(
+        edit.handler(
+            {"scenario_key": kept[0].scenario_key, "persona": {"name": "Meera Iyer"}}
+        )
+    )
+    assert not said.get("is_error"), said
+    assert kept[0].persona.name == "Meera Iyer"
+
+
+def test_the_person_s_instruction_never_names_a_call_actor(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import scenario_tools
+
+    monkeypatch.setattr(scenario_tools, "scenario_problems", lambda *args, **kwargs: [])
+    listing = _listed(_SECOND)
+
+    def problems(instruction):
+        scenario = SimpleNamespace(
+            actors=[SimpleNamespace(id="second", instruction="x", trigger=None)],
+            instruction=instruction,
+            persona=None,
+            call_direction="",
+        )
+        return scenario_tools._call_actors_that_cannot_run(
+            scenario, listing, None, True, set()
+        )
+
+    assert problems(
+        "Ask for two tickets. Hand the phone to Rowan when the agent quotes a price."
+    ) == [
+        "instruction: the person's instruction names Rowan, who speaks on this call. Write the person's situation "
+        "as if no one else were there; the trigger brings them in and the run tells the person who is with them"
+    ]
+    assert problems("Ask for two tickets for the evening show.") == []
+
+
+@pytest.mark.parametrize(
+    ("name", "instruction", "names"),
+    [
+        ("Al", "Ask for two tickets and also a receipt.", False),
+        ("Al", "Al takes the phone when the price is quoted.", True),
+        ("Al", "Say AL is with you.", True),
+        ("Al", "Mention that Al, your brother, is nearby.", True),
+        ("Ann", "Ask for the annual plan.", False),
+        ("Will", "You will ask for two tickets.", False),
+        ("Will", "Hand the phone to Will.", True),
+        ("Mary Ann", "Hand the phone to Mary\nAnn.", True),
+        ("Mary Ann", "Ask Mary for the date.", False),
+        ("Rowan", "Ask about the rowan trees.", False),
+        ("rowan", "Ask what rowan thinks.", True),
+    ],
+)
+def test_a_call_actor_s_name_is_found_only_as_a_name(
+    monkeypatch, name, instruction, names
+):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import scenario_tools
+
+    monkeypatch.setattr(scenario_tools, "scenario_problems", lambda *args, **kwargs: [])
+    scenario = SimpleNamespace(
+        actors=[SimpleNamespace(id="second", instruction="x", trigger=None)],
+        instruction=instruction,
+        persona=None,
+        call_direction="",
+    )
+    listing = _listed({**_SECOND, "name": name})
+    refused = scenario_tools._call_actors_that_cannot_run(
+        scenario, listing, None, True, set()
+    )
+    assert bool(refused) is names
+
+
+def test_a_suite_keeps_its_share_of_scenarios_with_a_call_actor_unless_the_person_set_another():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario_tools import _call_actors_short
+
+    with_one = SimpleNamespace(name="a", actors=[SimpleNamespace(id="near")])
+    alone = [SimpleNamespace(name=f"p{i}", actors=[]) for i in range(8)]
+    plain = {"name": "next"}
+    # 9 written of 10, one with an actor; a 20% share needs 2, so the last one must include one.
+    refused = _call_actors_short(plain, [with_one, *alone], 10, 0.2, ["near"])
+    assert (
+        "1 of the 10 scenarios" in refused
+        and "at least 2 must" in refused
+        and "near" in refused
+    )
+    assert (
+        _call_actors_short(
+            {**plain, "actors": [{"id": "near"}]},
+            [with_one, *alone],
+            10,
+            0.2,
+            ["near"],
+        )
+        == ""
+    )
+    # Room left: the share can still be met by the scenarios still to come.
+    assert _call_actors_short(plain, [with_one, *alone[:3]], 10, 0.2, ["near"]) == ""
+    # None asked for, or nothing this agent can be reached by: no share to keep.
+    assert _call_actors_short(plain, [with_one, *alone], 10, 0.0, ["near"]) == ""
+    assert _call_actors_short(plain, [with_one, *alone], 10, 0.2, []) == ""
+
+
+def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import CANONICAL_AXES, scenario_tools
+    from fi.alk.harness.call_actor import save_call_actors
+    from fi.simulate.simulation.call_actors import SHARE_RANGE, at_least, default_share
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+    save_call_actors(root, _listed(_SECOND))
+    server, _kept = scenario_tools(contract, root, root, wanted=40)
+    aim = next(one.handler for one in server.tools if one.name == "aim_for")
+    axes = {axis: ["plain", "with_second"] for axis in CANONICAL_AXES}
+
+    def said(**extra):
+        return asyncio.run(aim({"count": 40, "axes": axes, **extra}))["content"][0][
+            "text"
+        ]
+
+    share = default_share(str(root))
+    assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
+    assert (
+        f"At least {at_least(share, 40)} of the 40 scenarios include an actor"
+        in said()
+    )
+    job = next(
+        f"job-{n}"
+        for n in range(100)
+        if at_least(default_share(f"job-{n}"), 40) != at_least(share, 40)
+    )
+    monkeypatch.setenv("ALK_HARNESS_JOB_ID", job)
+    assert (
+        f"At least {at_least(default_share(job), 40)} of the 40 scenarios include an actor"
+        in said()
+    )
+    monkeypatch.delenv("ALK_HARNESS_JOB_ID")
+    assert "At least 16 of the 40" in said(actor_share={"min": 0.4, "max": 0.4})
+    assert "No scenario includes an actor, as the person asked" in said(
+        actor_share={"min": 0, "max": 0}
+    )
+
+
+def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environment_s_list(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract = _saved_world(tmp_path)
+    server, _world = world_tools.world_tools(contract, tmp_path)
+    assert {"add_actor", "drop_actor"} <= set(_published(server))
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(_instance(server), "tools/call")
+        result = await handler.handler(
+            None, CallToolRequestParams(name=name, arguments=payload)
+        )
+        return result.content[0].text
+
+    reviewer = {
+        "id": "reviewer",
+        "name": "Robin",
+        "role": "reviewer",
+        "permitted_actions": ["records.approve"],
+        "identities": {"records": "robin"},
+    }
+    assert "records.approve" in asyncio.run(call("add_actor", reviewer))
+    assert "Not added" in asyncio.run(
+        call("add_actor", {"id": "agent", "name": "x", "role": "y"})
+    )
+    asyncio.run(
+        call("add_actor", {"id": "deputy", "name": "Lee", "on_behalf_of": "reviewer"})
+    )
+    refused = asyncio.run(call("drop_actor", {"id": "reviewer"}))
+    assert refused.startswith("Not dropped") and "on behalf of" in refused
+    assert asyncio.run(call("drop_actor", {"id": "deputy"})) == "deputy dropped"
+    asyncio.run(
+        call(
+            "add_actor",
+            {**reviewer, "permitted_actions": ["records.approve", "records.reject"]},
+        )
+    )
+    [kept] = load_actors(tmp_path).actors
+    assert kept.permitted_actions == ["records.approve", "records.reject"]
+    # In the build and the chat alike, an action the world lacks is kept and named, never a refusal.
+    lacking = asyncio.run(
+        call(
+            "add_actor",
+            {
+                "id": "reviewer",
+                "name": "Robin",
+                "permitted_actions": ["records.no_such_action"],
+            },
+        )
+    )
+    assert "records.no_such_action is not among them" in lacking
+    assert load_actors(tmp_path).actors[0].permitted_actions == [
+        "records.no_such_action"
+    ]
+    asyncio.run(
+        call(
+            "add_actor",
+            {**reviewer, "permitted_actions": ["records.approve", "records.reject"]},
+        )
+    )
+    # Every field the editor sets can be set from the chat, and a later call changes only what it sends.
+    full = {
+        "id": "reviewer",
+        "name": "Robin",
+        "goal": "Approve only changes she can justify",
+        "constraints": {
+            "may_agree": ["Up to 25%"],
+            "private": ["The quarter's budget"],
+            "stop_when": ["Decided"],
+        },
+        "behaviour": {
+            "style": "brisk",
+            "response_timing": {"kind": "delayed", "seconds": 5},
+        },
+        "knowledge": [{"kind": "facts", "text": "Changes above 25% need the VP"}],
+        "activation": {
+            "trigger": {"kind": "on_tool", "tool": "records.request_approval"},
+            "fallback": "decline",
+        },
+        "provenance": {"origin": "forged"},
+    }
+    asyncio.run(call("add_actor", full))
+    asyncio.run(
+        call(
+            "add_actor",
+            {"id": "reviewer", "name": "Robin", "role": "regional reviewer"},
+        )
+    )
+    [kept] = load_actors(tmp_path).actors
+    assert (kept.role, kept.goal, kept.constraints.stop_when) == (
+        "regional reviewer",
+        "Approve only changes she can justify",
+        ["Decided"],
+    )
+    assert kept.permitted_actions == ["records.approve", "records.reject"]
+    assert (
+        kept.activation.trigger.tool == "records.request_approval"
+        and kept.behaviour.response_timing.seconds == 5
+    )
+    asyncio.run(
+        call(
+            "add_actor",
+            {
+                "id": "reviewer",
+                "name": "Robin",
+                "constraints": {"stop_when": ["Asked twice"]},
+            },
+        )
+    )
+    [kept] = load_actors(tmp_path).actors
+    assert (kept.constraints.stop_when, kept.constraints.may_agree) == (
+        ["Asked twice"],
+        ["Up to 25%"],
+    )
+    assert kept.provenance == {}
+    used = tmp_path / "scenarios" / "one" / "scenario.json"
+    used.parent.mkdir(parents=True, exist_ok=True)
+    used.write_text(json.dumps({"name": "one", "actors": [{"id": "reviewer"}]}))
+    assert "Not dropped. These scenarios include reviewer: one" in asyncio.run(
+        call("drop_actor", {"id": "reviewer"})
+    )
+    used.unlink()
+    assert "dropped" in asyncio.run(call("drop_actor", {"id": "reviewer"}))
+    assert load_actors(tmp_path).actors == []
+
+
+def test_a_built_environment_s_chat_can_still_change_its_cast_and_nothing_else_of_the_world(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract = _saved_world(tmp_path)
+    voice = contract.model_copy(update={"modality": "voice"})
+    server = world_tools.actor_tools_server(voice, tmp_path)
+    assert set(_published(server)) == {
+        "add_actor",
+        "drop_actor",
+        "note_unresolved",
+    }
+
+
+def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.scenario_tools import _actor_fields, _unlisted_actors
+
+    assert "actors" in _actor_fields()
+    save_actors(tmp_path, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
+    scenario = Scenario(
+        name="wrong-person-approval",
+        actors=[
+            {"id": "reviewer", "actions": [{"action": "records.approve"}]},
+            {"id": "ghost"},
+        ],
+    )
+    assert _unlisted_actors(scenario, tmp_path) == [
+        "actors: 'ghost' is not an actor; add it with add_actor first"
+    ]
+    from fi.alk.harness.folder import document_for
+
+    assert "actors" not in document_for(Scenario(name="plain"))
+    assert (
+        document_for(scenario)["actors"][0]["actions"][0]["trigger"]["kind"] == "always"
+    )
+
+
+def test_the_writer_is_always_told_how_to_write_actors():
+    from fi.alk.harness.config import discovered_skills
+
+    # There is no switch: every build's writer reads the actors module.
+    assert "add_actor" in discovered_skills(modality="voice")
+    assert "add_actor" in discovered_skills(modality="chat")
+
+
+def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_out_of_the_agent_s_calls(
+    tmp_path,
+):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.prove import _WorldActors
+    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.world.runtime import Call
+
+    class World:
+        def __init__(self):
+            self.calls = []
+
+        def call(self, name, arguments):
+            self.calls.append(
+                Call(
+                    name=name,
+                    arguments=arguments,
+                    result=None,
+                    ok=True,
+                    error="",
+                    refused=False,
+                )
+            )
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(
+                    id="reviewer", name="Robin", permitted_actions=["records.approve"]
+                ),
+                Actor(
+                    id="coworker",
+                    name="Sam",
+                    identities={"slack": "@sam"},
+                    permitted_actions=["slack.post_message"],
+                ),
+            ]
+        ),
+    )
+    scenario = Scenario(
+        name="approval",
+        actors=[
+            {
+                "id": "coworker",
+                "actions": [
+                    {"action": "records.approve"},
+                    {"action": "slack.post_message", "trigger": {"kind": "contacted"}},
+                ],
+            },
+            {
+                "id": "reviewer",
+                "actions": [
+                    {
+                        "action": "records.approve",
+                        "arguments": {"item": "d1"},
+                        "trigger": {
+                            "kind": "on_tool",
+                            "tool": "request_approval",
+                            "on_call": 2,
+                        },
+                    },
+                ],
+            },
+        ],
+    )
+    world, by_actors = World(), {}
+    acting = _WorldActors(scenario, tmp_path, world, by_actors)
+    acting.act_on(None)
+    assert world.calls == []  # the coworker may not approve, so nothing happened
+    for step in [
+        Step(tool="request_approval"),
+        Step(tool="post_message", arguments={"to": "@sam"}),
+        Step(tool="request_approval"),
+    ]:
+        world.call(step.tool, step.arguments)
+        acting.act_on(step)
+    assert [call.name for call in world.calls] == [
+        "request_approval",
+        "post_message",
+        "post_message",
+        "request_approval",
+        "approve",
+    ]
+    assert by_actors == {2: "coworker", 4: "reviewer"}
+    assert [
+        (one["actor_id"], one["outcome"], one["refusal_code"])
+        for one in acting.events(outcome="refused")
+    ] == [("coworker", "refused", "not_permitted")]
+    assert [one["actor_id"] for one in acting.events()] == [
+        "coworker",
+        "agent",
+        "agent",
+        "coworker",
+        "agent",
+        "reviewer",
+    ]
+
+    # A source-hosted world takes the action at its own route, which the agent's tools never name.
+    world, by_actors = World(), {}
+    world.endpoints = {"records/approve", "records/request_approval"}
+    acting = _WorldActors(scenario, tmp_path, world, by_actors)
+    for _ in range(2):
+        step = Step(tool="request_approval")
+        world.call(step.tool, step.arguments)
+        acting.act_on(step)
+    assert [call.name for call in world.calls][-1] == "records/approve"
+
+
+def test_a_check_reads_the_proof_s_action_log_as_it_reads_the_run_s(tmp_path):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.checks import run_check
+    from fi.alk.harness.prove import _run
+
+    root, _contract, _catalogue = _built_environment(tmp_path)
+    save_actors(root, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
+    scenario = Scenario.model_validate(
+        {
+            **_delta(),
+            "actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}],
+        }
+    )
+    world, calls, _refused, _assumed = _run(scenario, root, with_solution=True)
+    check = (
+        "def check(world, calls):\n"
+        "    tried = world.events(actor_id='reviewer', outcome='refused')\n"
+        "    return None if len(tried) == 1 and world.events('agent') else 'the log is wrong'\n"
+    )
+    outcome = run_check(check, world, calls, name="reviewer_refused")
+    assert outcome.held is True and not outcome.broken, outcome
+
+
+def test_a_proof_names_the_actor_actions_on_a_clock_or_a_chance_it_could_not_play():
+    from fi.alk.harness.prove import _unplayed
+
+    scenario = Scenario(
+        name="later",
+        actors=[
+            {
+                "id": "reviewer",
+                "actions": [
+                    {
+                        "action": "records.approve",
+                        "trigger": {"kind": "after_seconds", "seconds": 5},
+                    },
+                    {
+                        "action": "records.hold",
+                        "trigger": {"kind": "probability", "p": 0.5},
+                    },
+                    {
+                        "action": "records.note",
+                        "trigger": {"kind": "on_tool", "tool": "records.request"},
+                    },
+                    {"action": "records.open"},
+                ],
+            },
+        ],
+    )
+    assert _unplayed(scenario) == [
+        "reviewer records.approve (after_seconds)",
+        "reviewer records.hold (probability)",
+    ]
+
+
+def test_the_writer_is_told_which_world_actors_there_are_only_when_switched_on(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.scenario_tools import world_summary
+
+    _saved_world(tmp_path)
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(
+                    id="reviewer",
+                    name="Robin",
+                    role="reviewer",
+                    permitted_actions=["records.approve"],
+                )
+            ]
+        ),
+    )
+    assert "  reviewer: Robin, reviewer; may records.approve" in world_summary(tmp_path)
+
+
+def _with_actor_listed(root, **fields):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    save_actors(root, ActorList(actors=[Actor(id="mia", name="Mia", play="live", **fields)]))
+
+
+def test_a_trigger_its_runtime_cannot_evaluate_is_refused_when_the_scenario_is_written(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    # A speaking actor is brought in by the conversation; elapsed seconds are only kept by the world.
+    _with_actor_listed(root, channel="audio_mix", voice="v1", role="the caller's sister")
+    said = accept_scenario(
+        _delta(actors=[{"id": "mia", "trigger": {"kind": "after_seconds", "seconds": 30}}]),
+        world_root=root, catalogue=catalogue, kept=[],
+    )
+    assert said.get("is_error")
+    assert "mia speaks on the call, where `after_seconds` cannot be evaluated" in said["content"][0]["text"]
+
+
+def test_an_event_started_scenario_for_an_agent_reached_by_a_call_is_refused(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    _with_actor_listed(root, permitted_actions=["add"])
+    said = accept_scenario(
+        _delta(actors=[{"id": "mia"}], starts_with={"actor": "mia", "text": "New order in."}),
+        world_root=root, catalogue=catalogue, kept=[], spoken=True,
+    )
+    assert said.get("is_error")
+    assert "nothing can deliver an event to it" in said["content"][0]["text"]
+
+
+def test_the_builder_does_not_give_one_actor_s_own_action_to_a_second_until_the_person_confirms(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract = _saved_world(tmp_path)
+    server, _world = world_tools.world_tools(contract, tmp_path)
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(_instance(server), "tools/call")
+        result = await handler.handler(
+            None, CallToolRequestParams(name=name, arguments=payload)
+        )
+        return result.content[0].text
+
+    reviewer = {
+        "id": "reviewer",
+        "name": "Robin",
+        "role": "reviewer",
+        "permitted_actions": ["records.approve"],
+        "identities": {"records": "robin"},
+    }
+    manager = {
+        "id": "manager",
+        "name": "Lee",
+        "role": "manager",
+        "permitted_actions": ["records.approve"],
+        "identities": {"records": "lee"},
+    }
+    asyncio.run(call("add_actor", reviewer))
+
+    refused = asyncio.run(call("add_actor", manager))
+    assert refused.startswith("Not added") and "records.approve is held only by Robin" in refused
+    assert [one.id for one in load_actors(tmp_path).actors] == ["reviewer"]
+    confirmed = asyncio.run(call("add_actor", {**manager, "share_actions": ["records.approve"]}))
+    assert not confirmed.startswith("Not added"), confirmed
+    saved = load_actors(tmp_path).by_id()["manager"]
+    assert saved.permitted_actions == ["records.approve"]
+    assert "share_actions" not in saved.model_dump()
