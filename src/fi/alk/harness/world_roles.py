@@ -7,6 +7,7 @@ may do on the harness's tables, and checks a seed for a way around them."""
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import NamedTuple
 
 from .bundle_v2 import EnvironmentBundleV2, ProcessUser
 
@@ -49,36 +50,50 @@ def has_world_door(manifest: EnvironmentBundleV2) -> bool:
     return any(process.user is ProcessUser.SVC_DOOR for process in manifest.processes)
 
 
-def seed_escalation_queries(world_group: str) -> tuple[str, str]:
-    """The two read-only queries that find what a seed may not leave behind: (cluster-wide roles, code in a database).
-    ``world_group`` is the role group every world's role is a member of."""
-    # Our roles, made after the seed: one the seed made or changed is planted.
+class SeedEscalationQueries(NamedTuple):
+    """The read-only queries that find a way to more rights than a world's role has. Each row is (what was found, its
+    fingerprint): the fingerprint changes when the object does, so a seed that changes an object the source's own
+    migrations made is caught as well as one that adds one."""
+
+    # Our roles, made after the seed: anything one of them already has is planted, whoever planted it.
+    our_roles: str
+    # Any other role that is a superuser or can make roles, cluster-wide.
+    other_roles: str
+    # In a database: code that runs as its owner whoever calls it, or on any DDL.
+    code: str
+
+
+def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
+    """The queries for a world group ``world_group``, the group every world's role is a member of."""
     our_role = (
         f"(r.rolname IN ('{world_group}', '{DOOR_ROLE_GROUP}') "
         f"OR r.rolname ~ '^({WORLD_ROLE_PREFIX}|{DOOR_ROLE_PREFIX})[0-9]+$')"
     )
-    # What the seed may not leave behind, cluster-wide: a role besides the harness that is a superuser or
-    # can make roles; one of our roles with an attribute it never gets, or in a group it never joins.
-    roles = (
-        "SELECT 'role ' || rolname || ' is a superuser or can create roles' FROM pg_roles "
-        "WHERE (rolsuper OR rolcreaterole) AND rolname <> current_user "
-        "UNION ALL SELECT 'role ' || r.rolname || ' has an attribute the harness never gives it' "
+    our_roles = (
+        "SELECT 'role ' || r.rolname || ' has an attribute the harness never gives it', '' "
         f"FROM pg_roles r WHERE {our_role} "
         "AND (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls) "
-        "UNION ALL SELECT 'role ' || r.rolname || ' is a member of ' || g.rolname "
+        "UNION ALL SELECT 'role ' || r.rolname || ' is a member of ' || g.rolname, '' "
         "FROM pg_auth_members a JOIN pg_roles r ON r.oid = a.member JOIN pg_roles g ON g.oid = a.roleid "
         f"WHERE {our_role} AND NOT ("
         f"(g.rolname = '{world_group}' AND (r.rolname ~ '^{WORLD_ROLE_PREFIX}[0-9]+$' OR r.rolname = '{DOOR_ROLE_GROUP}')) "
         f"OR (g.rolname = '{DOOR_ROLE_GROUP}' AND r.rolname ~ '^{DOOR_ROLE_PREFIX}[0-9]+$'))"
     )
-    # And in each database: code that runs as its owner whoever calls it, or on any DDL.
+    other_roles = (
+        "SELECT 'role ' || rolname || ' is a superuser or can create roles', "
+        "rolsuper::text || rolcreaterole::text FROM pg_roles "
+        "WHERE (rolsuper OR rolcreaterole) AND rolname <> current_user"
+    )
     code = (
-        "SELECT 'event trigger ' || evtname FROM pg_event_trigger "
-        "UNION ALL SELECT 'security definer function ' || p.oid::regprocedure::text "
+        "SELECT 'event trigger ' || evtname, "
+        "md5(evtevent || evtfoid::text || evtenabled::text || evtowner::text || coalesce(evttags::text, '')) "
+        "FROM pg_event_trigger "
+        "UNION ALL SELECT 'security definer function ' || p.oid::regprocedure::text, "
+        "md5(p.prosrc || coalesce(p.probin, '') || p.proowner::text || coalesce(p.proconfig::text, '')) "
         "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
         "WHERE p.prosecdef AND n.nspname NOT IN ('pg_catalog', 'information_schema')"
     )
-    return roles, code
+    return SeedEscalationQueries(our_roles, other_roles, code)
 
 
 def seed_escalation_reason(process_name: str, found: Iterable[str]) -> str:

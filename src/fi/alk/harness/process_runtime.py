@@ -4260,25 +4260,29 @@ def apply_store_seed(
     rabbitmq_import: RabbitmqDefinitionsImporter = default_rabbitmq_definitions_importer,
     source_digest: str | None = None,
     generic_artifact_root: Path | None = None,
+    after_migrations: Callable[[], None] | None = None,
 ) -> None:
     """§2c: "migrations then seed_files... applied in listed order" — migrations always precede
     seed_files, regardless of how many files either list holds, and each list keeps its own
-    authored order (never sorted)."""
-    for relative_path in (*store.migrations, *store.seed_files):
-        apply_seed_file(
-            engine,
-            bundle_dir / relative_path,
-            port=port,
-            dbname=dbname,
-            credentials=credentials,
-            process_name=process_name,
-            sync_run=sync_run,
-            user=user,
-            group=group,
-            rabbitmq_import=rabbitmq_import,
-            source_digest=source_digest,
-            generic_artifact_root=generic_artifact_root,
-        )
+    authored order (never sorted). ``after_migrations`` runs between the two lists."""
+    for files in (store.migrations, store.seed_files):
+        for relative_path in files:
+            apply_seed_file(
+                engine,
+                bundle_dir / relative_path,
+                port=port,
+                dbname=dbname,
+                credentials=credentials,
+                process_name=process_name,
+                sync_run=sync_run,
+                user=user,
+                group=group,
+                rabbitmq_import=rabbitmq_import,
+                source_digest=source_digest,
+                generic_artifact_root=generic_artifact_root,
+            )
+        if files is store.migrations and after_migrations is not None:
+            after_migrations()
 
 
 # --- §2c sentinel checking ---------------------------------------------------------------------
@@ -5142,6 +5146,21 @@ def _freeze_one_store(
                 dbname="postgres",
                 statement=f'CREATE DATABASE "{baseline_dbname}"',
             )
+        before_seed: set[SeedEscalation] = set()
+
+        def _snapshot_before_seed() -> None:
+            # What the source's own migrations made: the seed check below refuses only what the seed adds or changes.
+            if process.engine is ManagedEngine.POSTGRES and credentials is not None:
+                before_seed.update(
+                    seed_escalation_snapshot(
+                        port=port,
+                        credentials=credentials,
+                        baseline_db=baseline_dbname,
+                        sql_runner=context.sql_runner,
+                        process_name=process.name,
+                    )
+                )
+
         apply_store_seed(
             store,
             engine=process.engine,
@@ -5156,6 +5175,7 @@ def _freeze_one_store(
             rabbitmq_import=context.rabbitmq_import,
             source_digest=manifest.provenance.source_digest,
             generic_artifact_root=context.generic_artifact_root,
+            after_migrations=_snapshot_before_seed,
         )
         # m3, p6-review-r1: §2c defines the sentinel as a check "against the freshly seeded
         # baseline" — checked here, before sealing, so a seed that silently produced the wrong
@@ -5193,6 +5213,7 @@ def _freeze_one_store(
                 baseline_db=baseline_dbname,
                 sql_runner=context.sql_runner,
                 process_name=process.name,
+                before_seed=before_seed,
             )
 
         row_counts: dict[str, int] = {}
@@ -5530,19 +5551,23 @@ def _seal_world_store(
     return handle
 
 
-def _refuse_seed_escalation(
+# A found way to more rights: (database, what was found, its fingerprint).
+SeedEscalation = tuple[str, str, str]
+
+
+def _seed_escalations(
     *,
     port: int,
     credentials: EngineCredentials,
     baseline_db: str,
     sql_runner: SqlRunner,
     process_name: str,
-) -> None:
-    """After the seed, which runs as the superuser: the build fails when the seed left a way to
-    act with more rights than a world's role has, before any world is made from it."""
-    roles, code = seed_escalation_queries(WORLD_ROLE_GROUP)
-    found: list[str] = []
-    for dbname, statement in (("postgres", roles), ("postgres", code), (baseline_db, code)):
+) -> tuple[set[SeedEscalation], set[SeedEscalation]]:
+    """What the databases hold now that could give more rights than a world's role has: (on the harness's own roles,
+    everything else)."""
+    queries = seed_escalation_queries(WORLD_ROLE_GROUP)
+
+    def found(dbname: str, statement: str) -> set[SeedEscalation]:
         rows = _call_sql(
             sql_runner,
             stage="baseline",
@@ -5555,7 +5580,45 @@ def _refuse_seed_escalation(
             statement=statement,
             read_only=True,
         )
-        found += [str(row[0]) for row in rows or [] if row]
+        return {(dbname, str(row[0]), str(row[1]) if len(row) > 1 else "") for row in rows or [] if row}
+
+    ours = found("postgres", queries.our_roles)
+    others = found("postgres", queries.other_roles) | found("postgres", queries.code) | found(baseline_db, queries.code)
+    return ours, others
+
+
+def seed_escalation_snapshot(
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+) -> set[SeedEscalation]:
+    """What the source's own migrations left, taken before the seed runs: the seed check refuses only what the seed
+    adds or changes on top of it."""
+    return _seed_escalations(
+        port=port, credentials=credentials, baseline_db=baseline_db, sql_runner=sql_runner, process_name=process_name
+    )[1]
+
+
+def _refuse_seed_escalation(
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+    before_seed: set[SeedEscalation] | None = None,
+) -> None:
+    """After the seed, which runs as the superuser: the build fails when the seed left a way to act with more rights
+    than a world's role has, before any world is made from it. What the source's migrations already made
+    (``before_seed``) is the source's own and passes unless the seed changed it; anything on the harness's roles is
+    planted, whoever made it, since the harness makes them only after the seed."""
+    ours, others = _seed_escalations(
+        port=port, credentials=credentials, baseline_db=baseline_db, sql_runner=sql_runner, process_name=process_name
+    )
+    found = [what for _db, what, _print in ours | (others - (before_seed or set()))]
     if found:
         raise ProcessRuntimeError(
             "baseline",

@@ -497,7 +497,7 @@ def test_the_baseline_takes_the_harness_tables_from_the_agent_only_with_a_door(t
 
 def test_a_seed_that_left_a_way_to_more_rights_fails_the_build(tmp_path: Path):
     manifest = runtime_tests._manifest()
-    spy = runtime_tests.SqlSpy(answers={seed_escalation_queries(pr.WORLD_ROLE_GROUP)[1]: [("event trigger planted",)]})
+    spy = runtime_tests.SqlSpy(answers={seed_escalation_queries(pr.WORLD_ROLE_GROUP).our_roles: [("role alk_w0 is a member of pg_write_server_files", "")]})
     context = runtime_tests._spawn_context(
         manifest, bundle_dir=tmp_path, sql_runner=spy, sync_run=runtime_tests._fake_sync_run,
         work_directory=tmp_path,
@@ -505,7 +505,7 @@ def test_a_seed_that_left_a_way_to_more_rights_fails_the_build(tmp_path: Path):
     with pytest.raises(pr.ProcessRuntimeError) as raised:
         pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=context)
     assert raised.value.code == "seed_failed"
-    assert "event trigger planted" in str(raised.value)
+    assert "role alk_w0 is a member of pg_write_server_files" in str(raised.value)
     assert not [s for _, s in spy.calls if "IS_TEMPLATE" in s]
 
 
@@ -786,3 +786,95 @@ def test_a_seed_refusal_says_what_to_change():
 def test_the_door_s_rights_name_only_tables_the_harness_makes():
     made = world_door.ddl_columns(author._TOOL_TRACE_DDL, ACTORS_DDL, *world_door.HARNESS_TABLES_DDL)
     assert set(pr.DOOR_TABLE_RIGHTS) == set(made)
+
+
+def test_the_seed_check_snapshots_after_the_migrations_and_before_the_seed(tmp_path: Path, monkeypatch):
+    """The source's migrations made a SECURITY DEFINER function and the seed made an event trigger: only the seed's is
+    refused, because the snapshot between the two lists holds the migration's."""
+    applied: list[str] = []
+    monkeypatch.setattr(pr, "apply_seed_file", lambda _engine, path, **_kw: applied.append(Path(path).name))
+    code = seed_escalation_queries(pr.WORLD_ROLE_GROUP).code
+    from_migration = ("security definer function auth.uid()", "m1")
+    from_seed = ("event trigger planted", "s1")
+
+    def answer(dbname: str, statement: str) -> list[tuple[str, str]]:
+        if statement != code or dbname == "postgres":
+            return []
+        return [from_migration] + ([from_seed] if "seed.sql" in applied else [])
+
+    spy = runtime_tests.SqlSpy()
+
+    def run(**kwargs):
+        found = answer(kwargs["dbname"], kwargs["statement"])
+        return found if kwargs["statement"] == code else spy(**kwargs)
+
+    def stores(body):
+        body["seed"]["stores"][0].update(migrations=["migrate.sql"], seed_files=["seed.sql"])
+        return body
+
+    manifest = runtime_tests._manifest(stores)
+    context = runtime_tests._spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=run, sync_run=runtime_tests._fake_sync_run, work_directory=tmp_path,
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=context)
+    assert applied == ["migrate.sql", "seed.sql"]
+    assert "event trigger planted" in str(raised.value)
+    assert "auth.uid()" not in str(raised.value)
+
+
+@real_postgres
+@pytest.mark.parametrize(
+    "migration, seed, refused",
+    [
+        # A source whose own migrations define a SECURITY DEFINER function builds.
+        ("CREATE FUNCTION mig_owned() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'", "", None),
+        # One the seed adds is refused.
+        ("", "CREATE FUNCTION seed_added() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'", "seed_added()"),
+        # A seed that changes the migration's function is refused.
+        (
+            "CREATE FUNCTION mig_changed() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'",
+            "CREATE OR REPLACE FUNCTION mig_changed() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 2'",
+            "mig_changed()",
+        ),
+        # A seed that turns a migration's plain function into a SECURITY DEFINER one is refused.
+        (
+            "CREATE FUNCTION mig_plain() RETURNS int LANGUAGE sql AS 'SELECT 1'",
+            "ALTER FUNCTION mig_plain() SECURITY DEFINER",
+            "mig_plain()",
+        ),
+        # A seed that alters the world group is refused.
+        ("", 'ALTER ROLE "alk_world_tools" CREATEDB', "alk_world_tools"),
+    ],
+)
+def test_the_seed_check_refuses_only_what_the_seed_added_or_changed(migration, seed, refused):
+    parts = urlsplit(_REAL)
+    host, port = parts.hostname or "localhost", parts.port or 5432
+    superuser = pr.EngineCredentials(parts.username, parts.password or "")
+    baseline = f"alk_baseline_{uuid.uuid4().hex[:8]}"
+    checked = {"port": port, "credentials": superuser, "baseline_db": baseline, "sql_runner": pr.default_sql_runner,
+               "process_name": "db"}
+
+    def run(dbname: str, statement: str) -> None:
+        if statement:
+            pr.default_sql_runner(
+                host=host, port=port, user=superuser.username, password=superuser.password, dbname=dbname,
+                statement=statement,
+            )
+
+    run("postgres", f'CREATE DATABASE "{baseline}"')
+    run("postgres", "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_world_tools') "
+        "THEN CREATE ROLE alk_world_tools NOLOGIN; END IF; END $$")
+    try:
+        run(baseline, migration)
+        before = pr.seed_escalation_snapshot(**checked)
+        run(baseline, seed)
+        if refused is None:
+            pr._refuse_seed_escalation(**checked, before_seed=before)
+        else:
+            with pytest.raises(pr.ProcessRuntimeError) as raised:
+                pr._refuse_seed_escalation(**checked, before_seed=before)
+            assert raised.value.code == "seed_failed" and refused in str(raised.value)
+    finally:
+        run("postgres", 'ALTER ROLE "alk_world_tools" NOCREATEDB')
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}"')
