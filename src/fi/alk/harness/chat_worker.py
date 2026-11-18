@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import os
+import socket
 import sys
 from dataclasses import asdict
 from datetime import datetime
@@ -16,10 +17,12 @@ from typing import Any
 
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .call_runner import ArtifactUploader, CallRunnerContext
-from .chat_call_runner import _check_text_usage
+from .chat_call_runner import _check_text_usage, handler_child_for
+from .handler_child import HandlerChannel
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .isolated_process import run_json_worker, run_worker
 from .outbound import ArtifactKind
+from .privilege import IsolationMode, isolation_mode
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
 from .usage import simulator_funding
 from .world.runtime import Call
@@ -59,8 +62,18 @@ _CHAT_ENV = frozenset(
 
 class IsolatedChatCallRunner:
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
+        from .call_runner import TrialRecords, sealed_seed
+
         self._adapter = adapter
         self._context = context
+        # Each trial runs in a worker of its own, so whether it started from the seed is read here, before its setup.
+        self._records = TrialRecords(sealed_seed(context.work_directory))
+
+    async def before_setup(self, runtime: EnvironmentRuntime) -> None:
+        """Read the trial's start on its reset world, before the scenario's setup writes."""
+        world_db = runtime.endpoints.get("world_db")
+        dsn = world_db.address if world_db is not None and world_db.protocol == "postgres" else None
+        await asyncio.to_thread(self._records.before_setup, id(runtime), dsn)
 
     async def run(
         self,
@@ -85,31 +98,53 @@ class IsolatedChatCallRunner:
         # worker's call used is recorded here.
         funding = simulator_funding()
         await _check_text_usage(context.usage_reporter, funding)
-        result = await run_json_worker(
-            "fi.alk.harness.chat_worker",
-            {
-                "job": context.job.model_dump(mode="json"),
-                "bundle_dir": str(context.bundle_dir),
-                "work_directory": str(context.work_directory),
-                "source_directory": str(context.source_directory)
-                if context.source_directory
-                else None,
-                "target_secrets": dict(context.target_provider_secret_values),
-                "local_auth_values": dict(runtime._local_auth_values),
-                "attempt_number": context.attempt_number,
-                "runtime": runtime.model_dump(mode="json"),
-                "scenario_key": scenario.scenario_key,
-                "source_scenario_key": getattr(scenario, "source_scenario_key", None),
-                "scenario_id": scenario.scenario_id,
-            },
-            environ=environ,
-            work_directory=context.work_directory / "chat-workers",
-        )
+        mode = isolation_mode()
+        # Under per-user isolation the tool handlers, and the agent code they import, run in a
+        # child of their own; the worker gets its socket and never the source.
+        handlers = await asyncio.to_thread(handler_child_for, context, runtime)
+        handler_fd = handlers.sock.fileno() if handlers is not None else None
+        try:
+            result = await run_json_worker(
+                "fi.alk.harness.chat_worker",
+                {
+                    "job": context.job.model_dump(mode="json"),
+                    "bundle_dir": str(context.bundle_dir),
+                    "work_directory": str(context.work_directory),
+                    "source_directory": str(context.source_directory)
+                    if context.source_directory and mode is not IsolationMode.PER_USER
+                    else None,
+                    "process_isolation": mode.value,
+                    "handler_fd": handler_fd,
+                    "target_secrets": dict(context.target_provider_secret_values),
+                    "local_auth_values": dict(runtime._local_auth_values),
+                    "attempt_number": context.attempt_number,
+                    "runtime": runtime.model_dump(mode="json"),
+                    "scenario_key": scenario.scenario_key,
+                    "source_scenario_key": getattr(
+                        scenario, "source_scenario_key", None
+                    ),
+                    "scenario_id": scenario.scenario_id,
+                    "start": self._records.start_of(id(runtime)),
+                },
+                environ=environ,
+                work_directory=context.work_directory / "chat-workers",
+                pass_fds=(handler_fd,) if handler_fd is not None else (),
+            )
+        finally:
+            # This side's copy of the socket goes with the child, once the worker is done.
+            if handlers is not None:
+                handlers.close()
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
         artifact_ids = {}
-        for artifact in result.get("artifacts", []):
+        artifacts = list(result.get("artifacts", []))
+        # A transcript names the trial's end state by the worker's own id, so the end state is stored before it.
+        ends = [one for one in artifacts if one["kind"] == ArtifactKind.WORLD_STATE.value]
+        for artifact in ends + [one for one in artifacts if one not in ends]:
+            data = base64.b64decode(artifact["data"], validate=True)
+            if artifact["kind"] == "transcript":
+                data = _with_stored_end_state(data, artifact_ids)
             artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
-                base64.b64decode(artifact["data"], validate=True),
+                data,
                 kind=ArtifactKind(artifact["kind"]),
                 scenario_key=scenario.scenario_key,
             )
@@ -133,6 +168,25 @@ class IsolatedChatCallRunner:
                 partial=outcome,
             )
         return outcome
+
+
+def _with_stored_end_state(data: bytes, artifact_ids: dict[str, Any]) -> bytes:
+    """A transcript whose World changes name the end state by the worker's id, naming it by the id it was stored
+    under instead; any other transcript is returned as it was."""
+    try:
+        document = json.loads(data)
+    except ValueError:
+        return data
+    world = document.get("world_actors") if isinstance(document, dict) else None
+    local = world.get("end_state_artifact") if isinstance(world, dict) else None
+    if local is None:
+        return data
+    stored = artifact_ids.get(str(local))
+    if stored:
+        world["end_state_artifact"] = stored
+    else:
+        world.pop("end_state_artifact", None)
+    return json.dumps(document, sort_keys=True, default=str).encode("utf-8")
 
 
 async def _record_worker_usage(
@@ -200,6 +254,21 @@ async def main() -> None:
     collector = _ArtifactCollector()
     usage = _UsageCollector()
     try:
+        isolated = payload.get("process_isolation") == IsolationMode.PER_USER.value
+        native = (
+            payload["runtime"].get("metadata", {}).get("observation_mode") == "native"
+        )
+        if isolated and (
+            payload.get("source_directory")
+            or (payload.get("handler_fd") is None and not native)
+        ):
+            # The tool handlers, and the agent's code they import, run only in their handler
+            # child; this process never runs them as the harness.
+            raise CallAborted(
+                "chat_worker_refused: per-user isolation runs tool handlers only in their child",
+                code="call_failed",
+            )
+        handler_fd = payload.get("handler_fd")
         job = HarnessJob.model_validate(payload["job"])
         context = CallRunnerContext(
             job=job,
@@ -212,6 +281,9 @@ async def main() -> None:
             if payload["source_directory"]
             else None,
             usage_reporter=usage,  # type: ignore[arg-type]
+            handler_channel=HandlerChannel(socket.socket(fileno=handler_fd))
+            if handler_fd is not None
+            else None,
         )
         runner_type = (
             RetellChatCallRunner
@@ -220,7 +292,11 @@ async def main() -> None:
         )
         runtime = EnvironmentRuntime.model_validate(payload["runtime"])
         runtime._local_auth_values = dict(payload.get("local_auth_values", {}))
-        outcome = await runner_type(collector, context).run(
+        runner = runner_type(collector, context)
+        started = payload.get("start")
+        if isinstance(started, dict) and isinstance(runner, HostedChatCallRunner):
+            runner.started_before_setup(runtime, started)
+        outcome = await runner.run(
             SimpleNamespace(
                 scenario_key=payload["scenario_key"],
                 source_scenario_key=payload.get("source_scenario_key"),

@@ -256,6 +256,36 @@ def test_native_phase_worker_receives_endpoints_and_preserves_read_only(
     assert records == {"item": 42}
 
 
+@pytest.mark.parametrize(("said", "verdict"), [("clm 1001", None), ("CLM-1002", "a different claim")])
+def test_a_hosted_check_that_compares_ids_with_same_id_gets_its_verdict(native_api, tmp_path, said, verdict):
+    """Authoring tells checks to compare an identifier with same_id(a, b); a hosted trial runs the check in the phase
+    worker, which gives it the same names, so the check returns its verdict instead of breaking on a NameError."""
+    import subprocess
+    import sys
+
+    address, _records = native_api
+    world = ObservationWorld(0, random.Random(1), {"agent": address})
+    source = (
+        "def check(world, calls):\n"
+        f"    return None if same_id('CLM-1001', {said!r}) else 'a different claim'\n"
+    )
+    result_path = tmp_path / "check.json"
+    subprocess.run(
+        [sys.executable, "-m", "fi.alk.harness.phase_worker", str(result_path)],
+        input=json.dumps(
+            {"world": world.read_only()._execution_state(), "source": source, "entry": "check", "calls": []}
+        ),
+        text=True,
+        check=True,
+        capture_output=True,
+        timeout=20,
+    )
+    result = json.loads(result_path.read_text())
+
+    assert "error" not in result, result
+    assert result["value"] == verdict
+
+
 def test_native_save_preserves_checks_without_claiming_proof(tmp_path):
     from fi.alk.harness.catalogue import load_catalogue
 
