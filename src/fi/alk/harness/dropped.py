@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .prove import NO_NEGATIVE_CONTROL
 from .scenario import Scenario, _slug
 
 DROPPED = "dropped.json"
@@ -233,7 +234,7 @@ def _unproved(record: Mapping[str, Any], proof: Mapping[str, Any] | None) -> str
         return "not proved again in this rebuild"
     if proof.get("proved") is True or proof.get("kept_as_written") is True:
         return ""
-    if proof.get("blocked_reason") == "no_negative_control":
+    if proof.get("blocked_reason") == NO_NEGATIVE_CONTROL:
         return "no negative control: write one that does the task wrong and fails its checks"
     return "could not be proved again: " + str(proof.get("why") or proof.get("blocked_reason") or "not proved")
 
