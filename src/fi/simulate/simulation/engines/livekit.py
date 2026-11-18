@@ -2533,15 +2533,7 @@ class LiveKitEngine(BaseEngine):
                             "transport": transport.kind,
                         },
                     )
-                    outcome = _failure_outcome(
-                        TestCaseStatus.FAILED,
-                        FailureStage.PREPARING,
-                        "web_bridge_start_failed",
-                        "Failed to start the provider web bridge",
-                        details=_safe_provider_error_details(
-                            exc, operation="web_bridge_start"
-                        ),
-                    )
+                    outcome = _web_bridge_start_failure(exc)
                     raise _PreparationFailed
             if profile.places_outbound_call and api_client is not None:
                 try:
@@ -5405,6 +5397,19 @@ def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
         }:
             return True
     return False
+
+
+def _web_bridge_start_failure(exc: BaseException) -> _CaseOutcome:
+    """The case outcome when a provider's web bridge doesn't start. A cause the bridge marks
+    as passing (a rate limit, media servers at capacity, a timeout) can be retried."""
+    return _failure_outcome(
+        TestCaseStatus.FAILED,
+        FailureStage.PREPARING,
+        "web_bridge_start_failed",
+        "Failed to start the provider web bridge",
+        retryable=bool(getattr(exc, "retryable", False)),
+        details=_safe_provider_error_details(exc, operation="web_bridge_start"),
+    )
 
 
 def _failure_outcome(

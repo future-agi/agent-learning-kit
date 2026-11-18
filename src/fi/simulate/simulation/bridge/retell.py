@@ -22,12 +22,14 @@ from aiortc import (
 from aiortc.mediastreams import MediaStreamError
 
 from fi.simulate.agent.definition import RetellTargetConfig
+from fi.simulate.agent.definition import RETELL_WEB_CALL_URL
 from fi.simulate.simulation.bridge.audio import PCMResampler
 from fi.simulate.simulation.bridge.connector import ConnectorConfig, ProviderConnector
 
 logger = logging.getLogger(__name__)
 RETELL_SAMPLE_RATE = 48000
-RETELL_API_URL = "https://api.retellai.com/v3/create-web-call"
+# The default lives with the target config; one copy, so the two never drift.
+RETELL_API_URL = RETELL_WEB_CALL_URL
 FRAME_SAMPLES = 960
 FRAME_BYTES = FRAME_SAMPLES * 2
 MAX_PENDING_BYTES = RETELL_SAMPLE_RATE * 2 * 10
@@ -43,6 +45,14 @@ class RetellWebCallError(RuntimeError):
         super().__init__(code if status is None else f"{code}:{status}")
         self.code = code
         self.status = status
+
+    @property
+    def retryable(self) -> bool:
+        """A cause that passes: a rate limit, Retell's media servers at capacity (502/503 on
+        the session call) or another 5xx, or a timeout."""
+        if self.status is not None:
+            return self.status == 429 or self.status >= 500
+        return self.code.endswith("_timeout")
 
 
 class _CallerAudioTrack(MediaStreamTrack):
@@ -82,8 +92,14 @@ class _CallerAudioTrack(MediaStreamTrack):
         return frame
 
 
-def _is_tls_relay(url: str) -> bool:
-    return url.startswith("turns:")
+def _relay_rank(url: str) -> int:
+    """aiortc keeps only the first TURN URL it sees, so the one most likely to get through a
+    restrictive network goes first: TLS on 443, then TCP, then UDP. STUN keeps its place."""
+    if url.startswith("turns:"):
+        return 0
+    if url.startswith("turn:") and "transport=tcp" in url.lower():
+        return 1
+    return 2
 
 
 def _ice_servers(servers: Any) -> list[RTCIceServer]:
@@ -98,17 +114,12 @@ def _ice_servers(servers: Any) -> list[RTCIceServer]:
             continue
         result.append(
             RTCIceServer(
-                urls=sorted(
-                    (str(url) for url in urls),
-                    key=lambda url: not _is_tls_relay(url),
-                ),
+                urls=sorted((str(url) for url in urls), key=_relay_rank),
                 username=server.get("username"),
                 credential=server.get("credential"),
             )
         )
-    return sorted(
-        result, key=lambda server: not any(_is_tls_relay(u) for u in server.urls)
-    )
+    return sorted(result, key=lambda server: min(map(_relay_rank, server.urls)))
 
 
 def _mono_pcm(frame: av.AudioFrame, resampler: av.AudioResampler) -> bytes:
@@ -237,6 +248,12 @@ class RetellWebCallConnector(ProviderConnector):
                 payload = await response.json()
         except _TIMEOUT_ERRORS as exc:
             raise RetellWebCallError("retell_webcall_create_timeout") from exc
+        except (aiohttp.ContentTypeError, ValueError) as exc:
+            # A 201 whose body isn't JSON.
+            raise RetellWebCallError("retell_webcall_response_invalid") from exc
+        except aiohttp.ClientError as exc:
+            # Refused or reset before Retell answered.
+            raise RetellWebCallError("retell_webcall_create_failed") from exc
         if not isinstance(payload, dict):
             raise RetellWebCallError("retell_webcall_response_invalid")
         for field in ("call_id", "access_token"):
@@ -293,6 +310,10 @@ class RetellWebCallConnector(ProviderConnector):
                 answer = await response.json()
         except _TIMEOUT_ERRORS as exc:
             raise RetellWebCallError("retell_webcall_session_timeout") from exc
+        except (aiohttp.ContentTypeError, ValueError) as exc:
+            raise RetellWebCallError("retell_webcall_session_response_invalid") from exc
+        except aiohttp.ClientError as exc:
+            raise RetellWebCallError("retell_webcall_session_failed") from exc
         session_id = answer.get("session_id") if isinstance(answer, dict) else None
         sdp = answer.get("sdp") if isinstance(answer, dict) else None
         if not isinstance(session_id, str) or not isinstance(sdp, str):
@@ -389,8 +410,16 @@ class RetellWebCallConnector(ProviderConnector):
             return
         try:
             if session_url and self._access_token:
-                async with http.delete(session_url, headers=self._session_headers()):
-                    pass
+                async with http.delete(
+                    session_url, headers=self._session_headers()
+                ) as response:
+                    # aiohttp doesn't raise on a 4xx or 5xx: an expired token or a Retell
+                    # error at hang-up is read here. 404 means the session is already gone.
+                    if response.status >= 300 and response.status != 404:
+                        logger.warning(
+                            "retell_webcall_session_end_failed",
+                            extra={"call_id": self._call_id, "status": response.status},
+                        )
         except (aiohttp.ClientError, asyncio.TimeoutError):
             logger.warning(
                 "retell_webcall_session_end_failed", extra={"call_id": self._call_id}

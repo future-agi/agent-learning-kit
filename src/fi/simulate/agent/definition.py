@@ -265,7 +265,7 @@ class RetellTargetConfig(BaseModel):
     provider: Literal["retell"] = "retell"
     agent_id: str = Field(..., min_length=1)
     api_url: AnyHttpUrl = Field(
-        "https://api.retellai.com/v3/create-web-call",
+        RETELL_WEB_CALL_URL,
         validate_default=True,
     )
     api_key_env: str = Field(

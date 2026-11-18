@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -952,3 +953,160 @@ def test_cancelling_bridge_run_reaps_all_media_tasks():
         )
 
     asyncio.run(run())
+
+
+# --- Dileep's review of #302, 17 Nov ---------------------------------------
+
+
+def test_tcp_relay_is_offered_before_udp_when_there_is_no_tls_relay() -> None:
+    # aiortc keeps only the first TURN URL; on a network that blocks UDP the TCP relay is
+    # the one that still works.
+    servers = retell._ice_servers(
+        [
+            {
+                "urls": "turn:t.example:3478?transport=udp",
+                "username": "u",
+                "credential": "c",
+            },
+            {
+                "urls": "turn:t.example:3478?transport=tcp",
+                "username": "u",
+                "credential": "c",
+            },
+        ]
+    )
+
+    assert connection_kwargs(servers)["turn_transport"] == "tcp"
+    assert connection_kwargs(servers)["turn_ssl"] is False
+
+
+def test_tcp_relay_leads_udp_within_one_server_entry() -> None:
+    (server,) = retell._ice_servers(
+        [
+            {
+                "urls": [
+                    "turn:t.example:3478?transport=udp",
+                    "turn:t.example:3478?transport=tcp",
+                    "turns:t.example:443?transport=tcp",
+                ],
+                "username": "u",
+                "credential": "c",
+            }
+        ]
+    )
+
+    assert server.urls == [
+        "turns:t.example:443?transport=tcp",
+        "turn:t.example:3478?transport=tcp",
+        "turn:t.example:3478?transport=udp",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("status", "logged"), [(401, True), (503, True), (204, False), (404, False)]
+)
+def test_a_refused_session_end_is_logged_with_its_status(
+    monkeypatch, caplog, status, logged
+):
+    http, _, connector = _ready(monkeypatch)
+    http.delete = lambda url, *, headers: (
+        http.requests.append(("DELETE", url, headers, None)) or _Response(status)
+    )
+    caplog.set_level(logging.WARNING, logger=retell.logger.name)
+
+    async def run():
+        await connector.connect()
+        await connector.disconnect()
+
+    asyncio.run(run())
+
+    assert any(request[0] == "DELETE" for request in http.requests)
+    ended = [
+        r
+        for r in caplog.records
+        if r.getMessage() == "retell_webcall_session_end_failed"
+    ]
+    assert bool(ended) is logged
+    if logged:
+        assert ended[0].status == status
+
+
+class _NotJson(_Response):
+    async def json(self):
+        raise retell.aiohttp.ContentTypeError(None, (), message="text/html")
+
+
+class _Refused:
+    async def __aenter__(self):
+        raise retell.aiohttp.ClientConnectorError(
+            SimpleNamespace(ssl=None, host="api.retellai.com", port=443),
+            OSError(61, "refused"),
+        )
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+@pytest.mark.parametrize(
+    ("responses", "code"),
+    [
+        ([_NotJson(201)], "retell_webcall_response_invalid"),
+        ([_Refused()], "retell_webcall_create_failed"),
+        (
+            [_Response(201, CALL), _NotJson(201)],
+            "retell_webcall_session_response_invalid",
+        ),
+        ([_Response(201, CALL), _Refused()], "retell_webcall_session_failed"),
+    ],
+)
+def test_a_post_that_fails_without_a_status_is_still_coded(
+    monkeypatch, responses, code
+) -> None:
+    http = _Http(responses)
+    _install(monkeypatch, http, _PeerConnection())
+
+    with pytest.raises(RetellWebCallError) as exc:
+        asyncio.run(_connector().connect())
+
+    assert exc.value.code == code
+    assert http.closed
+
+
+@pytest.mark.parametrize(
+    ("error", "retryable"),
+    [
+        (RetellWebCallError("retell_webcall_session_failed", 503), True),
+        (RetellWebCallError("retell_webcall_session_failed", 502), True),
+        (RetellWebCallError("retell_webcall_create_failed", 429), True),
+        (RetellWebCallError("retell_webcall_create_timeout"), True),
+        (RetellWebCallError("retell_webcall_create_failed", 422), False),
+        (RetellWebCallError("retell_webcall_session_failed", 401), False),
+        (RetellWebCallError("retell_webcall_response_invalid"), False),
+        (RuntimeError("other provider"), False),
+    ],
+)
+def test_a_bridge_start_failure_is_retryable_only_for_a_passing_cause(
+    error, retryable
+) -> None:
+    from fi.simulate.simulation.engines.livekit import _web_bridge_start_failure
+
+    assert getattr(error, "retryable", False) is retryable
+    outcome = _web_bridge_start_failure(error)
+    assert outcome.failure.code == "web_bridge_start_failed"
+    assert outcome.failure.retryable is retryable
+
+
+def test_the_retell_web_call_url_is_written_once() -> None:
+    from pathlib import Path
+
+    from fi.simulate.agent.definition import RETELL_WEB_CALL_URL, RetellTargetConfig
+
+    assert retell.RETELL_API_URL is RETELL_WEB_CALL_URL
+    assert str(RetellTargetConfig(agent_id="a").api_url) == RETELL_WEB_CALL_URL
+    source = Path(retell.__file__).resolve().parents[3]
+    copies = [
+        path
+        for path in source.rglob("*.py")
+        if RETELL_WEB_CALL_URL in path.read_text(encoding="utf-8")
+    ]
+    assert [path.name for path in copies] == ["definition.py"]
