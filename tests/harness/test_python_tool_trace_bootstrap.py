@@ -563,11 +563,12 @@ def test_a_generator_closed_early_is_recorded_and_is_not_an_error(
         expected = [(name, {"n": 3}, True)]
     else:
         expected = [(name, {"n": 3}, False)]
-    if _TRACED_VERSION == (3, 13) and name == "bare":
-        # Early 3.13 releases (3.13.3 here) close a generator paused at a `yield` outside any
-        # `try` without running its frame and fire no profile or monitoring event, so no hook
-        # sees the call end and it goes unrecorded; later 3.13 releases (3.13.18 in CI) run the
-        # frame, and it is recorded as on 3.12 and 3.14. Never a wrong record.
+    if mechanism == "profile" and _TRACED_VERSION in {(3, 12), (3, 13)} and name == "bare":
+        # Early 3.12 and 3.13 releases (3.12.3, 3.13.3) close a generator paused at a `yield`
+        # outside any `try` without running its frame and fire no profile or monitoring event, so
+        # the profile path sees no end and leaves the call unrecorded; later releases (CI's newest
+        # 3.12 and 3.13) run the frame, and it is recorded as on 3.14. Never a wrong record. The
+        # monitoring path settles the open call when its generator is gone, so it records it.
         assert seen in ([], expected)
     else:
         assert seen == expected

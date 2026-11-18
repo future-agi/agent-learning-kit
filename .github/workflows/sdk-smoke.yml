@@ -36,29 +36,35 @@ jobs:
             -k real_openai_agents_sdk | tee pytest.out
           ! grep -q "skipped" pytest.out
 
-  tool-trace-python-3-13:
-    # The tool tracer's own subprocesses on Python 3.13, which reads frames differently from 3.12
-    # (a suspension ends on a RESUME; a close or a cancel is not carried by the profile call
-    # event). pytest runs on 3.12 as in the other jobs; ALK_TEST_PYTHON points the tracer's
-    # subprocesses at 3.13.
+  tool-trace-other-pythons:
+    # The tool tracer's own subprocesses on other Pythons, which read frames differently from
+    # 3.12 (a suspension ends on a RESUME on 3.13; a close or a cancel is not carried by the
+    # profile call event). 3.12.3 is the release the sandbox runs and behaves like 3.13.3, while
+    # "3.12" floats to the newest release, so it is pinned here. pytest runs on 3.12 as in the
+    # other jobs; ALK_TEST_PYTHON points the tracer's subprocesses at the matrix Python.
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        traced-python: ["3.13", "3.12.3"]
     steps:
       - uses: actions/checkout@v4
-      # 3.13 first and 3.12 last: the last one set up is `python` on the path, which runs pytest.
+      # The traced Python first and 3.12 last: the last one set up is `python` on the path, which
+      # runs pytest.
       - uses: actions/setup-python@v5
-        id: python313
+        id: traced
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.traced-python }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
       - name: Install the kit
         run: python -m pip install . pytest
-      - name: Run the tool tracer tests with the tracer on Python 3.13
+      - name: Run the tool tracer tests with the tracer on Python ${{ matrix.traced-python }}
         env:
-          ALK_TEST_PYTHON: ${{ steps.python313.outputs.python-path }}
+          ALK_TEST_PYTHON: ${{ steps.traced.outputs.python-path }}
         run: python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py
 
   clean-install:
