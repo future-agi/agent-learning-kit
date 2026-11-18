@@ -630,6 +630,8 @@ _UNPARSED_LISTED = 50
 # The walk reads the agent's whole code, so it has a total of its own: the scans' 256 KB would
 # stop it inside an ordinary agent of 80 modules. Each file is still at most 128 KB.
 _UNPARSED_WALK_TOTAL = 4 * 1024 * 1024
+# And a count, as framework detection has: past it the rest is not checked, and the flag says so.
+_UNPARSED_WALK_FILES = 5000
 
 
 def newer_syntax(
@@ -701,6 +703,9 @@ def _bare_except_list(tokens: list[tokenize.TokenInfo], start: int) -> bool:
             return True
         elif depth == 0 and token.string == "as":
             return False
+        elif token.type == tokenize.NAME and token.string == "except":
+            # The next clause: scanning on past it would make a file of excepts quadratic.
+            return False
     return False
 
 
@@ -756,11 +761,13 @@ def unparsed_note(
     budget = ParseBudget(_UNPARSED_WALK_TOTAL)
     naming = TokenBudget()
     listed: list[dict[str, str]] = []
-    cut = False
-    for path in paths:
+    cut = len(paths) > _UNPARSED_WALK_FILES
+    for path in paths[:_UNPARSED_WALK_FILES]:
         text = read_module(path)
         if text is None:
-            cut = cut or _too_large(path)
+            # Too large, or not text this walk can decode: not checked. A link or a pipe is never
+            # read by any reader, so it says nothing.
+            cut = cut or _refused_file(path)
             continue
         if not budget.spend(text):
             cut = True
@@ -790,15 +797,20 @@ def unparsed_note(
                 "so this file was not read"
             )
         listed.append({"path": name, "python": python, "reason": reason})
-    if not listed and not cut:
-        return {}
-    return {"unparsed": listed, **({"unparsed_truncated": True} if cut else {})}
+    # A key only when it has something to say (ADR-011, condition 2 as amended 18 Nov): an agent
+    # whose files all parse but one went unchecked gets the flag alone.
+    return {
+        **({"unparsed": listed} if listed else {}),
+        **({"unparsed_truncated": True} if cut else {}),
+    }
 
 
 def _agent_files(
     root: Path, base: Path, subfolder: str | None, tool_modules: Iterable[str]
 ) -> list[Path]:
-    """The ``.py`` files the agent's readers read, each once: its folder's first, in order."""
+    """The ``.py`` files the agent's readers read, each once: its folder's first, in sorted
+    order, since where the budget runs out decides what is listed. A link that leads out of the
+    source is not the agent's file, and isn't read."""
     found = [
         path
         for path in sorted(base.rglob("*.py"))
@@ -806,40 +818,49 @@ def _agent_files(
             part.startswith(".") or part in _NOT_AGENT_CODE
             for part in path.relative_to(root).parts[:-1]
         )
+        and _inside(path, root)
     ]
+    extra: set[Path] = set()
+    # The tool check reads the module each entry names, wherever it is, tests/ included.
+    bases = [base, base / "src", root, root / "src"] if subfolder else [root, root / "src"]
+    for module in tool_modules:
+        if not module or not all(part.isidentifier() for part in module.split(".")):
+            continue
+        relative = Path(*module.split("."))
+        for one in bases:
+            for candidate in (relative.with_suffix(".py"), relative / "__init__.py"):
+                if (one / candidate).is_file():
+                    extra.add(one / candidate)
     if subfolder:
         from .agent_type_check import code_the_agent_reaches
         from .source_folder import SubfolderNotFound
 
         try:
-            extra = set(code_the_agent_reaches(root, subfolder))
+            extra.update(code_the_agent_reaches(root, subfolder))
         except SubfolderNotFound:
             raise
         except Exception:
             # The note never costs the reading: the folder's own files are still walked.
             logger.warning("unparsed note: code the agent reaches not found", exc_info=True)
-            extra = set()
-        bases = [base, base / "src", root, root / "src"]
-        for module in tool_modules:
-            if not module or not all(part.isidentifier() for part in module.split(".")):
-                continue
-            relative = Path(*module.split("."))
-            for one in bases:
-                for candidate in (relative.with_suffix(".py"), relative / "__init__.py"):
-                    if (one / candidate).is_file():
-                        extra.add(one / candidate)
-        seen = set(found)
-        for path in sorted(extra):
-            resolved = path.resolve()
-            if resolved.suffix == ".py" and resolved not in seen and resolved.is_relative_to(root):
-                seen.add(resolved)
-                found.append(resolved)
+    seen = {path.resolve() for path in found}
+    for path in sorted(extra):
+        resolved = path.resolve()
+        if resolved.suffix == ".py" and resolved not in seen and resolved.is_relative_to(root):
+            seen.add(resolved)
+            found.append(resolved)
     return found
 
 
-def _too_large(path: Path) -> bool:
-    """A regular file the walk didn't read for its size alone: a link or a pipe is never read."""
+def _inside(path: Path, root: Path) -> bool:
     try:
-        return path.is_file() and not path.is_symlink() and path.stat().st_size > LARGEST_PARSED_MODULE
+        return path.resolve().is_relative_to(root)
+    except (OSError, RuntimeError):
+        return False
+
+
+def _refused_file(path: Path) -> bool:
+    """A regular file ``read_module`` refused: too large, or not decodable."""
+    try:
+        return path.is_file() and not path.is_symlink()
     except OSError:
         return False

@@ -126,7 +126,7 @@ def test_a_path_the_platform_cannot_carry_is_counted_but_not_named(tmp_path) -> 
 def test_only_a_path_the_platform_cannot_carry_still_leaves_the_flag(tmp_path) -> None:
     (tmp_path / "my agent.py").write_text("g = t'x'\n", encoding="utf-8")
 
-    assert unparsed_note(tmp_path) == {"unparsed": [], "unparsed_truncated": True}
+    assert unparsed_note(tmp_path) == {"unparsed_truncated": True}
 
 
 def test_files_past_the_parse_budget_leave_the_flag(tmp_path, monkeypatch) -> None:
@@ -313,13 +313,13 @@ def test_an_agent_of_many_ordinary_modules_is_walked_to_the_end(tmp_path) -> Non
 def test_a_file_too_large_to_check_leaves_the_flag(tmp_path) -> None:
     (tmp_path / "agent.py").write_text(_T_STRING + "x = 1\n" * 23_000, encoding="utf-8")
 
-    assert unparsed_note(tmp_path) == {"unparsed": [], "unparsed_truncated": True}
+    assert unparsed_note(tmp_path) == {"unparsed_truncated": True}
 
 
 def test_a_file_that_runs_the_parser_out_of_stack_leaves_the_flag(tmp_path) -> None:
     (tmp_path / "agent.py").write_text("x = " + "-" * 7000 + "1\n", encoding="utf-8")
 
-    assert unparsed_note(tmp_path) == {"unparsed": [], "unparsed_truncated": True}
+    assert unparsed_note(tmp_path) == {"unparsed_truncated": True}
 
 
 # --- naming the construct: bounded, and only where the parser stopped (M1, M2, L1) -----------
@@ -364,3 +364,66 @@ def test_an_except_list_starting_with_a_parenthesised_name_is_named() -> None:
         "3.14",
         "an except clause without parentheses",
     )
+
+
+# --- Owl's round 2, and Mason's ruling on condition 2 (ADR-011, amended 18 Nov) ---------------
+
+
+def test_an_agent_whose_files_parse_but_one_is_too_large_says_only_that(tmp_path) -> None:
+    # Nothing unparsed is known, so no list; one file wasn't checked, so the flag.
+    (tmp_path / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / "generated_pb2.py").write_text("x = 1\n" * 23_000, encoding="utf-8")
+
+    assert unparsed_note(tmp_path) == {"unparsed_truncated": True}
+
+
+def test_a_tool_module_in_a_tests_package_is_listed_without_a_subfolder(tmp_path) -> None:
+    # The walk leaves tests/ out, but the tool check reads the module an entry names.
+    (tmp_path / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "tools.py").write_text(_T_STRING, encoding="utf-8")
+
+    note = unparsed_note(tmp_path, tool_modules=["tests.tools"])
+
+    assert [one["path"] for one in note["unparsed"]] == ["tests/tools.py"]
+
+
+def test_a_file_that_cannot_be_decoded_leaves_the_flag(tmp_path) -> None:
+    (tmp_path / "agent.py").write_bytes(b"\xff\xfe" + _T_STRING.encode())
+    (tmp_path / "escaped.py").write_text("# coding: unicode-escape\n" + _T_STRING, encoding="utf-8")
+    (tmp_path / "__init__.py").write_text("", encoding="utf-8")
+
+    assert unparsed_note(tmp_path) == {"unparsed_truncated": True}
+
+
+def test_an_except_clause_scan_stays_linear(tmp_path) -> None:
+    import time
+
+    # Owl's probe: 7.2 s, each except scanning forward over all the others.
+    text = "x = (\n" + "except\n" * 9_000 + ")\n"
+    started = time.monotonic()
+
+    assert newer_syntax(text) is None
+    assert time.monotonic() - started < 1
+
+
+def test_past_the_file_count_the_walk_stops_and_says_so(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness import python_source
+
+    monkeypatch.setattr(python_source, "_UNPARSED_WALK_FILES", 3)
+    for number in range(4):
+        (tmp_path / f"m{number}.py").write_text("x = 1\n", encoding="utf-8")
+
+    assert unparsed_note(tmp_path) == {"unparsed_truncated": True}
+
+
+def test_a_link_out_of_the_source_is_not_read(tmp_path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "elsewhere.py").write_text(_T_STRING, encoding="utf-8")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "linked.py").symlink_to(outside / "elsewhere.py")
+
+    assert unparsed_note(source) == {}

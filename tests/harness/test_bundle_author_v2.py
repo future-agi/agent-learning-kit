@@ -7140,3 +7140,18 @@ def test_the_tool_proxy_learns_the_declared_read_actions_and_a_plan_without_any_
     assert declared_read_actions(entries) == ["orders.get"]
     assert _tool_proxy_process(["orders.get"]).environment["READ_ACTIONS"] == "orders.get"
     assert "READ_ACTIONS" not in _tool_proxy_process(declared_read_actions(entries[1:])).environment
+
+
+def test_a_leftover_file_that_does_not_parse_does_not_make_the_callback_ambiguous(tmp_path):
+    # Owl's round-2 regression on kit 355: the line search for a file that doesn't parse is a
+    # fallback, used only when no file that parses defines the callback.
+    from fi.alk.harness.bundle_author_v2 import _discover_callback_entrypoint
+
+    (tmp_path / "agent.py").write_text(
+        "async def agent_callback(message):\n    return message\n", encoding="utf-8"
+    )
+    (tmp_path / "old_agent.py").write_text(
+        "def agent_callback(m):\n    print 'old'\n", encoding="utf-8"
+    )
+
+    assert _discover_callback_entrypoint(tmp_path) == "agent:agent_callback"

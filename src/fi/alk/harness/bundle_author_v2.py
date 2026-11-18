@@ -1783,24 +1783,31 @@ def _discover_callback_entrypoint(root: Path) -> str | None:
     ``python agent.py`` HTTP services, which can never pass the generated port readiness probe.
     """
     candidates: list[str] = []
+    # Found by a line search in modules the kit's own Python can't parse: used only when no
+    # module that parses defines the callback, so a leftover file that doesn't parse never makes
+    # a working agent's callback ambiguous (ADR-011).
+    searched: list[str] = []
     for path in sorted(root.rglob("*.py")):
         relative = path.relative_to(root)
         if any(part in _IGNORED_ARTIFACT_PARTS for part in relative.parts):
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
+        module = ".".join(relative.with_suffix("").parts)
         try:
-            defines = any(
-                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name == "agent_callback"
-                for node in ast.parse(text).body
-            )
+            tree = ast.parse(text)
         except SyntaxError:
-            # A module the kit's own Python can't parse may still hold the callback: a ``def``
-            # at the start of a line is a module-level one (ADR-011).
-            defines = _MODULE_LEVEL_CALLBACK.search(text) is not None
-        if defines:
-            module = ".".join(relative.with_suffix("").parts)
+            # A ``def`` at the start of a line is a module-level one.
+            if _MODULE_LEVEL_CALLBACK.search(text) is not None:
+                searched.append(f"{module}:agent_callback")
+            continue
+        if any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "agent_callback"
+            for node in tree.body
+        ):
             candidates.append(f"{module}:agent_callback")
+    if not candidates:
+        candidates = searched
     if not candidates:
         return None
     if len(candidates) != 1:
