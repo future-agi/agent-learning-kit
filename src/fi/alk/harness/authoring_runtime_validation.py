@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import fi.alk
 
-from . import call_runner, failure_record, judge
+from . import call_runner, failure_record, judge, tool_routing
 from .catalogue import load_catalogue
 from .certification import CheckStatus
 from .generated_runtime import installed_frameworks
@@ -1293,13 +1293,7 @@ async def validate_once(
                     _chat_target_timeout_seconds,
                     agent_chat_timeout_seconds,
                 )
-                from .chat_readiness import (
-                    probe_chat_ingress,
-                    probe_chat_workflow,
-                    record_tool_routing,
-                    request_uncovered_tools,
-                    world_call_log,
-                )
+                from .chat_readiness import probe_chat_ingress, probe_chat_workflow
 
                 chat_ingress = CheckStatus.NOT_APPLICABLE
                 interface = contract.runtime.interface if contract.runtime else None
@@ -1363,17 +1357,17 @@ async def validate_once(
                             logger.warning("agent's tool trace not read: %s", type(unread).__name__)
                             logger.debug("the failure in full", exc_info=True)
                             called = ()
-                        record_tool_routing(
+                        tool_routing.record_tool_routing(
                             authoring,
                             representative.scenario_key,
                             contract,
                             runtime,
-                            received=world_call_log(runtime, since),
+                            received=tool_routing.world_call_log(runtime, since),
                             reported=called,
                             bundle=bundle,
                         )
                     # Whichever conversation qualified the agent, each tool it did not show is asked once.
-                    await request_uncovered_tools(
+                    await tool_routing.request_uncovered_tools(
                         interface=interface,
                         endpoint=endpoint.address,
                         runtime=runtime,
