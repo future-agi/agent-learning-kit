@@ -1642,6 +1642,9 @@ KEPT_AS_WRITTEN = (
     "LocalHttpAuth",
     "RuntimeHttpFailureRule",
     "RuntimeHttpSetupRequest",
+    # The source's own tools server: an argv, a directory, a port and an environment variable's name, all
+    # started and read as written.
+    "RuntimeToolService",
     # The live SSE endpoint's rules (fi.simulate): a JSON path, a mode and the values a frame is
     # matched against, all compared with the frames as written.
     "HTTPStreamSpec",
