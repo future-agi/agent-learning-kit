@@ -9,6 +9,7 @@ configuration never mutate or enter the customer's source tree.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import re
 import shlex
@@ -749,8 +750,6 @@ def installed_frameworks(source: Path | None = None) -> dict[str, str]:
         else []
     )
     if paths:
-        import importlib.metadata
-
         for distribution in importlib.metadata.distributions(path=paths):
             name = _distribution_name(distribution.metadata["Name"] or "")
             if name in wanted:

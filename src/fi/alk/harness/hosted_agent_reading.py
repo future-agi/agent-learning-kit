@@ -20,17 +20,15 @@ import sys
 from pathlib import Path
 
 from .. import __version__ as _sdk_version
+from ..providers.agent import build_authored_agent
+from . import cli, hosted_authoring_entrypoint, spend
+from .contract import AgentContract
 
 AGENT_DOCUMENT = "agent.json"
 
 
 def _read(source: Path, output: Path, name: str) -> None:
-    from ..providers.agent import build_authored_agent
-    from . import cli, spend
-    from .contract import AgentContract
-    from .hosted_authoring_entrypoint import configure_authoring_credentials
-
-    configure_authoring_credentials()
+    hosted_authoring_entrypoint.configure_authoring_credentials()
     output.mkdir(parents=True, exist_ok=True)
     journal = os.environ.get(spend.JOURNAL_ALIAS, "").strip()
     if journal:

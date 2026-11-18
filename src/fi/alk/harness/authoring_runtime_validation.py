@@ -22,7 +22,13 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import failure_record
+import fi.alk
+
+from . import call_runner, failure_record, judge
+from .catalogue import load_catalogue
+from .certification import CheckStatus
+from .generated_runtime import installed_frameworks
+from .privilege import isolation_mode
 
 if TYPE_CHECKING:
     from .job import FailureCause
@@ -133,7 +139,6 @@ def _write_runtime_evidence(
         GenericHarnessArtifactStore,
         RuntimeValidationEvidence,
     )
-    from .privilege import isolation_mode
 
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     limitations = [
@@ -365,8 +370,6 @@ def _make_local_seed_files_readable(bundle: Path) -> None:
 
 
 def _has_judged_sub_goals(authoring: Path) -> bool:
-    from .catalogue import load_catalogue
-
     for root in (authoring, authoring / "environment-bundle"):
         try:
             catalogue = load_catalogue(root)
@@ -379,24 +382,18 @@ def _has_judged_sub_goals(authoring: Path) -> bool:
 
 def _with_judge_check(checks, authoring: Path):
     """``checks`` with whether the judge answered, only when a judged sub-goal needs it."""
-    from .certification import CheckStatus
-    from .judge import judge_reachable
-
     if not _has_judged_sub_goals(authoring):
         return checks
-    return checks.model_copy(update={"judge_reachable": CheckStatus(judge_reachable())})
+    return checks.model_copy(update={"judge_reachable": CheckStatus(judge.judge_reachable())})
 
 
 def _harness_version() -> str | None:
-    from fi.alk import __version__
-
-    return None if __version__.startswith("0.0.0+") else __version__
+    return None if fi.alk.__version__.startswith("0.0.0+") else fi.alk.__version__
 
 
 def _write_generic_certificate(
     job, authoring: Path, repairs, source: Path | None = None
 ) -> None:
-    from .generated_runtime import installed_frameworks
     from .certification import (
         CertificationAuthoring,
         CertificationCompiler,
@@ -1371,12 +1368,11 @@ async def validate_once(
                             scenario_id=representative.scenario_id,
                             timeout=agent_chat_timeout_seconds(job) or _chat_target_timeout_seconds(),
                         )
-                        from .call_runner import _collect_file_tool_calls
-
                         # A test message can call tools too; then ask for the rest.
                         try:
-                            called = _collect_file_tool_calls(runtime)
-                        except Exception:  # noqa: BLE001 - no trace, nothing observed
+                            called = call_runner.collect_file_tool_calls(runtime)
+                        except Exception as unread:  # noqa: BLE001 - no trace, nothing observed
+                            logger.warning("agent's tool trace not read: %s", type(unread).__name__)
                             called = ()
                         record_tool_routing(
                             authoring,

@@ -202,12 +202,12 @@ def _requests(
     monkeypatch.setattr(
         chat_readiness, "create_chat_wrapper", lambda *a, **k: Wrapper()
     )
-    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *a, **k: _World())
+    monkeypatch.setattr(chat_call_runner, "tool_world", lambda *a, **k: _World())
     monkeypatch.setattr(
-        call_runner, "_collect_file_tool_calls", lambda runtime: tuple(file_trace)
+        call_runner, "collect_file_tool_calls", lambda runtime: tuple(file_trace)
     )
     monkeypatch.setattr(
-        call_runner, "_collect_tool_trace_calls", lambda runtime: tuple(world_log)
+        call_runner, "collect_tool_trace_calls", lambda runtime: tuple(world_log)
     )
     record_tool_routing(
         tmp_path,
@@ -385,9 +385,9 @@ def test_one_request_stays_within_the_budget_however_many_times_the_agent_is_cal
             )
 
     monkeypatch.setattr(chat_readiness, "create_chat_wrapper", lambda *a, **k: Slow())
-    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *a, **k: _World())
-    monkeypatch.setattr(call_runner, "_collect_file_tool_calls", lambda runtime: ())
-    monkeypatch.setattr(call_runner, "_collect_tool_trace_calls", lambda runtime: ())
+    monkeypatch.setattr(chat_call_runner, "tool_world", lambda *a, **k: _World())
+    monkeypatch.setattr(call_runner, "collect_file_tool_calls", lambda runtime: ())
+    monkeypatch.setattr(call_runner, "collect_tool_trace_calls", lambda runtime: ())
     record_tool_routing(tmp_path, "s-1", _contract(), PROXIED, received=[], reported=[])
     started = time.monotonic()
     asyncio.run(
@@ -435,9 +435,9 @@ def test_a_request_runs_only_the_asked_tool_at_the_world(tmp_path, monkeypatch):
             return SimpleNamespace(content="done", tool_calls=[], tool_responses=[], metadata={})
 
     monkeypatch.setattr(chat_readiness, "create_chat_wrapper", lambda *a, **k: Agent())
-    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *a, **k: world)
-    monkeypatch.setattr(call_runner, "_collect_file_tool_calls", lambda runtime: ())
-    monkeypatch.setattr(call_runner, "_collect_tool_trace_calls", lambda runtime: ())
+    monkeypatch.setattr(chat_call_runner, "tool_world", lambda *a, **k: world)
+    monkeypatch.setattr(call_runner, "collect_file_tool_calls", lambda runtime: ())
+    monkeypatch.setattr(call_runner, "collect_tool_trace_calls", lambda runtime: ())
     record_tool_routing(tmp_path, "s-1", _contract(), PROXIED, received=[], reported=[])
 
     asyncio.run(
@@ -603,9 +603,9 @@ def test_a_blocking_tool_handler_cannot_outlast_the_request_deadline(
             )
 
     monkeypatch.setattr(chat_readiness, "create_chat_wrapper", lambda *a, **k: Agent())
-    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *a, **k: Blocking())
-    monkeypatch.setattr(call_runner, "_collect_file_tool_calls", lambda runtime: ())
-    monkeypatch.setattr(call_runner, "_collect_tool_trace_calls", lambda runtime: ())
+    monkeypatch.setattr(chat_call_runner, "tool_world", lambda *a, **k: Blocking())
+    monkeypatch.setattr(call_runner, "collect_file_tool_calls", lambda runtime: ())
+    monkeypatch.setattr(call_runner, "collect_tool_trace_calls", lambda runtime: ())
     record_tool_routing(
         tmp_path,
         "s-1",

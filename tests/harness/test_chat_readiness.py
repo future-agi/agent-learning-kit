@@ -1063,7 +1063,7 @@ def test_private_workflow_counts_a_returned_call_the_harness_ran_at_the_world(
             return SimpleNamespace(content="{}")
 
     monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
-    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *_a: World())
+    monkeypatch.setattr(chat_call_runner, "tool_world", lambda *_a: World())
     contract = AgentContract(
         runtime=Runtime(language="python", command=["python", "app.py"], interface=interface()),
         tools=[{"name": "lookup_account", "args": []}],
