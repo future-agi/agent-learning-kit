@@ -1,6 +1,7 @@
 """A reply the kit cannot read gives an empty turn, never a printed object."""
 
 import asyncio
+import logging
 from types import SimpleNamespace as NS
 
 import pytest
@@ -156,3 +157,42 @@ def test_the_plain_data_dump_drops_the_known_reasoning_keys(reply, expected):
 
 def test_output_key_value_is_scrubbed_too():
     assert _text({"out": {"order": "A1", "signature": "s"}}, output_key="out") == '{"order": "A1"}'
+
+
+def test_an_unreadable_reply_records_its_type_and_key_names_only():
+    response = _call({"type": "user", "name": MARK})
+    assert response.content == ""
+    record = response.metadata["reply_unreadable"]
+    assert record == {"type": "dict", "keys": ["name", "type"]}
+    assert MARK not in repr(record) and "user" not in repr(record)
+
+
+def test_an_unreadable_object_records_its_type_name():
+    response = _call(_Printable())
+    assert response.content == ""
+    assert response.metadata["reply_unreadable"] == {"type": "_Printable", "keys": []}
+
+
+def test_an_unreadable_reply_logs_names_only(caplog):
+    with caplog.at_level(logging.INFO, logger="fi.simulate.agent.generic"):
+        _call({"type": "user", "name": MARK})
+    lines = [r.getMessage() for r in caplog.records if "unreadable" in r.getMessage()]
+    assert len(lines) == 1
+    assert "dict" in lines[0] and "name" in lines[0] and "type" in lines[0]
+    assert MARK not in lines[0] and "user" not in lines[0]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        None,
+        {},
+        [],
+        {"content": "Hello"},
+        {"output": {"type": "text", "text": "Hello"}},
+        {"order": "A1"},
+    ],
+    ids=["none", "empty-dict", "empty-list", "text", "text-block", "plain-record"],
+)
+def test_a_reply_that_is_empty_or_was_read_records_nothing(reply):
+    assert "reply_unreadable" not in (_call(reply).metadata or {})

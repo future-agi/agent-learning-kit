@@ -1,5 +1,6 @@
 import inspect
 import json
+import logging
 import time
 from dataclasses import asdict, is_dataclass
 from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Union
@@ -24,6 +25,8 @@ from fi.simulate.agent.wrapper import (
     SimulationArtifact,
     SimulationEvent,
 )
+
+_LOG = logging.getLogger(__name__)
 
 InputMode = Literal["auto", "agent_input", "dict", "messages", "text"]
 
@@ -317,6 +320,12 @@ class GenericAgentWrapper(AgentWrapper):
         metadata = self._extract_metadata(raw)
         if self.metadata:
             metadata = {**metadata, **self.metadata}
+        if not content and not _is_empty_reply(raw):
+            unreadable = _unreadable_record(raw)
+            metadata = {**metadata, "reply_unreadable": unreadable}
+            _LOG.warning(
+                "reply_unreadable: the agent reply held no answer text (type=%s, keys=%s)", unreadable["type"], unreadable["keys"]
+            )
 
         return AgentResponse(
             content=content,
@@ -8525,6 +8534,23 @@ def _content_text(content: Any) -> str:
     if isinstance(content, (bool, int, float)):
         return str(content)
     return ""
+
+
+def _is_empty_reply(raw: Any) -> bool:
+    if raw is None:
+        return True
+    if isinstance(raw, (str, bytes, list, tuple, set, dict)):
+        return not raw
+    return False
+
+
+def _unreadable_record(raw: Any) -> Dict[str, Any]:
+    """What was not read: the value's type name and its top-level key names, never a value."""
+    mapped = _object_mapping(raw)
+    if mapped is None and not isinstance(raw, (list, tuple, set)):
+        mapped = getattr(raw, "__dict__", None)
+    keys = sorted(str(key)[:64] for key in mapped)[:50] if isinstance(mapped, Mapping) else []
+    return {"type": type(raw).__name__, "keys": keys}
 
 
 def _stringify(value: Any) -> str:
