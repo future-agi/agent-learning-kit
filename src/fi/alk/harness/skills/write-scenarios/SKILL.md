@@ -829,6 +829,12 @@ resolve is refused, so quote exactly. For any requirement you cannot cite, add a
 whose `quote` says what you assumed and whose `supports` names the part of the case it covers, rather
 than citing a source that does not say it. A scenario that cites nothing is kept, and shown as assumed.
 
+Ground a case only on records the world's tools serve. An attached records file is the world's data
+only when the agent's tools read the world's store; where the environment brief marks it "context
+only", the agent's own service holds its data, and a record that exists only in the file can never
+be reached, so a case built on it cannot be passed. Use such a file for context, and take the
+record a case turns on from what the tools return.
+
 ## Must-pass cases
 
 Set `must_pass: true` on a case when the person asks for it to block a release, or names it as one
