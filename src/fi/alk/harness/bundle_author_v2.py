@@ -34,7 +34,7 @@ from .actors import (
     ACTOR_RULES_FILE,
     ACTORS_FILE,
     actors_seed,
-    evaluator_only_paths,
+    knowledge_roles,
     load_actors,
     write_actor_rules,
 )
@@ -4308,9 +4308,10 @@ def author_bundle_v2(
             if (authoring_root / ACTORS_FILE).is_file():
                 shutil.copy2(authoring_root / ACTORS_FILE, temporary / ACTORS_FILE)
                 adopted_catalogue.append(ACTORS_FILE)
-            # Only with actors or evaluator-only attached files, so a bundle with neither seals exactly as before. The
-            # rules name the evaluator-only files, which the platform keeps from the agent and every actor.
-            if (authoring_root / ACTORS_FILE).is_file() or evaluator_only_paths(authoring_root):
+            # Only with actors or attached files that carry a role, so a bundle with neither seals exactly as before.
+            # The rules name the evaluator-only files, which the platform keeps from the agent and every actor, and
+            # whether attached seed records can reach the agent's tools.
+            if (authoring_root / ACTORS_FILE).is_file() or knowledge_roles(authoring_root):
                 write_actor_rules(temporary, config=job.agent.config, roles_root=authoring_root)
                 adopted_catalogue.append(ACTOR_RULES_FILE)
         adopted_chat_files = _copy_chat_authoring(

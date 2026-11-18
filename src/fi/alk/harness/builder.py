@@ -23,6 +23,7 @@ from .backends import (
     tool,
     tool_server,
 )
+from .actors import SEED_RECORDS_CONTEXT_ONLY, knowledge_roles, seed_records_loaded
 from .catalogue import Catalogue
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
 from .contract import AgentContract
@@ -560,6 +561,25 @@ def suite_health(
 
 
 
+def attached_files_brief(contract: AgentContract, out: Path) -> list[str]:
+    """The attached files and their roles, each seed_records file marked context only where the agent's tools serve
+    their own data (`actors.seed_records_loaded`)."""
+    roles = knowledge_roles(out)
+    if not roles:
+        return []
+    loaded = seed_records_loaded(contract.model_dump(mode="json"))
+    lines = ["- Attached files:"]
+    for path, role in sorted(roles.items()):
+        note = f"; {SEED_RECORDS_CONTEXT_ONLY}" if role == "seed_records" and not loaded else ""
+        lines.append(f"  - {path} ({role}{note})")
+    if not loaded:
+        lines.append(
+            "  Ground each scenario only on records the agent's tools serve; read them through the tools, never from "
+            "an attached seed file."
+        )
+    return lines
+
+
 def environment_brief(contract: AgentContract, out: Path, overview: dict[str, Any] | None) -> str:
     """What the builder knows about this environment before the first question, all derived."""
     from .catalogue import load_catalogue
@@ -577,6 +597,7 @@ def environment_brief(contract: AgentContract, out: Path, overview: dict[str, An
         f"- Modality {contract.modality}; {len(contract.tools)} tools: "
         + (", ".join(tool.name for tool in contract.tools) or "none (judged from the conversation)")
     )
+    lines.extend(attached_files_brief(contract, out))
     if contract.amendments:
         lines.append("- Contract amendments made after the agent was read:")
         lines.extend(f"  - {one}" for one in contract.amendments[-10:])

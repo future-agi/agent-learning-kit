@@ -661,6 +661,34 @@ def knowledge_roles(root: Path) -> dict[str, str]:
     return roles
 
 
+# What the builder is told about an attached `seed_records` file in a world whose tools serve their own data.
+SEED_RECORDS_CONTEXT_ONLY = "context only: this environment's tools serve their own data"
+
+
+def seed_records_loaded(contract: dict[str, Any] | None) -> bool:
+    """Whether attached `seed_records` files can reach what the agent's tools read: False when every tool is served
+    by the agent's own service (`mode: service`) and nothing records a data store the world stands in for, so the
+    service answers from its own data and seed rows never reach it. Read from the contract alone, never from a run."""
+    if not contract:
+        return True
+    names = [str(one.get("name")) for one in contract.get("tools") or [] if isinstance(one, dict)]
+    modes = {
+        str(one.get("tool")): str(one.get("mode") or "")
+        for one in contract.get("tool_entrypoints") or []
+        if isinstance(one, dict)
+    }
+    served = bool(names) and all(modes.get(name) == "service" for name in names)
+    return not served or bool(contract.get("data_store"))
+
+
+def _contract_at(root: Path | None) -> dict[str, Any] | None:
+    try:
+        body = json.loads((Path(root) / "contract.json").read_text(encoding="utf-8")) if root is not None else None
+    except (OSError, ValueError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
 def evaluator_only_paths(root: Path) -> list[str]:
     """The attached files only the evaluator may read, by path under `knowledge/`."""
     return sorted(path for path, role in knowledge_roles(root).items() if role == EVALUATOR_ONLY_ROLE)
@@ -990,6 +1018,9 @@ def actor_rules(config: dict[str, Any] | None = None, root: Path | None = None) 
         "evaluator_only": evaluator_only_rule(root),
         # How a reader of `knowledge/roles.json` reads it, so it never decides differently from this release.
         "knowledge_roles": KNOWLEDGE_ROLE_KEYS,
+        # Whether attached seed_records files can reach what the agent's tools read (`seed_records_loaded`); None
+        # when ``root`` holds no contract.
+        "seed_records_loaded": seed_records_loaded(contract) if (contract := _contract_at(root)) else None,
         "brief_inputs": BRIEF_INPUTS,
         "private_to_actor": PRIVATE_TO_ACTOR,
         # Files an actor's knowledge may never name, beside the evaluator-only ones.

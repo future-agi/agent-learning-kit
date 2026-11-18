@@ -367,3 +367,58 @@ def test_the_roles_file_is_never_an_actor_s_knowledge(named):
     assert knowledge_file_allowed(named) is False
     assert knowledge_file_allowed("knowledge/policy.md") is True
     assert "knowledge/roles.json" in actor_rules()["not_knowledge"]["files"]
+
+
+_SERVICE_ONLY = {
+    "agent": "support",
+    "tools": [{"name": "get_order", "args": []}, {"name": "issue_refund", "args": []}],
+    "tool_entrypoints": [
+        {"tool": "get_order", "mode": "service", "service": "tools-api", "endpoint": "orders/get"},
+        {"tool": "issue_refund", "mode": "service", "service": "tools-api", "endpoint": "refunds/issue"},
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    ("contract", "loaded"),
+    [
+        (_SERVICE_ONLY, False),
+        ({**_SERVICE_ONLY, "data_store": {"kind": "postgres", "configured_by": "DATABASE_URL"}}, True),
+        (
+            {**_SERVICE_ONLY, "tool_entrypoints": [*_SERVICE_ONLY["tool_entrypoints"][:1],
+                                                   {"tool": "issue_refund", "mode": "import", "module": "a"}]},
+            True,
+        ),
+        ({"agent": "chat", "tools": []}, True),
+    ],
+    ids=["service-only-no-store", "store-backed", "a-tool-in-process", "no-tools"],
+)
+def test_seed_records_reach_the_tools_unless_every_tool_serves_its_own_data(contract, loaded):
+    from fi.alk.harness.actors import seed_records_loaded
+    from fi.alk.harness.contract import AgentContract
+
+    assert seed_records_loaded(contract) is loaded
+    assert seed_records_loaded(AgentContract.model_validate(contract).model_dump(mode="json")) is loaded
+
+
+@pytest.mark.parametrize(("store", "loaded"), [(None, False), ({"kind": "postgres"}, True)])
+def test_the_builder_sees_seed_files_as_context_only_where_the_tools_serve_their_own_data(tmp_path, store, loaded):
+    import json
+
+    from fi.alk.harness.actors import SEED_RECORDS_CONTEXT_ONLY, actor_rules
+    from fi.alk.harness.builder import attached_files_brief
+    from fi.alk.harness.contract import AgentContract
+
+    body = {**_SERVICE_ONLY, **({"data_store": store} if store else {})}
+    (tmp_path / "contract.json").write_text(json.dumps(body))
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "knowledge" / "roles.json").write_text(
+        json.dumps({"knowledge/orders.csv": "seed_records", "knowledge/policy.md": "policy"})
+    )
+
+    brief = "\n".join(attached_files_brief(AgentContract.model_validate(body), tmp_path))
+
+    assert ("knowledge/orders.csv (seed_records; " + SEED_RECORDS_CONTEXT_ONLY + ")" in brief) is not loaded
+    assert "knowledge/policy.md (policy)" in brief
+    # Sealed for the platform to show at attach.
+    assert actor_rules(root=tmp_path)["seed_records_loaded"] is loaded
