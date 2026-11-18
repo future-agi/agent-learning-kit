@@ -384,3 +384,45 @@ def test_a_run_marked_by_an_earlier_trial_is_never_this_trial_s(world_database) 
     world_door.mark_worker_run(world_database, "refund")
     assert call_runner.read_worker_runs(_runtime()) == {"refund"}
     assert call_runner.read_worker_runs(_runtime(), time.time() + 1) == set()
+
+
+def test_a_trial_that_stops_a_worker_an_earlier_trial_left_running_on_reads_it_stopped(world_database) -> None:
+    """Trial 1's refund ran on past its cancel and the clear before trial 2 failed, so its `not_stopped` row stays. In
+    trial 2 refund is stopped at its deadline: that is this trial's stop, never the earlier trial's run on."""
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    assert world_door.claim_worker_stop(world_database, "refund", "refund-worker", lambda: False) is False
+    time.sleep(0.02)
+    trial_two = time.time()
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    assert world_door.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is True
+    assert [
+        (row["worker"], row["reason"]) for row in call_runner.read_worker_stops(_runtime(), trial_two)
+    ] == [("refund", "deadline_passed")]
+
+
+def test_a_run_on_in_this_trial_is_never_turned_into_a_stop_by_a_later_claim(world_database) -> None:
+    call_runner._write_trial_state(_runtime(), [], worker_deadline_at=time.time() - 1)
+    assert world_door.claim_worker_stop(world_database, "refund", "refund-worker", lambda: False) is False
+    assert world_door.claim_worker_stop(world_database, "refund", "refund-worker", lambda: True) is True
+    assert [(row["worker"], row["reason"]) for row in call_runner.read_worker_stops(_runtime())] == [
+        ("refund", world_door.NOT_STOPPED)
+    ]
+
+
+def test_unread_stops_hold_no_declared_worker_to_a_scalar_deadline_whatever_its_name(tmp_path) -> None:
+    """Two workers named alike and one with no name: each is a worker the trial's one deadline fell on."""
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "workers": [
+                    {"id": "sales", "name": "Assistant"},
+                    {"id": "support", "name": "Assistant"},
+                    {"id": "billing", "name": ""},
+                    {"id": "refund"},
+                ]
+            }
+        )
+    )
+    notices, unenforced = call_runner.worker_stop_outcomes(None, {"worker_budget_seconds": 30}, tmp_path)
+    assert notices == []
+    assert [one["worker"] for one in unenforced] == ["billing", "refund", "sales", "support"]

@@ -5036,3 +5036,44 @@ def test_two_workers_sharing_a_display_name_are_never_told_apart_by_it(tmp_path)
     assert not cr.is_worker_call(by_name, "shipping", names.get("shipping", ""))
     by_id = Call(name="lookup", arguments={}, worker_id="shipping")
     assert cr.is_worker_call(by_id, "shipping", names.get("shipping", ""))
+
+
+def test_a_shared_address_call_under_a_name_two_workers_share_is_lent_to_neither() -> None:
+    workers = [
+        {"id": "sales", "name": "Assistant", "binding": "separate"},
+        {"id": "support", "name": "Assistant", "binding": "separate"},
+    ]
+    call = replace(_door_call("issue_refund", "", 10.0), worker_id="Assistant")
+    assert cr.channel_bypasses([call], workers) == []
+
+
+def test_a_shared_address_call_is_its_worker_s_by_exact_id_before_another_worker_s_name() -> None:
+    workers = [
+        {"id": "ops", "name": "billing", "binding": "separate"},
+        {"id": "billing", "name": "Billing desk", "binding": "separate"},
+    ]
+    by_id = replace(_door_call("issue_refund", "", 10.0), worker_id="billing")
+    by_name = replace(_door_call("issue_refund", "", 11.0), worker_id="Billing desk")
+    assert [one["worker"] for one in cr.channel_bypasses([by_id, by_name], workers)] == ["billing", "billing"]
+
+
+def test_a_worker_s_name_that_is_another_worker_s_id_never_rewrites_that_id(tmp_path) -> None:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "workers": [
+                    {"id": "ops", "name": "billing"},
+                    {"id": "billing", "name": "Billing desk"},
+                    {"id": "refund", "name": "refund"},
+                ]
+            }
+        )
+    )
+    workers = cr.declared_worker_ids(tmp_path)
+    assert workers == {"Billing desk": "billing", "refund": "refund"}
+    assert cr.contract_worker_names(tmp_path) == {"billing": "Billing desk", "refund": "refund"}
+    (event,) = trace_row(Call(name="refund", arguments={}, worker_id="billing"), workers)["worker_events"]
+    assert event["worker_id"] == "billing"
+    assert not cr.is_worker_call(Call(name="refund", arguments={}, worker_id="billing"), "ops", "")

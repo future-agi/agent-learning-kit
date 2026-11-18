@@ -1306,18 +1306,40 @@ def _collect_tool_trace_calls(
     return tuple(calls)
 
 
-def contract_worker_names(bundle_dir: Any) -> dict[str, str]:
-    """Each contract worker's id and the name its framework gives it, from the sealed contract."""
+def _contract_workers(bundle_dir: Any) -> list[Mapping[str, Any]]:
+    """The workers the sealed contract declares, each with its id."""
     if bundle_dir is None:
-        return {}
+        return []
+    workers = _bundle_contract(Path(bundle_dir)).get("workers")
+    return [one for one in workers if isinstance(one, Mapping) and one.get("id")] if isinstance(workers, list) else []
+
+
+def contract_worker_ids(bundle_dir: Any) -> list[str]:
+    """Every worker id the sealed contract declares, whatever name its framework gives the worker."""
+    return sorted({str(one["id"]) for one in _contract_workers(bundle_dir)})
+
+
+def _unique_worker_names(workers: Sequence[Any]) -> dict[str, str]:
+    """Each worker's id and the name its framework gives it, where that name is the worker's alone: a name two workers
+    share, or one that is another worker's id, names neither, so their calls are matched by id, never guessed."""
     named = {
-        str(one["id"]): str(one.get("name") or "")
-        for one in _bundle_contract(Path(bundle_dir)).get("workers") or []
-        if isinstance(one, Mapping) and one.get("id") and one.get("name")
+        str(one["id"]): str(one.get("name") or "").strip()
+        for one in workers
+        if isinstance(one, Mapping) and one.get("id") and str(one.get("name") or "").strip()
     }
-    # A name two workers share names neither: their calls are matched by id alone, never guessed to one of them.
     shared = _shared_names(named.values())
-    return {worker: name for worker, name in named.items() if _tool_key(name) not in shared}
+    ids = {str(one["id"]) for one in workers if isinstance(one, Mapping) and one.get("id")}
+    return {
+        worker: name
+        for worker, name in named.items()
+        if _tool_key(name) not in shared and _tool_key(name) not in {_tool_key(other) for other in ids - {worker}}
+    }
+
+
+def contract_worker_names(bundle_dir: Any) -> dict[str, str]:
+    """Each contract worker's id and the name its framework gives it, from the sealed contract, where the name is the
+    worker's alone (`_unique_worker_names`)."""
+    return _unique_worker_names(_contract_workers(bundle_dir))
 
 
 def _shared_names(names: Iterable[str]) -> set[str]:
@@ -1974,7 +1996,8 @@ def worker_stop_outcomes(
     ran on past its cancel, or, when the stops could not be read, every worker this trial gave a deadline."""
     if stops is None:
         named = sorted(worker_deadlines(document))
-        due = (sorted(declared_worker_ids(bundle_dir).values()) if worker_deadline(document) is not None else []) or named
+        # Every declared worker by its id: a name two workers share, or none, never hides one the deadline fell on.
+        due = (contract_worker_ids(bundle_dir) if worker_deadline(document) is not None else []) or named
         return [], [
             {"worker": one, "reason": "whether the harness stopped it at its deadline could not be read"} for one in due
         ]
@@ -2056,11 +2079,11 @@ def _write_trial_state(
     def write() -> None:
         with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
             connection.execute(
-                "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at, worker_deadlines, sealed_at) "
-                "VALUES (1, %s::jsonb, %s, %s::jsonb, NULL) ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults, "
-                "worker_deadline_at = EXCLUDED.worker_deadline_at, worker_deadlines = EXCLUDED.worker_deadlines, "
-                "sealed_at = NULL",
-                (json.dumps(list(faults)), worker_deadline_at, json.dumps(dict(worker_deadlines or {}))),
+                "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at, worker_deadlines, sealed_at, "
+                "started_at) VALUES (1, %s::jsonb, %s, %s::jsonb, NULL, %s) ON CONFLICT (id) DO UPDATE SET "
+                "faults = EXCLUDED.faults, worker_deadline_at = EXCLUDED.worker_deadline_at, "
+                "worker_deadlines = EXCLUDED.worker_deadlines, sealed_at = NULL, started_at = EXCLUDED.started_at",
+                (json.dumps(list(faults)), worker_deadline_at, json.dumps(dict(worker_deadlines or {})), time.time()),
             )
 
     _on_trial_tables(database.address, write)
@@ -2744,12 +2767,13 @@ _BYPASS_PAIR_SECONDS = 5.0
 def channel_bypasses(calls: Sequence[Call], contract_workers: Sequence[Any]) -> list[dict[str, Any]]:
     """The calls a separately wired worker made on the shared address: the door row says the call came in on no
     channel, and the app's own spans name that worker. Matched by the contract id exactly, or by its name as the
-    framework spells it (spans carry the framework's agent name, not the contract id)."""
-    separate = [
-        one
+    framework spells it when no other worker has that name (`call_worker`): spans carry the framework's agent name,
+    not the contract id."""
+    separate = {
+        str(one["id"])
         for one in contract_workers
         if isinstance(one, Mapping) and one.get("binding") == "separate" and str(one.get("id") or "")
-    ]
+    }
     found: list[dict[str, Any]] = []
     # The app's own record of a worker's call (its span or its tool trace) that the door's row was not joined to:
     # the two answers can differ, so the row and the record are paired by the tool, its arguments and the time.
@@ -2758,11 +2782,8 @@ def channel_bypasses(calls: Sequence[Call], contract_workers: Sequence[Any]) -> 
     for call in calls:
         if call.channel != "":
             continue
-        worker = next(
-            (one for one in separate if is_worker_call(call, str(one["id"]), str(one.get("name") or ""))),
-            None,
-        )
-        if worker is None:
+        worker = call_worker(call, contract_workers)
+        if worker not in separate:
             record = next(
                 (
                     one
@@ -2773,18 +2794,29 @@ def channel_bypasses(calls: Sequence[Call], contract_workers: Sequence[Any]) -> 
                     # A row or record with no time cannot be placed beside the other, so it is never paired.
                     and bool(one.at and call.at)
                     and abs(one.at - call.at) <= _BYPASS_PAIR_SECONDS
-                    and any(is_worker_call(one, str(w["id"]), str(w.get("name") or "")) for w in separate)
+                    and call_worker(one, contract_workers) in separate
                 ),
                 None,
             )
+            worker = ""
             if record is not None:
                 used.add(traced.index(record))
-                worker = next(
-                    w for w in separate if is_worker_call(record, str(w["id"]), str(w.get("name") or ""))
-                )
-        if worker is not None:
-            found.append({"worker": str(worker["id"]), "tool": call.name, "at": call.at})
+                worker = call_worker(record, contract_workers)
+        if worker:
+            found.append({"worker": worker, "tool": call.name, "at": call.at})
     return found
+
+
+def call_worker(call: Any, workers: Sequence[Any]) -> str:
+    """The declared worker that made a call: the one whose id it carries exactly, else the one whose name it carries
+    when that name is the worker's alone (`_unique_worker_names`); "" when it names no one worker."""
+    spelled = [one for one in (getattr(call, "worker_id", ""), getattr(call, "worker_label", "")) if one]
+    ids = {str(one["id"]) for one in workers if isinstance(one, Mapping) and one.get("id")}
+    exact = next((one for one in spelled if one in ids), "")
+    if exact:
+        return exact
+    keys = {_tool_key(one) for one in spelled}
+    return next((worker for worker, name in _unique_worker_names(workers).items() if _tool_key(name) in keys), "")
 
 
 def is_worker_call(call: Any, worker_id: str, name: str) -> bool:
@@ -3069,19 +3101,10 @@ def _read_file_tool_calls(
 
 
 def declared_worker_ids(bundle_dir: Path | str | None) -> dict[str, str]:
-    """Each worker the bundle's contract declares, by the name its framework gives it: `{name: worker id}`."""
-    try:
-        body = json.loads((Path(bundle_dir) / "contract.json").read_text(encoding="utf-8")) if bundle_dir else {}
-    except (OSError, ValueError):
-        return {}
-    workers = [
-        one
-        for one in (body.get("workers") if isinstance(body, dict) else None) or []
-        if isinstance(one, dict) and str(one.get("name") or "").strip() and one.get("id")
-    ]
-    # A name two workers share is no worker's: an event under it stays undeclared rather than guessed.
-    shared = _shared_names(str(one["name"]) for one in workers)
-    return {str(one["name"]): str(one["id"]) for one in workers if _tool_key(str(one["name"])) not in shared}
+    """Each worker the bundle's contract declares, by the name its framework gives it: `{name: worker id}`. A name that
+    is not the worker's alone (`_unique_worker_names`) is left out: an event under it stays as it was, never guessed
+    and never rewriting another worker's id."""
+    return {name: worker for worker, name in contract_worker_names(bundle_dir).items()}
 
 
 def _call_id(call: Call) -> str:

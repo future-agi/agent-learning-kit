@@ -414,6 +414,8 @@ TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EX
 # When this trial's call read its stopped workers to seal them; a worker's process is never ended after it, so a stop
 # is sealed or never made. Null until then, and again at each trial's start.
 TRIAL_SEALED_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS sealed_at DOUBLE PRECISION"
+# When this trial started: a stop row from before it is an earlier trial's, left by a clear that failed.
+TRIAL_STARTED_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS started_at DOUBLE PRECISION"
 
 
 # The workers the harness stopped in this trial, written by whoever ended a worker past its deadline (the scheduler ends
@@ -443,8 +445,8 @@ def _trial_schema(address: str) -> None:
 
         with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
             for statement in (
-                TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, WORKER_STOPS_DDL,
-                WORKER_RUNS_DDL,
+                TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, TRIAL_STARTED_DDL,
+                WORKER_STOPS_DDL, WORKER_RUNS_DDL,
             ):
                 connection.execute(statement)
         _TRIAL_SCHEMA_MADE.add(address)
@@ -488,7 +490,7 @@ def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[]
         with psycopg.connect(address, connect_timeout=5) as connection:
             with connection.transaction():
                 row = connection.execute(
-                    "SELECT sealed_at, worker_deadline_at, worker_deadlines FROM _alk_trial_faults WHERE id = 1 "
+                    "SELECT sealed_at, worker_deadline_at, worker_deadlines, started_at FROM _alk_trial_faults WHERE id = 1 "
                     "FOR UPDATE"
                 ).fetchone()
                 if row is None or row[0] is not None:
@@ -498,16 +500,18 @@ def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[]
                 due = worker_due(named.get(worker), row[1])
                 if due is None or time.time() <= due:
                     return False
+                started = row[3] if isinstance(row[3], (int, float)) else 0.0
                 stopped = stop()
                 # Kept either way: a worker that ran on past its cancel was not held to its deadline, and grading must
-                # know that as surely as it knows a stop. A row already there (an earlier trial's, left by a clear that
-                # failed) is replaced with this stop's time, so this trial's seal reads it; a run that once ran on is
-                # never turned into a stop.
+                # know that as surely as it knows a stop. A run that ran on in this trial is never turned into a stop;
+                # an earlier trial's row (left by a clear that failed, so from before this trial started) is replaced
+                # whole by this stop, so this trial's seal reads only what happened in it.
                 connection.execute(
                     "INSERT INTO _alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
                     "ON CONFLICT (worker) DO UPDATE SET process = EXCLUDED.process, at = EXCLUDED.at, reason = CASE "
-                    "WHEN _alk_worker_stops.reason = %s THEN _alk_worker_stops.reason ELSE EXCLUDED.reason END",
-                    (worker, process, time.time(), "deadline_passed" if stopped else NOT_STOPPED, NOT_STOPPED),
+                    "WHEN _alk_worker_stops.reason = %s AND _alk_worker_stops.at >= %s THEN _alk_worker_stops.reason "
+                    "ELSE EXCLUDED.reason END",
+                    (worker, process, time.time(), "deadline_passed" if stopped else NOT_STOPPED, NOT_STOPPED, started),
                 )
                 return stopped
 
