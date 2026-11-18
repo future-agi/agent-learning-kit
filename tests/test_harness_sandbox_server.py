@@ -1132,6 +1132,32 @@ def test_a_github_submission_without_a_commit_sha_is_refused_at_intake(tmp_path)
     assert "github_commit_sha_required" in response.text
 
 
+@pytest.mark.parametrize(
+    "sha",
+    ["main", "   ", "abc1234", "g" * 40, "a" * 41],
+    ids=["a-branch", "blank", "short", "not-hex", "too-long"],
+)
+def test_a_github_submission_with_a_malformed_commit_sha_is_refused_at_intake(tmp_path, sha):
+    # Present is not enough: a value that isn't a commit used to pass intake and fail building
+    # the job, a 500 with no reason.
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs", json={"github_repository": "acme/agent", "github_commit_sha": sha}
+    )
+
+    assert response.status_code == 422
+    assert "github_commit_sha_invalid" in response.text
+
+
+def test_intake_and_the_job_share_one_commit_sha_rule():
+    from fi.alk.harness.job import is_commit_sha
+
+    assert is_commit_sha("0123456789abcdef0123456789ABCDEF01234567")
+    assert not is_commit_sha("main")
+    assert not is_commit_sha("")
+
+
 def test_job_submission_requires_exactly_one_source(tmp_path):
     client = TestClient(create_app(tmp_path / "state"))
 

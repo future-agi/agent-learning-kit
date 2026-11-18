@@ -65,6 +65,7 @@ from .job import (
     RepositorySource,
     SourceKind,
     SourceVisibility,
+    is_commit_sha,
 )
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
@@ -143,6 +144,10 @@ class LocalSandboxRequest(BaseModel):
             # A GitHub job runs hosted, and HarnessJob refuses a hosted GitHub job without the
             # commit it checks out; refuse here, by name, rather than fail building the job.
             raise ValueError("github_commit_sha_required")
+        if self.github_repository and not is_commit_sha(self.github_commit_sha):
+            # Present isn't enough: the job's own rule, so a branch name or a short SHA is a 422
+            # here rather than a 500 building the job.
+            raise ValueError("github_commit_sha_invalid")
         _validate_environment_values(self.environment_values, self.secret_refs)
         _validate_controller_names(self.connector_config, self.secret_refs)
         return self

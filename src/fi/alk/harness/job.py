@@ -45,6 +45,12 @@ class SourceVisibility(str, Enum):
     PUBLIC = "public"
 
 
+def is_commit_sha(value: str) -> bool:
+    """A full commit SHA: 40 hex characters, either case. The one rule for a GitHub source's
+    commit, at intake and on the job, so the two can't drift."""
+    return len(value) == 40 and all(char in "0123456789abcdef" for char in value.lower())
+
+
 class RepositorySource(BaseModel):
     kind: SourceKind
     local_path: str | None = None
@@ -94,10 +100,7 @@ class RepositorySource(BaseModel):
         if not required:
             raise ValueError(f"source_locator_missing: {self.kind.value}")
         if self.kind is SourceKind.GITHUB and self.commit_sha:
-            normalized = self.commit_sha.lower()
-            if len(normalized) != 40 or any(
-                char not in "0123456789abcdef" for char in normalized
-            ):
+            if not is_commit_sha(self.commit_sha):
                 raise ValueError("github_commit_sha_invalid")
         return self
 
