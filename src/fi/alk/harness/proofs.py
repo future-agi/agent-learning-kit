@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from collections.abc import Mapping
 
 from .proof_records import ProofEntry
 from .prove import Proof

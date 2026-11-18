@@ -27,23 +27,33 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import authoring_runtime_validation
-from .catalogue import load_catalogue
-from .catalogue import Catalogue
+from .catalogue import Catalogue, load_catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
 from .folder import apply_setup, check_ready
 from .outbound import redact_outbound_text
 from .proof_records import CheckRecord, ControlResult, LiveResult
 from .proofs import proof_key
-from .prove import Proof, checks_for, control_broken, executes, play_reference_step, played_control
-from .scenario_tools import load_scenarios
+from .prove import (
+    Proof,
+    checks_for,
+    control_broken,
+    executes,
+    play_reference_step,
+    played_control,
+)
 from .scenario import Scenario, Step
+from .scenario_tools import load_scenarios
 from .world.handle import MCP_ROUTE, mcp_request
 from .world.runtime import Call
 
 if TYPE_CHECKING:
     from .hosted_entrypoint import ProcessWorldFactory
-    from .process_runtime import EnvironmentRuntime, ProcessRuntimeProvider, RuntimeEndpoint
+    from .process_runtime import (
+        EnvironmentRuntime,
+        ProcessRuntimeProvider,
+        RuntimeEndpoint,
+    )
 
 logger = logging.getLogger(__name__)
 

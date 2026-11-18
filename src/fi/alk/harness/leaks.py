@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .actors import evaluator_only_paths

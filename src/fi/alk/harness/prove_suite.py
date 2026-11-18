@@ -26,8 +26,8 @@ from typing import Any
 
 from .catalogue import load_catalogue
 from .live_proof import apply_live, load_live
-from .proof_records import ProofEntry
 from .outbound import redact_outbound_text
+from .proof_records import ProofEntry
 from .proofs import proof_entry, proof_key, unprovable_entry
 from .prove import load_proof_contract, load_world_actors, prove
 from .scenario_tools import load_scenarios

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
-import traceback
 import json
 import os
 import re
@@ -11,6 +10,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 import uuid
 from collections.abc import Awaitable
 from contextlib import suppress
@@ -18,6 +18,16 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from ..providers.agent import (
+    _LETTER,
+    _QUERY_OR_FRAGMENT,
+    _REDACTED,
+    _START,
+    _URL_BREAKS,
+    _redact,
+)
+from . import bundle_author_v2
+from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
 from .backends import (
     ASK_TOOL,
     ConversationSession,
@@ -26,10 +36,10 @@ from .backends import (
     tool,
     tool_server,
 )
-from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
-from .failure_file import FAILURE_FILE
-from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
+from .catalogue import load_catalogue
 from .chat_policy import EffectiveChatPolicy, apply_chat_policy, load_chat_policy
+from .dropped import restore_note
+from .failure_file import FAILURE_FILE
 from .hosted_conversation import (
     _UNAVAILABLE_BUDGET_SECONDS,
     ConversationClient,
@@ -37,7 +47,7 @@ from .hosted_conversation import (
     PlatformSessionStore,
     load_conversation_capabilities,
 )
-from .tools import schema
+from .proofs import load_proofs, proof_counts, proof_key
 from .session import (
     ARTIFACT,
     DONE,
@@ -49,19 +59,9 @@ from .session import (
     Stage,
     asking_a_person,
 )
-from ..providers.agent import (
-    _LETTER,
-    _QUERY_OR_FRAGMENT,
-    _REDACTED,
-    _START,
-    _URL_BREAKS,
-    _redact,
-)
+from .tools import schema
+from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 from .understand import load as load_contract
-from .catalogue import load_catalogue
-from .proofs import load_proofs, proof_counts, proof_key
-from . import bundle_author_v2
-from .dropped import restore_note
 
 _NUMBERS = {"type": "array", "items": {"type": "integer"}}
 _RANGES = {

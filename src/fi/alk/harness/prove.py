@@ -38,16 +38,15 @@ from .actors import load_actors
 from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
-from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
 from .folder import apply_setup, check_ready
-from .scenario import NegativeControl, Scenario
-from .world.runtime import Call, GeneratedWorld, settled
-from .world.snapshot import read_manifest, restore
 from .grounding import policy_conflicts, resolve_sources, unresolved
 from .judge import judge_sub_goal
 from .leaks import leaks
+from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
+from .scenario import NegativeControl, Scenario
 from .understand import load
-
+from .world.runtime import Call, GeneratedWorld, settled
+from .world.snapshot import read_manifest, restore
 
 # The lane could not execute something; the case runs labelled "kept as written", never as proved.
 # "judged_only": only a judge grades the case and no control has shown the judge fails a wrong behaviour.
@@ -742,8 +741,8 @@ def workspace_fixture_problems(
     """Check fixture structure; only live readiness can verify target file contents."""
     if not bindings:
         return ["file fixtures require a declared runtime.workspaces binding"]
-    from .world.files import relative_parts
     from .world.errors import WorldUsageError
+    from .world.files import relative_parts
 
     writes = False
     reads = False
