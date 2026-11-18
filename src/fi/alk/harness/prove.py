@@ -46,6 +46,8 @@ from .world.snapshot import read_manifest, restore
 # The lane could not execute something; the case runs labelled "kept as written", never as proved.
 # "judged_only": only a judge grades the case and no control has shown the judge fails a wrong behaviour.
 LANE_CODES = frozenset({"proof_deferred", "solution_assumed", "control_not_run", "judged_only"})
+# A case with no negative control at all: refused at submit, kept not proved through a rebuild.
+NO_NEGATIVE_CONTROL = "no_negative_control"
 
 
 @dataclass
@@ -197,7 +199,7 @@ class Proof:
                 return "unchecked"
             if not self.judged_only:
                 if not self.controls:
-                    return "no_negative_control"
+                    return NO_NEGATIVE_CONTROL
                 if any(one.get("failed") is False for one in self.ran_controls):
                     return "negative_control_passed"
             elif any(one.get("failed") is False for one in self.judged_controls):

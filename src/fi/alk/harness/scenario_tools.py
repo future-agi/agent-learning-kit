@@ -73,6 +73,7 @@ from .folder import (
 from .checks import reference_of, run_check
 from .proofs import proof_key, record_proof, record_unprovable
 from .prove import (
+    NO_NEGATIVE_CONTROL,
     executes,
     native_runtime,
     native_source_problem,
@@ -1479,7 +1480,7 @@ def _controls_the_contract_refuses(scenario: Scenario, world_root: Path) -> list
 
 
 # A writer's fault: the scenario is not kept. The lane codes (an unbound tool) are kept and labelled.
-_REFUSED_CODES = frozenset({"negative_control_passed", "no_negative_control", "answer_leaked", "source_unresolved"})
+_REFUSED_CODES = frozenset({"negative_control_passed", NO_NEGATIVE_CONTROL, "answer_leaked", "source_unresolved"})
 
 
 def _a_read_that_declines(scenario: Scenario, proof: Any, world_root: Path) -> bool:

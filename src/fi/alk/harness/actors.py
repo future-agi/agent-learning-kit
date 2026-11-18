@@ -598,7 +598,10 @@ def knowledge_file_allowed(path: str, hidden: Collection[str] = ()) -> bool:
 
 # Each attached file's role, written by the platform when the person attaches it: `{"knowledge/<path>": <role>}`.
 KNOWLEDGE_ROLES = "knowledge/roles.json"
-FILE_ROLES = ("policy", "seed_records", "evaluator_only")
+EVALUATOR_ONLY_ROLE = "evaluator_only"
+FILE_ROLES = ("policy", "seed_records", EVALUATOR_ONLY_ROLE)
+# What a role the harness does not know is read as: the safe side, kept from the agent and every actor.
+UNKNOWN_ROLE_READS_AS = EVALUATOR_ONLY_ROLE
 _logger = logging.getLogger(__name__)
 
 
@@ -629,14 +632,14 @@ def knowledge_roles(root: Path) -> dict[str, str]:
                 role,
                 ", ".join(FILE_ROLES),
             )
-            role = "evaluator_only"
+            role = UNKNOWN_ROLE_READS_AS
         roles[path] = role
     return roles
 
 
 def evaluator_only_paths(root: Path) -> list[str]:
     """The attached files only the evaluator may read, by path under `knowledge/`."""
-    return sorted(path for path, role in knowledge_roles(root).items() if role == "evaluator_only")
+    return sorted(path for path, role in knowledge_roles(root).items() if role == EVALUATOR_ONLY_ROLE)
 
 
 def evaluator_only_rule(root: Path | None = None) -> dict[str, list[str]]:

@@ -32,7 +32,7 @@ from .catalogue import (
 from .contract import validate_contract
 from .outbound import _redact_validation_error
 from .proofs import load_proofs, record_proof, record_unprovable
-from .prove import prepared, prove
+from .prove import NO_NEGATIVE_CONTROL, prepared, prove
 from .scenario import Scenario, _slug
 from .scenario_tools import load_scenarios, refuses_keeping, write_scenarios
 from .seed_rows import missing_seed_rows
@@ -370,16 +370,13 @@ def environment_gate(workspace: Path) -> tuple[list[dict], list[str]]:
     return problems, not_checked
 
 
-NO_CONTROL = "no_negative_control"
-
-
 def unproved_without_control(workspace: Path) -> list[str]:
     """The warning for the suite's cases kept not proved because they have no negative control, or none."""
     proofs = load_proofs(workspace)
     keys = sorted(
         one.scenario_key
         for one in load_scenarios(workspace)
-        if (proofs.get(one.scenario_key) or {}).get("blocked_reason") == NO_CONTROL
+        if (proofs.get(one.scenario_key) or {}).get("blocked_reason") == NO_NEGATIVE_CONTROL
     )
     if not keys:
         return []
@@ -445,7 +442,7 @@ def suite_gate(
             # control its checks pass, a leaked answer) is a problem, however it held before. One with no control at
             # all was written before controls were required: it stays, recorded not proved, and is held out of runs
             # until it has one (`unproved_without_control`), so an older suite still rebuilds.
-            refused = refuses_keeping(proof) and proof.blocked_reason() != NO_CONTROL
+            refused = refuses_keeping(proof) and proof.blocked_reason() != NO_NEGATIVE_CONTROL
             if proof.deferred and not proof.broken and not refused:
                 # Only the live runtime can prove it; that is not a failure.
                 not_checked.append(key)
