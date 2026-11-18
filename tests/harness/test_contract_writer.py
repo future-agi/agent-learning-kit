@@ -1395,8 +1395,15 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, _READS + " (rewrites stale pre-run sessions in scenario.json)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "validate_native"): (
         1, _READS + " (the native validation record)"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_bytes"): (
-        1, _READS + " (a validation record)"),
+    # The job document and the secrets copy, written by `_prepare_runtime_work`, which a prove-only pass shares.
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "_prepare_runtime_work"): (
+        1, _READS + " (the runtime workspace's job and secrets copy)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "play_this_attempt"): (
+        1, _READS + " (the live proofs file)"),
+    ("fi.alk.harness.authoring_runtime_validation", "prove_on_sealed_runtime", "_prepare_runtime_work"): (
+        1, _READS + " (the runtime workspace's job and secrets copy)"),
+    ("fi.alk.harness.authoring_runtime_validation", "prove_on_sealed_runtime", "prove_live"): (
+        1, _READS + " (the live proofs file)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "record_tool_routing"): (
         1, _READS + " (the tool routing observations)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "request_uncovered_tools"): (
@@ -1406,7 +1413,7 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     ("fi.alk.harness.hosted_agent_reading", "_read", "write_text"): (
         1, _READS + " (the agent reading's document, agent.json)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_text"): (
-        2, _READS + " (validation records)"),
+        1, _READS + " (validation records)"),
     ("fi.alk.harness.bundle_author_v2", "_reuse_certified_bundle", "Path.rename"): (
         3, _READS + " (its digest); moves bundle folders"),
     ("fi.alk.harness.bundle_author_v2", "_reuse_certified_bundle", "shutil.copy2"): (
