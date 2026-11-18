@@ -178,6 +178,24 @@ def test_outside_the_controller_every_name_loads_as_before(clean_env, tmp_path):
     assert _MANIFEST not in os.environ
 
 
+@pytest.mark.parametrize("inside", [False, True], ids=["outside", "inside"])
+def test_a_repository_env_never_sets_the_kit_build_id(clean_env, tmp_path, inside):
+    # ALK_BUILD_ID says which kit build wrote a reading: the template sets it, a repository can't.
+    clean_env.delenv("ALK_BUILD_ID", raising=False)
+    if inside:
+        clean_env.setenv(_MANIFEST, "")
+    else:
+        clean_env.delenv(_MANIFEST, raising=False)
+    source = _env(tmp_path, "ALK_BUILD_ID=abc1234\nMY_SETTING=mine\n")
+
+    loaded = _load_connection_env(source)
+
+    assert "ALK_BUILD_ID" not in loaded
+    assert "ALK_BUILD_ID" not in os.environ
+    assert "ALK_RUNTIME_VALUE_ALK_BUILD_ID" not in os.environ
+    assert "MY_SETTING" in loaded
+
+
 def test_a_planted_voice_runner_is_not_run_by_place_the_call(clean_env, tmp_path, monkeypatch):
     from fi.alk.harness.run import call
 
