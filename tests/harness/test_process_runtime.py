@@ -3709,6 +3709,267 @@ def test_canonical_seed_replays_bundled_discovery_without_authoring_directory(
         assert applied[0].source_schema_hash == discovered.fingerprint
 
 
+@pytest.mark.parametrize(
+    ("built_with", "live_adds", "applies", "wider_log"),
+    [
+        ((), ("_alk_actors",), True, False),
+        ((), ("_alk_actors",), True, True),
+        (("_alk_actors",), ("_alk_actors",), True, False),
+        ((), ("orders",), False, False),
+    ],
+    ids=[
+        "actors-added-after-build",
+        "actor-columns-on-the-log",
+        "built-with-actors",
+        "agent-schema-changed",
+    ],
+)
+def test_canonical_seed_checks_the_world_as_built_whatever_alk_adds_later(
+    tmp_path: Path,
+    monkeypatch,
+    built_with: tuple[str, ...],
+    live_adds: tuple[str, ...],
+    applies: bool,
+    wider_log: bool,
+) -> None:
+    from contextlib import nullcontext
+
+    from fi.alk.harness.compile import postgres as compiler
+    from fi.alk.harness.source_model import (
+        LogicalType,
+        SourceColumn,
+        SourceModel,
+        SourceTable,
+    )
+    from fi.alk.harness.source_schema import postgres as schema
+    from fi.alk.harness.world_ir import WorldIR
+
+    def table(name: str, *more: str) -> SourceTable:
+        columns = tuple(
+            SourceColumn(
+                name=one,
+                logical_type=LogicalType.STRING,
+                native_type="text",
+                nullable=one != "id",
+                has_default=False,
+            )
+            for one in ("id", *more)
+        )
+        return SourceTable(name=name, columns=columns, primary_key=("id",))
+
+    digest = "sha256:" + "a" * 64
+    built = ("_alk_tool_trace", "items", *built_with)
+    recorded = SourceModel.create(
+        source_digest=digest, engine="postgres", tables=tuple(map(table, built))
+    )
+    live_tables = tuple(map(table, (*built, *live_adds)))
+    if wider_log:
+        # Seeded with an actor, the action log has the actor columns the build's log lacked.
+        live_tables = (
+            table("_alk_tool_trace", "actor_id", "outcome"),
+            *live_tables[1:],
+        )
+    live = SourceModel.create(
+        source_digest=digest, engine="postgres", tables=live_tables
+    )
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "source-model.json").write_text(recorded.model_dump_json())
+    (seed / "world-ir.json").write_text(
+        WorldIR.create(
+            source_model_fingerprint=recorded.fingerprint, tables=()
+        ).model_dump_json()
+    )
+    applied = []
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        types.SimpleNamespace(connect=lambda **_: nullcontext(object())),
+    )
+    monkeypatch.setattr(schema, "inspect_postgres", lambda *_args, **_kwargs: live)
+    monkeypatch.setattr(
+        compiler,
+        "apply_postgres",
+        lambda _connection, compiled: applied.append(compiled),
+    )
+
+    def seed_world():
+        pr.apply_postgres_world_ir(
+            seed / "world-ir.json",
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            source_digest=digest,
+        )
+
+    if applies:
+        seed_world()
+        assert applied[0].source_schema_hash == recorded.fingerprint
+    else:
+        with pytest.raises(
+            pr.GenericWorldSeedError, match="source_model_fingerprint_mismatch"
+        ):
+            seed_world()
+        assert not applied
+
+
+@pytest.mark.parametrize(
+    ("built", "live", "applies"),
+    [
+        (("items",), ("_alk_tool_trace", "items"), True),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace+", "items"), True),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace", "items"), True),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace", "items", "orders"), False),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace", "items+"), False),
+    ],
+    ids=[
+        "log-the-build-did-not-record",
+        "log-widened-since-the-build",
+        "same-harness",
+        "agent-table-added",
+        "agent-column-added",
+    ],
+)
+def test_canonical_seed_reads_the_harness_tables_as_the_build_recorded_them(
+    tmp_path: Path, monkeypatch, built: tuple[str, ...], live: tuple[str, ...], applies: bool
+) -> None:
+    """Certify-only seeds a saved World IR under whatever harness runs it: the harness's own
+    `_alk_` tables never change the fingerprint, any change to the agent's schema does."""
+    from contextlib import nullcontext
+
+    from fi.alk.harness.compile import postgres as compiler
+    from fi.alk.harness.source_model import LogicalType, SourceColumn, SourceModel, SourceTable
+    from fi.alk.harness.source_schema import postgres as schema
+    from fi.alk.harness.world_ir import WorldIR
+
+    def table(spec: str) -> SourceTable:
+        name = spec.rstrip("+")
+        names = ("id", "extra") if spec.endswith("+") else ("id",)
+        columns = tuple(
+            SourceColumn(
+                name=one,
+                logical_type=LogicalType.STRING,
+                native_type="text",
+                nullable=one != "id",
+                has_default=False,
+            )
+            for one in names
+        )
+        return SourceTable(name=name, columns=columns, primary_key=("id",))
+
+    digest = "sha256:" + "b" * 64
+    recorded = SourceModel.create(source_digest=digest, engine="postgres", tables=tuple(map(table, built)))
+    inspected = SourceModel.create(source_digest=digest, engine="postgres", tables=tuple(map(table, live)))
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "source-model.json").write_text(recorded.model_dump_json())
+    (seed / "world-ir.json").write_text(
+        WorldIR.create(source_model_fingerprint=recorded.fingerprint, tables=()).model_dump_json()
+    )
+    applied = []
+    monkeypatch.setitem(
+        sys.modules, "psycopg", types.SimpleNamespace(connect=lambda **_: nullcontext(object()))
+    )
+    monkeypatch.setattr(schema, "inspect_postgres", lambda *_args, **_kwargs: inspected)
+    monkeypatch.setattr(compiler, "apply_postgres", lambda _connection, compiled: applied.append(compiled))
+
+    def seed_world():
+        pr.apply_postgres_world_ir(
+            seed / "world-ir.json",
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            source_digest=digest,
+        )
+
+    if applies:
+        seed_world()
+        assert applied[0].source_schema_hash == recorded.fingerprint
+    else:
+        with pytest.raises(pr.GenericWorldSeedError):
+            seed_world()
+        assert not applied
+
+
+@pytest.mark.parametrize(
+    ("extra_table", "seeds"),
+    [("_alk_tool_trace", True), ("harness_seed_sentinel", True), ("audit_log", False)],
+)
+def test_canonical_seed_reads_past_the_harness_tables_in_the_live_schema(
+    tmp_path: Path, monkeypatch, extra_table: str, seeds: bool
+) -> None:
+    from contextlib import nullcontext
+
+    from fi.alk.harness.compile import postgres as compiler
+    from fi.alk.harness.source_model import (
+        LogicalType,
+        SourceColumn,
+        SourceModel,
+        SourceTable,
+    )
+    from fi.alk.harness.source_schema import postgres as schema
+    from fi.alk.harness.world_ir import WorldIR
+
+    def table(name: str) -> SourceTable:
+        column = SourceColumn(
+            name="id",
+            logical_type=LogicalType.STRING,
+            native_type="text",
+            nullable=False,
+            has_default=False,
+        )
+        return SourceTable(name=name, columns=(column,), primary_key=("id",))
+
+    discovered = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        engine_version="16",
+        tables=(table("orders"),),
+    )
+    inspected = SourceModel.create(
+        source_digest=discovered.source_digest,
+        engine="postgres",
+        engine_version="16",
+        tables=(table(extra_table), table("orders")),
+    )
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "source-model.json").write_text(discovered.model_dump_json())
+    world = WorldIR.create(source_model_fingerprint=discovered.fingerprint, tables=())
+    (seed / "world-ir.json").write_text(world.model_dump_json())
+    applied = []
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        types.SimpleNamespace(connect=lambda **_: nullcontext(object())),
+    )
+    monkeypatch.setattr(schema, "inspect_postgres", lambda *_args, **_kwargs: inspected)
+    monkeypatch.setattr(
+        compiler,
+        "apply_postgres",
+        lambda _connection, compiled: applied.append(compiled),
+    )
+
+    def replay():
+        pr.apply_postgres_world_ir(
+            seed / "world-ir.json",
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            source_digest=discovered.source_digest,
+        )
+
+    if seeds:
+        replay()
+        assert applied[0].source_schema_hash == discovered.fingerprint
+    else:
+        with pytest.raises(
+            pr.GenericWorldSeedError, match="source_model_fingerprint_mismatch"
+        ):
+            replay()
+        assert not applied
+
+
 def test_canonical_seed_names_a_source_model_recorded_for_other_source(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -4712,6 +4973,7 @@ def test_write_build_output_shape(tmp_path: Path) -> None:
             "inputs_digest": "sha256:" + "a" * 64,
             "baseline_reference": "alk_baseline_postgres",
             "row_counts": {"riders": 3},
+            "seed_digest": {},
         }
     ]
 
@@ -10368,7 +10630,9 @@ _EXPORT_HEADERS = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
 
 
 def _provision_from_job_json(
-    tmp_path: Path, customer_code_environment: object
+    tmp_path: Path,
+    customer_code_environment: object,
+    egress_allowed_hosts: list[str] | None = None,
 ) -> tuple[
     list[tuple[list[str], dict[str, str]]], list[tuple[list[str], dict[str, str]]]
 ]:
@@ -10394,7 +10658,14 @@ def _provision_from_job_json(
                         },
                     }
                 },
-                "metadata": {"customer_code_environment": customer_code_environment},
+                "metadata": {
+                    "customer_code_environment": customer_code_environment,
+                    **(
+                        {"egress_allowed_hosts": egress_allowed_hosts}
+                        if egress_allowed_hosts is not None
+                        else {}
+                    ),
+                },
             }
         )
     )
@@ -10484,6 +10755,36 @@ def test_mark_read_from_job_json_reaches_every_source_process(tmp_path: Path) ->
             "PYTHONPATH",
         ):
             assert name not in env
+
+
+def test_a_controlled_run_points_only_the_agent_at_the_refusing_proxy(tmp_path: Path) -> None:
+    """`job.json` naming the allowed hosts gives the agent process HTTP(S)_PROXY at a refusing proxy and NO_PROXY
+    covering loopback, the world's own hosts and every allowed domain; without it nothing changes."""
+    allowed = ["api.openai.com", "*.hf.co", "platform.example"]
+    controlled = tmp_path / "controlled"
+    controlled.mkdir()
+    spawned, _ = _provision_from_job_json(controlled, {}, allowed)
+    agents = [env for argv, env in spawned if argv == ["python3", "agent.py"]]
+    tools = [env for argv, env in spawned if argv == ["node", "server.js"]]
+    assert agents and tools
+    for env in agents:
+        assert env["HTTP_PROXY"] == env["HTTPS_PROXY"] == env["https_proxy"]
+        assert env["NODE_USE_ENV_PROXY"] == "1"
+        assert env["HTTP_PROXY"].startswith("http://127.0.0.1:")
+        excluded = env["NO_PROXY"].split(",")
+        assert env["no_proxy"] == env["NO_PROXY"]
+        for host in ("localhost", "127.0.0.1", "::1", "api.openai.com", ".hf.co", "platform.example"):
+            assert host in excluded
+    # Each world has its own proxy, so a refusal lands in that world's action log.
+    assert len({env["HTTP_PROXY"] for env in agents}) == 2
+    for env in tools:
+        assert "HTTP_PROXY" not in env and "NO_PROXY" not in env
+
+    unrestricted = tmp_path / "unrestricted"
+    unrestricted.mkdir()
+    spawned, _ = _provision_from_job_json(unrestricted, {})
+    for argv, env in spawned:
+        assert "HTTP_PROXY" not in env and "HTTPS_PROXY" not in env and "NO_PROXY" not in env
 
 
 @pytest.mark.parametrize(
@@ -11230,3 +11531,28 @@ def test_the_agents_sdk_tracing_switch_alone_places_no_hook(tmp_path: Path) -> N
     )
     assert captured["env"]["OPENAI_AGENTS_DISABLE_TRACING"] == "1"
     assert not (captured["world_dir"] / "sitecustomize.py").exists()
+
+
+@pytest.mark.parametrize(
+    ("agent_env", "traced_by"),
+    [({}, "mcp-toolbox"), ({"HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl"}, "agent")],
+    ids=["an older seal traces in its tools service", "the control service traces itself"],
+)
+def test_the_tool_trace_is_read_from_the_process_that_writes_it(tmp_path: Path, agent_env, traced_by) -> None:
+    from types import SimpleNamespace
+
+    toolbox = SimpleNamespace(
+        name="mcp-toolbox",
+        environment={"DATABASE_URL": "{{WORLD_DATABASE_URL}}", "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl"},
+    )
+    agent = SimpleNamespace(name="agent", environment={"HARNESS_MODE": "1", **agent_env})
+    provider = object.__new__(pr.ProcessRuntimeProvider)
+    provider._manifest = SimpleNamespace(
+        processes=[SimpleNamespace(name="world-db", environment=None), agent, toolbox],
+        runtime=SimpleNamespace(control_service="agent"),
+    )
+    provider._context = SimpleNamespace(work_directory=tmp_path, dispatch_id="", job_id="job-1")
+
+    metadata = provider._control_metadata(0)
+
+    assert metadata["tool_trace_path"] == str(tmp_path / "worlds" / "w0" / traced_by / "agent-tool-calls.jsonl")

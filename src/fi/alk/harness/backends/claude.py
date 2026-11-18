@@ -12,6 +12,7 @@ name rather than implemented here.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import tempfile
 from typing import Any, AsyncIterator
@@ -34,7 +35,9 @@ from claude_agent_sdk import (
 from fi import agentcc
 
 from .base import (
+    ASK_TOOL,
     DELEGATE_TOOL,
+    KNOWN_BUILTINS,
     MOST_WORKERS_AT_ONCE,
     Call,
     ModelReply,
@@ -48,6 +51,9 @@ from .base import (
     WorkerSpec,
     tool_input_schema,
 )
+from .files import secret_read_rules
+
+logger = logging.getLogger(__name__)
 
 # The loop is Claude Code; the model it bills is not.
 DEFAULT_MODEL = "gemini-3.7-flash"
@@ -184,8 +190,15 @@ class ClaudeSession:
         self._mirror_errors: list[str] = []
         self._tool_names: dict[str, str] = {}
         self._terminal_save_succeeded = False
+        # The CLI reports running totals within one connection, so a result's own counts are its
+        # totals less the last ones seen. None until this connection's first report.
+        self._so_far: dict[str, int] | None = None
+        # A resumed connection's totals may carry the old process's turns on (SDK 0.2.176 on).
+        self._resumed = bool(getattr(options, "resume", None))
 
     async def start(self) -> None:
+        # A new process starts its own totals, which the old baseline must not be taken from.
+        self._so_far = None
         self._client = ClaudeSDKClient(options=self._options)
         await self._client.connect()
 
@@ -277,7 +290,8 @@ class ClaudeSession:
         if isinstance(received, ResultMessage):
             # subtype alone is not the outcome. A call that failed upstream still arrives with
             # subtype "success", so the error facts ride along and Stage decides what failed.
-            counted = _tokens(getattr(received, "model_usage", None))
+            model_usage = getattr(received, "model_usage", None)
+            own = self._own(received)
             errors = [
                 *list(getattr(received, "errors", None) or []),
                 *self._mirror_errors,
@@ -286,17 +300,23 @@ class ClaudeSession:
                 StageDone(
                     outcome=received.subtype,
                     turns=received.num_turns,
-                    cost_usd=_cost(
-                        getattr(received, "model_usage", None),
-                        counted,
-                        received.total_cost_usd,
+                    # A turn that reported no usage cost nothing; None would read as unpriced.
+                    cost_usd=(
+                        0.0
+                        if own is None
+                        else _cost(
+                            [self._reported_model]
+                            if self._reported_model
+                            else [str(name) for name in (model_usage or {})],
+                            own,
+                        )
                     ),
-                    **counted,
+                    **(own or _tokens(None)),
                     session_id=received.session_id,
                     models=(
                         {self._reported_model}
                         if self._reported_model
-                        else set(getattr(received, "model_usage", None) or {})
+                        else set(model_usage or {})
                     ),
                     is_error=bool(
                         getattr(received, "is_error", False) or self._mirror_errors
@@ -326,19 +346,56 @@ class ClaudeSession:
             return returned
         return []
 
+    def _own(self, received: Any) -> dict[str, int] | None:
+        """This result's own counts, or None when it reported no usage at all."""
+        totals = _tokens(getattr(received, "model_usage", None))
+        if not any(totals.values()):
+            # Nothing to take a difference from, so the baseline stands for the next result.
+            return None
+        if self._so_far is None and self._resumed:
+            # A resumed connection's first totals may hold the earlier process's turns, and
+            # `usage` reports this query alone on every SDK. It leaves out workers' tokens.
+            usage = getattr(received, "usage", None)
+            if not usage:
+                logger.warning(
+                    "a resumed Claude session's first result reported no usage; "
+                    "its own tokens are recorded as 0"
+                )
+            own = _tokens({"usage": usage or {}})
+        elif self._so_far is None:
+            own = totals
+        elif any(totals[count] < self._so_far[count] for count in totals) or (
+            totals["tokens_in"] - totals["tokens_cached"]
+            < self._so_far["tokens_in"] - self._so_far["tokens_cached"]
+        ):
+            # The totals restarted under us, so this result is all new.
+            own = totals
+        else:
+            own = {count: totals[count] - self._so_far[count] for count in totals}
+            # A difference below the query's own usage means the totals weren't running on:
+            # restarted and already back above the baseline, or a CLI that reports each query on
+            # its own. usage is this query's main-thread tokens, so the turn is never less.
+            per_query = _tokens({"usage": getattr(received, "usage", None) or {}})
+            if any(own[count] < per_query[count] for count in own):
+                own = totals
+        self._so_far = totals
+        return own
 
-def _cost(model_usage: Any, counted: dict[str, int], reported: float | None) -> float | None:
-    """What the run cost, priced here where possible, else the CLI's own figure."""
+
+def _cost(names: list[str], own: dict[str, int]) -> float | None:
+    """What this turn cost, priced here from its own tokens, or None where nothing is priced.
+
+    Never the CLI's own estimate: it prices a non-Claude model at a guess, about 7x Gemini's rate.
+    """
     from .vertex_gemini import priced
 
-    named = [str(name) for name in (model_usage or {})]
     ours = [
-        priced(name, counted["tokens_in"], counted["tokens_out"], counted["tokens_cached"])
-        for name in named
+        priced(name, own["tokens_in"], own["tokens_out"], own["tokens_cached"])
+        for name in names
     ]
     known = [one for one in ours if one is not None]
     if not known:
-        return reported
+        return None
     # One stage runs on one model: summing would price the same tokens once per reported id.
     return max(known)
 
@@ -414,6 +471,22 @@ class ClaudeBackend:
         gateway_compatible = behind_gateway(spec.model)
         # A worker's calls are made inside this session, so the gate covers its tools too.
         allowed = [name for name in spec.granted_anywhere() if name != DELEGATE_TOOL]
+        # What the session itself may call, and each worker: the gate holds each to its own.
+        own = [name for name in spec.granted() if name != DELEGATE_TOOL]
+        per_worker = {
+            name: [tool for tool in worker.granted(spec) if tool != DELEGATE_TOOL]
+            for name, worker in spec.workers.items()
+        }
+        # The CLI's own tools are only the ones the session or a worker was granted; left unset,
+        # the CLI offers every one it has.
+        asked_for = [
+            *spec.builtins,
+            *(name for worker in spec.workers.values() for name in (worker.builtins or ())),
+        ]
+        unknown = sorted({name for name in asked_for if name not in KNOWN_BUILTINS})
+        if unknown:
+            raise ValueError(f"no host tool of these names to grant: {', '.join(unknown)}")
+        builtins = list(dict.fromkeys(name for name in asked_for if name != DELEGATE_TOOL))
         # Union per server name; each agent is still restricted by its own `tools` allowlist.
         servers: dict[str, ToolServer] = {}
         for source in (spec.servers, *(worker.servers for worker in spec.workers.values())):
@@ -441,10 +514,15 @@ class ClaudeBackend:
             # A backgrounded worker lets the stage end before the worker reports.
             environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
             allowed.extend(DELEGATION_TOOLS)
+            own.extend(DELEGATION_TOOLS)
+            builtins.extend(DELEGATION_TOOLS)
         _can_reach_its_workers(spec, allowed)
         options = ClaudeAgentOptions(
+            tools=builtins,
             system_prompt=_prompt_for(spec.system_prompt),
-            allowed_tools=allowed,
+            # Not the question tool: an allow rule could approve it before the permission
+            # callback, and so before the stage's ask, is consulted.
+            allowed_tools=[name for name in allowed if name != ASK_TOOL],
             mcp_servers={
                 server_name: _sdk_server(
                     server, gateway_compatible=gateway_compatible
@@ -470,16 +548,27 @@ class ClaudeBackend:
         )
         if spec.cwd is not None:
             options.cwd = spec.cwd
+        if not spec.granted_anywhere():
+            # A session given no tools sees none: otherwise the CLI's own built-ins are offered, a model may call
+            # one, and a one-turn decision ends at its turn limit with no answer.
+            options.tools = []
         if spec.gated:
             # Not acceptEdits: that auto-approves Edit and Write before the permission callback
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose
             # whole job is to validate that change.
             options.permission_mode = "default"
-            options.disallowed_tools = [name for name in UNWANTED if name not in spec.builtins]
-            options.hooks = gate_hooks(allowed)
+            options.hooks = gate_hooks(own, per_worker)
             options.can_use_tool = spec.permission_override or permission_gate(
-                spec.ask, allowed
+                spec.ask, allowed, own
             )
+        # Every session, gated or not, carries the secret list as Read deny rules: Claude Code's own
+        # Grep and Glob turn them into exclusions, which the gate (it sees only a call's
+        # arguments) can't do for a search that starts above a credential file.
+        options.disallowed_tools = [
+            # A worker's granted built-ins are the session's too, so none of them is disallowed.
+            *([name for name in UNWANTED if name not in builtins] if spec.gated else []),
+            *secret_read_rules(),
+        ]
         if spec.thinking:
             options.thinking = thinking_config()
         return options

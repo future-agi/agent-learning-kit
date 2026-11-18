@@ -295,6 +295,8 @@ class HarnessJobMetadata(BaseModel):
     model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
 
     customer_code_environment: dict[str, str] = Field(default_factory=dict)
+    # The hosts a controlled run lets the agent reach; absent when the platform does not control its egress.
+    egress_allowed_hosts: list[str] | None = None
 
 
 # OpenAI's own model families, the only bare names the model gateway serves in the Agents SDK's
@@ -437,12 +439,13 @@ class HarnessJob(BaseModel):
                 "sends the rest unchanged to its configured endpoint. A name handed to a model "
                 "object such as OpenAIChatCompletionsModel(model=...) is sent unchanged, so "
                 "leave it as the requested model. Never change the model itself. If the agent "
-                "runs as its own Docker Compose project and its code neither calls "
+                "is a Docker Compose project and its code neither calls "
                 'set_default_openai_api("chat_completions") nor hands the model to a '
-                "chat-completions model object, write in the contract's notes that every turn "
-                "on this model gets the gateway's HTTP 501 until the agent's startup adds "
-                'set_default_openai_api("chat_completions"): the kit can\'t set it inside '
-                "that project."
+                "chat-completions model object, write in the contract's notes that when the kit "
+                "runs this Compose project as is (it does where a Compose broker is set up), "
+                "every turn on this model gets the gateway's HTTP 501 until the agent's startup "
+                'adds set_default_openai_api("chat_completions"); where the kit builds the '
+                "services from source instead, it sets this itself."
             )
         if self.require_tool_workflow:
             instructions.append(

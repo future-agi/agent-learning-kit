@@ -334,7 +334,9 @@ def _set_openai_agents_chat_style(module: Any, reason: str = "") -> None:
             )
         else:
             # Only the kit's own switch, and for this process only: the environment keeps it, so
-            # a child the hook never reaches (python -I) still has its tracing off. A customer
+            # a child the hook never reaches (python -I) starts with its tracing off. That child's
+            # exporter isn't made local, so if its own code turns tracing back on, it sends its
+            # spans and OPENAI_API_KEY (the gateway key) to OpenAI: a stated limit. A customer
             # who turned their tracing off themselves keeps it off.
             if os.environ.get(_SDK_TRACING_BY_KIT) == "1":
                 try:
@@ -607,3 +609,12 @@ except Exception:  # noqa: BLE001 - optional observation must not affect custome
 
 if not _crewai_observer_installed:
     _install_declared_python_tools()
+
+# The world's door for tools the agent runs in its own process: beside this hook only when the bundle has one.
+if os.environ.get("ALK_WORLD_DOOR_URL", "").strip():
+    try:
+        import in_process_door_bootstrap
+
+        in_process_door_bootstrap.install()
+    except Exception:  # noqa: BLE001 - the door must never cost the agent its tools
+        sys.stderr.write("world door hook: failed\n")

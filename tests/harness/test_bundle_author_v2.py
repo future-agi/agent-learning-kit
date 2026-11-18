@@ -892,7 +892,8 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
 
     handler = (output / "handlers" / "lookup_account.py").read_text(encoding="utf-8")
     assert "from customer_tools import lookup_account" in handler
-    assert "return settled(lookup_account(**args))" in handler
+    # The adopted tool is called the way its own signature expects (keywords here), through the shared caller.
+    assert "return settled(call_agent_tool(lookup_account, args, db, state=False))" in handler
     load_bundle_v2(output)
     world = GeneratedWorld(":memory:")
     world.handlers["lookup_account"] = handler
@@ -5124,6 +5125,75 @@ def test_a_changed_world_reaches_the_sealed_seed_on_reseal(
     assert reseal_scenarios(authoring) == digest
 
 
+def test_an_actor_who_speaks_on_calls_is_sealed_in_the_one_actor_list(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "actors.json").write_text(
+        json.dumps(
+            {
+                "actors": [
+                    {"id": "partner", "name": "Sam", "role": "the person's partner", "channel": "audio_mix"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", scenario_count=1),
+        authoring=authoring,
+        output=output,
+    )
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    sealed = {one["path"] for one in manifest["files"]}
+    assert "actors.json" in sealed
+    assert sealed.isdisjoint({"sub_actors.json", "call_actors.json"})
+    assert json.loads((output / "actors.json").read_text())["actors"][0]["channel"] == "audio_mix"
+
+
+def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", scenario_count=1),
+        authoring=authoring,
+        output=output,
+    )
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert {"actors.json", "actor_rules.json"} <= {
+        one["path"] for one in manifest["files"]
+    }
+    rules = json.loads((output / "actor_rules.json").read_text(encoding="utf-8"))
+    assert set(rules["records"]) == {"actors.json"}
+
+
+def test_a_world_without_actors_gets_the_full_action_log(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _action_log_seed
+
+    without = _action_log_seed(tmp_path)
+    assert "actor_id text" in without and "outcome text" in without and "effect text" in without
+    assert "INSERT INTO _alk_actors" not in without
+    (tmp_path / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+    with_actors = _action_log_seed(tmp_path)
+    assert "actor_id text" in with_actors and "INSERT INTO _alk_actors" in with_actors
+
+
 # The platform pins the same digest for the same files (test_harness_versioning_reseal.py).
 GOLDEN_SEALED_FROM = (
     "sha256:402ed05450abe6c943865dd538ebd78e94d15c7e7a15d9b6a934e51cf4d26d3e"
@@ -7146,3 +7216,17 @@ def test_unrouted_compose_control_service_is_left_alone(
         tmp_path, monkeypatch, resolved_compose_images, target_model, ""
     )
     assert "environment" not in service
+
+
+def test_the_tool_proxy_learns_the_declared_read_actions_and_a_plan_without_any_is_unchanged():
+    from fi.alk.harness.bundle_author_v2 import _tool_proxy_process, declared_read_actions
+
+    entries = [
+        {"tool": "get_order", "endpoint": "/orders/get", "method": "POST", "effect": "read"},
+        {"tool": "issue_refund", "endpoint": "/orders/refund", "method": "POST", "effect": "write"},
+        {"tool": "lookup", "endpoint": "", "effect": "read"},
+        {"tool": "list_refunds", "endpoint": "/refunds/list", "method": "POST"},
+    ]
+    assert declared_read_actions(entries) == ["orders.get"]
+    assert _tool_proxy_process(["orders.get"]).environment["READ_ACTIONS"] == "orders.get"
+    assert "READ_ACTIONS" not in _tool_proxy_process(declared_read_actions(entries[1:])).environment

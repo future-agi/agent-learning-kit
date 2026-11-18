@@ -18,6 +18,7 @@ from .authoring_entrypoint import main as authoring_main
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
 from .privilege import IsolationUnavailable, establish_isolation
+from .secrets import mark_controller_process
 
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
@@ -72,6 +73,27 @@ def _platform_simulator_values(values: dict[str, str]) -> dict[str, str]:
         for name, value in values.items()
         if name.startswith(prefix)
     }
+
+
+# In secrets.json only names a customer can't declare may be kept, and the backend refuses only
+# SIMULATOR_*. A customer may store a secret under FI_HARNESS_PROJECT, FI_BASE_URL or
+# GOOGLE_CLOUD_PROJECT, so under those names it is masked there; the gateway file still carries
+# the platform's own values for them, and they come through from it.
+_PLATFORM_ONLY_SETTINGS = frozenset(
+    name for name in observability.NON_SECRET_SETTINGS if name.startswith("SIMULATOR_")
+)
+
+
+def _span_secret_values(
+    all_values: dict[str, str], gateway_values: dict[str, str]
+) -> tuple[str, ...]:
+    """The values spans replace whole: everything in both files, except the platform settings a
+    span keeps. Each file is read on its own and the tuples joined, so a name in both masks both
+    values."""
+    return (
+        *observability.declared_values(all_values, _PLATFORM_ONLY_SETTINGS),
+        *observability.declared_values(gateway_values),
+    )
 
 
 def _configure_generation_environment(values: dict[str, str]) -> None:
@@ -202,6 +224,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     _configure_generation_environment(values)
     _configure_observability_environment(all_values)
+    # This process holds the platform's generation credentials, and authoring loads the customer's
+    # .env into it: only through the same allowlist as the sandbox controller.
+    mark_controller_process()
     target_values = {
         name: all_values[name]
         for name in _TARGET_CREDENTIAL_NAMES
@@ -218,7 +243,13 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["ALK_FOREGROUND_COORDINATOR"] = "1"
     job_id, run_id, telemetry = _authoring_job_context(forwarded)
     if job_id:
-        observability.begin(job_id, run_id, telemetry)
+        # Spans carry tool output, and a tool can print a key.
+        observability.begin(
+            job_id,
+            run_id,
+            telemetry,
+            secret_values=_span_secret_values(all_values, gateway_values),
+        )
         observability.stage("authoring")
     try:
         from .authoring_runtime_validation import RuntimeValidationError

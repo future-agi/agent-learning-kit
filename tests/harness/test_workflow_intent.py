@@ -408,6 +408,8 @@ def test_routed_target_model_is_briefed_to_use_the_openai_prefix(tmp_path, targe
     # A Compose project run as is gets no kit hook: the reading names the one line to add.
     assert "write in the contract's notes" in briefing
     assert 'set_default_openai_api("chat_completions")' in briefing
+    # Whether a Compose project runs as is depends on the deployment, not the source.
+    assert "when the kit runs this Compose project as is" in briefing
 
 
 @pytest.mark.parametrize(
