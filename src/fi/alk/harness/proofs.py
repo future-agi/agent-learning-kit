@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .json_file import write_json_atomic
 from .proof_records import ProofEntry
-from .prove import Proof
+from .prove import BlockedReason, Proof
 from .scenario import Scenario, scenario_slug
 
 PROOFS = "proofs.json"
@@ -74,7 +74,7 @@ def record_proof(destination: Path, scenario_key: str, proof: Proof, *, solution
     _save(destination, proofs)
 
 
-def unprovable_entry(why: str, blocked_reason: str = "broken_check") -> ProofEntry:
+def unprovable_entry(why: str, blocked_reason: BlockedReason = BlockedReason.BROKEN_CHECK) -> ProofEntry:
     return {
         "format": 2,
         "holds": False,

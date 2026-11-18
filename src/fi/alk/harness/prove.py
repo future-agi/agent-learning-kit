@@ -31,6 +31,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -50,9 +51,43 @@ from .world.snapshot import read_manifest, restore
 
 # The lane could not execute something; the case runs labelled "kept as written", never as proved.
 # "judged_only": only a judge grades the case and no control has shown the judge fails a wrong behaviour.
-LANE_CODES = frozenset({"proof_deferred", "solution_assumed", "control_not_run", "judged_only"})
+class BlockedReason(str, Enum):
+    """Why a proof is not proved, as `blocked_reason` says it and the proof record keeps it."""
+
+    BROKEN_CHECK = "broken_check"
+    NOT_READY = "not_ready"
+    NOT_SOLVABLE = "not_solvable"
+    VACUOUS = "vacuous"
+    WEAK_CHECK = "weak_check"
+    CREDITS_FAILED_ATTEMPT = "credits_failed_attempt"
+    TOO_STRICT = "too_strict"
+    UNCHECKED = "unchecked"
+    NO_NEGATIVE_CONTROL = "no_negative_control"
+    NEGATIVE_CONTROL_PASSED = "negative_control_passed"
+    POLICY_CONFLICT = "policy_conflict"
+    ANSWER_LEAKED = "answer_leaked"
+    SOURCE_UNRESOLVED = "source_unresolved"
+    PROOF_DEFERRED = "proof_deferred"
+    SOLUTION_ASSUMED = "solution_assumed"
+    CONTROL_NOT_RUN = "control_not_run"
+    JUDGED_ONLY = "judged_only"
+    VALIDATION_INCOMPLETE = "validation_incomplete"
+
+    def __str__(self) -> str:
+        return self.value
+
+
+# Not proved only because this lane could not execute something: the case is kept as written.
+LANE_CODES = frozenset(
+    {
+        BlockedReason.PROOF_DEFERRED,
+        BlockedReason.SOLUTION_ASSUMED,
+        BlockedReason.CONTROL_NOT_RUN,
+        BlockedReason.JUDGED_ONLY,
+    }
+)
 # A case with no negative control at all: refused at submit, kept not proved through a rebuild.
-NO_NEGATIVE_CONTROL = "no_negative_control"
+NO_NEGATIVE_CONTROL = BlockedReason.NO_NEGATIVE_CONTROL
 # Decides one judged sub-goal of a control: (goal, world, calls, what was said, scenario) -> (held, explanation).
 ControlJudge = Callable[[Any, Any, list[Call], list[dict[str, str]], Any], tuple[bool | None, str]]
 
@@ -173,49 +208,49 @@ class Proof:
         """Not proved only because this lane could not execute something; nothing that ran failed."""
         return not self.proved and self.blocked_reason() in LANE_CODES
 
-    def blocked_reason(self) -> str | None:
+    def blocked_reason(self) -> BlockedReason | None:
         """The first reason this proof is not proved, faults before the lane's own limits."""
         if self.proved:
             return None
         if self.broken:
-            return "broken_check"
+            return BlockedReason.BROKEN_CHECK
         if not self.deferred:
             # A deferred proof returns before any gate runs, so its gates read unset, not failed.
             if not self.ready:
-                return "not_ready"
+                return BlockedReason.NOT_READY
             if not self.solvable:
-                return "not_solvable"
+                return BlockedReason.NOT_SOLVABLE
             if self.vacuous:
-                return "vacuous"
+                return BlockedReason.VACUOUS
             if self.weak and self.outcome == "change":
-                return "weak_check"
+                return BlockedReason.WEAK_CHECK
             if self.failed_attempts:
-                return "credits_failed_attempt"
+                return BlockedReason.CREDITS_FAILED_ATTEMPT
             if self.too_strict:
-                return "too_strict"
+                return BlockedReason.TOO_STRICT
             if self.unchecked:
-                return "unchecked"
+                return BlockedReason.UNCHECKED
             if not self.judged_only:
                 if not self.controls:
                     return NO_NEGATIVE_CONTROL
                 if any(one.get("failed") is False for one in self.ran_controls):
-                    return "negative_control_passed"
+                    return BlockedReason.NEGATIVE_CONTROL_PASSED
             elif any(one.get("failed") is False for one in self.judged_controls):
-                return "negative_control_passed"
+                return BlockedReason.NEGATIVE_CONTROL_PASSED
         if self.conflicts:
-            return "policy_conflict"
+            return BlockedReason.POLICY_CONFLICT
         if self.leaks:
-            return "answer_leaked"
+            return BlockedReason.ANSWER_LEAKED
         if self.unresolved_sources:
-            return "source_unresolved"
+            return BlockedReason.SOURCE_UNRESOLVED
         if self.deferred:
-            return "proof_deferred"
+            return BlockedReason.PROOF_DEFERRED
         if self.assumed:
-            return "solution_assumed"
+            return BlockedReason.SOLUTION_ASSUMED
         if self.controls and not self.ran_controls and not self.judged_only:
-            return "control_not_run"
+            return BlockedReason.CONTROL_NOT_RUN
         if self.judged_only and not self.controls_failed:
-            return "judged_only"
+            return BlockedReason.JUDGED_ONLY
         return None
 
     def gates(self) -> dict[str, bool]:

@@ -74,7 +74,7 @@ from .checks import reference_of, run_check
 from .proofs import proof_key, record_proof, record_unprovable
 from .understand import load as load_contract
 from .prove import (
-    NO_NEGATIVE_CONTROL,
+    BlockedReason,
     Proof,
     executes,
     native_runtime,
@@ -1482,7 +1482,14 @@ def _controls_the_contract_refuses(scenario: Scenario, world_root: Path) -> list
 
 
 # A writer's fault: the scenario is not kept. The lane codes (an unbound tool) are kept and labelled.
-_REFUSED_CODES = frozenset({"negative_control_passed", NO_NEGATIVE_CONTROL, "answer_leaked", "source_unresolved"})
+_REFUSED_CODES = frozenset(
+    {
+        BlockedReason.NEGATIVE_CONTROL_PASSED,
+        BlockedReason.NO_NEGATIVE_CONTROL,
+        BlockedReason.ANSWER_LEAKED,
+        BlockedReason.SOURCE_UNRESOLVED,
+    }
+)
 
 
 def _a_read_that_declines(scenario: Scenario, proof: Any, world_root: Path) -> bool:
@@ -1917,13 +1924,13 @@ def accept_scenario(
         if proof is not None and proof.unplayed
         else ""
     )
-    if proof is not None and proof.blocked_reason() == "control_not_run":
+    if proof is not None and proof.blocked_reason() == BlockedReason.CONTROL_NOT_RUN:
         unproved += (
             "\nNOT PROVED: no negative control could run here, because these tools have no endpoint: "
             + ", ".join(sorted({tool for one in proof.controls for tool in one.get("assumed") or []}))
             + ". It is kept as written; the checks were never shown to fail a wrong behaviour."
         )
-    if proof is not None and proof.blocked_reason() == "judged_only":
+    if proof is not None and proof.blocked_reason() == BlockedReason.JUDGED_ONLY:
         unproved += (
             f"\nNOT PROVED: {proof.why()} Give each negative control a `transcript` of the wrong behaviour as said; "
             "the judge must fail it."

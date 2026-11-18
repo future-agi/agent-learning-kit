@@ -27,7 +27,7 @@ from .live_proof import apply_live, load_live
 from .outbound import redact_outbound_text
 from .proof_records import ProofEntry
 from .proofs import proof_entry, proof_key, unprovable_entry
-from .prove import load_proof_contract, load_world_actors, prove
+from .prove import BlockedReason, load_proof_contract, load_world_actors, prove
 from .scenario_tools import load_scenarios
 
 EXIT_UNREADABLE = 3
@@ -40,7 +40,7 @@ def _write(output: Path, proofs: Mapping[str, ProofEntry]) -> None:
 
 
 def _incomplete() -> dict[str, Any]:
-    return unprovable_entry(INCOMPLETE_WHY, blocked_reason="validation_incomplete")
+    return unprovable_entry(INCOMPLETE_WHY, blocked_reason=BlockedReason.VALIDATION_INCOMPLETE)
 
 
 def budget_seconds(budget: float, deadline_at: float | None, now: float) -> float:
