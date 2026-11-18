@@ -177,17 +177,9 @@ def _build_id() -> str:
 
 
 def _made_by() -> dict[str, str]:
-    """Which kit build is writing the reading, for information only. Never raises."""
-    made_by = {"kit_version": "", "build_id": ""}
-    try:
-        made_by["kit_version"] = _kit_version()
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        made_by["build_id"] = _build_id()
-    except Exception:  # noqa: BLE001
-        pass
-    return made_by
+    """Which kit build is writing the reading, for information only. Nothing is caught here: a
+    failure goes to `document()`, which logs it with the trace and keeps the reading."""
+    return {"kit_version": _kit_version(), "build_id": _build_id()}
 
 
 def _splice(raw: bytes, record: dict[str, Any], *, empty: bool) -> bytes:

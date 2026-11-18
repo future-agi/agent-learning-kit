@@ -230,22 +230,6 @@ def test_the_build_id_is_stored_only_when_it_is_a_commit_hash(monkeypatch, given
     assert json.loads(saved)[RECORD_KEY]["made_by"]["build_id"] == kept
 
 
-def test_a_failure_reading_the_kit_build_stores_empty_values(monkeypatch):
-    def broken():
-        raise OSError("not readable")
-
-    monkeypatch.setattr(seed_contract, "_kit_version", broken)
-    monkeypatch.setattr(seed_contract, "_build_id", broken)
-
-    saved = with_record(_job(), json.dumps(CONTRACT).encode())
-
-    assert saved is not None
-    assert json.loads(saved)[RECORD_KEY]["made_by"] == {
-        "kit_version": "",
-        "build_id": "",
-    }
-
-
 @pytest.mark.parametrize(
     "made_by",
     [
