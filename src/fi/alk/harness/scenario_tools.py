@@ -1481,6 +1481,12 @@ def _controls_the_contract_refuses(scenario: Scenario, world_root: Path) -> list
 _REFUSED_CODES = frozenset({"negative_control_passed", "no_negative_control", "answer_leaked", "source_unresolved"})
 
 
+def refuses_keeping(proof: Any) -> bool:
+    """Whether a scenario with this proof may not be kept: its checks do not hold (unless only the live runtime can
+    prove it), or the writer left a fault the lane caught. One rule for a submit and for every case a rebuild keeps."""
+    return (not proof.holds and not (proof.deferred and not proof.broken)) or proof.blocked_reason() in _REFUSED_CODES
+
+
 def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions: str) -> list[str]:
     """Fixed text values whose stated source (caller, record or a quoted rule) does not contain them."""
 
@@ -1797,9 +1803,7 @@ def accept_scenario(
             )
 
         proof = prove(scenario, catalogue, world_root)
-        if (not proof.holds and not (proof.deferred and not proof.broken)) or (
-            proof.blocked_reason() in _REFUSED_CODES
-        ):
+        if refuses_keeping(proof):
             said = f"Not kept. {proof.why()}"
             # Code written against the wrong collection shape is the commonest way setup, ready and a
             # check fail here, and the exception alone does not say which collections are mappings and

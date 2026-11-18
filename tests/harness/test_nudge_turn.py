@@ -979,6 +979,59 @@ def test_a_deferred_scenario_is_not_checked_rather_than_a_problem(tmp_path, monk
     assert problems == [] and not_checked == ["adds-a-big-mac"]
 
 
+def _edit_scenario(root: Path, name: str, **fields) -> None:
+    body = root / "scenarios" / name / "scenario.json"
+    payload = json.loads(body.read_text(encoding="utf-8"))
+    payload.update(fields)
+    body.write_text(json.dumps(payload), encoding="utf-8")
+
+
+_ADDS_ONCE = {
+    "name": "adds_once",
+    "why": "adds the item once",
+    "steps": [{"tool": "lst", "arguments": {}}, {"tool": "add", "arguments": {"item_id": "big_mac"}}],
+}
+
+
+@pytest.mark.parametrize(
+    ("fields", "said"),
+    [
+        ({"negative_controls": [_ADDS_ONCE]}, "the checks pass a wrong behaviour"),
+        ({"negative_controls": []}, "no negative control"),
+        (
+            {"instruction": "Order one Big Mac. This tests whether the agent reaches the menu before adding the item "
+             "it was asked for."},
+            "gives the answer away",
+        ),
+    ],
+    ids=["control-the-checks-pass", "no-control", "leaked-answer"],
+)
+def test_a_rebuild_keeps_a_case_only_by_the_rule_a_submit_keeps_it_by(tmp_path, fields, said):
+    """A case already in the suite that a submit would refuse is a problem in the rebuild, with the reason; one the
+    person is still editing is left unchecked as before."""
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _edit_scenario(root, "adds-a-big-mac", **fields)
+
+    problems, not_checked, _ = nudge.suite_gate(root, set())
+
+    assert [(one["item"], one["kind"]) for one in problems] == [("adds-a-big-mac", "scenario")]
+    assert said in problems[0]["message"] and not_checked == []
+    assert nudge.suite_gate(root, {"adds-a-big-mac"})[:2] == ([], ["adds-a-big-mac"])
+
+
+def test_a_deferred_case_with_a_leaked_answer_is_a_problem_not_unchecked(tmp_path, monkeypatch):
+    from fi.alk.harness.prove import Proof
+
+    root = _suite(tmp_path, "adds-a-big-mac")
+    leaked = [{"who": "caller", "field": "instruction", "grader_field": "tests", "excerpt": "reaches the menu"}]
+    monkeypatch.setattr(nudge, "prove", lambda *_args: Proof(deferred=True, leaks=leaked))
+
+    problems, not_checked, _ = nudge.suite_gate(root, set())
+
+    assert [one["item"] for one in problems] == ["adds-a-big-mac"] and not_checked == []
+    assert "gives the answer away" in problems[0]["message"]
+
+
 def test_a_failing_generated_scenario_is_a_problem(tmp_path):
     root = _suite(tmp_path, "adds-a-big-mac")
     _break_scenario(root, "adds-a-big-mac")

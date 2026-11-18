@@ -34,7 +34,7 @@ from .outbound import _redact_validation_error
 from .proofs import load_proofs, record_proof, record_unprovable
 from .prove import prepared, prove
 from .scenario import Scenario, _slug
-from .scenario_tools import load_scenarios, write_scenarios
+from .scenario_tools import load_scenarios, refuses_keeping, write_scenarios
 from .seed_rows import missing_seed_rows
 from .source_data_invariants import (
     ARTIFACT,
@@ -420,11 +420,14 @@ def suite_gate(
             holds, why = False, type(exc).__name__
         else:
             record_proof(workspace, key, proof, solution_steps=len(scenario.solution))
-            if proof.deferred and not proof.broken:
+            # The rule a submit keeps a case by: a case the rebuild keeps with a proof a submit would refuse (a
+            # control its checks pass, no control, a leaked answer) is a problem, however it held before.
+            refused = refuses_keeping(proof)
+            if proof.deferred and not proof.broken and not refused:
                 # Only the live runtime can prove it; that is not a failure.
                 not_checked.append(key)
                 continue
-            holds, why = proof.holds, ("" if proof.holds else proof.why())
+            holds, why = not refused, ("" if not refused else proof.why())
         if holds:
             continue
         if key in user_draft_keys:

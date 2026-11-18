@@ -385,10 +385,10 @@ def test_a_restored_scenario_without_a_negative_control_is_not_restored(tmp_path
     assert [one["key"] for one in result["restored"]] == ["cancels-after-a-change", "cancels-the-only-booking"]
     assert all(one["proof"] == "proved" for one in result["restored"])
     [failed] = result["restore_failed"]
-    assert failed["key"] == "cancels-a-booking" and failed["why"].startswith("no negative control")
+    assert failed["key"] == "cancels-a-booking" and "no negative control" in failed["why"]
     assert "cancels-a-booking" not in {one.scenario_key for one in load_scenarios(root)}
     assert "cancels-a-booking" not in {one.scenario_key for one in kept}
-    assert dropped.load(root)["cancels-a-booking"]["restore_failed"].startswith("no negative control")
+    assert "no negative control" in dropped.load(root)["cancels-a-booking"]["restore_failed"]
 
 
 def test_a_restored_scenario_the_lane_could_not_run_is_restored_as_kept_as_written(tmp_path, monkeypatch):
