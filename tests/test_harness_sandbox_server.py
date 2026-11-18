@@ -1060,15 +1060,30 @@ def test_preflight_accepts_public_github_url_and_requires_app_for_private_repo(
     assert requirement["accepted_secret_types"] == ["github_app_installation"]
 
 
+class _AwaitingDedicatedIsolation(Exception):
+    """The route failed only on the runtime isolation hosted jobs still lack."""
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=_AwaitingDedicatedIsolation,
+    reason="submit does not yet give hosted jobs the dedicated_vm runtime",
+)
 def test_public_github_branch_url_populates_job_ref(tmp_path):
     client = TestClient(create_app(tmp_path / "state"))
 
-    response = client.post(
-        "/v1/jobs",
-        json={
-            "github_repository": "https://github.com/acme/agent/tree/feat/harness",
-        },
-    )
+    try:
+        response = client.post(
+            "/v1/jobs",
+            json={
+                "github_repository": "https://github.com/acme/agent/tree/feat/harness",
+                "github_commit_sha": "a" * 40,
+            },
+        )
+    except ValidationError as exc:
+        if "hosted_isolation_must_be_dedicated_vm" in str(exc):
+            raise _AwaitingDedicatedIsolation from exc
+        raise
 
     assert response.status_code == 200
     source = response.json()["job"]["source"]
@@ -1076,23 +1091,45 @@ def test_public_github_branch_url_populates_job_ref(tmp_path):
     assert source["ref"] == "feat/harness"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=_AwaitingDedicatedIsolation,
+    reason="submit does not yet give hosted jobs the dedicated_vm runtime",
+)
 def test_private_github_submission_becomes_hosted_job(tmp_path):
     client = TestClient(create_app(tmp_path / "state"))
 
-    response = client.post(
-        "/v1/jobs",
-        json={
-            "github_repository": "customer/private-agent",
-            "github_visibility": "private",
-            "github_installation_id": "installation-42",
-        },
-    )
+    try:
+        response = client.post(
+            "/v1/jobs",
+            json={
+                "github_repository": "customer/private-agent",
+                "github_visibility": "private",
+                "github_installation_id": "installation-42",
+                "github_commit_sha": "a" * 40,
+            },
+        )
+    except ValidationError as exc:
+        if "hosted_isolation_must_be_dedicated_vm" in str(exc):
+            raise _AwaitingDedicatedIsolation from exc
+        raise
 
     assert response.status_code == 200
     job = response.json()["job"]
     assert job["execution"] == "hosted"
     assert job["source"]["installation_id"] == "installation-42"
     assert "token" not in json.dumps(job).lower()
+
+
+def test_a_github_submission_without_a_commit_sha_is_refused_at_intake(tmp_path):
+    # A GitHub job runs hosted, and a hosted GitHub job needs the commit it checks out. Without
+    # one the route used to fail building the job (a 500 with no reason); it says why now.
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"github_repository": "acme/agent"})
+
+    assert response.status_code == 422
+    assert "github_commit_sha_required" in response.text
 
 
 def test_job_submission_requires_exactly_one_source(tmp_path):
@@ -1666,10 +1703,6 @@ class _DedicatedVmJob(HarnessJob):
             isolation=RuntimeIsolation.DEDICATED_VM
         )
     )
-
-
-class _AwaitingDedicatedIsolation(Exception):
-    """The route failed only on the runtime isolation hosted jobs still lack."""
 
 
 async def _idle_execute(*_args):

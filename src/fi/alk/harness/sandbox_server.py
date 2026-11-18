@@ -139,6 +139,10 @@ class LocalSandboxRequest(BaseModel):
                 raise ValueError(
                     "A subfolder needs the generic harness, which this job didn't ask for."
                 )
+        if self.github_repository and not self.github_commit_sha:
+            # A GitHub job runs hosted, and HarnessJob refuses a hosted GitHub job without the
+            # commit it checks out; refuse here, by name, rather than fail building the job.
+            raise ValueError("github_commit_sha_required")
         _validate_environment_values(self.environment_values, self.secret_refs)
         _validate_controller_names(self.connector_config, self.secret_refs)
         return self
