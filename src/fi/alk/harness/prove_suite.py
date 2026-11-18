@@ -15,16 +15,14 @@ then holds only their keys, and the platform merges it over the proofs it alread
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import sys
-import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from .catalogue import load_catalogue
+from .json_file import write_json_atomic
 from .live_proof import apply_live, load_live
 from .outbound import redact_outbound_text
 from .proof_records import ProofEntry
@@ -38,16 +36,7 @@ INCOMPLETE_WHY = "not proved: the validation's time budget ran out before this c
 
 
 def _write(output: Path, proofs: Mapping[str, ProofEntry]) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    handle, temporary = tempfile.mkstemp(dir=output.parent, prefix=".scenario-proofs-", suffix=".json")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            json.dump(proofs, out, indent=2, sort_keys=True, ensure_ascii=False)
-        os.chmod(temporary, 0o644)
-        os.replace(temporary, output)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+    write_json_atomic(output, proofs)
 
 
 def _incomplete() -> dict[str, Any]:

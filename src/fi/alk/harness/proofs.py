@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .json_file import write_json_atomic
 from .proof_records import ProofEntry
 from .prove import Proof
 from .scenario import Scenario, scenario_slug
@@ -26,17 +25,7 @@ def load_proofs(destination: Path) -> dict[str, ProofEntry]:
 
 
 def _save(destination: Path, proofs: Mapping[str, ProofEntry]) -> None:
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    handle, temporary = tempfile.mkstemp(dir=destination, prefix=".proofs-", suffix=".json")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            json.dump(proofs, out, indent=2, sort_keys=True, ensure_ascii=False)
-        os.chmod(temporary, 0o644)
-        os.replace(temporary, destination / PROOFS)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+    write_json_atomic(Path(destination) / PROOFS, proofs)
 
 
 def utc_stamp() -> str:

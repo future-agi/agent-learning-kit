@@ -18,9 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import random
-import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -31,6 +29,7 @@ from .catalogue import Catalogue, load_catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
 from .folder import apply_setup, check_ready
+from .json_file import write_json_atomic
 from .outbound import redact_outbound_text
 from .proof_records import CheckRecord, ControlResult, LiveResult
 from .proofs import proof_key
@@ -217,16 +216,7 @@ async def prove_live(
 
 def write_live(authoring: Path, results: Mapping[str, LiveResult]) -> None:
     """Merge `results` into the live proofs file by key, so other keys keep theirs."""
-    path = Path(authoring) / LIVE_PROOFS
-    merged = {**load_live(authoring), **results}
-    handle, temporary = tempfile.mkstemp(dir=Path(authoring), prefix=".live-proofs-", suffix=".json")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            json.dump(merged, out, indent=2, sort_keys=True, default=str)
-        os.replace(temporary, path)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+    write_json_atomic(Path(authoring) / LIVE_PROOFS, {**load_live(authoring), **results})
 
 
 def forget_live(authoring: Path, keys: set[str] | None) -> None:

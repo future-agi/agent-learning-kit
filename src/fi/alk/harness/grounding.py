@@ -10,14 +10,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
-import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
 from .backends import tool
 from .catalogue import Catalogue
 from .contract import AgentContract
+from .json_file import write_json_atomic
 from .judge import NoGateway, chat_completion
 from .leaks import normalise
 from .proof_records import PolicyCheck, SourceResult
@@ -140,13 +139,8 @@ def _load_checks(world_root: Path) -> dict[str, dict[str, Any]]:
 
 
 def _save_checks(world_root: Path, checks: dict[str, dict[str, Any]]) -> None:
-    root = Path(world_root)
     try:
-        root.mkdir(parents=True, exist_ok=True)
-        handle, temporary = tempfile.mkstemp(dir=root, prefix=".policy-checks-", suffix=".json")
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            json.dump(checks, out, indent=2, sort_keys=True, ensure_ascii=False)
-        os.replace(temporary, root / POLICY_CHECKS)
+        write_json_atomic(Path(world_root) / POLICY_CHECKS, checks)
     except OSError as exc:  # a cache that cannot be written only costs a repeated call
         logger.warning("policy check cache not written: %s", exc)
 

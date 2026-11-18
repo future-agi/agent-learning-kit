@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from .contract import AgentContract
+from .json_file import write_json_atomic
 from .proof_records import ProofEntry
 from .proofs import utc_stamp
 from .prove import NO_NEGATIVE_CONTROL
@@ -79,19 +80,7 @@ def save(workspace: Path, records: Mapping[str, DropRecord]) -> None:
     if not records:
         path.unlink(missing_ok=True)
         return
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(
-        json.dumps(
-            {
-                "format": FORMAT,
-                "scenarios": {key: dict(records[key]) for key in sorted(records)},
-            },
-            indent=2,
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+    write_json_atomic(path, {"format": FORMAT, "scenarios": dict(records)})
 
 
 def needs(scenario: Scenario) -> Capabilities:
