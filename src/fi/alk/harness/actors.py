@@ -611,18 +611,20 @@ KNOWLEDGE_ROLE_KEYS = {
     "strip": True,
     "drop_prefix": "./",
     "under": "knowledge/",
-    "refuse_parts": [".."],
+    "refuse_parts": ["", ".", ".."],
 }
 
 
 def knowledge_role_key(raw: object) -> str | None:
     """The attached file a `knowledge/roles.json` key names, or None when it names none: surrounding whitespace and
-    one leading "./" are dropped, and the path must lie under `knowledge/` with no ".." part. The one rule for reading
+    one leading "./" are dropped, and the path must lie under `knowledge/` (exactly that case) with no empty, "." or
+    ".." part, so a trailing slash, a doubled slash and an absolute path name none. The one rule for reading
     a key, sealed in the actor rules (`KNOWLEDGE_ROLE_KEYS`) so every reader applies the same one."""
     path = str(raw).strip().removeprefix("./")
-    if not path.startswith("knowledge/") or ".." in path.split("/") or path == KNOWLEDGE_ROLES:
+    parts = path.split("/")
+    if parts[0] != "knowledge" or len(parts) < 2 or set(parts) & set(KNOWLEDGE_ROLE_KEYS["refuse_parts"]):
         return None
-    return path
+    return None if path == KNOWLEDGE_ROLES else path
 
 
 def knowledge_roles(root: Path) -> dict[str, str]:

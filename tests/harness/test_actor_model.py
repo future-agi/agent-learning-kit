@@ -328,3 +328,30 @@ def test_a_role_key_with_a_leading_dot_slash_or_padding_still_keeps_the_file_fro
     asked = [{"kind": "files", "paths": ["knowledge/answers.md", "knowledge/policy.md"]}]
     [read] = read_knowledge(asked, tmp_path)
     assert [one["path"] for one in read["read"]] == ["knowledge/policy.md"]
+
+
+# The one table every reader of `knowledge/roles.json` must give the same answers for.
+ROLE_KEY_CASES = [
+    ("knowledge/x", "knowledge/x"),
+    ("./knowledge/x", "knowledge/x"),
+    ("  knowledge/x  ", "knowledge/x"),
+    ("knowledge/sub/x.md", "knowledge/sub/x.md"),
+    ("knowledge/../x", None),
+    ("knowledge/./x", None),
+    ("knowledge//x", None),
+    ("KNOWLEDGE/x", None),
+    ("knowledge/x/", None),
+    ("/knowledge/x", None),
+    ("knowledge/", None),
+    ("knowledge", None),
+    ("x", None),
+    ("././knowledge/x", None),
+    ("knowledge/roles.json", None),
+]
+
+
+@pytest.mark.parametrize(("raw", "expected"), ROLE_KEY_CASES, ids=[repr(one[0]) for one in ROLE_KEY_CASES])
+def test_a_roles_key_names_a_file_or_nothing(raw, expected):
+    from fi.alk.harness.actors import knowledge_role_key
+
+    assert knowledge_role_key(raw) == expected
