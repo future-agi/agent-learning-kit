@@ -997,14 +997,13 @@ _ADDS_ONCE = {
     ("fields", "said"),
     [
         ({"negative_controls": [_ADDS_ONCE]}, "the checks pass a wrong behaviour"),
-        ({"negative_controls": []}, "no negative control"),
         (
             {"instruction": "Order one Big Mac. This tests whether the agent reaches the menu before adding the item "
              "it was asked for."},
             "gives the answer away",
         ),
     ],
-    ids=["control-the-checks-pass", "no-control", "leaked-answer"],
+    ids=["control-the-checks-pass", "leaked-answer"],
 )
 def test_a_rebuild_keeps_a_case_only_by_the_rule_a_submit_keeps_it_by(tmp_path, fields, said):
     """A case already in the suite that a submit would refuse is a problem in the rebuild, with the reason; one the
@@ -1017,6 +1016,34 @@ def test_a_rebuild_keeps_a_case_only_by_the_rule_a_submit_keeps_it_by(tmp_path, 
     assert [(one["item"], one["kind"]) for one in problems] == [("adds-a-big-mac", "scenario")]
     assert said in problems[0]["message"] and not_checked == []
     assert nudge.suite_gate(root, {"adds-a-big-mac"})[:2] == ([], ["adds-a-big-mac"])
+
+
+def test_a_suite_written_before_controls_were_required_still_rebuilds_its_cases_not_proved(tmp_path):
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _edit_scenario(root, "adds-a-big-mac", negative_controls=[])
+
+    problems, not_checked, _ = nudge.suite_gate(root, set())
+
+    assert problems == [] and not_checked == []
+    entry = load_proofs(root)["adds-a-big-mac"]
+    # Kept, recorded not proved with the builder's hint, so the platform holds it out of runs.
+    assert (entry["proved"], entry["kept_as_written"], entry["blocked_reason"]) == (False, False, "no_negative_control")
+    assert entry["why"].startswith("no negative control: add a wrong behaviour")
+    [warning] = nudge.unproved_without_control(root)
+    assert "adds-a-big-mac" in warning and "held out of runs" in warning
+
+
+def test_a_legacy_rebuild_reports_its_uncontrolled_cases_and_passes(tmp_path):
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _edit_scenario(root, "adds-a-big-mac", negative_controls=[])
+    server = nudge.nudge_server(root, {"nudge_id": "n-1", "stage": "suite"}, catalogue=load_catalogue(root), kept=None)
+
+    said = _call(server, "report_update", {"changed": False, "notes": "nothing to change"})
+
+    assert not said.get("is_error"), said
+    result = json.loads((root / nudge.NUDGE_RESULT).read_text(encoding="utf-8"))
+    assert result["checks"]["passed"] is True
+    assert any("not proved: no negative control" in one for one in result["checks"]["warnings"])
 
 
 def test_a_deferred_case_with_a_leaked_answer_is_a_problem_not_unchecked(tmp_path, monkeypatch):

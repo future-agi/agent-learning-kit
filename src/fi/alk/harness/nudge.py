@@ -370,6 +370,27 @@ def environment_gate(workspace: Path) -> tuple[list[dict], list[str]]:
     return problems, not_checked
 
 
+NO_CONTROL = "no_negative_control"
+
+
+def unproved_without_control(workspace: Path) -> list[str]:
+    """The warning for the suite's cases kept not proved because they have no negative control, or none."""
+    proofs = load_proofs(workspace)
+    keys = sorted(
+        one.scenario_key
+        for one in load_scenarios(workspace)
+        if (proofs.get(one.scenario_key) or {}).get("blocked_reason") == NO_CONTROL
+    )
+    if not keys:
+        return []
+    return [
+        "not proved: no negative control, so these are held out of runs until each has one: "
+        + ", ".join(keys)
+        + ". Add a wrong behaviour written for each task (the wrong record, the action done twice, or the forbidden "
+        "change) that its checks must fail."
+    ]
+
+
 def suite_gate(
     workspace: Path,
     user_draft_keys: set[str],
@@ -421,8 +442,10 @@ def suite_gate(
         else:
             record_proof(workspace, key, proof, solution_steps=len(scenario.solution))
             # The rule a submit keeps a case by: a case the rebuild keeps with a proof a submit would refuse (a
-            # control its checks pass, no control, a leaked answer) is a problem, however it held before.
-            refused = refuses_keeping(proof)
+            # control its checks pass, a leaked answer) is a problem, however it held before. One with no control at
+            # all was written before controls were required: it stays, recorded not proved, and is held out of runs
+            # until it has one (`unproved_without_control`), so an older suite still rebuilds.
+            refused = refuses_keeping(proof) and proof.blocked_reason() != NO_CONTROL
             if proof.deferred and not proof.broken and not refused:
                 # Only the live runtime can prove it; that is not a failure.
                 not_checked.append(key)
@@ -793,6 +816,7 @@ def report_update(
             restored=restored or {},
             unrestorable=unrestorable or [],
         )
+        warnings.extend(unproved_without_control(workspace))
     write_result(
         workspace,
         nudge_id=str(nudge.get("nudge_id") or ""),
