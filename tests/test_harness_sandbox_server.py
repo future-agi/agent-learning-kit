@@ -570,6 +570,28 @@ def test_local_sandbox_reports_committed_scenario_progress_while_worker_runs(
     assert executed == [True]
 
 
+def test_the_environment_output_names_the_settings_the_kit_skipped(tmp_path):
+    # ADR-014, step 1: a setting the kit skipped is in the job's result, by name only.
+    from fi.alk.harness.sandbox_server import _stage_outputs
+
+    (tmp_path / "environment.json").write_text(
+        json.dumps(
+            {
+                "services": ["agent-runtime"],
+                "project": "fagi-harness-1",
+                "skipped_setting_names": ["LANG", "NO_PROXY"],
+            }
+        )
+    )
+
+    [environment] = [
+        item for item in _stage_outputs(tmp_path) if item["kind"] == "environment"
+    ]
+
+    assert environment["data"]["skipped_settings"] == ["LANG", "NO_PROXY"]
+    assert "LANG, NO_PROXY" in environment["summary"]
+
+
 def test_local_sandbox_exposes_secret_safe_live_stage_outputs(tmp_path, monkeypatch):
     source = tmp_path / "sources" / "agent"
     source.mkdir(parents=True)

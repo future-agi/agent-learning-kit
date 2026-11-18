@@ -124,6 +124,10 @@ class ProvisionedEnvironment:
     # Names only. Values are resolved from the job secret environment immediately before the
     # ephemeral worker starts and are never serialized into environment.json or a bundle.
     runtime_configuration_names: list[str] = field(default_factory=list)
+    # Names only: the job's own settings Compose also reads for itself (a proxy, CA bundle or
+    # locale), skipped rather than handed over until they can go to the agent's own service
+    # (ADR-014). Shown to the owner in the job's result.
+    skipped_setting_names: list[str] = field(default_factory=list)
 
     def save(self, destination: Path) -> Path:
         destination.mkdir(parents=True, exist_ok=True)
@@ -310,35 +314,49 @@ def _log_skipped_reserved(names: set[str]) -> None:
         )
 
 
+def _agent_setting_compose_also_reads(name: str) -> bool:
+    """A setting intake admits as the agent's own (a proxy, CA bundle or locale) that Compose
+    also reads for itself under the same name."""
+    return (
+        client_name_reserved(name)
+        and not tool_credential_name(name)
+        and not agent_value_name_reserved(name)
+    )
+
+
+def skipped_setting_names(environment: ProvisionedEnvironment) -> list[str]:
+    """The job's settings ``_runtime_values`` skips because Compose also reads them: names
+    only, for the job's result (ADR-014, step 1)."""
+    return sorted(
+        name
+        for name in environment.runtime_configuration_names
+        if _agent_setting_compose_also_reads(name)
+        and runtime_configuration_value(name).strip()
+    )
+
+
 def _runtime_values(
     environment: ProvisionedEnvironment, skipped: set[str] | None = None
 ) -> dict[str, str]:
-    """The job's own values for the names it declared, minus names it may not set."""
+    """The job's own values for the names it declared, minus names it may not set.
+
+    A proxy, CA bundle or locale setting is skipped, as it was before kit #337: Compose reads
+    the same names for itself, and passing them would steer the tool, not the agent. The skip
+    is logged and recorded in the job's result (``skipped_setting_names``) until the value can
+    go to the agent's own service (ADR-014, step 2)."""
     values: dict[str, str] = {}
-    refused: list[str] = []
     under_sandbox = _under_sandbox()
     for name in environment.runtime_configuration_names:
         value = runtime_configuration_value(name).strip()
         if not value:
             continue
         if client_name_reserved(name) and not tool_credential_name(name):
-            if not agent_value_name_reserved(name):
-                # Intake admits it as the agent's own setting (a proxy, CA bundle or locale),
-                # which a Compose service can't get under its own name: refuse, never drop.
-                refused.append(name)
-            elif skipped is not None:
-                # Intake refuses these; this is the backstop.
+            if skipped is not None:
                 skipped.add(name)
             continue
         if not under_sandbox and _local_denied(name):
             continue
         values[name] = value
-    if refused:
-        raise ProvisionError(
-            f"compose_value_name_reserved: {', '.join(sorted(refused))} (a Compose service "
-            "can't get a proxy, CA bundle or locale value under its own name; send it under "
-            "another name and set the name in the Compose file from it)"
-        )
     return values
 
 
@@ -2246,6 +2264,7 @@ def provision(
             existing.overrides = _overrides(existing, config)
             existing.internal_overrides = _internal_overrides(existing, config)
             existing.runtime_configuration_names = runtime_configuration_names
+            existing.skipped_setting_names = skipped_setting_names(existing)
             existing.save(destination)
             return existing
 
@@ -2277,6 +2296,7 @@ def provision(
         runtime_fingerprint=runtime_fingerprint,
         runtime_configuration_names=runtime_configuration_names,
     )
+    environment.skipped_setting_names = skipped_setting_names(environment)
     _write_initial_env_file_override(destination, environment)
     # Record the project before the first Compose call, not running: a worker killed mid-boot
     # then leaves an environment that ``stop`` can find, so it removes the job file and tears the
