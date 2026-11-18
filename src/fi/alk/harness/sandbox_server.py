@@ -66,6 +66,7 @@ from .job import (
     SourceKind,
     SourceVisibility,
 )
+from .refusals import refusal_kind
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
 from .secrets import (
@@ -90,18 +91,35 @@ _SANDBOX_FILE_PREFIX = "ALK_SECRET_FILE_"
 
 
 class JobRefused(Exception):
-    """The job model refused a submission: a 422 to the caller, in the shape of the route's
-    own 422, one entry per error with its code in ``msg``. ``loc`` points at the body, as the
-    job model's own field names mean nothing to the caller, and no ``input`` or ``ctx`` is
-    kept, since either can carry a submitted value."""
+    """The job model refused a submission, answered in the shape of the route's own 422: one
+    entry per error, its code in ``msg``, and no ``input`` or ``ctx``, since either can carry
+    a submitted value.
+
+    Whose problem it is decides the answer (``refusals``). A refusal of this sandbox's own
+    configuration is a 500 that names it, ``type`` "sandbox_configuration" and ``loc``
+    ["sandbox"], and it alone is reported: the caller can't get past it by fixing their part.
+    Otherwise it is a 422, ``loc`` ["body"], as the job model's field names mean nothing to
+    the caller."""
 
     def __init__(self, error: ValidationError):
-        self.detail = [
-            {"type": item["type"], "loc": ["body"], "msg": item["msg"]}
+        messages = [
+            (item["type"], item["msg"])
             for item in error.errors(
                 include_url=False, include_input=False, include_context=False
             )
         ]
+        ours = [msg for _type, msg in messages if refusal_kind(msg) == "configuration"]
+        if ours:
+            self.status_code = 500
+            self.detail = [
+                {"type": "sandbox_configuration", "loc": ["sandbox"], "msg": msg}
+                for msg in ours
+            ]
+        else:
+            self.status_code = 422
+            self.detail = [
+                {"type": kind, "loc": ["body"], "msg": msg} for kind, msg in messages
+            ]
         super().__init__("; ".join(entry["msg"] for entry in self.detail))
 
 
@@ -2509,7 +2527,7 @@ def create_app(root: Path | None = None) -> FastAPI:
 
     @app.exception_handler(JobRefused)
     async def job_refused(_request, exc: JobRefused):
-        return JSONResponse(status_code=422, content={"detail": exc.detail})
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request, exc: RequestValidationError):

@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from pydantic import Field, ValidationError
 import pytest
 
-from fi.alk.harness import call_runner, config, local_certified_runtime, process_runtime, provision, sandbox_server
+from fi.alk.harness import call_runner, config, local_certified_runtime, process_runtime, provision, refusals, sandbox_server
 from fi.alk.harness.bundle_v2 import ProcessUser, SourceProcess
 from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.sandbox_server import (
@@ -1087,7 +1087,7 @@ def test_public_github_branch_url_populates_job_ref(tmp_path):
             raise _AwaitingDedicatedIsolation from exc
         raise
     if (
-        response.status_code == 422
+        response.status_code == 500
         and "hosted_isolation_must_be_dedicated_vm" in response.text
     ):
         raise _AwaitingDedicatedIsolation
@@ -1121,7 +1121,7 @@ def test_private_github_submission_becomes_hosted_job(tmp_path):
             raise _AwaitingDedicatedIsolation from exc
         raise
     if (
-        response.status_code == 422
+        response.status_code == 500
         and "hosted_isolation_must_be_dedicated_vm" in response.text
     ):
         raise _AwaitingDedicatedIsolation
@@ -1214,7 +1214,8 @@ def _job_model_codes():
 
 def _refusal(code):
     """A real pydantic ValidationError carrying ``code``, as a job.py validator raises it."""
-    from pydantic import BaseModel as _Model, model_validator as _after
+    from pydantic import BaseModel as _Model
+    from pydantic import model_validator as _after
 
     class _Refuses(_Model):
         note: str = ""
@@ -1238,7 +1239,17 @@ def _local_source(tmp_path, monkeypatch):
     return source
 
 
-@pytest.mark.parametrize("code", _job_model_codes())
+def test_every_job_model_code_is_classified_once():
+    # A new refusal in job.py can't ship without saying whose it is: the caller's to fix, or
+    # this sandbox's own configuration.
+    codes = set(_job_model_codes())
+    submission, configuration = set(refusals.SUBMISSION), set(refusals.CONFIGURATION)
+
+    assert not submission & configuration
+    assert codes == submission | configuration
+
+
+@pytest.mark.parametrize("code", sorted(refusals.SUBMISSION))
 def test_a_job_model_refusal_is_a_cleaned_422_naming_its_code(tmp_path, monkeypatch, code):
     # Built inside the route, the job model's ValidationError used to be a bare 500, which
     # the platform reads as "sandbox unavailable". It is the caller's refusal, with its reason.
@@ -1263,9 +1274,68 @@ def test_a_job_model_refusal_is_a_cleaned_422_naming_its_code(tmp_path, monkeypa
     assert not any((tmp_path / "state" / "jobs").glob("*/job.json"))
 
 
-def test_a_real_job_model_refusal_reaches_the_caller_as_a_422(tmp_path):
+@pytest.mark.parametrize("code", sorted(refusals.CONFIGURATION))
+def test_a_refusal_of_this_sandboxs_own_configuration_is_a_500_naming_its_code(
+    tmp_path, monkeypatch, code
+):
+    # Nothing in the submission can fix it, so it is not a 422; but it is not "down" either:
+    # the code says what is misconfigured, so the platform can say something true.
+    source = _local_source(tmp_path, monkeypatch)
+
+    def refuse(*_args, **_kwargs):
+        raise _refusal(code)
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", refuse)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"source_path": str(source)})
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": [
+            {"type": "sandbox_configuration", "loc": ["sandbox"], "msg": f"Value error, {code}"}
+        ]
+    }
+    assert "submitted-secret-value" not in response.text
+    assert not any((tmp_path / "state" / "jobs").glob("*/job.json"))
+
+
+def test_a_submission_and_a_configuration_refusal_together_report_the_configuration():
+    # Ours comes first: the caller can't get past it by fixing their part.
+    from pydantic import BaseModel as _Model
+    from pydantic import model_validator as _after
+
+    class _Theirs(_Model):
+        @_after(mode="after")
+        def _refuse(self):
+            raise ValueError("github_commit_sha_invalid")
+
+    class _Ours(_Model):
+        @_after(mode="after")
+        def _refuse(self):
+            raise ValueError("hosted_isolation_must_be_dedicated_vm")
+
+    class _Both(_Model):
+        source: _Theirs
+        runtime: _Ours
+
+    try:
+        _Both(source={}, runtime={})
+    except ValidationError as exc:
+        both = exc
+    assert len(both.errors()) == 2
+
+    refused = JobRefused(both)
+
+    assert refused.status_code == 500
+    assert [entry["msg"] for entry in refused.detail] == [
+        "Value error, hosted_isolation_must_be_dedicated_vm"
+    ]
+
+
+def test_a_real_configuration_refusal_reaches_the_caller_as_a_500_with_its_code(tmp_path):
     # A GitHub job runs hosted, and submit doesn't yet give it the isolation a hosted job
-    # needs: HarnessJob refuses it, and the caller is told so.
+    # needs: that is ours to fix, and the caller is told what, not that we are down.
     client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
 
     response = client.post(
@@ -1273,7 +1343,8 @@ def test_a_real_job_model_refusal_reaches_the_caller_as_a_422(tmp_path):
         json={"github_repository": "acme/agent", "github_commit_sha": "a" * 40},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 500
+    assert response.json()["detail"][0]["type"] == "sandbox_configuration"
     assert "hosted_isolation_must_be_dedicated_vm" in response.text
 
 
@@ -2516,7 +2587,7 @@ def test_hosted_github_route_accepts_a_submitted_value(tmp_path, monkeypatch):
             raise _AwaitingDedicatedIsolation from exc
         raise
     if (
-        response.status_code == 422
+        response.status_code == 500
         and "hosted_isolation_must_be_dedicated_vm" in response.text
     ):
         raise _AwaitingDedicatedIsolation
