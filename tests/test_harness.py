@@ -4175,7 +4175,7 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
     # whoever submits the contract.
     ours = {
         "amendments",
-        "value_changes",
+        "amendment_records",
         "instrumentation",
         "source_subfolder",
         "unconfirmed_prompt_from",
@@ -11010,7 +11010,7 @@ def test_the_build_stage_writes_a_worker_s_own_check_and_a_repair_keeps_whose_ch
     assert "subject_unknown_worker" in refused
 
 
-def test_a_refusal_only_the_judge_grades_is_accepted_with_advice_to_check_what_it_refuses(tmp_path):
+def test_a_judged_sub_goal_is_accepted_without_advice_read_from_its_name(tmp_path):
     import asyncio
 
     from fi.alk.harness.world import tools as world_tools
@@ -11033,7 +11033,8 @@ def test_a_refusal_only_the_judge_grades_is_accepted_with_advice_to_check_what_i
     )
     said = asyncio.run(call("add_sub_goal", {"name": "ineligible_refund_declined", "what": "declines", "judged": judged}))
     assert "Not added" not in said, said
-    assert "give it a check that fails when that change commits" in said
+    # Its name is not read for what kind of sub-goal it is: whether a control can fail the case is the proof's.
+    assert "give it a check that fails when that change commits" not in said
 
 
 def test_both_stages_tools_for_sub_goals_name_the_declared_workers_as_subjects(tmp_path):
