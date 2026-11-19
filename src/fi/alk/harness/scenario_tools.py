@@ -1357,25 +1357,33 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
     ]
 
 
-def _seed_file_ids(path: Path) -> set[str]:
-    """The row ids an attached records file lists: its first column and every `id` or `*_id` column, of a CSV or of a
-    JSON list of objects. A value with no digit is left out, so a status or a name is never read as an id."""
+# A column's name read as an id: its last word, split on `_`, `-` or a space.
+_ID_COLUMN_WORDS = frozenset({"id", "number", "no"})
+
+
+def _id_column(column: str, argument_names: set[str]) -> bool:
+    """A column that holds ids: one named like an id (`id`, `order_id`, `orderId`, `order number`, `order_no`), or
+    one the tools' argument names match."""
+    name = str(column).strip()
+    words = re.split(r"[_\-\s]+", name.lower())
+    return name in argument_names or words[-1] in _ID_COLUMN_WORDS or name.endswith("Id")
+
+
+def _seed_file_ids(path: Path, argument_names: set[str]) -> set[str]:
+    """The row ids an attached records file lists, of a CSV or of a JSON list of objects: the values of its id
+    columns (`_id_column`). A date, an amount or a name column is never read as ids, wherever it stands."""
     try:
         text = path.read_text(encoding="utf-8")
         rows = json.loads(text) if path.suffix == ".json" else list(csv.DictReader(text.splitlines()))
     except (OSError, ValueError, csv.Error):
         return set()
-    found: set[str] = set()
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict) or not row:
-            continue
-        first = next(iter(row))
-        for column, value in row.items():
-            if column == first or str(column).lower() == "id" or str(column).lower().endswith("_id"):
-                text = str(value).strip()
-                if any(char.isdigit() for char in text):
-                    found.add(text)
-    return found
+    return {
+        str(value).strip()
+        for row in (rows if isinstance(rows, list) else [])
+        if isinstance(row, dict)
+        for column, value in row.items()
+        if column is not None and _id_column(column, argument_names) and str(value).strip()
+    }
 
 
 def _held_values(data: Any) -> set[str]:
@@ -1399,7 +1407,8 @@ def _records_only_a_context_file_holds(scenario: Scenario, trial: Any, world_roo
     if not isinstance(contract, dict) or seed_records_loaded(contract):
         return []
     files = sorted(path for path, role in knowledge_roles(world_root).items() if role == "seed_records")
-    listed = {value: path for path in files for value in _seed_file_ids(Path(world_root) / path)}
+    arguments = {str(name) for step in scenario.solution for name in (step.arguments or {})}
+    listed = {value: path for path in files for value in _seed_file_ids(Path(world_root) / path, arguments)}
     if not listed:
         return []
     try:
