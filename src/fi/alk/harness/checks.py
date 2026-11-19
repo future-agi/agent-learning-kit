@@ -308,8 +308,38 @@ def committed_writes(world: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _with(call: Any, arguments: Mapping[str, Any]) -> bool:
+    given = getattr(call, "arguments", None) or {}
+    return all(same_value(given.get(field), value) for field, value in arguments.items())
+
+
+def answered(calls: Sequence[Any], name: str, **arguments: Any) -> list[Any]:
+    """The calls of tool `name` the world answered: each that went through and each its own rule turned down, a
+    not-found included; never one that crashed or a fault failed. What "the agent looked X up" or "tried X" reads, so a
+    lookup that correctly finds nothing still counts. `arguments` keeps only the calls made with those values."""
+    return [
+        call
+        for call in calls
+        if call.name == name
+        and (getattr(call, "ok", False) or getattr(call, "refusal_code", "") == "world_rule")
+        and _with(call, arguments)
+    ]
+
+
+def succeeded(calls: Sequence[Any], name: str, **arguments: Any) -> list[Any]:
+    """The calls of tool `name` that went through: what "the agent did X" reads. `arguments` keeps only the calls
+    made with those values."""
+    return [
+        call
+        for call in calls
+        if call.name == name and getattr(call, "ok", False) and not getattr(call, "refused", False) and _with(call, arguments)
+    ]
+
+
 # Read-only helpers every check is given beside `world` and `calls`.
 CHECK_HELPERS = {
+    "answered": answered,
+    "succeeded": succeeded,
     "same_id": same_id,
     "same_value": same_value,
     "retried_timeouts": retried_timeouts,

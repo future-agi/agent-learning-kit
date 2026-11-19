@@ -37,6 +37,8 @@ class ControlResult(_PlayedControl, total=False):
     unmatched: list[str]
     # The tools the control tried that the reference never calls and the world refused: nothing committed.
     attempted: list[str]
+    # The writes the control committed beyond the reference's own, as `action(arguments)`: the records it changes.
+    changed: list[str]
 
 
 class _CitedSource(TypedDict):

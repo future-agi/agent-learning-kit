@@ -526,7 +526,11 @@ that did the right thing:
 - **A corrected try.** The world refused the agent's first value and it then sent the right one. Match
   the reference to any successful call, never to every call.
 - **A faulted call.** Where the scenario makes a tool fail, never require that call to succeed; check
-  what the agent did about it. A write the world committed counts even when its answer was lost.
+  what the agent did about it. A write the world committed counts even when its answer was lost. The
+  proof fails the faulted step exactly as the run does, so a reference or a check that expects the
+  change to go through is refused at submit: write both for the failure path (the agent reports the
+  failure honestly, claims nothing it did not do, and retries only where that is safe), and check that
+  the change did not happen.
 - **Spelling heard on a call.** "Callum" and "Calum" sound the same. Compare the record a spoken name
   or place resolved to, or leave the spelling to the judge, never its exact letters.
 - **A value the tool decides.** An amount the tool computes is in what it returned (the call's
@@ -540,10 +544,17 @@ do nothing. Write them on purpose and never drop one for asking:
 - **Not found.** The reference looks the record up with the read-only tool and stops. A check reads
   the world's answer (the not-found result or error it returned), not only that a lookup was tried:
   a lookup that crashed shows nothing. Another check fails when anything is changed for that record,
-  and the control acts on it anyway.
+  and the control acts on it anyway. A not-found answer is not a successful call, so read the lookup
+  with `answered(calls, "<the lookup tool>", <its id argument>="<the id>")`, never with `c.ok`.
 - **No such tool.** The reference uses only what the agent has (the lookup, the hand-over), never the
   missing tool. A check fails when the action happens another way; the judge reads how it was declined.
 - **Not allowed.** As any refusal: a check on the forbidden change, a control that makes it.
+
+Two helpers say which calls count. `answered(calls, tool, **arguments)` is every call of that tool the
+world answered, whether it went through or the world's own rule turned it down (a not-found, a refusal):
+use it for "the agent looked X up" and "the agent tried X". `succeeded(calls, tool, **arguments)` is
+only the calls that went through: use it for "the agent did X". Neither counts a call that crashed or a
+fault failed. Given arguments, both keep only the calls made with those values.
 
 `same_value(a, b)` compares numbers and amounts written with a currency symbol or ISO code (`89`,
 `"$89.00"` and `"89 USD"`, never `$89` and `€89`), ISO dates and times by their value (`14:00` and
