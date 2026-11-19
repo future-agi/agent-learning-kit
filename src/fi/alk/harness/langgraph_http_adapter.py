@@ -26,9 +26,16 @@ loop costs little, but:
 
 Each request's ``thread_id`` reaches the graph as LangGraph's own thread,
 ``config={"configurable": {"thread_id": ...}}``, so a node or tool can tell conversations apart
-with ``langgraph.config.get_config()``. A graph compiled with a checkpointer of its own gets no
-thread: it would store each turn, and the kit sends the whole history every turn, so the graph
-would see it twice. It is called as it would be without the thread.
+with ``langgraph.config.get_config()``. The kit sends the whole history every turn, so what a
+graph keeps of a thread would see it twice. So:
+
+- a graph compiled with a checkpointer of its own gets no thread, and is called as it would be
+  without one;
+- an object whose ``ainvoke`` takes no ``config`` (neither by name nor through ``**kwargs``) is
+  called as before, with the state alone;
+- not covered: a subgraph compiled with its own checkpointer under a parent with none, and a
+  graph that keys a memory store of its own by the thread. Each keeps every turn of a
+  conversation, and so sees the history again on each.
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import importlib
+import inspect
 import json
 import os
 import sys
@@ -115,9 +123,24 @@ def _thread_config(payload: dict[str, Any]) -> dict[str, Any] | None:
     thread = payload.get("thread_id")
     if not isinstance(thread, str) or not thread.strip():
         return None
-    if getattr(GRAPH, "checkpointer", None) not in (None, False):
+    if getattr(GRAPH, "checkpointer", None) not in (None, False) or not _TAKES_CONFIG:
         return None
     return {"configurable": {"thread_id": thread}}
+
+
+def _takes_config(graph: Any) -> bool:
+    """Whether the graph's ``ainvoke`` accepts ``config``: by name, or through ``**kwargs``."""
+    try:
+        parameters = inspect.signature(graph.ainvoke).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == "config" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+_TAKES_CONFIG = _takes_config(GRAPH)
 
 
 async def _run_graph(

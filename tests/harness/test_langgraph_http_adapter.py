@@ -657,3 +657,33 @@ def test_a_graph_with_its_own_checkpointer_gets_no_thread(load) -> None:
     adapter._invoke({"thread_id": "one", "new_message": {"content": "hi"}})
 
     assert sys.modules["checkpointed_graph.graph"].SEEN == ["no config"]
+
+
+@pytest.mark.parametrize(
+    "signature,receives",
+    [
+        ("self, state", None),
+        ("self, state, **options", {"configurable": {"thread_id": "one"}}),
+        ("self, state, *, config=None", {"configurable": {"thread_id": "one"}}),
+    ],
+    ids=["no_config", "kwargs", "keyword_config"],
+)
+def test_an_ainvoke_that_takes_no_config_is_called_with_the_state_alone(
+    load, signature, receives
+) -> None:
+    # The loader accepts any object with an ainvoke; one written without config ran before
+    # threads were passed, and still does.
+    adapter = load(
+        "SEEN = []\n"
+        "class Graph:\n"
+        f"    async def ainvoke({signature}):\n"
+        "        SEEN.append(locals().get('config', locals().get('options', {}).get('config')))\n"
+        "        return {'final_report': 'ok'}\n"
+        "graph = Graph()\n",
+        "plain_graph",
+    )
+
+    assert adapter._invoke({"thread_id": "one", "new_message": {"content": "hi"}}) == {
+        "content": "ok"
+    }
+    assert sys.modules["plain_graph.graph"].SEEN == [receives]
