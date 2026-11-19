@@ -840,7 +840,7 @@ def test_the_known_misses_stay_unread(tmp_path, raw, name):
 @_KEEPS_A_DECODED_CR
 def test_a_tracing_import_in_a_file_the_parser_ends_early_is_found_by_its_lines(tmp_path):
     # The parser ends the line at the decoded CR and refuses the file; Python runs the import.
-    # The instrumentation check searches the lines of a file that doesn't parse (ADR-011), so
+    # The instrumentation check searches the lines of a file that doesn't parse, so
     # this is no longer a miss for it. The browser check still misses its twin, cr-in-a-try.
     raw = _UTF7 + b"try:\n    import +AHQ-raceai_openai\n+AA0-[0]\nexcept ImportError:\n    pass\n"
 

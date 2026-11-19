@@ -1791,7 +1791,7 @@ def _discover_callback_entrypoint(root: Path) -> str | None:
     candidates: list[str] = []
     # Found by a line search in modules the kit's own Python can't parse: used only when no
     # module that parses defines the callback, so a leftover file that doesn't parse never makes
-    # a working agent's callback ambiguous (ADR-011).
+    # a working agent's callback ambiguous.
     searched: list[str] = []
     for path in sorted(root.rglob("*.py")):
         relative = path.relative_to(root)

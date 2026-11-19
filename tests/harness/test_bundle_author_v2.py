@@ -7143,8 +7143,8 @@ def test_the_tool_proxy_learns_the_declared_read_actions_and_a_plan_without_any_
 
 
 def test_a_leftover_file_that_does_not_parse_does_not_make_the_callback_ambiguous(tmp_path):
-    # Owl's round-2 regression on kit 355: the line search for a file that doesn't parse is a
-    # fallback, used only when no file that parses defines the callback.
+    # The line search for a file that doesn't parse is a fallback, used only when no file that
+    # parses defines the callback.
     from fi.alk.harness.bundle_author_v2 import _discover_callback_entrypoint
 
     (tmp_path / "agent.py").write_text(

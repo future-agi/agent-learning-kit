@@ -108,7 +108,7 @@ def _read_imports(
             imported.update(_imports(tree))
         elif isinstance(tree, SyntaxError):
             # A file the kit's own Python can't parse still imports what it imports: the line
-            # search reads its absolute imports, so tracing there is not missed (ADR-011).
+            # search reads its absolute imports, so tracing there is not missed.
             imported.update(name for level, name in import_lines(reading) if not level)
 
 

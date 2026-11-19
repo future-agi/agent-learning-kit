@@ -1,6 +1,6 @@
-"""The kit reads customers' Python on its own interpreter, the hosted image's 3.12. A file
+"""The kit reads customers' Python on the Python it runs on, the hosted image's 3.12. A file
 written for 3.13's or 3.14's syntax doesn't parse there; the reading says so, naming the file
-and the Python it needs, instead of reading the agent in part without a word (TH-8802)."""
+and the Python it needs, instead of reading the agent in part without a word."""
 
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ def test_the_files_the_kits_python_cannot_parse_are_listed(tmp_path) -> None:
     assert set(by_path) == {"agent/box.py", "agent/greet.py", "agent/broken.py"}
     assert by_path["agent/box.py"]["python"] == "3.13"
     assert by_path["agent/greet.py"]["python"] == "3.14"
-    # Empty, never None: the platform reads "3.13", "3.14" or nothing (ADR-011, condition 3).
+    # Empty, never None: the platform reads "3.13", "3.14" or nothing.
     assert by_path["agent/broken.py"]["python"] == ""
     assert by_path["agent/box.py"]["reason"] == (
         "agent/box.py uses a type parameter default, which needs Python 3.13; the kit reads "
@@ -142,7 +142,7 @@ def test_fifty_files_fit_without_the_flag(tmp_path) -> None:
 
 def test_a_path_the_platform_cannot_carry_is_counted_but_not_named(tmp_path) -> None:
     # A name outside the kit's path rule is the customer's own text: it is never copied into
-    # the document, and the flag says the list is not the whole story (ADR-011, condition 3).
+    # the document, and the flag says the list is not the whole story.
     (tmp_path / "my agent.py").write_text("g = t'x'\n", encoding="utf-8")
     (tmp_path / "ok.py").write_text("g = t'x'\n", encoding="utf-8")
 
@@ -171,7 +171,7 @@ def test_files_past_the_parse_budget_leave_the_flag(tmp_path, monkeypatch) -> No
     assert note["unparsed_truncated"] is True
 
 
-# --- every place that parses source takes its cautious branch (ADR-011, condition 4) ---------
+# --- every place that parses source takes its cautious branch -------------------------------
 # A file it can't parse must not read as a file with nothing in it.
 
 _T_STRING = "label = t'{x}'\n"
@@ -293,7 +293,7 @@ def test_a_vertex_client_in_a_file_that_does_not_parse_still_asks_for_google_cre
     ]
 
 
-# --- the walk reaches what the readers read, and says when it stops (Owl's H1, round 1) -------
+# --- the walk reaches what the readers read, and says when it stops ---------------------------
 
 
 def test_a_tool_module_outside_the_agents_folder_is_listed(tmp_path) -> None:
@@ -363,7 +363,7 @@ def test_naming_the_construct_stops_when_the_token_budget_runs_out() -> None:
 def test_a_long_one_line_file_is_named_quickly(tmp_path) -> None:
     import time
 
-    # Owl's probe: 15.7 s to tokenize before the budget.
+    # Unbounded, this took 15.7 s to tokenize.
     (tmp_path / "agent.py").write_text("a," * 64_000 + " :\n", encoding="utf-8")
 
     started = time.monotonic()
@@ -395,7 +395,7 @@ def test_an_except_list_starting_with_a_parenthesised_name_is_named() -> None:
     )
 
 
-# --- Owl's round 2, and Mason's ruling on condition 2 (ADR-011, amended 18 Nov) ---------------
+# --- a key only when it has something to say, and the walk's limits ---------------------------
 
 
 def test_an_agent_whose_files_parse_but_one_is_too_large_says_only_that(tmp_path) -> None:
@@ -428,7 +428,7 @@ def test_a_file_that_cannot_be_decoded_leaves_the_flag(tmp_path) -> None:
 def test_an_except_clause_scan_stays_linear(tmp_path) -> None:
     import time
 
-    # Owl's probe: 7.2 s, each except scanning forward over all the others.
+    # Unbounded, this took 7.2 s, each except scanning forward over all the others.
     text = "x = (\n" + "except\n" * 9_000 + ")\n"
     started = time.monotonic()
 

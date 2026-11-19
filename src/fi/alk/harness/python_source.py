@@ -569,7 +569,7 @@ def parsed(text: str) -> ast.Module | None:
 def parsed_or_syntax_error(text: str) -> ast.Module | SyntaxError | None:
     """As ``parsed``, but a file that is only not this Python's syntax gives its ``SyntaxError``.
 
-    That file may be another Python's (ADR-011), so a caller can still search its lines. A file
+    That file may be another Python's, so a caller can still search its lines. A file
     that runs the parser out of stack or holds a long run of combining marks gives None: such a
     file is crafted, and counts for nothing.
     """
@@ -796,7 +796,7 @@ def unparsed_note(
     ``unparsed`` lists each as ``{"path", "python", "reason"}``: ``python`` is the version a
     newer construct needs, or ``""`` for a plain syntax error. Nothing in it is the customer's
     own text but a path the platform's path rule admits, so the parser's message, which can
-    repeat the file's code, is left out (ADR-011). ``unparsed_truncated`` is set when the list
+    repeat the file's code, is left out. ``unparsed_truncated`` is set when the list
     may not be every such file: past ``_UNPARSED_LISTED`` of them, a path outside the rule, a
     file too large or too deep to parse, or files past the walk's parse budget.
     """
@@ -848,8 +848,8 @@ def unparsed_note(
                 "so this file was not read"
             )
         listed.append({"path": name, "python": python, "reason": reason})
-    # A key only when it has something to say (ADR-011, condition 2 as amended 18 Nov): an agent
-    # whose files all parse but one went unchecked gets the flag alone.
+    # A key only when it has something to say: an agent whose files all parse but one went
+    # unchecked gets the flag alone, and one with nothing to say gets the document it always got.
     return {
         **({"unparsed": listed} if listed else {}),
         **({"unparsed_truncated": True} if cut else {}),

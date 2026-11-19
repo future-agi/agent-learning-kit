@@ -396,7 +396,7 @@ def test_the_framework_is_a_builds_shape(tmp_path, model, write, expected):
 def test_a_file_the_kits_python_cannot_parse_is_named_in_the_agent_document(tmp_path, model):
     # The kit reads the agent's source on Python 3.12; a file in 3.13's or 3.14's syntax isn't
     # read, and the agent document says which file and why, never a reading in part without a
-    # word (TH-8802).
+    # word.
     source = _repo(tmp_path)
     (source / "box.py").write_text("class Box[T=int]:\n    item: T\n", encoding="utf-8")
     (source / "greet.py").write_text("def greet(n):\n    return t'hi {n}'\n", encoding="utf-8")
@@ -457,8 +457,7 @@ def test_an_agent_the_kits_python_reads_whole_has_no_unparsed_list(tmp_path, mod
 
 def test_an_agent_the_kits_python_reads_whole_gets_the_document_it_got_before(tmp_path, model):
     # The platform keeps one description per version and refuses a second, different one, so a
-    # reading with nothing unparsed writes the very bytes it wrote before TH-8802 (ADR-011,
-    # condition 2).
+    # reading with nothing unparsed writes the very bytes a build of the same contract writes.
     _repo(tmp_path)
     model(_writes(CHAT))
 

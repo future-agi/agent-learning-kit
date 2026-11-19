@@ -456,7 +456,7 @@ def _unparsed_sdk_requirements(content: str) -> list[tuple[str, str]]:
 
     Nothing in the file can be read as an ``api_key=``, so each plugin asks for every name it may
     read, as for ``**opts``, and ``vertexai=True`` anywhere in the file counts for every Google constructor in it: a
-    name too many is asked for, a name needed is never missed (ADR-011).
+    name too many is asked for, a name needed is never missed.
     """
     found: set[tuple[str, str]] = set()
     vertex = _VERTEX_ON.search(content) is not None

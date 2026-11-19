@@ -282,7 +282,7 @@ def read_all(destination: Path) -> list[Scenario]:
 
 def _tools_selected(body: str) -> set[str] | None:
     """Every tool name this check narrows the calls to, or None for a check the kit's own Python
-    can't parse: that is not a check that selects no tool (ADR-011)."""
+    can't parse: that is not a check that selects no tool."""
     try:
         tree = ast.parse(textwrap.dedent(body))
     except SyntaxError:

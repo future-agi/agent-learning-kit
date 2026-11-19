@@ -8979,8 +8979,7 @@ def test_the_duplicate_claim_remark_does_not_depend_on_what_the_loop_variable_is
 
     assert _tools_selected("return None\n") == set()
     assert _tools_selected('if call.tool == "book_ride":\n    return None\n') == set()
-    # A check that does not parse is not one that selects no tool: check_problems names it
-    # (ADR-011).
+    # A check that does not parse is not one that selects no tool: check_problems names it.
     assert _tools_selected("def (:\n") is None
 
 

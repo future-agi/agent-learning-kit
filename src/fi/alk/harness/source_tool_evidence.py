@@ -147,7 +147,7 @@ def defined_tool_names(source: Path) -> set[str]:
         tree = parsed_or_syntax_error(text)
         if isinstance(tree, SyntaxError):
             # A file the kit's own Python can't parse still defines its tools: a line search
-            # finds them, and a name too many only keeps a tool from being rejected (ADR-011).
+            # finds them, and a name too many only keeps a tool from being rejected.
             names.update(_DEFINED_CALLABLE.findall(text))
             names.update(match.group(2) for match in _EXPLICIT_NAME.finditer(text))
             continue
