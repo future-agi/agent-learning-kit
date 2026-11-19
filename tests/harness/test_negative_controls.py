@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import copy
 from types import SimpleNamespace
 
@@ -24,7 +25,7 @@ from fi.alk.harness import live_proof
 from fi.alk.harness import prove as module
 from fi.alk.harness.contract import ToolEntry
 from fi.alk.harness.prove import Proof
-from fi.alk.harness.world.runtime import Call
+from fi.alk.harness.world.runtime import REQUEST_NOT_ACCEPTED, Call
 
 LOOKUP_O20 = {"tool": "lookup_order", "arguments": {"order_id": "O-20"}, "fixed": {"order_id": "the caller"}}
 REFUND_O20 = {"tool": "refund_order", "arguments": {"order_id": "O-20"}, "fixed": {"order_id": "the caller"}}
@@ -921,3 +922,121 @@ def test_the_save_judges_only_the_cases_written_in_this_session(monkeypatch, tmp
     # The shared-control case was left untouched (it may predate the rule); only the others were written now.
     assert controls_off_their_case(suite[1:], suite, tmp_path) == []
     assert len(controls_off_their_case([target], suite, tmp_path)) == 1
+
+
+def _validated(monkeypatch, tmp_path, case, forward):
+    """An old case validated: its reference and controls played on the live runtime, then the Validate's proof."""
+    import json
+
+    from fi.alk.harness import authoring_entrypoint, prove_suite
+
+    monkeypatch.setattr(ServiceWorld, "forward", forward)
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [case])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    stack = Stack()
+    asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path, contract=_contract({"lookup_order": "service", "refund_order": "service"}),
+            runtime=stack, provider=stack, factory=stack, work=tmp_path,
+        )
+    )
+    install(monkeypatch, runtime_tools={"lookup_order", "refund_order"})
+    monkeypatch.setattr(prove_suite, "load_scenarios", lambda path: [case])
+    monkeypatch.setattr(prove_suite, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    authoring_entrypoint._prove_scenarios(tmp_path, None)
+    return json.loads((tmp_path / authoring_entrypoint.SCENARIO_PROOFS).read_text(encoding="utf-8"))["refund_case"]
+
+
+def _needs_the_call_s_session(self, endpoint, arguments=None, *, record_as="", record=True):
+    """A service whose requests carry what the agent's own tool adds from the call (here a caller id): sent only the
+    agent-facing arguments, it rejects the request's shape."""
+    args = dict(arguments or {})
+    if "caller_id" not in args:
+        missing = {"type": "missing", "loc": ["body", "caller_id"], "msg": "Field required"}
+        return _rejected(endpoint, args, {"detail": [missing]})
+    return Call(endpoint, args, result={"ok": True}, ok=True)
+
+
+def _rejected(endpoint, args, body):
+    """The service's 422, with `body` as it answered (a dict, or text that is not JSON)."""
+    error = body if isinstance(body, str) else json.dumps(body)
+    return Call(endpoint, args, result=body, ok=False, refused=True, error=error, refusal_code=REQUEST_NOT_ACCEPTED)
+
+
+def test_an_old_case_whose_service_wants_what_the_agent_adds_stays_kept_as_written(monkeypatch, tmp_path):
+    saved = _validated(monkeypatch, tmp_path, refund_case(), _needs_the_call_s_session)
+
+    assert saved["live"] is True and saved["proved"] is False and saved["kept_as_written"] is True
+    assert saved["blocked_reason"] == "solution_assumed"
+    assert saved["assumed"] == ["lookup_order", "refund_order"]
+
+
+def test_a_reference_the_service_refuses_for_itself_is_still_held(monkeypatch, tmp_path):
+    def no_such_order(self, endpoint, arguments=None, *, record_as="", record=True):
+        return Call(endpoint, dict(arguments or {}), ok=False, refused=True, error='{"detail": "no such order"}')
+
+    saved = _validated(monkeypatch, tmp_path, refund_case(), no_such_order)
+
+    assert saved["kept_as_written"] is False and saved["blocked_reason"] == "not_solvable"
+
+
+def test_a_request_the_case_declares_itself_is_held_when_the_service_rejects_it(monkeypatch, tmp_path):
+    declared = [
+        {**LOOKUP_O10, "environment_arguments": {"order_id": "O-10"}},
+        {**REFUND_O10, "environment_arguments": {"order_id": "O-10"}},
+    ]
+    case = scenario(declared, sub_goals=["refund_once", "looked_up"])
+    case.negative_controls = refund_case().negative_controls
+
+    saved = _validated(monkeypatch, tmp_path, case, _needs_the_call_s_session)
+
+    assert saved["kept_as_written"] is False and saved["blocked_reason"] == "not_solvable"
+
+
+@pytest.mark.parametrize(("status", "code"), [(422, REQUEST_NOT_ACCEPTED), (404, ""), (409, "")])
+def test_only_a_request_the_service_cannot_take_reads_as_not_accepted(monkeypatch, status, code):
+    from fi.alk.harness.world import handle
+
+    world = _toolbox_world({})
+    world.bind_tools("http://proxy", {"lookup_order": "lookup"}, ["lookup_order"])
+    reply = SimpleNamespace(status_code=status, json=lambda: {"detail": "no"}, text="")
+    monkeypatch.setattr(handle.requests, "post", lambda *args, **kwargs: reply)
+
+    call = world.forward("lookup", {"order_id": "O-10"}, record=False)
+
+    assert call.ok is False and call.refusal_code == code
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"detail": [{"type": "enum", "loc": ["body", "order_id"], "msg": "Input should be one of the orders"}]},
+        {"detail": [{"type": "missing", "loc": ["body", "order_id"], "msg": "Field required"}]},
+        {"detail": [
+            {"type": "missing", "loc": ["body", "caller_id"], "msg": "Field required"},
+            {"type": "string_type", "loc": ["body", "order_id"], "msg": "Input should be a valid string"},
+        ]},
+        {"detail": [{"type": "value_error", "loc": ["body", "caller_id"], "msg": "Value error, unknown caller"}]},
+        {"detail": "this order was refunded already"},
+        {"detail": []},
+        "<html>Unprocessable</html>",
+    ],
+    ids=[
+        "wrong-value",
+        "missing-a-field-the-step-sends",
+        "missing-and-wrong",
+        "bad-value-for-a-field-the-agent-adds",
+        "refusal-as-422",
+        "no-errors",
+        "unreadable",
+    ],
+)
+def test_a_422_that_is_not_only_fields_the_agent_adds_stays_refused(monkeypatch, tmp_path, body):
+    def rejecting(self, endpoint, arguments=None, *, record_as="", record=True):
+        return _rejected(endpoint, dict(arguments or {}), body)
+
+    saved = _validated(monkeypatch, tmp_path, refund_case(), rejecting)
+
+    assert saved["kept_as_written"] is False and saved["blocked_reason"] == "not_solvable"
+    assert saved["assumed"] == []
