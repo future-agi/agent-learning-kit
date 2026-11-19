@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from .catalogue import Catalogue, load_catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
-from .controls import control_broken, played_control, refused_attempts, unmatched_calls
+from .controls import control_broken, played_control, refused_attempts, unmatched_calls, writes_beyond
 from .folder import apply_setup, check_ready
 from .json_file import write_json_atomic
 from .outbound import redact_outbound_text
@@ -412,21 +412,23 @@ async def _prove_case(scenario: Scenario, catalogue: Catalogue, fresh: Any) -> L
             world = await fresh()
             control_calls, control_assumed, _ = await asyncio.to_thread(_play, scenario, world, list(control.steps))
             outcomes = await asyncio.to_thread(_outcomes, scenario, catalogue, world, control_calls)
+            changed = await asyncio.to_thread(writes_beyond, world, reference_of(scenario.solution))
         except Exception as exc:  # noqa: BLE001 - a control that cannot be played is no evidence, the case still is
             controls.append(
                 {"name": control.name, "why": control.why, "ran": False, "failed": None, "held": [], "assumed": [],
                  "error": redact_outbound_text(f"{type(exc).__name__}: {exc}")[:300]}
             )
             continue
-        controls.append(
-            played_control(
-                control,
-                outcomes,
-                control_assumed,
-                unmatched_calls(scenario, control_calls),
-                refused_attempts(scenario, control_calls),
-            )
+        played = played_control(
+            control,
+            outcomes,
+            control_assumed,
+            unmatched_calls(scenario, control_calls),
+            refused_attempts(scenario, control_calls),
         )
+        if changed:
+            played["changed"] = changed
+        controls.append(played)
     return {
         "assumed": assumed,
         "refused": refused,

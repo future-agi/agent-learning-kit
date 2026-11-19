@@ -30,6 +30,7 @@ import ast
 import json
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
@@ -54,6 +55,7 @@ from .scenario import Scenario
 from .understand import load
 from .world.runtime import REQUEST_NOT_ACCEPTED, Call, GeneratedWorld
 from .world.snapshot import read_manifest, restore, source_state
+from .world_door import named_alike
 
 
 # The lane could not execute something; the case runs labelled "kept as written", never as proved.
@@ -138,6 +140,8 @@ class Proof:
     with_solution: list[Outcome] = field(default_factory=list)
     with_nothing: list[Outcome] = field(default_factory=list)
     refused: list[str] = field(default_factory=list)
+    # Reference steps this scenario's own faults failed, as the run fails them (`run_steps`).
+    faulted: list[str] = field(default_factory=list)
     broken: list[str] = field(default_factory=list)
     # Solution steps that were recorded without being executed, because the tool they name has no
     # endpoint bound in this lane. The condition was already detected and logged and then went
@@ -371,11 +375,22 @@ class Proof:
                 if self.refused
                 else ""
             )
+            faulted = (
+                "\n\nThis scenario's own faults fail these steps, as they will in the run:\n  - "
+                + "\n  - ".join(self.faulted)
+                + "\n\nA case that injects a fault tests the failure path, never the change succeeding: write its "
+                "reference and its checks for what a good agent does when the step fails (it reports the failure "
+                "honestly, claims nothing it did not do, and may retry where a retry is safe), and check that the "
+                "change did not happen."
+                if self.faulted
+                else ""
+            )
             return (
                 "the reference solution does not pass this scenario's own checks, so either the "
                 "scenario cannot be passed or the checks are wrong:\n  - "
                 + said
                 + refusals
+                + faulted
             )
         if self.vacuous:
             passed = [one.name for one in self.with_nothing if one.held]
@@ -450,6 +465,13 @@ class Proof:
                         f"; it tried {', '.join(one['attempted'])}, which the reference never calls; the world refused "
                         "it, so nothing changed, and no check fails on the attempt"
                         if one.get("attempted")
+                        else ""
+                    )
+                    + (
+                        f"; it committed {', '.join(one['changed'])}, which the reference never does, and no check "
+                        "reads that record. A check that fails when that write commits (`committed_writes(world)`, "
+                        "or the record's end state in `world`) fails this control"
+                        if one.get("changed")
                         else ""
                     )
                     for one in passed
@@ -763,8 +785,20 @@ def run_steps(
     acting.replay_pre_run()
     if with_solution:
         acting.act_on(None)
+        made: Counter[str] = Counter()
+        world.faulted = []
         for step in scenario.solution if steps is None else steps:
-            call = play_reference_step(world, step)
+            fault = _fault_on(scenario, step, made)
+            if fault is None:
+                call = play_reference_step(world, step)
+            else:
+                # The scenario's own fault fails this step before any change, as the world door fails it in the run,
+                # with the reason the door logs.
+                reason = (str(fault.message or "").strip() or "error") if fault.mode == "error" else fault.mode
+                call = world._record(
+                    Call(name=str(step.tool), arguments=dict(step.arguments or {}), ok=False, error=reason)
+                )
+                world.faulted.append(f"{call.name}({step.arguments}): {fault.mode}")
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
             acting.act_on(step)
@@ -786,6 +820,29 @@ def run_steps(
             )
     calls = [call for index, call in enumerate(world.calls) if index not in by_actors]
     return world, calls, refused, sorted(set(assumed))
+
+
+# The fault modes that fail a call before any change. `timeout_after_commit` makes the change (its answer is lost) and
+# `approval_required` holds the call for an approver; the proof plays both as written.
+_FAILING_FAULTS = ("timeout_before_commit", "unavailable", "error")
+
+
+def _fault_on(scenario: Scenario, step: object, made: Counter[str]) -> Any:
+    """The scenario's own fault on this reference step, by which call of the fault's action it is, as the world door
+    counts them; None when no fault fails it. `made` counts the calls of each faulted action so far."""
+    tool = str(getattr(step, "tool", "") or "")
+    hit = None
+    for action in {fault.action for fault in getattr(scenario, "faults", None) or () if named_alike(fault.action, tool)}:
+        made[action] += 1
+        hit = hit or next(
+            (
+                fault
+                for fault in scenario.faults
+                if fault.action == action and fault.on_call == made[action] and fault.mode in _FAILING_FAULTS
+            ),
+            None,
+        )
+    return hit
 
 
 # The triggers a reference solution can meet; the rest are reported in `Proof.unplayed`.
@@ -1459,6 +1516,7 @@ def prove(
         finally:
             wrong_world.close()
     proof.refused = refused
+    proof.faulted = list(getattr(world, "faulted", None) or [])
     proof.broken = [one.name for one in proof.with_solution if one.broken]
     proof.solvable = all(one.held or one.name in proof.excused for one in proof.with_solution) and not proof.broken
 

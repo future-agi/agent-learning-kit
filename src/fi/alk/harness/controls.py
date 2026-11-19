@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from .catalogue import Catalogue
-from .checks import Outcome, run_check
+from .checks import Outcome, committed_writes, run_check, same_value
 from .judge import judge_sub_goal
 from .proof_records import ControlResult
 from .scenario import NegativeControl, Scenario
 from .world.runtime import Call, GeneratedWorld, settled
+from .world_door import named_alike
 
 # Plays `steps` (else the scenario's solution) on a world set up for the scenario: (world, calls, refused, assumed).
 StepRunner = Callable[..., tuple[GeneratedWorld, list[Call], list[str], list[str]]]
@@ -40,14 +41,45 @@ def play_controls(
         world, calls, _refused, assumed = run(scenario, world_root, with_solution=True, steps=control.steps)
         try:
             outcomes = [run_check(source, world, calls, name=name, reference=reference) for name, source in checks]
+            changed = writes_beyond(world, reference)
         finally:
             world.close()
-        played.append(
-            played_control(
-                control, outcomes, assumed, unmatched_calls(scenario, calls), refused_attempts(scenario, calls)
-            )
+        result = played_control(
+            control, outcomes, assumed, unmatched_calls(scenario, calls), refused_attempts(scenario, calls)
         )
+        if changed:
+            result["changed"] = changed
+        played.append(result)
     return played
+
+
+def writes_beyond(world: Any, reference: Any) -> list[str]:
+    """The writes a control's world committed beyond the reference's own, each as `action(arguments)`: the record the
+    wrong behaviour changes, which a check on the world's end state fails. A reference step accounts for one write of
+    its action with its fixed arguments, so a second refund of one order is beyond it."""
+    try:
+        writes = committed_writes(world)
+    except Exception:  # noqa: BLE001 - a world without an action log names no write, and the control still reports
+        return []
+    remaining = [dict(step) for step in reference or () if isinstance(step, dict)]
+    beyond = []
+    for write in writes:
+        given = write.get("arguments") or {}
+        mine = next(
+            (
+                step
+                for step in remaining
+                if named_alike(str(write.get("action") or ""), str(step.get("tool") or ""))
+                and all(same_value(given.get(field), value) for field, value in (step.get("arguments") or {}).items())
+            ),
+            None,
+        )
+        if mine is not None:
+            remaining.remove(mine)
+            continue
+        shown = ", ".join(f"{field}={value!r}" for field, value in sorted(given.items()))
+        beyond.append(f"{write.get('action')}({shown})")
+    return beyond
 
 
 def unmatched_calls(scenario: Scenario, calls: Sequence[Call]) -> list[str]:
