@@ -1022,8 +1022,9 @@ class _WorldActors:
                     "error": call.error or None,
                     "action_id": f"proof-{index}",
                     "actor_id": self.by_actors.get(index, "agent"),
-                    "outcome": "committed" if call.ok else "refused",
-                    "refusal_code": None if call.ok else "world_rule",
+                    # A step recorded, not run (`ok` None), neither went through nor was turned down.
+                    "outcome": "recorded" if call.ok is None else "committed" if call.ok else "refused",
+                    "refusal_code": None if call.ok or call.ok is None else "world_rule",
                 }
             )
         rows += [row for _, row in pending]
