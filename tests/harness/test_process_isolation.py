@@ -624,3 +624,33 @@ def test_the_template_refuses_a_harness_source_its_user_can_write():
     template = (root / "scripts" / "e2b-template.py").read_text()
     assert '"harness-source-read-only"' in template
     assert "writable_harness_source" in template and "sys.exit(1 if found else 0)" in template
+
+
+def test_a_proposer_s_candidate_in_the_certify_sandbox_gets_no_author_credential_and_no_verifier_evidence(
+    tmp_path, monkeypatch
+):
+    """The fix engine's code reaches a sandbox only as a candidate agent version, run as the agent's user in the certify
+    sandbox, beside the authoring credentials and the suite's proofs. Its environment carries none of those
+    credentials, and under per-user isolation every proof the certify writes (the reference's and controls' verdicts,
+    the live results) is the harness's alone."""
+    from fi.alk.harness import live_proof, prove_suite
+    from fi.alk.harness.proofs import PROOFS, record_proof
+    from fi.alk.harness.prove import Proof
+
+    names = sorted(hosted_authoring_entrypoint._PASSTHROUGH | hosted_authoring_entrypoint._OBSERVABILITY_PASSTHROUGH)
+    monkeypatch.setattr(os, "environ", {"PATH": "/usr/bin"})
+    hosted_authoring_entrypoint._configure_generation_environment({name: f"author-{name}" for name in names})
+    hosted_authoring_entrypoint._configure_observability_environment({name: f"author-{name}" for name in names})
+    candidate = pr._allowlisted_ambient_env(dict(os.environ))
+    assert not [name for name in candidate if candidate[name].startswith("author-")]
+
+    monkeypatch.setattr(privilege, "_mode", IsolationMode.PER_USER)
+    before = os.umask(0o077)  # what establish_isolation sets under per-user isolation
+    try:
+        record_proof(tmp_path, "refund", Proof())
+        live_proof.write_live(tmp_path, {"refund": {"with_solution": [], "controls": []}})
+        prove_suite._write(tmp_path / "scenario-proofs.json", {})
+    finally:
+        os.umask(before)
+    for name in (PROOFS, live_proof.LIVE_PROOFS, "scenario-proofs.json"):
+        assert (tmp_path / name).stat().st_mode & 0o077 == 0, name
