@@ -4109,6 +4109,7 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
     # whoever submits the contract.
     ours = {
         "amendments",
+        "value_changes",
         "instrumentation",
         "source_subfolder",
         "unconfirmed_prompt_from",
@@ -4125,6 +4126,9 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
         found: list[str] = []
         for name, field in model.model_fields.items():
             found.append(name)
+            if name in ours:
+                # Ours to fill, shape and all: nothing under it is the submitter's.
+                continue
             for inner in _models_within(field.annotation):
                 found.extend(named(inner))
         return found
