@@ -168,6 +168,23 @@ def judge_model() -> str:
     return os.environ.get(JUDGE_MODEL_ALIAS, "").strip() or chosen_model()
 
 
+_REACHABLE_TIMEOUT_SECONDS = 20
+
+
+def judge_reachable(timeout: float = _REACHABLE_TIMEOUT_SECONDS) -> str:
+    """``passed`` when the judge's model answers one tiny request in ``timeout`` seconds, else
+    ``failed``: a judged sub-goal cannot be graded without it."""
+    try:
+        _complete(
+            [{"role": "user", "content": "Reply with the single word: ready"}], [], False, timeout=timeout, max_tokens=5
+        )
+    except Exception as exc:  # noqa: BLE001 - any failure means the judge cannot grade
+        logger.warning("judge not reachable in the check: %s", type(exc).__name__)
+        logger.debug("judge reachability failure", exc_info=True)
+        return "failed"
+    return "passed"
+
+
 def _short(value: object) -> object:
     if isinstance(value, str) and len(value) > _LIMIT:
         return value[:_LIMIT] + f"... [{len(value)} chars]"
@@ -629,7 +646,12 @@ def _transcript(messages: Sequence[Any]) -> str:
 
 
 def _complete(
-    conversation: list[dict[str, Any]], tools: Sequence[Any], forced: bool
+    conversation: list[dict[str, Any]],
+    tools: Sequence[Any],
+    forced: bool,
+    *,
+    timeout: float = _TURN_TIMEOUT_SECONDS,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """One turn of the judge on the gateway's OpenAI-compatible chat completions."""
     env = provider_env(judge_model())
@@ -650,11 +672,13 @@ def _complete(
         ]
     if forced:
         body["tool_choice"] = {"type": "function", "function": {"name": "decide"}}
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
     response = requests.post(
         f"{base}/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
         json=body,
-        timeout=_TURN_TIMEOUT_SECONDS,
+        timeout=timeout,
     )
     response.raise_for_status()
     answer = response.json()

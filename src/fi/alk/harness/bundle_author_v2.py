@@ -181,7 +181,9 @@ _TOOL_TRACE_DDL = (
     "ADD COLUMN IF NOT EXISTS provider_call_id text, ADD COLUMN IF NOT EXISTS tool_call_id text, "
     "ADD COLUMN IF NOT EXISTS status text, ADD COLUMN IF NOT EXISTS effect text, ADD COLUMN IF NOT EXISTS attribution text, "
     # How each call was made and the scenario's fault the door applied on it.
-    "ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb;\n"
+    "ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb, "
+    # The HTTP path a call through the tool proxy went to.
+    "ADD COLUMN IF NOT EXISTS endpoint text;\n"
 )
 
 

@@ -1034,6 +1034,23 @@ def test_certify_only_runs_the_real_runtime_gate_without_a_model(
     assert json.loads((authoring / ARTIFACT).read_text())["status"] == "not_applicable"
 
 
+def test_certify_only_asks_for_the_tools_the_qualifying_chat_did_not_show_once(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness import tool_routing
+
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    _forbid_models(monkeypatch)
+    _real_runtime(tmp_path, monkeypatch, state={}, authoring=authoring)
+    asked = []
+
+    async def request_uncovered_tools(**kwargs):
+        asked.append(kwargs["authoring"])
+
+    monkeypatch.setattr(tool_routing, "request_uncovered_tools", request_uncovered_tools)
+
+    assert _hosted(tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle")) == 0
+    assert asked == [authoring]
+
+
 @pytest.mark.parametrize(
     "failure,cause",
     [("agent_crashed", "agent_exited_before_ready"), ("chat_timed_out", "chat_target_timeout")],
