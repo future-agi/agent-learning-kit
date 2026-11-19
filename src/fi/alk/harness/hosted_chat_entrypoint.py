@@ -180,10 +180,20 @@ def _call_digest(tool: str, arguments: Any) -> str:
     return hashlib.sha256(f"{tool}\n{_canonical(arguments)}".encode()).hexdigest()
 
 
+# How much of one argument a plan shows; the approval still covers the whole call (`_call_digest`).
+_SHOWN_PER_ARGUMENT = 200
+
+
+def _shown(value: Any) -> str:
+    said = value if isinstance(value, str) else _canonical(value)
+    if len(said) <= _SHOWN_PER_ARGUMENT:
+        return said
+    return f"{said[:_SHOWN_PER_ARGUMENT].rstrip()}... ({len(said) - _SHOWN_PER_ARGUMENT} more characters)"
+
+
 def _call_line(tool: str, arguments: Mapping[str, Any]) -> str:
-    """A call as the person reads it in a plan: the tool and each argument it is called with, as given."""
-    shown = "; ".join(f"{name}: {_canonical(value) if not isinstance(value, str) else value}"
-                      for name, value in sorted(arguments.items()))
+    """A call as the person reads it in a plan: the tool and each argument it is called with, a long one cut short."""
+    shown = "; ".join(f"{name}: {_shown(value)}" for name, value in sorted(arguments.items()))
     return f"{tool} ({shown})" if shown else tool
 _NUDGE_NOTE = (
     "\n\nLoad `builder/agent-update` with read_skill first, and end the turn with "
@@ -1406,7 +1416,10 @@ class HostedChatRuntime:
             contract = load_contract(self.workspace)
             has_contract, has_world = self._what_exists()
             kept = load_scenarios(self.workspace) if has_world else []
-            asked = int(self.job.get("scenario_count") or 0)
+            from .authoring_runtime_validation import supported_count
+
+            # Fewer when the plan's cells hold fewer distinct cases than were asked for; yield.json says so.
+            asked = supported_count(self.workspace, int(self.job.get("scenario_count") or 0))
             missing = (
                 ["no contract is saved"] if not has_contract
                 else ["no world is saved"] if not has_world
@@ -1863,7 +1876,9 @@ class HostedChatRuntime:
             await self.conversation.close()
             said = "[What you saved opened the next part of the build: your tools now cover it. Carry on.]"
         else:
-            asked = int(self.job.get("scenario_count") or 0)
+            from .authoring_runtime_validation import supported_count
+
+            asked = supported_count(self.workspace, int(self.job.get("scenario_count") or 0))
             said = (
                 f"[The build is not finished: the test environment for this agent, with {asked} "
                 "scenarios. Carry on, and call finish_build when it is.]"

@@ -5314,6 +5314,15 @@ def test_a_plan_is_confirmed_once_and_its_exact_calls_then_run_without_asking(tm
     assert len(questions) == 2
 
 
+def test_a_plan_shows_a_long_argument_cut_short_and_still_approves_the_whole_call():
+    from fi.alk.harness.hosted_chat_entrypoint import _SHOWN_PER_ARGUMENT, _call_line
+
+    payload = {"scenarios": [{"name": f"case-{n}", "instruction": "x" * 80} for n in range(40)]}
+    line = _call_line("save_changes", {"changes": payload, "why": "tidy"})
+
+    assert len(line) < 3 * _SHOWN_PER_ARGUMENT and "more characters)" in line and "why: tidy" in line
+
+
 def test_a_listed_tool_called_with_other_arguments_is_asked_about(tmp_path, monkeypatch):
     """A plan approves drop_rule on rule A, never drop_rule on rule B."""
     asked = []
