@@ -1018,7 +1018,7 @@ def test_a_rebuild_keeps_a_case_only_by_the_rule_a_submit_keeps_it_by(tmp_path, 
     assert nudge.suite_gate(root, {"adds-a-big-mac"})[:2] == ([], ["adds-a-big-mac"])
 
 
-def test_a_suite_written_before_controls_were_required_still_rebuilds_its_cases_not_proved(tmp_path):
+def test_a_suite_written_before_controls_were_required_still_rebuilds_its_cases_kept_as_written(tmp_path):
     root = _suite(tmp_path, "adds-a-big-mac")
     _edit_scenario(root, "adds-a-big-mac", negative_controls=[])
 
@@ -1027,10 +1027,10 @@ def test_a_suite_written_before_controls_were_required_still_rebuilds_its_cases_
     assert problems == [] and not_checked == []
     entry = load_proofs(root)["adds-a-big-mac"]
     # Kept, recorded not proved with the builder's hint, so the platform holds it out of runs.
-    assert (entry["proved"], entry["kept_as_written"], entry["blocked_reason"]) == (False, False, "no_negative_control")
+    assert (entry["proved"], entry["kept_as_written"], entry["blocked_reason"]) == (False, True, "no_negative_control")
     assert entry["why"].startswith("no negative control: add a wrong behaviour")
     [warning] = nudge.unproved_without_control(root)
-    assert "adds-a-big-mac" in warning and "held out of runs" in warning
+    assert "adds-a-big-mac" in warning and "kept as written" in warning
 
 
 def test_a_legacy_rebuild_reports_its_uncontrolled_cases_and_passes(tmp_path):
@@ -1043,7 +1043,7 @@ def test_a_legacy_rebuild_reports_its_uncontrolled_cases_and_passes(tmp_path):
     assert not said.get("is_error"), said
     result = json.loads((root / nudge.NUDGE_RESULT).read_text(encoding="utf-8"))
     assert result["checks"]["passed"] is True
-    assert any("not proved: no negative control" in one for one in result["checks"]["warnings"])
+    assert any("kept as written: no negative control" in one for one in result["checks"]["warnings"])
 
 
 def test_a_deferred_case_with_a_leaked_answer_is_a_problem_not_unchecked(tmp_path, monkeypatch):
@@ -1815,9 +1815,65 @@ def test_a_save_is_refused_while_a_case_s_controls_break_only_what_the_suite_sha
     root = _suite(tmp_path, "adds-a-big-mac")
     scenarios, _server, _catalogue, _kept = _session(root, "suite")
     monkeypatch.setattr(
-        tools_module, "controls_off_their_case", lambda kept, world_root: [f"{kept[0].name}: shared control"]
+        tools_module, "controls_off_their_case", lambda written, kept, world_root: [f"{kept[0].name}: shared control"]
     )
 
     saved = _call(scenarios, "save_scenarios", {})
 
     assert saved.get("is_error") and "adds-a-big-mac: shared control" in saved["content"][0]["text"], saved
+
+
+def _old_suite(tmp_path: Path) -> Path:
+    """Two cases written before negative controls were required: on disk with none."""
+    root = _suite(tmp_path, "adds-a-big-mac", "adds-a-mcflurry")
+    for name in ("adds-a-big-mac", "adds-a-mcflurry"):
+        _edit_scenario(root, name, negative_controls=[])
+    return root
+
+
+def test_a_validate_keeps_an_old_suite_without_controls_runnable_and_a_build_holds_it(tmp_path):
+    from fi.alk.harness.prove_suite import prove_suite
+
+    root = _old_suite(tmp_path)
+
+    validated = prove_suite(root, tmp_path / "validated.json")
+    built = prove_suite(root, tmp_path / "built.json", judge_case_goals=True)
+
+    for key in ("adds-a-big-mac", "adds-a-mcflurry"):
+        assert validated[key]["kept_as_written"] is True and validated[key]["blocked_reason"] == "no_negative_control"
+        assert built[key]["kept_as_written"] is False and built[key]["blocked_reason"] == "no_negative_control"
+
+
+def test_a_new_case_without_a_control_is_still_refused(tmp_path):
+    root = _old_suite(tmp_path)
+
+    said = accept_scenario(
+        _scenario("adds-a-coke", negative_controls=[]), world_root=root, catalogue=load_catalogue(root), kept=[]
+    )
+
+    assert said.get("is_error") and "no negative control" in said["content"][0]["text"], said
+
+
+def test_an_edited_old_case_is_judged_and_an_untouched_one_never_is(tmp_path):
+    from fi.alk.harness.scenario_tools import controls_off_their_case
+
+    root = _old_suite(tmp_path)
+    scenarios, _server, _catalogue, kept = _session(root, "suite")
+
+    edited = _call(scenarios, "edit_scenario", {"scenario_key": "adds-a-big-mac", "instruction": "Order a Big Mac."})
+    saved = _call(scenarios, "save_scenarios", {})
+
+    assert edited.get("is_error") and "no negative control" in edited["content"][0]["text"], edited
+    # The untouched old cases are saved as they are; nothing about their controls stops the save.
+    assert saved["content"][0]["text"].startswith("Saved 2 scenarios"), saved
+    assert controls_off_their_case([], kept, root) == []
+
+
+def test_a_check_rewrite_proves_an_old_case_again_as_written(tmp_path):
+    from fi.alk.harness.scenario_tools import _no_longer_hold
+
+    root = _old_suite(tmp_path)
+
+    assert _no_longer_hold(root, load_catalogue(root), ["adds-a-big-mac"], root) == []
+    entry = load_proofs(root)["adds-a-big-mac"]
+    assert (entry["kept_as_written"], entry["blocked_reason"]) == (True, "no_negative_control")

@@ -77,8 +77,9 @@ def prove_suite(
     agent_document: Path | None = None,
     judge_case_goals: bool = False,
 ) -> dict[str, dict[str, Any]]:
-    """`judge_case_goals` holds a case whose controls break only goals its whole suite shares: set where the suite
-    was just written (a build), never on a Validate, so a saved proof is not re-judged by that rule on read."""
+    """`judge_case_goals` is set where the suite was just written (a build): a case whose controls break only goals its
+    whole suite shares, or that has none, is held. Otherwise (a Validate) every case is proved as it was written, so a
+    case written before those rules is kept as written with the reason as its note, never held."""
     scenarios = load_scenarios(authoring)
     catalogue = load_catalogue(authoring)
     contract = load_proof_contract(authoring)
@@ -98,7 +99,14 @@ def prove_suite(
         try:
             goals = distinctive_goals(scenario, scenarios) if judge_case_goals else ()
             proof = prove(
-                scenario, catalogue, authoring, contract=contract, actors=actors, agent_tools=tools, case_goals=goals
+                scenario,
+                catalogue,
+                authoring,
+                contract=contract,
+                actors=actors,
+                agent_tools=tools,
+                case_goals=goals,
+                as_written=not judge_case_goals,
             )
             if key in live:
                 # The certification just played this case on the live runtime: its gates win.

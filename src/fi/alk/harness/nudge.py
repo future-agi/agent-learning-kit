@@ -379,7 +379,8 @@ def environment_gate(workspace: Path) -> tuple[list[dict], list[str]]:
 
 
 def unproved_without_control(workspace: Path) -> list[str]:
-    """The warning for the suite's cases kept not proved because they have no negative control, or none."""
+    """The note for the suite's cases kept as written because they have no negative control, or none that makes their
+    own goal fail: written before those rules, they still run."""
     proofs = load_proofs(workspace)
     keys = sorted(
         one.scenario_key
@@ -392,7 +393,7 @@ def unproved_without_control(workspace: Path) -> list[str]:
         if (proofs.get(one.scenario_key) or {}).get("blocked_reason") == BlockedReason.CONTROL_MISSES_CASE_GOAL
     )
     said = (
-        ["not proved: no control makes the case's own goal fail, so these are held out of runs until each has one: "
+        ["kept as written: no control makes the case's own goal fail, so nothing shows their checks catch it: "
          + ", ".join(missing)]
         if missing
         else []
@@ -400,7 +401,7 @@ def unproved_without_control(workspace: Path) -> list[str]:
     if not keys:
         return said
     return said + [
-        "not proved: no negative control, so these are held out of runs until each has one: "
+        "kept as written: no negative control, so nothing shows their checks fail a wrong behaviour: "
         + ", ".join(keys)
         + ". Add a wrong behaviour written for each task (the wrong record, the action done twice, or the forbidden "
         "change) that its checks must fail."
@@ -451,7 +452,10 @@ def suite_gate(
                 problems.append(_problem(key, "scenario", why))
             continue
         try:
-            proof = prove(scenario, catalogue, workspace, case_goals=distinctive_goals(scenario, scenarios))
+            # A case written or edited this turn was judged by its submit; here each is proved as it stands.
+            proof = prove(
+                scenario, catalogue, workspace, case_goals=distinctive_goals(scenario, scenarios), as_written=True
+            )
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
             record_unprovable(workspace, key, type(exc).__name__)
             holds, why = False, type(exc).__name__
@@ -459,8 +463,8 @@ def suite_gate(
             record_proof(workspace, key, proof, solution_steps=len(scenario.solution))
             # The rule a submit keeps a case by: a case the rebuild keeps with a proof a submit would refuse (a
             # control its checks pass, a leaked answer) is a problem, however it held before. One written before a
-            # rule existed (no control at all, or a control that misses its own goal) stays, recorded not proved, and
-            # is held out of runs until it is fixed (`unproved_without_control`), so an older suite still rebuilds.
+            # rule existed (no control at all, or a control that misses its own goal) stays and runs, kept as written
+            # with a note (`unproved_without_control`), so an older suite still rebuilds and runs.
             refused = refuses_keeping(proof) and proof.blocked_reason() not in KEPT_THROUGH_REBUILD
             if proof.deferred and not proof.broken and not refused:
                 # Only the live runtime can prove it; that is not a failure.
