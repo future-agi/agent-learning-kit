@@ -55,10 +55,30 @@ def _tokens(text: str) -> tuple[list[str], list[str]]:
     return tokens, ["#" if token[0].isdigit() else token.casefold() for token in tokens]
 
 
+def _likeness(before: str, after: str) -> float:
+    first, second = _tokens(before)[1], _tokens(after)[1]
+    return SequenceMatcher(None, first, second, autojunk=False).ratio() if first and second else 0.0
+
+
 def same_rule(before: str, after: str) -> bool:
     """Whether `after` is `before` with its values changed: the two read alike with every number set aside."""
-    first, second = _tokens(before)[1], _tokens(after)[1]
-    return bool(first and second) and SequenceMatcher(None, first, second, autojunk=False).ratio() >= _SAME_RULE
+    return _likeness(before, after) >= _SAME_RULE
+
+
+def _cuts(body: str) -> list[str]:
+    """Where an amendment's rule may end: before each `: ` (amend.py writes `{rule}: {why}`, and a why can hold its
+    own `: `), or the whole line."""
+    return [body[: at.start()] for at in re.finditer(r": ", body)] + [body]
+
+
+def _rule_pair(removed: str, added: str) -> tuple[str, str] | None:
+    """The two rules a removed and an added amendment name, each without its why: the cuts that read most alike, the
+    shortest on a tie. None when no cut makes them the same rule."""
+    best = max(
+        ((_likeness(one, two), -len(one) - len(two), one, two) for one in _cuts(removed) for two in _cuts(added)),
+        default=None,
+    )
+    return (best[2], best[3]) if best is not None and best[0] >= _SAME_RULE else None
 
 
 def changed_values(before: str, after: str) -> set[tuple[str, str]]:
@@ -99,18 +119,15 @@ def _changes(contract: Any) -> list[tuple[str, str]]:
     for at, line in enumerate(lines):
         if not line.startswith(_REMOVED):
             continue
-        before = line[len(_REMOVED):]
-        later = next(
-            (
-                index
-                for index in range(at + 1, len(lines))
-                if index not in used and lines[index].startswith(_ADDED) and same_rule(before, lines[index][len(_ADDED):])
-            ),
-            None,
-        )
-        if later is not None:
-            used.add(later)
-            pairs.append((before, lines[later][len(_ADDED):]))
+        for index in range(at + 1, len(lines)):
+            if index in used or not lines[index].startswith(_ADDED):
+                continue
+            # Each line's why is cut off first: two whys never decide whether the rules are one.
+            pair = _rule_pair(line[len(_REMOVED):], lines[index][len(_ADDED):])
+            if pair is not None:
+                used.add(index)
+                pairs.append(pair)
+                break
     return pairs
 
 
