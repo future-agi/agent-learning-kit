@@ -611,3 +611,49 @@ def test_close_refuses_to_run_on_the_adapters_own_loop(load) -> None:
 
     with pytest.raises(RuntimeError, match="own event loop"):
         _turn(adapter)
+
+
+THREAD_GRAPH = """
+SEEN = []
+NO_CONFIG = "no config"
+
+
+class Graph:
+    checkpointer = None
+
+    async def ainvoke(self, state, config=NO_CONFIG):
+        SEEN.append(config)
+        return {"final_report": "ok"}
+
+
+graph = Graph()
+"""
+
+
+def test_each_requests_thread_reaches_the_graph_as_its_langgraph_thread(load) -> None:
+    adapter = load(THREAD_GRAPH, "thread_graph")
+    graph = sys.modules["thread_graph.graph"]
+
+    for thread in ("one", "two"):
+        adapter._invoke({"thread_id": thread, "new_message": {"content": "hi"}})
+    # A request with no thread, or a blank one, calls the graph as before.
+    for payload in ({}, {"thread_id": ""}, {"thread_id": "  "}, {"thread_id": 7}):
+        adapter._invoke({**payload, "new_message": {"content": "hi"}})
+
+    assert graph.SEEN == [
+        {"configurable": {"thread_id": "one"}},
+        {"configurable": {"thread_id": "two"}},
+        *[graph.NO_CONFIG] * 4,
+    ]
+
+
+def test_a_graph_with_its_own_checkpointer_gets_no_thread(load) -> None:
+    # It would store each turn, and every turn carries the whole history.
+    adapter = load(
+        THREAD_GRAPH.replace("checkpointer = None", "checkpointer = object()"),
+        "checkpointed_graph",
+    )
+
+    adapter._invoke({"thread_id": "one", "new_message": {"content": "hi"}})
+
+    assert sys.modules["checkpointed_graph.graph"].SEEN == ["no config"]
