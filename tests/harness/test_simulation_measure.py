@@ -1078,7 +1078,6 @@ def test_an_http_client_request_to_a_model_api_marks_partial(measuring) -> None:
     assert marked == ["partial"] * 5
 
 
-
 def test_an_httpx2_request_to_a_model_api_marks_partial(measuring) -> None:
     """openai 3 and the OpenAI Agents SDK from 0.24 send through httpx2, not httpx, so a raw
     model call there must be seen too. This proves only the registration and the wrapper, on
@@ -1117,7 +1116,8 @@ def test_a_request_through_the_real_httpx2_marks_partial(
     measuring, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The same on the real httpx2, offline through its MockTransport. Runs wherever httpx2 is
-    installed, which openai 3 brings (sdk-smoke's clean-install, newest)."""
+    installed, which openai 3 brings. sdk-smoke's clean-install (minimum-livekit) runs it by node
+    id after installing openai 3, and that step fails if it skips."""
     httpx2 = pytest.importorskip("httpx2")
     module, marked = measuring
     patches: dict = {}
@@ -1137,10 +1137,13 @@ def test_a_request_through_the_real_httpx2_marks_partial(
 
     async def ask_async() -> int:
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(answer)) as client:
-            return (await client.post("https://api.openai.com/v1/responses", json={})).status_code
+            return (
+                await client.post("https://api.openai.com/v1/responses", json={})
+            ).status_code
 
     assert asyncio.run(ask_async()) == 200
     assert marked == ["partial"] * 2
+
 
 _MARK = {"project_name": "hidden-simulation", "fi.simulation.origin": "simulation"}
 
@@ -1182,7 +1185,9 @@ def test_register_needs_the_switch_the_destination_and_the_mark(
     patches: dict = {}
 
     assert module.register(patches, lines.append, _MARK) is True
-    assert {"openai", "anthropic", "httpx", "httpx2", "http.client", "vertexai"} <= set(patches)
+    assert {"openai", "anthropic", "httpx", "httpx2", "http.client", "vertexai"} <= set(
+        patches
+    )
 
     # Without the mark its spans would read as production traces: nothing is measured.
     patches = {}

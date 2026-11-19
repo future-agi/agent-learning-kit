@@ -216,12 +216,14 @@ jobs:
       - name: Run the raw-request measuring tests and the OpenAI instrumentor on openai 3
         if: matrix.dependencies == 'minimum-livekit'
         # The steps above run on openai 2: LiveKit 1.8.3, the minimum the kit supports, needs it.
-        # openai 3 sends through httpx2, so measuring must see a raw call there too. Fails if any
-        # of these skip.
+        # openai 3 sends through httpx2, so measuring must see a raw call there too. The tests are
+        # chosen by node id, so no filter deselects a file, and the step fails if any of them skip.
         shell: bash
         run: |
           python -m pip install 'openai>=3,<4'
-          python -m pytest -q -rs tests/harness/test_simulation_measure.py -k raw_model_request \
+          python -m pytest -q -rs \
+            tests/harness/test_simulation_measure.py::test_a_raw_model_request_marks_its_call_partial \
+            tests/harness/test_simulation_measure.py::test_a_request_through_the_real_httpx2_marks_partial \
             tests/test_evals_openai_instrumentor.py | tee openai3.out
           ! grep -q "skipped" openai3.out
 

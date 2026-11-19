@@ -4,6 +4,15 @@ All notable release changes for Agent Learning Kit are tracked here.
 
 ## Unreleased
 
+- `StepEfficiency` now measures repeated tool calls against total tool calls,
+  rather than total steps, so several repeats within one step cannot produce a
+  negative score with the default weights. Scores can shift for trajectories
+  containing zero-call or multi-call steps when calls repeat; trajectories with
+  one call per step and trajectories with no tool calls are unchanged. The
+  corrected component also changes `TrajectoryScore` (30% efficiency by default).
+  The existing `redundant_steps` details key is preserved and still counts
+  redundant calls.
+
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
