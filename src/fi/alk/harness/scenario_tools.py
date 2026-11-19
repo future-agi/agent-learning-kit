@@ -2904,7 +2904,13 @@ def scenario_tools(
                     "description": "Only when the person's request says how many scenarios should include an "
                     "actor: that share of the suite as fractions, min and max both 1 for every scenario, both 0 "
                     "for none, or the range they gave. It replaces the environment's default share. Leave it out "
-                    "otherwise.",
+                    "otherwise. A share this environment already has is kept unless `change_actor_share` is set.",
+                },
+                "change_actor_share": {
+                    "type": "boolean",
+                    "description": "True only when the person asked in this conversation to change how many "
+                    "scenarios include an actor. Without it, `actor_share` never replaces the share this "
+                    "environment already has.",
                 },
                 "axes": {
                     "type": "object",
@@ -2936,7 +2942,13 @@ def scenario_tools(
                 if people == "alike"
                 else ". No accent, language or location may dominate the suite"
             )
-        if args.get("actor_share") is not None:
+        if args.get("actor_share") is not None and target.get("actor_share") and not args.get("change_actor_share"):
+            kept_share = target["actor_share"]
+            said += (
+                f". The environment's actor share stays {kept_share['min']:g}-{kept_share['max']:g}: "
+                "change_actor_share was not set"
+            )
+        elif args.get("actor_share") is not None:
             given = args["actor_share"]
             try:
                 low, high = sorted(min(max(float(given[end]), 0.0), 1.0) for end in ("min", "max"))
