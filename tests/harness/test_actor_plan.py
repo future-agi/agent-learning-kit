@@ -2225,3 +2225,22 @@ def test_the_scenario_s_limits_keep_an_explicit_no_limit_and_its_model_plays_eve
     assert dispatcher._turn_left(watcher)
     dispatcher.live_turns["watcher"] = 5
     assert not dispatcher._turn_left(watcher)
+
+
+@pytest.mark.parametrize("written", [{"decision": "approved"}, {"set": {"status": "denied"}}, {"approved": True}])
+def test_an_approver_s_record_never_says_its_verdict_by_the_words_in_its_fields(written):
+    """The verdict is the one the actor gave or a declining timeout's; words a record happens to hold are not one."""
+    from fi.alk.harness.call_runner import approvals
+
+    log = [
+        {"actor_id": "agent", "name": "ask", "action_id": "a1", "at": 1.0, "outcome": "committed"},
+        {"actor_id": "approver", "name": "approvals.change", "action_id": "m1", "at": 2.0, "outcome": "committed",
+         "parent_event_id": "a1", "arguments": written},
+    ]
+    [line] = approvals(log)
+    assert line["verdict"] is None and line["decision"]["verdict"] is None
+    # A fallback action taken on a timeout gives no verdict of its own either.
+    decisions = [{"actor": "approver", "play": "timeout", "fallback": "approvals.change", "parent": "a1",
+                  "outcome": "fallback_action"}]
+    timed_out = [one for one in approvals(log, decisions) if one["decision"]["action"].startswith("timeout")]
+    assert [one["verdict"] for one in timed_out] == [None]
