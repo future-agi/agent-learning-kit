@@ -525,6 +525,11 @@ that did the right thing:
   a step comes first fails only when the later thing happened without it.
 - **A corrected try.** The world refused the agent's first value and it then sent the right one. Match
   the reference to any successful call, never to every call.
+- **A tool the proof cannot run.** A tool that runs inside the agent and has no endpoint here (its own
+  session memory, an in-process lookup) is never played by the proof: a step of one the contract marks
+  `world_free` is recorded with its arguments and no result, any other is assumed and its case is kept
+  as written. Put what the case tests, and every negative control, on steps the proof plays and on the
+  agent's reply; never build a case or its only control on such a tool alone, and never check its result.
 - **A faulted call.** Where the scenario makes a tool fail, never require that call to succeed; check
   what the agent did about it. A write the world committed counts even when its answer was lost. The
   proof fails the faulted step exactly as the run does, so a reference or a check that expects the

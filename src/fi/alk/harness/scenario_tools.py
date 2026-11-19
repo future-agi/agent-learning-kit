@@ -80,6 +80,7 @@ from .checks import reference_of, run_check, same_id
 from .proofs import load_proofs, proof_key, record_proof, record_unprovable
 from .understand import load as load_contract
 from .prove import (
+    RECORDED_NOT_RUN,
     BlockedReason,
     distinctive_goals,
     misses_case_goals,
@@ -2189,6 +2190,13 @@ def accept_scenario(
         if proof is not None and proof.unplayed
         else ""
     )
+    if proof is not None and proof.recorded:
+        unproved += (
+            f"\nNOTE: {', '.join(proof.recorded)}: {RECORDED_NOT_RUN}. These tools touch no world and nothing here "
+            "runs them, so their steps were recorded with their arguments and no result: a check of the calls reads "
+            "them, a check of their result cannot. Keep what this case tests on steps the proof plays and on the "
+            "agent's reply."
+        )
     if proof is not None and proof.blocked_reason() == BlockedReason.CONTROL_NOT_RUN:
         unproved += (
             "\nNOT PROVED: no negative control could run here, because these tools have no endpoint: "

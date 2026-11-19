@@ -86,15 +86,20 @@ class CheckRecord(TypedDict):
     broken: bool
 
 
-class LiveResult(TypedDict):
-    """One case played on the live runtime: its reference, the empty run and its controls."""
-
+class _LiveFields(TypedDict):
     assumed: list[str]
     refused: list[str]
     with_solution: list[CheckRecord]
     with_nothing: list[CheckRecord]
     outcome: Literal["change", "no_change"]
     controls: list[ControlResult]
+
+
+class LiveResult(_LiveFields, total=False):
+    """One case played on the live runtime: its reference, the empty run and its controls."""
+
+    # Tools whose reference steps were recorded, not run: they touch no world and nothing there runs them.
+    recorded: list[str]
 
 
 class _ProofFields(TypedDict):
@@ -133,3 +138,6 @@ class ProofEntry(_ProofFields, total=False):
     # Tools the reference solution calls that the agent version under test lacks (`tool_not_on_agent`), by name;
     # empty when none, or when the agent's tools are not known.
     missing_tools: list[str]
+    # Tools whose reference steps were recorded, not run (no world effect), and the line that says so.
+    recorded: list[str]
+    recorded_note: str

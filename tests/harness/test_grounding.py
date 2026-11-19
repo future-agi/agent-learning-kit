@@ -228,3 +228,19 @@ def test_the_proof_hands_the_conflict_judge_the_contract_s_workers(monkeypatch, 
     module.prove(case, catalogue(**REFUND_CATALOGUE), tmp_path, contract=contract, actors=[], conflict_judge=judge)
 
     assert asked and "refund_order (done by the worker refunds_agent)" in asked[0]
+
+
+def test_a_quote_from_the_agent_s_source_that_holds_a_key_is_refused(tmp_path):
+    authoring, source = tmp_path / "authoring", tmp_path / "source"
+    authoring.mkdir()
+    (source / "agent").mkdir(parents=True)
+    fake = "sk-" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0"
+    (source / "agent" / "config.py").write_text(
+        f'OPENAI_API_KEY = "{fake}"\nMAX_REFUND_DAYS = 14\n', encoding="utf-8"
+    )
+
+    [keyed] = resolve_sources(_cites("file:agent/config.py", f'OPENAI_API_KEY = "{fake}"'), None, authoring, source)
+    [plain] = resolve_sources(_cites("file:agent/config.py", "MAX_REFUND_DAYS = 14"), None, authoring, source)
+
+    assert keyed["resolved"] is False and "reads as a secret" in keyed["problem"]
+    assert plain["resolved"] is True

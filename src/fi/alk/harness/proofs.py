@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .json_file import write_json_atomic
 from .proof_records import ProofEntry
-from .prove import BlockedReason, Proof, refuses_keeping
+from .prove import RECORDED_NOT_RUN, BlockedReason, Proof, refuses_keeping
 from .scenario import Scenario, scenario_slug
 
 PROOFS = "proofs.json"
@@ -64,6 +64,11 @@ def proof_entry(proof: Proof, solution_steps: int) -> ProofEntry:
         "excused": list(proof.excused),
         # Tools the reference calls that the agent version lacks (`tool_not_on_agent`); empty when none or unknown.
         "missing_tools": list(proof.missing_tools),
+        **(
+            {"recorded": list(proof.recorded), "recorded_note": f"{', '.join(proof.recorded)}: {RECORDED_NOT_RUN}"}
+            if proof.recorded
+            else {}
+        ),
         "blocked_reason": blocked,
         "refused": refuses_keeping(proof),
         **({"trial": proof.trial} if proof.trial else {}),

@@ -307,11 +307,11 @@ def test_a_control_that_crashes_on_the_runtime_keeps_the_case_live_proof(monkeyp
     real = live_proof._play
     played = []
 
-    def play(scenario, world, steps):
+    def play(scenario, world, steps, *rest):
         played.append(len(steps))
         if len(played) == 3:  # reference, empty run, then the control
             raise ConnectionError("tools service went away")
-        return real(scenario, world, steps)
+        return real(scenario, world, steps, *rest)
 
     monkeypatch.setattr(live_proof, "_play", play)
     results, _stack = _prove(monkeypatch, tmp_path, {"lookup_order": "service", "refund_order": "service"})
@@ -1186,8 +1186,8 @@ def _prove_lanes(monkeypatch, tmp_path, lanes: Lanes, cases, **options):
     played = {}
     original = live_proof._prove_case
 
-    async def tracking(scenario, catalogue_, fresh):
-        result = await original(scenario, catalogue_, fresh)
+    async def tracking(scenario, catalogue_, fresh, *rest):
+        result = await original(scenario, catalogue_, fresh, *rest)
         return result
 
     monkeypatch.setattr(live_proof, "_prove_case", tracking)
@@ -1265,12 +1265,12 @@ def test_a_case_that_fails_beside_others_is_played_again_alone_not_dropped(monke
     failed_once = set()
     original = live_proof._prove_case
 
-    async def flaky(scenario, catalogue_, fresh):
+    async def flaky(scenario, catalogue_, fresh, *rest):
         # The first time case-05 runs beside others, its instance runs out of memory.
         if scenario.scenario_key == "case-05" and lanes.most_at_once > 1 and "case-05" not in failed_once:
             failed_once.add("case-05")
             raise MemoryError("the instance ran out of memory")
-        return await original(scenario, catalogue_, fresh)
+        return await original(scenario, catalogue_, fresh, *rest)
 
     monkeypatch.setattr(live_proof, "load_scenarios", lambda path: _many(8))
     monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
@@ -1321,10 +1321,10 @@ def test_a_live_run_cut_off_part_way_keeps_what_it_had_proved(monkeypatch, tmp_p
     monkeypatch.setattr(live_proof, "SAVE_EVERY_SECONDS", 0.0)
     original = live_proof._prove_case
 
-    async def stopped_at_the_fifth(scenario, catalogue_, fresh):
+    async def stopped_at_the_fifth(scenario, catalogue_, fresh, *rest):
         if scenario.scenario_key == "case-05":
             raise SystemExit("the sandbox was stopped")
-        return await original(scenario, catalogue_, fresh)
+        return await original(scenario, catalogue_, fresh, *rest)
 
     monkeypatch.setattr(live_proof, "_prove_case", stopped_at_the_fifth)
     with pytest.raises(SystemExit):

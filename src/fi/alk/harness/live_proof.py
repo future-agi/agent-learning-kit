@@ -33,7 +33,16 @@ from .json_file import write_json_atomic
 from .outbound import redact_outbound_text
 from .proof_records import CheckRecord, ControlResult, LiveResult
 from .proofs import proof_key
-from .prove import Proof, assumed_tools, checks_for, excused_by_assumed_steps, play_reference_step
+from .prove import (
+    Proof,
+    assumed_tools,
+    checks_for,
+    excused_by_assumed_steps,
+    executes,
+    play_reference_step,
+    recordable_tools,
+    record_unrun_step,
+)
 from .scenario import Scenario, Step
 from .scenario_tools import load_scenarios
 from .world.handle import MCP_ROUTE, mcp_request
@@ -101,8 +110,11 @@ def _outcomes(scenario: Scenario, catalogue: Catalogue, world: Any, calls: list[
     return [run_check(source, world, calls, name=name, reference=reference) for name, source in checks_for(scenario, catalogue)]
 
 
-def _play(scenario: Scenario, world: Any, steps: list[Step]) -> tuple[list[Call], list[str], list[str]]:
-    """Set up, play `steps`, and say which ran unbound (assumed) and which were refused."""
+def _play(
+    scenario: Scenario, world: Any, steps: list[Step], recordable: frozenset[str] = frozenset()
+) -> tuple[list[Call], list[str], list[str]]:
+    """Set up, play `steps`, and say which ran unbound (assumed) and which were refused. A step of a `recordable` tool
+    nothing here runs is recorded, not run (`record_unrun_step`), as the offline proof records it."""
     applied = apply_setup(scenario, world)
     if not applied.ok:
         raise RuntimeError(f"setup: {applied.said}")
@@ -110,12 +122,17 @@ def _play(scenario: Scenario, world: Any, steps: list[Step]) -> tuple[list[Call]
     if not ready.ok:
         raise RuntimeError(f"ready: {ready.said}")
     world.calls = []
+    world.recorded = []
     refused = []
     for step in steps:
-        call = play_reference_step(world, step)
+        tool = str(step.tool)
+        if tool in recordable and not executes(world, tool):
+            call = record_unrun_step(world, step)
+        else:
+            call = play_reference_step(world, step)
         if not call.ok:
             refused.append(f"{call.name}({step.arguments}): {call.error}")
-    assumed = assumed_tools(world, steps)
+    assumed = [tool for tool in assumed_tools(world, steps) if tool not in world.recorded]
     return list(world.calls), assumed, refused
 
 
@@ -261,7 +278,9 @@ async def prove_live(
             world.bind_tools(proxy, endpoints, contract.tool_names(), mcp_toolbox=toolbox)
             return world
 
-        return await _prove_case(scenario, catalogue, fresh)
+        return await _prove_case(
+            scenario, catalogue, fresh, recordable_tools(scenario, contract, checks_for(scenario, catalogue))
+        )
 
     if len(lanes) == 1 or len(order) <= 1:
         # One instance: today's loop, case after case.
@@ -396,10 +415,13 @@ async def _measured(
     return before, peak
 
 
-async def _prove_case(scenario: Scenario, catalogue: Catalogue, fresh: Any) -> LiveResult:
+async def _prove_case(
+    scenario: Scenario, catalogue: Catalogue, fresh: Any, recordable: frozenset[str] = frozenset()
+) -> LiveResult:
     """One case on one runtime instance: its reference, an empty run and each control, each on a fresh world."""
     world = await fresh()
-    calls, assumed, refused = await asyncio.to_thread(_play, scenario, world, list(scenario.solution))
+    calls, assumed, refused = await asyncio.to_thread(_play, scenario, world, list(scenario.solution), recordable)
+    recorded = list(getattr(world, "recorded", None) or [])
     with_solution = await asyncio.to_thread(_outcomes, scenario, catalogue, world, calls)
     right = await asyncio.to_thread(_digest, world)
     world = await fresh()
@@ -410,7 +432,9 @@ async def _prove_case(scenario: Scenario, catalogue: Catalogue, fresh: Any) -> L
     for control in scenario.negative_controls:
         try:
             world = await fresh()
-            control_calls, control_assumed, _ = await asyncio.to_thread(_play, scenario, world, list(control.steps))
+            control_calls, control_assumed, _ = await asyncio.to_thread(
+                _play, scenario, world, list(control.steps), recordable
+            )
             outcomes = await asyncio.to_thread(_outcomes, scenario, catalogue, world, control_calls)
             changed = await asyncio.to_thread(writes_beyond, world, reference_of(scenario.solution))
         except Exception as exc:  # noqa: BLE001 - a control that cannot be played is no evidence, the case still is
@@ -436,6 +460,7 @@ async def _prove_case(scenario: Scenario, catalogue: Catalogue, fresh: Any) -> L
         "with_nothing": [{"name": one.name, "held": one.held, "said": one.said, "broken": one.broken} for one in with_nothing],
         "outcome": "no_change" if not assumed and right is not None and right == untouched else "change",
         "controls": controls,
+        **({"recorded": recorded} if recorded else {}),
     }
 
 
@@ -488,6 +513,7 @@ def apply_live(proof: Proof, live: LiveResult) -> Proof:
     proof.with_solution = outcomes(live.get("with_solution") or [])
     proof.with_nothing = outcomes(live.get("with_nothing") or [])
     proof.assumed = list(live.get("assumed") or [])
+    proof.recorded = list(live.get("recorded") or [])
     proof.refused = list(live.get("refused") or [])
     # What the offline pass said about a reference it could not run speaks for nothing the live run did.
     proof.excused = excused_by_assumed_steps(proof)

@@ -111,7 +111,7 @@ def _proved(monkeypatch, tmp_path, *, actor_calls=0, assumed=()):
     monkeypatch.setattr(
         module,
         "run_steps",
-        lambda *a, with_solution, steps=None: (
+        lambda *a, with_solution, steps=None, **_: (
             (solved, list(solution), [], list(assumed)) if with_solution else (untouched, [], [], [])
         ),
     )
