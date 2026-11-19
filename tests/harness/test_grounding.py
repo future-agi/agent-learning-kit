@@ -119,3 +119,61 @@ def test_undecided_judge_is_not_a_conflict_and_is_not_cached(tmp_path):
     assert policy_conflicts(case, goals, rules, tmp_path, judge=judge)[0]["conflict"] is None
     policy_conflicts(case, goals, rules, tmp_path, judge=judge)
     assert len(calls) == 2
+
+
+def _agent_source(root) -> None:
+    (root / "agent").mkdir(parents=True)
+    (root / "agent" / "app.py").write_text(
+        "def refund(order):\n    # Refunds are only issued within 14 days of delivery.\n    ...\n", encoding="utf-8"
+    )
+
+
+def _cites(ref: str, quote: str):
+    return SimpleNamespace(sources=[ScenarioSource(kind="file", ref=ref, quote=quote)])
+
+
+def test_a_file_of_the_agent_s_own_source_resolves_against_its_words(tmp_path):
+    authoring, source = tmp_path / "authoring", tmp_path / "source"
+    authoring.mkdir()
+    _agent_source(source)
+
+    [found] = resolve_sources(_cites("file:agent/app.py", "only issued within 14 days"), None, authoring, source)
+    [missing] = resolve_sources(_cites("file:agent/app.py", "within 30 days"), None, authoring, source)
+
+    assert found["resolved"] is True and found["origin"] == "agent_source"
+    assert found["matched_digest"].startswith("sha256:")
+    assert missing["resolved"] is False and "app.py does not contain the quoted words" in missing["problem"]
+    # Without the source root the platform still decides it, as before.
+    [unknown] = resolve_sources(_cites("file:agent/app.py", "only issued within 14 days"), None, authoring)
+    assert unknown["resolved"] is None
+
+
+def test_a_file_source_never_climbs_out_of_the_agent_s_source(tmp_path):
+    authoring, source = tmp_path / "authoring", tmp_path / "source"
+    authoring.mkdir()
+    _agent_source(source)
+    (tmp_path / "secret.txt").write_text("only issued within 14 days", encoding="utf-8")
+    (source / "escape").symlink_to(tmp_path)
+
+    for ref in ("file:../secret.txt", "file:agent/../../secret.txt", "file:escape/secret.txt"):
+        [entry] = resolve_sources(_cites(ref, "only issued within 14 days"), None, authoring, source)
+        assert entry["resolved"] is None and "origin" not in entry, ref
+
+
+def test_the_proof_reads_the_source_root_its_entrypoint_published(monkeypatch, tmp_path):
+    from fi.alk.harness.grounding import SOURCE_ROOT_ENV, agent_source_root, publish_source_root
+
+    monkeypatch.setenv(SOURCE_ROOT_ENV, "")  # restored after the test, whatever publish_source_root sets
+    authoring, source = tmp_path / "authoring", tmp_path / "source"
+    authoring.mkdir()
+    _agent_source(source)
+    assert agent_source_root(authoring) is None
+    # A local session records its source beside the authoring tree.
+    (authoring / "session.json").write_text('{"source": "%s"}' % source, encoding="utf-8")
+    assert agent_source_root(authoring) == source
+
+    publish_source_root(source)
+    install(monkeypatch)
+    case = refund_case(sources=[ScenarioSource(kind="file", ref="file:agent/app.py", quote="only issued within 14 days")])
+    proof = module.prove(case, catalogue(**REFUND_CATALOGUE), tmp_path, contract=CONTRACT, actors=[])
+    assert proof.sources[0]["resolved"] is True and proof.sources[0]["origin"] == "agent_source"

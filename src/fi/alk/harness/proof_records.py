@@ -55,6 +55,8 @@ class SourceResult(_CitedSource, total=False):
     # A resolved rule's place among the agent's rules.
     rule_index: int
     matched_digest: str
+    # "agent_source" for a file found in the agent's own source rather than the authoring tree.
+    origin: str
 
 
 class PolicyCheck(TypedDict):

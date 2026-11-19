@@ -2973,6 +2973,10 @@ async def _run(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    from .grounding import publish_source_root
+
+    # A `file:` source may cite the agent's own source: every proof this process runs reads it from here.
+    publish_source_root(args.source)
     try:
         asyncio.run(_run(args))
     except (ConversationTransportError, ValueError, OSError) as exc:

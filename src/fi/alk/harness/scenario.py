@@ -110,7 +110,8 @@ class ScenarioSource(BaseModel):
 
     kind: Literal["rule", "file", "chat_message", "evidence_case", "requirement", "assumption"]
     # rule:<index into contract.hard_constraints> | file:<path> | chat:<message id> |
-    # evidence:<EvidenceImportCase id> | "" for requirement and assumption
+    # evidence:<EvidenceImportCase id> | "" for requirement and assumption. A file:<path> is an attached file, or a
+    # file of the agent's own source (where its tools live) relative to the source root, e.g. file:agent/app.py.
     ref: str = ""
     quote: str = Field(default="", max_length=500)  # the cited words; required for rule and file
     supports: str = ""  # which part of the case it justifies, e.g. "<the limit the rule states>"

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -30,14 +31,46 @@ POLICY_CHECKS = ".futureagi-policy-checks.json"
 logger = logging.getLogger(__name__)
 
 
-def _file(world_root: Path, ref: str) -> Path | None:
+# Where an entrypoint publishes its `--source` (the agent's own source, `/work/source` in the hosted sandbox).
+SOURCE_ROOT_ENV = "ALK_HARNESS_SOURCE_ROOT"
+
+
+def publish_source_root(source: Path | str) -> None:
+    """Say where the agent's own source is, for every proof this process and its children run."""
+    os.environ[SOURCE_ROOT_ENV] = str(Path(source).expanduser().resolve())
+
+
+def agent_source_root(world_root: Path | None = None) -> Path | None:
+    """The agent's own source a `file:` source may cite: what the entrypoint published, else the source a local
+    session recorded beside its authoring tree. None when neither is known."""
+    given = os.environ.get(SOURCE_ROOT_ENV, "").strip()
+    if given:
+        return Path(given)
+    if world_root is not None:
+        try:
+            recorded = json.loads((Path(world_root) / "session.json").read_text(encoding="utf-8")).get("source")
+        except (OSError, ValueError, AttributeError):
+            recorded = ""
+        if isinstance(recorded, str) and recorded.strip():
+            return Path(recorded)
+    return None
+
+
+def _file(world_root: Path, ref: str, source_root: Path | None = None) -> tuple[Path, str] | None:
+    """The cited file and where it was found: `authoring` (knowledge/ or the authoring tree), else `agent_source` (the
+    agent's own source). Never a path that climbs out of its root."""
     name = ref.removeprefix("file:").strip().lstrip("/")
     if not name or ".." in name.split("/"):
         return None
     for root in _FILE_ROOTS:
         candidate = Path(world_root) / root / name if root else Path(world_root) / name
         if candidate.is_file():
-            return candidate
+            return candidate, "authoring"
+    if source_root is not None:
+        base = Path(source_root).resolve()
+        candidate = (base / name).resolve()
+        if candidate.is_relative_to(base) and candidate.is_file():
+            return candidate, "agent_source"
     return None
 
 
@@ -54,9 +87,12 @@ class Rules:
     hard_constraints: list[str]
 
 
-def resolve_sources(scenario: Scenario, contract: RuleSource | None, world_root: Path) -> list[SourceResult]:
+def resolve_sources(
+    scenario: Scenario, contract: RuleSource | None, world_root: Path, source_root: Path | None = None
+) -> list[SourceResult]:
     """One entry per cited source: `{kind, ref, resolved, problem, ...}`; `resolved` None means
-    the platform decides it. A resolved rule carries its place among the rules in `rule_index`."""
+    the platform decides it. A resolved rule carries its place among the rules in `rule_index`; a file found in the
+    agent's own source (`source_root`) carries `origin` "agent_source"."""
     rules = list(contract.hard_constraints or []) if contract is not None else []
     resolved: list[SourceResult] = []
     for source in getattr(scenario, "sources", None) or []:
@@ -71,11 +107,14 @@ def resolve_sources(scenario: Scenario, contract: RuleSource | None, world_root:
                 entry["resolved_ref"] = f"rule:{matched}"
                 entry["rule_index"] = matched
         elif kind == "file":
-            path = _file(world_root, ref)
-            if path is None:
+            found = _file(world_root, ref, source_root)
+            if found is None:
                 # Uploaded files may live only on the platform; it resolves them there.
-                entry.update(resolved=None, problem="the file is not in the authoring tree")
+                entry.update(resolved=None, problem="the file is not in the authoring tree or the agent's source")
             else:
+                path, origin = found
+                if origin == "agent_source":
+                    entry["origin"] = origin
                 text = path.read_bytes()
                 entry["matched_digest"] = "sha256:" + hashlib.sha256(text).hexdigest()
                 if normalise(quote) not in normalise(text.decode("utf-8", errors="replace")):
@@ -166,6 +205,7 @@ def policy_conflicts(
     world_root: Path,
     *,
     judge: Callable[[str, str], tuple[bool | None, str]] | None = None,
+    source_root: Path | None = None,
 ) -> list[PolicyCheck]:
     """For each cited rule that resolves, whether the case's expected outcome contradicts it:
     `{rule, ref, conflict, why}`. `conflict` None means no judge could decide it here."""
@@ -176,7 +216,7 @@ def policy_conflicts(
     cache = _load_checks(world_root)
     changed = False
     found: list[PolicyCheck] = []
-    for entry in resolve_sources(scenario, Rules(rules) if rules else None, world_root):
+    for entry in resolve_sources(scenario, Rules(rules) if rules else None, world_root, source_root):
         if entry["kind"] != "rule" or entry.get("resolved") is not True:
             continue
         at = entry.get("rule_index", -1)

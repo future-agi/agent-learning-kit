@@ -509,7 +509,7 @@ def cases_citing(destination: Path, *, rule: str = "", tool: str = "") -> str:
     cites it (resolved as the case's sources are, `grounding.resolve_sources`, against the rule as it read), or whose
     solution or negative controls call the tool. Nothing in their text is read for values: the builder re-reads each
     against the current rules."""
-    from .grounding import Rules, resolve_sources
+    from .grounding import Rules, agent_source_root, resolve_sources
     from .scenario_tools import load_scenarios
 
     try:
@@ -523,7 +523,9 @@ def cases_citing(destination: Path, *, rule: str = "", tool: str = "") -> str:
             rule
             and any(
                 entry["kind"] == "rule" and entry["resolved"]
-                for entry in resolve_sources(one, Rules(hard_constraints=[rule]), destination)
+                for entry in resolve_sources(
+                    one, Rules(hard_constraints=[rule]), destination, agent_source_root(destination)
+                )
             )
         )
         or (
