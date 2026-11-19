@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import random
 from enum import Enum
 from typing import Any
@@ -51,6 +52,23 @@ class RepairPhase(str, Enum):
     SCENARIOS = "scenarios"
 
 
+DEFAULT_HELD_CASE_SECONDS = 1200.0
+HELD_CASE_MAX_SECONDS = 4 * 3600.0
+
+
+def held_case_repair_seconds() -> float:
+    """The held-case repair budget: `ALK_HELD_CASE_REPAIR_SECONDS` when it is a usable number of seconds (0 turns the
+    rounds off), else 20 minutes."""
+    raw = os.getenv("ALK_HELD_CASE_REPAIR_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_HELD_CASE_SECONDS
+    try:
+        configured = float(raw)
+    except ValueError:
+        return DEFAULT_HELD_CASE_SECONDS
+    return configured if 0.0 <= configured <= HELD_CASE_MAX_SECONDS else DEFAULT_HELD_CASE_SECONDS
+
+
 class RepairBudgets(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -59,8 +77,9 @@ class RepairBudgets(BaseModel):
     environment_patches: int = Field(default=4, ge=0, le=10)
     scenario_patches: int = Field(default=2, ge=0, le=10)
     # Wall time, from the first round, that handing held cases back to the writer may add to a validation: its
-    # rewrites and the validations they cause. When it runs out the cases stay held.
-    held_case_seconds: float = Field(default=300.0, ge=0, le=1800)
+    # rewrites and the validations they cause. When it runs out the cases stay held with their reason; the build never
+    # fails for it. Generous by default (`ALK_HELD_CASE_REPAIR_SECONDS`, 20 minutes).
+    held_case_seconds: float = Field(default_factory=lambda: held_case_repair_seconds(), ge=0, le=HELD_CASE_MAX_SECONDS)
     infrastructure_retries_per_candidate: int = Field(default=2, ge=0, le=5)
     infrastructure_initial_backoff_seconds: float = Field(default=1.0, ge=0, le=60)
     infrastructure_max_backoff_seconds: float = Field(default=30.0, ge=0, le=300)
