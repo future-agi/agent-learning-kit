@@ -951,10 +951,34 @@ def _first_names_on_disk(destination: Path, excluding: str = "") -> set[str]:
         return set()
 
 
+# How often one family name may recur, as a share of the suite: a real population of a thousand callers shares
+# surnames, a dozen does not. Never fewer than `FAMILY_NAME_FLOOR`.
+FAMILY_NAME_SHARE = 0.02
+FAMILY_NAME_FLOOR = 2
+
+
+def _cells_in(grid: dict[str, list[str]] | None) -> int:
+    """How many cells the plan's grid holds: the product of each axis's levels."""
+    cells = 1
+    for levels in (grid or {}).values():
+        cells *= max(1, len(levels or ()))
+    return cells
+
+
 def _already_in_the_suite(
-    args: dict[str, Any], kept: list[Scenario], elsewhere: set[str] | None = None
+    args: dict[str, Any],
+    kept: list[Scenario],
+    elsewhere: set[str] | None = None,
+    *,
+    wanted: int = 0,
+    grid: dict[str, list[str]] | None = None,
 ) -> str:
-    """Why this scenario is one the suite already has, or "" when it is new."""
+    """Why this scenario is one the suite already has, or "" when it is new. The limits scale with the suite asked
+    for (`wanted`) and the plan's variety (`grid`): a cell may hold one scenario per the suite's share of each cell
+    before another asserting the same sub-goals adds nothing, and a family name recurs as often as a population of
+    that size would have it."""
+    per_cell = max(1, -(-wanted // _cells_in(grid))) if wanted and grid else 1
+    alike = 0
     name = str(args.get("name") or "").strip()
     coverage = {
         str(axis): str(level)
@@ -987,12 +1011,15 @@ def _already_in_the_suite(
                 goal.name if hasattr(goal, "name") else str(goal)
                 for goal in (one.sub_goals or [])
             } == goals:
-                return (
-                    f"{one.name!r} already occupies this cell and asserts the same sub-goals, so "
-                    "this scenario proves nothing the suite does not already prove. Move it to a "
-                    "cell nothing holds, or give it a different thing to find out: the variation "
-                    "that counts is what the caller withholds, not their name or address"
-                )
+                alike += 1
+                if alike >= per_cell:
+                    return (
+                        f"{one.name!r} already occupies this cell and asserts the same sub-goals"
+                        + (f", and the cell holds its share of this suite ({per_cell})" if per_cell > 1 else "")
+                        + ", so this scenario proves nothing the suite does not already prove. Move it to a "
+                        "cell that holds fewer, or give it a different thing to find out: the variation "
+                        "that counts is what the caller withholds, not their name or address"
+                    )
         if first and one.persona is not None:
             if " ".join(str(one.persona.name or "").lower().split()) == first:
                 return (
@@ -1007,7 +1034,9 @@ def _already_in_the_suite(
             for one in kept
             if one.persona is not None and one.name != name
         }
-        if sum(1 for one in named if one.split()[-1:] == [family]) >= 2:
+        if sum(1 for one in named if one.split()[-1:] == [family]) >= max(
+            FAMILY_NAME_FLOOR, int(wanted * FAMILY_NAME_SHARE)
+        ):
             return (
                 f"the suite already has callers with the family name {family.title()!r} more than "
                 "once, and a suite that keeps reaching for one family name reads as invented. Give "
@@ -3006,7 +3035,11 @@ def scenario_tools(
         if short:
             return _refuse(short, gate="actor_share")
         twin = _already_in_the_suite(
-            {**args, "name": same}, kept, _first_names_on_disk(destination, same)
+            {**args, "name": same},
+            kept,
+            _first_names_on_disk(destination, same),
+            wanted=cap(),
+            grid=target.get("axes"),
         )
         if twin:
             return _refuse(twin)

@@ -3556,3 +3556,36 @@ def test_a_lookup_by_get_with_no_declared_effect_reads_and_a_post_with_none_acts
     )
     said = _records_only_a_context_file_holds(refunded, world, root)
     assert said and "2001 is only in knowledge/orders.csv" in said[0]
+
+
+def _named(name: str, person: str, **fields):
+    from fi.alk.harness.scenario import Scenario
+
+    return Scenario(name=name, instruction="i", persona={"name": person}, **fields)
+
+
+@pytest.mark.parametrize("wanted,refused_at", [(0, 2), (12, 2), (200, 4), (1000, 20)])
+def test_a_family_name_recurs_as_often_as_a_suite_of_that_size_allows(wanted, refused_at):
+    from fi.alk.harness.scenario_tools import _already_in_the_suite
+
+    kept = [_named(f"s{n}", f"Given{n} Sterling") for n in range(refused_at)]
+    ask = {"name": "next", "persona": {"name": "Another Sterling"}}
+
+    assert "family name 'Sterling'" in _already_in_the_suite(ask, kept, wanted=wanted)
+    assert _already_in_the_suite(ask, kept[:-1], wanted=wanted) == ""
+
+
+def test_a_cell_holds_its_share_of_a_large_suite_before_a_like_case_is_refused():
+    from fi.alk.harness.scenario_tools import _already_in_the_suite
+
+    cell = {"intent": "refund", "situation": "late"}
+    grid = {"intent": ["refund", "status"], "situation": ["late", "on time"]}  # four cells
+    kept = [_named(f"s{n}", f"Person{n} Family{n}", coverage=cell, sub_goals=["refunded"]) for n in range(2)]
+    ask = {"name": "next", "coverage": cell, "sub_goals": ["refunded"], "persona": {"name": "New Person"}}
+
+    # A suite of eight over four cells: two a cell, so a third alike case adds nothing.
+    assert "holds its share of this suite (2)" in _already_in_the_suite(ask, kept, wanted=8, grid=grid)
+    # A suite of twelve: three a cell.
+    assert _already_in_the_suite(ask, kept, wanted=12, grid=grid) == ""
+    # Without a plan or a size, one alike case is enough, as before.
+    assert "already occupies this cell" in _already_in_the_suite(ask, kept[:1])
