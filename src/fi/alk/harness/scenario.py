@@ -265,6 +265,14 @@ def used_keys(destination: Any) -> set[str]:
     return _USED_KEYS.setdefault(str(Path(destination).resolve()), set())
 
 
+def seed_used_keys(destination: Any, metadata: Any) -> None:
+    """Add every key the environment has given a scenario (the job's `used_scenario_keys`, a dropped one's included)
+    to the keys `destination`'s writers treat as taken, so a new scenario never takes one and inherits another's row and
+    run history."""
+    keys = (metadata or {}).get("used_scenario_keys") if isinstance(metadata, dict) else None
+    used_keys(destination).update(str(key) for key in keys or () if key)
+
+
 def unused_key(key: str, taken: set[str]) -> str:
     """``key``, or it with a numbered suffix when another scenario already holds it."""
     if not key or key not in taken:

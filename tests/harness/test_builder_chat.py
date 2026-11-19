@@ -3701,7 +3701,13 @@ def test_dropping_a_case_names_the_key_that_restores_it(tmp_path):
 
 
 def test_finding_removed_cases_asks_the_platform_for_them(tmp_path, monkeypatch):
-    client = BuilderClient()
+    class RemovedClient(BuilderClient):
+        async def scenarios(self, query):
+            self.queries.append(query)
+            return {"rows": [{"scenario_key": "refund-late", "name": "refund_late", "suite_version": "v-3",
+                              "content": {"name": "refund_late", "instruction": "Ask for a refund."}}]}
+
+    client = RemovedClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     spec = next(spec for spec in runtime._builder_platform_server().tools if spec.name == "find_scenarios")
 
@@ -3711,3 +3717,8 @@ def test_finding_removed_cases_asks_the_platform_for_them(tmp_path, monkeypatch)
     # The builder is told it can ask, and what a removed case comes back with.
     assert "removed" in str(spec.input_schema)
     assert "suite_version it last existed in" in spec.description
+    # Kept, so restoring it can say what changed.
+    from fi.alk.harness.scenario_tools import REMOVED_CASES
+
+    kept = json.loads((tmp_path / REMOVED_CASES).read_text(encoding="utf-8"))
+    assert kept == {"refund-late": {"name": "refund_late", "instruction": "Ask for a refund."}}

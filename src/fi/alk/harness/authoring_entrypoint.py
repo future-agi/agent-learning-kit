@@ -830,6 +830,10 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         args.source.resolve(), job.source.subfolder, args.output.resolve()
     ):
         return EXIT_REFUSED
+    from .scenario import seed_used_keys
+
+    # A build or rebuild of an environment that had scenarios never gives a new one a key it gave before.
+    seed_used_keys(args.output.resolve(), job.metadata)
     from .seed_contract import SEED_ACCEPTED
 
     # Cleared before the seed checks: a mark an earlier command left must not pass for this one's yes.
