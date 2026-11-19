@@ -53,7 +53,7 @@ from fi.alk.harness.job import (
 from fi.alk.harness.reading_entry import READING_JOB_INVALID, run_reading_mode
 from fi.alk.harness.tools import CONTRACT_SERVER, _checked_contract
 from fi.alk.harness.understand import SUBMIT_REMINDER, reading_settings
-from fi.alk.providers.agent import build_authored_agent
+from fi.alk.providers.agent import Agent, build_authored_agent
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples" / "frameworks"
 SUPPORT = "agents/support"
@@ -411,6 +411,32 @@ def test_a_file_the_kits_python_cannot_parse_is_named_in_the_agent_document(tmp_
         "greet.py": "3.14",
     }
     assert all("the kit reads source with Python 3.12" in one["reason"] for one in unparsed)
+
+
+def test_a_document_naming_an_unparsed_file_is_a_valid_stored_agent(tmp_path, model):
+    # A plain syntax error is unparsed on every Python, so this runs everywhere.
+    source = _repo(tmp_path)
+    (source / "broken.py").write_text("def f(:\n", encoding="utf-8")
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    output = tmp_path / "reading"
+    written = (output / "agent.json").read_bytes()
+    document = json.loads(written)
+    assert [one["path"] for one in document["agent"]["extension"]["source"]["unparsed"]] == [
+        "broken.py"
+    ]
+    # The hash covers the note: the platform validates the stored agent this way.
+    Agent.model_validate(document["agent"])
+    # A build of the same contract and source makes the same document.
+    built = scenario_source.authored_agent_document(
+        (output / "contract.json").read_text(encoding="utf-8"),
+        subfolder=None,
+        framework=document["agent"]["extension"].get("framework"),
+        source=source,
+    )
+    assert written == json.dumps(built, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def test_an_agent_the_kits_python_reads_whole_has_no_unparsed_list(tmp_path, model):

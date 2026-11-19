@@ -22,7 +22,6 @@ from .contract import CONTRACT_FILE
 from .failure_file import FAILURE_FILE
 from .framework_detection import detect_framework, named_framework_folder
 from .job import FailureDomain, HarnessJob
-from .python_source import unparsed_note
 from .reading_entry import (
     EXIT_DONE,
     EXIT_RETRYABLE,
@@ -224,20 +223,12 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
             repo_root=source,
             package_dir=None,
         )
-        # The build's own document, made by the build's own code.
+        # The build's own document, made by the build's own code. A file the kit's own Python
+        # can't parse was not read: the document says which and why, so an agent is never read
+        # in part without a word.
         made = authored_agent_document(
-            contract_text, subfolder=job.source.subfolder, framework=framework
+            contract_text, subfolder=job.source.subfolder, framework=framework, source=source
         )
-        # A file the kit's own Python can't parse was not read: the document says which and why,
-        # so an agent is never read in part without a word (TH-8802).
-        unparsed = unparsed_note(
-            source,
-            job.source.subfolder,
-            [entry["module"] for entry in json.loads(contract_text).get("tool_entrypoints") or []
-             if isinstance(entry, dict) and isinstance(entry.get("module"), str)],
-        )
-        if unparsed:
-            made["agent"]["extension"].setdefault("source", {}).update(unparsed)
         body = json.dumps(made, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         stored = json.dumps(made["agent"], ensure_ascii=False).encode("utf-8")
         if len(body) > _DOCUMENT_LIMIT_BYTES or len(stored) > _DOCUMENT_LIMIT_BYTES:
