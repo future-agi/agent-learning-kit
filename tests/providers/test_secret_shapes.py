@@ -6,12 +6,14 @@ copied as data (W2), so a planted bug in a rule fails a named case.
 
 from __future__ import annotations
 
+import ast
 import itertools
 import json
 import logging
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -2378,3 +2380,23 @@ def test_the_bare_host_with_no_port_is_a_named_limit() -> None:
     """`host: user:pw@db.example.com` has no port: it reads as `mailto:a@b` or `12:30@room`."""
     text = "host: admin:Xk9Qp2Zr8@db.example.com"
     assert _redact(text) == text
+
+
+# A form Python 3.11 added: a possessive quantifier (`*+`, `++`, `?+`, `}+`) or an atomic group.
+_NEWER_THAN_3_10 = re.compile(r"(?<![\\\[])(?:[*+?}]\+|\(\?>)")
+
+
+def test_no_pattern_uses_a_form_python_3_10_cannot_read() -> None:
+    # The package runs on Python 3.10, and the telemetry modules import this one, so a
+    # possessive quantifier there would stop `import fi.alk.telemetry` with "multiple repeat".
+    tree = ast.parse(Path(secret_shapes.__file__).read_text(encoding="utf-8"))
+    found = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and _NEWER_THAN_3_10.search(node.value)
+    ]
+    assert not found
+    assert _NEWER_THAN_3_10.search(r"[ \t]*+") and _NEWER_THAN_3_10.search(r"(?>a)")
+    assert not _NEWER_THAN_3_10.search(r"[ \t]*(?![ \t])") and not _NEWER_THAN_3_10.search(r"\++")

@@ -406,6 +406,40 @@ def test_a_credential_in_a_structured_replayed_field_is_refused_named_and_kept(f
     assert AWS in json.dumps(clean_scenario_document(document_for(scenario)))
 
 
+@pytest.mark.parametrize(
+    "field,trigger_on",
+    [("actors[0].trigger.where", "actor"), ("actors[0].actions[0].trigger.where", "action")],
+)
+def test_a_shapeless_value_under_a_credential_name_in_where_is_refused(field, trigger_on):
+    trigger = {"kind": "conditional", "collection": "accounts", "where": {"password": "hunter2"}}
+    actor = {"id": "it_desk"}
+    if trigger_on == "actor":
+        actor["trigger"] = trigger
+    else:
+        actor["actions"] = [{"action": "rotate", "trigger": trigger}]
+
+    problems = [
+        one
+        for one in validate_scenario(_replayed(actors=[actor]), _catalogue(), {})
+        if "holds a credential" in one
+    ]
+
+    assert len(problems) == 1 and problems[0].startswith(field)
+    assert "hunter2" not in problems[0]
+
+
+def test_an_honest_where_with_a_credential_word_first_or_a_yes_no_is_kept():
+    trigger = {
+        "kind": "conditional",
+        "collection": "accounts",
+        "where": {"password_reset_status": "pending", "has_credentials": True},
+    }
+    scenario = _replayed(actors=[{"id": "it_desk", "trigger": trigger}])
+    assert not [
+        one for one in validate_scenario(scenario, _catalogue(), {}) if "holds a credential" in one
+    ]
+
+
 @pytest.mark.parametrize("start,fields", PROSE, ids=[one[0].strip() for one in PROSE])
 def test_replayed_prose_the_cleaner_would_change_is_refused(start, fields):
     problems = _cleaning_problems(_replayed(**fields))

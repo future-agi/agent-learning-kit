@@ -344,7 +344,7 @@ _NAME_ALTERNATION = "|".join(map(re.escape, sorted(_FORMS, key=len, reverse=True
 # characters: tried second, the alignment branch would match empty before the break. The run is
 # possessive, so a long one is read once and never given back and retried: nothing that follows
 # it can start with a space or tab.
-_AROUND = r"(?:(?=\s{0,4}\S)\s{0,4}|[ \t]*+)"
+_AROUND = r"(?:(?=\s{0,4}\S)\s{0,4}|[ \t]*(?![ \t]))"
 # A quote may close a quoted name; Markdown emphasis or a backtick may sit around the ":".
 # A quote may be escaped for JSON text inside JSON text: one backslash per level, 2^level - 1 of
 # them, so up to 15 backslashes covers four levels. The count is bounded, so each name is
@@ -1507,12 +1507,13 @@ def credential_in_check_code(code: str) -> bool:
 # (reset_token, clientSecret, db_password, session_cookie, aws_credentials), and `authorization`
 # only alone: authorization_status, credential_type, secretary_name, cookie_flavor, token_count
 # and tokenizer name honest enums, the marker word first. Pass and pwd are not argument names: as
-# bare words they are not secrets (a shell's pwd, a boarding pass).
+# bare words they are not secrets (a shell's pwd, a boarding pass). A leading acronym is its own
+# word (XCookie, APIKey).
 _ARGUMENT_FORMS = frozenset(
     form.replace("-", "_") for form in _FORMS if form not in {"pass", "pwd"}
-) | {"passphrase", "cookie", "credential", "credentials"}
+) | {"passphrase", "cookie", "cookies", "credential", "credentials"}
 _ARGUMENT_WHOLE_NAMES = frozenset({"authorization"})
-_CAMEL_JOIN = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_CAMEL_JOIN = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 
 def _names_a_credential_argument(name: str) -> bool:
@@ -1531,7 +1532,13 @@ def credential_named_arg_values_refusal(arg_name: str, values: object) -> bool:
     if not _names_a_credential_argument(arg_name) or values is None:
         return False
     listed = values if isinstance(values, (list, tuple)) else [values]
-    return any(not _is_reference(value) for value in listed)
+    # A yes/no or an empty value can't hold a secret (`with_credentials: [true, false]`); a
+    # number can (a PIN), so it is still refused.
+    return any(
+        not _is_reference(value)
+        for value in listed
+        if value is not None and not isinstance(value, bool)
+    )
 
 
 # ---------------------------------------------------------------------------------- chat
@@ -1544,7 +1551,7 @@ _SEAM_GUARD = re.compile("|".join(_GUARD_NAMES))
 _TAIL_PATTERN = re.compile(_TAIL)
 # Every beginning of a tail: while what follows a name is one, its match is still open.
 _TAIL_OPEN = re.compile(
-    r"\\{0,15}[\"'`]?[*_`]{0,4}(?:[ \t]*+|\s{0,4})(?:[=:][*_`]{0,4}(?:[ \t]*+|\s{0,4}))?"
+    r"\\{0,15}[\"'`]?[*_`]{0,4}(?:[ \t]*(?![ \t])|\s{0,4})(?:[=:][*_`]{0,4}(?:[ \t]*(?![ \t])|\s{0,4}))?"
 )
 _GUARD_TAIL = re.compile(r"[\s:=]+['\"]?")
 _GUARD_TAIL_OPEN = re.compile(r"[\s:=]*")

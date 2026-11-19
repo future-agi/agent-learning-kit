@@ -764,5 +764,40 @@ def test_cli_runs_sync_says_why_a_row_not_cleaned_was_refused(ledger_env, capsys
     assert "nothing was sent" in out
     assert "redaction contract" not in out
     assert "metadata sync are unaffected" not in out
-    # Where the row lives, so it can be moved aside to stop the refusal repeating.
-    assert str(telemetry.RunLedger().rows_path) in out
+    # How to stop the refusal repeating, for this one row.
+    assert f"agent-learn runs forget {rows[0]['run_id'][:8]} --run" in out
+
+
+def test_a_row_not_cleaned_is_refused_by_the_cli_and_once_forgotten_is_not_queued(
+    ledger_env, capsys, monkeypatch, stub_collector
+):
+    # The real refusal, end to end: a row an older kit left a credential in, the advice the
+    # CLI gives, and that following it stops the row from being queued.
+    from fi.alk.telemetry import _emit
+    from fi.alk.telemetry._row import canonical_row_address
+
+    monkeypatch.setenv("AGENT_LEARNING_API_KEY", "key-x")
+    monkeypatch.setenv("AGENT_LEARNING_SECRET_KEY", "secret-x")
+    monkeypatch.setenv("FI_BASE_URL", stub_collector)
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        _emit, "keyed_emit", lambda **kwargs: sent.append(kwargs) or {"status": "synced"}
+    )
+    ledger = telemetry.RunLedger()
+    legacy = dict(telemetry.build_ledger_row(_payload()))
+    legacy["note"] = "key sk-proj-" + "Ab12Cd34Ef56Gh78Ij90Kl12Mn34Op56Qr78St90UvWx"
+    legacy["run_id"] = canonical_row_address(legacy)
+    ledger.append(legacy)
+    short = legacy["run_id"][:8]
+
+    assert main(["runs", "sync", short]) == 0
+    out = capsys.readouterr().out
+    assert "holds a credential an older kit did not remove" in out
+    assert f"agent-learn runs forget {short} --run" in out
+    assert "Ab12Cd34" not in out
+
+    assert main(["runs", "forget", short, "--run", "--yes"]) == 0
+    capsys.readouterr()
+    assert main(["runs", "sync", "--queued"]) == 0
+    assert "nothing queued" in capsys.readouterr().out
+    assert sent == []

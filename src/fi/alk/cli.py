@@ -6183,10 +6183,17 @@ def _runs_sync(telemetry: Any, ledger: Any, parsed: Any) -> int:
     targets: List[Dict[str, Any]] = []
     if parsed.queued:
         synced_map = ledger.read_cursor()["synced"]
+        # A run forgotten whole (`runs forget --run`) is never sent.
+        forgotten = {
+            run_id
+            for run_id, tomb in _runs_tombstoned(telemetry, ledger).items()
+            if "*" in (tomb.get("redacted_fields") or [])
+        }
         targets = [
             row
             for row in _runs_rows(telemetry, ledger)
             if str(row.get("run_id")) not in synced_map
+            and str(row.get("run_id")) not in forgotten
         ]
         if not targets:
             print("nothing queued — every row is already synced (no-op).")
@@ -6223,8 +6230,8 @@ def _runs_sync(telemetry: Any, ledger: Any, parsed: Any) -> int:
                 "`runs sync --queued`; your run is unaffected."
             )
             print(
-                "  to stop that, move the ledger aside to start a new one: "
-                f"{ledger.rows_path}"
+                "  to stop that, forget this run (a tombstone is appended; the row is not "
+                f"sent again): agent-learn runs forget {run_id[:8]} --run"
             )
         elif result["status"] == "refused":
             print(f"✗ content sync REFUSED  run {run_id}")

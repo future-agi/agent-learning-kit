@@ -328,6 +328,12 @@ jobs:
           tests/harness/test_contract_tools_subfolder.py
           tests/harness/test_contract_model.py
           tests/harness/test_secret_paths.py
+          tests/harness/test_secret_cleaning_files.py
+          tests/telemetry/test_telemetry_ledger.py
+          tests/test_dashboard_telemetry.py
+          tests/harness/test_contract.py
+          tests/harness/test_actor_runtime.py
+          tests/harness/test_native_authoring.py
           tests/harness/test_import_roots.py
           tests/harness/test_source_data_invariants_folder.py
           tests/harness/test_hosted_authoring_entrypoint.py

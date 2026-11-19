@@ -375,6 +375,10 @@ def test_a_credential_named_argument_may_not_list_values() -> None:
         "sessionCookie",
         "cookie",
         "credentials",
+        # A plural cookie, and a leading acronym as its own word.
+        "cookies",
+        "XCookie",
+        "APIKey",
     ],
 )
 def test_the_argument_name_is_judged_by_the_named_value_forms(name: str) -> None:
@@ -390,6 +394,12 @@ def test_the_argument_name_is_judged_by_the_named_value_forms(name: str) -> None
         ("cookie_flavor", ["oatmeal", "chocolate"]),
         ("token_count", [5, 10]),
         ("tokenizer", ["cl100k", "o200k"]),
+        # A yes/no can't hold a secret, whatever its name (an HTTP client's withCredentials).
+        ("with_credentials", [True, False]),
+        ("withCredentials", [True, False]),
+        ("has_credentials", [True, False]),
+        ("requires_password", [True, False]),
+        ("is_secret", [True, False, None]),
     ],
 )
 def test_an_honest_argument_that_only_contains_a_marker_may_list_values(

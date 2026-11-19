@@ -27,7 +27,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .actors import Fault, Limits, PreRunSession, ScenarioActor, StartsWith
 from ..providers.agent import redact_strings
-from ..providers.secret_shapes import credential_in, credential_in_check_code
+from ..providers.secret_shapes import (
+    credential_in,
+    credential_in_check_code,
+    credential_named_arg_values_refusal,
+)
 from .catalogue import Catalogue
 from .simulator import variables_in
 
@@ -540,8 +544,18 @@ def _credentials_in_kept_fields(scenario: Scenario) -> list[str]:
         f"{field} holds a credential. A scenario's {field.split('.')[-1]} is kept as written, so "
         "give the agent the secret through its settings and use a placeholder here"
         for field, value in kept.items()
-        if credential_in(value)
+        if _holds_a_credential(field, value)
     ]
+
+
+def _holds_a_credential(field: str, value: Any) -> bool:
+    if credential_in(value):
+        return True
+    # A where's key names the record field it matches, so a shapeless value under a credential's
+    # name (`password: hunter2`) is one too.
+    return field.endswith(".where") and isinstance(value, dict) and any(
+        credential_named_arg_values_refusal(str(key), one) for key, one in value.items()
+    )
 
 
 def _credentials_in_copied_files(scenario: Scenario, catalogue: Catalogue) -> list[str]:
