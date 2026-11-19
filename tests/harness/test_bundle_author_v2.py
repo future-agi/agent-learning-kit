@@ -7155,3 +7155,21 @@ def test_a_leftover_file_that_does_not_parse_does_not_make_the_callback_ambiguou
     )
 
     assert _discover_callback_entrypoint(tmp_path) == "agent:agent_callback"
+
+
+@pytest.mark.parametrize("leftovers", [["old_agent"], ["old_agent", "older_agent"]])
+def test_a_leftover_that_does_not_parse_never_becomes_the_callback(tmp_path, leftovers):
+    # An agent that defines no callback of its own (a graph or an HTTP service) beside Python 2
+    # files that define one: those files run on no Python, so they are no callback.
+    from fi.alk.harness.bundle_author_v2 import _discover_callback_entrypoint
+
+    (tmp_path / "graph.py").write_text(
+        "from langgraph.graph import StateGraph\ngraph = StateGraph(dict).compile()\n",
+        encoding="utf-8",
+    )
+    for name in leftovers:
+        (tmp_path / f"{name}.py").write_text(
+            "def agent_callback(m):\n    print 'old'\n", encoding="utf-8"
+        )
+
+    assert _discover_callback_entrypoint(tmp_path) is None
