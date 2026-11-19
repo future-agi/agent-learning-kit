@@ -62,6 +62,8 @@ def proof_entry(proof: Proof, solution_steps: int) -> ProofEntry:
         "policy_checks": [dict(one) for one in proof.policy_checks],
         "evidence": {name: list(kinds) for name, kinds in proof.evidence.items()},
         "excused": list(proof.excused),
+        # Tools the reference calls that the agent version lacks (`tool_not_on_agent`); empty when none or unknown.
+        "missing_tools": list(proof.missing_tools),
         "blocked_reason": blocked,
         "refused": refuses_keeping(proof),
         **({"trial": proof.trial} if proof.trial else {}),

@@ -778,12 +778,13 @@ def test_a_case_whose_reference_calls_a_tool_the_agent_lacks_is_never_proved(mon
 
     assert saved["live"] is True and saved["proved"] is False
     assert saved["blocked_reason"] == "tool_not_on_agent" and saved["refused"] is True
-    assert "refund_order" in saved["why"]
+    # Named in a field of its own, so the platform never parses `why`.
+    assert saved["missing_tools"] == ["refund_order"]
 
 
 def test_a_case_the_agent_s_tools_cover_is_proved(monkeypatch, tmp_path):
     saved = _built(monkeypatch, tmp_path, refund_case(), agent_document=_agent_document(tmp_path, ["lookup_order", "refund_order"]))
-    assert saved["proved"] is True and saved["blocked_reason"] is None
+    assert saved["proved"] is True and saved["blocked_reason"] is None and saved["missing_tools"] == []
 
 
 @pytest.mark.parametrize("body", [None, "not json", '{"agent": {}}', '{"agent": {"tools": [{"label": "x"}]}}'])
