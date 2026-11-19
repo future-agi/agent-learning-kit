@@ -29,9 +29,13 @@ Each request's ``thread_id`` reaches the graph as LangGraph's own thread,
 with ``langgraph.config.get_config()``. The kit sends the whole history every turn, so what a
 graph keeps of a thread would see it twice. So:
 
-- a graph compiled with a checkpointer of its own is refused once, when it is loaded, with a
-  message that names the checkpointer: it would keep every turn and see the history again on
-  each, and LangGraph refuses such a graph called without a thread;
+- a LangGraph graph compiled with a checkpointer of its own is refused once, when it is
+  loaded, with a message that names the checkpointer: it would keep every turn and see the
+  history again on each, and LangGraph refuses such a graph called without a thread. One bound
+  to a fixed thread with ``with_config`` is refused too: every conversation would share that
+  stored thread;
+- any other object with a ``checkpointer`` attribute is called as it was before threads were
+  passed: with no thread, and not refused;
 - an object whose ``ainvoke`` takes no ``config`` (neither by name nor through ``**kwargs``) is
   called as before, with the state alone;
 - not covered: a subgraph compiled with its own checkpointer under a parent with none, and a
@@ -70,8 +74,9 @@ def _load_graph() -> Any:
     graph = getattr(importlib.import_module(".".join(parts)), attribute)
     if not callable(getattr(graph, "ainvoke", None)):
         raise TypeError("declared LangGraph object has no ainvoke method")
-    checkpointer = getattr(graph, "checkpointer", None)
-    if checkpointer is not None and checkpointer is not False:
+    compiled = _compiled_graph(graph)
+    checkpointer = getattr(compiled, "checkpointer", None)
+    if compiled is not None and _is_set(checkpointer):
         named = checkpointer if isinstance(checkpointer, bool) else type(checkpointer).__name__
         raise ValueError(
             f"declared LangGraph graph is compiled with a checkpointer ({named}); compile it "
@@ -79,6 +84,24 @@ def _load_graph() -> Any:
             "would keep each turn and the graph would see the history twice"
         )
     return graph
+
+
+def _compiled_graph(graph: Any) -> Any:
+    """The LangGraph compiled graph ``graph`` is, or wraps in a binding (``bind``,
+    ``with_retry``); None for any other object, or when LangGraph is not installed.
+    ``with_config`` on a compiled graph returns a compiled graph."""
+    try:
+        from langchain_core.runnables.base import RunnableBindingBase
+        from langgraph.pregel import Pregel
+    except ImportError:
+        return None
+    while isinstance(graph, RunnableBindingBase):
+        graph = graph.bound
+    return graph if isinstance(graph, Pregel) else None
+
+
+def _is_set(checkpointer: Any) -> bool:
+    return checkpointer is not None and checkpointer is not False
 
 
 GRAPH = _load_graph()
@@ -127,10 +150,10 @@ def _start_loop() -> None:
 
 
 def _thread_config(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """The conversation as the graph's thread, or None: no thread named, or an ``ainvoke`` that
-    takes no config."""
+    """The conversation as the graph's thread, or None: no thread named, an ``ainvoke`` that
+    takes no config, or an object other than a LangGraph graph that has a checkpointer."""
     thread = payload.get("thread_id")
-    if not isinstance(thread, str) or not thread.strip() or not _TAKES_CONFIG:
+    if not isinstance(thread, str) or not thread.strip() or not _THREADED:
         return None
     return {"configurable": {"thread_id": thread}}
 
@@ -147,7 +170,7 @@ def _takes_config(graph: Any) -> bool:
     )
 
 
-_TAKES_CONFIG = _takes_config(GRAPH)
+_THREADED = _takes_config(GRAPH) and not _is_set(getattr(GRAPH, "checkpointer", None))
 
 
 async def _run_graph(
