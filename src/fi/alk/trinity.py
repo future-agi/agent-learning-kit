@@ -10378,6 +10378,9 @@ def _release_docs_executability_status(
         # Phase 11B (11B-A10): the profile-doc index is a cross-link page with
         # no executable twin — it rides the backing_optional lane (ARCH §2.8).
         "docs/frameworks/profiles/index.md",
+        # The supported-frameworks page is generated from its data file, which its own tests
+        # check; it has no example to run.
+        "docs/frameworks/supported.md",
     }
 
     for path in page_paths:

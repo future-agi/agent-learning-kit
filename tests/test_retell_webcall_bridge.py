@@ -7,22 +7,27 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
-import av
 import pytest
-from aiortc.mediastreams import MediaStreamError
-from aiortc.rtcicetransport import connection_kwargs
 
-from fi.alk.harness.call_runner import _retell_web_call_url
-from fi.simulate.agent.definition import RetellTargetConfig, retell_web_call_url
-from fi.simulate.simulation.bridge import livekit as bridge_livekit
-from fi.simulate.simulation.bridge import retell
-from fi.simulate.simulation.bridge.connector import ConnectorConfig
-from fi.simulate.simulation.bridge.retell import (
+# The web call bridge needs aiortc and av, which come with the livekit extra; the newest-dependencies
+# CI row installs the kit without it, so this file skips there.
+av = pytest.importorskip("av")
+pytest.importorskip("aiortc")
+
+from aiortc.mediastreams import MediaStreamError  # noqa: E402
+from aiortc.rtcicetransport import connection_kwargs  # noqa: E402
+
+from fi.alk.harness.call_runner import _retell_web_call_url  # noqa: E402
+from fi.simulate.agent.definition import RetellTargetConfig, retell_web_call_url  # noqa: E402
+from fi.simulate.simulation.bridge import livekit as bridge_livekit  # noqa: E402
+from fi.simulate.simulation.bridge import retell  # noqa: E402
+from fi.simulate.simulation.bridge.connector import ConnectorConfig  # noqa: E402
+from fi.simulate.simulation.bridge.retell import (  # noqa: E402
     FRAME_SAMPLES,
     RetellWebCallConnector,
     RetellWebCallError,
 )
-from fi.simulate.simulation.engines.livekit import _safe_provider_error_details
+from fi.simulate.simulation.engines.livekit import _safe_provider_error_details  # noqa: E402
 
 API_URL = "https://api.retellai.com/v3/create-web-call"
 SESSIONS_URL = (

@@ -5070,6 +5070,9 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         | {"company", "pan"}
         | set(_CALLER_PHONE_KEYS)
         | {"social_engineering_resisted", "true", "or"}
+        # The reading skill's tool guidance: a tool entry's modes and an execution value, two
+        # langgraph.json keys, and the Python it describes (a `def`, the `agents` package).
+        | {"import", "construct", "unreachable", "auto", "http", "auth", "def", "agents"}
     )
 
     for stage, tools in surface.items():
