@@ -4,6 +4,11 @@ All notable release changes for Agent Learning Kit are tracked here.
 
 ## Unreleased
 
+- A start-up timeout of a process the agent depends on, not the agent itself, now records the
+  closed cause `dependency_not_ready_in_time` after exit 78, instead of no cause. Before, the
+  platform could not tell it from the agent's own slow start. The process's name stays out of
+  the cause, since the user's manifest names it.
+
 - `StepEfficiency` now measures repeated tool calls against total tool calls,
   rather than total steps, so several repeats within one step cannot produce a
   negative score with the default weights. Scores can shift for trajectories

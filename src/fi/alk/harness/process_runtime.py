@@ -3043,7 +3043,11 @@ def wait_for_dependency(
                 f"{dependency_name}: readiness probe did not pass within {combined_timeout}s",
                 process=dependency_name,
                 domain=FailureDomain.INFRASTRUCTURE,
-                cause=FailureCause.AGENT_NOT_READY_IN_TIME if is_agent else None,
+                cause=(
+                    FailureCause.AGENT_NOT_READY_IN_TIME
+                    if is_agent
+                    else FailureCause.DEPENDENCY_NOT_READY_IN_TIME
+                ),
             ),
         )
         return
@@ -3101,7 +3105,11 @@ def wait_for_dependency(
             f"{_output_tail(spawned.handle, spawned.local_auth_values)}",
             process=dependency_name,
             domain=FailureDomain.INFRASTRUCTURE,
-            cause=FailureCause.AGENT_NOT_READY_IN_TIME if is_agent else None,
+            cause=(
+                FailureCause.AGENT_NOT_READY_IN_TIME
+                if is_agent
+                else FailureCause.DEPENDENCY_NOT_READY_IN_TIME
+            ),
         ),
     )
 
@@ -4792,6 +4800,7 @@ def _wait_for_store_ready(
             f"{process.name}: did not become ready within {timeout}s",
             process=process.name,
             domain=FailureDomain.INFRASTRUCTURE,
+            cause=FailureCause.DEPENDENCY_NOT_READY_IN_TIME,
         ),
     )
 
