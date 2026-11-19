@@ -17,10 +17,11 @@ import re
 import shutil
 import tempfile
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import fi.alk
 
@@ -1664,29 +1665,84 @@ WRITER_FIXABLE = frozenset(
         "control_misses_case_goal",
     }
 )
-HELD_CASE_REPAIRS = 2
 # The held-case rounds' own clock, so their time budget can be read apart from the event loop's, and the wall clock
 # a build's deadline is read against.
 _held_clock = time.monotonic
 _wall_clock = time.time
 
 
-def held_for_the_writer(authoring: Path, *, budget: float = 300) -> dict[str, str]:
-    """Each case the proofs, with this attempt's live plays, hold for a reason its writer can fix, in the proof's own
-    words. Judged as a build judges them (`judge_case_goals`)."""
+def read_held(authoring: Path, *, budget: float = 300) -> tuple[dict[str, str], dict[str, Any] | None]:
+    """Prove the suite with this attempt's live plays, as a build judges it (`judge_case_goals`), and return the cases
+    held for a reason its writer can fix, in the proof's own words, with the tally: how many cases are runnable
+    (proved, or kept as written, `proof_counts`), how many there are, and how many are held for each reason. The tally
+    is None when the suite could not be proved."""
     from .prove_suite import prove_suite
+    from .proofs import proof_counts
 
     try:
         with tempfile.TemporaryDirectory(prefix="held-cases-") as root:
             proofs = prove_suite(authoring, Path(root) / "proofs.json", budget=budget, judge_case_goals=True)
     except Exception as error:  # noqa: BLE001 - only adds a chance to repair; the build's proofs decide the rest
         print(f"runtime validation: held cases not read ({type(error).__name__})", flush=True)
-        return {}
-    return {
+        return {}, None
+    counts = proof_counts(proofs, list(proofs))
+    reasons = Counter(
+        str(entry.get("blocked_reason") or "not_proved")
+        for entry in proofs.values()
+        if entry.get("proved") is not True and entry.get("kept_as_written") is not True
+    )
+    held = {
         key: str(entry.get("why") or entry.get("blocked_reason"))
         for key, entry in proofs.items()
-        if entry.get("blocked_reason") in WRITER_FIXABLE
+        if entry.get("blocked_reason") in WRITER_FIXABLE and entry.get("kept_as_written") is not True
     }
+    tally = {"runnable": counts["proved"] + counts["kept_as_written"], "cases": len(proofs), "held": dict(reasons)}
+    return held, tally
+
+
+def held_for_the_writer(authoring: Path, *, budget: float = 300) -> dict[str, str]:
+    """The cases `read_held` hands back to the writer."""
+    return read_held(authoring, budget=budget)[0]
+
+
+# What each hold means, in plain words, for the build's yield line. Read from the proof's code, never from case text.
+HELD_WORDS = {
+    "negative_control_passed": "no check fails the wrong behaviour its control plays",
+    "control_misses_case_goal": "its wrong behaviour never breaks the goal the case is about",
+    "no_negative_control": "it has no wrong behaviour to fail",
+    "not_solvable": "its reference solution does not pass on the world",
+    "broken_check": "a check fails to run",
+    "vacuous": "its checks pass before the agent does anything",
+    "weak_check": "a check only tests that a call was made",
+    "too_strict": "a check fails a right answer written another way",
+    "unchecked": "no check reads what it tests",
+    "credits_failed_attempt": "a check counts a failed attempt as done",
+    "not_ready": "the world does not hold what it needs",
+    "validation_incomplete": "the validation ran out of time before reaching it",
+    "tool_not_on_agent": "it calls a tool this agent does not have",
+}
+YIELD_FILE = "yield.json"
+
+
+def yield_line(asked: int, tally: dict[str, Any]) -> str:
+    """`X of N runnable; held: 3 because ..., 1 because ...`, N being what the build asked for (else the cases)."""
+    wanted = asked or int(tally.get("cases") or 0)
+    held = sorted((tally.get("held") or {}).items(), key=lambda pair: (-pair[1], pair[0]))
+    reasons = ", ".join(f"{count} because {HELD_WORDS.get(code, code.replace('_', ' '))}" for code, count in held)
+    return f"{tally.get('runnable', 0)} of {wanted} runnable" + (f"; held: {reasons}" if reasons else "")
+
+
+def write_yield(authoring: Path, asked: int, tally: dict[str, Any] | None, rounds: list[dict[str, Any]]) -> None:
+    """The build's yield, kept beside its repair history: what was asked, what is runnable, what is held and why, and
+    each round that handed held cases back."""
+    if tally is None:
+        return
+    body = {"asked": asked, **tally, "line": yield_line(asked, tally), "rounds": rounds}
+    path = authoring / "generic-harness" / YIELD_FILE
+    from .json_file import write_json_atomic
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(path, body)
 
 
 def held_case_guidance(held: dict[str, str]) -> str:
@@ -1694,8 +1750,11 @@ def held_case_guidance(held: dict[str, str]) -> str:
     return (
         "The live proof held these cases, each for the reason given. Rewrite each so it proves: fix its checks, its "
         "negative controls or its reference solution as the reason says, and add or amend a sub-goal with "
-        "add_sub_goal where it says so. Keep every case, its name and its intent, and never drop a sub-goal it "
-        "names.\n" + "\n".join(f"- {key}: {why}" for key, why in sorted(held.items()))
+        "add_sub_goal where it says so. Keep its name and intent, and never drop a sub-goal it names. Where the "
+        "reason shows the case cannot be passed as it is grounded (a record the world cannot serve, a request "
+        "the tools cannot carry out), replace it instead: write a new case for the same plan cell, with the same "
+        "coverage, and remove the held one with drop_scenario. Every other case stays as it is, and the number of cases stays the "
+        "same.\n" + "\n".join(f"- {key}: {why}" for key, why in sorted(held.items()))
     )
 
 
@@ -1797,7 +1856,9 @@ async def _rewrite_held_cases(
     if _authoring_digest(authoring) == before_tree:
         return False
     try:
-        certify_scenario_repair(before, load_scenarios(authoring), expected_count=expected_count, diagnostic_codes=set())
+        certify_scenario_repair(
+            before, load_scenarios(authoring), expected_count=expected_count, diagnostic_codes=set(), replaceable=held
+        )
     except ValueError as rejected:
         # A rewrite of the catalogue alone (a check added to a shared sub-goal) changes no scenario file.
         if not str(rejected).startswith("scenario_repair_no_material_change"):
@@ -2111,12 +2172,16 @@ async def _validate_and_repair(
         from .repair_controller import (
             CandidateObservation,
             RepairAction,
+            RepairBudgets,
             RepairController,
             RepairOutcome,
             RepairPhase,
+            held_case_repair_seconds,
         )
 
-        repair_controller = controller or RepairController()
+        repair_controller = controller or RepairController(
+            RepairBudgets(held_case_seconds=held_case_repair_seconds(int(getattr(job, "scenario_count", 0) or 0)))
+        )
         artifacts = GenericHarnessArtifactStore(authoring / "generic-harness")
 
         def write_history():
@@ -2144,9 +2209,11 @@ async def _validate_and_repair(
         )
         candidate_hash = _generic_candidate_hash(source, authoring)
         held_rounds = 0
+        yield_rounds: list[dict[str, Any]] = []
+        asked = int(getattr(job, "scenario_count", 0) or 0)
         held_since: float | None = None
         last_validation = 0.0
-        for _attempt in range(decision_bound + HELD_CASE_REPAIRS):
+        for _attempt in range(decision_bound + budgets.held_case_rounds):
             # A record left by an earlier attempt must never speak for this one.
             failure_record.clear()
             try:
@@ -2397,11 +2464,23 @@ async def _validate_and_repair(
 
                     # Never past the build's own deadline: one more validation and the sealing after it still fit.
                     left = min(left, deadline_at - _wall_clock() - last_validation - DEADLINE_MARGIN_SECONDS)
-                held = (
-                    held_for_the_writer(authoring, budget=left)
-                    if not readiness_only and budgets.scenario_patches and held_rounds < HELD_CASE_REPAIRS and left > 0
-                    else {}
+                held, tally = (
+                    read_held(authoring, budget=left)
+                    if not readiness_only
+                    and budgets.scenario_patches
+                    and held_rounds < budgets.held_case_rounds
+                    and left > 0
+                    else ({}, None)
                 )
+                if tally is not None:
+                    write_yield(authoring, asked, tally, yield_rounds)
+                    print(f"runtime validation: {yield_line(asked, tally)}", flush=True)
+                    # The build asked for this many runnable cases and has them: nothing more to hand back.
+                    if asked and tally["runnable"] >= asked:
+                        held = {}
+                from .scenario_tools import load_scenarios
+
+                keys_before = {one.scenario_key for one in load_scenarios(authoring)} if held else set()
                 rewritten = bool(held) and await _rewrite_held_cases(
                     held,
                     authoring,
@@ -2417,6 +2496,18 @@ async def _validate_and_repair(
                         f"{budgets.held_case_seconds:.0f}s spent",
                         flush=True,
                     )
+                if held:
+                    kept_keys = {one.scenario_key for one in load_scenarios(authoring)}
+                    yield_rounds.append(
+                        {
+                            "round": held_rounds + 1,
+                            "held": len(held),
+                            "rewritten": rewritten,
+                            "replaced": len(keys_before - kept_keys) if rewritten else 0,
+                            "seconds": round(_held_clock() - round_started, 1),
+                        }
+                    )
+                    write_yield(authoring, asked, tally, yield_rounds)
                 if rewritten:
                     held_rounds += 1
                     candidate_hash = _generic_candidate_hash(source, authoring)

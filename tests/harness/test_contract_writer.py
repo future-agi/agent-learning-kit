@@ -1521,8 +1521,10 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         3, "calls its nested repair, scanned as validate_and_repair.repair"),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "_rewrite_held_cases"): (
         1, "hands held cases to its nested repair (scenarios), then puts back what other cases rely on"),
-    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "held_for_the_writer"): (
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "read_held"): (
         1, "proves the suite into a temporary file to read which cases are held; writes no contract"),
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "write_yield"): (
+        2, "writes generic-harness/yield.json, the build's runnable and held counts; writes no contract"),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "validate"): (
         2, "calls its nested validate, which runs validate_once (listed above)"),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "write_scenarios"): (
