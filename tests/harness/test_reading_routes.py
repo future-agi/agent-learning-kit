@@ -9,6 +9,7 @@ The 12 Nov readings (``fixtures/readings_12nov``) are the kit's own example agen
 from __future__ import annotations
 
 import json
+import shlex
 import os
 import shutil
 import subprocess
@@ -259,10 +260,59 @@ def graph_route(manifest, output) -> bool:
     return taken
 
 
+_PER_THREAD = "/threads/{{langgraph_thread_id}}/runs/wait"
+
+
+def _set(interface: dict) -> dict:
+    """The interface's set fields: a field left unset seals the same, written as null or left out."""
+    return {key: value for key, value in (interface or {}).items() if value is not None}
+
+
 def todays_route(manifest, output, body) -> None:
-    """The graph route is not taken: the reading's command route stands, served as the kit serves a framework's
-    server (`langgraph dev` from its config folder, on the sandbox's port, without its file watcher)."""
+    """The graph route is not taken: the reading's command route stands, as the kit serves a framework's server
+    (TH-8887). `langgraph dev` runs without its file watcher; served natively, it runs on the sandbox's port, with
+    each conversation on its own thread. Execution, workdir and subfolder are the reading's."""
+    from fi.alk.harness.framework_servers import _is_langgraph_server_command, server_command
+
+    agent = _agent_of(manifest)
     assert not graph_route(manifest, output)
+    assert "ALK_LANGGRAPH_ENTRYPOINT" not in agent.environment
+    sealed = _sealed(output)["runtime"]
+    for key in ("execution", "workdir", "source_subfolder"):
+        assert sealed[key] == body["runtime"][key], key
+    command, interface = body["runtime"]["command"], body["runtime"]["interface"]
+    served = (sealed["interface"] or {}).get("path") == _PER_THREAD
+    # The command: the reading's, given the sandbox's port when the kit serves `langgraph dev` natively.
+    expected = command if not served or "--port" in command else [*command, "--port", "2024"]
+    assert sealed["command"] == expected
+    # The run: a served `langgraph dev` from its config folder on $PORT, else the command as sealed; neither
+    # keeps the file watcher.
+    if agent.run_command[:2] == ["sh", "-c"]:
+        port = expected.index("--port") + 1
+        argv = [*expected[:port], "PORT_VALUE", *expected[port + 1 :]]
+        assert agent.run_command == ["sh", "-c", shlex.join(argv).replace("PORT_VALUE", "$PORT") + " --no-reload"]
+    else:
+        run = server_command(expected) if _is_langgraph_server_command(expected) else expected
+        assert agent.run_command[-len(run) :] == run
+    # The interface: the reading's, with the per-thread path and its thread setup when served.
+    own = ("path", "request_template", "setup_requests", "headers_template", "setup_secrets")
+    kept = {key: value for key, value in _set(interface).items() if key not in own}
+    assert {key: value for key, value in _set(sealed["interface"]).items() if key not in own} == kept
+    if not served:
+        assert _set(sealed["interface"]) == _set(interface)
+        return
+    assert sealed["interface"]["request_template"]["input"] == {
+        "messages": [{"content": "{{new_message_content}}", "role": "user"}]
+    }
+    assert sealed["interface"]["setup_requests"] == [
+        {
+            "accepted_statuses": [200],
+            "body_template": {},
+            "capture": {"langgraph_thread_id": "thread_id"},
+            "method": "POST",
+            "path": "/threads",
+        }
+    ]
 
 
 def test_the_12_nov_deep_agents_reading_takes_the_graph_route(tmp_path):
