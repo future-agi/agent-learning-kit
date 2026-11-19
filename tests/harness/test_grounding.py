@@ -177,3 +177,54 @@ def test_the_proof_reads_the_source_root_its_entrypoint_published(monkeypatch, t
     case = refund_case(sources=[ScenarioSource(kind="file", ref="file:agent/app.py", quote="only issued within 14 days")])
     proof = module.prove(case, catalogue(**REFUND_CATALOGUE), tmp_path, contract=CONTRACT, actors=[])
     assert proof.sources[0]["resolved"] is True and proof.sources[0]["origin"] == "agent_source"
+
+
+def test_a_hand_off_rule_is_judged_with_the_worker_that_does_the_work(monkeypatch, tmp_path):
+    from fi.alk.harness import grounding
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.contract import DeclaredWorker
+    from fi.alk.harness.scenario import Step
+
+    rule = "If the user asks about finding flight deals or seat selection, transfer to the agent planning_agent."
+    goals = Catalogue(sub_goals=[SubGoal(name="seat_chosen", what="A window seat is chosen on the flight.", judged="x")])
+    case = SimpleNamespace(
+        scenario_key="seat",
+        sub_goals=["seat_chosen"],
+        solution=[Step(tool="transfer_to_agent", arguments={}), Step(tool="select_seat", arguments={"seat": "12A"})],
+        sources=[ScenarioSource(kind="rule", ref="rule:0", quote="transfer to the agent planning_agent")],
+    )
+    workers = [DeclaredWorker(id="planning_agent", name="planning_agent", tools=["search_flights", "select_seat"])]
+    asked: list[str] = []
+
+    def judge(expected, cited):
+        asked.append(expected)
+        return False, "the seat is chosen by the worker the rule hands the request to"
+
+    found = grounding.policy_conflicts(case, goals, [rule], tmp_path, judge=judge, workers=workers)
+
+    [expected] = asked
+    assert "planning_agent: search_flights, select_seat" in expected
+    assert "select_seat (done by the worker planning_agent)" in expected
+    assert found[0]["conflict"] is False
+    # The judge is told how a hand-off rule is read.
+    assert "a rule that sends a kind of request to a worker is how that work gets done" in grounding._CONFLICT_PROMPT
+
+
+def test_the_proof_hands_the_conflict_judge_the_contract_s_workers(monkeypatch, tmp_path):
+    from fi.alk.harness.contract import DeclaredWorker
+
+    install(monkeypatch)
+    rule = "Hand refund requests to the agent refunds_agent."
+    contract = SimpleNamespace(
+        hard_constraints=[rule], workers=[DeclaredWorker(id="refunds_agent", tools=["refund_order"])]
+    )
+    case = refund_case(sources=[ScenarioSource(kind="rule", ref="rule:0", quote="Hand refund requests")])
+    asked: list[str] = []
+
+    def judge(expected, cited):
+        asked.append(expected)
+        return False, ""
+
+    module.prove(case, catalogue(**REFUND_CATALOGUE), tmp_path, contract=contract, actors=[], conflict_judge=judge)
+
+    assert asked and "refund_order (done by the worker refunds_agent)" in asked[0]

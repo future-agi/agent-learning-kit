@@ -1372,7 +1372,15 @@ def prove(
     proof.sources = resolve_sources(scenario, contract, world_root, source_root)
     rules = [str(one) for one in (getattr(contract, "hard_constraints", None) or [])] if contract is not None else []
     proof.policy_checks = (
-        policy_conflicts(scenario, catalogue, rules, world_root, judge=conflict_judge, source_root=source_root)
+        policy_conflicts(
+            scenario,
+            catalogue,
+            rules,
+            world_root,
+            judge=conflict_judge,
+            source_root=source_root,
+            workers=getattr(contract, "workers", None) or (),
+        )
         if rules
         else []
     )
