@@ -43,7 +43,7 @@ def test_stalled_gate_reaped_and_owned_pipes_closed(monkeypatch, tmp_path, caplo
     # Larger than a Linux pipe. The gate never reads, so only the deadline interrupts the write.
     env = {"PAYLOAD": "a" * (8 << 20)} if backpressure else {}
     command = ["true"]
-    fds = Path("/proc/self/fd")
+    fds = Path("/dev/fd")
     before = set(os.listdir(fds))
     start = time.monotonic()
     with pytest.raises(subprocess.TimeoutExpired) as caught:
