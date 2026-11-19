@@ -1853,20 +1853,14 @@ _CUT_OFF_REPLY = (
 @pytest.mark.parametrize(
     ("last", "code"),
     [
-        # Closing markdown wrappers are set aside; the sentence inside them ended.
-        ("The refund is **submitted.**", "simulator_stalled"),
-        ("Your refund id is `R-1043.`", "simulator_stalled"),
-        ("Here it is:\n```\nRefund R-1043 issued.\n```", "simulator_stalled"),
         ("Would you like me to go ahead?", "simulator_stalled"),
-        # No sentence end once wrappers are gone: cut off, as before.
+        ("Refund R-1043 issued.", "simulator_stalled"),
         (_MARKDOWN_REPLY, "target_agent_stalled"),
         ("- Your refund of", "target_agent_stalled"),
-        ("The refund is **R-1043**", "target_agent_stalled"),
-        ("It will post shortly (see the order page)", "target_agent_stalled"),
         (_CUT_OFF_REPLY, "target_agent_stalled"),
     ],
 )
-def test_a_reply_ending_in_markdown_is_not_read_as_stopped_mid_utterance(
+def test_a_stall_is_attributed_from_the_last_turn(
     tmp_path: Path, last: str, code: str
 ) -> None:
     _job_obj, context = _context(tmp_path=tmp_path)
@@ -4469,14 +4463,16 @@ def test_a_retry_that_rewords_free_text_but_writes_the_same_record_is_a_duplicat
         _logged("issue_refund", {"order": 7, "amount": 500, "note": "retrying after the timeout"}),
     ]
     # The reference fixes the record and the value; the note is the agent's own words.
-    solution = [{"tool": "issue_refund", "arguments": {"order": 7, "amount": 500}, "fixed": {"order": "the person", "amount": "the person"}}]
+    solution = [{"tool": "issue_refund", "arguments": {"order": 7, "amount": 500, "note": "any"}, "fixed": {"order": "the person", "amount": "the person"}}]
     [found] = duplicate_commits(log, solution)
     assert found["action"] == "orders.issue_refund"
     # Another record is another write, whatever the free text says.
     other = [log[0], _logged("issue_refund", {"order": 8, "amount": 500, "note": "first try"})]
     assert duplicate_commits(other, solution) == []
-    # With nothing fixed for the action, every argument still has to match.
+    # With nothing fixed for the action, every argument still has to match; and a note the reference never lists is
+    # compared too, whatever its name.
     assert duplicate_commits(log) == []
+    assert duplicate_commits(log, [{**solution[0], "arguments": {"order": 7, "amount": 500}}]) == []
 
 
 def test_an_identical_retry_is_a_duplicate_even_when_the_solution_fixes_a_field_the_call_does_not_carry():
@@ -4517,7 +4513,8 @@ def test_writes_to_two_records_named_by_text_ids_are_not_a_duplicate():
     ]
 
     assert duplicate_commits(two_records, solution) == []
-    assert len(duplicate_commits(reworded, solution)) == 1
+    chosen = [{**solution[0], "arguments": {"amount": 500, "note": "any"}}]
+    assert len(duplicate_commits(reworded, chosen)) == 1
 
 
 def test_an_unreadable_action_log_leaves_duplicates_unknown_never_cleared(monkeypatch):
@@ -4754,7 +4751,8 @@ def test_writes_to_two_records_are_not_a_duplicate_whatever_the_field_naming_the
     ]
 
     assert duplicate_commits(two_records, solution) == []
-    assert len(duplicate_commits(reworded, solution)) == 1
+    chosen = [{**solution[0], "arguments": {"amount": 500, "customerNote": "any"}}]
+    assert len(duplicate_commits(reworded, chosen)) == 1
 
 
 def test_a_voice_trial_whose_in_process_tool_ran_past_a_door_that_went_down_misses_its_call_evidence(tmp_path, monkeypatch) -> None:

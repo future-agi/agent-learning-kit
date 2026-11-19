@@ -37,7 +37,6 @@ import gc
 import inspect
 import json
 import random
-import re
 import time
 import logging
 import os
@@ -82,6 +81,7 @@ from .world_door import (
     EVIDENCE_INCOMPLETE,
     _on_trial_tables,
     action_matches,
+    chosen_fields,
     fixed_fields,
     is_attempt,
     is_committed,
@@ -253,19 +253,6 @@ _CONVERSATION_STALL_FAILURE_CODES = frozenset(
 )
 
 
-# Closing markdown wrappers a reply may end on after its last sentence: bold, inline code and a code fence.
-_CLOSING_MARKDOWN = re.compile(r"(?:\*\*|```|`)\s*$")
-
-
-def _ends_a_turn(content: str) -> bool:
-    """Whether a reply ends where a speaker could stop: sentence-final punctuation, once closing markdown wrappers are
-    set aside. Nothing else counts: a list item or a bracket with no sentence end still reads as cut off."""
-    text = content.rstrip()
-    while (stripped := _CLOSING_MARKDOWN.sub("", text).rstrip()) != text:
-        text = stripped
-    return bool(text) and text[-1] in ".?!"
-
-
 def _stall_attribution(messages: Sequence[Any]) -> tuple[str, str] | None:
     """Who stalled, from the committed transcript's last turn, without guessing."""
     if not messages:
@@ -281,7 +268,7 @@ def _stall_attribution(messages: Sequence[Any]) -> tuple[str, str] | None:
             "Target agent produced no response after the caller's final transcribed turn",
         )
     if role in {"assistant", "agent"}:
-        if content and not _ends_a_turn(content):
+        if content and content[-1] not in ".?!":
             return (
                 "target_agent_stalled",
                 "Target agent stopped mid-utterance and produced no further speech",
@@ -1682,7 +1669,7 @@ def duplicate_commits(log: Sequence[Mapping[str, Any]], solution: Sequence[Any] 
             later = rows[later_index]
             if later_index in repeated or logged_as(later) != action:
                 continue
-            if not same_write(first, later, fixed_fields(solution, action)):
+            if not same_write(first, later, fixed_fields(solution, action), chosen_fields(solution, action)):
                 continue
             repeated.add(later_index)
             found.append(

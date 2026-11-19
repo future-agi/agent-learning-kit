@@ -86,11 +86,11 @@ def test_only_a_committed_write_counts_as_a_change_made() -> None:
 
 REWORDED = (
     "def check(world, calls, reference):\n"
-    "    return 'retried' if retried_timeouts(world, reference) else None\n"
+    "    return 'retried' if retried_timeouts(world, reference, own_words=['reason']) else None\n"
 )
 TWICE = (
     "def check(world, calls, reference):\n"
-    "    return 'committed twice' if repeated_commits(world, reference) else None\n"
+    "    return 'committed twice' if repeated_commits(world, reference, own_words=['reason']) else None\n"
 )
 
 
@@ -111,7 +111,7 @@ def test_a_reworded_retry_is_the_same_record_for_every_duplicate_reader() -> Non
     solution = [
         {
             "tool": "refunds.issue",
-            "arguments": {"order_id": "1045", "amount": 35},
+            "arguments": {"order_id": "1045", "amount": 35, "reason": "damaged"},
             "fixed": ["order_id"],
         }
     ]
@@ -128,6 +128,20 @@ def test_a_reworded_retry_is_the_same_record_for_every_duplicate_reader() -> Non
     assert not duplicate_commits(other.rows, solution)
     assert run_check(REWORDED, other, [], reference=reference).held
     assert run_check(TWICE, other, [], reference=reference).held
+
+
+def test_a_reworded_argument_nothing_declares_as_the_agent_s_words_is_another_write() -> None:
+    """Nothing is read from an argument's name: `reason` is the agent's own words only when the reference lists it
+    unfixed or the check names it."""
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    solution = [{"tool": "refunds.issue", "arguments": {"order_id": "1045"}, "fixed": ["order_id"]}]
+    reference = [{"tool": "refunds.issue", "arguments": {"order_id": "1045"}}]
+    world = _World(_refund("committed", "1045", "damaged", error="response_lost"), _refund("committed", "1045", "broken"))
+    unnamed = "def check(world, calls, reference):\n    return 'twice' if repeated_commits(world, reference) else None\n"
+
+    assert duplicate_commits(world.rows, solution) == []
+    assert run_check(unnamed, world, [], reference=reference).held
 
 
 def test_a_log_kept_before_outcomes_were_recorded_still_lists_its_committed_writes() -> (
