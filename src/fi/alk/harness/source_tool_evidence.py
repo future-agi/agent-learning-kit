@@ -12,7 +12,14 @@ import tokenize
 from pathlib import Path
 
 from .contract import AgentContract
-from .python_source import EscapeBudget, ParseBudget, TokenBudget, parsed, read_module
+from .python_source import (
+    EscapeBudget,
+    ParseBudget,
+    TokenBudget,
+    parsed,
+    parsed_or_syntax_error,
+    read_module,
+)
 from .runtime_selection import charged_path
 from .source_folder import SubfolderNotFound, agent_folder, is_within
 
@@ -120,6 +127,12 @@ def _comments(text: str, tokens: TokenBudget) -> list[str] | None:
     return [token.string for token in found if token.type == tokenize.COMMENT]
 
 
+# What a line search reads as a definition in a file that doesn't parse: a ``def`` at any depth,
+# and an explicit ``name="..."``.
+_DEFINED_CALLABLE = re.compile(r"^[ \t]*(?:async[ \t]+)?def[ \t]+([A-Za-z_]\w*)", re.MULTILINE)
+_EXPLICIT_NAME = re.compile(r"""\bname\s*=\s*(['"])([^'"\\\n]+)\1""")
+
+
 def defined_tool_names(source: Path) -> set[str]:
     """Names the source's own Python code defines a callable or an explicit tool name for."""
     root = source.resolve()
@@ -129,7 +142,16 @@ def defined_tool_names(source: Path) -> set[str]:
         if any(part.startswith(".") or part in _NOT_AGENT_CODE for part in parts):
             continue
         text = read_module(path, _LARGEST_TOOL_MODULE)
-        if text is None or (tree := parsed(text)) is None:
+        if text is None:
+            continue
+        tree = parsed_or_syntax_error(text)
+        if isinstance(tree, SyntaxError):
+            # A file the kit's own Python can't parse still defines its tools: a line search
+            # finds them, and a name too many only keeps a tool from being rejected.
+            names.update(_DEFINED_CALLABLE.findall(text))
+            names.update(match.group(2) for match in _EXPLICIT_NAME.finditer(text))
+            continue
+        if tree is None:
             continue
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

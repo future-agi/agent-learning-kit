@@ -142,7 +142,10 @@ def build_authored_agent(
     *,
     subfolder: str | None = None,
     framework: Mapping[str, Any] | None = None,
+    source_note: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """The agent document for a contract. ``source_note`` is what the document says about the
+    agent's source (the unparsed files), set before the hash so the hash covers it."""
     contract = _redact(
         {key: value for key, value in document.items() if key != "base_environment"}
     )
@@ -185,6 +188,8 @@ def build_authored_agent(
     if subfolder:
         # The platform compares this to what it sent, so it is never trimmed or normalised.
         agent["extension"]["source"] = {"subfolder": subfolder}
+    if source_note:
+        agent["extension"].setdefault("source", {}).update(source_note)
     agent["setup_hash"] = compute_setup_hash(agent)
     try:
         return Agent.model_validate(agent).model_dump(mode="json")

@@ -32,6 +32,7 @@ from typing import Any
 
 from ..providers.agent import redact_strings
 from .catalogue import Catalogue, SubGoal
+from .python_source import KIT_PYTHON
 from .scenario import Scenario
 from .world.runtime import GeneratedWorld
 
@@ -379,12 +380,13 @@ def read_all(destination: Path) -> list[Scenario]:
     return found
 
 
-def _tools_selected(body: str) -> set[str]:
-    """Every tool name this check narrows the calls to."""
+def _tools_selected(body: str) -> set[str] | None:
+    """Every tool name this check narrows the calls to, or None for a check the kit's own Python
+    can't parse: that is not a check that selects no tool."""
     try:
         tree = ast.parse(textwrap.dedent(body))
     except SyntaxError:
-        return set()
+        return None
     found: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Compare) or not node.ops:
@@ -472,7 +474,14 @@ def check_problems(folder: Path) -> list[str]:
             if not reads_world and not reads_arguments:
                 plumbing += 1
             if not reads_world:
-                for tool in _tools_selected(inside):
+                selected = _tools_selected(inside)
+                if selected is None:
+                    problems.append(
+                        f"{scenario_dir.name}: {check.stem} doesn't parse on Python "
+                        f"{KIT_PYTHON}, so it was not compared with the scenario's other checks"
+                    )
+                    continue
+                for tool in selected:
                     by_tool[tool].append(check.stem)
         for tool, names in sorted(by_tool.items()):
             if len(names) > 1:

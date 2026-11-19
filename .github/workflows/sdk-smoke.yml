@@ -67,13 +67,15 @@ jobs:
           ALK_TEST_PYTHON: ${{ steps.traced.outputs.python-path }}
         run: python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py
 
-  tool-trace-python-3-12-3:
-    # 3.12.3 is the release the sandbox runs, and it closes a generator paused at a bare yield
-    # without an event, as 3.13.3 does; "3.12" elsewhere floats to the newest release.
-    # setup-python has no 3.12.3 build for the current Ubuntu image, so this runs in the official
-    # 3.12.3 image, where pytest and the tracer's subprocesses both run on it.
+  python-3-12-3:
+    # The hosted image's own Python: Ubuntu 24.04's python3.12, which is 3.12.3 (Dockerfile.hosted,
+    # /opt/alk-venv). "3.12" elsewhere floats to the newest release, and setup-python has no
+    # 3.12.3 build for the current Ubuntu image, so this runs in the official 3.12.3 image, where
+    # pytest and the tracer's subprocesses both run on it. 3.12.3 closes a generator paused at a
+    # bare yield without an event, as 3.13.3 does, so the tool tracer runs here, and the kit
+    # finds, reads and documents an agent here as the sandbox does.
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     container: python:3.12.3-slim-bookworm
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +85,32 @@ jobs:
         run: python -m pip install . pytest
       - name: Run the tool tracer tests on Python 3.12.3
         run: python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py
+      - name: Run the finding, reading and agent-document tests on Python 3.12.3
+        shell: bash
+        # A skip hides a test from the 3.12.3 check. The only ones allowed are the container's
+        # own: it runs as root, which reads a mode-000 folder, on a case-sensitive disk.
+        run: >-
+          set -o pipefail;
+          python -m pytest -q -rs
+          tests/harness/test_agent_scan.py
+          tests/harness/test_scan_walk.py
+          tests/harness/test_scan_folders.py
+          tests/harness/test_scan_document.py
+          tests/harness/test_scan_ai.py
+          tests/harness/test_import_lines.py
+          tests/harness/test_import_lines_diff.py
+          tests/harness/test_reading_entry.py
+          tests/harness/test_agent_reading.py
+          tests/harness/test_framework_detection.py
+          tests/harness/test_authoring_entrypoint_find_agents.py
+          tests/harness/test_python_source_codecs.py
+          tests/harness/test_newer_python_syntax.py
+          tests/harness/test_source_tool_evidence.py
+          tests/harness/test_instrumentation_evidence.py
+          tests/harness/test_agent_type_refusal.py
+          | tee pytest.out;
+          ! grep '^SKIPPED' pytest.out
+          | grep -v -e 'root reads a mode-000' -e "case-sensitive disk can't spell"
 
   clean-install:
     # Install, doctor, the local simulation and the suites that need their own SDK versions. The
@@ -188,12 +216,14 @@ jobs:
       - name: Run the raw-request measuring tests and the OpenAI instrumentor on openai 3
         if: matrix.dependencies == 'minimum-livekit'
         # The steps above run on openai 2: LiveKit 1.8.3, the minimum the kit supports, needs it.
-        # openai 3 sends through httpx2, so measuring must see a raw call there too. Fails if any
-        # of these skip.
+        # openai 3 sends through httpx2, so measuring must see a raw call there too. The tests are
+        # chosen by node id, so no filter deselects a file, and the step fails if any of them skip.
         shell: bash
         run: |
           python -m pip install 'openai>=3,<4'
-          python -m pytest -q -rs tests/harness/test_simulation_measure.py -k raw_model_request \
+          python -m pytest -q -rs \
+            tests/harness/test_simulation_measure.py::test_a_raw_model_request_marks_its_call_partial \
+            tests/harness/test_simulation_measure.py::test_a_request_through_the_real_httpx2_marks_partial \
             tests/test_evals_openai_instrumentor.py | tee openai3.out
           ! grep -q "skipped" openai3.out
 
@@ -335,6 +365,7 @@ jobs:
           tests/harness/test_langgraph_http_adapter.py
           tests/harness/test_reading_entry.py
           tests/harness/test_agent_reading.py
+          tests/harness/test_newer_python_syntax.py
           tests/harness/test_crewai_reference.py
           tests/harness/test_scan_walk.py
           tests/harness/test_browser_scan_cut.py
