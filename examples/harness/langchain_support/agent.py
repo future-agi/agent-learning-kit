@@ -1,7 +1,9 @@
+import copy
 import os
 
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
+from langgraph.config import get_config
 
 MODEL = os.getenv("OPENAI_MODEL", "vertex_ai/gemini-3.7-flash")
 
@@ -23,16 +25,24 @@ if _setting("OPENAI_API_KEY") and not _setting("OPENAI_BASE_URL"):
         "endpoint the key belongs to."
     )
 
-_ORDERS = {
+_SEED_ORDERS = {
     "A1001": {"item": "trail running shoes", "status": "delivered", "return": None},
     "A1002": {"item": "rain jacket", "status": "shipped", "return": None},
     "A1003": {"item": "water bottle", "status": "delivered", "return": None},
 }
+_ORDERS_BY_CONVERSATION: dict[str, dict] = {}
+
+
+def _orders() -> dict:
+    # Each conversation has its own copy of the orders. The conversation is the run's thread,
+    # which the caller passes as `config={"configurable": {"thread_id": ...}}`.
+    conversation = str(get_config().get("configurable", {}).get("thread_id") or "")
+    return _ORDERS_BY_CONVERSATION.setdefault(conversation, copy.deepcopy(_SEED_ORDERS))
 
 
 def look_up_order(order_id: str) -> str:
     """Look up an order by its id and report its item, status and any return."""
-    order = _ORDERS.get(order_id)
+    order = _orders().get(order_id)
     if order is None:
         return f"No order {order_id} exists."
     returned = order["return"] or "none"
@@ -41,7 +51,7 @@ def look_up_order(order_id: str) -> str:
 
 def start_return(order_id: str, reason: str) -> str:
     """Start a return for a delivered order, giving the customer's reason."""
-    order = _ORDERS.get(order_id)
+    order = _orders().get(order_id)
     if order is None:
         return f"No order {order_id} exists."
     if order["status"] != "delivered":

@@ -11,6 +11,9 @@ system prompt. It has three tools over a small in-memory set of orders: `look_up
 which is how LangChain deploys an agent. The kit runs it with its LangGraph adapter.
 - Each turn the adapter sends the whole conversation as `messages` and replies with the last
   message's text.
+- It names the conversation as the run's thread, `config={"configurable": {"thread_id": ...}}`,
+  and the tools read it with LangGraph's `get_config()`, so each conversation has its own copy
+  of the orders.
 - Tool calls are not returned: the agent runs the tools itself, and the kit's tool tracer
   records each call made to the three tool functions, including the ones made from a worker
   thread.
@@ -36,7 +39,3 @@ Install with `pip install -r requirements.txt` on Python 3.12.
 
 - The kit's LangGraph adapter runs every request on one event loop. The plain tools run on a
   worker thread and don't block it.
-- Every conversation the agent process serves shares the same orders, so a return started in
-  one scenario is still there in the next. The kit's LangGraph adapter calls the graph with no
-  thread, so the tools can't tell conversations apart. The LangGraph and Deep Agents
-  references have the same limit.

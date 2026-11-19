@@ -84,6 +84,28 @@ jobs:
       - name: Run the tool tracer tests on Python 3.12.3
         run: python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py
 
+  langchain-reference:
+    # The LangChain reference agent on the versions its requirements file pins, driven through
+    # the kit's LangGraph adapter against a local endpoint. The pins are for this job only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit with the reference's pinned libraries
+        run: >-
+          python -m pip install . pytest
+          -r examples/harness/langchain_support/requirements.txt
+      - name: Run the reference on its pins, failing if it skips
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_langchain_reference.py \
+            -k pinned_libraries | tee pytest.out
+          ! grep -q "skipped" pytest.out
+
   clean-install:
     # Install, doctor, the local simulation and the suites that need their own SDK versions. The
     # long test run is kit-tests: this job takes 1 to 4 of its 15 minutes.
@@ -335,6 +357,7 @@ jobs:
           tests/harness/test_reading_entry.py
           tests/harness/test_agent_reading.py
           tests/harness/test_crewai_reference.py
+          tests/harness/test_langchain_reference.py
           tests/harness/test_scan_walk.py
           tests/harness/test_browser_scan_cut.py
           tests/harness/test_save_child.py
