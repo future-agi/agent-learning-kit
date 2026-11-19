@@ -994,7 +994,7 @@ def test_a_request_the_case_declares_itself_is_held_when_the_service_rejects_it(
     assert saved["kept_as_written"] is False and saved["blocked_reason"] == "not_solvable"
 
 
-@pytest.mark.parametrize(("status", "code"), [(422, REQUEST_NOT_ACCEPTED), (404, ""), (409, "")])
+@pytest.mark.parametrize(("status", "code"), [(422, REQUEST_NOT_ACCEPTED), (404, "world_rule"), (409, "world_rule"), (503, "")])
 def test_only_a_request_the_service_cannot_take_reads_as_not_accepted(monkeypatch, status, code):
     from fi.alk.harness.world import handle
 

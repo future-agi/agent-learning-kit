@@ -17,7 +17,7 @@ from ..provision import (
     attached_postgres_store,
     reachable_overrides,
 )
-from .runtime import REQUEST_NOT_ACCEPTED, Call, GeneratedWorld
+from .runtime import Call, GeneratedWorld, refusal_code_for
 
 
 class ProvisionedWorld(GeneratedWorld):
@@ -141,7 +141,7 @@ class ProvisionedWorld(GeneratedWorld):
                 result=body,
                 ok=not refused,
                 refused=refused,
-                refusal_code=REQUEST_NOT_ACCEPTED if response.status_code == 422 else "",
+                refusal_code=refusal_code_for(response.status_code),
                 error=(
                     json.dumps(body, default=str)
                     if refused and not isinstance(body, str)

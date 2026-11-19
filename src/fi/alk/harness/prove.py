@@ -55,7 +55,7 @@ from .scenario import Scenario
 from .understand import load
 from .world.runtime import REQUEST_NOT_ACCEPTED, Call, GeneratedWorld
 from .world.snapshot import read_manifest, restore, source_state
-from .world_door import named_alike
+from .world_door import fault_numbered, fault_slot, faults_named, route_action, routed_faults
 
 
 # The lane could not execute something; the case runs labelled "kept as written", never as proved.
@@ -785,20 +785,21 @@ def run_steps(
     acting.replay_pre_run()
     if with_solution:
         acting.act_on(None)
-        made: Counter[str] = Counter()
+        faults = _Faults(scenario, world_root)
         world.faulted = []
         for step in scenario.solution if steps is None else steps:
-            fault = _fault_on(scenario, step, made)
+            fault = faults.on(step)
             if fault is None:
                 call = play_reference_step(world, step)
             else:
                 # The scenario's own fault fails this step before any change, as the world door fails it in the run,
                 # with the reason the door logs.
-                reason = (str(fault.message or "").strip() or "error") if fault.mode == "error" else fault.mode
+                mode = str(fault.get("mode"))
+                reason = (str(fault.get("message") or "").strip() or "error") if mode == "error" else mode
                 call = world._record(
                     Call(name=str(step.tool), arguments=dict(step.arguments or {}), ok=False, error=reason)
                 )
-                world.faulted.append(f"{call.name}({step.arguments}): {fault.mode}")
+                world.faulted.append(f"{call.name}({step.arguments}): {mode}")
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
             acting.act_on(step)
@@ -827,22 +828,41 @@ def run_steps(
 _FAILING_FAULTS = ("timeout_before_commit", "unavailable", "error")
 
 
-def _fault_on(scenario: Scenario, step: object, made: Counter[str]) -> Any:
-    """The scenario's own fault on this reference step, by which call of the fault's action it is, as the world door
-    counts them; None when no fault fails it. `made` counts the calls of each faulted action so far."""
-    tool = str(getattr(step, "tool", "") or "")
-    hit = None
-    for action in {fault.action for fault in getattr(scenario, "faults", None) or () if named_alike(fault.action, tool)}:
-        made[action] += 1
-        hit = hit or next(
-            (
-                fault
-                for fault in scenario.faults
-                if fault.action == action and fault.on_call == made[action] and fault.mode in _FAILING_FAULTS
-            ),
-            None,
+class _Faults:
+    """A scenario's own faults on its reference steps, matched and counted the way the world door matches and counts
+    them in the run (`faults_named`, `fault_slot`, `fault_numbered`): each step as the call it makes, its world action
+    the tool's route where the contract gives one, and each fault renamed to that route (`routed_faults`)."""
+
+    def __init__(self, scenario: Scenario, world_root: Path) -> None:
+        contract = load_proof_contract(world_root)
+        faults = [one.model_dump() if hasattr(one, "model_dump") else dict(one) for one in getattr(scenario, "faults", None) or ()]
+        self.faults = routed_faults(faults, contract) if faults else []
+        self.routes: dict[str, tuple[str, str]] = {}
+        for entry in getattr(contract, "tool_entrypoints", None) or ():
+            entry = entry if isinstance(entry, Mapping) else entry.model_dump()
+            route = route_action(str(entry.get("endpoint") or ""))
+            if entry.get("tool") and route:
+                self.routes[str(entry["tool"])] = (route, str(entry.get("method") or "POST").upper())
+        self.made: Counter[str] = Counter()
+
+    def on(self, step: object) -> Any:
+        """The fault the run sets on this step, by which call of its slot it is; None when none fails it."""
+        if not self.faults:
+            return None
+        tool = str(getattr(step, "tool", "") or "")
+        routed = tool in self.routes
+        action, method = self.routes.get(tool, (tool, ""))
+        named = faults_named(
+            self.faults, action=action, name=action.rsplit(".", 1)[-1], tool=tool, method=method, by_tool=not routed
         )
-    return hit
+        named = [one for one in named if one.get("mode") != "approval_required"]
+        if not named:
+            return None
+        counted, by_method = fault_slot(named, action, method)
+        slot = f"{counted}\x00{by_method}" if by_method is not None else counted
+        fault = fault_numbered(named, self.made[slot])
+        self.made[slot] += 1
+        return fault if fault is not None and fault.get("mode") in _FAILING_FAULTS else None
 
 
 # The triggers a reference solution can meet; the rest are reported in `Proof.unplayed`.

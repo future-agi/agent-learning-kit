@@ -30,7 +30,7 @@ from .errors import (
     WorldUsageError,
 )
 from .observation import HttpObservationHandle, ObservationWorld
-from .runtime import REQUEST_NOT_ACCEPTED, Call
+from .runtime import Call, refusal_code_for
 from .stores.postgres import PostgresStore
 from .workspace_channel import WorkspaceClient, WorkspaceService
 
@@ -398,7 +398,7 @@ class HostedWorld(HttpObservationHandle):
                 refused=refused,
                 error=error,
                 at=at,
-                refusal_code=REQUEST_NOT_ACCEPTED if response.status_code == 422 else "",
+                refusal_code=refusal_code_for(response.status_code),
             )
         except requests.RequestException as exc:
             call = Call(name=name, arguments=args, ok=False, error=f"{type(exc).__name__}: {exc}", at=at)

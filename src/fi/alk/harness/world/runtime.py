@@ -173,6 +173,16 @@ def _is_refusal(raised: BaseException, refusal_signature: str = "") -> bool:
 
 # A `refusal_code`: the service would not accept the request's shape (HTTP 422), so the action itself never ran.
 REQUEST_NOT_ACCEPTED = "request_not_accepted"
+# The tool ran and said no (a rule, a record not found), as the world door records a refusal.
+WORLD_RULE = "world_rule"
+
+
+def refusal_code_for(status: int) -> str:
+    """Why an HTTP answer refused a call: a 422 is the request the tool would not accept, any other 4xx the tool's
+    own answer (`WORLD_RULE`, a not-found among them), and anything else no refusal of the tool's."""
+    if status == 422:
+        return REQUEST_NOT_ACCEPTED
+    return WORLD_RULE if 400 <= status < 500 else ""
 
 
 @dataclass
