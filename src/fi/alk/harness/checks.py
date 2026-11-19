@@ -148,16 +148,14 @@ def same_id(first: Any, second: Any) -> bool:
 # A number as text: an optional sign, a currency (a symbol, a code or a word, before or after), thousands commas, a
 # fraction. A leading zero (`007`) is an identifier's, never a number's.
 _NUMBER_TEXT = re.compile(
-    r"^(?P<sign>[-+]?)(?P<before>US\$|[$€£₹]|Rs\.?|[A-Za-z]{3}(?=\s?\d))?\s?"
+    r"^(?P<sign>[-+]?)(?P<before>US\$|[$€£₹]|[A-Za-z]{3}(?=\s?\d))?\s?"
     r"(?P<digits>(?:0|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?:\.\d+)?)\s?(?P<after>[A-Za-z]+\.?)?$"
 )
-_CURRENCIES = {
-    "$": "USD", "us$": "USD", "€": "EUR", "£": "GBP", "₹": "INR", "rs": "INR", "rs.": "INR",
-    "dollar": "USD", "dollars": "USD", "euro": "EUR", "euros": "EUR",
-    "pound": "GBP", "pounds": "GBP", "rupee": "INR", "rupees": "INR",
-}
+# A currency symbol and the ISO 4217 code it stands for; any other currency is written as its code.
+_CURRENCIES = {"$": "USD", "us$": "USD", "€": "EUR", "£": "GBP", "₹": "INR"}
 def _number(value: Any) -> tuple[str, Decimal] | None:
-    """A number and the currency it is written in ("" for none): `$89`, `89 USD` and `89 dollars` are one currency."""
+    """A number and the currency it is written in ("" for none), by symbol or ISO code: `$89` and `89 USD` are one
+    currency. A word after the number (`89 dollars`, `89 items`) makes it something other than an amount."""
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float, Decimal)):
@@ -168,7 +166,6 @@ def _number(value: Any) -> tuple[str, Decimal] | None:
     marker = found["before"] or found["after"] or ""
     currency = _CURRENCIES.get(marker.casefold(), marker.upper() if len(marker) in (0, 3) else None)
     if currency is None:
-        # A word after the number that names no currency (`89 items`) makes it something other than an amount.
         return None
     return currency, Decimal(found["sign"] + found["digits"].replace(",", ""))
 
@@ -193,7 +190,7 @@ def _iso(value: Any) -> date | time | datetime | None:
 
 def same_value(first: Any, second: Any) -> bool:
     """Whether two values are the same value however they were written: a number by its value (`89`, `89.0`,
-    `"$89.00"`, `"89 dollars"`; two different currencies never match), an ISO 8601 date or time by its value
+    `"$89.00"`, `"89 USD"`; two different currencies never match), an ISO 8601 date or time by its value
     (`14:00` and `14:00:00`), and any other text as `same_id` reads it (case and separators ignored). A date said in
     words is compared as text: write the reference in the form the world holds. Lists and objects compare item by
     item.

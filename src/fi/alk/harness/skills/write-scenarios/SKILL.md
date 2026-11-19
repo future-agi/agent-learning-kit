@@ -545,10 +545,10 @@ do nothing. Write them on purpose and never drop one for asking:
   missing tool. A check fails when the action happens another way; the judge reads how it was declined.
 - **Not allowed.** As any refusal: a check on the forbidden change, a control that makes it.
 
-`same_value(a, b)` compares numbers and amounts however they were written (`89` and `"$89.00"` or
-`"89 dollars"`, never `$89` and `€89`), ISO dates and times by their value (`14:00` and `14:00:00`), and
-ids; a date or time said in words is compared as text, so compare against the value in the form the
-world holds it. `same_id(a, b)` compares ids.
+`same_value(a, b)` compares numbers and amounts written with a currency symbol or ISO code (`89`,
+`"$89.00"` and `"89 USD"`, never `$89` and `€89`), ISO dates and times by their value (`14:00` and
+`14:00:00`), and ids. Anything said in words (`89 dollars`, a spoken date) is compared as text, so
+compare records: the value in the form the world holds it. `same_id(a, b)` compares ids.
 
 **A check that only asks whether a tool was called is not a check.** It proves the plumbing worked, not
 that the agent behaved: any agent that reaches the tool at all passes it, and no agent that behaves
