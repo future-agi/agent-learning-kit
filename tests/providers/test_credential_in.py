@@ -81,6 +81,9 @@ _REFUSED = {
     "named value with a short value, as text": 'reset_token="RT4821X"',
     "slack hook path": "https://hooks.slack.com/services/T0000/B0000/XXXXXXXXXXXXXXXXXXXXXXXX",
     "key in the host": "https://api.sk_live_" + "a1" * 12 + ".example/x",
+    # Letter runs and digit runs, mostly letters: a hex digest cut at dashes, not an id
+    # (the ratio guard in _reads_as_names_or_an_id).
+    "a hex digest cut into letter and digit runs": "https://api.example.com/x?x=deadbeef-1234-cafebabe-5678-feedface",
 }
 
 
@@ -124,6 +127,8 @@ _KEPT = {
     "an encoded mixed-case path in a query": "https://api.example.com/forecast?timezone=America%2FNew_York",
     "a snake_case sort key": "https://api.example.com/orders?sort=created_at_desc_order",
     "a dashed id of mostly digits": "https://api.example.com/items?sku=ABC-DEF-123456789",
+    # The ratio guard keeps an id whose runs are mostly digits.
+    "a dashed id of digit runs only": "https://api.example.com/items?ids=1234-5678-9012-3456",
     "an encoded path in a query": "/login?next=%2Faccount%2Fsettings%2Fbilling",
     "userinfo password, a full shell reference": "postgres://svc:${DB_PASSWORD}@db/app",
     "userinfo password, a full variable": "postgres://svc:$DB_PASSWORD@db/app",
@@ -362,6 +367,14 @@ def test_a_credential_named_argument_may_not_list_values() -> None:
         "token",
         "Authorization",
         "db_password",
+        # cookie and credential(s) as the last word.
+        "session_cookie",
+        "auth_cookie",
+        "aws_credentials",
+        "user_credentials",
+        "sessionCookie",
+        "cookie",
+        "credentials",
     ],
 )
 def test_the_argument_name_is_judged_by_the_named_value_forms(name: str) -> None:

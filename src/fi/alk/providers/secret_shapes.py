@@ -1504,14 +1504,14 @@ def credential_in_check_code(code: str) -> bool:
 
 
 # An argument name is judged by the named-value rule's forms, as the whole name or its last word
-# (reset_token, clientSecret, db_password), and `authorization` or a bare cookie or credential only
-# alone: authorization_status, credential_type, secretary_name, cookie_flavor, token_count and
-# tokenizer name honest enums. Pass and pwd are not argument names: as bare words they are not
-# secrets (a shell's pwd, a boarding pass).
+# (reset_token, clientSecret, db_password, session_cookie, aws_credentials), and `authorization`
+# only alone: authorization_status, credential_type, secretary_name, cookie_flavor, token_count
+# and tokenizer name honest enums, the marker word first. Pass and pwd are not argument names: as
+# bare words they are not secrets (a shell's pwd, a boarding pass).
 _ARGUMENT_FORMS = frozenset(
     form.replace("-", "_") for form in _FORMS if form not in {"pass", "pwd"}
-) | {"passphrase"}
-_ARGUMENT_WHOLE_NAMES = frozenset({"authorization", "cookie", "credential", "credentials"})
+) | {"passphrase", "cookie", "credential", "credentials"}
+_ARGUMENT_WHOLE_NAMES = frozenset({"authorization"})
 _CAMEL_JOIN = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
