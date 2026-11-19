@@ -6,6 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from fi.alk.harness import prove as module
 from fi.alk.harness.catalogue import Catalogue, SubGoal
 from fi.alk.harness.contract import ToolSpec
@@ -130,3 +132,36 @@ def test_the_live_proof_records_the_same_step_and_reports_it(tmp_path, monkeypat
     world.runtime_tools, world.endpoint_for = {"memorize"}, {}
     _, assumed, _ = live_proof._play(case, world, list(case.solution))
     assert assumed == ["memorize"]
+
+
+
+@pytest.mark.parametrize(
+    "credits",
+    [
+        "any(c.name == 'memorize' and c.ok and c.arguments.get('value') == 'Seattle' for c in calls)",
+        "succeeded(calls, 'memorize', value='Seattle')",
+        "answered(calls, 'memorize', value='Seattle')",
+        "any(c.name == 'memorize' and not c.refused and c.arguments.get('value') == 'Seattle' for c in calls)",
+    ],
+)
+def test_a_check_that_reads_whether_a_call_went_through_keeps_the_step_assumed(tmp_path, monkeypatch, credits):
+    _in_process_world(tmp_path, monkeypatch)
+    check = f"def check(world, calls):\n    return None if {credits} else 'not remembered'\n"
+
+    proof = _prove(tmp_path, _case(), check)
+
+    assert proof.assumed == ["memorize"] and proof.recorded == [] and not proof.proved
+
+
+def test_a_recorded_call_never_reads_as_gone_through_or_answered():
+    from fi.alk.harness.checks import answered, succeeded
+    from fi.alk.harness.prove import record_unrun_step
+
+    world = SimpleNamespace(calls=[])
+    step = SimpleNamespace(tool="memorize", arguments={"key": "destination", "value": "Seattle"})
+
+    call = record_unrun_step(world, step)
+
+    assert call.ok is None and call.refused is None and call.refusal_code is None and call.error is None
+    assert succeeded([call], "memorize") == [] and answered([call], "memorize") == []
+    assert world.recorded == ["memorize"]

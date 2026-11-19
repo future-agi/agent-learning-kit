@@ -651,23 +651,39 @@ def record_unrun_step(world: Any, step: object) -> Call:
     without running it: what a check of the calls reads, and nothing a check of the world could. Listed in
     `world.recorded`."""
     tool = str(getattr(step, "tool", "") or "")
-    call = Call(name=tool, arguments=dict(getattr(step, "arguments", {}) or {}), result=None)
+    # Never run, so nothing says it went through or was turned down: no check of success can pass on it.
+    call = Call(
+        name=tool,
+        arguments=dict(getattr(step, "arguments", {}) or {}),
+        result=None,
+        ok=None,  # type: ignore[arg-type]
+        refused=None,  # type: ignore[arg-type]
+        refusal_code=None,  # type: ignore[arg-type]
+        error=None,  # type: ignore[arg-type]
+    )
     record = getattr(world, "_record", None)
     call = record(call) if callable(record) else (world.calls.append(call) or call)
     world.recorded = sorted({*getattr(world, "recorded", ()), tool})
     return call
 
 
+# What a call came to, by the names a check reads it with: on a call, on a log row, or through a helper.
+_OUTCOME_FIELDS = frozenset({"result", "ok", "refused", "error", "refusal_code", "outcome"})
+_OUTCOME_HELPERS = frozenset({"succeeded", "answered", "committed_writes", "retried_timeouts", "repeated_commits"})
+
+
 def _reads_results(source: str) -> bool:
-    """Whether a check's code reads any call's result (`c.result`, a log row's `["result"]`); unreadable code is taken
-    to read one."""
+    """Whether a check's code reads what any call came to: its result, whether it went through or was turned down
+    (`c.ok`, `c.refused`, `c.error`, a log row's fields of the same names, `world.events`), or a helper that reads them
+    (`succeeded`, `answered`, ...). Unreadable code is taken to read one."""
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return True
     return any(
-        (isinstance(node, ast.Attribute) and node.attr == "result")
-        or (isinstance(node, ast.Constant) and node.value == "result")
+        (isinstance(node, ast.Attribute) and (node.attr in _OUTCOME_FIELDS or node.attr == "events"))
+        or (isinstance(node, ast.Constant) and node.value in _OUTCOME_FIELDS)
+        or (isinstance(node, ast.Name) and node.id in _OUTCOME_HELPERS)
         for node in ast.walk(tree)
     )
 
@@ -866,7 +882,8 @@ def run_steps(
         for step in scenario.solution if steps is None else steps:
             fault = faults.on(step)
             tool = str(getattr(step, "tool", "") or "")
-            if fault is None and tool in recordable and not executes(world, tool):
+            unrun = fault is None and tool in recordable and not executes(world, tool)
+            if unrun:
                 call = record_unrun_step(world, step)
             elif fault is None:
                 call = play_reference_step(world, step)
@@ -879,7 +896,7 @@ def run_steps(
                     Call(name=str(step.tool), arguments=dict(step.arguments or {}), ok=False, error=reason)
                 )
                 world.faulted.append(f"{call.name}({step.arguments}): {mode}")
-            if not call.ok:
+            if not call.ok and not unrun:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
             acting.act_on(step)
         assumed = [

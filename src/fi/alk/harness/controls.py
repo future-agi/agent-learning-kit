@@ -95,7 +95,14 @@ def refused_attempts(scenario: Scenario, calls: Sequence[Call]) -> list[str]:
     solved = {str(step.tool) for step in getattr(scenario, "solution", None) or ()}
     went_through = set(unmatched_calls(scenario, calls))
     # Every call outside the reference that did not go through (`unmatched_calls`) was refused or failed.
-    return sorted({call.name for call in calls if call.name not in solved and call.name not in went_through})
+    # A step recorded, not run (`ok` None), was never tried against the world.
+    return sorted(
+        {
+            call.name
+            for call in calls
+            if call.name not in solved and call.name not in went_through and call.ok is not None
+        }
+    )
 
 
 def played_control(
