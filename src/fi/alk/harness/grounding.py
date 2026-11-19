@@ -13,7 +13,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, Sequence
 
 from .backends import tool
 from .catalogue import Catalogue
@@ -135,14 +135,35 @@ def unresolved(entries: list[SourceResult]) -> list[SourceResult]:
     return [one for one in entries if one["kind"] in ALK_RESOLVED_KINDS and one.get("resolved") is False]
 
 
-def expected_outcome(scenario: Scenario, catalogue: Catalogue) -> str:
-    """What the case expects, in words: each of its sub-goals' `what`."""
+def expected_outcome(scenario: Scenario, catalogue: Catalogue, workers: Sequence[Any] = ()) -> str:
+    """What the case expects, in words: each of its sub-goals' `what`. Where the app hands work to `workers` (the
+    contract's), also how the case reaches it: each reference step's tool with the worker that holds it."""
     lines = []
     for name in getattr(scenario, "sub_goals", None) or []:
         goal = catalogue.named(name) if catalogue is not None else None
         what = str(getattr(goal, "what", "") or "").strip()
         if what:
             lines.append(f"- {what}")
+    if not lines or not workers:
+        return "\n".join(lines)
+    holder = {
+        tool: str(getattr(one, "name", "") or getattr(one, "id", ""))
+        for one in workers
+        for tool in getattr(one, "tools", None) or ()
+    }
+    path = [
+        f"{step.tool} (done by the worker {holder[str(step.tool)]})" if str(step.tool) in holder else str(step.tool)
+        for step in getattr(scenario, "solution", None) or ()
+    ]
+    lines.append(
+        "\nThe app's workers, the agents it hands work to, and the tools each holds: "
+        + "; ".join(
+            f"{getattr(one, 'name', '') or one.id}: {', '.join(getattr(one, 'tools', None) or ()) or 'no tools'}"
+            for one in workers
+        )
+    )
+    if path:
+        lines.append("The case reaches its outcome through: " + ", then ".join(path))
     return "\n".join(lines)
 
 
@@ -150,7 +171,10 @@ _CONFLICT_PROMPT = (
     "A test case for an agent expects the outcome below, and cites the agent's rule below as its source. "
     "Decide whether the expected outcome contradicts the rule: expecting the agent to do what the rule "
     "forbids, or a number, limit, window or condition the rule states differently. A case that only "
-    "covers part of the rule, or adds details the rule does not mention, does not contradict it.\n\n"
+    "covers part of the rule, or adds details the rule does not mention, does not contradict it. Where the app "
+    "hands work to workers, a rule that sends a kind of request to a worker is how that work gets done: an "
+    "outcome the case reaches through that worker follows the rule; only an outcome reached some other way, "
+    "or one the rule's worker is not to produce, contradicts it.\n\n"
     "Expected outcome:\n{expected}\n\nRule:\n{rule}\n\nCall decide."
 )
 
@@ -206,10 +230,11 @@ def policy_conflicts(
     *,
     judge: Callable[[str, str], tuple[bool | None, str]] | None = None,
     source_root: Path | None = None,
+    workers: Sequence[Any] = (),
 ) -> list[PolicyCheck]:
     """For each cited rule that resolves, whether the case's expected outcome contradicts it:
     `{rule, ref, conflict, why}`. `conflict` None means no judge could decide it here."""
-    expected = expected_outcome(scenario, catalogue)
+    expected = expected_outcome(scenario, catalogue, workers)
     if not expected:
         return []
     decide = judge or _harness_conflict_judge
