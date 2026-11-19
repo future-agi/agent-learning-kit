@@ -280,3 +280,29 @@ def test_a_live_not_found_is_answered_a_bad_request_and_a_server_fault_are_not(f
     assert missing.refusal_code == "world_rule" and rejected.refusal_code == REQUEST_NOT_ACCEPTED
     assert broke.refusal_code == ""
     assert answered([missing, rejected, broke], "get_order", order_id="6619") == [missing]
+
+
+def test_a_history_check_whose_control_refunds_is_told_the_refund_it_made(tmp_path):
+    from fi.alk.harness.checks import reference_of
+    from fi.alk.harness.controls import play_controls
+
+    _refunds(tmp_path)
+    lookup = {"tool": "get_order", "arguments": {"order_id": "1045"}}
+    refund = {"tool": "issue_refund", "arguments": {"order_id": "1045", "amount": 35}}
+    case = Scenario(
+        name="refund-history",
+        instruction="You want to know what was refunded.",
+        solution=[lookup],
+        negative_controls=[{"name": "refunds_on_a_history_check", "why": "refunds instead", "steps": [lookup, refund]}],
+    )
+    reads_the_lookup = "def check(world, calls):\n    return None if answered(calls, 'get_order') else 'not looked up'\n"
+    played = play_controls(case, tmp_path, [("looked_up", reads_the_lookup)], reference_of(case.solution), run=run_steps)
+
+    proof = Proof(
+        ready=True, solvable=True, vacuous=False, with_solution=[Outcome("looked_up", True)],
+        with_nothing=[Outcome("looked_up", False, "not looked up")], controls=played,
+    )
+    said = proof.why()
+
+    assert "refunds_on_a_history_check" in said and "it called issue_refund" in said
+    assert "it committed issue_refund(amount=35, order_id='1045'), which the reference never does" in said
