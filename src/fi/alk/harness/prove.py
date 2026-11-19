@@ -52,7 +52,7 @@ from .leaks import leaks
 from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
 from .scenario import Scenario
 from .understand import load
-from .world.runtime import Call, GeneratedWorld
+from .world.runtime import REQUEST_NOT_ACCEPTED, Call, GeneratedWorld
 from .world.snapshot import read_manifest, restore, source_state
 
 
@@ -574,6 +574,19 @@ def executes(world: GeneratedWorld, tool: str) -> bool:
     return bool((getattr(world, "endpoint_for", {}) or {}).get(tool))
 
 
+def assumed_tools(world: GeneratedWorld, steps: Sequence[Any]) -> list[str]:
+    """The tools of `steps` recorded unrun: none bound here, or a request the service would not take as sent
+    (`play_reference_step`)."""
+    unplayed = set(getattr(world, "not_replayed", ()))
+    return sorted(
+        {
+            str(getattr(step, "tool", ""))
+            for step in steps
+            if not executes(world, str(getattr(step, "tool", ""))) or str(getattr(step, "tool", "")) in unplayed
+        }
+    )
+
+
 def play_reference_step(world: GeneratedWorld, step: object) -> Call:
     """Play one correct-agent step without confusing its API with its dependency's API.
 
@@ -597,6 +610,14 @@ def play_reference_step(world: GeneratedWorld, step: object) -> Call:
     if endpoint and callable(forward):
         dependency_arguments = environment_arguments or arguments
         effect = forward(endpoint, dependency_arguments, record=False)
+        if not environment_arguments and effect.refusal_code == REQUEST_NOT_ACCEPTED:
+            # The step names no request for the service, so it was sent the agent-facing arguments. The service
+            # would not take them as a request: the agent's own tool builds that request, adding what it holds
+            # from the conversation. The step never ran as the agent runs it, so it is recorded unrun, not refused.
+            logger.warning("reference step assumed rather than executed: tool=%s reason=request not accepted", name)
+            world.not_replayed = {*getattr(world, "not_replayed", ()), name}
+            world.calls.append(Call(name=name, arguments=arguments))
+            return world.calls[-1]
         semantic = Call(
             name=name,
             arguments=arguments,
@@ -675,11 +696,7 @@ def run_steps(
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
             acting.act_on(step)
-        assumed = [
-            str(getattr(step, "tool", ""))
-            for step in (scenario.solution if steps is None else steps)
-            if not executes(world, str(getattr(step, "tool", "")))
-        ]
+        assumed = assumed_tools(world, scenario.solution if steps is None else steps)
         if assumed:
             logger.warning(
                 "scenario %s: %d of %d solution steps were assumed, not executed (%s). The "

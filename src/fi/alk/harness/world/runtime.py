@@ -171,6 +171,10 @@ def _is_refusal(raised: BaseException, refusal_signature: str = "") -> bool:
     )
 
 
+# A `refusal_code`: the service would not accept the request's shape (HTTP 422), so the action itself never ran.
+REQUEST_NOT_ACCEPTED = "request_not_accepted"
+
+
 @dataclass
 class Call:
     """One tool call and what the world did with it."""

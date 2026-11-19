@@ -33,7 +33,7 @@ from .json_file import write_json_atomic
 from .outbound import redact_outbound_text
 from .proof_records import CheckRecord, ControlResult, LiveResult
 from .proofs import proof_key
-from .prove import Proof, checks_for, excused_by_assumed_steps, executes, play_reference_step
+from .prove import Proof, assumed_tools, checks_for, excused_by_assumed_steps, play_reference_step
 from .scenario import Scenario, Step
 from .scenario_tools import load_scenarios
 from .world.handle import MCP_ROUTE, mcp_request
@@ -115,7 +115,7 @@ def _play(scenario: Scenario, world: Any, steps: list[Step]) -> tuple[list[Call]
         call = play_reference_step(world, step)
         if not call.ok:
             refused.append(f"{call.name}({step.arguments}): {call.error}")
-    assumed = sorted({str(step.tool) for step in steps if not executes(world, str(step.tool))})
+    assumed = assumed_tools(world, steps)
     return list(world.calls), assumed, refused
 
 
@@ -262,7 +262,7 @@ def apply_live(proof: Proof, live: LiveResult) -> Proof:
     proof.excused = excused_by_assumed_steps(proof)
     proof.trial = {}
     proof.broken = [one.name for one in proof.with_solution if one.broken]
-    proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken
+    proof.solvable = all(one.held or one.name in proof.excused for one in proof.with_solution) and not proof.broken
     proof.controls = [dict(one) for one in live.get("controls") or []]
     proof.broken += control_broken(proof.controls)
     proof.weak = [one.name for one in proof.with_nothing if one.held]
