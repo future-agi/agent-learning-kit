@@ -22,6 +22,7 @@ import errno
 import itertools
 import logging
 import os
+import selectors
 import signal
 import subprocess
 import sys
@@ -197,17 +198,42 @@ def _go_message(env: Mapping[Any, Any] | None) -> bytes:
     return b"go " + str(len(body)).encode() + b"\0" + body
 
 
-def _write_all(fd: int, data: bytes) -> None:
+@dataclass(frozen=True)
+class _Deadline:
+    args: Sequence[str]
+    timeout: float
+    end: float
+
+    def remaining(self) -> float:
+        return max(0.0, self.end - time.monotonic())
+
+    def wait(self, fd: int, event: int) -> None:
+        with selectors.DefaultSelector() as selector:
+            selector.register(fd, event)
+            left = self.remaining()
+            if not left or not selector.select(left):
+                raise subprocess.TimeoutExpired(self.args, self.timeout)
+
+
+def _write_all(fd: int, data: bytes, deadline: _Deadline | None = None) -> None:
     view = memoryview(data)
+    if deadline is not None:
+        os.set_blocking(fd, False)
     while view:
+        if deadline is not None:
+            deadline.wait(fd, selectors.EVENT_WRITE)
         view = view[os.write(fd, view) :]
 
 
-def _read_all(fd: int) -> bytes:
+def _read_all(fd: int, deadline: _Deadline | None = None) -> bytes:
     chunks = []
-    while chunk := os.read(fd, 4096):
+    while True:
+        if deadline is not None:
+            deadline.wait(fd, selectors.EVENT_READ)
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            return b"".join(chunks)
         chunks.append(chunk)
-    return b"".join(chunks)
 
 
 def _close(*fds: int) -> None:
@@ -216,7 +242,9 @@ def _close(*fds: int) -> None:
             os.close(fd)
 
 
-def popen(args: Sequence[str], **kwargs: Any) -> tuple[subprocess.Popen, Leaf | None]:
+def popen(
+    args: Sequence[str], *, _deadline: _Deadline | None = None, **kwargs: Any
+) -> tuple[subprocess.Popen, Leaf | None]:
     """``subprocess.Popen`` for a customer execution, inside a leaf of its own when contained.
 
     Without containment this is a plain Popen. With it, the process starts as the gate, joins
@@ -247,10 +275,11 @@ def popen(args: Sequence[str], **kwargs: Any) -> tuple[subprocess.Popen, Leaf | 
     _close(go_read, done_write)
     try:
         leaf.add(process.pid)
-        _write_all(go_write, message)
+        _write_all(go_write, message, _deadline)
         _close(go_write)
         go_write = -1
-        failure = _read_all(done_read)  # EOF once the command is executing
+        # EOF once the command is executing.
+        failure = _read_all(done_read) if _deadline is None else _read_all(done_read, _deadline)
     except BaseException:
         # Closing the go pipe before the mark arrived ends the gate unrun.
         _close(go_write, done_read)
@@ -285,11 +314,18 @@ def run(
         kwargs["stderr"] = subprocess.PIPE
     if input is not None:
         kwargs["stdin"] = subprocess.PIPE
-    process, leaf = popen(args, start_new_session=True, **kwargs)
+    deadline = (
+        _Deadline(args, timeout, time.monotonic() + timeout)
+        if timeout is not None and active() is not None
+        else None
+    )
+    process, leaf = popen(args, _deadline=deadline, start_new_session=True, **kwargs)
     try:
         try:
-            stdout, stderr = process.communicate(input=input, timeout=timeout)
-        except BaseException:
+            stdout, stderr = process.communicate(
+                input=input, timeout=deadline.remaining() if deadline else timeout
+            )
+        except BaseException as exc:
             # A timeout, or the harness interrupted: stop all it started before passing it on.
             if leaf is not None:
                 leaf.kill()
@@ -298,6 +334,10 @@ def run(
             except ProcessLookupError:
                 pass
             process.wait()
+            if deadline is not None and isinstance(exc, subprocess.TimeoutExpired):
+                raise subprocess.TimeoutExpired(
+                    args, deadline.timeout, output=exc.output, stderr=exc.stderr
+                ) from exc
             raise
     finally:
         if leaf is not None:
