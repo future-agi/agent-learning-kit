@@ -1502,6 +1502,10 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, "the runtime-plan repair, which saves through write_contract (B13); " + _TEMP_COMPOSE),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "repair"): (
         3, "calls its nested repair, scanned as validate_and_repair.repair"),
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "_rewrite_held_cases"): (
+        1, "hands held cases to its nested repair (scenarios), then puts back what other cases rely on"),
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "held_for_the_writer"): (
+        1, "proves the suite into a temporary file to read which cases are held; writes no contract"),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "validate"): (
         2, "calls its nested validate, which runs validate_once (listed above)"),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "write_scenarios"): (
