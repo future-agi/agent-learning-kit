@@ -3580,3 +3580,62 @@ def test_certificate_carries_the_isolation_the_runtime_recorded(tmp_path, record
     else:
         # An older runtime's evidence says nothing about isolation; the certificate does not guess.
         assert "process_isolation" not in runtime and "door_user" not in runtime
+
+
+
+def _held_loop(tmp_path, monkeypatch, held_rounds, *, rewrites=True):
+    """A generic validation that passes every time, with `held_rounds` lists of held cases read after each pass."""
+    from fi.alk.harness import authoring_runtime_validation as module
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    reads = list(held_rounds)
+    monkeypatch.setattr(module, "held_for_the_writer", lambda root: reads.pop(0) if reads else {})
+    calls, guidance = [], []
+
+    async def validate(*args):
+        calls.append("validate")
+        return 1
+
+    async def repair(phase, text, *more, **options):
+        guidance.append((phase, text))
+        if rewrites:
+            # A check added to a shared sub-goal: the catalogue changes, no scenario file does.
+            (authoring / "sub_goals.json").write_text(json.dumps({"n": len(guidance)}), encoding="utf-8")
+        return 0
+
+    controller = RepairController(RepairBudgets())
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=0)
+    asyncio.run(validate_and_repair(job, source, authoring, validate=validate, repair=repair, controller=controller))
+    return calls, guidance, controller
+
+
+def test_a_case_the_live_proof_holds_goes_back_to_the_writer_and_is_validated_again(tmp_path, monkeypatch):
+    held = {"refund-refused-outside-window": "the checks pass a wrong behaviour: it called issue_refund"}
+    calls, guidance, controller = _held_loop(tmp_path, monkeypatch, [held, {}])
+
+    assert calls == ["validate", "validate"]
+    assert [phase for phase, _ in guidance] == ["scenarios"]
+    assert "refund-refused-outside-window: the checks pass a wrong behaviour: it called issue_refund" in guidance[0][1]
+    assert controller.history.decisions[-1].action is RepairAction.CERTIFY
+
+
+def test_cases_still_held_after_the_bounded_rewrites_are_kept_held_and_the_build_passes(tmp_path, monkeypatch):
+    from fi.alk.harness.authoring_runtime_validation import HELD_CASE_REPAIRS
+
+    held = {"case": "negative_control_passed"}
+    calls, guidance, controller = _held_loop(tmp_path, monkeypatch, [held] * (HELD_CASE_REPAIRS + 3))
+
+    assert len(guidance) == HELD_CASE_REPAIRS
+    assert calls == ["validate"] * (HELD_CASE_REPAIRS + 1)
+    assert controller.history.decisions[-1].action is RepairAction.CERTIFY
+
+
+def test_a_rewrite_that_changes_nothing_is_not_validated_again(tmp_path, monkeypatch):
+    calls, guidance, controller = _held_loop(tmp_path, monkeypatch, [{"case": "unchecked"}], rewrites=False)
+
+    assert calls == ["validate"] and len(guidance) == 1
+    assert controller.history.decisions[-1].action is RepairAction.CERTIFY
