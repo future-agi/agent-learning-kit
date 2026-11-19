@@ -456,3 +456,10 @@ def test_a_link_out_of_the_source_is_not_read(tmp_path) -> None:
     (source / "linked.py").symlink_to(outside / "elsewhere.py")
 
     assert unparsed_note(source) == {}
+
+
+def test_a_tool_module_whose_path_cannot_be_checked_is_skipped(tmp_path) -> None:
+    # A first part longer than the system allows in a file name: checking it raises OSError.
+    (tmp_path / "agent.py").write_text("x = 1\n", encoding="utf-8")
+
+    assert unparsed_note(tmp_path, None, ["a" * 300 + ".tools"]) == {}
