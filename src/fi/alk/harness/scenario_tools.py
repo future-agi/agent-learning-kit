@@ -11,6 +11,7 @@ scenario that clears all three is written out as its own folder of runnable file
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import re
@@ -87,7 +88,17 @@ from .prove import (
     workspace_bindings,
     workspace_fixture,
 )
-from .actors import ACTORS_FILE, CALLER, Actor, ActorShare, cycles, load_actors, save_actors
+from .actors import (
+    ACTORS_FILE,
+    CALLER,
+    Actor,
+    ActorShare,
+    cycles,
+    knowledge_roles,
+    load_actors,
+    save_actors,
+    seed_records_loaded,
+)
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -1346,6 +1357,69 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
     ]
 
 
+def _seed_file_ids(path: Path) -> set[str]:
+    """The row ids an attached records file lists: its first column and every `id` or `*_id` column, of a CSV or of a
+    JSON list of objects. A value with no digit is left out, so a status or a name is never read as an id."""
+    try:
+        text = path.read_text(encoding="utf-8")
+        rows = json.loads(text) if path.suffix == ".json" else list(csv.DictReader(text.splitlines()))
+    except (OSError, ValueError, csv.Error):
+        return set()
+    found: set[str] = set()
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not row:
+            continue
+        first = next(iter(row))
+        for column, value in row.items():
+            if column == first or str(column).lower() == "id" or str(column).lower().endswith("_id"):
+                text = str(value).strip()
+                if any(char.isdigit() for char in text):
+                    found.add(text)
+    return found
+
+
+def _held_values(data: Any) -> set[str]:
+    """Every scalar value held anywhere in `data`, as text."""
+    if isinstance(data, dict):
+        return {held for value in data.values() for held in _held_values(value)}
+    if isinstance(data, list):
+        return {held for value in data for held in _held_values(value)}
+    return set() if data is None else {str(data).strip()}
+
+
+def _records_only_a_context_file_holds(scenario: Scenario, trial: Any, world_root: Path) -> list[str]:
+    """Records the reference asks the tools for that only an attached `seed_records` file lists, where the agent's
+    tools serve their own data (`seed_records_loaded`): no such file reaches them, so a case on one of its rows cannot
+    be passed. What the tools do serve is the agent's real starting data, read from its source, else the world that
+    replicates it."""
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(contract, dict) or seed_records_loaded(contract):
+        return []
+    files = sorted(path for path, role in knowledge_roles(world_root).items() if role == "seed_records")
+    listed = {value: path for path in files for value in _seed_file_ids(Path(world_root) / path)}
+    if not listed:
+        return []
+    try:
+        served = _held_values(contract.get("base_environment")) or _held_values(trial.state())
+    except Exception:  # noqa: BLE001 - a world that cannot be read is not the scenario's fault
+        return []
+    if not served:
+        return []
+    named = {str(value).strip() for step in scenario.solution for value in (step.arguments or {}).values()}
+    missing = sorted(value for value in named & set(listed) if value not in served)
+    if not missing:
+        return []
+    return [
+        f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} only in "
+        f"{', '.join(sorted({listed[value] for value in missing}))}, an attached records file this agent's tools never "
+        "read: they serve their own data, so a case on that record cannot be passed. Use a record the tools serve "
+        "(the agent's starting data), and keep the file for context"
+    ]
+
+
 _LOADED_ONCE = (
     "change records after the run starts, but this agent loads its data once when it starts and never reads it "
     "again, so it never sees the change. Make it starting state (`always`), or give the actor a part on the "
@@ -1775,6 +1849,7 @@ def accept_scenario(
                 problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
                 problems.extend(_credentials_the_world_lacks(scenario, trial))
                 problems.extend(_identifiers_the_instruction_invents(scenario, trial))
+                problems.extend(_records_only_a_context_file_holds(scenario, trial, world_root))
                 problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
                 problems.extend(_steps_the_contract_refuses(scenario, world_root))
                 problems.extend(_controls_the_contract_refuses(scenario, world_root))

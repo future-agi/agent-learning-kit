@@ -3305,3 +3305,86 @@ def test_a_worker_subject_in_the_bundle_catalogue_reaches_the_loaded_scenario(tm
         encoding="utf-8",
     )
     assert ss.load_scenarios(tmp_path)[0].sub_goals[0].worker == "refund"
+
+
+def _ledger_root(tmp_path: Path, *, mode: str = "service", roles: dict | None = None) -> Path:
+    """An environment whose order tools are served by the agent's own ledger, holding order 1043, with an attached
+    orders.csv listing 1043 and 2001."""
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "knowledge" / "orders.csv").write_text(
+        "id,customer_id,item\n1043,C-2,Rain jacket\n2001,C-1,Tent\n", encoding="utf-8"
+    )
+    (tmp_path / "knowledge" / "roles.json").write_text(
+        json.dumps(roles if roles is not None else {"knowledge/orders.csv": "seed_records"}), encoding="utf-8"
+    )
+    contract = {
+        "agent": "desk",
+        "tools": [{"name": "get_order"}],
+        "tool_entrypoints": [{"tool": "get_order", "mode": mode}],
+        "base_environment": {"orders": [{"order_id": "1043", "item": "Rain jacket", "amount": 89.0}]},
+    }
+    (tmp_path / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    return tmp_path
+
+
+def _order_case(order: str):
+    from fi.alk.harness.scenario import Scenario
+
+    return Scenario(
+        name=f"refund-{order}",
+        instruction=f"You want a refund for order {order}.",
+        solution=[{"tool": "get_order", "arguments": {"order_id": order}}],
+    )
+
+
+def test_a_case_on_a_row_only_a_context_only_records_file_lists_is_refused(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    world = SimpleNamespace(state=lambda: {})
+
+    said = _records_only_a_context_file_holds(_order_case("2001"), world, root)
+    assert said and "2001 is only in knowledge/orders.csv" in said[0]
+    # A row the agent's own data holds too is served, whatever the file says.
+    assert _records_only_a_context_file_holds(_order_case("1043"), world, root) == []
+
+
+@pytest.mark.parametrize(
+    "mode,roles",
+    [("world", None), ("service", {"knowledge/orders.csv": "policy"})],
+    ids=["tools-read-the-world", "not-a-records-file"],
+)
+def test_a_records_file_the_tools_can_read_or_a_file_of_another_role_refuses_nothing(
+    tmp_path: Path, mode: str, roles: dict | None
+) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path, mode=mode, roles=roles)
+    assert _records_only_a_context_file_holds(_order_case("2001"), SimpleNamespace(state=lambda: {}), root) == []
+
+
+def test_submitting_a_case_on_a_context_only_row_is_refused(tmp_path: Path) -> None:
+    from fi.alk.harness.catalogue import Catalogue
+    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class Desk(GeneratedWorld):
+        name = "desk"
+        tools = [{"name": "get_order"}]
+        handlers = {"get_order": "def handle(args, db):\n    return {}\n"}
+
+    world = Desk(":memory:")
+    world.connection.executescript("CREATE TABLE orders(order_id TEXT); INSERT INTO orders VALUES ('1043');")
+    save(world, tmp_path, notes="test", sequences=[])
+    root = _ledger_root(tmp_path)
+
+    said = accept_scenario(
+        _order_case("2001").model_dump(), world_root=root, catalogue=Catalogue(sub_goals=[]), kept=[], persist=False
+    )
+
+    assert said.get("is_error") and "2001 is only in knowledge/orders.csv" in said["content"][0]["text"], said
