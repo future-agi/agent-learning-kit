@@ -3585,7 +3585,9 @@ def test_certificate_carries_the_isolation_the_runtime_recorded(tmp_path, record
 
 
 
-def _held_loop(tmp_path, monkeypatch, held_rounds, *, rewrites=True, budgets=None, asked=None):
+def _held_loop(
+    tmp_path, monkeypatch, held_rounds, *, rewrites=True, budgets=None, asked=None, deadline_at=None, repair_sleep=0.0
+):
     """A generic validation that passes every time, with `held_rounds` lists of held cases read after each pass."""
     from fi.alk.harness import authoring_runtime_validation as module
 
@@ -3609,6 +3611,9 @@ def _held_loop(tmp_path, monkeypatch, held_rounds, *, rewrites=True, budgets=Non
 
     async def repair(phase, text, *more, **options):
         guidance.append((phase, text))
+        if repair_sleep:
+            (authoring / "sub_goals.json").write_text("{}", encoding="utf-8")  # a half-made change
+            await asyncio.sleep(repair_sleep)
         if rewrites:
             # A check added to a shared sub-goal: the catalogue changes, no scenario file does.
             (authoring / "sub_goals.json").write_text(json.dumps({"n": len(guidance)}), encoding="utf-8")
@@ -3616,7 +3621,11 @@ def _held_loop(tmp_path, monkeypatch, held_rounds, *, rewrites=True, budgets=Non
 
     controller = RepairController(budgets or RepairBudgets())
     job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=0)
-    asyncio.run(validate_and_repair(job, source, authoring, validate=validate, repair=repair, controller=controller))
+    asyncio.run(
+        validate_and_repair(
+            job, source, authoring, validate=validate, repair=repair, controller=controller, deadline_at=deadline_at
+        )
+    )
     return calls, guidance, controller
 
 
@@ -3854,3 +3863,74 @@ def test_the_held_case_budget_is_generous_and_set_by_its_environment_setting(mon
     else:
         monkeypatch.setenv("ALK_HELD_CASE_REPAIR_SECONDS", setting)
     assert RepairBudgets().held_case_seconds == seconds
+
+
+def test_a_held_case_round_too_near_the_build_s_deadline_is_skipped_and_the_build_passes(tmp_path, monkeypatch):
+    from fi.alk.harness import authoring_runtime_validation as module
+    from fi.alk.harness.prove_suite import DEADLINE_MARGIN_SECONDS
+
+    monkeypatch.setattr(module, "_wall_clock", lambda: 1_000_000.0)
+    asked = []
+    # Less than the sealing margin is left: there is no time for a round and the validation after it.
+    calls, guidance, controller = _held_loop(
+        tmp_path,
+        monkeypatch,
+        [{"case": "negative_control_passed"}],
+        asked=asked,
+        deadline_at=1_000_000.0 + DEADLINE_MARGIN_SECONDS - 1,
+    )
+    assert asked == [] and guidance == [] and calls == ["validate"]
+    assert controller.history.decisions[-1].action is RepairAction.CERTIFY
+
+
+def test_a_held_case_round_is_cut_at_the_build_s_deadline_and_the_cases_stay_held(tmp_path, monkeypatch):
+    from fi.alk.harness import authoring_runtime_validation as module
+    from fi.alk.harness.prove_suite import DEADLINE_MARGIN_SECONDS
+
+    monkeypatch.setattr(module, "_wall_clock", lambda: 1_000_000.0)
+    asked = []
+    # A fraction of a second is left after the margin: the writer is stopped there, and what it began is undone.
+    calls, guidance, controller = _held_loop(
+        tmp_path,
+        monkeypatch,
+        [{"case": "negative_control_passed"}],
+        asked=asked,
+        deadline_at=1_000_000.0 + DEADLINE_MARGIN_SECONDS + 0.3,
+        repair_sleep=20,
+    )
+    assert len(guidance) == 1 and calls == ["validate"]
+    assert 0 < asked[0] <= 0.3
+    assert not (tmp_path / "authoring" / "sub_goals.json").exists()
+    assert controller.history.decisions[-1].action is RepairAction.CERTIFY
+
+
+def test_a_build_s_deadline_is_its_own_when_given_else_its_start_plus_its_time_budget(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.authoring_entrypoint import build_deadline
+
+    assert build_deadline(SimpleNamespace(deadline_at=5000.0), started=100.0) == 5000.0
+    monkeypatch.setenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", "10800")
+    assert build_deadline(SimpleNamespace(deadline_at=None), started=100.0) == 10900.0
+    monkeypatch.delenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS")
+    assert build_deadline(SimpleNamespace(), started=100.0) == 3400.0
+
+
+def test_a_held_case_round_leaves_room_for_a_validation_as_long_as_the_last_one(tmp_path, monkeypatch):
+    from fi.alk.harness import authoring_runtime_validation as module
+    from fi.alk.harness.prove_suite import DEADLINE_MARGIN_SECONDS
+
+    monkeypatch.setattr(module, "_wall_clock", lambda: 1_000_000.0)
+    # The validation took 100 s on the rounds' clock; every later reading is the same moment.
+    readings = iter([0.0, 100.0])
+    monkeypatch.setattr(module, "_held_clock", lambda: next(readings, 100.0))
+    asked = []
+    calls, guidance, _ = _held_loop(
+        tmp_path,
+        monkeypatch,
+        [{"case": "negative_control_passed"}],
+        asked=asked,
+        deadline_at=1_000_000.0 + DEADLINE_MARGIN_SECONDS + 50,
+    )
+    # 50 s would fit a round, but not a round and another 100 s validation.
+    assert asked == [] and guidance == [] and calls == ["validate"]

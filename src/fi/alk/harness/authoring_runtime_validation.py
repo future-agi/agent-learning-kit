@@ -1648,8 +1648,10 @@ WRITER_FIXABLE = frozenset(
     }
 )
 HELD_CASE_REPAIRS = 2
-# The held-case rounds' own clock, so their time budget can be read apart from the event loop's.
+# The held-case rounds' own clock, so their time budget can be read apart from the event loop's, and the wall clock
+# a build's deadline is read against.
 _held_clock = time.monotonic
+_wall_clock = time.time
 
 
 def held_for_the_writer(authoring: Path, *, budget: float = 300) -> dict[str, str]:
@@ -1881,8 +1883,10 @@ async def validate_and_repair(
     controller=None,
     sleeper=asyncio.sleep,
     readiness_only: bool = False,
+    deadline_at: float | None = None,
 ) -> None:
-    """Two repairs per phase; environment repairs cannot exhaust setup's budget."""
+    """Two repairs per phase; environment repairs cannot exhaust setup's budget. `deadline_at` (epoch seconds) is when
+    the build is stopped, when known: handing held cases back never runs into it."""
     token = _SOURCE_MASKS.set({})
     try:
         await _validate_and_repair(
@@ -1894,6 +1898,7 @@ async def validate_and_repair(
             controller=controller,
             sleeper=sleeper,
             readiness_only=readiness_only,
+            deadline_at=deadline_at,
         )
     finally:
         _SOURCE_MASKS.reset(token)
@@ -1909,6 +1914,7 @@ async def _validate_and_repair(
     controller,
     sleeper,
     readiness_only: bool,
+    deadline_at: float | None = None,
 ) -> None:
     from .job import HarnessJob
 
@@ -2120,11 +2126,15 @@ async def _validate_and_repair(
         candidate_hash = _generic_candidate_hash(source, authoring)
         held_rounds = 0
         held_since: float | None = None
+        last_validation = 0.0
         for _attempt in range(decision_bound + HELD_CASE_REPAIRS):
             # A record left by an earlier attempt must never speak for this one.
             failure_record.clear()
             try:
+                validation_started = _held_clock()
                 count = await validate(job, source, authoring)
+                # How long one more validation takes, so a held-case round leaves room for it before the deadline.
+                last_validation = _held_clock() - validation_started
             except RuntimeValidationError as exc:
                 if readiness_only and exc.phase == "scenarios":
                     raise
@@ -2363,6 +2373,11 @@ async def _validate_and_repair(
                 round_started = _held_clock()
                 held_since = round_started if held_since is None else held_since
                 left = budgets.held_case_seconds - (round_started - held_since)
+                if deadline_at is not None:
+                    from .prove_suite import DEADLINE_MARGIN_SECONDS
+
+                    # Never past the build's own deadline: one more validation and the sealing after it still fit.
+                    left = min(left, deadline_at - _wall_clock() - last_validation - DEADLINE_MARGIN_SECONDS)
                 held = (
                     held_for_the_writer(authoring, budget=left)
                     if not readiness_only and budgets.scenario_patches and held_rounds < HELD_CASE_REPAIRS and left > 0
