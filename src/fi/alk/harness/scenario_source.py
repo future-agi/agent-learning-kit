@@ -228,14 +228,19 @@ def _compile_entry(
 
         def deferred(*args: object) -> object:
             # Compatibility for injected worlds; hosted worlds execute the source in a worker.
-            namespace: dict[str, Any] = {}
+            from .checks import check_namespace
+
+            namespace: dict[str, Any] = check_namespace()
             exec(code, namespace)  # noqa: S102 - compatibility for injected local worlds
             return namespace[entry](*args)
 
         deferred._alk_source = source
         deferred._alk_entry = entry
         return deferred
-    namespace: dict[str, Any] = {}
+    from .checks import check_namespace
+
+    # A scenario file's checks see the same names as every other check.
+    namespace: dict[str, Any] = check_namespace()
     try:
         exec(code, namespace)  # noqa: S102 - scenario code is meant to be exec'd; see CONTRACT QUESTIONS
     except (Exception, SystemExit, KeyboardInterrupt) as exc:  # noqa: BLE001 - see R1-1
@@ -741,22 +746,40 @@ def load_scenarios(
 
 
 def authored_agent_document(
-    contract_text: str, *, subfolder: str | None, framework: Any
+    contract_text: str,
+    *,
+    subfolder: str | None,
+    framework: Any,
+    source: Path | None = None,
 ) -> dict[str, Any]:
     """The agent document stored for a saved contract, ``{"sdk_version", "agent"}``.
 
     Both a build and a reading with no build make it here, so the two can't differ. The caller
-    reads the contract, so what it checked is what is used.
+    reads the contract, so what it checked is what is used. With ``source``, the agent's files
+    the kit's Python can't parse are named in the document (``unparsed_note``), inside its hash.
     """
     contract = AgentContract.model_validate(json.loads(contract_text)).model_dump(mode="json")
     # The echo proves which folder was built, so it comes from the contract.
     built_from = str((contract.get("runtime") or {}).get("source_subfolder") or "")
     if built_from != (subfolder or ""):
         raise AgentBuildError("agent_invalid", "subfolder_mismatch")
+    note: dict[str, Any] = {}
+    if source is not None:
+        from .python_source import unparsed_note
+
+        note = unparsed_note(
+            source,
+            built_from or None,
+            [
+                entry["module"]
+                for entry in contract.get("tool_entrypoints") or []
+                if isinstance(entry, dict) and isinstance(entry.get("module"), str)
+            ],
+        )
     return {
         "sdk_version": _sdk_version,
         "agent": build_authored_agent(
-            contract, subfolder=built_from or None, framework=framework
+            contract, subfolder=built_from or None, framework=framework, source_note=note
         ),
     }
 
@@ -851,10 +874,12 @@ class BundleScenarioSource:
         if source_kind in (SourceKind.GITHUB, SourceKind.ARCHIVE):
             framework = await self._detect_framework()
             try:
+                folders = self._framework_folders
                 authored_agent = authored_agent_document(
                     (bundle_dir / "contract.json").read_text(encoding="utf-8"),
                     subfolder=job.source.subfolder,
                     framework=framework,
+                    source=folders.repo_root if folders is not None else None,
                 )
             except Exception as exc:
                 # A field path can name the customer's own keys, so only the mismatch is named.

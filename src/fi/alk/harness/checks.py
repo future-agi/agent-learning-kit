@@ -141,6 +141,13 @@ def same_id(first: Any, second: Any) -> bool:
     return bool(mine) and mine == theirs
 
 
+def check_namespace() -> dict[str, Any]:
+    """The names every check is given when it runs, wherever it runs (authoring, a hosted trial's phase worker, an
+    injected local world): the helpers authoring tells checks to use, such as ``same_id``. One set, so a check that
+    proves while authoring never fails on a name a trial does not give it."""
+    return {"same_id": same_id}
+
+
 def run_check(
     source: str,
     world: GeneratedWorld,
@@ -150,7 +157,7 @@ def run_check(
     reference: Sequence[dict[str, Any]] = (),
 ) -> Outcome:
     """Execute one check against what the run left behind, with the reference when it takes one."""
-    namespace: dict[str, Any] = {"same_id": same_id}
+    namespace = check_namespace()
     try:
         exec(compile(source, f"<check:{name}>", "exec"), namespace)
     except Exception as failed:
@@ -215,7 +222,7 @@ def run_world_check(
     """
     import inspect
 
-    namespace: dict[str, Any] = {}
+    namespace = check_namespace()
     try:
         exec(compile(source, f"<world-check:{name}>", "exec"), namespace)
     except Exception as failed:

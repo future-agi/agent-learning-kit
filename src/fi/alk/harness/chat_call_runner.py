@@ -1195,7 +1195,8 @@ class HostedChatCallRunner:
             transcript.notices = (
                 list(transcript.notices or [])
                 + evidence_notices(
-                    trial_log, transcript.calls, in_process_tools(_bundle_contract(self._context.bundle_dir))
+                    trial_log, transcript.calls,
+                    in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints),
                 )
                 + ([dict(DUPLICATES_UNREADABLE)] if trial_log is None else [])
             )

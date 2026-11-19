@@ -26,6 +26,7 @@ async def main() -> None:
         WorldUnavailable,
         WorldUsageError,
     )
+    from .checks import check_namespace
     from .isolated_process import CHANNEL_FD_ENV
     from .world.handle import HostedWorld
     from .world.runtime import Call
@@ -64,7 +65,8 @@ async def main() -> None:
             http_client = world._http_client
         http_client._restore_private_http_state(payload.get("private_http", {}))
         handle = world.read_only() if state["read_only"] else world
-        namespace: dict[str, Any] = {}
+        # The same names a check is given while authoring (`same_id`), so a proved check runs the same here.
+        namespace: dict[str, Any] = check_namespace()
         exec(compile(payload["source"], "<scenario-phase>", "exec"), namespace)  # noqa: S102 - isolated scenario execution
         args = [handle]
         if "calls" in payload:

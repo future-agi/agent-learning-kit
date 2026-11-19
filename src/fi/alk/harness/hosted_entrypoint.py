@@ -1121,11 +1121,15 @@ _TERMINAL_FAILURE_MESSAGE_MAX_CHARS = 4096  # an unbounded `failure.message` can
 # that self-truncates. 4KB is ample for a diagnostic message.
 
 
-def _cap_failure_message(message: str) -> str:
-    if len(message) <= _TERMINAL_FAILURE_MESSAGE_MAX_CHARS:
+# The platform keeps a receipt's `reason` to 500 characters.
+_RECEIPT_REASON_MAX_CHARS = 500
+
+
+def _cap_failure_message(message: str, limit: int = _TERMINAL_FAILURE_MESSAGE_MAX_CHARS) -> str:
+    if len(message) <= limit:
         return message
     marker = "…[truncated]"
-    return message[: _TERMINAL_FAILURE_MESSAGE_MAX_CHARS - len(marker)] + marker
+    return message[: limit - len(marker)] + marker
 
 
 # guest-side mirror of outbound-channels.md's artifact level table (Channel 3) -- no module
@@ -1659,7 +1663,12 @@ class OutboundAdapter:
             call=call,
             failure=failure,
             extra_secret_values=self._extra_secret_values,
-            reason=receipt.reason,
+            # Redacted whole, then capped, as `failure.message` is.
+            reason=_cap_failure_message(
+                ob.redact_outbound_text(receipt.reason, self._extra_secret_values), _RECEIPT_REASON_MAX_CHARS
+            )
+            if receipt.reason is not None
+            else None,
         )
         self._persist_offline_json(Path("receipts") / f"{wire['digest']}.json", wire)
         push_result = await asyncio.to_thread(

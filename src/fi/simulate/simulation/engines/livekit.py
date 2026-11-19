@@ -2533,15 +2533,7 @@ class LiveKitEngine(BaseEngine):
                             "transport": transport.kind,
                         },
                     )
-                    outcome = _failure_outcome(
-                        TestCaseStatus.FAILED,
-                        FailureStage.PREPARING,
-                        "web_bridge_start_failed",
-                        "Failed to start the provider web bridge",
-                        details=_safe_provider_error_details(
-                            exc, operation="web_bridge_start"
-                        ),
-                    )
+                    outcome = _web_bridge_start_failure(exc)
                     raise _PreparationFailed
             if profile.places_outbound_call and api_client is not None:
                 try:
@@ -4144,10 +4136,19 @@ async def _wait_for_conversation_end(
             else:
                 monitor_failures[name] = exc
         for name, exc in monitor_failures.items():
+            extra: dict[str, object] = {
+                "monitor": name,
+                "target_identity": target_identity,
+            }
+            if name == "provider_disconnected" and isinstance(exc, Exception):
+                # Only the sanitized code and status, never the message.
+                extra.update(
+                    _safe_provider_error_details(exc, operation="provider_audio")
+                )
             logger.warning(
                 "conversation end monitor failed",
                 exc_info=redacted_exc_info(exc),
-                extra={"monitor": name, "target_identity": target_identity},
+                extra=extra,
             )
         # A bridge task error is still a real provider-side disconnect.
         if "provider_disconnected" in monitor_failures:
@@ -5396,6 +5397,19 @@ def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
         }:
             return True
     return False
+
+
+def _web_bridge_start_failure(exc: BaseException) -> _CaseOutcome:
+    """The case outcome when a provider's web bridge doesn't start. A cause the bridge marks
+    as passing (a rate limit, media servers at capacity, a timeout) can be retried."""
+    return _failure_outcome(
+        TestCaseStatus.FAILED,
+        FailureStage.PREPARING,
+        "web_bridge_start_failed",
+        "Failed to start the provider web bridge",
+        retryable=bool(getattr(exc, "retryable", False)),
+        details=_safe_provider_error_details(exc, operation="web_bridge_start"),
+    )
 
 
 def _failure_outcome(

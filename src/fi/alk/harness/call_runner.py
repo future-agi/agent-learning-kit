@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection, Mapping, Protocol, Sequence
 
 from fi import agentcc, simulate
+from fi.simulate.agent.definition import retell_web_call_url as _retell_web_call_url
 from fi.simulate.runtime import (
     SimulationSpec,
     new_run_id,
@@ -80,6 +81,7 @@ from .world_door import (
     is_attempt,
     is_read,
     logged_as,
+    route_action,
     routed_faults,
     same_action,
     same_json,
@@ -687,14 +689,7 @@ def _build_spec(
             target={
                 "provider": "retell",
                 "agent_id": provider_target_id,
-                "api_url": str(
-                    simulator_config.get("retell_api_url")
-                    or "https://api.retellai.com/v2/create-web-call"
-                ),
-                "livekit_url": str(
-                    simulator_config.get("retell_livekit_url")
-                    or "wss://retell-ai-4ihahnq7.livekit.cloud"
-                ),
+                "api_url": _retell_web_call_url(simulator_config.get("retell_api_url")),
                 "api_key_env": RETELL_API_KEY_ALIAS,
             },
             transport={"kind": "retell_webcall"},
@@ -978,7 +973,9 @@ def _unrecorded(row: Mapping[str, Any]) -> bool:
 
 
 def evidence_notices(
-    log: Sequence[Mapping[str, Any]] | None, calls: Sequence[Call] = (), held: Collection[str] = ()
+    log: Sequence[Mapping[str, Any]] | None,
+    calls: Sequence[Call] = (),
+    held: Mapping[str, Mapping[str, str]] | Collection[str] = (),
 ) -> list[dict[str, Any]]:
     """A notice when any of the agent's calls ran without the world's door recording it: what the world did on them
     is unknown, so the trial is unmeasured. Beside the door's own marks, the agent's calls of each tool the door holds
@@ -986,17 +983,52 @@ def evidence_notices(
     missing = [row for row in log or () if _unrecorded(row)]
     why = sorted({str(row.get("error") or "") for row in missing} - {""})
     count = sum(calls_in(row) for row in missing)
-    for tool in sorted(set(held)):
-        made = sum(1 for call in calls if call.name == tool)
-        logged = sum(
-            1
-            for row in log or ()
-            if (row.get("actor_id") or AGENT) == AGENT and str(row.get("name") or "") == tool and is_attempt(row)
-        )
-        marked = sum(calls_in(row) for row in missing if str(row.get("name") or "") == tool)
-        unseen = made - logged - marked
-        if unseen > 0:
-            count += unseen
+    # Each held tool with how its door logs it (`in_process_tools`); a bare name is logged as itself.
+    logged_as_by = (
+        {str(tool): dict(how) for tool, how in held.items()}
+        if isinstance(held, Mapping)
+        else {str(tool): {"action": str(tool)} for tool in held}
+    )
+    # Tools the proxy reaches over one route with one method are one thing the log can tell apart: their calls are
+    # counted together against its rows for that route.
+    groups: dict[tuple[str, str, bool], list[str]] = {}
+    for tool, how in logged_as_by.items():
+        # A tool held behind the proxy carries the method it is called with; the in-process door's rows name the tool.
+        proxied = "method" in how
+        action = str(how.get("action") or tool)
+        groups.setdefault((action, str(how.get("method") or "").upper(), proxied), []).append(tool)
+    rows = list(log or ())
+    used: set[int] = set()
+    # A route of its own before one with a `{part}` that could also match its rows, so each row goes to its own.
+    for (action, method, proxied), tools in sorted(groups.items(), key=lambda item: ("{" in item[0][0], item[0])):
+
+        def is_this(row: Mapping[str, Any], tools: list[str] = tools, action: str = action, method: str = method,
+                    proxied: bool = proxied) -> bool:
+            # The in-process door names the call by the tool or records the tool beside it. The proxy logs the world
+            # action it reached (a route's `{part}` standing for the part the call named) with the method it was
+            # made with; its row's name is only the route's last part, never the tool.
+            if not proxied and (str(row.get("name") or "") in tools or str(row.get("agent_tool") or "") in tools):
+                return True
+            made_with = str(row.get("method") or "").upper()
+            return action_matches(logged_as(row), action) and not (method and made_with and made_with != method)
+
+        made = sum(1 for call in calls if call.name in tools)
+        seen = 0
+        # Each row is one call's record: it settles one call, of one tool, once.
+        for index, row in enumerate(rows):
+            if seen >= made:
+                break
+            if index in used or not is_this(row):
+                continue
+            if _unrecorded(row):
+                seen += calls_in(row)
+            elif (row.get("actor_id") or AGENT) == AGENT and is_attempt(row):
+                seen += 1
+            else:
+                continue
+            used.add(index)
+        if made > seen:
+            count += made - seen
             why = sorted(set(why) | {"the world's door kept no row for them"})
     if not count:
         return []
@@ -1698,16 +1730,36 @@ def fault_notices(
     return notices
 
 
-def in_process_tools(contract: Mapping[str, Any]) -> set[str]:
-    """The tools the agent runs in its own process with the world's door in front of them."""
-    return {
-        str(entry.get("tool"))
-        for entry in contract.get("tool_entrypoints") or []
-        if isinstance(entry, Mapping)
-        and entry.get("tool")
-        and entry.get("mode") in ("import", "construct")
-        and not entry.get("door_unreached")
-    }
+def in_process_tools(
+    contract: Mapping[str, Any], endpoints: Mapping[str, Any] | None = None
+) -> dict[str, dict[str, str]]:
+    """The tools the agent runs in its own process that a door holds, each with the world action that door logs it
+    as and, for a route, the method it is called with.
+
+    Behind the in-process door every bound tool is held and logged by its own name. Behind the tool proxy the agent's
+    tool calls the world over its route, so the proxy logs the route's world action (`check_payment_link_status`
+    reaches `get_payment_link_status`; `/orders/{order_id}` is logged as `orders.1043`), and a tool with no route (an
+    agent-only step, such as confirming an address) never reaches it: nothing holds it, so it is never a call the
+    door missed. The bundle never installs the in-process door beside the proxy; were both there, the in-process
+    door, which wraps every bound tool, decides."""
+    in_process = endpoints is None or endpoints.get("world_door") is not None
+    proxied = not in_process and endpoints is not None and endpoints.get("tool_proxy") is not None
+    held: dict[str, dict[str, str]] = {}
+    for entry in contract.get("tool_entrypoints") or []:
+        if (
+            not isinstance(entry, Mapping)
+            or not entry.get("tool")
+            or entry.get("mode") not in ("import", "construct")
+            or entry.get("door_unreached")
+        ):
+            continue
+        tool, route = str(entry["tool"]), route_action(str(entry.get("endpoint") or ""))
+        if not proxied:
+            held[tool] = {"action": tool}
+        elif route:
+            # Two tools can share a route under different methods (GET and DELETE on `/orders/{id}`).
+            held[tool] = {"action": route, "method": str(entry.get("method") or "").strip().upper()}
+    return held
 
 
 def _names_action(entry: Mapping[str, Any], action: str) -> bool:
@@ -2062,6 +2114,9 @@ def _read_file_tool_calls(
         ended = record.get("ended_at")
         call.ended_at = float(ended) if isinstance(ended, (int, float)) else 0.0
         if record.get("source") == _SPAN_SOURCE:
+            if _framework_message(call.result):
+                # Only the framework's message object around the answer: nothing to hold against the call's own.
+                call.output_omitted = True
             from_spans.append(call)
             continue
         if record.get("source") != _LIVEKIT_HOOK_SOURCE:
@@ -2624,6 +2679,18 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                 )
             )
     return tuple(calls)
+
+
+def _framework_message(result: Any) -> bool:
+    """Whether a span recorded a tool's answer only as the framework's message object (LangChain's
+    `{"output": "content='...' name=... tool_call_id=..."}`): that text is not the result the agent's own report
+    gives, so comparing them would part one call into two."""
+    return (
+        isinstance(result, dict)
+        and set(result) == {"output"}
+        and isinstance(result["output"], str)
+        and result["output"].startswith("content=")
+    )
 
 
 def _structured(value: Any) -> Any:
@@ -3579,7 +3646,7 @@ class CallRunnerImpl:
                 # The agent's calls of each tool the door holds in its own process are counted against the log, so a
                 # door down for the rest of the trial is seen, as on a chat trial.
                 trial_notices += evidence_notices(
-                    action_log, calls, in_process_tools(_bundle_contract(self._context.bundle_dir))
+                    action_log, calls, in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints)
                 )
         trial_notices += repeated_untimed_notices(calls)
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.

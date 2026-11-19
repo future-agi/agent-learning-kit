@@ -128,8 +128,7 @@ someone else starts has that actor in `starts_with`, never a caller whose instru
 the instruction says what happened, and the sub-goals grade what the agent did in the world, including nothing.
 
 **What is graded.** Every sub-goal grades the agent, never an actor. A sub-goal can depend on an actor (give its
-`actor`): it then reads not applicable when that actor never came in, and inconclusive when it came in and never
-reached the agent. A check can read the trial's action log with `world.events(actor_id=None, outcome=None)`: every
+`actor`): it then reads not applicable when that actor never came in. A check can read the trial's action log with `world.events(actor_id=None, outcome=None)`: every
 action attempted in the world (never a request to a host outside it), whose it was (`agent` for the agent under test) and what came of it, so a check can assert the order
 of the agent's actions against an actor's, and the outcome of each of the agent's attempts. Never assert what an
 actor did as the thing tested.
