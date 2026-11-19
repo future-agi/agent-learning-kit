@@ -10,7 +10,6 @@ changes the environment only through the tools that prove each change.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -28,6 +27,7 @@ from .actors import SEED_RECORDS_CONTEXT_ONLY, knowledge_roles, seed_records_loa
 from .catalogue import Catalogue
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
 from .contract import AgentContract
+from .rule_values import old_value_notes
 from .scenario import Scenario, voicemail_enabled
 from .source_folder import contract_folder
 from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, world_summary
@@ -157,47 +157,6 @@ def knowledge_server(contract: AgentContract | None, destination: Path) -> ToolS
     )
 
 
-# A literal value a rule or a tool states: a run of digits, with any decimal or thousands separators inside it.
-_STATED_VALUE = re.compile(r"\d+(?:[.,]\d+)*")
-
-
-def stated_values(contract: AgentContract | None) -> set[str]:
-    """The literal values the agent's rules, prompt and tool descriptions state (`30`, `4.99`)."""
-    if contract is None:
-        return set()
-    texts = [*contract.hard_constraints, contract.system_prompt_excerpt, *(tool.description for tool in contract.tools)]
-    return {value for text in texts for value in _STATED_VALUE.findall(text or "")}
-
-
-def _states(text: str, value: str) -> bool:
-    """Whether `text` holds `value` as a whole literal, so `30` is in "past 30 days" and not in "130" or "3.0"."""
-    return re.search(rf"(?<![\d.,]){re.escape(value)}(?![\d]|[.,]\d)", text or "") is not None
-
-
-def stale_values(before: set[str], contract: AgentContract | None, kept: list, catalogue) -> list[str]:
-    """Each scenario or sub-goal text still stating a value a rule or tool stated when the conversation opened and no
-    longer states: the old value of a changed rule (a 30-day window made 20) left behind. Advice, never a refusal."""
-    gone = sorted(before - stated_values(contract))
-    if not gone:
-        return []
-    texts: list[tuple[str, str]] = []
-    for scenario in kept:
-        for field in ("use_case", "tests", "instruction", "branch"):
-            texts.append((f"{scenario.name}.{field}", str(getattr(scenario, field, "") or "")))
-        for control in getattr(scenario, "negative_controls", None) or []:
-            texts.append((f"{scenario.name}.negative_controls.{control.name}.why", control.why or ""))
-    for goal in catalogue.sub_goals:
-        for field in ("what", "judged", "applicability", "reference"):
-            texts.append((f"sub-goal {goal.name}.{field}", str(getattr(goal, field, "") or "")))
-    return [
-        f"{where} still says {value}, which no rule or tool of the agent states since this conversation opened. "
-        "If it is the old value of a rule you changed, write the new one there"
-        for value in gone
-        for where, text in texts
-        if _states(text, value)
-    ]
-
-
 def suite_server(
     out: Path,
     kept: list,
@@ -210,8 +169,6 @@ def suite_server(
     from .prove import prove
     from .scenario_tools import write_scenarios
 
-    # What the rules and tools stated when this conversation opened, so a value a change left behind is found.
-    opening_values = stated_values(contract if contract is not None else contract_of(out))
 
     @tool(
         "drop_scenarios",
@@ -281,7 +238,7 @@ def suite_server(
     async def check_health(args: dict[str, Any]) -> dict[str, Any]:
         current = contract_of(out)
         problems = suite_health(current, out, kept, prove_all=bool(args.get("prove")), sealed=sealed)
-        notes = stale_values(opening_values, current, kept, load_catalogue(out))
+        notes = old_value_notes(current, kept, load_catalogue(out).sub_goals)
         said = "Healthy: nothing broken found." if not problems else "\n".join(problems)
         return _ok(said + ("\n\nNot broken, but worth a look:\n- " + "\n- ".join(notes[:40]) if notes else ""))
 

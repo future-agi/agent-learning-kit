@@ -3629,37 +3629,59 @@ def test_a_change_waiting_on_the_person_asks_to_be_answered_with_an_option(tmp_p
     assert [one.get("options_only") for one in asked] == [True]
 
 
-def test_check_health_names_text_still_stating_a_value_a_changed_rule_no_longer_states(tmp_path):
+def _stale_suite(tmp_path):
+    """A suite whose rule said 30 days before this conversation and 20 now, with texts never updated."""
     from test_nudge_turn import _edit_scenario, _suite
 
+    from fi.alk.harness.amend import add_rule, drop_rule
     from fi.alk.harness.catalogue import load_catalogue, save_catalogue
     from fi.alk.harness.contract import write_contract
-    from fi.alk.harness.scenario_tools import load_scenarios
 
     root = _suite(tmp_path, "adds-a-big-mac", "adds-one-big-mac")
     contract = builder.contract_of(root)
     contract.hard_constraints = ["Refund only within 30 days of delivery.", "Never sell more than 130 items."]
     write_contract(contract, root)
-    _edit_scenario(root, "adds-a-big-mac", use_case="Refuse a refund past 30 days", tests="the 130-item cap holds")
+    _edit_scenario(
+        root,
+        "adds-a-big-mac",
+        use_case="Refuse a refund past the 30-day window",
+        instruction="Delivered 41 days ago; the 130 items cap holds.",
+    )
     catalogue = load_catalogue(root)
-    catalogue.sub_goals[0].what = "Keeps to the 30-day window."
+    catalogue.sub_goals[0].what = "Keeps to the 30 days window."
     save_catalogue(catalogue, root)
+    # An earlier conversation: 30 days became 20, and the texts were left behind.
+    drop_rule(contract, root, rule="Refund only within 30 days of delivery.", why="policy changed")
+    add_rule(contract, root, rule="Refund only within 20 days of delivery.", why="policy changed")
+    return root, contract, catalogue.sub_goals[0].name
+
+
+def test_check_health_names_text_still_stating_an_old_value_even_from_an_earlier_change(tmp_path):
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root, _contract, goal = _stale_suite(tmp_path)
+    # Opened after the change: nothing changed in this conversation, the texts are still old.
     server = builder.suite_server(root, load_scenarios(root))
     health = next(one for one in server.tools if one.name == "check_health")
+    report = asyncio.run(health.handler({}))["content"][0]["text"]
 
-    def said() -> str:
-        return asyncio.run(health.handler({}))["content"][0]["text"]
-
-    assert "still says" not in said()
-    # The window becomes 20 days; the cap is untouched.
-    contract.hard_constraints = ["Refund only within 20 days of delivery.", "Never sell more than 130 items."]
-    write_contract(contract, root)
-    report = said()
-    assert "adds-a-big-mac.use_case still says 30" in report
-    assert f"sub-goal {catalogue.sub_goals[0].name}.what still says 30" in report
-    assert "still says 130" not in report and ".tests still says" not in report
-    # A note, never a problem: health still reads as nothing broken.
+    assert "adds-a-big-mac.use_case still says 30 day" in report and "(it now says 20 day)" in report
+    assert f"sub-goal {goal}.what still says 30 day" in report
+    # A fact the case states (41 days ago) and a value still in force (130 items) are not old values.
+    assert "41 day" not in report and "130" not in report
+    # A note, never a problem.
     assert report.startswith("Healthy: nothing broken found.")
+
+
+def test_a_rule_change_answers_with_the_texts_still_stating_an_old_value(tmp_path):
+    from fi.alk.harness.amend import add_rule, drop_rule
+
+    root, contract, _goal = _stale_suite(tmp_path)
+    done, said = drop_rule(contract, root, rule="Refund only within 20 days of delivery.", why="now 14")
+    assert done and "adds-a-big-mac.use_case still says 30 day" in said
+    done, said = add_rule(contract, root, rule="Refund only within 14 days of delivery.", why="now 14")
+    assert done and "still says 30 day" in said and "(it now says 14 day)" in said
+    assert "Update each now" in said
 
 
 def test_dropping_a_case_names_the_key_that_restores_it(tmp_path):
