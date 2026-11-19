@@ -11,8 +11,10 @@ scenario that clears all three is written out as its own folder of runnable file
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
+import math
 import os
 import re
 import logging
@@ -30,7 +32,7 @@ from fi.simulate.simulation.call_actors import (
     named_in,
 )
 
-from .backends import tool, tool_server
+from .backends import MOST_WORKERS_AT_ONCE, tool, tool_server
 from .job import actors_on, current_actors_switch
 
 from .amend import add_rule, drop_rule, fix_tool, set_worker_tools, widen
@@ -951,12 +953,121 @@ def _first_names_on_disk(destination: Path, excluding: str = "") -> set[str]:
         return set()
 
 
+# How many distinct cases one cell of the plan holds before another is the same test again. Generous, and a setting.
+CASES_PER_CELL = int(os.environ.get("ALK_HARNESS_CASES_PER_CELL", "4") or 4)
+# How many cases one writer is dealt: worth reading the world once for, and few enough that no one writer's session
+# carries the suite. A setting.
+CASES_PER_WRITER = int(os.environ.get("ALK_HARNESS_CASES_PER_WRITER", "16") or 16)
+# The levels the framework pairs with no overlay, so an attack's vector and intensity only vary under an attack.
+_NO_ATTACK = {"overlay": "none", "overlay_vector": "none", "overlay_intensity": "absent"}
+
+
 def _cells_in(grid: dict[str, list[str]] | None) -> int:
-    """How many cells the plan's grid holds: the product of each axis's levels."""
+    """How many distinct cells the plan's grid holds: the product of each axis's levels, where an attack's vector and
+    intensity multiply only the overlay levels that are attacks, since no overlay pairs with no vector and no
+    intensity."""
+    axes = {level_name(axis): [level_name(one) for one in levels or ()] for axis, levels in (grid or {}).items()}
     cells = 1
-    for levels in (grid or {}).values():
-        cells *= max(1, len(levels or ()))
+    for axis, levels in axes.items():
+        if axis not in _NO_ATTACK or "overlay" not in axes:
+            cells *= max(1, len(levels))
+    if "overlay" in axes:
+        variants = 1
+        for axis in ("overlay_vector", "overlay_intensity"):
+            variants *= max(1, sum(1 for one in axes.get(axis, []) if one != _NO_ATTACK[axis]))
+        plain = sum(1 for one in axes["overlay"] if one == _NO_ATTACK["overlay"])
+        cells *= max(1, plain + (len(axes["overlay"]) - plain) * variants)
     return cells
+
+
+def suite_capacity(grid: dict[str, list[str]] | None) -> int:
+    """About how many distinct cases the plan supports: each of its cells holding `CASES_PER_CELL`. 0 without a plan."""
+    return _cells_in(grid) * CASES_PER_CELL if grid else 0
+
+
+def capacity_line(supports: int, written: int, asked: int) -> str:
+    """The plain line a build reports when its plan holds fewer distinct cases than were asked for."""
+    return f"this agent supports about {supports} distinct scenarios; wrote {written} of {asked}"
+
+
+def _dealt_axes(grid: dict[str, list[str]] | None) -> dict[str, list[str]]:
+    """The axes a deal divides: every one but those rare by design, which each writer spreads across its own cases."""
+    return {axis: list(levels) for axis, levels in (grid or {}).items() if levels and level_name(axis) not in _NOT_SHARED}
+
+
+def _cell_of(coverage: Any, axes: Sequence[str]) -> tuple[str, ...]:
+    """A coordinate on the dealt axes, as the deal names its cells."""
+    placed = coverage if isinstance(coverage, dict) else {}
+    return tuple(level_name(placed.get(axis) or placed.get(level_name(axis)) or "") for axis in axes)
+
+
+def deal_cells(
+    grid: dict[str, list[str]] | None,
+    kept: list[Scenario],
+    remaining: int,
+    *,
+    writers_at_once: int,
+    per_writer: int = CASES_PER_WRITER,
+) -> list[Counter[tuple[str, ...]]]:
+    """The cases still to write, divided across writers: each writer's cells of the dealt axes, with how many to
+    write in each. At most `writers_at_once` writers and `per_writer` cases a writer; the cells the suite holds
+    least of go first, taken in a stride across the grid so one round reaches every level rather than the first."""
+    if remaining <= 0:
+        return []
+    import itertools
+
+    dealt = _dealt_axes(grid)
+    names = list(dealt)
+    cells = [tuple(level_name(one) for one in combo) for combo in itertools.product(*dealt.values())] or [()]
+    held = Counter(_cell_of(one.coverage, names) for one in kept)
+    count = len(cells)
+    stride = next(step for step in range(max(1, int(count * 0.618)), count + 2) if math.gcd(step, count) == 1)
+    order = sorted((cells[(index * stride) % count] for index in range(count)), key=lambda cell: held[cell])
+    writers = max(1, min(writers_at_once, -(-remaining // max(1, per_writer))))
+    shares: list[Counter[tuple[str, ...]]] = [Counter() for _ in range(writers)]
+    for index in range(min(remaining, writers * max(1, per_writer))):
+        shares[index % writers][order[index % count]] += 1
+    return [share for share in shares if share]
+
+
+def deal_brief(deal: str, share: Counter[tuple[str, ...]], axes: Sequence[str]) -> str:
+    """What one writer is dealt, sized by its own share and never by the suite."""
+    return "\n".join(
+        [
+            f"Deal {deal}: write {sum(share.values())} scenarios, passing deal={deal!r} on every submit_scenario. "
+            "These cells of the plan are yours, with how many in each; the other axes are spread across your "
+            "cases as the brief says:",
+            *(
+                "  - " + (", ".join(f"{axis}={level}" for axis, level in zip(axes, cell)) or "any cell") + f" x{n}"
+                for cell, n in sorted(share.items())
+            ),
+        ]
+    )
+
+
+# How many caller names a summary shows; submit_scenario refuses any repeat whether shown or not.
+NAMES_IN_A_SUMMARY = 30
+
+
+def suite_summary(kept: list[Scenario], grid: dict[str, list[str]] | None) -> str:
+    """The suite as a writer needs it, the same size at ten cases or a thousand: how many each level of the plan
+    holds, and the latest caller names taken."""
+    lines = [f"The suite holds {len(kept)}."]
+    for axis, levels in (grid or {}).items():
+        held = Counter(level_name((one.coverage or {}).get(axis, "")) for one in kept)
+        lines.append(f"{axis}: " + ", ".join(f"{level} {held.get(level_name(level), 0)}" for level in levels))
+    taken = [
+        str(one.persona.name).strip() for one in kept if one.persona is not None and str(one.persona.name or "").strip()
+    ]
+    if taken:
+        shown = taken[-NAMES_IN_A_SUMMARY:]
+        lines.append(
+            "Caller names taken, the latest: "
+            + ", ".join(shown)
+            + (f", and {len(taken) - len(shown)} more" if len(taken) > len(shown) else "")
+            + ". submit_scenario refuses any name already taken."
+        )
+    return "\n".join(lines)
 
 
 def _already_in_the_suite(
@@ -2339,8 +2450,17 @@ def scenario_tools(
     used.update(one.scenario_key for one in kept)
     as_loaded = {one.scenario_key: one.model_dump(mode="json") for one in kept}
 
-    def cap() -> int:
+    def asked_count() -> int:
         return int(target["count"] or 0) if can_grow else wanted
+
+    def cap() -> int:
+        """What the suite is written to: what was asked for, or fewer when the plan supports only that many."""
+        return min(asked_count(), int(target["supports"])) if target.get("supports") else asked_count()
+
+    # The round of writers out now, by deal: its cells, how many each, what it has written, and whether it is open.
+    deals: dict[str, dict[str, Any]] = {}
+    # One submission is checked and kept at a time, so writers submitting side by side never both take the last place.
+    admitting = asyncio.Lock()
 
     def call_actor_share() -> float:
         """The share of scenarios that include an actor: drawn within the range the person asked for
@@ -2931,6 +3051,11 @@ def scenario_tools(
                     '"interruption"}. Copy it from your brief. It is what lets the suite '
                     "report how much of the space was tested; it never reaches the caller.",
                 },
+                "deal": {
+                    "type": "string",
+                    "description": "The deal your brief names, when it names one: the scenario must sit on "
+                    "one of its cells, and the deal ends when its count is written.",
+                },
             },
             scenario_required,
         ),
@@ -2971,7 +3096,41 @@ def scenario_tools(
                 return _refuse("Not kept. " + " ".join(unwritable))
             # The actors write their pre-run conversations now, once, so every trial replays the same thread.
             args = await written(dict(args), world_root)
+        async with admitting:
+            return admit(args, _refuse)
 
+    def _off_its_deal(args: dict[str, Any], same: str) -> str:
+        """Why this new scenario is outside the deal it names, or outside every deal while a round is out."""
+        if any(one.name == same for one in kept):
+            return ""
+        name = str(args.get("deal") or "").strip()
+        dealt = deals.get(name)
+        if dealt is None:
+            out = sorted(key for key, one in deals.items() if one["open"])
+            return (
+                f"This suite is written in deals ({', '.join(out)}): pass the deal your brief names."
+                if out
+                else (f"There is no deal {name!r}." if name else "")
+            )
+        if not dealt["open"]:
+            return f"Deal {name} was closed when the next round was dealt. Report what you wrote and stop."
+        if sum(dealt["wrote"].values()) >= sum(dealt["cells"].values()):
+            return f"Deal {name} is written. Report what you wrote and stop."
+        cell = _cell_of(args.get("coverage"), dealt["axes"])
+        if dealt["wrote"][cell] < dealt["cells"].get(cell, 0):
+            return ""
+        free = [
+            ", ".join(f"{axis}={level}" for axis, level in zip(dealt["axes"], one))
+            for one, n in sorted(dealt["cells"].items())
+            if dealt["wrote"][one] < n
+        ]
+        return (
+            f"{', '.join(f'{axis}={level}' for axis, level in zip(dealt['axes'], cell))} is not a cell of deal "
+            f"{name} with room left. Place it on one that is: " + "; ".join(free)
+        )
+
+    def admit(args: dict[str, Any], _refuse: Callable[..., dict[str, Any]]) -> dict[str, Any]:
+        """Everything after the slow preparation, checked and kept as one step while `admitting` is held."""
         # A submission carrying a kept scenario's key replaces that one, under its new name if renamed,
         # so the checks below never count it against itself.
         key = str(args.get("scenario_key") or "").strip()
@@ -2980,9 +3139,10 @@ def scenario_tools(
             str(args.get("name") or "").strip(),
         )
         # Cheap label checks run before the gates, since proving is expensive.
-        strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
+        strayed = _off_the_grid(args.get("coverage"), target.get("axes")) or _off_its_deal(args, same)
         if strayed:
             return _refuse(strayed)
+        fresh = not any(one.name == same for one in kept)
         crowded_level = _over_its_share(
             args.get("coverage"),
             target.get("axes"),
@@ -3078,6 +3238,8 @@ def scenario_tools(
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
+            if fresh and (dealt := deals.get(str(args.get("deal") or "").strip())):
+                dealt["wrote"][_cell_of(args.get("coverage"), dealt["axes"])] += 1
             try:
                 result["content"][0]["text"] += cast_read_back(
                     Scenario.model_validate(args), world_root, _first_names_on_disk(destination)
@@ -3404,6 +3566,20 @@ def scenario_tools(
                         "scenario carrying one would assert only the plain task. Add a sub-goal "
                         "for each with add_sub_goal before you hand any of them out"
                     )
+        supports = suite_capacity(target.get("axes"))
+        if supports and asked_count() > supports:
+            target["supports"] = supports
+            said += (
+                f". {capacity_line(supports, len(kept), asked_count())}: the plan's {_cells_in(target.get('axes'))} cells "
+                f"hold about {CASES_PER_CELL} distinct cases each, so the suite is written to {supports} and the "
+                "build finishes there. A level the plan is missing, declared here, makes room for more"
+            )
+        else:
+            target.pop("supports", None)
+        if can_save and target.get("axes"):
+            from .authoring_runtime_validation import record_capacity
+
+            record_capacity(destination, int(target.get("supports") or 0), len(kept), asked_count())
         if vocabulary:
             target["keywords"] = vocabulary
             said += (
@@ -3444,12 +3620,41 @@ def scenario_tools(
         "batch of writers reports back, to decide what the next batch covers. It never returns "
         "scenario bodies, so it costs the same whether ten are written or a thousand. Pass "
         "`names` only when you need to name a scenario, as `inspect_scenario` does: the list is "
-        "the one expensive part of this reply.",
-        schema({"names": bool}, []),
+        "the one expensive part of this reply.\n\n"
+        "`deal` divides what is still to write across writers: each deal is one writer's own cells of the "
+        f"plan, at most {CASES_PER_WRITER} cases, and at most {MOST_WORKERS_AT_ONCE} deals a round. Brief one "
+        "`scenario_writer` per deal, all in one message, each with its deal as given and the suite summary that "
+        "comes with them, never the cases already written. A writer submits under its deal and is stopped when "
+        "the deal is written; dealing again closes the round before it.",
+        schema({"names": bool, "deal": bool}, []),
     )
     async def suite_progress(args: dict[str, Any]) -> dict[str, Any]:
         design = {"axes": target.get("axes") or {}}
-        lines = [f"{len(kept)} of {target['count']} written."]
+        lines = [f"{len(kept)} of {cap()} written."]
+        if target.get("supports"):
+            lines.append(capacity_line(int(target["supports"]), len(kept), asked_count()) + ".")
+        if bool(args.get("deal")):
+            if not target.get("axes"):
+                return _err("Declare the grid with aim_for first: a deal is cells of it.")
+            for one in deals.values():
+                one["open"] = False
+            axes = list(_dealt_axes(target["axes"]))
+            shares = deal_cells(target["axes"], kept, cap() - len(kept), writers_at_once=MOST_WORKERS_AT_ONCE)
+            if not shares:
+                return _ok("\n".join([*lines, "Nothing is left to deal: the suite is at its count."]))
+            briefs = []
+            for share in shares:
+                name = f"d{len(deals) + 1}"
+                deals[name] = {"axes": axes, "cells": share, "wrote": Counter(), "open": True}
+                briefs.append(deal_brief(name, share, axes))
+            return _ok(
+                "\n".join(lines)
+                + f"\n\n{len(briefs)} deals. Brief one scenario_writer per deal in ONE message, each with its own "
+                "deal and this summary, and with what each cell means and the sub-goal that must fail there:\n\n"
+                + suite_summary(kept, target["axes"])
+                + "\n\n"
+                + "\n\n".join(briefs)
+            )
         report = coverage_report(kept, design)
         for axis, body in report.get("axes", {}).items():
             unused = body.get("unused") or []
@@ -3601,7 +3806,12 @@ def scenario_tools(
         # persistence and not a second opinion: refusing here left proved work in memory only,
         # which is how a suite that asked for fifty and reached twenty-eight saved nothing at all.
         # What is off about the suite is said, not enforced.
-        noted = not_ready(kept, target["count"], catalogue)
+        count = int(target["count"] or 0)
+        noted = not_ready(kept, min(count, int(target["supports"])) if target.get("supports") else count, catalogue)
+        if target.get("supports"):
+            from .authoring_runtime_validation import record_capacity
+
+            record_capacity(destination, int(target["supports"]), len(kept), asked_count())
         design = _args.get("design") if isinstance(_args.get("design"), dict) else None
         # Reuse the grid declared to aim_for as the design's axes.
         if target.get("axes"):

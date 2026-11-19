@@ -96,6 +96,14 @@ def test_the_published_switch_is_what_the_process_reads():
 # --- authoring ------------------------------------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _a_plan_that_holds_the_count(monkeypatch):
+    """The one-level grid here is a placeholder, not a plan too thin for the count."""
+    from fi.alk.harness import scenario_tools as tools_module
+
+    monkeypatch.setattr(tools_module, "CASES_PER_CELL", 1000)
+
+
 def _environment(root: Path) -> AgentContract:
     class Notes(GeneratedWorld):
         name = "notes"

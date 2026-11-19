@@ -1755,8 +1755,46 @@ def write_yield(authoring: Path, asked: int, tally: dict[str, Any] | None, round
     path = authoring / "generic-harness" / YIELD_FILE
     from .json_file import write_json_atomic
 
+    # What the plan supports was recorded while the suite was written, and outlives every validation round.
+    if supports := _read_yield(authoring).get("supports"):
+        body["supports"] = supports
     path.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomic(path, body)
+
+
+def _read_yield(authoring: Path) -> dict[str, Any]:
+    try:
+        found = json.loads((Path(authoring) / "generic-harness" / YIELD_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def record_capacity(authoring: Path, supports: int, written: int, asked: int) -> None:
+    """Record in the yield that the plan holds about `supports` distinct cases of the `asked`, with the plain line
+    the build reports; `supports` 0 clears it, once a wider plan holds what was asked."""
+    from .json_file import write_json_atomic
+    from .scenario_tools import capacity_line
+
+    body = _read_yield(authoring)
+    if not supports and "supports" not in body:
+        return
+    if supports:
+        body["supports"] = {
+            "cases": supports,
+            "asked": asked,
+            "written": written,
+            "line": capacity_line(supports, written, asked),
+        }
+    else:
+        body.pop("supports", None)
+    write_json_atomic(Path(authoring) / "generic-harness" / YIELD_FILE, body)
+
+
+def supported_count(authoring: Path, asked: int) -> int:
+    """What the build has to finish with: what it asked for, or fewer when its plan supports only that many."""
+    supports = int((_read_yield(authoring).get("supports") or {}).get("cases") or 0)
+    return min(asked, supports) if asked and supports else asked
 
 
 def held_case_guidance(held: dict[str, str], replaceable: Collection[str] = ()) -> str:

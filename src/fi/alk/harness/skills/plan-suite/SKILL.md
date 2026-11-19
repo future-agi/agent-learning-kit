@@ -915,6 +915,18 @@ Between ten and twenty, judge it on how rich the cells are.
 When you delegate, delegate the writing entirely. Splitting a suite and then writing half of it
 yourself gives you the overhead of both.
 
+**Deal each round with `suite_progress` and `deal`.** It divides what is still to write into deals, one
+per writer: the writer's own cells of your grid on the axes every case varies along, how many in each,
+at most as many writers as run at once, and a summary of the suite (counts per level, the latest caller
+names taken) that is the same size at fifty cases or a thousand. Brief one writer per deal, each with its
+deal word for word, that summary, and what its cells mean; never the cases already written. A writer
+submits under its deal, is refused outside its cells and is stopped when its count is written, so no one
+writer carries the suite. Dealing again closes the round before it.
+
+When the plan's cells cannot hold the count, `aim_for` says so and the suite is written to what they hold
+("this agent supports about X distinct scenarios"). Finish there, or declare the level the plan is missing
+if the agent really has more to test.
+
 **Keep writers busy, not rounds tidy.** Writers briefed in the same turn run together, and your
 next turn starts when the last of them reports. Throughput is how many are working at once and how
 evenly their slices end, so:
@@ -924,7 +936,7 @@ evenly their slices end, so:
    slice, so slices of three or four spend most of their turns re-reading.
 2. **Keep slices even.** The turn lasts as long as its slowest writer, so give no writer a slice much
    larger or harder than the others. One writer stuck on refusals with a big slice leaves the rest idle.
-3. **Brief the next turn at once.** When a turn's writers report, call `suite_progress` and brief the
+3. **Brief the next turn at once.** When a turn's writers report, call `suite_progress` with `deal` and brief the
    next writers for what is still empty in the same turn. Do not stop to read scenarios back: a
    writer's report says what it wrote, and `suite_progress` names what is empty without returning a
    single scenario body, so it costs the same at any suite size. Brief only what it shows as empty, so
@@ -975,8 +987,8 @@ The worker is called `scenario_writer`. **Every brief MUST carry, for each cell 
 - the overlay, what it means, what the agent must do about it, and for an attack which kind it is;
 - the sub-goal that has to fail if the agent gets that difficulty wrong;
 - how many scenarios it is worth, and what separates them from each other;
-- the people and their surroundings dealt to this writer, and the full names already used in the
-  suite (from earlier writers' reports), so no name repeats;
+- the people and their surroundings dealt to this writer, and the suite summary that comes with the
+  deals, which names the latest callers taken (submit_scenario refuses any repeat);
 - the other slices in this round, so the writer can stay out of them.
 
 It never carries scenario names or a naming pattern: each writer names each scenario after what it
