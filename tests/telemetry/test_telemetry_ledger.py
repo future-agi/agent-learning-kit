@@ -742,3 +742,27 @@ def test_sync_run_refuses_a_row_written_before_cleaning_and_leaves_the_cursor(
     clean = telemetry.build_ledger_row(_payload())
     assert _sync.sync_run(clean, ledger=ledger)["status"] == "synced"
     assert len(sent) == 1
+
+
+def test_cli_runs_sync_says_why_a_row_not_cleaned_was_refused(ledger_env, capsys, monkeypatch):
+    # A row an older kit left a credential in is refused before anything is sent. The CLI
+    # says that, not the content-contract text, which is about transcripts and promises the
+    # metadata went out.
+    rows = _seed_two_runs()
+    monkeypatch.setenv("AGENT_LEARNING_API_KEY", "key-x")
+    monkeypatch.setenv("AGENT_LEARNING_SECRET_KEY", "secret-x")
+    monkeypatch.setattr(
+        _sync,
+        "sync_run",
+        lambda row, **kwargs: {"status": "refused", "reason": "row_not_cleaned", "sent": False},
+    )
+
+    assert main(["runs", "sync", rows[0]["run_id"][:8]]) == 0
+    out = capsys.readouterr().out
+
+    assert "holds a credential an older kit did not remove" in out
+    assert "nothing was sent" in out
+    assert "redaction contract" not in out
+    assert "metadata sync are unaffected" not in out
+    # Where the row lives, so it can be moved aside to stop the refusal repeating.
+    assert str(telemetry.RunLedger().rows_path) in out

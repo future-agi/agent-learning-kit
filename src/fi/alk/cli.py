@@ -6210,6 +6210,22 @@ def _runs_sync(telemetry: Any, ledger: Any, parsed: Any) -> int:
                 f"= already synced  run {run_id}  ({result['channel']}) — "
                 "re-sync is a no-op (idempotent by content address)"
             )
+        elif result["status"] == "refused" and result.get("reason") == "row_not_cleaned":
+            # The metadata row itself is held back: it was written by an older kit and still
+            # holds a credential today's cleaner removes. It stays queued, refused each time.
+            print(f"✗ sync REFUSED  run {run_id}")
+            print(
+                "  this row holds a credential an older kit did not remove, so "
+                "nothing was sent."
+            )
+            print(
+                "  it stays in your ledger and is refused again on every "
+                "`runs sync --queued`; your run is unaffected."
+            )
+            print(
+                "  to stop that, move the ledger aside to start a new one: "
+                f"{ledger.rows_path}"
+            )
         elif result["status"] == "refused":
             print(f"✗ content sync REFUSED  run {run_id}")
             print(f"  reason: {result['reason']}")
