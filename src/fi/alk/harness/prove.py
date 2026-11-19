@@ -663,6 +663,11 @@ def play_reference_step(world: GeneratedWorld, step: object) -> Call:
     return semantic
 
 
+# How a validation error names a missing field: `missing` in current FastAPI and pydantic, `value_error.missing`
+# in older ones.
+_MISSING_FIELD_TYPES = frozenset({"missing", "value_error.missing"})
+
+
 def _only_fields_the_agent_adds(effect: Call, arguments: Mapping[str, Any]) -> bool:
     """Whether the service refused `effect` only for missing fields: a request-shape refusal
     (`REQUEST_NOT_ACCEPTED`) whose body is a validation error listing at least one error, every one of type
@@ -681,7 +686,7 @@ def _only_fields_the_agent_adds(effect: Call, arguments: Mapping[str, Any]) -> b
         return False
     for one in errors:
         where = one.get("loc") if isinstance(one, dict) else None
-        if not isinstance(where, list) or not where or one.get("type") != "missing":
+        if not isinstance(where, list) or not where or one.get("type") not in _MISSING_FIELD_TYPES:
             return False
         if str(where[-1]) in arguments:
             return False
