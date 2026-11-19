@@ -165,3 +165,17 @@ def test_a_recorded_call_never_reads_as_gone_through_or_answered():
     assert call.ok is None and call.refused is None and call.refusal_code is None and call.error is None
     assert succeeded([call], "memorize") == [] and answered([call], "memorize") == []
     assert world.recorded == ["memorize"]
+
+
+def test_a_recorded_step_reads_in_the_action_log_as_recorded_never_refused(tmp_path, monkeypatch):
+    _in_process_world(tmp_path, monkeypatch)
+    world, calls, refused, assumed = module.run_steps(
+        _case(), tmp_path, with_solution=True, recordable=frozenset({"memorize"})
+    )
+    try:
+        [row] = [one for one in world.events(actor_id="agent") if one["name"] == "memorize"]
+    finally:
+        world.close()
+
+    assert row["outcome"] == "recorded" and row["refusal_code"] is None
+    assert refused == [] and assumed == []
