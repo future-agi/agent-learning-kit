@@ -510,12 +510,22 @@ def misses_case_goals(
 SHARED_GOAL_SUITE_SIZE = 3
 
 
-def distinctive_goals(scenario: Scenario, suite: Sequence[Scenario]) -> list[str]:
-    """This scenario's sub-goals that are not named by every scenario of its suite (``suite`` includes it). Empty for
-    a suite under `SHARED_GOAL_SUITE_SIZE`: there a goal they all name may be the one they are all about."""
+def shared_goals(suite: Sequence[Scenario]) -> set[str] | None:
+    """The sub-goals every scenario of the suite names; None for a suite under `SHARED_GOAL_SUITE_SIZE`."""
     if len(suite) < SHARED_GOAL_SUITE_SIZE:
+        return None
+    return set.intersection(*(set(getattr(one, "sub_goals", None) or []) for one in suite))
+
+
+def distinctive_goals(
+    scenario: Scenario, suite: Sequence[Scenario], shared: set[str] | None = None
+) -> list[str]:
+    """This scenario's sub-goals that are not named by every scenario of its suite (``suite`` includes it). Empty for
+    a suite under `SHARED_GOAL_SUITE_SIZE`: there a goal they all name may be the one they are all about. `shared`,
+    the suite's `shared_goals` read once, spares reading the whole suite again for each case."""
+    shared = shared_goals(suite) if shared is None else shared
+    if shared is None:
         return []
-    shared = set.intersection(*(set(getattr(one, "sub_goals", None) or []) for one in suite))
     return [goal for goal in scenario.sub_goals if goal not in shared]
 
 

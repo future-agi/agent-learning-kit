@@ -105,3 +105,37 @@ def test_a_crash_s_reason_is_written_without_the_secrets_in_it(monkeypatch, tmp_
     proofs = prove_suite(tmp_path, tmp_path / "proofs.json")
 
     assert "hunter2" not in proofs["one"]["why"] and "postgresql://admin:" in proofs["one"]["why"]
+
+
+def test_a_large_suite_writes_its_proofs_in_batches_and_ends_with_every_case(monkeypatch, tmp_path):
+    install(monkeypatch)
+    _suite(monkeypatch, [refund_case(name=f"c{n}", scenario_key=f"c{n}") for n in range(40)])
+    writes = []
+    real = suite_module._write
+
+    def counted(output, proofs):
+        writes.append(len(proofs))
+        real(output, proofs)
+
+    monkeypatch.setattr(suite_module, "_write", counted)
+    output = tmp_path / "proofs.json"
+    proofs = prove_suite(tmp_path, output)
+    # Not the whole file after every case: a thousand cases would rewrite it a thousand times.
+    assert len(writes) < 40
+    assert set(json.loads(output.read_text(encoding="utf-8"))) == set(proofs) == {f"c{n}" for n in range(40)}
+
+
+def test_each_case_s_own_goals_read_the_suite_s_shared_goals_once(monkeypatch, tmp_path):
+    install(monkeypatch)
+    _suite(monkeypatch, [refund_case(name=f"c{n}", scenario_key=f"c{n}") for n in range(5)])
+    reads = []
+    real = suite_module.shared_goals
+
+    def counted(suite):
+        reads.append(len(suite))
+        return real(suite)
+
+    monkeypatch.setattr(suite_module, "shared_goals", counted)
+    monkeypatch.setattr(module, "shared_goals", counted)
+    prove_suite(tmp_path, tmp_path / "proofs.json", judge_case_goals=True)
+    assert reads == [5]

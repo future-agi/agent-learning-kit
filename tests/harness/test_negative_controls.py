@@ -1314,3 +1314,34 @@ def test_the_prove_concurrency_setting_is_a_ceiling_of_at_least_one(monkeypatch,
     else:
         monkeypatch.setenv("ALK_PROVE_CONCURRENCY", setting)
     assert live_proof.prove_concurrency() == ceiling
+
+
+def test_a_live_run_cut_off_part_way_keeps_what_it_had_proved(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "1")
+    monkeypatch.setattr(live_proof, "SAVE_EVERY_SECONDS", 0.0)
+    original = live_proof._prove_case
+
+    async def stopped_at_the_fifth(scenario, catalogue_, fresh):
+        if scenario.scenario_key == "case-05":
+            raise SystemExit("the sandbox was stopped")
+        return await original(scenario, catalogue_, fresh)
+
+    monkeypatch.setattr(live_proof, "_prove_case", stopped_at_the_fifth)
+    with pytest.raises(SystemExit):
+        _prove_lanes(monkeypatch, tmp_path, Lanes(1), _many(8))
+    assert list(live_proof.load_live(tmp_path)) == [f"case-{n:02d}" for n in range(5)]
+
+
+@pytest.mark.parametrize(
+    "setting,seconds",
+    [(None, 3600.0), ("7200", 7200.0), ("0", 3600.0), ("soon", 3600.0)],
+    ids=["default-an-hour", "longer", "zero", "not-a-number"],
+)
+def test_the_offline_proving_budget_is_generous_and_set_by_its_setting(monkeypatch, setting, seconds):
+    from fi.alk.harness import prove_suite
+
+    if setting is None:
+        monkeypatch.delenv("ALK_PROVE_SUITE_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("ALK_PROVE_SUITE_SECONDS", setting)
+    assert prove_suite.suite_budget_seconds() == seconds

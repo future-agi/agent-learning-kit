@@ -29,13 +29,30 @@ from .live_proof import apply_live, load_live
 from .outbound import redact_outbound_text
 from .proof_records import ProofEntry
 from .proofs import proof_entry, proof_key, unprovable_entry
-from .prove import BlockedReason, distinctive_goals, load_proof_contract, load_world_actors, prove
+from .prove import BlockedReason, distinctive_goals, load_proof_contract, load_world_actors, prove, shared_goals
 from .scenario_tools import load_scenarios
 
 logger = logging.getLogger(__name__)
 EXIT_UNREADABLE = 3
 DEADLINE_MARGIN_SECONDS = 300
 INCOMPLETE_WHY = "not proved: the validation's time budget ran out before this case"
+# The offline pass's own budget when the caller gives none (`ALK_PROVE_SUITE_SECONDS`): generous, since at about 0.05 s
+# a case a thousand cases take under a minute; the job's deadline still bounds it.
+DEFAULT_SUITE_SECONDS = 3600.0
+# How often the proofs file is written while cases are proved: often enough that a stopped job keeps its progress, not
+# after every case, which rewrites the whole file a thousand times on a thousand cases.
+WRITE_EVERY_SECONDS = 2.0
+
+
+def suite_budget_seconds() -> float:
+    """`ALK_PROVE_SUITE_SECONDS` when it is a positive number, else an hour."""
+    import os
+
+    try:
+        value = float(str(os.environ.get("ALK_PROVE_SUITE_SECONDS") or "").strip())
+    except ValueError:
+        return DEFAULT_SUITE_SECONDS
+    return value if value > 0 else DEFAULT_SUITE_SECONDS
 
 
 def _write(output: Path, proofs: Mapping[str, ProofEntry]) -> None:
@@ -71,7 +88,7 @@ def prove_suite(
     authoring: Path,
     output: Path,
     *,
-    budget: float = 1200,
+    budget: float | None = None,
     deadline_at: float | None = None,
     keys: set[str] | None = None,
     agent_document: Path | None = None,
@@ -87,7 +104,9 @@ def prove_suite(
     live = load_live(authoring)
     tools = agent_tools(agent_document)
     started = time.monotonic()
-    allowed = budget_seconds(budget, deadline_at, time.time())
+    allowed = budget_seconds(suite_budget_seconds() if budget is None else budget, deadline_at, time.time())
+    written = started
+    shared = shared_goals(scenarios) if judge_case_goals else None
     proofs: dict[str, ProofEntry] = {}
     for scenario in scenarios:
         key = proof_key(scenario)
@@ -97,7 +116,7 @@ def prove_suite(
             proofs[key] = _incomplete()
             continue
         try:
-            goals = distinctive_goals(scenario, scenarios) if judge_case_goals else ()
+            goals = distinctive_goals(scenario, scenarios, shared) if judge_case_goals else ()
             proof = prove(
                 scenario,
                 catalogue,
@@ -117,7 +136,9 @@ def prove_suite(
         else:
             # `live`: its gates are what the live runtime showed, not what was recorded without running.
             proofs[key] = {**proof_entry(proof, len(scenario.solution)), "live": key in live}
-        _write(output, proofs)
+        if time.monotonic() - written >= WRITE_EVERY_SECONDS:
+            _write(output, proofs)
+            written = time.monotonic()
     _write(output, proofs)
     return proofs
 
@@ -126,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--authoring", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--budget-seconds", type=float, default=1200)
+    parser.add_argument("--budget-seconds", type=float, default=None)
     parser.add_argument("--deadline-at", type=float, default=None)
     parser.add_argument("--keys", default=None, help="comma-separated scenario keys to prove; default every one")
     parser.add_argument(
