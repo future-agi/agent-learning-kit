@@ -437,6 +437,7 @@ class Proof:
             ]
             if passed:
                 unmatched = any(one.get("unmatched") for one in passed)
+                attempted = any(one.get("attempted") for one in passed)
                 return "the checks pass a wrong behaviour, so they cannot tell it from the right one:\n  - " + "\n  - ".join(
                     f"{one['name']} ({one['why']}): held {', '.join(one.get('held') or []) or 'every check'}"
                     + (
@@ -445,14 +446,26 @@ class Proof:
                         if one.get("unmatched")
                         else ""
                     )
+                    + (
+                        f"; it tried {', '.join(one['attempted'])}, which the reference never calls; the world refused "
+                        "it, so nothing changed, and no check fails on the attempt"
+                        if one.get("attempted")
+                        else ""
+                    )
                     for one in passed
                 ) + (
                     "\n\nA check on that call's effect catches it: give a sub-goal of this case a check that fails "
                     "when that call commits for this caller's record (read `committed_writes(world, reference)` or the "
                     "record it changes). A refusal left to the judge alone cannot fail a control."
                     if unmatched
-                    else "\n\nTighten the named checks so this wrong behaviour fails them."
-                )
+                    else ""
+                ) + (
+                    "\n\nWhere the world itself refuses the wrong action, nothing commits, so a check on its effect "
+                    "holds either way: give a sub-goal of this case a check that fails when the agent attempts that "
+                    "call for this caller's record (read `calls`, whether or not it went through)."
+                    if attempted
+                    else ""
+                ) + ("" if unmatched or attempted else "\n\nTighten the named checks so this wrong behaviour fails them.")
         if self.misses_case_goal and not self.deferred:
             return (
                 "the negative controls only make checks fail that every scenario in this suite shares, so they show "

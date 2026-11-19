@@ -1345,3 +1345,35 @@ def test_the_offline_proving_budget_is_generous_and_set_by_its_setting(monkeypat
     else:
         monkeypatch.setenv("ALK_PROVE_SUITE_SECONDS", setting)
     assert prove_suite.suite_budget_seconds() == seconds
+
+
+def test_a_refusal_whose_wrong_action_the_world_refuses_names_the_attempt(monkeypatch, tmp_path):
+    """749b83f5: the world refuses the refund outside its window, so the control that refunds anyway commits
+    nothing, every check on the refund's effect holds, and the control passes. The proof names the attempt."""
+    install(monkeypatch)
+    proof = module.prove(_refusal(sub_goals=("looked_up_o20",)), catalogue(looked_up_o20=LOOKED_UP_O20), tmp_path)
+
+    assert proof.blocked_reason() == "negative_control_passed"
+    assert (proof.controls[0]["unmatched"], proof.controls[0]["attempted"]) == ([], ["refund_order"])
+    why = proof.why()
+    assert "it tried refund_order, which the reference never calls; the world refused it" in why
+    assert "fails when the agent attempts that call for this caller's record (read `calls`" in why
+    assert "Tighten the named checks" not in why and "committed_writes(world, reference)" not in why
+    # A check on the attempt fails the same control, and the case proves.
+    fixed = module.prove(_refusal(), catalogue(no_refund=NO_REFUND, looked_up_o20=LOOKED_UP_O20), tmp_path)
+    assert fixed.controls[0]["failed"] is True and fixed.proved is True
+
+
+def test_a_refused_call_the_reference_also_makes_is_no_attempt_to_name(monkeypatch, tmp_path):
+    from fi.alk.harness.controls import refused_attempts
+    from fi.alk.harness.world.runtime import Call
+
+    case = _refusal()
+    calls = [
+        Call("lookup_order", {"order_id": "O-20"}, ok=False, error="down"),
+        Call("refund_order", {"order_id": "O-20"}, ok=False, refused=True),
+        Call("refund_order", {"order_id": "O-10"}, ok=True),
+    ]
+    # The lookup is the reference's own call; a refund that went through once is the unmatched call, not an attempt.
+    assert refused_attempts(case, calls) == []
+    assert refused_attempts(case, calls[:2]) == ["refund_order"]
