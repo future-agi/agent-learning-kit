@@ -2784,6 +2784,38 @@ def test_a_check_that_fails_a_corrected_try_is_named_when_the_case_is_kept(tmp_p
     assert [one.name for one in kept] == ["adds-a-big-mac"]
 
 
+def test_a_removed_case_submitted_with_its_key_comes_back_under_that_key(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept, used = [], set()
+    first = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert not first.get("is_error"), first
+    key = kept[0].scenario_key
+    kept.clear()  # dropped: the environment has had the key, no case holds it now
+
+    said = accept_scenario(_delta(scenario_key=key), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert not said.get("is_error"), said
+    assert [one.scenario_key for one in kept] == [key]
+
+
+def test_a_new_case_never_takes_a_removed_case_s_key_unless_it_names_it(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept, used = [], set()
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    key = kept[0].scenario_key
+    kept.clear()
+
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert [one.scenario_key for one in kept] == [f"{key}-2"]
+    # A key this environment never had is not taken on the writer's say-so.
+    kept.clear()
+    accept_scenario(_delta(scenario_key="never-had-it"), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert kept[0].scenario_key != "never-had-it"
+
+
 def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
     from fi.alk.harness.scenario_tools import accept_scenario
 
