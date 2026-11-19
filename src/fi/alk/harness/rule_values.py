@@ -112,8 +112,12 @@ def _changes(contract: Any) -> list[tuple[str, str]]:
         (str(_field(one, "before") or ""), str(_field(one, "after") or ""))
         for one in _field(contract, "value_changes") or []
     ]
-    if recorded:
-        return [pair for pair in recorded if pair[0] and pair[1]]
+    # Changes made before they were recorded live only in the amendments, so both are read: a value two changes old is
+    # as stale as the last one.
+    return [pair for pair in recorded if pair[0] and pair[1]] + _amendment_pairs(contract)
+
+
+def _amendment_pairs(contract: Any) -> list[tuple[str, str]]:
     lines = [str(one) for one in _field(contract, "amendments") or []]
     pairs, used = [], set()
     for at, line in enumerate(lines):

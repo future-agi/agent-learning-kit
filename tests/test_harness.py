@@ -2793,6 +2793,12 @@ def _removed_case(tmp_path):
     first = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
     assert not first.get("is_error"), first
     key = kept[0].scenario_key
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario_tools import remember_removed
+
+    # What find_scenarios(removed) returned for it, kept for the restore to compare with. The platform's copy may
+    # carry fields left empty that the case does not write at all: never a change.
+    remember_removed(root, [{"scenario_key": key, "content": {**document_for(kept[0]), "archived_note": ""}}])
     kept.clear()
     return root, catalogue, kept, used, key
 
@@ -2807,6 +2813,7 @@ def test_a_removed_case_restored_exactly_as_it_was_comes_back_under_its_own_key(
         _delta(scenario_key=key, restored_from=restored_from), world_root=root, catalogue=catalogue, kept=kept, used=used
     )
     assert not said.get("is_error"), said
+    assert "Restored exactly as it was" in said["content"][0]["text"]
     assert [(one.scenario_key, one.restored_from) for one in kept] == [(key, restored_from)]
     # Written with the case, so the platform's save reads it as a restore.
     assert load_scenarios(root)[0].restored_from == restored_from
@@ -2823,6 +2830,7 @@ def test_a_removed_case_restored_with_a_change_as_the_same_case_keeps_its_key(tm
     )
     said = accept_scenario(changed, world_root=root, catalogue=catalogue, kept=kept, used=used)
     assert not said.get("is_error"), said
+    assert "Restored with changes: instruction" in said["content"][0]["text"]
     assert kept[0].scenario_key == key and kept[0].instruction == "Order one Big Mac, no pickles."
     # Edited again later, still carrying the marker, it is an ordinary edit of itself.
     again = accept_scenario({**changed, "tests": "whether it is one Big Mac"}, world_root=root, catalogue=catalogue,

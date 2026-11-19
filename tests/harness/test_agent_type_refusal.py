@@ -7022,7 +7022,7 @@ def test_a_build_proves_its_suite_after_its_validation(tmp_path, no_waiting, mon
         source={"kind": "local_repository", "local_path": str(source)},
         agent={"connector": "auto"},
         scenario_count=2,
-        metadata={"generic_harness_v1": True},
+        metadata={"generic_harness_v1": True, "used_scenario_keys": ["refund-late", "status-check"]},
     )
     job_path = tmp_path / "job.json"
     job_path.write_text(job.model_dump_json(), encoding="utf-8")
@@ -7049,3 +7049,7 @@ def test_a_build_proves_its_suite_after_its_validation(tmp_path, no_waiting, mon
     assert steps == ["validated", ("proved", output.resolve(), "build")]
     # The validation knows when the build is stopped: its start plus the build's time budget.
     assert before + 3600 <= deadlines[0] <= time.time() + 3600
+    # Keys the environment gave before are taken for every writer of this build.
+    from fi.alk.harness.scenario import used_keys
+
+    assert {"refund-late", "status-check"} <= used_keys(output.resolve())

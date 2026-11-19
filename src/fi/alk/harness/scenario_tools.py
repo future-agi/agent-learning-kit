@@ -60,10 +60,12 @@ from .catalogue import (
     without_delivery_overlay,
 )
 from .contract import CALL_DIRECTIONS, AgentContract
+from .json_file import write_json_atomic
 from .folder import (
     INDEX,
     SCENARIOS,
     apply_setup,
+    document_for,
     check_problems,
     unasserted_behaviour,
     read_all,
@@ -2098,10 +2100,59 @@ def accept_scenario(
         if renamed_from
         else f"{scenario.name} {'replaced' if replaced else 'kept'}"
     )
+    if restored:
+        changes = restored_changes(world_root, scenario)
+        done += (
+            "" if changes is None
+            else f". Restored with changes: {', '.join(changes)}" if changes
+            else ". Restored exactly as it was"
+        )
     return _ok(
         f"{done}. {proof_summary}"
         f"{unproved}{strayed}\n{len(kept)} so far. These names are taken, so do not reuse one "
         f"and do not read them: {recent}{more}"
+    )
+
+
+# The removed cases `find_scenarios` read with `removed`, by key, kept so a restore can say how it differs from them.
+REMOVED_CASES = ".futureagi-removed-cases.json"
+# What a restore is compared on: the case's own content, never its identity or the restore mark.
+_IDENTITY_FIELDS = frozenset({"scenario_key", "scenario_id", "restored_from", "number", "folder"})
+
+
+def remember_removed(destination: Path, rows: Any) -> None:
+    """Keep the removed cases a `find_scenarios(removed)` answer listed, by key, beside those kept before."""
+    found = {
+        str(row.get("scenario_key")): row.get("content")
+        for row in rows or []
+        if isinstance(row, dict) and row.get("scenario_key") and isinstance(row.get("content"), dict)
+    }
+    if not found:
+        return
+    path = Path(destination) / REMOVED_CASES
+    try:
+        kept = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        kept = {}
+    write_json_atomic(path, {**(kept if isinstance(kept, dict) else {}), **found})
+
+
+def restored_changes(destination: Path, scenario: Scenario) -> list[str] | None:
+    """The fields a restored case changed from the removed version it was read as, [] when none; None when that
+    version was never read here."""
+    try:
+        removed = json.loads((Path(destination) / REMOVED_CASES).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    before = removed.get(scenario.scenario_key) if isinstance(removed, dict) else None
+    if not isinstance(before, dict):
+        return None
+    after = document_for(scenario)
+    return sorted(
+        field
+        for field in set(before) | set(after)
+        if field not in _IDENTITY_FIELDS and before.get(field) != after.get(field)
+        and not (before.get(field) in (None, "", [], {}, False) and after.get(field) in (None, "", [], {}, False))
     )
 
 

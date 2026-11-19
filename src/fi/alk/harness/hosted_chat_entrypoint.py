@@ -536,15 +536,9 @@ class HostedChatRuntime:
         self.workspace = workspace
         self.source = source
         self.job = job
-        from .scenario import used_keys
+        from .scenario import seed_used_keys
 
-        # Every key the environment has given a scenario, a dropped one's included, so a new
-        # scenario never takes one and inherits another's row and run history.
-        used_keys(workspace).update(
-            str(key)
-            for key in (job.get("metadata") or {}).get("used_scenario_keys") or ()
-            if key
-        )
+        seed_used_keys(workspace, job.get("metadata"))
         backend = resolve()
         self.backend_name = backend.name
         self.event_store: Any = None
@@ -1051,7 +1045,17 @@ class HostedChatRuntime:
         )
         async def find_scenarios(args: dict[str, Any]) -> dict[str, Any]:
             query = {key: value for key, value in args.items() if value not in (None, "", [], {})}
-            return await call(self.client.scenarios(query))
+            if not query.get("removed"):
+                return await call(self.client.scenarios(query))
+            try:
+                answer = await self.client.scenarios(query)
+            except ConversationTransportError as exc:
+                return text(str(exc), error=True)
+            from .scenario_tools import remember_removed
+
+            # Kept so a restore of one of them can say what it changed.
+            remember_removed(self.workspace, (answer or {}).get("rows"))
+            return text(answer)
 
         @tool(
             "save_changes",

@@ -136,6 +136,8 @@ MEMORY_FLOOR = 0.15
 MEMORY_SHARE = 0.85
 # How often the sandbox's memory is read while the first case is measured.
 MEMORY_SAMPLE_SECONDS = 0.25
+# How often the results so far are saved while cases are proved.
+SAVE_EVERY_SECONDS = 5.0
 
 
 def prove_concurrency() -> int:
@@ -214,9 +216,17 @@ async def prove_live(
     ]
     results: dict[str, LiveResult] = {}
     retry: list[Scenario] = []
+    flushed = {"at": time.monotonic()}
 
     def due() -> bool:
         return until is None or time.time() < until
+
+    def keep(scenario: Scenario, result: LiveResult) -> None:
+        """Record a case's result, and every few seconds save those so far: a job stopped at its deadline keeps them."""
+        results[proof_key(scenario)] = result
+        if time.monotonic() - flushed["at"] >= SAVE_EVERY_SECONDS:
+            write_live(authoring, results)
+            flushed["at"] = time.monotonic()
 
     async def prove_on(lane: Any, scenario: Scenario) -> LiveResult:
         endpoints = service_endpoints(contract, lane.endpoints, served_by_toolbox(lane.endpoints))
@@ -238,7 +248,7 @@ async def prove_live(
                 logger.warning("live proof: time budget spent before %s; it keeps its offline proof", proof_key(scenario))
                 continue
             try:
-                results[proof_key(scenario)] = await prove_on(lanes[0], scenario)
+                keep(scenario, await prove_on(lanes[0], scenario))
             except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play keeps its offline proof
                 _skipped(scenario, exc)
     else:
@@ -247,7 +257,7 @@ async def prove_live(
         before = peak = None
         if due():
             first = pending.pop(0)
-            before, peak = await _measured(prove_on(lanes[0], first), results, retry, first)
+            before, peak = await _measured(prove_on(lanes[0], first), keep, retry, first)
         active = _lanes_that_fit(len(lanes), before, peak)
         logger.info("live proof: %d cases on %d of %d runtime instances", len(order), active, len(lanes))
         state = {"active": active, "failed": False}
@@ -271,7 +281,7 @@ async def prove_live(
                 except asyncio.QueueEmpty:
                     return
                 try:
-                    results[proof_key(scenario)] = await prove_on(lane, scenario)
+                    keep(scenario, await prove_on(lane, scenario))
                 except Exception as exc:  # noqa: BLE001 - played again alone, never dropped
                     logger.warning(
                         "live proof: %s failed beside other cases (%s); it is played again alone",
@@ -290,7 +300,7 @@ async def prove_live(
                 logger.warning("live proof: time budget spent before %s; it keeps its offline proof", proof_key(scenario))
                 continue
             try:
-                results[proof_key(scenario)] = await prove_on(lanes[0], scenario)
+                keep(scenario, await prove_on(lanes[0], scenario))
             except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play keeps its offline proof
                 _skipped(scenario, exc)
     for lane in lanes:
@@ -314,7 +324,7 @@ def _skipped(scenario: Scenario, exc: Exception) -> None:
 
 
 async def _measured(
-    play: Any, results: dict[str, LiveResult], retry: list[Scenario], scenario: Scenario
+    play: Any, keep: Any, retry: list[Scenario], scenario: Scenario
 ) -> tuple[float | None, float | None]:
     """Run one case alone while sampling the sandbox's memory: `(before, peak)` GiB, None when unreadable."""
     reading = _memory()
@@ -327,7 +337,7 @@ async def _measured(
         if now is not None and (peak is None or now[0] > peak):
             peak = now[0]
     try:
-        results[proof_key(scenario)] = task.result()
+        keep(scenario, task.result())
     except Exception as exc:  # noqa: BLE001 - played again alone at the end
         logger.warning("live proof: %s failed (%s); it is played again", proof_key(scenario), type(exc).__name__)
         retry.append(scenario)
