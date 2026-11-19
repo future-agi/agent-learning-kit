@@ -157,7 +157,7 @@ def _translate(report: SimpleNamespace) -> CallAborted:
         asyncio.run(
             runner._translate_report(
                 report,
-                runtime=SimpleNamespace(endpoints={}),
+                runtime=SimpleNamespace(endpoints={}, metadata={}),
                 scenario_key="k1",
                 started_at=datetime.now(timezone.utc),
             )
