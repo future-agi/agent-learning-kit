@@ -5094,12 +5094,10 @@ def test_a_change_waiting_on_the_person_asks_to_be_answered_with_an_option(tmp_p
     assert [one.get("options_only") for one in asked] == [True]
 
 
-def _stale_suite(tmp_path):
-    """A suite whose rule said 30 days before this conversation and 20 now, with texts never updated."""
+def _cited_suite(tmp_path):
+    """Two cases: one cites the refund-window rule, the other the item cap."""
     from test_nudge_turn import _edit_scenario, _suite
 
-    from fi.alk.harness.amend import add_rule, drop_rule
-    from fi.alk.harness.catalogue import load_catalogue, save_catalogue
     from fi.alk.harness.contract import write_contract
 
     root = _suite(tmp_path, "adds-a-big-mac", "adds-one-big-mac")
@@ -5109,44 +5107,108 @@ def _stale_suite(tmp_path):
     _edit_scenario(
         root,
         "adds-a-big-mac",
-        use_case="Refuse a refund past the 30-day window",
-        instruction="Delivered 41 days ago; the 130 items cap holds.",
+        use_case="Refuse a refund past the window",
+        sources=[{"kind": "rule", "ref": "rule:0", "quote": "within 30 days of delivery"}],
     )
-    catalogue = load_catalogue(root)
-    catalogue.sub_goals[0].what = "Keeps to the 30 days window."
-    save_catalogue(catalogue, root)
-    # An earlier conversation: 30 days became 20, and the texts were left behind.
-    drop_rule(contract, root, rule="Refund only within 30 days of delivery.", why="policy changed")
-    add_rule(contract, root, rule="Refund only within 20 days of delivery.", why="policy changed")
-    return root, contract, catalogue.sub_goals[0].name
+    _edit_scenario(
+        root, "adds-one-big-mac", sources=[{"kind": "rule", "ref": "rule:1", "quote": "more than 130 items"}]
+    )
+    return root, builder.contract_of(root)
 
 
-def test_check_health_names_text_still_stating_an_old_value_even_from_an_earlier_change(tmp_path):
+def _key(root, name):
     from fi.alk.harness.scenario_tools import load_scenarios
 
-    root, _contract, goal = _stale_suite(tmp_path)
-    # Opened after the change: nothing changed in this conversation, the texts are still old.
-    server = builder.suite_server(root, load_scenarios(root))
-    health = next(one for one in server.tools if one.name == "check_health")
-    report = asyncio.run(health.handler({}))["content"][0]["text"]
-
-    assert "adds-a-big-mac.use_case still says 30 day" in report and "(it now says 20 day)" in report
-    assert f"sub-goal {goal}.what still says 30 day" in report
-    # A fact the case states (41 days ago) and a value still in force (130 items) are not old values.
-    assert "41 day" not in report and "130" not in report
-    # A note, never a problem.
-    assert report.startswith("Healthy: nothing broken found.")
+    return next(one.scenario_key for one in load_scenarios(root) if one.name == name)
 
 
-def test_a_rule_change_answers_with_the_texts_still_stating_an_old_value(tmp_path):
+def test_rewording_a_rule_links_the_two_by_id_and_lists_only_the_cases_citing_the_old_one(tmp_path):
+    from fi.alk.harness.amend import add_rule
+    from fi.alk.harness.contract import rule_id
+
+    root, contract = _cited_suite(tmp_path)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 20 days of delivery."
+
+    done, said = add_rule(contract, root, rule=new, why="policy changed", replaces=rule_id(old))
+
+    assert done, said
+    assert contract.hard_constraints == ["Never sell more than 130 items.", new]
+    assert [one.model_dump() for one in contract.amendment_records] == [
+        {"kind": "rule", "key": rule_id(old), "action": "removed", "previous": "", "replaced_by": rule_id(new),
+         "text": old},
+        {"kind": "rule", "key": rule_id(new), "action": "added", "previous": rule_id(old), "replaced_by": "",
+         "text": new},
+    ]
+    assert f"{_key(root, 'adds-a-big-mac')}: adds-a-big-mac (Refuse a refund past the window)" in said
+    assert "adds-one-big-mac" not in said
+    # Saved as records, so a reader never parses the amendment line.
+    saved = json.loads((root / "contract.json").read_text(encoding="utf-8"))
+    assert saved["amendment_records"][1]["previous"] == rule_id(old)
+
+
+def test_a_rule_dropped_first_is_linked_when_its_rewrite_names_it(tmp_path):
+    from fi.alk.harness.amend import add_rule, drop_rule
+    from fi.alk.harness.contract import rule_id
+
+    root, contract = _cited_suite(tmp_path)
+    old = "Refund only within 30 days of delivery."
+    done, said = drop_rule(contract, root, rule=old, why="being reworded")
+    assert done and rule_id(old) in said and "adds-a-big-mac" in said
+
+    done, said = add_rule(contract, root, rule="Refund only within 14 days.", why="reworded", replaces=old)
+    assert done, said
+    removed, added = contract.amendment_records
+    assert (removed.action, removed.replaced_by) == ("removed", rule_id("Refund only within 14 days."))
+    assert (added.action, added.previous) == ("added", rule_id(old))
+
+
+def test_a_rule_added_with_no_replaces_is_never_linked_to_one_that_reads_alike(tmp_path):
     from fi.alk.harness.amend import add_rule, drop_rule
 
-    root, contract, _goal = _stale_suite(tmp_path)
-    done, said = drop_rule(contract, root, rule="Refund only within 20 days of delivery.", why="now 14")
-    assert done and "adds-a-big-mac.use_case still says 30 day" in said
-    done, said = add_rule(contract, root, rule="Refund only within 14 days of delivery.", why="now 14")
-    assert done and "still says 30 day" in said and "(it now says 14 day)" in said
-    assert "Update each now" in said
+    root, contract = _cited_suite(tmp_path)
+    drop_rule(contract, root, rule="Refund only within 30 days of delivery.", why="gone")
+    done, said = add_rule(contract, root, rule="Refund only within 20 days of delivery.", why="new")
+
+    assert done and [one.replaced_by for one in contract.amendment_records] == ["", ""]
+    assert [one.previous for one in contract.amendment_records] == ["", ""]
+    assert "rest on what changed" not in said
+
+
+def test_replacing_a_rule_that_is_not_there_changes_nothing(tmp_path):
+    from fi.alk.harness.amend import add_rule
+
+    root, contract = _cited_suite(tmp_path)
+    before = (root / "contract.json").read_bytes()
+
+    done, said = add_rule(contract, root, rule="Refund within 7 days.", why="x", replaces="Refund within 30 days")
+
+    assert not done and "no rule" in said and "rule-" in said
+    assert (root / "contract.json").read_bytes() == before
+    assert contract.hard_constraints == ["Refund only within 30 days of delivery.", "Never sell more than 130 items."]
+
+
+def test_correcting_a_tool_lists_the_cases_that_call_it(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+
+    root, contract = _cited_suite(tmp_path)
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    tool = load_scenarios(root)[0].solution[-1].tool
+    done, said = fix_tool(contract, root, tool_name=tool, why="read wrong", description="Adds one item to the cart.")
+
+    assert done, said
+    assert "adds-a-big-mac" in said and "adds-one-big-mac" in said
+    assert contract.amendment_records[-1].model_dump() == {
+        "kind": "tool", "key": tool, "action": "changed", "previous": "", "replaced_by": "", "text": ""
+    }
+
+
+def test_a_contract_with_no_amendment_records_saves_the_same_bytes(tmp_path):
+    from fi.alk.harness.contract import write_contract
+
+    root, contract = _cited_suite(tmp_path)
+    write_contract(contract, root)
+    assert "amendment_records" not in json.loads((root / "contract.json").read_text(encoding="utf-8"))
 
 
 def test_dropping_a_case_names_the_key_that_restores_it(tmp_path):

@@ -27,7 +27,6 @@ from .actors import SEED_RECORDS_CONTEXT_ONLY, knowledge_roles, seed_records_loa
 from .catalogue import Catalogue
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
 from .contract import AgentContract
-from .rule_values import old_value_notes
 from .scenario import Scenario, voicemail_enabled
 from .source_folder import contract_folder
 from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, world_summary
@@ -239,9 +238,7 @@ def suite_server(
     async def check_health(args: dict[str, Any]) -> dict[str, Any]:
         current = contract_of(out)
         problems = suite_health(current, out, kept, prove_all=bool(args.get("prove")), sealed=sealed)
-        notes = old_value_notes(current, kept, load_catalogue(out).sub_goals)
-        said = "Healthy: nothing broken found." if not problems else "\n".join(problems)
-        return _ok(said + ("\n\nNot broken, but worth a look:\n- " + "\n- ".join(notes[:40]) if notes else ""))
+        return _ok("Healthy: nothing broken found." if not problems else "\n".join(problems))
 
     @tool(
         "impact_of",
@@ -313,7 +310,7 @@ def suite_server(
     async def declare_tool(args: dict[str, Any]) -> dict[str, Any]:
         from .amend import _persist
         from .backends.files import secret_text
-        from .contract import ToolSpec, validate_contract
+        from .contract import AmendmentRecord, ToolSpec, validate_contract
         from .source_folder import agent_scope, in_agent_scope
 
         if contract is None:
@@ -366,6 +363,7 @@ def suite_server(
             contract.tools.pop()
             contract.amendments.pop()
             return _err("the contract would not be valid: " + "; ".join(problems))
+        contract.amendment_records.append(AmendmentRecord(kind="tool", key=name, action="added"))
         _persist(contract, out)
         return _ok(f"{name} added to the contract. Re-prove the scenarios that use it, then save_changes.")
 

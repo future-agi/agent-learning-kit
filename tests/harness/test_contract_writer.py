@@ -77,8 +77,7 @@ PINNED_FREE_TEXT = (
     "AgentContract.notes",
     "AgentContract.open_questions",
     "AgentContract.amendments",
-    "ValueChange.before",
-    "ValueChange.after",
+    "AmendmentRecord.text",
     "ToolSpec.description",
     "ToolSpec.refuses",
     "ToolSpec.effects",
@@ -229,7 +228,7 @@ def _full_contract() -> AgentContract:
         "runtime_dependencies": [{"name": URL}],
         "data_store": {"kind": "database", "host": URL, "configured_by": URL},
         "workers": [{"id": URL, "name": URL, "tools": ["post"]}],
-        "value_changes": [{"kind": "rule", "name": URL}],
+        "amendment_records": [{"kind": "rule", "key": URL, "action": "removed", "text": URL}],
     }
     for name in FREE_TEXT:
         model, field = name.split(".")
@@ -243,7 +242,7 @@ def _full_contract() -> AgentContract:
                     ("tool_entrypoints", "ToolEntry"),
                     ("dependencies", "Dependency"),
                     ("runtime_dependencies", "Dependency"),
-                    ("value_changes", "ValueChange"),
+                    ("amendment_records", "AmendmentRecord"),
                 )
                 if kind == model
                 for item in body[key]

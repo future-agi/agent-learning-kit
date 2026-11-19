@@ -12,6 +12,7 @@ rather than a bad contract reaching disk.
 from __future__ import annotations
 
 import collections.abc
+import hashlib
 import json
 import logging
 import os
@@ -231,15 +232,26 @@ class ToolEntry(BaseModel):
 _CHANNEL_WORKER_ID = re.compile(r"[A-Za-z0-9_.-]+")
 
 
-class ValueChange(BaseModel):
-    """One rule or tool description changed by an amendment, as it read before and after: the record that says which
-    values a change retired (a 30-day window made 20), so case texts still stating them can be found. A rule that was
-    dropped and not yet replaced has `after` empty."""
+def rule_id(rule: str) -> str:
+    """A rule's stable id: `rule-` and the first 12 hex digits of the SHA-256 of its saved text (UTF-8). The same words
+    keep the same id across saves and versions; a reworded rule is another rule, linked by `replaced_by`."""
+    return "rule-" + hashlib.sha256(str(rule).encode("utf-8")).hexdigest()[:12]
 
-    kind: str = "rule"
-    name: str = ""
-    before: str = ""
-    after: str = ""
+
+class AmendmentRecord(BaseModel):
+    """One change an amendment made to the contract, beside its line in `amendments`, for a reader that must not
+    parse that line: what changed (`kind`: rule, tool, modality, worker), which one (`key`: a rule's `rule_id`, a
+    tool's or worker's name, a modality), and how (`action`: added, removed, changed). A removed rule rewritten as
+    another names the new rule's id in `replaced_by`; the rule that replaced it names the old id in `previous` (a
+    modality names the one it changed from there). A rule's words are in `text`, since a removed rule is no longer
+    among the rules."""
+
+    kind: str
+    key: str
+    action: str
+    previous: str = ""
+    replaced_by: str = ""
+    text: str = ""
 
 
 class DeclaredWorker(BaseModel):
@@ -1307,8 +1319,8 @@ class AgentContract(BaseModel):
     # the agent verifiably is, so when the harness widens it the difference is recorded rather
     # than blended in, and whoever reads it later can tell the two apart.
     amendments: list[str] = Field(default_factory=list)
-    # The rules and tool descriptions those amendments changed, before and after, in order.
-    value_changes: list[ValueChange] = Field(default_factory=list)
+    # The same changes as records (`AmendmentRecord`), in order: what changed, which one, and how.
+    amendment_records: list[AmendmentRecord] = Field(default_factory=list)
     instrumentation: str = "none"
 
     @model_serializer(mode="wrap")
@@ -1321,6 +1333,8 @@ class AgentContract(BaseModel):
         # The same for the record of unconfirmed prompt lines, kept only when there are some.
         if not data.get("unconfirmed_prompt_from"):
             data.pop("unconfirmed_prompt_from", None)
+        if not data.get("amendment_records"):
+            data.pop("amendment_records", None)
         return data
 
     @model_validator(mode="after")
@@ -1557,8 +1571,7 @@ FREE_TEXT = (
     "AgentContract.notes",
     "AgentContract.open_questions",
     "AgentContract.amendments",
-    "ValueChange.before",
-    "ValueChange.after",
+    "AmendmentRecord.text",
     "ToolSpec.description",
     "ToolSpec.refuses",
     "ToolSpec.effects",
@@ -1573,9 +1586,12 @@ FREE_TEXT = (
 # own right. A name without a dot is a whole technical model, every field of it kept.
 KEPT_AS_WRITTEN = (
     "AgentContract.agent",
-    "AgentContract.value_changes",
-    "ValueChange.kind",
-    "ValueChange.name",
+    "AgentContract.amendment_records",
+    "AmendmentRecord.kind",
+    "AmendmentRecord.key",
+    "AmendmentRecord.action",
+    "AmendmentRecord.previous",
+    "AmendmentRecord.replaced_by",
     "AgentContract.modality",
     "AgentContract.call_direction",
     "AgentContract.agent_languages",

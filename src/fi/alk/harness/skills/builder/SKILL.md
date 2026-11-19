@@ -188,11 +188,14 @@ what the gates check. Then:
     `restored_from`. No question.
   Only a case carrying `restored_from` takes a key the environment gave before; anything else gets a
   new one, so a copy never inherits another case's history.
-- **Change a rule or a fixed value** (a 30-day window made 20): in the same turn, carry the new value
-  into every place that states an old one, including values from earlier changes still left behind:
-  each affected scenario's name, use case, tests, instruction and controls' `why`, and each sub-goal's
-  description, criteria and reference. The rule or tool change answers with the texts still stating an
-  old value, and so does `check_health`; work through that list before you save.
+- **Change a rule or a fixed value** (a 30-day window made 20): reword it with `add_rule` and
+  `replaces` naming the old rule (its id or exact words), never a drop and an unrelated add, so the two
+  are linked. The reply lists every case that cites the old rule, and a `fix_tool` reply every case
+  that calls the tool. Read each listed case against the current rule, with its sub-goals, and in the
+  same turn edit what no longer holds: its name, use case, tests, instruction and controls' `why`, and
+  each sub-goal's description, criteria and reference. Many cases: hand them to sub-agents in batches,
+  each with the current rule and its share of the list, and say how many of the total are reviewed as
+  they come back. Ask before saving whether to review the rest now or leave them marked Source changed.
 - **Duplicate or vary**: read the original, then submit a copy under a new name with only the asked
   difference. "Twenty more like #5" is `aim_for` plus a writer brief naming #5's cell and what differs.
 - **Prove again without changing**: `prove_scenarios`.
