@@ -1333,24 +1333,14 @@ def _world_identifiers(state: dict[str, list[dict[str, Any]]]) -> set[str]:
 _AN_IDENTIFIER = re.compile(r"[a-z]{2,5}_[a-z0-9_]{2,40}")
 
 
-def _read_only_tools(contract: Any) -> set[str]:
-    """The tools the contract declares read-only: they look records up and change nothing."""
-    entries = contract.get("tool_entrypoints") if isinstance(contract, dict) else None
-    return {
-        str(entry.get("tool"))
-        for entry in entries or []
-        if isinstance(entry, dict) and str(entry.get("effect") or "").strip().lower() == "read"
-    }
-
-
 def _only_looked_up(scenario: Scenario, world_root: Path | None) -> set[str]:
-    """Every argument value the reference names only in steps of declared read-only tools: a record it looks up and
-    never acts on, which an adversarial case may expect to be missing."""
+    """Every argument value the reference names only in steps of read-only tools (`_read_tools`): a record it looks up
+    and never acts on, which an adversarial case may expect to be missing."""
     try:
         contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8")) if world_root else {}
     except (OSError, ValueError):
         contract = {}
-    reads = _read_only_tools(contract)
+    reads = _read_tools(contract)
     looked: set[str] = set()
     acted: set[str] = set()
     for step in scenario.solution:
@@ -1430,7 +1420,8 @@ def _held_values(data: Any) -> set[str]:
 def _records_only_a_context_file_holds(scenario: Scenario, trial: Any, world_root: Path) -> list[str]:
     """Records the reference acts on that only an attached `seed_records` file lists, where the agent's tools serve
     their own data (`seed_records_loaded`): no such file reaches them, so a case on one of its rows cannot be passed.
-    A record a declared read-only tool only looks up is left to the proof: an adversarial case may expect it missing. What the tools do serve is the agent's real starting data, read from its source, else the world that
+    A record a read-only tool (`_read_tools`) only looks up is left to the proof: an adversarial case may expect it
+    missing. What the tools do serve is the agent's real starting data, read from its source, else the world that
     replicates it."""
     try:
         contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
@@ -1449,10 +1440,10 @@ def _records_only_a_context_file_holds(scenario: Scenario, trial: Any, world_roo
         return []
     if not served:
         return []
-    # A tool the contract declares read-only only looks a record up: a case may expect it not to be found (an order
-    # that is not in the system), and the proof decides whether the case can be passed. Any other step acts on the
-    # record, so the record has to be one the tools serve.
-    reads = _read_only_tools(contract)
+    # A read-only tool (declared, else by its method) only looks a record up: a case may expect it not to be found
+    # (an order that is not in the system), and the proof decides whether the case can be passed. Any other step acts
+    # on the record, so the record has to be one the tools serve.
+    reads = _read_tools(contract)
     named = {
         str(value).strip()
         for step in scenario.solution
@@ -1690,9 +1681,11 @@ def _service_tools(contract: Any) -> set[str]:
 
 
 def _read_tools(contract: Any) -> set[str]:
-    """The agent's tools that only read, by the rule the world's door applies (the declared effect, else the method),
-    each by its name and by its route's world action, the two names a fault can give it."""
-    entries = [one if isinstance(one, dict) else one.model_dump() for one in (contract.tool_entrypoints or [])]
+    """The agent's tools that only read, by the rule the world's door applies (the declared effect, else the method:
+    GET, HEAD and OPTIONS read), each by its name and by its route's world action, the two names a fault can give it.
+    `contract` is the model or its saved JSON."""
+    listed = contract.get("tool_entrypoints") if isinstance(contract, dict) else contract.tool_entrypoints
+    entries = [one if isinstance(one, dict) else one.model_dump() for one in (listed or [])]
     reads = [
         entry
         for entry in entries

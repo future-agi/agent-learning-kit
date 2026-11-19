@@ -3498,3 +3498,35 @@ def test_an_instruction_naming_a_missing_record_the_reference_only_looks_up_is_k
     )
     said = _identifiers_the_instruction_invents(booked, world, tmp_path)
     assert said and "plc_blr_airport" in said[0]
+
+
+def test_a_lookup_by_get_with_no_declared_effect_reads_and_a_post_with_none_acts(tmp_path: Path) -> None:
+    """The contract's own rule: an empty effect reads the HTTP method, so an undeclared GET lookup is read-only and an
+    undeclared POST step acts on its record."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    contract = json.loads((root / "contract.json").read_text(encoding="utf-8"))
+    contract["tool_entrypoints"] = [
+        {"tool": "get_order", "mode": "service", "method": "GET"},
+        {"tool": "issue_refund", "mode": "service", "method": "POST"},
+    ]
+    (root / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    world = SimpleNamespace(state=lambda: {})
+
+    not_found = Scenario(
+        name="order-not-in-the-system",
+        instruction="You ask about order 2001.",
+        solution=[{"tool": "get_order", "arguments": {"order_id": "2001"}}],
+    )
+    assert _records_only_a_context_file_holds(not_found, world, root) == []
+    refunded = Scenario(
+        name="refund-2001",
+        instruction="You want a refund for order 2001.",
+        solution=[{"tool": "issue_refund", "arguments": {"order_id": "2001"}}],
+    )
+    said = _records_only_a_context_file_holds(refunded, world, root)
+    assert said and "2001 is only in knowledge/orders.csv" in said[0]
