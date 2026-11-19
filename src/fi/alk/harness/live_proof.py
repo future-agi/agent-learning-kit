@@ -126,11 +126,9 @@ def _play(
     refused = []
     for step in steps:
         tool = str(step.tool)
-        if tool in recordable and not executes(world, tool):
-            call = record_unrun_step(world, step)
-        else:
-            call = play_reference_step(world, step)
-        if not call.ok:
+        unrun = tool in recordable and not executes(world, tool)
+        call = record_unrun_step(world, step) if unrun else play_reference_step(world, step)
+        if not call.ok and not unrun:
             refused.append(f"{call.name}({step.arguments}): {call.error}")
     assumed = [tool for tool in assumed_tools(world, steps) if tool not in world.recorded]
     return list(world.calls), assumed, refused

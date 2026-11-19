@@ -321,7 +321,7 @@ def answered(calls: Sequence[Any], name: str, **arguments: Any) -> list[Any]:
         call
         for call in calls
         if call.name == name
-        and (getattr(call, "ok", False) or getattr(call, "refusal_code", "") == "world_rule")
+        and (getattr(call, "ok", False) is True or getattr(call, "refusal_code", "") == "world_rule")
         and _with(call, arguments)
     ]
 
@@ -332,7 +332,10 @@ def succeeded(calls: Sequence[Any], name: str, **arguments: Any) -> list[Any]:
     return [
         call
         for call in calls
-        if call.name == name and getattr(call, "ok", False) and not getattr(call, "refused", False) and _with(call, arguments)
+        if call.name == name
+        and getattr(call, "ok", False) is True
+        and not getattr(call, "refused", False)
+        and _with(call, arguments)
     ]
 
 
