@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from dataclasses import dataclass
 import hmac
 from io import BytesIO
@@ -15,12 +16,14 @@ from fastapi.testclient import TestClient
 from pydantic import Field, ValidationError
 import pytest
 
-from fi.alk.harness import sandbox_server
+from fi.alk.harness import call_runner, config, local_certified_runtime, process_runtime, provision, sandbox_server
+from fi.alk.harness.bundle_v2 import ProcessUser, SourceProcess
 from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.sandbox_server import (
     LocalSandbox,
     LocalSandboxRequest,
     SandboxAdjustmentRequest,
+    SandboxPreflightRequest,
     SandboxRerunRequest,
     _CONTROLLER_TOKEN,
     _presentation_value,
@@ -33,6 +36,13 @@ from fi.alk.harness.sandbox_server import (
 from fi.alk.harness import secrets
 from fi.alk.harness.secrets import SecretResolutionError, resolve_worker_secrets
 from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
+
+# Imported before the worker guard swaps subprocess.Popen for a function: mcp annotates a class
+# with subprocess.Popen[bytes] when first imported, which config.provider_env() can reach mid-test.
+try:
+    import mcp.os.win32.utilities  # noqa: F401
+except ImportError:
+    pass
 
 pytest_plugins = ["pytester"]
 
@@ -70,12 +80,28 @@ _HARMLESS = [sys.executable, "-c", "pass"]
 
 
 @dataclass
-class Launch:
+class Launch(Mapping):
     argv: str
     env: dict | None
 
+    # A launch also reads as its environment: launch["NAME"], dict(launch), launch.items().
     def __getitem__(self, name):
-        return self.env[name]
+        return (self.env or {})[name]
+
+    def __iter__(self):
+        return iter(self.env or {})
+
+    def __len__(self):
+        return len(self.env or {})
+
+    def __eq__(self, other):
+        if isinstance(other, Launch):
+            return (self.argv, self.env) == (other.argv, other.env)
+        if isinstance(other, Mapping):
+            return dict(self) == dict(other)
+        return NotImplemented
+
+    __hash__ = None
 
 
 class _WorkerGuard:
@@ -542,6 +568,28 @@ def test_local_sandbox_reports_committed_scenario_progress_while_worker_runs(
     assert current["completed_scenarios"] == 1
     assert current["total_scenarios"] == 3
     assert executed == [True]
+
+
+def test_the_environment_output_names_the_settings_the_kit_skipped(tmp_path):
+    # A setting the kit skipped is in the job's result, by name only.
+    from fi.alk.harness.sandbox_server import _stage_outputs
+
+    (tmp_path / "environment.json").write_text(
+        json.dumps(
+            {
+                "services": ["agent-runtime"],
+                "project": "fagi-harness-1",
+                "skipped_setting_names": ["LANG", "NO_PROXY"],
+            }
+        )
+    )
+
+    [environment] = [
+        item for item in _stage_outputs(tmp_path) if item["kind"] == "environment"
+    ]
+
+    assert environment["data"]["skipped_settings"] == ["LANG", "NO_PROXY"]
+    assert "LANG, NO_PROXY" in environment["summary"]
 
 
 def test_local_sandbox_exposes_secret_safe_live_stage_outputs(tmp_path, monkeypatch):
@@ -1670,6 +1718,11 @@ def _ref(manager, key):
     return SecretRef(manager=manager, key=key, purpose="target_provider")
 
 
+def _controller_ref(manager, key):
+    # A connection ref for the controller itself, not the customer agent's own credential.
+    return SecretRef(manager=manager, key=key, purpose="livekit_url")
+
+
 def _job_key(job_id, index):
     return f"ALK_JOB_{job_id.replace('-', '').upper()}_{index}"
 
@@ -1809,7 +1862,7 @@ def test_local_submit_refuses_a_second_alias_for_an_upload(tmp_path, manager):
                     },
                     secret_refs={
                         "GOOD": _ref("mounted", upload),
-                        "PYTHONPATH": _ref(manager, upload),
+                        "OTHER_VALUE": _ref(manager, upload),
                     },
                 )
             )
@@ -1818,7 +1871,7 @@ def test_local_submit_refuses_a_second_alias_for_an_upload(tmp_path, manager):
     refused = asyncio.run(submit())
 
     assert refused.status_code == 400
-    assert refused.detail == "sandbox_secret_reference_refused: PYTHONPATH"
+    assert refused.detail == "sandbox_secret_reference_refused: OTHER_VALUE"
     _assert_nothing_left(sandbox)
 
 
@@ -1952,7 +2005,7 @@ def test_hosted_submit_still_refuses_a_mounted_server_key(hosted_sandbox):
         source_id = await _upload_archive(sandbox)
         upload = await _upload_credential(sandbox, "GOOD")
         with pytest.raises(
-            ValidationError, match="hosted_secret_manager_unsupported: AGENTCC_API_KEY"
+            ValidationError, match="hosted_secret_manager_unsupported: OTHER_VALUE"
         ):
             sandbox.submit(
                 LocalSandboxRequest(
@@ -1960,7 +2013,7 @@ def test_hosted_submit_still_refuses_a_mounted_server_key(hosted_sandbox):
                     environment_values={"OPENAI_API_KEY": "value"},
                     secret_refs={
                         "GOOD": _ref("mounted", upload),
-                        "AGENTCC_API_KEY": _ref("mounted", "AGENTCC_API_KEY"),
+                        "OTHER_VALUE": _ref("mounted", "AGENTCC_API_KEY"),
                     },
                 )
             )
@@ -1985,7 +2038,7 @@ def test_hosted_submit_refuses_a_vault_alias_for_another_aliases_upload(
                     source_id=source_id,
                     secret_refs={
                         "GOOD": _ref("mounted", upload),
-                        "PYTHONPATH": _ref("platform-vault", upload),
+                        "OTHER_VALUE": _ref("platform-vault", upload),
                     },
                 )
             )
@@ -1995,7 +2048,7 @@ def test_hosted_submit_refuses_a_vault_alias_for_another_aliases_upload(
     pending = str(uuid.UUID(hex=upload.removeprefix("ALK_SECRET_FILE_")[:32].lower()))
 
     assert refused.status_code == 400
-    assert refused.detail == "sandbox_secret_reference_refused: PYTHONPATH"
+    assert refused.detail == "sandbox_secret_reference_refused: OTHER_VALUE"
     _assert_nothing_left(sandbox)
     # The refusal precedes the claim, so the upload was never consumed.
     assert (sandbox.secret_files_root / "pending" / pending).is_file()
@@ -2297,6 +2350,1172 @@ def test_hosted_github_route_accepts_a_submitted_value(tmp_path, monkeypatch):
     assert job["execution"] == "hosted"
     assert job["agent"]["secret_refs"]["OPENAI_API_KEY"]["manager"] == "platform-vault"
     assert "route-value" not in response.text
+
+
+# --- TH-9550: what a job can put in the controller's environment -----------------------------
+
+@pytest.fixture
+def local_sandbox(tmp_path, monkeypatch):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    (source / "agent.py").write_text("print('ready')\n", encoding="utf-8")
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    sandbox = LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+    sandbox.test_source = source
+    return sandbox
+
+
+def _run_local_job(sandbox, refs=None, **fields):
+    """Submit a local job, then run the real _execute on it with refs of the test's choosing."""
+
+    async def run():
+        job = await _parked_submit(sandbox, source_path=str(sandbox.test_source), **fields)
+        if refs is not None:
+            job = _with_refs(job, {**job.agent.secret_refs, **refs})
+        await sandbox._execute(job, sandbox.test_source)
+        return job
+
+    return asyncio.run(run())
+
+
+def _state(sandbox, job):
+    return json.loads((sandbox.jobs_root / job.job_id / "state.json").read_text())
+
+
+def _only_worker_env(launched):
+    assert len(launched) == 1
+    return dict(launched[0])
+
+
+def test_config_connection_names_reach_the_controller_and_the_rest_only_the_runtime(
+    local_sandbox, launched_workers
+):
+    job = _run_local_job(
+        local_sandbox,
+        connector_config={
+            "VAPI_ASSISTANT_ID": "assistant-canary",
+            "REMOTE_AGENT_ID": "remote-canary",
+            "VAPI_API_BASE_URL": "https://canary.invalid",
+            "HTTP_PROXY": "http://canary-proxy.invalid:3128",
+            "NO_PROXY": "canary.invalid",
+        },
+    )
+
+    env = _only_worker_env(launched_workers)
+    assert _state(local_sandbox, job)["stage"] == "completed"
+    assert env["VAPI_ASSISTANT_ID"] == "assistant-canary"
+    for name in ("REMOTE_AGENT_ID", "VAPI_API_BASE_URL", "HTTP_PROXY", "NO_PROXY"):
+        assert name not in env
+        assert env[f"ALK_RUNTIME_VALUE_{name}"]
+    names = env["ALK_RUNTIME_CONFIGURATION_NAMES"].split(",")
+    assert {"REMOTE_AGENT_ID", "VAPI_API_BASE_URL", "HTTP_PROXY", "NO_PROXY"} <= set(names)
+    assert "VAPI_ASSISTANT_ID" not in names
+
+
+@pytest.mark.parametrize(
+    "name", ["PYTHONPATH", "HARNESS_PLATFORM_URL", "ALK_SANDBOX_TOKEN"]
+)
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+def test_reserved_config_keys_are_refused_at_submit_and_preflight(name, request_type):
+    with pytest.raises(ValidationError, match=f"connector_config_name_reserved: {name}"):
+        request_type(source_path="/tmp/agent", connector_config={name: "canary"})
+
+
+_NO_AGENT_NEEDS = [
+    "DOCKER_CONFIG", "COMPOSE_FILE", "BASH_ENV", "ENV", "LD_PRELOAD",
+    "DYLD_INSERT_LIBRARIES", "GIT_SSH_COMMAND", "SSH_ASKPASS", "NODE_OPTIONS",
+]
+_AGENT_SETTINGS = [
+    "HTTPS_PROXY", "http_proxy", "NO_PROXY", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE",
+    # A customer's own credentials under a tool's prefix: git, ssh and docker don't read these.
+    "GIT_TOKEN", "GIT_ACCESS_TOKEN", "SSH_PRIVATE_KEY", "DOCKER_PASSWORD", "DOCKER_USERNAME",
+]
+
+
+@pytest.mark.parametrize("name", _NO_AGENT_NEEDS)
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+def test_a_name_no_agent_needs_is_refused_on_both_channels(name, request_type):
+    # Runtime values reach the Compose subprocess under their own names, where these steer it.
+    with pytest.raises(ValidationError, match=f"connector_config_name_reserved: {name}"):
+        request_type(source_path="/tmp/agent", connector_config={name: "canary"})
+    with pytest.raises(ValidationError, match=f"environment_name_reserved: {name}"):
+        request_type(source_path="/tmp/agent", environment_values={name: "canary"})
+
+
+def test_a_job_value_does_not_override_the_kits_port_variable(tmp_path, monkeypatch):
+    # The kit allocates the published port; a job value of the same name (MY_PORT=1.2.3.4:9, or
+    # 0.0.0.0:2375) must not replace it in Compose's environment.
+    from fi.alk.harness import provision
+
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_MY_PORT", "1.2.3.4:9")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        # What Compose sees: the job env file (read now, it is deleted after the call) under the
+        # process environment.
+        seen = dict(kwargs["env"])
+        job_file = [c for i, c in enumerate(command) if i and command[i - 1] == "--env-file"][-1]
+        with open(job_file, encoding="utf-8") as handle:
+            for line in filter(None, handle.read().split("\n")):
+                key, _, quoted = line.partition("=")
+                seen.setdefault(key, quoted[1:-1])
+        calls.append((dict(kwargs["env"]), seen))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(provision.subprocess, "run", fake_run)
+    compose = tmp_path / "compose.yml"
+    compose.write_text("services: {}\n")
+    environment = provision.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(compose),
+        project="fagi-harness-port",
+        runtime_configuration_names=["MY_PORT"],
+        port_variables={"MY_PORT": "0"},
+    )
+    provision._run(environment, "ps")
+    process_env, seen = calls[0]
+    assert seen["MY_PORT"] == "0"
+    assert "MY_PORT" not in process_env
+
+
+@pytest.mark.parametrize(
+    "field", ["environment_values", "connector_config"]
+)
+def test_a_refused_value_is_not_echoed_in_the_422(tmp_path, field):
+    client = TestClient(create_app(tmp_path / "state"))
+    response = client.post(
+        "/v1/jobs",
+        json={"source_path": "/tmp/agent", field: {"DOCKER_CONFIG": "canary-echo-0042"}},
+    )
+    assert response.status_code == 422
+    assert "canary-echo-0042" not in response.text
+
+
+def test_a_rerun_refuses_a_name_no_agent_needs():
+    with pytest.raises(ValidationError, match="environment_name_reserved: DOCKER_CONFIG"):
+        SandboxRerunRequest(environment_values={"DOCKER_CONFIG": "x"})
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["alk_sandbox_token", "Alk_Anything", "pythonpath", "fi_api_key", "harness_platform_url"],
+)
+def test_a_runner_name_is_refused_in_any_case(name):
+    with pytest.raises(ValidationError, match="name_reserved"):
+        LocalSandboxRequest(source_path="/tmp/agent", connector_config={name: "x"})
+    with pytest.raises(ValidationError, match="name_reserved"):
+        LocalSandboxRequest(source_path="/tmp/agent", environment_values={name: "x"})
+
+
+def test_a_refused_name_says_why_and_what_to_do(request_type=LocalSandboxRequest):
+    with pytest.raises(ValidationError, match="steers a process the runner starts.*another name"):
+        request_type(source_path="/tmp/agent", environment_values={"DOCKER_CONFIG": "x"})
+
+
+@pytest.mark.parametrize("name", _AGENT_SETTINGS)
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+def test_proxy_ca_and_credential_names_stay_agent_settings(name, request_type):
+    request_type(source_path="/tmp/agent", connector_config={name: "canary"})
+    request_type(source_path="/tmp/agent", environment_values={name: "canary"})
+
+
+def test_reserved_config_key_is_a_422_over_http(tmp_path):
+    client = TestClient(create_app(tmp_path / "state"))
+
+    for route in ("/v1/jobs", "/v1/preflight"):
+        response = client.post(
+            route,
+            json={"source_path": "/tmp/agent", "connector_config": {"PYTHONPATH": "x"}},
+        )
+        assert response.status_code == 422, route
+        assert "connector_config_name_reserved: PYTHONPATH" in response.text
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "PYTHONPATH",
+        "LD_PRELOAD",
+        "HARNESS_VOICE_RUNNER",
+        "AGENTCC_API_KEY",
+        "GOOGLE_API_KEY",
+        "TMPDIR",
+        "http_proxy",
+        "no_proxy",
+        "ALK_SANDBOX_TOKEN",
+        "ANTHROPIC_API_KEY",
+    ],
+)
+def test_a_reserved_alias_for_a_controller_variable_is_refused(request_type, alias):
+    for manager in ("environment", "mounted", "futureagi"):
+        with pytest.raises(ValidationError, match=f"secret_alias_reserved: {alias}"):
+            request_type(
+                source_path="/tmp/agent",
+                secret_refs={alias: _controller_ref(manager, "SOME_NEUTRAL_KEY")},
+            )
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+@pytest.mark.parametrize(
+    "alias", ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "GOOGLE_API_KEY"]
+)
+def test_the_agents_own_provider_credential_is_accepted(request_type, alias):
+    request_type(source_path="/tmp/agent", secret_refs={alias: _ref("environment", "MY_KEY")})
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+@pytest.mark.parametrize("alias", ["PYTHONPATH", "HARNESS_PLATFORM_API_KEY", "ALK_SANDBOX_TOKEN"])
+def test_the_agents_own_credential_takes_the_environment_value_rule(request_type, alias):
+    with pytest.raises(ValidationError, match=f"secret_alias_reserved: {alias}"):
+        request_type(source_path="/tmp/agent", secret_refs={alias: _ref("environment", "MY_KEY")})
+
+
+def test_the_agents_own_claude_key_reaches_the_agent_and_not_the_controller(
+    local_sandbox, launched_workers, monkeypatch
+):
+    monkeypatch.setenv("MY_ANTHROPIC", "customer-claude-key")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    _run_local_job(local_sandbox, refs={"ANTHROPIC_API_KEY": _ref("environment", "MY_ANTHROPIC")})
+
+    child = _only_worker_env(launched_workers)
+    assert child["ALK_RUNTIME_VALUE_ANTHROPIC_API_KEY"] == "customer-claude-key"
+    assert "ANTHROPIC_API_KEY" in child["ALK_RUNTIME_CONFIGURATION_NAMES"].split(",")
+    assert "ANTHROPIC_API_KEY" not in child
+
+
+@pytest.mark.parametrize("alias", ["A=B", " PYTHONPATH", "X\x00", "1BAD", ""])
+def test_a_malformed_alias_is_refused_at_submit_preflight_and_rerun(alias):
+    for request_type in (LocalSandboxRequest, SandboxPreflightRequest):
+        with pytest.raises(ValidationError, match="secret_reference_name_invalid"):
+            request_type(
+                source_path="/tmp/agent",
+                secret_refs={alias: _ref("environment", "SOME_NEUTRAL_KEY")},
+            )
+    with pytest.raises(ValidationError, match="secret_reference_name_invalid"):
+        SandboxRerunRequest(secret_refs={alias: _ref("mounted", "SOME_NEUTRAL_KEY")})
+
+
+def test_the_rerun_alias_shape_is_a_422_over_http(tmp_path):
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.post(
+        "/v1/jobs/anything/rerun",
+        json={"secret_refs": {"A=B": {"manager": "mounted", "key": "K", "purpose": "target_provider"}}},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest])
+def test_uploads_and_environment_values_keep_their_reserved_looking_names(request_type):
+    request = request_type(
+        source_path="/tmp/agent",
+        secret_refs={
+            "GOOGLE_APPLICATION_CREDENTIALS": _ref(
+                "mounted", "ALK_SECRET_FILE_0123456789ABCDEF_ABC123"
+            )
+        },
+        environment_values={
+            "GOOGLE_CLOUD_PROJECT": "project-canary",
+            "PYTHONUNBUFFERED": "1",
+        },
+    )
+
+    assert "GOOGLE_APPLICATION_CREDENTIALS" in request.secret_refs
+
+
+def test_a_mounted_ref_that_is_not_an_upload_cannot_take_a_reserved_alias():
+    with pytest.raises(ValidationError, match="secret_alias_reserved: PYTHONPATH"):
+        LocalSandboxRequest(
+            source_path="/tmp/agent",
+            secret_refs={"PYTHONPATH": _ref("mounted", "NOT_AN_UPLOAD_KEY")},
+        )
+
+
+def test_the_jobs_own_allowlisted_values_reach_the_controller_under_their_own_names(
+    local_sandbox, launched_workers
+):
+    _run_local_job(
+        local_sandbox,
+        environment_values={
+            "LIVEKIT_URL": "wss://canary.invalid",
+            "VAPI_API_BASE_URL": "https://canary-base.invalid",
+            "MY_VALUE": "mine",
+        },
+    )
+
+    env = _only_worker_env(launched_workers)
+    assert env["LIVEKIT_URL"] == "wss://canary.invalid"
+    assert env["ALK_RUNTIME_VALUE_LIVEKIT_URL"] == "wss://canary.invalid"
+    assert "VAPI_API_BASE_URL" not in env
+    assert "MY_VALUE" not in env
+    assert env["ALK_RUNTIME_VALUE_VAPI_API_BASE_URL"] == "https://canary-base.invalid"
+
+
+def test_a_rerun_controller_gets_the_jobs_allowlisted_values(
+    local_sandbox, launched_workers
+):
+    sandbox = local_sandbox
+
+    async def rerun():
+        job = await _terminal_job(sandbox, source_path=str(sandbox.test_source))
+        del sandbox._execute_rerun
+        sandbox.rerun(
+            job.job_id,
+            SandboxRerunRequest(
+                environment_values={
+                    "VAPI_API_KEY": "vapi-canary",
+                    "VAPI_API_BASE_URL": "https://canary-base.invalid",
+                }
+            ),
+        )
+        await sandbox._tasks.pop(job.job_id)
+
+    asyncio.run(rerun())
+
+    env = launched_workers[0]
+    assert env["VAPI_API_KEY"] == "vapi-canary"
+    assert "VAPI_API_BASE_URL" not in env
+    assert env["ALK_RUNTIME_VALUE_VAPI_API_BASE_URL"] == "https://canary-base.invalid"
+
+
+@pytest.mark.parametrize("manager", ["environment", "mounted", "futureagi"])
+def test_a_token_server_never_lets_a_ref_read_its_environment(
+    local_sandbox, launched_workers, monkeypatch, manager
+):
+    monkeypatch.setenv(_TOKEN, "server-token-canary")
+    monkeypatch.setenv("LK_URL", "wss://server.invalid")
+
+    job = _run_local_job(local_sandbox, refs={"X": _ref(manager, "LK_URL")})
+
+    _assert_failed_before_launch(
+        local_sandbox, job.job_id, launched_workers, "secret_reference_reserved: X"
+    )
+
+
+def test_the_flag_with_a_token_is_not_development_mode(
+    local_sandbox, launched_workers, monkeypatch
+):
+    monkeypatch.setenv(_FLAG, "1")
+    monkeypatch.setenv(_TOKEN, "server-token-canary")
+    monkeypatch.setenv("LK_URL", "wss://server.invalid")
+
+    job = _run_local_job(local_sandbox, refs={"X": _ref("environment", "LK_URL")})
+
+    _assert_failed_before_launch(
+        local_sandbox, job.job_id, launched_workers, "secret_reference_reserved: X"
+    )
+
+
+def test_the_flag_without_a_token_on_a_public_host_is_not_development_mode(
+    local_sandbox, launched_workers, monkeypatch
+):
+    monkeypatch.setenv("ALK_SANDBOX_HOST", "0.0.0.0")
+    monkeypatch.setenv("LK_URL", "wss://server.invalid")
+
+    job = _run_local_job(local_sandbox, refs={"X": _ref("environment", "LK_URL")})
+
+    _assert_failed_before_launch(
+        local_sandbox, job.job_id, launched_workers, "secret_reference_reserved: X"
+    )
+
+
+def test_development_mode_reads_an_ordinary_server_variable(
+    local_sandbox, launched_workers, monkeypatch
+):
+    monkeypatch.setenv("LK_URL", "wss://dev.invalid")
+
+    _run_local_job(local_sandbox, refs={"X": _controller_ref("environment", "LK_URL")})
+
+    assert _only_worker_env(launched_workers)["X"] == "wss://dev.invalid"
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "HARNESS_PLATFORM_API_KEY",
+        "AGENTCC_API_KEY",
+        "GITHUB_INSTALLATION_1_TOKEN",
+        "ALK_SANDBOX_TOKEN",
+        "PYTHONPATH",
+        # Covered only by the client half of the predicate.
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "HTTPS_PROXY",
+    ],
+)
+@pytest.mark.parametrize("manager", ["environment", "mounted", "futureagi"])
+def test_development_mode_still_refuses_a_reserved_key_under_a_neutral_alias(
+    local_sandbox, launched_workers, monkeypatch, key, manager
+):
+    monkeypatch.setenv(key, "runner-canary")
+
+    job = _run_local_job(local_sandbox, refs={"X": _ref(manager, key)})
+
+    _assert_failed_before_launch(
+        local_sandbox, job.job_id, launched_workers, "secret_reference_reserved: X"
+    )
+
+
+@pytest.mark.parametrize("token", [None, "server-token-canary"])
+def test_a_jobs_own_value_resolves_in_both_modes(
+    local_sandbox, launched_workers, monkeypatch, token
+):
+    if token:
+        monkeypatch.setenv(_TOKEN, token)
+
+    _run_local_job(local_sandbox, environment_values={"MY_VALUE": "mine"})
+
+    assert _only_worker_env(launched_workers)["ALK_RUNTIME_VALUE_MY_VALUE"] == "mine"
+
+
+def _local_rerun_refused(sandbox, key, manager="environment"):
+    async def rerun():
+        job = await _terminal_job(sandbox, source_path=str(sandbox.test_source))
+        upload = await _upload_credential(sandbox, "GOOD")
+        before = (sandbox.jobs_root / job.job_id / "state.json").read_text()
+        with pytest.raises(HTTPException) as refused:
+            sandbox.rerun(
+                job.job_id,
+                SandboxRerunRequest(
+                    secret_refs={
+                        "GOOD": _ref("mounted", upload),
+                        "X": _ref(manager, key),
+                    }
+                ),
+            )
+        return job, before, refused.value
+
+    return asyncio.run(rerun())
+
+
+def test_a_token_server_local_rerun_refuses_a_server_ref_and_stores_nothing(
+    local_sandbox, monkeypatch
+):
+    sandbox = local_sandbox
+    monkeypatch.setenv(_TOKEN, "server-token-canary")
+    monkeypatch.setenv("LK_URL", "wss://server.invalid")
+
+    job, before, refused = _local_rerun_refused(sandbox, "LK_URL")
+
+    assert refused.status_code == 400
+    assert refused.detail == "secret_reference_reserved: X"
+    assert job.job_id not in sandbox._ephemeral_secrets
+    assert job.job_id not in sandbox._tasks
+    assert not (sandbox.secret_files_root / "jobs" / job.job_id).exists()
+    assert (sandbox.jobs_root / job.job_id / "state.json").read_text() == before
+
+
+@pytest.mark.parametrize("manager", ["environment", "mounted", "futureagi"])
+def test_development_mode_local_rerun_refuses_a_runner_key(local_sandbox, monkeypatch, manager):
+    sandbox = local_sandbox
+    monkeypatch.setenv("HARNESS_PLATFORM_API_KEY", "runner-canary")
+
+    job, _before, refused = _local_rerun_refused(sandbox, "HARNESS_PLATFORM_API_KEY", manager)
+
+    assert (refused.status_code, refused.detail) == (400, "secret_reference_reserved: X")
+    assert job.job_id not in sandbox._ephemeral_secrets
+    assert not (sandbox.secret_files_root / "jobs" / job.job_id).exists()
+
+
+def test_a_token_server_local_rerun_still_resolves_a_claimed_upload(
+    local_sandbox, monkeypatch
+):
+    sandbox = local_sandbox
+    monkeypatch.setenv(_TOKEN, "server-token-canary")
+
+    async def rerun():
+        job = await _terminal_job(sandbox, source_path=str(sandbox.test_source))
+        upload = await _upload_credential(sandbox, "GOOD")
+        sandbox.rerun(
+            job.job_id, SandboxRerunRequest(secret_refs={"GOOD": _ref("mounted", upload)})
+        )
+        await sandbox._tasks.pop(job.job_id)
+        return job
+
+    job = asyncio.run(rerun())
+
+    assert "GOOD" in sandbox._ephemeral_secrets[job.job_id]
+
+
+def test_no_proxy_setting_from_a_job_reaches_the_controllers_environment(
+    local_sandbox, launched_workers, monkeypatch
+):
+    """The proxy leak end to end: a canary proxy in config must not be read by the controller."""
+    import urllib.request
+
+    _run_local_job(
+        local_sandbox,
+        connector_config={"HTTP_PROXY": "http://canary-proxy.invalid:3128"},
+        environment_values={"https_proxy": "http://canary-proxy.invalid:3128"},
+    )
+    env = _only_worker_env(launched_workers)
+    monkeypatch.setattr(os, "environ", dict(env))
+
+    # Only a bare scheme name is a proxy setting; the namespaced copies are inert.
+    assert not {"http", "https", "all", "ftp", "no"} & set(
+        urllib.request.getproxies_environment()
+    )
+    with pytest.raises(ValidationError, match="secret_alias_reserved: no_proxy"):
+        LocalSandboxRequest(
+            source_path="/tmp/agent",
+            secret_refs={"no_proxy": _controller_ref("environment", "SOME_NEUTRAL_KEY")},
+        )
+
+
+# --- TH-9550, amendment 4.1: the customer's own model keys are the agent's, never the controller's
+
+_PROVIDER_NAMES = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+]
+# Exception 1a: an environment value for a controller connection name also reaches the controller.
+_CONTROLLER_CONNECTION_PROVIDER_NAMES = {"OPENAI_API_KEY", "GEMINI_API_KEY"}
+# Exception 1b: a local job's simulator runs on the customer's own keys for these.
+_LOCAL_SIMULATOR_FALLBACK_NAMES = {"GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"}
+_ALIASES_ENV = "ALK_TARGET_PROVIDER_ALIASES"
+_ROUTES = ["environment_value", "target_provider_ref"]
+
+
+def _canary(name):
+    return f"canary-{name.lower().replace('_', '-')}-1"
+
+
+def _reaches_controller(route, name):
+    """True where the spec lets the value into the controller under its own name (1a)."""
+    return route == "environment_value" and name in _CONTROLLER_CONNECTION_PROVIDER_NAMES
+
+
+def _provider_fields(route, name, monkeypatch, canary):
+    """A job supplying ``name`` as an environment value or as a caller-sent target_provider ref.
+
+    The ref is a dev-mode local ref keyed to a neutral server variable (rule 4 refuses a reserved
+    key), on a local job.
+    """
+    if route == "environment_value":
+        return {"environment_values": {name: canary}}
+    monkeypatch.setenv("MY_PROVIDER_SOURCE", canary)
+    return {"secret_refs": {name: _ref("environment", "MY_PROVIDER_SOURCE")}}
+
+
+def _assert_holders(environment, name, canary, route, where):
+    """The value sits in the runtime namespace, and under its own name only for exception 1a."""
+    allowed = {f"ALK_RUNTIME_VALUE_{name}"}
+    if _reaches_controller(route, name):
+        allowed.add(name)
+    holders = {key for key, value in environment.items() if value == canary}
+    assert holders == allowed, where
+    assert (name in environment) == _reaches_controller(route, name), where
+
+
+def _assert_no_holder(environment, name, canary, where):
+    assert name not in environment, where
+    assert canary not in environment.values(), where
+
+
+def _agent_process_environment(worker_environment, job, tmp_path, monkeypatch):
+    """The environment of a stub agent spawned the way ProcessRuntimeProvider spawns one.
+
+    The worker's environment becomes this process's, as it is the worker's. The values are what
+    local_certified_runtime hands the provider (``_runtime_values``), loaded through the provider's
+    own secrets loader with the purposes from job.json, and selected by a process that claims
+    TARGET_PROVIDER. The spawn stops at the runner, which records the environment it was given.
+    """
+    monkeypatch.setattr(os, "environ", dict(worker_environment))
+    work = tmp_path / "agent-work"
+    work.mkdir()
+    (work / "job.json").write_text(job.model_dump_json(), encoding="utf-8")
+    secrets = work / "secrets.json"
+    secrets.write_text(
+        json.dumps(local_certified_runtime._runtime_values(job)), encoding="utf-8"
+    )
+    provider = process_runtime.ProcessRuntimeProvider(secrets_path=secrets)
+    values, purposes = process_runtime._load_and_delete_secrets(
+        provider._secrets_path,
+        work_directory=work,
+        secret_purpose_map=provider._secret_purpose_map,
+    )
+    assert not secrets.exists()
+    process = SourceProcess(
+        name="agent",
+        kind="source",
+        working_directory=".",
+        build_commands=[],
+        run_command=["python3", "-c", "pass"],
+        environment={},
+        secret_purposes=["target_provider"],
+        user=ProcessUser.SVC_TOOLS,
+        depends_on=[],
+    )
+    captured = {}
+
+    class Handle:
+        def is_running(self):
+            return True
+
+        def captured_output(self):
+            return ""
+
+        def terminate(self):
+            pass
+
+        def interrupt(self):
+            pass
+
+        def wait(self, timeout):
+            return True
+
+        def kill(self):
+            pass
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured.update(env)
+        return Handle()
+
+    (tmp_path / "agent-build").mkdir()
+    process_runtime.spawn_source_process(
+        process,
+        build_dir=tmp_path / "agent-build",
+        world_dir=tmp_path / "agent-world",
+        world_index=0,
+        port_plan=process_runtime.PortPlan(
+            ordinals={"agent": 0},
+            job_shared=frozenset(),
+            fixed_ports={},
+            effective_instances=1,
+            degraded_reason=None,
+        ),
+        configuration_addresses={},
+        secret_values=values,
+        secret_purposes=purposes,
+        runner=runner,
+    )
+    return captured
+
+
+def _compose_session(tmp_path, monkeypatch, services_environment, label):
+    """A recorded agent runtime whose Compose config names every variable in the mapping.
+
+    Returns (session, docker_calls); docker_calls records (argv, environment) of every docker
+    invocation at provision's subprocess.run, the boundary of this process.
+    """
+    names = provision._contract_runtime_configuration_names(None)
+    source = tmp_path / f"{label}-agent"
+    session = tmp_path / f"{label}-session"
+    source.mkdir()
+    compose = source / "compose.yml"
+    compose.write_text("services:\n  agent-runtime:\n    image: example\n", encoding="utf-8")
+    provision.ProvisionedEnvironment(
+        source=str(source.resolve()),
+        compose_file=str(compose),
+        project="fagi-harness-byok",
+        runtime_services=["agent-runtime"],
+        runtime_configuration_names=names,
+        running=True,
+    ).save(session)
+    docker_calls = []
+
+    def fake_run(command, **kwargs):
+        # What Compose sees: the job env file (read now, it is deleted after the call) under the
+        # process environment. Job values reach Compose only through that file.
+        seen = dict(kwargs["env"])
+        if "--env-file" in command:
+            job_file = [c for i, c in enumerate(command) if i and command[i - 1] == "--env-file"][-1]
+            with open(job_file, encoding="utf-8") as handle:
+                lines = handle.read().split("\n")
+            for line in filter(None, lines):
+                key, _, quoted = line.partition("=")
+                seen.setdefault(
+                    key,
+                    re.sub(r"\\(.)", lambda m: "\n" if m.group(1) == "n" else m.group(1), quoted[1:-1]),
+                )
+        docker_calls.append((list(command), seen))
+        rendered = {
+            "services": {
+                "agent-runtime": {"image": "example", "environment": services_environment}
+            }
+        }
+        stdout = json.dumps(rendered) if "config" in command else ""
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    monkeypatch.setattr(provision.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        provision, "_docker", lambda *a, **_k: "running healthy" if a and a[0] == "inspect" else ""
+    )
+    return session, docker_calls
+
+
+def _agent_runtime_command(worker_environment, tmp_path, monkeypatch, label="start"):
+    """Start the agent's Compose runtime from a worker's environment, up to the docker client."""
+    monkeypatch.setattr(os, "environ", dict(worker_environment))
+    session, docker_calls = _compose_session(tmp_path, monkeypatch, {}, label)
+    provision.start_runtime(session, stable_seconds=0.25)
+    return next(call for call in docker_calls if "run" in call[0] and "config" not in call[0])
+
+
+def _activate(worker_environment, tmp_path, monkeypatch, *, controller_lacks=(), label="activate"):
+    """provision.activate_voice_environment in a worker, over a Compose service naming all seven.
+
+    The service environment is rendered with the runtime values under their own names, as Compose
+    renders it, so only the name tells the caller's value from the repository's own. Returns the
+    worker's os.environ afterwards.
+    """
+    environment = {
+        key: value for key, value in worker_environment.items() if key not in controller_lacks
+    }
+    monkeypatch.setattr(os, "environ", environment)
+    rendered = {
+        name: environment[f"ALK_RUNTIME_VALUE_{name}"]
+        for name in _PROVIDER_NAMES
+        if f"ALK_RUNTIME_VALUE_{name}" in environment
+    }
+    session, _ = _compose_session(tmp_path, monkeypatch, rendered, label)
+    provision.activate_voice_environment(session)
+    return environment
+
+
+def _simulator_call_environment(worker_environment, job, tmp_path, name, canary):
+    """The environment a local job's call subprocess gets, built as the worker builds it."""
+    context = call_runner.CallRunnerContext(
+        job=job,
+        bundle_dir=tmp_path,
+        work_directory=tmp_path / "call-work",
+        evidence_seam=None,
+        target_provider_secret_values={name: canary},
+        attempt_number=1,
+    )
+    return call_runner.CallRunnerImpl(None, context, environ=dict(worker_environment))._environ
+
+
+async def _rerun(sandbox, launched, **rerun_fields):
+    """Rerun a terminal job that was submitted with no credentials; return the stage environments."""
+    job = await _terminal_job(sandbox, source_path=str(sandbox.test_source))
+    del sandbox._execute_rerun
+    before = len(launched)
+    sandbox.rerun(job.job_id, SandboxRerunRequest(**rerun_fields))
+    await sandbox._tasks.pop(job.job_id)
+    return launched[before:]
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest, SandboxRerunRequest])
+@pytest.mark.parametrize("route", _ROUTES)
+@pytest.mark.parametrize("name", _PROVIDER_NAMES)
+def test_submit_preflight_and_rerun_accept_the_customers_own_provider_key(
+    request_type, route, name, monkeypatch
+):
+    fields = _provider_fields(route, name, monkeypatch, "canary-accepted")
+    extra = {} if request_type is SandboxRerunRequest else {"source_path": "/tmp/agent"}
+
+    request = request_type(**extra, **fields)
+
+    assert name in {**request.secret_refs, **request.environment_values}
+
+
+@pytest.mark.parametrize("route", _ROUTES)
+@pytest.mark.parametrize("name", _PROVIDER_NAMES)
+def test_the_customers_own_provider_key_reaches_the_agent_and_the_controller_only_by_the_spec(
+    local_sandbox, launched_workers, monkeypatch, tmp_path, route, name
+):
+    canary = _canary(name)
+    monkeypatch.delenv(name, raising=False)
+    fields = _provider_fields(route, name, monkeypatch, canary)
+    expected_aliases = name if route == "target_provider_ref" else ""
+
+    # Submit and preflight, on the real request path; the worker is the real _execute's.
+    job = _run_local_job(local_sandbox, **fields)
+    local_sandbox.preflight(
+        SandboxPreflightRequest(source_path=str(local_sandbox.test_source), **fields)
+    )
+    assert _state(local_sandbox, job)["stage"] == "completed"
+    submit_worker = _only_worker_env(launched_workers)
+
+    # A rerun of another job that had no credentials at submit: the alias arrives only now.
+    rerun_workers = asyncio.run(_rerun(local_sandbox, launched_workers, **fields))
+    monkeypatch.delenv("MY_PROVIDER_SOURCE", raising=False)
+
+    # The controller process (this one) never holds it, after submit, preflight and rerun.
+    _assert_no_holder(dict(os.environ), name, canary, "the server process")
+    # The worker holds it in the runtime namespace, and under its name only for exception 1a, and
+    # it is told which names the caller sent as target aliases (defined, even when empty).
+    assert len(rerun_workers) == 3
+    for where, worker in [("submit", submit_worker)] + [("rerun", w) for w in rerun_workers]:
+        _assert_holders(worker, name, canary, route, where)
+        assert worker[_ALIASES_ENV] == expected_aliases, where
+        assert name in worker["ALK_RUNTIME_CONFIGURATION_NAMES"].split(","), where
+
+    # The authoring session inherits the worker's environment with provider_env() over it, so it
+    # holds the canary in the runtime namespace (ALK_RUNTIME_VALUE_<name>, the known limit) and,
+    # for exception 1a, under its own name; _assert_holders pins exactly that set, so the value
+    # is under no other name (a name check would be wrong: config.py sets ANTHROPIC_AUTH_TOKEN
+    # and ANTHROPIC_BASE_URL itself).
+    authoring = {**submit_worker, **config.provider_env()}
+    _assert_holders(authoring, name, canary, route, "authoring")
+
+    # The simulator's call environment has the customer's value under its own name only by 1a or 1b.
+    call_environment = _simulator_call_environment(submit_worker, job, tmp_path, name, canary)
+    assert (name in call_environment) == (
+        _reaches_controller(route, name) or name in _LOCAL_SIMULATOR_FALLBACK_NAMES
+    )
+
+    # Activation, with a Compose service that references the name. For 1a the controller is made
+    # to lack the name first, so that activation, not the promotion, is what puts it there.
+    activated = _activate(
+        submit_worker,
+        tmp_path,
+        monkeypatch,
+        controller_lacks={name} if _reaches_controller(route, name) else (),
+    )
+    _assert_holders(activated, name, canary, route, "activation")
+
+    # The agent has it under its own name: a stub process spawned through the provider's loader,
+    # and the Compose runtime's `--env NAME` and docker's own environment.
+    process_environment = _agent_process_environment(submit_worker, job, tmp_path, monkeypatch)
+    assert process_environment[name] == canary
+    argv, docker_environment = _agent_runtime_command(submit_worker, tmp_path, monkeypatch)
+    assert docker_environment[name] == canary
+    assert any(argv[i : i + 2] == ["--env", name] for i in range(len(argv) - 1))
+    assert canary not in " ".join(argv)
+    # Neither agent start gave the controller more than it had.
+    assert dict(os.environ) == submit_worker
+
+    # The same for the rerun's own workers: an alias sent only on the rerun reaches the agent
+    # (activation does not copy it into the controller, Compose hands it to the agent by name).
+    for index, rerun_worker in enumerate(rerun_workers):
+        activated = _activate(
+            rerun_worker,
+            tmp_path,
+            monkeypatch,
+            controller_lacks={name} if _reaches_controller(route, name) else (),
+            label=f"rerun-activate-{index}",
+        )
+        _assert_holders(activated, name, canary, route, f"rerun activation {index}")
+        argv, docker_environment = _agent_runtime_command(
+            rerun_worker, tmp_path, monkeypatch, label=f"rerun-start-{index}"
+        )
+        assert docker_environment[name] == canary, index
+        assert any(argv[i : i + 2] == ["--env", name] for i in range(len(argv) - 1)), index
+        assert canary not in " ".join(argv), index
+        assert dict(os.environ) == rerun_worker, index
+
+
+@pytest.mark.parametrize("name", ["OPENAI_API_KEY", "GEMINI_API_KEY"])
+def test_an_agent_config_key_with_a_connection_name_reaches_the_controller_only(
+    local_sandbox, launched_workers, monkeypatch, tmp_path, name
+):
+    canary = _canary(name)
+
+    job = _run_local_job(local_sandbox, connector_config={name: canary})
+
+    worker = _only_worker_env(launched_workers)
+    assert worker[name] == canary
+    agent = _agent_process_environment(worker, job, tmp_path, monkeypatch)
+    assert name not in agent
+    assert canary not in agent.values()
+
+
+@pytest.mark.parametrize("name", ["OPENAI_API_KEY", "GEMINI_API_KEY"])
+def test_a_caller_cannot_make_its_target_alias_an_environment_value_through_metadata(
+    local_sandbox, launched_workers, monkeypatch, name
+):
+    canary = _canary(name)
+    monkeypatch.setenv("MY_PROVIDER_SOURCE", canary)
+
+    _run_local_job(
+        local_sandbox,
+        secret_refs={name: _ref("environment", "MY_PROVIDER_SOURCE")},
+        metadata={"environment_value_names": [name], "secret_file_names": []},
+    )
+
+    worker = _only_worker_env(launched_workers)
+    assert name not in worker
+    assert worker[_ALIASES_ENV] == name
+
+
+def test_the_target_alias_variable_is_defined_when_there_are_none(
+    local_sandbox, launched_workers
+):
+    _run_local_job(local_sandbox)
+    rerun_workers = asyncio.run(_rerun(local_sandbox, launched_workers))
+
+    assert _only_worker_env(launched_workers[:1])[_ALIASES_ENV] == ""
+    assert [worker[_ALIASES_ENV] for worker in rerun_workers] == ["", "", ""]
+
+
+@pytest.mark.parametrize("route", _ROUTES)
+@pytest.mark.parametrize("name", _PROVIDER_NAMES)
+def test_a_rerun_rebuilds_the_target_aliases_from_its_own_refs(
+    local_sandbox, launched_workers, monkeypatch, route, name
+):
+    # The submit sent the name as a target alias; the rerun sends it as an environment value
+    # (and the other way round). Each run's set is its own request's.
+    canary = _canary(name)
+    submitted = "environment_value" if route == "target_provider_ref" else "target_provider_ref"
+    monkeypatch.delenv(name, raising=False)
+
+    async def run():
+        fields = _provider_fields(submitted, name, monkeypatch, "submit-" + canary)
+        job = await _terminal_job(local_sandbox, source_path=str(local_sandbox.test_source), **fields)
+        del local_sandbox._execute_rerun
+        fields = _provider_fields(route, name, monkeypatch, canary)
+        local_sandbox.rerun(job.job_id, SandboxRerunRequest(**fields))
+        await local_sandbox._tasks.pop(job.job_id)
+
+    asyncio.run(run())
+
+    for worker in launched_workers:
+        _assert_holders(worker, name, canary, route, "rerun")
+        assert worker[_ALIASES_ENV] == (name if route == "target_provider_ref" else "")
+
+
+def test_a_rerun_with_no_held_alias_set_treats_every_held_name_as_the_agents(local_sandbox):
+    # Not reachable today (rerun() sets the entry first); if it ever were, the submit's set
+    # (empty here) must not stand in for the rerun's, or a name sent only on the rerun is promoted.
+    async def run():
+        job = await _terminal_job(local_sandbox, source_path=str(local_sandbox.test_source))
+        assert sandbox_server._job_target_aliases(job) == frozenset()
+        local_sandbox._ephemeral_secrets[job.job_id] = {
+            "OPENAI_API_KEY": "canary-a",
+            "GEMINI_API_KEY": "canary-b",
+        }
+        local_sandbox._ephemeral_target_aliases.pop(job.job_id, None)
+        return job
+
+    job = asyncio.run(run())
+
+    assert local_sandbox._rerun_target_aliases(job) == {"OPENAI_API_KEY", "GEMINI_API_KEY"}
+    local_sandbox._ephemeral_target_aliases[job.job_id] = frozenset({"ONLY_THIS"})
+    assert local_sandbox._rerun_target_aliases(job) == {"ONLY_THIS"}
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest, SandboxRerunRequest])
+@pytest.mark.parametrize("manager", ["environment", "mounted", "futureagi"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "GOOGLE_API_KEY",
+        "OPENAI_BASE_URL",
+    ],
+)
+def test_these_provider_names_as_a_controller_alias_are_still_refused(request_type, manager, name):
+    extra = {} if request_type is SandboxRerunRequest else {"source_path": "/tmp/agent"}
+    with pytest.raises(ValidationError, match=f"secret_alias_reserved: {name}"):
+        request_type(**extra, secret_refs={name: _controller_ref(manager, "SOME_NEUTRAL_KEY")})
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest, SandboxRerunRequest])
+@pytest.mark.parametrize("name", ["OPENAI_API_KEY", "GEMINI_API_KEY"])
+def test_the_two_connection_names_stay_legal_controller_aliases(request_type, name):
+    extra = {} if request_type is SandboxRerunRequest else {"source_path": "/tmp/agent"}
+
+    request = request_type(**extra, secret_refs={name: _controller_ref("environment", "SOME_NEUTRAL_KEY")})
+
+    assert name in request.secret_refs
+
+
+@pytest.mark.parametrize("token", [None, "server-token-canary"])
+@pytest.mark.parametrize("alias", ["X", "ANTHROPIC_API_KEY"])
+@pytest.mark.parametrize(
+    "key", ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "GOOGLE_API_KEY"]
+)
+def test_a_target_provider_ref_cannot_read_the_servers_own_provider_key(
+    local_sandbox, launched_workers, monkeypatch, token, alias, key
+):
+    if token:
+        monkeypatch.setenv(_TOKEN, token)
+    monkeypatch.setenv(key, "runner-canary")
+
+    job = _run_local_job(local_sandbox, refs={alias: _ref("environment", key)})
+
+    _assert_failed_before_launch(
+        local_sandbox, job.job_id, launched_workers, f"secret_reference_reserved: {alias}"
+    )
+
+
+@pytest.mark.parametrize("key", ["OPENAI_API_KEY", "GEMINI_API_KEY", "OPENAI_BASE_URL"])
+def test_development_mode_lets_a_ref_read_these_server_values(
+    local_sandbox, launched_workers, monkeypatch, key
+):
+    # Deliberate: dev mode reads the server's environment for a name rule 4 does not reserve.
+    monkeypatch.setenv(key, "server-canary")
+
+    job = _run_local_job(local_sandbox, refs={"X": _ref("environment", key)})
+
+    assert _state(local_sandbox, job)["stage"] == "completed"
+    assert _only_worker_env(launched_workers)["ALK_RUNTIME_VALUE_X"] == "server-canary"
+
+
+_ALIAS_NAMES_REFUSED_FOR_A_TARGET_REF = [
+    "ALK_SANDBOX_TOKEN",
+    "ALK_RUNTIME_VALUE_ANTHROPIC_API_KEY",
+    "ALK_RUNTIME_CONFIGURATION_NAMES",
+    "ALK_TARGET_PROVIDER_ALIASES",
+    *sorted(sandbox_server._RUNNER_RESERVED_ENVIRONMENT),
+    "PATH",
+    "DOCKER_HOST",
+    "LD_PRELOAD",
+    "HTTPS_PROXY",
+    "no_proxy",
+    "NODE_OPTIONS",
+    "SSL_CERT_FILE",
+    "PYTHONPATH",
+]
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest, SandboxRerunRequest])
+@pytest.mark.parametrize("alias", _ALIAS_NAMES_REFUSED_FOR_A_TARGET_REF)
+def test_a_caller_sent_target_provider_alias_cannot_be_an_alk_runner_or_client_name(
+    request_type, alias
+):
+    extra = {} if request_type is SandboxRerunRequest else {"source_path": "/tmp/agent"}
+    with pytest.raises(ValidationError, match=f"secret_alias_reserved: {alias}"):
+        request_type(**extra, secret_refs={alias: _ref("environment", "MY_KEY")})
+
+
+_CLIENT_NAMES_AN_UPLOAD_CANNOT_TAKE = ["LD_PRELOAD", "DOCKER_HOST", "PATH", "https_proxy", "NODE_OPTIONS"]
+
+
+@pytest.mark.parametrize("name", _CLIENT_NAMES_AN_UPLOAD_CANNOT_TAKE)
+def test_an_upload_cannot_be_named_for_a_client_name(tmp_path, name):
+    sandbox = LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(_upload_credential(sandbox, name))
+
+    assert refused.value.status_code == 400
+    assert refused.value.detail == "environment_name is reserved"
+    assert not any(path.is_file() for path in (tmp_path / "secret-files").rglob("*"))
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest, SandboxRerunRequest])
+@pytest.mark.parametrize("alias", _CLIENT_NAMES_AN_UPLOAD_CANNOT_TAKE)
+def test_an_upload_ref_aliased_to_a_client_name_is_refused(request_type, alias):
+    extra = {} if request_type is SandboxRerunRequest else {"source_path": "/tmp/agent"}
+    with pytest.raises(ValidationError, match=f"secret_alias_reserved: {alias}"):
+        request_type(
+            **extra,
+            secret_refs={alias: _ref("mounted", "ALK_SECRET_FILE_0123456789ABCDEF_ABC123")},
+        )
+
+
+def test_an_ordinary_upload_alias_still_uploads_and_validates(tmp_path):
+    sandbox = LocalSandbox(
+        tmp_path / "state",
+        upload_root=tmp_path / "uploads",
+        secret_file_root=tmp_path / "secret-files",
+    )
+
+    key = asyncio.run(_upload_credential(sandbox, "GOOGLE_APPLICATION_CREDENTIALS", b"{\"a\": 1}"))
+
+    LocalSandboxRequest(
+        source_path="/tmp/agent",
+        secret_refs={"GOOGLE_APPLICATION_CREDENTIALS": _ref("mounted", key)},
+    )
+
+
+@pytest.mark.parametrize("request_type", [LocalSandboxRequest, SandboxPreflightRequest, SandboxRerunRequest])
+@pytest.mark.parametrize(
+    "name", ["HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "LANG", "LC_ALL"]
+)
+def test_a_client_name_is_accepted_as_an_environment_value(request_type, name):
+    extra = {} if request_type is SandboxRerunRequest else {"source_path": "/tmp/agent"}
+
+    request = request_type(**extra, environment_values={name: "canary-client"})
+
+    assert name in request.environment_values
+
+
+def test_a_target_provider_ref_under_a_neutral_alias_reaches_only_the_runtime_namespace(
+    local_sandbox, launched_workers, monkeypatch
+):
+    # A neutral alias is the name that would show a target ref kept as a controller variable.
+    canary = "canary-neutral-agent-key-1"
+    monkeypatch.setenv("MY_AGENT_SOURCE", canary)
+
+    job = _run_local_job(
+        local_sandbox, secret_refs={"MY_AGENT_KEY": _ref("environment", "MY_AGENT_SOURCE")}
+    )
+
+    worker = _only_worker_env(launched_workers)
+    assert _state(local_sandbox, job)["stage"] == "completed"
+    assert "MY_AGENT_KEY" not in worker
+    assert [key for key, value in worker.items() if value == canary] == [
+        "ALK_RUNTIME_VALUE_MY_AGENT_KEY"
+    ]
+    assert worker[_ALIASES_ENV] == "MY_AGENT_KEY"
+
+
+@pytest.mark.parametrize("name", ["fi_api_key", "harness_platform_url", "Alk_X"])
+def test_a_runner_name_is_refused_in_any_case_as_a_target_alias(name):
+    with pytest.raises(ValidationError, match=f"secret_alias_reserved: {name}"):
+        LocalSandboxRequest(
+            source_path="/tmp/agent", secret_refs={name: _ref("environment", "MY_SOURCE")}
+        )
+
+
+@pytest.mark.parametrize("name", ["fi_api_key", "harness_platform_url"])
+def test_a_runner_name_is_refused_in_any_case_for_an_upload(tmp_path, name):
+    from fastapi import HTTPException
+
+    sandbox = LocalSandbox(tmp_path / "state")
+    with pytest.raises(HTTPException, match="environment_name is reserved"):
+        asyncio.run(_upload_credential(sandbox, name))
+
+
+def test_the_agent_runtime_is_started_without_publishing_its_service_ports(
+    tmp_path, monkeypatch
+):
+    # A job value can stand in for a port variable at the agent runtime's start; that's safe only
+    # while the run publishes no service ports.
+    command, _environment = _agent_runtime_command({}, tmp_path, monkeypatch, label="ports")
+    assert "--no-deps" in command
+    assert "-P" not in command and "--service-ports" not in command
+
+
+def test_a_tool_credential_reaches_the_agent_runtime_env_list(tmp_path, monkeypatch):
+    # GIT_TOKEN is the agent's own setting, so it is named in `--env` like MY_KEY; a reserved
+    # name that is not a tool credential (DOCKER_CONFIG) stays out.
+    worker = {
+        "ALK_RUNTIME_CONFIGURATION_NAMES": "GIT_TOKEN,MY_KEY,DOCKER_CONFIG",
+        "ALK_RUNTIME_VALUE_GIT_TOKEN": "git-canary",
+        "ALK_RUNTIME_VALUE_MY_KEY": "key-canary",
+        "ALK_RUNTIME_VALUE_DOCKER_CONFIG": "/steer",
+    }
+    argv, _environment = _agent_runtime_command(worker, tmp_path, monkeypatch, label="toolcred")
+    pairs = [argv[i : i + 2] for i in range(len(argv) - 1)]
+    assert ["--env", "GIT_TOKEN"] in pairs
+    assert ["--env", "MY_KEY"] in pairs
+    assert ["--env", "DOCKER_CONFIG"] not in pairs
+    assert "git-canary" not in " ".join(argv)
+
+
+@pytest.mark.parametrize("name", ["GIT_TOKEN", "DOCKER_PASSWORD", "SSH_PRIVATE_KEY"])
+def test_a_tool_credential_is_accepted_as_a_target_ref(name):
+    # How the platform's create sends every stored value; the same rule as environment values.
+    LocalSandboxRequest(source_path="/tmp/agent", secret_refs={name: _ref("platform-vault", "k")})
+
+
+def test_a_refused_target_alias_says_why():
+    with pytest.raises(ValidationError, match="secret_alias_reserved: DOCKER_CONFIG.*another name"):
+        LocalSandboxRequest(
+            source_path="/tmp/agent", secret_refs={"DOCKER_CONFIG": _ref("platform-vault", "k")}
+        )
 
 
 # A cancelled or interrupted job: one owner stops its worker and its environment (TH-9519).

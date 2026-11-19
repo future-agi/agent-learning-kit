@@ -240,6 +240,40 @@ harness_chat:
     ]
 
 
+def test_a_disabled_stage_gets_no_workers_either(tmp_path):
+    from fi.alk.harness.backends import WorkerSpec
+
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        """schema_version: 1
+harness_chat:
+  enabled: true
+  stages:
+    run:
+      enabled: false
+""",
+        encoding="utf-8",
+    )
+    policy = load_chat_policy(policy_path)
+
+    async def handler(_args):
+        return {"content": []}
+
+    tools = ToolServer(name="run", tools=[ToolSpec("run_simulation", "run", {}, handler)])
+    spec = SessionSpec(
+        system_prompt="run",
+        servers={"run": tools},
+        builtins=("Read",),
+        workers={"runner": WorkerSpec(description="runs", instructions="run", servers={"run": tools})},
+    )
+
+    filtered = apply_chat_policy(spec, stage="run", policy=policy)
+
+    # A worker brings its own tools, so keeping it would leave the stage able to act.
+    assert filtered.granted_anywhere() == []
+    assert filtered.workers == {}
+
+
 def test_chat_policy_rejects_unknown_stages(tmp_path):
     policy_path = tmp_path / "policy.yaml"
     policy_path.write_text(

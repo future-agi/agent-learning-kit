@@ -11,8 +11,11 @@ import asyncio
 import json
 import logging
 import secrets
-from pathlib import Path
-from typing import Any
+import sys
+import weakref
+from collections.abc import Callable
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Any
 
 from fi.simulate.agent.wrappers.http_events import (
     CompletedToolEvents,
@@ -40,6 +43,7 @@ from .contract import (
     AgentContract,
     Runtime,
     RuntimeInterface,
+    ToolEntry,
     RuntimeSecretFile,
     RuntimeConfigFile,
     HttpObservation,
@@ -54,11 +58,13 @@ from .contract import (
     CONTRACT_FILE,
 )
 from .failure_file import FAILURE_FILE, write_failure_file
+from .job import FailureDomain, HarnessFailure, HarnessStage
 from .instrumentation_evidence import detect_instrumentation
 from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
     PathLookupsSpent,
     RuntimeSelectionError,
+    charged_path,
     path_lookup_budget,
     select_runtime,
 )
@@ -72,7 +78,10 @@ from .model_citation import (
     source_lines,
 )
 from .python_source import utf8_size
-from .source_folder import SubfolderNotFound, agent_folder, bind_runtime
+from .source_folder import SubfolderNotFound, agent_folder, bind_runtime, is_within
+
+if TYPE_CHECKING:
+    from .save_checker import Mode
 
 _LOG = logging.getLogger(__name__)
 
@@ -210,23 +219,39 @@ def _checked_contract(
     reached: list[Path] | None = None,
     asked: set[str] | None = None,
     held: dict[str, str] | None = None,
+    instrumentation: str | None = None,
+    progress: Callable[[str, list[str]], None] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The contract to save, or the problems to send back. It reads the customer's files and
     writes nothing, so the tool runs it off the event loop. ``reached`` is the code outside the
-    folder the browser scan found the agent reaches, when it has run."""
+    folder the browser scan found the agent reaches, when it has run. ``instrumentation``, when
+    given, is the answer already found for this session, so it isn't read again. ``progress`` is
+    told each stage's new problems as the stage ends, so a save cut partway can still answer
+    with what was found."""
     arrived = sorted(payload) if isinstance(payload, dict) else [type(payload).__name__]
-    payload = _without_nulls(unwrapped(payload))
-    # The harness records the folder below; one the model wrote itself is dropped, never refused.
-    if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
-        payload["runtime"].pop("source_subfolder", None)
+    payload = _contract_payload(payload)
     try:
         contract = AgentContract.model_validate(payload)
     except Exception as invalid:
-        return _problems([f"schema:{invalid}"[:600]], arrived)
+        schema_problems = [f"schema:{invalid}"[:600]]
+        if progress is not None:
+            progress("contract", list(schema_problems))
+        return _problems(schema_problems, arrived)
     # Only the save records lines it couldn't confirm.
     contract.unconfirmed_prompt_from = []
 
     problems = validate_contract(contract)
+    for entry in contract.tool_entrypoints:
+        if (
+            entry.mode in _ROOTED_MODES
+            and entry.module
+            and not all(part.isidentifier() for part in entry.module.split("."))
+        ):
+            problems.append(
+                f"tool[{entry.tool}]:module-not-dotted-identifier: module {entry.module[:80]!r} "
+                "must be a dotted Python name such as `agent` or `pkg.tools`, each part an "
+                "identifier; it is not a file path."
+            )
     if (
         require_setup_contract
         and contract.modality != "voice"
@@ -241,10 +266,40 @@ def _checked_contract(
     if require_setup_contract and contract.modality == "chat":
         if problem := generated_chat_interface_problem(contract.runtime):
             problems.append(problem)
+    if progress is not None:
+        progress("contract", list(problems))
     with path_lookup_budget():
         return _checked_against_source(
-            contract, problems, arrived, source_root, subfolder, reached, asked, held
+            contract,
+            problems,
+            arrived,
+            source_root,
+            subfolder,
+            reached,
+            asked,
+            held,
+            instrumentation=instrumentation,
+            progress=progress,
         )
+
+
+def _contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """The payload as the contract is read from it, shared by the quick check and the full one so
+    neither refuses what the other accepts. The harness records the folder; one the model wrote
+    itself is dropped, never refused."""
+    payload = _without_nulls(unwrapped(payload))
+    if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
+        payload["runtime"].pop("source_subfolder", None)
+    return payload
+
+
+def _quick_schema(payload: dict[str, Any], arrived: list[str]) -> dict[str, Any] | None:
+    """The schema refusal, answered without waiting on the checks that read files."""
+    try:
+        AgentContract.model_validate(_contract_payload(payload))
+    except Exception as invalid:
+        return _problems([f"schema:{invalid}"[:600]], arrived)
+    return None
 
 
 def _checked_against_source(
@@ -256,6 +311,9 @@ def _checked_against_source(
     reached: list[Path] | None = None,
     asked: set[str] | None = None,
     held: dict[str, str] | None = None,
+    *,
+    instrumentation: str | None = None,
+    progress: Callable[[str, list[str]], None] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The checks that read the customer's files, under the save's one path lookup budget.
     ``asked`` is the reading's record of what it has been asked once. A model whose citation was
@@ -263,6 +321,16 @@ def _checked_against_source(
     for the quote, rather than refused again: both are optional, and neither may cost the
     reading its turns. ``held`` is the reading's latest quote (submit_contract keeps it), so
     lines named later without one are still checked against what was quoted."""
+    # Where the stage now running began in problems, so each report holds only its own.
+    stage, since = "tool_evidence", len(problems)
+
+    def stage_ended(name: str, then: str | None) -> None:
+        nonlocal stage, since
+        if progress is not None:
+            progress(name, problems[since:])
+        if then is not None:
+            stage, since = then, len(problems)
+
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
@@ -284,6 +352,7 @@ def _checked_against_source(
         set_aside: list[str] = []
         try:
             problems.extend(tool_evidence_problems(contract, source_root, subfolder))
+            stage_ended("tool_evidence", "prompt_copy")
             copy_problems = _copy_prompt(contract, source_root)
             problems.extend(copy_problems)
             if contract.system_prompt_from and not copy_problems:
@@ -362,6 +431,7 @@ def _checked_against_source(
                             "unconfirmed and keeps the quote, or saves no prompt if the quote has "
                             "fewer than 16 letters"
                         )
+            stage_ended("prompt_copy", "model")
             if cited := model_problems(contract, source_root):
                 if asked is not None and "model" in asked:
                     contract.model = None
@@ -370,13 +440,22 @@ def _checked_against_source(
                     if asked is not None:
                         asked.add("model")
                         problems.append("model: if the model is refused again, it is left out")
+            stage_ended("model", None)
         except PathLookupsSpent as spent:
+            if progress is not None:
+                progress(stage, [*problems[since:], str(spent)])
             return _problems([*problems, str(spent)], arrived)
+        # After the model's report: a save cut later answers without the notes on lines set aside.
         if problems:
             problems.extend(set_aside)
     else:
         # With no source there is no line to find the name on, so the model is unknown.
         contract.model = None
+        # Every stage is reported on every save, so the one that reads no file says it found
+        # nothing rather than leaving a cut save to wonder whether it ran.
+        for name in ("tool_evidence", "prompt_copy", "model"):
+            stage_ended(name, None)
+    since = len(problems)
     runtime = contract.runtime
     if subfolder and source_root is not None:
         try:
@@ -398,6 +477,10 @@ def _checked_against_source(
                 )
             if refusal := _builds_a_sibling(source_root, runtime, subfolder):
                 problems.append(refusal)
+            if rooted := _modules_as_the_process_imports_them(
+                contract.tool_entrypoints, source_root, runtime.workdir, subfolder
+            ):
+                contract = contract.model_copy(update={"tool_entrypoints": rooted})
         except SubfolderNotFound:
             problems.append(
                 f"subfolder_not_found: {subfolder} is not a folder with files in the source, "
@@ -432,20 +515,99 @@ def _checked_against_source(
                 "runtime: the command hands an interpreter its program as an argument "
                 "(-c, -e, -p, --eval, --print); name the source file it runs instead"
             )
+    stage_ended("runtime", None)
     if problems:
         return _problems(problems, arrived)
-    return contract.model_copy(
-        update={
-            # With a folder, what it imports from elsewhere is read too, as the other scans do.
-            "instrumentation": detect_instrumentation(
+    if instrumentation is None:
+        # With a folder, what it imports from elsewhere is read too, as the other scans do.
+        instrumentation = (
+            detect_instrumentation(
                 agent_folder(source_root, subfolder),
                 code_the_agent_reaches(source_root, subfolder) if reached is None else reached,
             )
             if source_root and subfolder
-            else detect_instrumentation(source_root),
-            "runtime": runtime,
-        }
-    )
+            else detect_instrumentation(source_root)
+        )
+    return contract.model_copy(update={"instrumentation": instrumentation, "runtime": runtime})
+
+
+def _modules_as_the_process_imports_them(
+    entries: list[ToolEntry], source_root: Path, workdir: str, subfolder: str = ""
+) -> list[ToolEntry] | None:
+    """The entries with each module written as the agent's own process imports it, or None when
+    none changes. Only with a subfolder, where the process starts in the bound ``workdir``: a
+    reading writes ``examples.harness.x.agent`` for the file the process knows as ``agent``,
+    and the tracer matches a frame's module name exactly.
+
+    A module is rewritten when all of these hold; each is a file check, never an import, and
+    each is charged to the save's lookup budget:
+    - it starts with the workdir's path written dotted, and the rest names a file under the
+      workdir (``<rest>.py`` or ``<rest>/__init__.py``);
+    - the name as written is not itself a file under the workdir (``svc/agent.py`` beside
+      ``svc/svc/agent.py``: with the process in ``svc``, ``svc.agent`` is the inner one);
+    - no folder from the repository root down to the workdir has an ``__init__.py``: one that
+      does is part of a regular package, whose code knows its modules by the qualified name
+      (``GeneratedWorld.reach`` puts the package root on the path for exactly that).
+
+    An ``import`` or ``construct`` entry is also compiled to a handler, which imports through
+    ``GeneratedWorld.reach(source_root, subfolder)``: the root and the subfolder are on its path,
+    never the workdir. So those entries are rewritten only when the workdir is the subfolder
+    itself; an ``unreachable`` entry has no handler and only the tracer reads it, so it keeps the
+    workdir as its root.
+    """
+    from .source_tool_evidence import _file_in
+
+    folders = [part for part in PurePosixPath(workdir or "").parts if part != "."]
+    if not folders or ".." in folders or not all(part.isidentifier() for part in folders):
+        return None
+    if not any(entry.module and entry.mode in _ROOTED_MODES for entry in entries):
+        return None
+    root = Path(source_root).resolve()
+    try:
+        start = charged_path(root / Path(*folders))
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not is_within(start, root) or start == root:
+        return None
+    # The root and every folder down to the workdir, along the dotted path.
+    for depth in range(len(folders) + 1):
+        if _file_in(root.joinpath(*folders[:depth], "__init__.py"), root):
+            return None
+    prefix = ".".join(folders) + "."
+    subfolder_parts = [part for part in PurePosixPath(subfolder or "").parts if part != "."]
+    handler_root = subfolder_parts == folders
+
+    resolved: dict[str, bool] = {}
+
+    def names_a_file(dotted: str) -> bool:
+        # One resolution per name within a save: many entries can name one module.
+        if dotted not in resolved:
+            module = start.joinpath(*dotted.split("."))
+            resolved[dotted] = _file_in(module.with_suffix(".py"), start) or _file_in(
+                module / "__init__.py", start
+            )
+        return resolved[dotted]
+
+    rewritten, changed = [], False
+    for entry in entries:
+        module = entry.module
+        if (
+            entry.mode in _ROOTED_MODES
+            and (handler_root or entry.mode == "unreachable")
+            and module.startswith(prefix)
+            and all(part.isidentifier() for part in module.split("."))
+            and not names_a_file(module)
+            and names_a_file(rest := module[len(prefix) :])
+            # `calendar.py` in the folder is not what `import calendar` finds first.
+            and rest.split(".")[0] not in sys.stdlib_module_names
+        ):
+            entry = entry.model_copy(update={"module": rest})
+            changed = True
+        rewritten.append(entry)
+    return rewritten if changed else None
+
+
+_ROOTED_MODES = {"import", "construct", "unreachable"}
 
 
 def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
@@ -650,12 +812,22 @@ def contract_tools(
     scan_root: Path | None = None,
     require_setup_contract: bool = False,
     subfolder: str | None = None,
+    save_checks: Mode | None = None,
+    save_stand_in: str | None = None,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
     ``available_evals`` is the platform's own eval catalogue when the job carried one. Absent, the
     contract simply chooses none, which is what every job did before the catalogue existed.
+
+    ``save_checks`` picks where the checks that read the customer's files run (the default is the
+    kit's); ``save_stand_in`` names a module whose stages replace the real ones in the child, for
+    tests.
     """
+    # Here rather than at the top: the checker's child imports this module.
+    from . import save_checker
+    from .save_checker import SAVE_DEADLINE, ChildKeepsEnding, NotInTime, Saved
+
     events_schema = CompletedToolEvents.model_json_schema()
     events_schema["properties"]["failure_events"]["items"] = (
         events_schema.pop("$defs")["CompletedToolFailureEvent"]
@@ -704,11 +876,15 @@ def contract_tools(
     # Calls in one message check side by side, so the one sent last can finish first; it's the
     # model's last word, and an earlier call that finishes later mustn't write over it.
     sent = saved = 0
-    # Calls in one message share one scan: each running its own takes that many times longer.
-    scan: asyncio.Future[tuple[list[str], frozenset[str]]] | None = None
-    # The code outside the folder the scan found the agent reaches, for the instrumentation
-    # check, so the save walks the imports once.
-    reach: list[Path] = []
+    # The customer's files are read where a crafted repository can't hold the conversation: the
+    # checker owns the scan, which calls in one message share, and each save's checks.
+    checker = save_checker.SaveChecker(
+        scan_root=scan_root,
+        source_root=source_root,
+        subfolder=subfolder,
+        mode=save_checks,
+        stand_in=save_stand_in,
+    )
 
     @tool(
         "submit_contract",
@@ -1101,12 +1277,21 @@ def contract_tools(
                                 "that has to be built first. service: its effect is implemented "
                                 "by a shipped HTTP service. unreachable: no runnable seam exists, "
                                 "which blocks environment creation rather than generating a "
-                                "replacement.",
+                                "replacement. The kit can't call it, but traces it when `module` "
+                                "and `callable` say where it is. Use it for a tool whose module "
+                                "attribute is an object the kit can't call, such as the OpenAI "
+                                "Agents SDK's `@function_tool`: name the module and the def's own "
+                                "name. A LangChain `@tool` or a LiveKit `@function_tool` method "
+                                "stays `import` or `construct`.",
                             },
                             "module": {
                                 "type": "string",
-                                "description": "Importable path as the agent's own code would "
-                                "write it, e.g. package.module.file. Not a filesystem path.",
+                                "description": "The dotted name the agent's own process imports, "
+                                "from the folder it runs in: `agent` for the file agent.py "
+                                "there, not the name counted from the repository root. For "
+                                "`import` and `construct` the name is counted from the "
+                                "subfolder, and is rewritten only when the runtime's workdir "
+                                "is that subfolder. Not a filesystem path.",
                             },
                             "callable": {
                                 "type": "string",
@@ -1594,27 +1779,42 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, cut, sent, saved, scan
+        nonlocal refused, found, cut, sent, saved
+
+        def _end_the_stage(worn: ChildKeepsEnding) -> dict[str, Any]:
+            nonlocal refused
+            # Set first, as for the agent-type refusal: no resubmission gets through.
+            refused = True
+            write_failure_file(
+                HarnessFailure(
+                    domain=FailureDomain.AGENT,
+                    stage=HarnessStage.UNDERSTANDING_AGENT,
+                    code="save_checks_child_keeps_ending",
+                    message=str(worn),
+                    retryable=False,
+                    details={"deaths": worn.deaths},
+                ),
+                destination,
+            )
+            return _ok(_stop_message(destination))
+
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
         looked_before = second_look.given
         sent += 1
         mine = sent
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
+        # One deadline for everything this call waits on, so waiting on the scan leaves the
+        # checks less time rather than starting the clock again.
+        deadline = asyncio.get_running_loop().time() + SAVE_DEADLINE
         if found is None:
-            # Run again only a scan that can't give its answer here: one that raised or was
-            # cancelled, or one on another loop, which this one can't wait on. One that finished
-            # after every call waiting on it was cancelled still holds its answer.
-            if (
-                scan is None
-                or scan.get_loop() is not asyncio.get_running_loop()
-                or (scan.done() and (scan.cancelled() or scan.exception() is not None))
-            ):
-                scan = asyncio.ensure_future(
-                    asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder, reach)
-                )
-            # Shielded: one call cancelled mustn't cancel the scan the others wait on.
-            found, cut = await asyncio.shield(scan)
+            try:
+                answer = await checker.scan(deadline=deadline)
+            except ChildKeepsEnding as worn:
+                return _end_the_stage(worn)
+            if isinstance(answer, NotInTime):
+                return answer.response
+            found, cut = answer.found, answer.cut
             # A call running alongside this one may have refused while this one waited.
             if refused or (destination / FAILURE_FILE).is_file():
                 return _ok(_stop_message(destination))
@@ -1886,23 +2086,30 @@ def contract_tools(
             return _problems(
                 say + ["If any of these genuinely does not apply, submit again as is."]
             )
-        # The checks read the customer's files, which can take a second on a crafted one, so
-        # they run off the loop. The write stays here, after a refusal that came meanwhile.
-        checked = await asyncio.to_thread(
-            _checked_contract,
-            payload,
-            source_root=source_root,
-            require_setup_contract=require_setup_contract,
-            subfolder=subfolder,
-            # The scan's answer is for scan_root; another root's code is found again.
-            reached=reach if scan_root == source_root else None,
-            asked=asked_before,
-            held=held,
-        )
+        # A malformed payload is answered here, without waiting on the checks that read files.
+        quick = _quick_schema(payload, sorted(payload))
+        if quick is not None:
+            nudged.update(asked_before)
+            return quick
+        # The checks read the customer's files, which can take seconds on a crafted one, so they
+        # run where the deadline can stop them. The write stays here, after a refusal that came
+        # meanwhile.
+        try:
+            checked = await checker.check(
+                payload,
+                require_setup_contract=require_setup_contract,
+                asked=asked_before,
+                held=held,
+                deadline=deadline,
+            )
+        except ChildKeepsEnding as worn:
+            nudged.update(asked_before)
+            return _end_the_stage(worn)
         # Whatever this call asked is asked for the calls sent after it.
         nudged.update(asked_before)
-        if isinstance(checked, dict):
-            return checked
+        if not isinstance(checked, Saved):
+            # Refused, or not checked in time: either way nothing is saved.
+            return checked.response
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
         if mine < saved:
@@ -1910,11 +2117,17 @@ def contract_tools(
                 "Not saved: a contract submitted after this one, in the same turn, was saved "
                 "instead. Don't submit this one again."
             )
-        result = _save_contract(checked, destination)
+        result = _save_contract(checked.contract, destination)
         # After the write: if it raised, nothing was saved for an earlier call to defer to.
         saved = mine
         return result
 
+    if scan_root is not None or source_root is not None:
+        checker.start()
+        # On the handler, not the server: every copy of the server the session makes keeps the
+        # handler, so the child ends only when the last of them is gone.
+        weakref.finalize(submit_contract.handler, checker.close)
+        save_checker._OPEN.add(checker)
     return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])
 
 

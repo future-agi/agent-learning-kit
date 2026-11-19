@@ -12,7 +12,7 @@ from fi.api.types import HttpMethod, RequestConfig
 from fi.evals.execution import Execution, _normalize_status
 from fi.evals.templates import EvalTemplate
 from fi.evals.types import BatchRunResult, EvalResult
-from fi.utils.errors import InvalidAuthError
+from fi.utils.errors import EvaluationBatchDenied, InvalidAuthError
 from fi.utils.routes import Routes
 
 def _coerce_to_api_input(value: Any) -> Any:
@@ -31,6 +31,15 @@ def _coerce_to_api_input(value: Any) -> Any:
     return value
 
 
+def _batch_size(inputs: Any) -> int:
+    """Item count the backend uses: a batch when the first input value is a list."""
+    if isinstance(inputs, dict) and inputs:
+        first = next(iter(inputs.values()))
+        if isinstance(first, list):
+            return len(first)
+    return 1
+
+
 class EvalResponseHandler(ResponseHandler[BatchRunResult, None]):
     """Handles responses for evaluation requests"""
 
@@ -46,10 +55,38 @@ class EvalResponseHandler(ResponseHandler[BatchRunResult, None]):
             )
         elif response.status_code == 403:
             raise InvalidAuthError()
-        else:
-            raise Exception(
-                f"Error in evaluation: {response.status_code}, response: {response.text}"
-            )
+        elif response.status_code in (402, 429):
+            cls._raise_if_batch_denied(response)
+        raise Exception(
+            f"Error in evaluation: {response.status_code}, response: {response.text}"
+        )
+
+    @classmethod
+    def _raise_if_batch_denied(cls, response: Response) -> None:
+        """Raise EvaluationBatchDenied for a batch refused partway by a usage limit.
+
+        The backend reports items that already ran in ``completed_results`` and the
+        first item that did not run in ``failed_index``.
+        """
+        try:
+            body = response.json()
+        except ValueError:
+            return
+        if not isinstance(body, dict) or not isinstance(
+            body.get("completed_results"), list
+        ):
+            return
+        failed_index = body.get("failed_index")
+        raise EvaluationBatchDenied(
+            message=str(
+                body.get("message")
+                or f"Evaluation refused by a usage limit ({response.status_code})"
+            ),
+            status_code=response.status_code,
+            code=body.get("code"),
+            completed_results=body["completed_results"],
+            failed_index=failed_index if isinstance(failed_index, int) else None,
+        )
 
     @classmethod
     def convert_to_batch_results(cls, response: Dict[str, Any]) -> BatchRunResult:
@@ -331,6 +368,28 @@ class Evaluator(APIKeyAuth):
                             reason=f"Evaluation timed out after {timeout or self._default_timeout}s",
                             runtime=0,
                         )
+                    )
+                except EvaluationBatchDenied as denial:
+                    # Keep the items that already ran; mark the rest as refused.
+                    all_results.extend(
+                        EvalResponseHandler.convert_to_batch_results(
+                            {"result": [{"evaluations": denial.completed_results}]}
+                        ).eval_results
+                    )
+                    failed_index = denial.failed_index
+                    if failed_index is None:
+                        failed_index = len(denial.completed_results)
+                    refused = max(_batch_size(inputs) - failed_index, 1)
+                    logging.getLogger(__name__).error(
+                        f"Evaluation refused for {refused} item(s) from index "
+                        f"{failed_index}: {denial}"
+                    )
+                    failed_inputs.append(future_to_input[future])
+                    all_results.extend(
+                        EvalResult(
+                            name=eval_name, output=None, reason=str(denial), runtime=0
+                        )
+                        for _ in range(refused)
                     )
                 except Exception as exc:
                     input_case = future_to_input[future]
