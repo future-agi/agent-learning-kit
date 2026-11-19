@@ -19,6 +19,7 @@ import threading
 import time
 from pathlib import Path
 import tempfile
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -29,8 +30,10 @@ from .job import (
     PROVIDER_MANAGED_CONNECTORS as PROVIDER_MANAGED_CONNECTORS,
     HarnessJob,
     ProviderExecutionMode,
+    ExecutionMode,
     SourceKind,
     provider_profile_source,
+    publish_actors_switch,
 )
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
@@ -65,6 +68,16 @@ def _persist_authored_scenario_count(
 
 
 CERTIFY_REPORT = "certify-report.json"
+
+
+def _job_document(path: Path) -> dict[str, Any]:
+    """The job document as written, for the actors switch; empty when it cannot be read here (its own load reports
+    why)."""
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return document if isinstance(document, dict) else {}
 
 
 def _one_line(exc: BaseException) -> str:
@@ -775,6 +788,11 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         help="A reading's raw contract.json at /work/seed/contract.json; the build reuses it when it matches the job",
     )
     args = parser.parse_args(argv)
+    raw_job = _job_document(args.job)
+    publish_actors_switch(
+        raw_job.get("metadata") if isinstance(raw_job.get("metadata"), dict) else None,
+        hosted=raw_job.get("execution") == ExecutionMode.HOSTED.value,
+    )
     if args.seed_contract is not None and (
         args.certify_only or args.read_agent_only or args.find_agents
     ):

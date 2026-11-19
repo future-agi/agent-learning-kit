@@ -37,7 +37,6 @@ import gc
 import inspect
 import json
 import random
-import re
 import time
 import logging
 import os
@@ -50,6 +49,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection, Iterable, Mapping, Protocol, Sequence
 
 from fi import agentcc, simulate
+from fi.simulate.agent.definition import retell_web_call_url as _retell_web_call_url
 from fi.simulate.runtime import (
     SimulationSpec,
     new_run_id,
@@ -81,6 +81,7 @@ from .world_door import (
     EVIDENCE_INCOMPLETE,
     _on_trial_tables,
     action_matches,
+    chosen_fields,
     fixed_fields,
     is_attempt,
     is_committed,
@@ -102,7 +103,7 @@ from .actors import (
     actor_brief,
     brief_text,
     load_actors,
-    with_caller_actor,
+    as_played,
     with_knowledge_read,
 )
 from .background_noise import place_of, scenario_source
@@ -115,7 +116,7 @@ from .call_actor import (
 )
 from .hosted_scheduler import WORKER_LIMITS_NOT_ENFORCED, CallAborted, CallCancelled, CallOutcome, call_sealed
 from .hosted_scheduler import Scenario as HostedScenario
-from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode
+from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode, job_actors_switch
 from .isolated_process import run_json_worker
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
@@ -170,6 +171,12 @@ GOOGLE_APPLICATION_CREDENTIALS_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS"
 GOOGLE_CLOUD_PROJECT_ALIAS = "GOOGLE_CLOUD_PROJECT"
 GOOGLE_CLOUD_LOCATION_ALIAS = "GOOGLE_CLOUD_LOCATION"
 GOOGLE_GENAI_USE_VERTEXAI_ALIAS = "GOOGLE_GENAI_USE_VERTEXAI"
+# Settings of the job's own Google credentials file; used only with that file (see CallRunnerImpl).
+_JOB_GOOGLE_SETTING_ALIASES = (
+    GOOGLE_CLOUD_LOCATION_ALIAS,
+    GOOGLE_CLOUD_PROJECT_ALIAS,
+    GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
+)
 OPENAI_API_KEY_ALIAS = "OPENAI_API_KEY"
 VAPI_API_KEY_ALIAS = "VAPI_API_KEY"
 VAPI_PUBLIC_API_KEY_ALIAS = "VAPI_PUBLIC_API_KEY"
@@ -246,19 +253,6 @@ _CONVERSATION_STALL_FAILURE_CODES = frozenset(
 )
 
 
-# Closing markdown wrappers a reply may end on after its last sentence: bold, inline code and a code fence.
-_CLOSING_MARKDOWN = re.compile(r"(?:\*\*|```|`)\s*$")
-
-
-def _ends_a_turn(content: str) -> bool:
-    """Whether a reply ends where a speaker could stop: sentence-final punctuation, once closing markdown wrappers are
-    set aside. Nothing else counts: a list item or a bracket with no sentence end still reads as cut off."""
-    text = content.rstrip()
-    while (stripped := _CLOSING_MARKDOWN.sub("", text).rstrip()) != text:
-        text = stripped
-    return bool(text) and text[-1] in ".?!"
-
-
 def _stall_attribution(messages: Sequence[Any]) -> tuple[str, str] | None:
     """Who stalled, from the committed transcript's last turn, without guessing."""
     if not messages:
@@ -274,7 +268,7 @@ def _stall_attribution(messages: Sequence[Any]) -> tuple[str, str] | None:
             "Target agent produced no response after the caller's final transcribed turn",
         )
     if role in {"assistant", "agent"}:
-        if content and not _ends_a_turn(content):
+        if content and content[-1] not in ".?!":
             return (
                 "target_agent_stalled",
                 "Target agent stopped mid-utterance and produced no further speech",
@@ -521,6 +515,7 @@ def _check_config(
     job: HarnessJob,
     target_provider_secret_values: Mapping[str, str],
     simulator_values: Mapping[str, str] | None = None,
+    call_environment: Mapping[str, str] | None = None,
 ) -> _MissingVoiceConfig | None:
     simulator_values = simulator_values or {}
 
@@ -532,6 +527,13 @@ def _check_config(
             if job.execution is ExecutionMode.LOCAL
             else None
         )
+
+    def google_project() -> str | None:
+        # A local job's call runs on its environment, where the 1b gate has already dropped the
+        # job's project if the host's credentials file is in effect; count only what the call has.
+        if call_environment is not None and job.execution is ExecutionMode.LOCAL:
+            return call_environment.get(GOOGLE_CLOUD_PROJECT_ALIAS)
+        return simulator_value(GOOGLE_CLOUD_PROJECT_ALIAS)
 
     config = job.agent.config
     llm_provider = str(
@@ -591,7 +593,7 @@ def _check_config(
                 simulator_value(GOOGLE_APPLICATION_CREDENTIALS_ALIAS)
                 or simulator_value(GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS)
             )
-            and simulator_value(GOOGLE_CLOUD_PROJECT_ALIAS)
+            and google_project()
         )
         if not has_api_key and not has_vertex_adc:
             missing_aliases.append(
@@ -827,14 +829,7 @@ def _build_spec(
             target={
                 "provider": "retell",
                 "agent_id": provider_target_id,
-                "api_url": str(
-                    simulator_config.get("retell_api_url")
-                    or "https://api.retellai.com/v2/create-web-call"
-                ),
-                "livekit_url": str(
-                    simulator_config.get("retell_livekit_url")
-                    or "wss://retell-ai-4ihahnq7.livekit.cloud"
-                ),
+                "api_url": _retell_web_call_url(simulator_config.get("retell_api_url")),
                 "api_key_env": RETELL_API_KEY_ALIAS,
             },
             transport={"kind": "retell_webcall"},
@@ -1675,7 +1670,7 @@ def duplicate_commits(log: Sequence[Mapping[str, Any]], solution: Sequence[Any] 
             later = rows[later_index]
             if later_index in repeated or logged_as(later) != action:
                 continue
-            if not same_write(first, later, fixed_fields(solution, action)):
+            if not same_write(first, later, fixed_fields(solution, action), chosen_fields(solution, action)):
                 continue
             repeated.add(later_index)
             found.append(
@@ -3942,6 +3937,8 @@ class CallRunnerImpl:
         # Local SDK runs remain BYOK and historically carry simulator keys in the one local
         # target map. Hosted runs deliberately do not fall back: their simulator credentials must
         # come from platform configuration and must not be confused with customer-agent keys.
+        job_google_credentials = False
+        job_google_settings: dict[str, str] = {}
         if context.job.execution is ExecutionMode.LOCAL:
             for alias in (
                 LIVEKIT_URL_ALIAS,
@@ -3952,9 +3949,6 @@ class CallRunnerImpl:
                 GEMINI_API_KEY_ALIAS,
                 GOOGLE_API_KEY_ALIAS,
                 GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS,
-                GOOGLE_CLOUD_PROJECT_ALIAS,
-                GOOGLE_CLOUD_LOCATION_ALIAS,
-                GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
                 OPENAI_API_KEY_ALIAS,
                 SIMULATOR_LLM_PROVIDER_ALIAS,
                 SIMULATOR_LLM_MODEL_ALIAS,
@@ -3967,6 +3961,13 @@ class CallRunnerImpl:
                     value = context.target_provider_secret_values.get(alias)
                     if value:
                         simulator_secret_values[alias] = value
+                        if alias == GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS:
+                            job_google_credentials = True
+            # The job's Google settings go with the job's own credentials file, not before.
+            for alias in _JOB_GOOGLE_SETTING_ALIASES:
+                value = context.target_provider_secret_values.get(alias)
+                if value:
+                    job_google_settings[alias] = value
         # Provider libraries read ambient credentials. Supply a private snapshot to
         # each call subprocess, never export credentials into the parent process.
         ambient = os.environ if environ is None else environ
@@ -3999,6 +4000,17 @@ class CallRunnerImpl:
             value = context.target_provider_secret_values.get(alias)
             if value:
                 target_environ[alias] = value
+        # The job's own credentials file is in effect only if it is the one copied from the job's
+        # target values and no GOOGLE_APPLICATION_CREDENTIALS is set (_materialize_vertex_adc
+        # writes the file only then). Then the job's project, location and Vertex switch replace
+        # the host's and the platform's, which would otherwise win. Otherwise they are dropped.
+        if job_google_credentials and not target_environ.get(
+            GOOGLE_APPLICATION_CREDENTIALS_ALIAS
+        ):
+            for alias in _JOB_GOOGLE_SETTING_ALIASES:
+                target_environ.pop(alias, None)
+                simulator_secret_values.pop(alias, None)
+            target_environ.update(job_google_settings)
         for alias in (
             LIVEKIT_URL_ALIAS,
             LIVEKIT_API_KEY_ALIAS,
@@ -4050,6 +4062,7 @@ class CallRunnerImpl:
             context.job,
             context.target_provider_secret_values,
             simulator_secret_values,
+            target_environ,
         )
         self._scenario_room_counts: dict[str, int] = {}
         self._closed = False
@@ -4149,7 +4162,7 @@ class CallRunnerImpl:
         doc = _with_scenario_edits(
             doc, getattr(self._context.job, "metadata", None), source_key
         )
-        doc = with_caller_actor(doc, self._context.bundle_dir)
+        doc = as_played(doc, self._context.bundle_dir, job_actors_switch(self._context.job))
         if held := limits_not_held(doc, self._context.bundle_dir):
             # Known before the call: a trial relying on limits nobody can hold is held without placing it.
             return replace(self._timing_only_outcome(datetime.now(timezone.utc)), notices=tuple(held))

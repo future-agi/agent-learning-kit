@@ -1,0 +1,312 @@
+{"reading_inputs": {"version":1,"source":{"kind":"github","repository":"future-agi/agent-learning-kit","commit_sha":"d687a0db00000000000000000000000000000000"},"subfolder":"examples/harness/google_adk_support","evals_sha256":null,"generic_harness_v1":true}, 
+  "agent": "google_adk_support",
+  "one_liner": "A small Google ADK customer-support chat agent for an online store that looks up orders, starts returns on delivered orders, and states the return policy.",
+  "modality": "chat",
+  "call_direction": "inbound",
+  "agent_languages": [],
+  "conversational": true,
+  "system_prompt_excerpt": "    instruction=(\n        \"You are a customer support agent for an online store. Use the tools to look up \"\n        \"orders and start returns, and never guess an order's status. Answer briefly.\"\n    ),",
+  "system_prompt_from": [
+    {
+      "path": "examples/harness/google_adk_support/support_agent/agent.py",
+      "start_line": 58,
+      "end_line": 61
+    }
+  ],
+  "model": {
+    "provider": "openai",
+    "name": "vertex_ai/gemini-3.7-flash",
+    "path": "examples/harness/google_adk_support/support_agent/agent.py",
+    "line": 6
+  },
+  "hard_constraints": [
+    "Use the tools to look up orders and start returns, and never guess an order's status.",
+    "Answer briefly.",
+    "Code rule (start_return): only an order with status 'delivered' can be returned, and only if it has no return already started."
+  ],
+  "tools": [
+    {
+      "name": "look_up_order",
+      "args": [
+        "order_id"
+      ],
+      "arg_types": {
+        "order_id": "str"
+      },
+      "arg_values": {},
+      "description": "Look up an order by its id and report its item, status and any return.",
+      "requires": [],
+      "refuses": "Returns the ordinary string 'No order {order_id} exists.' for an unknown id (ids are exact-match, case-sensitive; only A1001, A1002, A1003 exist). Does not raise.",
+      "effects": "Read-only. Looks up order_id in the in-memory _ORDERS dict. Returns a sentence 'Order {id}: {item}, status {status}, return: {reason or none}.'",
+      "inputs_from": {}
+    },
+    {
+      "name": "start_return",
+      "args": [
+        "order_id",
+        "reason"
+      ],
+      "arg_types": {
+        "order_id": "str",
+        "reason": "str"
+      },
+      "arg_values": {},
+      "description": "Start a return for a delivered order, giving the customer's reason.",
+      "requires": [],
+      "refuses": "Returned as ordinary strings, not errors, checked in this order: unknown id -> 'No order {id} exists.'; status != 'delivered' -> 'Order {id} is {status} and cannot be returned yet.' (A1002 is 'shipped'); return already set -> 'Order {id} already has a return started.'",
+      "effects": "On success sets _ORDERS[order_id]['return'] = reason (the reason text is free text the agent writes from the customer's words), so later look_up_order shows that reason, and a second start_return is refused. Returns 'Return started for order {id}: {reason}.' State is in process memory and persists across sessions until the process restarts.",
+      "inputs_from": {}
+    },
+    {
+      "name": "return_policy",
+      "args": [],
+      "arg_types": {},
+      "arg_values": {},
+      "description": "State the store's return policy.",
+      "requires": [],
+      "refuses": "Never refuses.",
+      "effects": "Read-only, no state. Always returns 'Delivered items can be returned within 30 days for a full refund.' The 30-day window is only stated, never enforced by start_return (no dates in data).",
+      "inputs_from": {}
+    }
+  ],
+  "data_schema": {
+    "orders": {
+      "key": "order_id (str)",
+      "fields": {
+        "item": "str",
+        "status": "str, values seen: delivered, shipped (only 'delivered' permits a return)",
+        "return": "str|None, the customer's return reason once started, else None"
+      }
+    }
+  },
+  "base_environment": {
+    "orders": {
+      "A1001": {
+        "item": "trail running shoes",
+        "status": "delivered"
+      },
+      "A1002": {
+        "item": "rain jacket",
+        "status": "shipped"
+      },
+      "A1003": {
+        "item": "water bottle",
+        "status": "delivered"
+      }
+    }
+  },
+  "dependencies": [
+    {
+      "name": "orders_in_memory",
+      "kind": "datastore",
+      "what": "The three seeded orders in _ORDERS, mutated by start_return.",
+      "used_by": [
+        "look_up_order",
+        "start_return"
+      ],
+      "engine": "python dict (in_process)",
+      "version": "",
+      "reached": {
+        "dsn_env": "",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "support_agent.agent",
+        "loader_function": ""
+      }
+    }
+  ],
+  "runtime_dependencies": [
+    {
+      "name": "openai_compatible_chat_completions_gateway",
+      "kind": "inference",
+      "what": "Chat-completions endpoint serving the model; model sent as 'openai/' + OPENAI_MODEL (default vertex_ai/gemini-3.7-flash, a gateway model name). Not recreated.",
+      "used_by": [],
+      "engine": "LiteLLM (openai/ prefix) via google.adk.models.lite_llm.LiteLlm",
+      "version": "",
+      "reached": {
+        "dsn_env": "OPENAI_BASE_URL",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "",
+        "loader_function": ""
+      }
+    },
+    {
+      "name": "openai_api_key",
+      "kind": "inference",
+      "what": "Key for the endpoint, required for any turn.",
+      "used_by": [],
+      "engine": "",
+      "version": "",
+      "reached": {
+        "dsn_env": "OPENAI_API_KEY",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "",
+        "loader_function": ""
+      }
+    }
+  ],
+  "implementation": "present",
+  "tool_entrypoints": [
+    {
+      "tool": "look_up_order",
+      "mode": "import",
+      "module": "support_agent.agent",
+      "callable": "look_up_order",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Module-level plain function over module-global _ORDERS; importing support_agent.agent also builds root_agent (no network)."
+    },
+    {
+      "tool": "start_return",
+      "mode": "import",
+      "module": "support_agent.agent",
+      "callable": "start_return",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Mutates module-global _ORDERS in process memory; no reset function exists, so state persists until the process restarts."
+    },
+    {
+      "tool": "return_policy",
+      "mode": "import",
+      "module": "support_agent.agent",
+      "callable": "return_policy",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Fully local, constant string."
+    }
+  ],
+  "refusal_signature": "",
+  "data_store": {
+    "kind": "in_process",
+    "version": "",
+    "configured_by": "Hardcoded: module-level dict _ORDERS in support_agent/agent.py. Not configurable by env or config. (ADK's own session store is written by adk web to support_agent/.adk/, which holds conversation history only, not orders.)",
+    "config_key": "",
+    "host": "",
+    "port": null,
+    "database": "",
+    "user": "",
+    "password_from": "",
+    "schema_from": "",
+    "loaded_by": "",
+    "loader_module": ""
+  },
+  "runtime": {
+    "language": "python",
+    "version": "3.12",
+    "install": "pip install -r requirements.txt",
+    "extras": [],
+    "requirements_files": [],
+    "observations": {},
+    "workspaces": {},
+    "workdir": "examples/harness/google_adk_support",
+    "execution": "native",
+    "compose_file": "",
+    "compose_overrides": [],
+    "compose_image_services": [],
+    "service": "",
+    "additional_services": [],
+    "required_environment": {
+      "agent": [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODEL"
+      ]
+    },
+    "secret_files": {},
+    "config_files": {},
+    "directories": [],
+    "dockerfile": "",
+    "command": [
+      "adk",
+      "web",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8080",
+      "."
+    ],
+    "context_excludes": [],
+    "platform": "",
+    "interface": {
+      "kind": "http",
+      "protocol": "json_template",
+      "model": null,
+      "port": 8080,
+      "path": "/run",
+      "health_path": "",
+      "include_tools": false,
+      "request_template": {
+        "app_name": "support_agent",
+        "user_id": "{{thread_id}}",
+        "session_id": "{{thread_id}}",
+        "new_message": {
+          "role": "user",
+          "parts": [
+            {
+              "text": "{{new_message_content}}"
+            }
+          ]
+        },
+        "streaming": false
+      },
+      "response_path": "-1.content.parts.0.text",
+      "headers_template": {},
+      "completed_tool_events": null,
+      "completed_tools": null,
+      "local_auth": null,
+      "setup_secrets": {},
+      "failure_rule": null,
+      "setup_requests": [
+        {
+          "method": "POST",
+          "path": "/apps/support_agent/users/{{thread_id}}/sessions/{{thread_id}}",
+          "body_template": {},
+          "encoding": "json",
+          "headers_template": {},
+          "capture_headers": {},
+          "accepted_statuses": [
+            200
+          ],
+          "failure_rule": null,
+          "capture": {}
+        }
+      ]
+    },
+    "source_subfolder": "examples/harness/google_adk_support"
+  },
+  "real_use_cases": [
+    "Look up an order by id and report its item, status and any return.",
+    "Start a return for a delivered order with the customer's stated reason.",
+    "Explain the store's return policy (30 days, full refund for delivered items).",
+    "Decline or explain when an order does not exist, is not yet delivered, or already has a return."
+  ],
+  "caller_identity": "The agent never identifies the person. No login, phone number or account is loaded before a tool runs; the caller supplies order ids in conversation. Session identity is just an ADK user_id/session_id pair.",
+  "notes": "Single agent, one runtime: ADK app (support_agent package exposes root_agent), served by `adk web` (README: `adk web --port 8080 .` from the agent folder). Modality chat. No Dockerfile exists in this agent folder (only .gitignore, .python-version=3.12, README, requirements.txt: google-adk==2.13.0, litellm==1.106.2), so deployment is native Python startup via adk web (the README's own start path); nothing was replaced or invented. CAVEATS: (1) The HTTP mapping (/run, session-create route, camelCase event JSON, last event text at -1.content.parts.0.text) is from knowledge of ADK's api server, not from source in this repo (google-adk is not vendored here) and should be verified on first run; --host 0.0.0.0 is likewise ADK CLI knowledge (README omits it; default binds localhost). (2) ADK runs tools internally and /run returns a list of events where a functionCall event and its functionResponse event are separate items; I did not declare completed_tool_events because the required per-item pairing shape is unverified. The README says the kit's tool tracer records calls to the three functions in agent.py, so the import seam is the observation path. (3) The model string is 'openai/'+OPENAI_MODEL; line 6 default is vertex_ai/gemini-3.7-flash (provider recorded as openai because LiteLLM routes through the OpenAI-compatible gateway). (4) Instruction text has no braces deliberately (ADK would treat {x} as session-state keys). (5) State in _ORDERS is process-global and shared across sessions; start_return on A1001/A1003 is a one-time change per process. (6) The 30-day window in return_policy is never enforced. (7) Seeded edge cases: A1002 is 'shipped' (return refused), unknown ids refused, double return refused.",
+  "open_questions": [],
+  "chosen_evals": [],
+  "amendments": [],
+  "instrumentation": "none"
+}

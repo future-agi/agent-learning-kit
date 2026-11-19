@@ -250,10 +250,16 @@ def _fixed(reference: Sequence[Mapping[str, Any]], action: str) -> set[str]:
     }
 
 
-def _repeats(first: Mapping[str, Any], later: Mapping[str, Any], reference: Sequence[Mapping[str, Any]]) -> bool:
-    """The same write of one record, as duplicate commits read it: rewording free text is still the same write."""
+def _repeats(
+    first: Mapping[str, Any],
+    later: Mapping[str, Any],
+    reference: Sequence[Mapping[str, Any]],
+    own_words: Sequence[str] = (),
+) -> bool:
+    """The same write of one record, as duplicate commits read it: rewording an argument the check names as the
+    agent's own words (`own_words`) is still the same write."""
     action = logged_as(first)
-    return logged_as(later) == action and same_write(first, later, _fixed(reference, action))
+    return logged_as(later) == action and same_write(first, later, _fixed(reference, action), own_words)
 
 
 def _pair(first: Mapping[str, Any], later: Mapping[str, Any]) -> dict[str, Any]:
@@ -266,25 +272,31 @@ def _pair(first: Mapping[str, Any], later: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def retried_timeouts(world: Any, reference: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
-    """Each write of the agent's the world timed out on that the agent then attempted again on the same record."""
+def retried_timeouts(
+    world: Any, reference: Sequence[Mapping[str, Any]] = (), own_words: Sequence[str] = ()
+) -> list[dict[str, Any]]:
+    """Each write of the agent's the world timed out on that the agent then attempted again on the same record.
+    `own_words` names arguments the agent may reword on a retry (a note); every other argument has to match."""
     rows = _agent_writes(world)
     found = []
     for index, first in enumerate(rows):
         if first.get("error") not in TIMED_OUT:
             continue
-        retry = next((later for later in rows[index + 1 :] if _repeats(first, later, reference)), None)
+        retry = next((later for later in rows[index + 1 :] if _repeats(first, later, reference, own_words)), None)
         if retry is not None:
             found.append(_pair(first, retry))
     return found
 
 
-def repeated_commits(world: Any, reference: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
-    """Each write of the agent's the world committed again on the same record: one entry per extra commit."""
+def repeated_commits(
+    world: Any, reference: Sequence[Mapping[str, Any]] = (), own_words: Sequence[str] = ()
+) -> list[dict[str, Any]]:
+    """Each write of the agent's the world committed again on the same record: one entry per extra commit.
+    `own_words` names arguments the agent may reword on a retry (a note); every other argument has to match."""
     committed = [row for row in _agent_writes(world) if is_committed(row)]
     found = []
     for index, later in enumerate(committed):
-        first = next((row for row in committed[:index] if _repeats(row, later, reference)), None)
+        first = next((row for row in committed[:index] if _repeats(row, later, reference, own_words)), None)
         if first is not None:
             found.append(_pair(first, later))
     return found
