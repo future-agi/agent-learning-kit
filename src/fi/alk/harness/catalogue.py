@@ -339,9 +339,14 @@ SUB_GOAL_RULES = (
 CHECK_RULES = (
     "Use `check` only for a change the call must leave in the records, made as it should be, "
     "reading the world and the call that made it, never only a call's name. Whether a forbidden "
-    "thing happened is judged from the records: a check that holds on an untouched world grades "
-    "nothing and is refused. A check that a step comes before something fails only when that "
-    "something happened without it, and accepts every tool for the step. A call's `ok` only means "
+    "change happened is settled in code from the records, never left to the judge alone: a refusal of "
+    "a change is verifier both, its check fails when that change commits for this caller's record "
+    "(`committed_writes(world, reference)` or the record itself), and its criteria judge only how the "
+    "refusal was explained. That check holds on an untouched world, so the case also names a check "
+    "that fails when nothing is done, and its negative control makes the forbidden change. A check "
+    "that a step comes before something fails only when that "
+    "something happened without it, and accepts every tool for the step; which tool or which worker "
+    "made a read is the agent's choice. A call's `ok` only means "
     "the tool ran without an error or refusal; what it decided (verified or not, found or not) is "
     "in its `result` or the records, so read those. Whether a step was right for this caller (the "
     "right record, the right values) is checked in code against the scenario's reference solution: "
@@ -355,9 +360,17 @@ CHECK_RULES = (
     "Compare only what something fixes for this caller: what they said, their record in the world, "
     "or a rule of the agent that names the value; a value the reference holds only because a step "
     "needed one (a category or destination the agent picks, a free-text note) is the agent's choice "
-    "and is never compared. A value the person speaks (a date, an amount, a name) reaches the agent in "
-    "the form they said it, so compare it in one common form (a date parsed, an amount as a number), "
-    "or compare what the tool decided with it instead. Compare an identifier with `same_id(a, b)`, never as "
+    "and is never compared. A search's wording is the agent's own even when the caller named what to "
+    "find: compare what it found or the record it then acted on, never the query text, and where neither "
+    "shows it (a genre the results do not list) leave it to the judge. A value the "
+    "person speaks (a date, an amount, a name) reaches the agent in "
+    "the form they said it, so compare it with `same_value(a, b)` (numbers, dates, times and ids however "
+    "they were written), or compare what the tool decided with it instead; a spoken name or place is "
+    "heard, not spelled, so compare the record it resolved to, not its spelling. A value the tool decides "
+    "(an amount, a reference) is read from its `result` or the records. A try the world refused that the "
+    "agent then corrects is not a mistake. Where the scenario faults a tool, never require that call to "
+    "succeed; a write the world committed counts even when its answer was lost. Compare an identifier with "
+    "`same_id(a, b)`, never as "
     "text: it ignores separators and case and nothing else, and the proof refuses a check that fails the same id "
     "typed without its separators. `retried_timeouts(world)`, `repeated_commits(world)` and "
     "`committed_writes(world)` list the agent's writes from the action log: one the world timed out "
@@ -514,6 +527,18 @@ def compares_to_a_value(source: str) -> bool:
                 continue
             return True
     return False
+
+
+def judged_refusal_advisory(sub_goal: SubGoal) -> str:
+    """What to say about a refusal left to the judge alone, whose control no code check can then fail."""
+    if sub_goal.check.strip() or not is_refusal(sub_goal.name):
+        return ""
+    return (
+        f"{sub_goal.name}: only the judge grades this refusal. If what it refuses is a change (a refund, a "
+        "cancellation, a discount), give it a check that fails when that change commits for this caller's record "
+        "and keep the criteria for how it was explained (verifier both); otherwise no check can fail the "
+        "negative control that makes the change, and the case is held"
+    )
 
 
 def weak_check_advisory(sub_goal: SubGoal) -> str:

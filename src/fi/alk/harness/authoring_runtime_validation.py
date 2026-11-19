@@ -1630,6 +1630,54 @@ async def prove_on_sealed_runtime(
             await provider.close(work_directory=work)
 
 
+# Held after the live proof for a reason the scenario writer can fix (a check, a control, a reference), never a limit of
+# the lane it was proved on. After a passing validation these cases go back to the writer this many times, each round
+# replayed live, before the build keeps them held.
+WRITER_FIXABLE = frozenset(
+    {
+        "broken_check",
+        "not_solvable",
+        "vacuous",
+        "weak_check",
+        "credits_failed_attempt",
+        "too_strict",
+        "unchecked",
+        "no_negative_control",
+        "negative_control_passed",
+        "control_misses_case_goal",
+    }
+)
+HELD_CASE_REPAIRS = 2
+
+
+def held_for_the_writer(authoring: Path) -> dict[str, str]:
+    """Each case the proofs, with this attempt's live plays, hold for a reason its writer can fix, in the proof's own
+    words. Judged as a build judges them (`judge_case_goals`)."""
+    from .prove_suite import prove_suite
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="held-cases-") as root:
+            proofs = prove_suite(authoring, Path(root) / "proofs.json", budget=300, judge_case_goals=True)
+    except Exception as error:  # noqa: BLE001 - only adds a chance to repair; the build's proofs decide the rest
+        print(f"runtime validation: held cases not read ({type(error).__name__})", flush=True)
+        return {}
+    return {
+        key: str(entry.get("why") or entry.get("blocked_reason"))
+        for key, entry in proofs.items()
+        if entry.get("blocked_reason") in WRITER_FIXABLE
+    }
+
+
+def held_case_guidance(held: dict[str, str]) -> str:
+    """What the writer is told about the cases the proof held."""
+    return (
+        "The live proof held these cases, each for the reason given. Rewrite each so it proves: fix its checks, its "
+        "negative controls or its reference solution as the reason says, and add or amend a sub-goal with "
+        "add_sub_goal where it says so. Keep every case, its name and its intent, and never drop a sub-goal it "
+        "names.\n" + "\n".join(f"- {key}: {why}" for key, why in sorted(held.items()))
+    )
+
+
 async def play_this_attempt(
     *,
     authoring: Path,
@@ -1690,6 +1738,44 @@ def _promote_data_store(contract, authoring: Path, candidate_dir: Path) -> int:
     payload["data_store"] = candidate.data_store.model_dump()
     write_contract(AgentContract.model_validate(payload), authoring)
     return 0
+
+
+async def _rewrite_held_cases(
+    held: dict[str, str], authoring: Path, *, repair, guidance: str, expected_count: int
+) -> bool:
+    """Hand the held cases back to the writer once. True when it changed something and kept every case, its name and
+    its sub-goals; otherwise the suite is left as it was and the cases stay held, never failing the build."""
+    from .scenario_repair import certify_scenario_repair
+    from .scenario_tools import load_scenarios, write_scenarios
+
+    print(f"runtime validation: {len(held)} cases held after the live proof, back to the writer", flush=True)
+    before = load_scenarios(authoring)
+    before_tree = _authoring_digest(authoring)
+    try:
+        status = await repair("scenarios", held_case_guidance(held) + "\n\n" + guidance)
+    except Exception as error:  # noqa: BLE001 - a writer that cannot repair leaves the cases held
+        print(f"runtime validation: held cases not rewritten ({type(error).__name__})", flush=True)
+        return False
+    if status or _authoring_digest(authoring) == before_tree:
+        return False
+    try:
+        certify_scenario_repair(before, load_scenarios(authoring), expected_count=expected_count, diagnostic_codes=set())
+    except ValueError as rejected:
+        # A rewrite of the catalogue alone (a check added to a shared sub-goal) changes no scenario file.
+        if not str(rejected).startswith("scenario_repair_no_material_change"):
+            write_scenarios(before, authoring)
+            print(f"runtime validation: held-case rewrite undone: {rejected}", flush=True)
+            return False
+    return True
+
+
+def _authoring_digest(authoring: Path) -> str:
+    """The scenarios and the sub-goal catalogue as written, so a rewrite that changed neither is seen as none."""
+    digest = hashlib.sha256()
+    for path in sorted([*Path(authoring).glob("scenarios/**/*"), Path(authoring) / "sub_goals.json"]):
+        if path.is_file():
+            digest.update(str(path.relative_to(authoring)).encode() + b"\0" + path.read_bytes())
+    return digest.hexdigest()
 
 
 async def validate_and_repair(
@@ -1939,7 +2025,8 @@ async def _validate_and_repair(
             + (candidate_repairs + 1) * budgets.infrastructure_retries_per_candidate
         )
         candidate_hash = _generic_candidate_hash(source, authoring)
-        for _attempt in range(decision_bound):
+        held_rounds = 0
+        for _attempt in range(decision_bound + HELD_CASE_REPAIRS):
             # A record left by an earlier attempt must never speak for this one.
             failure_record.clear()
             try:
@@ -2177,6 +2264,18 @@ async def _validate_and_repair(
                     raise
                 candidate_hash = after_hash
             else:
+                held = (
+                    held_for_the_writer(authoring)
+                    if not readiness_only and held_rounds < HELD_CASE_REPAIRS
+                    else {}
+                )
+                if held and await _rewrite_held_cases(
+                    held, authoring, repair=repair, guidance=base_guidance, expected_count=job.scenario_count
+                ):
+                    held_rounds += 1
+                    candidate_hash = _generic_candidate_hash(source, authoring)
+                    # Validated again: the live proof replays every case, the rewritten ones included.
+                    continue
                 decision = repair_controller.decide(
                     CandidateObservation(
                         candidate_hash=candidate_hash,

@@ -657,3 +657,55 @@ def test_the_spoken_date_replay_runs_only_for_a_language_it_can_write():
     assert changed == {"book.date"}
     _, changed = _said_another_way(scenario([]))
     assert changed == {"book.date"}
+
+
+def _cards_world(tmp_path):
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "cards"
+        tools = [{"name": "pay"}]
+        handlers = {
+            "pay": (
+                "def handle(args, db):\n"
+                "    if args['method'] != 'saved_card:pm_1':\n"
+                "        raise ToolError('Unsupported payment method.')\n"
+                "    db.execute('INSERT INTO charges (method) VALUES (?)', [args['method']])\n"
+                "    return {'selected': args['method']}\n"
+            )
+        }
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE charges(method TEXT);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+    return tmp_path
+
+
+def _card_proof(root, which_calls: str):
+    from fi.alk.harness.scenario import Step
+
+    check = (
+        "def check(world, calls, reference):\n"
+        "    want = [s['arguments'].get('method') for s in reference if s['tool'] == 'pay'][-1]\n"
+        f"    for c in [c for c in calls if c.name == 'pay'{which_calls}]:\n"
+        "        if c.arguments.get('method') != want:\n"
+        "            return 'done wrong: method expected ' + repr(want)\n"
+        "    return None if any(c.name == 'pay' and c.ok for c in calls) else 'not done'\n"
+    )
+    solution = [Step(tool="pay", arguments={"method": "saved_card:pm_1"}, fixed={"method": "their saved card"})]
+    return _proof(root, solution, check)
+
+
+def test_a_check_that_fails_a_refused_try_the_agent_corrected_is_named(tmp_path):
+    root = _cards_world(tmp_path)
+    proof = _card_proof(root, "")
+    assert proof.retried == ["right (a value the world refused, then corrected: pay.method)"]
+    # Named, never refused: the case still proves.
+    assert proof.holds is True and proof.too_strict == []
+
+
+def test_a_check_that_reads_only_the_successful_calls_is_not_named(tmp_path):
+    root = _cards_world(tmp_path)
+    assert _card_proof(root, " and c.ok").retried == []
