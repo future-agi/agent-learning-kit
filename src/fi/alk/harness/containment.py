@@ -242,6 +242,30 @@ def _close(*fds: int) -> None:
             os.close(fd)
 
 
+def _abort_child(process: subprocess.Popen, leaf: Leaf | None) -> None:
+    # A failed leaf kill must not leave the direct child alive or its parent blocked in wait.
+    try:
+        process.kill()
+    except OSError as exc:
+        logger.warning("containment: could not kill child %s (%s)", process.pid, exc)
+    if leaf is not None:
+        try:
+            leaf.close()  # Includes descendants; reports a leaf that could not be removed.
+        except OSError as exc:
+            logger.warning("containment: could not close leaf for child %s (%s)", process.pid, exc)
+    try:
+        process.wait(timeout=_EMPTY_WAIT_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("containment: could not reap child %s (%s)", process.pid, exc)
+    # These attributes are populated for PIPE only, never for caller-owned file objects.
+    for stream in (process.stdin, process.stdout, process.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError as exc:
+                logger.warning("containment: could not close child stream (%s)", exc)
+
+
 def popen(
     args: Sequence[str], *, _deadline: _Deadline | None = None, **kwargs: Any
 ) -> tuple[subprocess.Popen, Leaf | None]:
@@ -280,20 +304,14 @@ def popen(
         go_write = -1
         # EOF once the command is executing.
         failure = _read_all(done_read) if _deadline is None else _read_all(done_read, _deadline)
+        if failure:
+            code = int(failure) or errno.ENOEXEC
+            raise OSError(code, os.strerror(code), argv[0])
     except BaseException:
-        # Closing the go pipe before the mark arrived ends the gate unrun.
-        _close(go_write, done_read)
-        leaf.close()
-        process.wait()
+        _abort_child(process, leaf)
         raise
-    _close(done_read)
-    if failure:
-        # The leaf first: a same-user process can reach the gate's done pipe through /proc and
-        # forge a failure; the command it hides must not keep the harness waiting.
-        leaf.close()
-        process.wait()
-        code = int(failure) or errno.ENOEXEC
-        raise OSError(code, os.strerror(code), argv[0])
+    finally:
+        _close(go_write, done_read)
     return process, leaf
 
 
@@ -321,25 +339,23 @@ def run(
     )
     process, leaf = popen(args, _deadline=deadline, start_new_session=True, **kwargs)
     try:
+        stdout, stderr = process.communicate(
+            input=input, timeout=deadline.remaining() if deadline else timeout
+        )
+    except BaseException as exc:
         try:
-            stdout, stderr = process.communicate(
-                input=input, timeout=deadline.remaining() if deadline else timeout
-            )
-        except BaseException as exc:
-            # A timeout, or the harness interrupted: stop all it started before passing it on.
-            if leaf is not None:
-                leaf.kill()
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-            if deadline is not None and isinstance(exc, subprocess.TimeoutExpired):
-                raise subprocess.TimeoutExpired(
-                    args, deadline.timeout, output=exc.output, stderr=exc.stderr
-                ) from exc
-            raise
-    finally:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as kill_error:
+            logger.warning("containment: could not kill group %s (%s)", process.pid, kill_error)
+        _abort_child(process, leaf)
+        if deadline is not None and isinstance(exc, subprocess.TimeoutExpired):
+            raise subprocess.TimeoutExpired(
+                args, deadline.timeout, output=exc.output, stderr=exc.stderr
+            ) from exc
+        raise
+    else:
         if leaf is not None:
             leaf.close()
     if check and process.returncode:
