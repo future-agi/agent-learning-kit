@@ -5188,7 +5188,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         _BUILTIN_BY_ENVIRONMENT,
         _SILENT_ENVIRONMENTS,
     )
-    from fi.alk.harness.scenario import _AXIS_LABELS, _LEVEL_LABELS
+    from fi.alk.harness.scenario import _AXIS_LABELS, _LEVEL_LABELS, ScenarioSource
 
     ignore = (
         offered
@@ -5200,6 +5200,8 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         | set(_LEVEL_LABELS)
         | set(_BUILTIN_BY_ENVIRONMENT)
         | set(_SILENT_ENVIRONMENTS)
+        # The kinds of source a scenario cites, as `ScenarioSource.kind` declares them.
+        | set(typing.get_args(ScenarioSource.model_fields["kind"].annotation))
         # A fixture key, and one tool argument the skills name while explaining a tool.
         | {"origin", "matching"}
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
