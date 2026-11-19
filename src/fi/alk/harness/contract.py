@@ -231,6 +231,17 @@ class ToolEntry(BaseModel):
 _CHANNEL_WORKER_ID = re.compile(r"[A-Za-z0-9_.-]+")
 
 
+class ValueChange(BaseModel):
+    """One rule or tool description changed by an amendment, as it read before and after: the record that says which
+    values a change retired (a 30-day window made 20), so case texts still stating them can be found. A rule that was
+    dropped and not yet replaced has `after` empty."""
+
+    kind: str = "rule"
+    name: str = ""
+    before: str = ""
+    after: str = ""
+
+
 class DeclaredWorker(BaseModel):
     """An agent the app hands work to, as its source declares it.
 
@@ -1296,6 +1307,8 @@ class AgentContract(BaseModel):
     # the agent verifiably is, so when the harness widens it the difference is recorded rather
     # than blended in, and whoever reads it later can tell the two apart.
     amendments: list[str] = Field(default_factory=list)
+    # The rules and tool descriptions those amendments changed, before and after, in order.
+    value_changes: list[ValueChange] = Field(default_factory=list)
     instrumentation: str = "none"
 
     @model_serializer(mode="wrap")
@@ -1544,6 +1557,8 @@ FREE_TEXT = (
     "AgentContract.notes",
     "AgentContract.open_questions",
     "AgentContract.amendments",
+    "ValueChange.before",
+    "ValueChange.after",
     "ToolSpec.description",
     "ToolSpec.refuses",
     "ToolSpec.effects",
@@ -1558,6 +1573,9 @@ FREE_TEXT = (
 # own right. A name without a dot is a whole technical model, every field of it kept.
 KEPT_AS_WRITTEN = (
     "AgentContract.agent",
+    "AgentContract.value_changes",
+    "ValueChange.kind",
+    "ValueChange.name",
     "AgentContract.modality",
     "AgentContract.call_direction",
     "AgentContract.agent_languages",

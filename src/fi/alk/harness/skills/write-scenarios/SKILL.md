@@ -520,8 +520,8 @@ that did the right thing:
 - **A search's wording.** The caller asked for Dune; the agent searched "dune frank herbert" and found
   it. A check on the query text failed it. Check what the search found, or the record the agent then
   acted on; where the results do not show what was asked for (a genre), leave it to the judge.
-- **A route.** A read before a write, the worker that made the read, `find_items` instead of
-  `get_item`, one identity factor instead of another the rules allow. Check the outcome; a check that
+- **A route.** A read before a write, the worker that made the read, a search instead of a lookup by
+  id, one identity factor instead of another the rules allow. Check the outcome; a check that
   a step comes first fails only when the later thing happened without it.
 - **A corrected try.** The world refused the agent's first value and it then sent the right one. Match
   the reference to any successful call, never to every call.
@@ -529,8 +529,8 @@ that did the right thing:
   what the agent did about it. A write the world committed counts even when its answer was lost.
 - **Spelling heard on a call.** "Callum" and "Calum" sound the same. Compare the record a spoken name
   or place resolved to, or leave the spelling to the judge, never its exact letters.
-- **A value the tool decides.** An amount the tool computes is in its `result`, not in an argument it
-  does not take.
+- **A value the tool decides.** An amount the tool computes is in what it returned (the call's
+  result), not in an argument it does not take.
 
 `same_value(a, b)` compares numbers, dates, times and ids however they were written (`89` and
 `"$89.00"` or `"89 dollars"`, never `$89` and `€89`; `2026-11-20` and `20 November 2026`, `14:00` and `2 pm`);

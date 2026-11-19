@@ -3585,7 +3585,7 @@ def test_certificate_carries_the_isolation_the_runtime_recorded(tmp_path, record
 
 
 
-def _held_loop(tmp_path, monkeypatch, held_rounds, *, rewrites=True, budgets=None):
+def _held_loop(tmp_path, monkeypatch, held_rounds, *, rewrites=True, budgets=None, asked=None):
     """A generic validation that passes every time, with `held_rounds` lists of held cases read after each pass."""
     from fi.alk.harness import authoring_runtime_validation as module
 
@@ -3595,7 +3595,12 @@ def _held_loop(tmp_path, monkeypatch, held_rounds, *, rewrites=True, budgets=Non
     authoring.mkdir()
     (source / "agent.py").write_text("agent", encoding="utf-8")
     reads = list(held_rounds)
-    monkeypatch.setattr(module, "held_for_the_writer", lambda root: reads.pop(0) if reads else {})
+    def read(root, budget=300):
+        if asked is not None:
+            asked.append(budget)
+        return reads.pop(0) if reads else {}
+
+    monkeypatch.setattr(module, "held_for_the_writer", read)
     calls, guidance = [], []
 
     async def validate(*args):
@@ -3726,7 +3731,7 @@ def test_a_rewrite_that_only_loosens_a_shared_check_changes_nothing(tmp_path):
 def test_a_certify_only_validation_never_reads_or_hands_back_held_cases(tmp_path, monkeypatch):
     from fi.alk.harness import authoring_runtime_validation as module
 
-    def unread(root):
+    def unread(root, budget=300):
         raise AssertionError("certify-only must not prove the suite again for held cases")
 
     monkeypatch.setattr(module, "held_for_the_writer", unread)
@@ -3781,3 +3786,56 @@ def test_a_rewrite_that_only_edits_a_passing_case_changes_nothing(tmp_path):
         (folder / "scenario.json").write_text(json.dumps(body), encoding="utf-8")
 
     assert _rewrite(root, edit) is False
+
+
+def test_a_spent_time_budget_never_reads_or_hands_back_held_cases(tmp_path, monkeypatch):
+    asked = []
+    calls, guidance, controller = _held_loop(
+        tmp_path,
+        monkeypatch,
+        [{"case": "unchecked"}],
+        budgets=RepairBudgets(held_case_seconds=0),
+        asked=asked,
+    )
+    # Not even the proof that finds held cases runs.
+    assert asked == [] and calls == ["validate"] and guidance == []
+    assert controller.history.decisions[-1].action is RepairAction.CERTIFY
+
+
+def test_a_writer_that_outruns_the_time_budget_is_stopped_and_its_changes_undone(tmp_path, monkeypatch):
+    from fi.alk.harness import authoring_runtime_validation as module
+
+    root = _two_cases(tmp_path)
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+    async def slow(phase, text):
+        (root / "sub_goals.json").write_text("{}", encoding="utf-8")  # a half-made change
+        next(p for p in (root / "scenarios").iterdir() if p.is_dir()).joinpath("draft.txt").write_text("x")
+        await asyncio.sleep(30)
+        return 0
+
+    started = asyncio.get_event_loop_policy().new_event_loop()
+    try:
+        rewritten = started.run_until_complete(
+            module._rewrite_held_cases(
+                {"held": "unchecked"}, root, repair=slow, guidance="", expected_count=2, seconds=0.2
+            )
+        )
+    finally:
+        started.close()
+    assert rewritten is False
+    after = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    assert after == before
+
+
+def test_the_held_case_rounds_stop_when_their_time_budget_runs_out(tmp_path, monkeypatch):
+    from fi.alk.harness import authoring_runtime_validation as module
+
+    clock = iter(float(n) * 100 for n in range(1000))
+    monkeypatch.setattr(module, "_held_clock", lambda: next(clock))
+    held = {"case": "negative_control_passed"}
+    # Each read of the clock moves 100 s on: one round fits in 250 s, a second never starts.
+    calls, guidance, _ = _held_loop(
+        tmp_path, monkeypatch, [held] * 5, budgets=RepairBudgets(held_case_seconds=250)
+    )
+    assert len(guidance) == 1 and calls == ["validate", "validate"]

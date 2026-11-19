@@ -26,6 +26,7 @@ from ..providers.agent import _redact
 from .contract import (
     CONTRACT_FILE,
     AgentContract,
+    ValueChange,
     known_modalities,
     validate_contract,
     write_contract,
@@ -136,6 +137,7 @@ def add_rule(
         contract.amendments.pop()
         return False, "the amended contract would not be valid: " + "; ".join(problems)
 
+    _replaces_dropped_rule(contract, rule)
     _persist(contract, destination)
     return True, (
         f"added. The agent now has {len(contract.hard_constraints)} rules, and this one is "
@@ -222,6 +224,8 @@ def drop_rule(
         )
     contract.hard_constraints.remove(match)
     contract.amendments.append(f"rule removed — {match}: {why.strip()}")
+    # Open until a rule that reads alike replaces it, so what the change retired is known.
+    contract.value_changes.append(ValueChange(kind="rule", before=match))
     _persist(contract, destination)
     return True, f"removed. {len(contract.hard_constraints)} rules left" + old_values_left(contract, destination)
 
@@ -305,6 +309,7 @@ def fix_tool(
     if returns:
         spec.returns.update(returns)
         changed.append("returned fields updated")
+    stated = {"description": spec.description, "refuses": spec.refuses}
     if description:
         spec.description = description
         changed.append("description updated")
@@ -312,6 +317,12 @@ def fix_tool(
         if value:
             setattr(spec, field, value)
             changed.append(f"{field} updated")
+    # The tool's own words before and after, so the values the correction replaced are known.
+    contract.value_changes += [
+        ValueChange(kind="tool", name=tool_name, before=str(before), after=str(getattr(spec, field)))
+        for field, before in stated.items()
+        if before and str(getattr(spec, field)) != str(before)
+    ]
     if not changed:
         return False, (
             "nothing to change: give args, arg_types, arg_units, returns, description, refuses, effects, inputs_from, "
@@ -397,6 +408,22 @@ def set_worker_tools(
         + (f"; the test world refuses its {', '.join(refused)}" if refused else "")
         + ". The change takes effect in the next saved version."
     )
+
+
+def _replaces_dropped_rule(contract: AgentContract, rule: str) -> None:
+    """Close the latest dropped rule this one reads like (the same words, other values): that pair is the change."""
+    from .rule_values import same_rule
+
+    opened = next(
+        (
+            one
+            for one in reversed(contract.value_changes)
+            if one.kind == "rule" and not one.after and same_rule(one.before, rule)
+        ),
+        None,
+    )
+    if opened is not None:
+        opened.after = rule
 
 
 def old_values_left(contract: AgentContract, destination: Path) -> str:

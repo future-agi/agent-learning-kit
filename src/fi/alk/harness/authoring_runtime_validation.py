@@ -1648,16 +1648,18 @@ WRITER_FIXABLE = frozenset(
     }
 )
 HELD_CASE_REPAIRS = 2
+# The held-case rounds' own clock, so their time budget can be read apart from the event loop's.
+_held_clock = time.monotonic
 
 
-def held_for_the_writer(authoring: Path) -> dict[str, str]:
+def held_for_the_writer(authoring: Path, *, budget: float = 300) -> dict[str, str]:
     """Each case the proofs, with this attempt's live plays, hold for a reason its writer can fix, in the proof's own
     words. Judged as a build judges them (`judge_case_goals`)."""
     from .prove_suite import prove_suite
 
     try:
         with tempfile.TemporaryDirectory(prefix="held-cases-") as root:
-            proofs = prove_suite(authoring, Path(root) / "proofs.json", budget=300, judge_case_goals=True)
+            proofs = prove_suite(authoring, Path(root) / "proofs.json", budget=budget, judge_case_goals=True)
     except Exception as error:  # noqa: BLE001 - only adds a chance to repair; the build's proofs decide the rest
         print(f"runtime validation: held cases not read ({type(error).__name__})", flush=True)
         return {}
@@ -1741,7 +1743,7 @@ def _promote_data_store(contract, authoring: Path, candidate_dir: Path) -> int:
 
 
 async def _rewrite_held_cases(
-    held: dict[str, str], authoring: Path, *, repair, guidance: str, expected_count: int
+    held: dict[str, str], authoring: Path, *, repair, guidance: str, expected_count: int, seconds: float = 300
 ) -> bool:
     """Hand the held cases back to the writer once. True when it changed something and kept every case, its name and
     its sub-goals; otherwise the suite is left as it was and the cases stay held, never failing the build."""
@@ -1753,10 +1755,17 @@ async def _rewrite_held_cases(
     catalogue_before = load_catalogue(authoring)
     before_tree = _authoring_digest(authoring)
     passing_files = _passing_case_files(held, before, authoring)
+    suite_files = _suite_files(authoring)
+    if seconds <= 0:
+        return False
     try:
-        status = await repair("scenarios", held_case_guidance(held) + "\n\n" + guidance)
-    except Exception as error:  # noqa: BLE001 - a writer that cannot repair leaves the cases held
+        status = await asyncio.wait_for(
+            repair("scenarios", held_case_guidance(held) + "\n\n" + guidance), timeout=seconds
+        )
+    except Exception as error:  # noqa: BLE001 - a writer that cannot repair, or runs out of time, leaves them held
         print(f"runtime validation: held cases not rewritten ({type(error).__name__})", flush=True)
+        # Whatever a writer stopped part-way left is undone, file for file.
+        _put_back_suite(authoring, suite_files)
         return False
     if status:
         return False
@@ -1829,6 +1838,28 @@ def _put_back_files(files: dict[Path, dict[Path, bytes]]) -> list[str]:
             path.write_bytes(body)
         touched.append(folder.name)
     return touched
+
+
+def _suite_paths(authoring: Path) -> set[Path]:
+    """The suite as written: every scenario folder's files, the index and the sub-goal catalogue."""
+    from .folder import INDEX
+
+    root = Path(authoring)
+    paths = {path for path in (root / "scenarios").rglob("*") if path.is_file()} if (root / "scenarios").is_dir() else set()
+    return paths | {path for path in (root / INDEX, root / "sub_goals.json") if path.is_file()}
+
+
+def _suite_files(authoring: Path) -> dict[Path, bytes]:
+    return {path: path.read_bytes() for path in _suite_paths(authoring)}
+
+
+def _put_back_suite(authoring: Path, files: dict[Path, bytes]) -> None:
+    """The suite exactly as `files` holds it: a file written since is removed, every other one written back."""
+    for path in _suite_paths(authoring) - set(files):
+        path.unlink()
+    for path, body in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
 
 
 def _authoring_digest(authoring: Path) -> str:
@@ -2088,6 +2119,7 @@ async def _validate_and_repair(
         )
         candidate_hash = _generic_candidate_hash(source, authoring)
         held_rounds = 0
+        held_since: float | None = None
         for _attempt in range(decision_bound + HELD_CASE_REPAIRS):
             # A record left by an earlier attempt must never speak for this one.
             failure_record.clear()
@@ -2326,15 +2358,32 @@ async def _validate_and_repair(
                     raise
                 candidate_hash = after_hash
             else:
-                # A validation that may not repair scenarios (certify-only) never reads or hands back held cases.
+                # A validation that may not repair scenarios (certify-only) never reads or hands back held cases, and
+                # every round, with the validation it causes, fits in one time budget from the first round.
+                round_started = _held_clock()
+                held_since = round_started if held_since is None else held_since
+                left = budgets.held_case_seconds - (round_started - held_since)
                 held = (
-                    held_for_the_writer(authoring)
-                    if not readiness_only and budgets.scenario_patches and held_rounds < HELD_CASE_REPAIRS
+                    held_for_the_writer(authoring, budget=left)
+                    if not readiness_only and budgets.scenario_patches and held_rounds < HELD_CASE_REPAIRS and left > 0
                     else {}
                 )
-                if held and await _rewrite_held_cases(
-                    held, authoring, repair=repair, guidance=base_guidance, expected_count=job.scenario_count
-                ):
+                rewritten = bool(held) and await _rewrite_held_cases(
+                    held,
+                    authoring,
+                    repair=repair,
+                    guidance=base_guidance,
+                    expected_count=job.scenario_count,
+                    seconds=left - (_held_clock() - round_started),
+                )
+                if held:
+                    print(
+                        f"runtime validation: held-case round {held_rounds + 1} took "
+                        f"{_held_clock() - round_started:.0f}s; {_held_clock() - held_since:.0f}s of "
+                        f"{budgets.held_case_seconds:.0f}s spent",
+                        flush=True,
+                    )
+                if rewritten:
                     held_rounds += 1
                     candidate_hash = _generic_candidate_hash(source, authoring)
                     # Validated again: the live proof replays every case, the rewritten ones included.

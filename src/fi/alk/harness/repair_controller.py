@@ -58,6 +58,9 @@ class RepairBudgets(BaseModel):
     runtime_patches: int = Field(default=8, ge=0, le=10)
     environment_patches: int = Field(default=4, ge=0, le=10)
     scenario_patches: int = Field(default=2, ge=0, le=10)
+    # Wall time, from the first round, that handing held cases back to the writer may add to a validation: its
+    # rewrites and the validations they cause. When it runs out the cases stay held.
+    held_case_seconds: float = Field(default=300.0, ge=0, le=1800)
     infrastructure_retries_per_candidate: int = Field(default=2, ge=0, le=5)
     infrastructure_initial_backoff_seconds: float = Field(default=1.0, ge=0, le=60)
     infrastructure_max_backoff_seconds: float = Field(default=30.0, ge=0, le=300)

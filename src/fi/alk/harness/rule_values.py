@@ -1,16 +1,18 @@
 """Values a rule or a tool used to state and no longer does, and the case texts still stating them.
 
 When a rule changes (a 30-day refund window made 20, then 14), the cases and sub-goals written against it keep their
-old words unless someone carries the new value into them. The contract records every change in `amendments`, so the
-values a changed rule or tool once stated are known across conversations. A value is a number with the word after it
-(`30 days`, `30-day`): the word scopes it to what the rule governed, so `delivered 41 days ago` is never taken for
-the old window, and `30` alone never matches `130`.
+old words unless someone carries the new value into them. The contract records each changed rule and tool
+description before and after (`value_changes`). A value is retired only where the two line up word for word and the
+number in that place changed, with the word after it (`30 days`, `30-day`): so only the value the change replaced, and
+`30` alone never matches `130`. Contracts saved before that record are read from their `rule removed` / `rule added`
+amendments the same way.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
+from difflib import SequenceMatcher
 from typing import Any
 
 # A number and the word that follows it, joined by a space, a hyphen or an underscore: `30 days`, `30-day`,
@@ -38,17 +40,86 @@ def current_values(contract: Any) -> set[tuple[str, str]]:
     if contract is None:
         return set()
     texts = [str(one) for one in _field(contract, "hard_constraints") or []]
-    texts += [str(_field(tool, "description") or "") for tool in _field(contract, "tools") or []]
+    for tool in _field(contract, "tools") or []:
+        texts += [str(_field(tool, "description") or ""), str(_field(tool, "refuses") or "")]
     return {value for text in texts for value in values_in(text)}
 
 
+# A number, a word, or one other character: what two versions of a rule are lined up by.
+_TOKEN = re.compile(r"\d+(?:\.\d+)?|[A-Za-z]+|\S")
+_SAME_RULE = 0.8
+
+
+def _tokens(text: str) -> tuple[list[str], list[str]]:
+    tokens = _TOKEN.findall(text or "")
+    return tokens, ["#" if token[0].isdigit() else token.casefold() for token in tokens]
+
+
+def same_rule(before: str, after: str) -> bool:
+    """Whether `after` is `before` with its values changed: the two read alike with every number set aside."""
+    first, second = _tokens(before)[1], _tokens(after)[1]
+    return bool(first and second) and SequenceMatcher(None, first, second, autojunk=False).ratio() >= _SAME_RULE
+
+
+def changed_values(before: str, after: str) -> set[tuple[str, str]]:
+    """The values `before` states where `after` says the same words around another number: what the change
+    retired, each with its unit."""
+    (old, old_masked), (new, new_masked) = _tokens(before), _tokens(after)
+    retired = set()
+    matcher = SequenceMatcher(None, old_masked, new_masked, autojunk=False)
+    for tag, start, end, other, _ in matcher.get_opcodes():
+        if tag != "equal":
+            continue
+        for offset in range(end - start):
+            at = start + offset
+            if old_masked[at] != "#" or old[at] == new[other + offset]:
+                continue
+            unit = at + 1
+            while unit < len(old) and old[unit] in ("-", "_"):
+                unit += 1
+            if unit < len(old) and old[unit].isalpha():
+                retired.add((old[at], _unit(old[unit])))
+    return retired
+
+
+_REMOVED, _ADDED = "rule removed — ", "rule added — "
+
+
+def _changes(contract: Any) -> list[tuple[str, str]]:
+    """Each changed rule or tool text, before and after: the recorded ones, else (a contract saved before they were
+    recorded) each removed rule paired with the next added one that reads alike."""
+    recorded = [
+        (str(_field(one, "before") or ""), str(_field(one, "after") or ""))
+        for one in _field(contract, "value_changes") or []
+    ]
+    if recorded:
+        return [pair for pair in recorded if pair[0] and pair[1]]
+    lines = [str(one) for one in _field(contract, "amendments") or []]
+    pairs, used = [], set()
+    for at, line in enumerate(lines):
+        if not line.startswith(_REMOVED):
+            continue
+        before = line[len(_REMOVED):]
+        later = next(
+            (
+                index
+                for index in range(at + 1, len(lines))
+                if index not in used and lines[index].startswith(_ADDED) and same_rule(before, lines[index][len(_ADDED):])
+            ),
+            None,
+        )
+        if later is not None:
+            used.add(later)
+            pairs.append((before, lines[later][len(_ADDED):]))
+    return pairs
+
+
 def retired_values(contract: Any) -> set[tuple[str, str]]:
-    """The values a changed rule or tool stated before (from the contract's amendments) that no rule or tool states
-    now."""
+    """The values a changed rule or tool replaced that no rule or tool states now."""
     if contract is None:
         return set()
-    stated = {value for line in _field(contract, "amendments") or [] for value in values_in(str(line))}
-    return stated - current_values(contract)
+    retired = {value for before, after in _changes(contract) for value in changed_values(before, after)}
+    return retired - current_values(contract)
 
 
 def scenario_texts(scenario: Any) -> list[tuple[str, str]]:
