@@ -2,8 +2,9 @@
 
 Google ADK streams each tool call as events marked unfinished (``partial: true`` on the event,
 ``willContinue: true`` on the call) that carry the call's id and name but no arguments, then one
-finished event with the arguments. Only the finished copy is a call. A call never disappears: an
-id seen only in unfinished events keeps its last copy. Only one reply is ever considered.
+finished event with the arguments. Only the finished copy is a call, matched by id and tool name.
+A call never disappears: an id and name seen only in unfinished events keep their last copy. An
+event's marker covers only its own calls, and only one reply is ever considered.
 """
 
 import copy
@@ -86,6 +87,7 @@ def test_the_adk_reply_reads_as_the_agent_text_and_one_call_through_the_wrapper(
 
 def test_a_call_seen_only_unfinished_is_kept_as_its_last_copy():
     """The guard: no finished copy arrived, so the call is not lost."""
+
     def calls_in(event):
         parts = (event.get("content") or {}).get("parts") or []
         return [part["functionCall"] for part in parts if "functionCall" in part]
@@ -180,4 +182,84 @@ def test_an_unfinished_copy_is_dropped_only_for_its_own_id():
     assert [(i, n) for i, n, _ in calls] == [
         (events[2]["content"]["parts"][0]["functionCall"]["id"], "look_up_order"),
         ("call_other", "return_policy"),
+    ]
+
+
+def _assistant_call(call_id, name, arguments):
+    return {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(arguments)},
+            }
+        ],
+    }
+
+
+def test_partial_on_an_envelope_does_not_mark_the_history_it_carries():
+    """An event's marker covers only its own calls, in its content and parts. A history under a
+    `partial` envelope keeps its finished calls, even when their ids restart."""
+    payload = {
+        "partial": True,
+        "messages": [
+            _assistant_call("call_0", "a", {"x": 1}),
+            _assistant_call("call_0", "b", {"y": 2}),
+        ],
+    }
+
+    calls, _ = _nested_tool_evidence(payload)
+
+    assert [(c["id"], c["function"]["name"]) for c in calls] == [
+        ("call_0", "a"),
+        ("call_0", "b"),
+    ]
+
+
+def test_an_unfinished_copy_is_dropped_only_for_a_finished_call_of_the_same_tool():
+    """Matching is by id and tool name: a finished call under the same id but another tool
+    does not remove the unfinished one."""
+    events = copy.deepcopy(REPLIES[0])
+    call_id = events[2]["content"]["parts"][0]["functionCall"]["id"]
+    events[0]["content"]["parts"][0]["functionCall"].update(
+        name="return_policy", args={"order_id": "A1"}
+    )
+    events.insert(2, copy.deepcopy(events[0]))
+    events[2]["content"]["parts"][0]["functionCall"]["args"] = {"order_id": "A2"}
+
+    calls, _ = _calls(events)
+
+    assert calls == [
+        (call_id, "return_policy", {"order_id": "A2"}),
+        (call_id, "look_up_order", {"order_id": "A1001"}),
+    ]
+
+
+def test_two_unfinished_calls_under_one_id_with_different_tools_both_stay():
+    events = [
+        {
+            "partial": True,
+            "content": {
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "id": "call_0",
+                            "name": name,
+                            "args": {},
+                            "willContinue": True,
+                        }
+                    }
+                ],
+            },
+        }
+        for name in ("look_up_order", "return_policy")
+    ]
+
+    calls, _ = _calls(events)
+
+    assert [(i, n) for i, n, _ in calls] == [
+        ("call_0", "look_up_order"),
+        ("call_0", "return_policy"),
     ]
