@@ -20,8 +20,8 @@ import pytest
 from fi.alk.harness import call_runner, config, local_certified_runtime, process_runtime, provision, refusals, sandbox_server
 from fi.alk.harness.bundle_v2 import ProcessUser, SourceProcess
 from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.refusals import JobRefused
 from fi.alk.harness.sandbox_server import (
-    JobRefused,
     LocalSandbox,
     LocalSandboxRequest,
     SandboxAdjustmentRequest,
@@ -1215,6 +1215,27 @@ def test_a_commit_sha_that_is_not_forty_hex_characters_is_refused_with_its_code(
     assert "github_commit_sha_invalid" in response.text
 
 
+def test_intake_and_the_job_share_one_commit_sha_rule():
+    from fi.alk.harness.job import (
+        RepositorySource,
+        SourceKind,
+        SourceVisibility,
+        is_commit_sha,
+    )
+
+    assert is_commit_sha("0123456789abcdef0123456789ABCDEF01234567")
+    assert not is_commit_sha("main")
+    assert not is_commit_sha("")
+    # The job model holds the same rule itself, not only the route in front of it.
+    with pytest.raises(ValidationError, match="github_commit_sha_invalid"):
+        RepositorySource(
+            kind=SourceKind.GITHUB,
+            repository="acme/agent",
+            visibility=SourceVisibility.PUBLIC,
+            commit_sha="main",
+        )
+
+
 @pytest.mark.parametrize(
     ("extra", "reason"),
     [
@@ -1365,7 +1386,7 @@ def test_a_submission_and_a_configuration_refusal_together_answer_the_callers_42
         both = exc
     assert len(both.errors()) == 2
 
-    with caplog.at_level("ERROR", logger=sandbox_server.__name__):
+    with caplog.at_level("ERROR", logger=refusals.__name__):
         refused = JobRefused([(both, None)], job_id="job-1")
 
     assert refused.status_code == 422
@@ -1386,7 +1407,7 @@ def test_a_real_configuration_refusal_reaches_the_caller_as_a_500_with_its_code(
     # needs: that is ours to fix, and the caller is told what, not that we are down.
     client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
 
-    with caplog.at_level("ERROR", logger=sandbox_server.__name__):
+    with caplog.at_level("ERROR", logger=refusals.__name__):
         response = client.post(
             "/v1/jobs",
             json={"github_repository": "acme/agent", "github_commit_sha": "a" * 40},
@@ -1449,6 +1470,65 @@ def test_two_faults_in_one_submission_come_back_in_one_422(tmp_path, monkeypatch
     assert not any((tmp_path / "state" / "jobs").glob("*/job.json"))
 
 
+_GOOD_ENTRY = {**_BAD_TRIAL, "trial_index": 1}
+
+
+def test_a_part_refused_and_a_plan_of_the_wrong_size_come_back_in_one_422(
+    tmp_path, monkeypatch
+):
+    # The count used to be checked only by the job, after every part had built: the caller
+    # fixed the connector and was then told the plan was the wrong size.
+    source = _local_source(tmp_path, monkeypatch)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs",
+        json={
+            "source_path": str(source),
+            "connector": "vapi",
+            "connector_mode": "provider_import",
+            "scenario_count": 2,
+            "metadata": {"execution_manifest": [_GOOD_ENTRY]},
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert sorted(entry["msg"] for entry in response.json()["detail"]) == [
+        "Value error, execution_manifest_count_mismatch",
+        "Value error, provider_import_requires_assistant_id",
+    ]
+
+
+def test_a_bad_entry_and_a_repeated_key_in_the_plan_come_back_in_one_422(
+    tmp_path, monkeypatch
+):
+    source = _local_source(tmp_path, monkeypatch)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs",
+        json={
+            "source_path": str(source),
+            "scenario_count": 2,
+            "metadata": {"execution_manifest": [_BAD_TRIAL, _GOOD_ENTRY]},
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == [
+        {
+            "type": "int_parsing",
+            "loc": ["body", "metadata", "execution_manifest", 0, "trial_index"],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+        },
+        {
+            "type": "value_error",
+            "loc": ["body"],
+            "msg": "Value error, execution_manifest_duplicate_key",
+        },
+    ]
+
+
 def test_an_error_without_a_code_names_the_field_it_is_about(tmp_path, monkeypatch):
     source = _local_source(tmp_path, monkeypatch)
     client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
@@ -1486,7 +1566,7 @@ def test_an_error_without_a_code_in_a_value_submit_sets_itself_is_ours(
     )
     client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
 
-    with caplog.at_level("ERROR", logger=sandbox_server.__name__):
+    with caplog.at_level("ERROR", logger=refusals.__name__):
         response = client.post("/v1/jobs", json={"source_path": str(source)})
 
     assert response.status_code == 500
@@ -1496,17 +1576,10 @@ def test_an_error_without_a_code_in_a_value_submit_sets_itself_is_ours(
     assert any(r.levelname == "ERROR" for r in caplog.records)
 
 
-def test_a_malformed_commit_is_refused_before_any_upload_is_claimed(
-    hosted_sandbox, monkeypatch
-):
+def test_a_malformed_commit_is_refused_before_any_upload_is_claimed(hosted_sandbox):
     # The boundary refuses it: the uploaded credential never leaves pending/, so nothing has
     # to be put back.
     sandbox = hosted_sandbox
-
-    def claimed(*_args, **_kwargs):
-        raise AssertionError("an upload was claimed for a request refused at intake")
-
-    monkeypatch.setattr(LocalSandbox, "_claim_secret_files", claimed)
 
     async def upload():
         return await _upload_credential(sandbox, "GOOD")
@@ -1526,25 +1599,53 @@ def test_a_malformed_commit_is_refused_before_any_upload_is_claimed(
 
 
 def test_a_refusal_whose_uploads_cannot_be_put_back_still_answers_and_cleans_up(
-    tmp_path, monkeypatch
+    hosted_sandbox, monkeypatch, caplog
 ):
-    source = _local_source(tmp_path, monkeypatch)
+    # The credential is claimed, the job is refused, and putting the upload back fails: the
+    # caller still gets the 422, the claim is still deleted, and the loss is logged.
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
 
-    def refuse(*_args, **_kwargs):
+    def refuse(**_kwargs):
         raise _refusal("execution_manifest_invalid")
 
-    def stuck(*_args, **_kwargs):
+    claims_seen = []
+
+    def stuck(self, job_id, _references):
+        claims_seen.append(
+            (self.secret_files_root / "jobs" / job_id / "GOOD").is_file()
+        )
         raise OSError("pending/ is read-only")
 
     monkeypatch.setattr(sandbox_server, "HarnessJob", refuse)
     monkeypatch.setattr(LocalSandbox, "_return_job_secret_files", stuck)
-    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
 
-    response = client.post("/v1/jobs", json={"source_path": str(source)})
+    async def submit():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        with caplog.at_level("ERROR", logger=sandbox_server.__name__):
+            with pytest.raises(JobRefused) as refused:
+                sandbox.submit(
+                    LocalSandboxRequest(
+                        source_id=source_id,
+                        secret_refs={"GOOD": _ref("mounted", upload)},
+                    )
+                )
+        return refused.value
 
-    assert response.status_code == 422
-    assert "execution_manifest_invalid" in response.text
-    assert not any((tmp_path / "state" / "jobs").iterdir())
+    refused = asyncio.run(submit())
+
+    assert refused.status_code == 422
+    assert "execution_manifest_invalid" in str(refused)
+    # The upload was claimed before the refusal, so there was a claim to clean up.
+    assert claims_seen == [True]
+    _assert_nothing_left(sandbox)
+    assert not any((sandbox.secret_files_root / "pending").iterdir())
+    assert any(
+        r.levelname == "ERROR"
+        and r.getMessage().startswith("job_refused_uploads_not_returned")
+        for r in caplog.records
+    )
 
 
 def test_an_unexpected_failure_building_the_job_is_still_a_500(tmp_path, monkeypatch):

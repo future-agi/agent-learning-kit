@@ -11,9 +11,17 @@ from datetime import datetime
 from enum import Enum
 import json
 import re
-from typing import Protocol
+from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
@@ -285,6 +293,61 @@ class HarnessExecutionManifestEntry(BaseModel):
     call_execution_id: str = Field(min_length=1)
 
 
+class _ExecutionPlan(BaseModel):
+    """A scenario plan judged whole. Each fault is its own field, so one pass reports a bad
+    entry, a repeated key and a wrong count together; ``parse_execution_manifest`` fills it."""
+
+    scenario_count: int
+    entries: list[HarnessExecutionManifestEntry]
+    # Taken from the raw entries, so a key repeated beside an entry that fails is still seen.
+    execution_keys: list[Any]
+    entry_count: int
+
+    @field_validator("entries", mode="before")
+    @classmethod
+    def _a_nonempty_list(cls, value: object) -> object:
+        if not isinstance(value, list) or not value:
+            raise ValueError("execution_manifest_invalid")
+        return value
+
+    @field_validator("execution_keys")
+    @classmethod
+    def _unique(cls, keys: list[Any]) -> list[Any]:
+        named = [key for key in keys if isinstance(key, str)]
+        if len(named) != len(set(named)):
+            raise ValueError("execution_manifest_duplicate_key")
+        return keys
+
+    @field_validator("entry_count")
+    @classmethod
+    def _one_per_scenario(cls, count: int, info: ValidationInfo) -> int:
+        expected = info.data.get("scenario_count")
+        if expected is not None and count != expected:
+            raise ValueError("execution_manifest_count_mismatch")
+        return count
+
+
+def parse_execution_manifest(
+    manifest: object, scenario_count: int
+) -> list[HarnessExecutionManifestEntry]:
+    """The platform's scenario plan, checked whole: every entry, every key, and one entry per
+    scenario. A ``ValidationError`` lists every fault at once; an entry's own error is placed
+    at ``("entries", index, field)``. The one rule for the plan, at intake and on the job."""
+    entries = manifest if isinstance(manifest, list) else []
+    return _ExecutionPlan.model_validate(
+        {
+            "scenario_count": scenario_count,
+            "entries": manifest,
+            "execution_keys": [
+                entry.get("execution_key") if isinstance(entry, dict) else None
+                for entry in entries
+            ],
+            # Not a list is already its own fault; a count on top of it says nothing more.
+            "entry_count": len(entries) if entries else scenario_count,
+        }
+    ).entries
+
+
 class HarnessJobMetadata(BaseModel):
     """The entries of `HarnessJob.metadata` the SDK reads by name, typed.
 
@@ -432,19 +495,11 @@ class HarnessJob(BaseModel):
             raise ValueError(f"harness_job_version_unsupported: {self.schema_version}")
         execution_manifest = self.metadata.get("execution_manifest")
         if execution_manifest is not None:
-            if not isinstance(execution_manifest, list) or not execution_manifest:
-                raise ValueError("execution_manifest_invalid")
-            parsed_manifest = [
-                HarnessExecutionManifestEntry.model_validate(entry)
-                for entry in execution_manifest
-            ]
-            execution_keys = [entry.execution_key for entry in parsed_manifest]
-            if len(execution_keys) != len(set(execution_keys)):
-                raise ValueError("execution_manifest_duplicate_key")
-            if len(parsed_manifest) != self.scenario_count:
-                raise ValueError("execution_manifest_count_mismatch")
             self.metadata["execution_manifest"] = [
-                entry.model_dump(mode="json") for entry in parsed_manifest
+                entry.model_dump(mode="json")
+                for entry in parse_execution_manifest(
+                    execution_manifest, self.scenario_count
+                )
             ]
         if (
             self.execution is ExecutionMode.LOCAL

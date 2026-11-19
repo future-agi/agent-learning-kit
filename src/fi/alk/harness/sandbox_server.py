@@ -22,7 +22,6 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 import uuid
 
@@ -59,7 +58,7 @@ from .job import (
     AgentConnection,
     ExecutionMode,
     HarnessArtifactPolicy,
-    HarnessExecutionManifestEntry,
+    parse_execution_manifest,
     HarnessJob,
     HarnessJobStatus,
     HarnessStage,
@@ -69,7 +68,15 @@ from .job import (
     SourceVisibility,
     is_commit_sha,
 )
-from .refusals import refusal_kind
+from .refusals import (
+    AGENT_FIELDS,
+    SOURCE_FIELDS,
+    JobRefused,
+    Place,
+    by_field,
+    in_job,
+    in_plan,
+)
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
 from .secrets import (
@@ -91,108 +98,6 @@ from .source_folder import SubfolderNotFound, agent_folder, subfolder_not_found
 _CONTROLLER_TOKEN = uuid.uuid4().hex
 _SANDBOX_JOB_PREFIX = "ALK_JOB_"
 _SANDBOX_FILE_PREFIX = "ALK_SECRET_FILE_"
-
-
-# Where each job-model field comes from in the request, so an error without a code can name
-# the field the caller sent. A field missing here is one submit fills itself.
-_SOURCE_FIELDS = {
-    "repository": "github_repository",
-    "ref": "github_ref",
-    "commit_sha": "github_commit_sha",
-    "visibility": "github_visibility",
-    "installation_id": "github_installation_id",
-    "subfolder": "github_subfolder",
-    "archive_artifact_id": "source_id",
-    "local_path": "source_path",
-}
-_AGENT_FIELDS = {
-    "connector": "connector",
-    "mode": "connector_mode",
-    "config": "connector_config",
-    "secret_refs": "secret_refs",
-}
-_JOB_FIELDS = {"scenario_count", "seed", "platform_run_id"}
-# Metadata entries submit writes itself, over whatever the request's metadata held.
-_SUBMIT_METADATA = {
-    "agent_name",
-    "source_kind",
-    "environment_value_names",
-    "secret_file_names",
-}
-
-Place = Callable[[tuple[str | int, ...]], list[str | int] | None]
-
-
-def _by_field(fields: Mapping[str, str]) -> Place:
-    def place(loc: tuple[str | int, ...]) -> list[str | int] | None:
-        if loc and loc[0] in fields:
-            return ["body", fields[str(loc[0])], *loc[1:]]
-        return None
-
-    return place
-
-
-def _in_job(loc: tuple[str | int, ...]) -> list[str | int] | None:
-    if loc and loc[0] in _JOB_FIELDS:
-        return ["body", *loc]
-    if len(loc) > 1 and loc[0] == "metadata" and loc[1] not in _SUBMIT_METADATA:
-        return ["body", *loc]
-    return None
-
-
-def _under(*prefix: str | int) -> Place:
-    return lambda loc: ["body", *prefix, *loc]
-
-
-class JobRefused(Exception):
-    """The job models refused a submission, answered in the shape of the route's own 422: one
-    entry per error, and no ``input`` or ``ctx``, since either can carry a submitted value.
-
-    A 5xx is only for a request with nothing of its own at fault, so any fault of the
-    caller's makes it a 422 that lists the caller's entries:
-
-    - an error with a code (``Value error, <code>``) has ``loc`` ["body"], since the code says
-      what is wrong;
-    - an error without one (a type or length error) keeps its place, mapped onto the request
-      field it is about, such as ["body", "metadata", "execution_manifest", 0, "trial_index"].
-
-    The rest are this sandbox's own configuration: a configuration code, or an error without a
-    code in a value submit fills itself. Each is logged as an error with the job id, so ours is
-    never lost behind theirs. A request refused only for those is a 500 that names them,
-    ``type`` "sandbox_configuration" and ``loc`` ["sandbox"]."""
-
-    def __init__(
-        self, refusals: Sequence[tuple[ValidationError, Place | None]], *, job_id: str
-    ):
-        theirs: list[dict[str, Any]] = []
-        ours: list[str] = []
-        for error, place in refusals:
-            for item in error.errors(
-                include_url=False, include_input=False, include_context=False
-            ):
-                kind, msg = item["type"], item["msg"]
-                coded = refusal_kind(msg)
-                where = place(tuple(item["loc"])) if place is not None else None
-                if coded == "submission":
-                    theirs.append({"type": kind, "loc": ["body"], "msg": msg})
-                elif coded is None and where is not None:
-                    theirs.append({"type": kind, "loc": where, "msg": msg})
-                else:
-                    ours.append(msg)
-        for msg in ours:
-            logger.error(
-                "job_refused_for_sandbox_configuration: job_id=%s %s", job_id, msg
-            )
-        if theirs:
-            self.status_code = 422
-            self.detail = theirs
-        else:
-            self.status_code = 500
-            self.detail = [
-                {"type": "sandbox_configuration", "loc": ["sandbox"], "msg": msg}
-                for msg in ours
-            ]
-        super().__init__("; ".join(entry["msg"] for entry in self.detail))
 
 
 class LocalSandboxRequest(BaseModel):
@@ -828,8 +733,9 @@ class LocalSandbox:
             job_refs, mounted_values, secret_file_names = self._job_secret_refs(
                 identifier, request, hosted=hosted
             )
-            # Each model is built on its own and every refusal kept, so a request with two
-            # faults hears about both at once; the job is built only from parts that built.
+            # The source, the agent, the artifact policy and the scenario plan are each judged
+            # on their own and every refusal kept, so faults in any of them are heard at once.
+            # The job's own checks run only once all of them pass, and stop at the first.
             refused: list[tuple[ValidationError, Place | None]] = []
             source_spec: RepositorySource | None = None
             agent: AgentConnection | None = None
@@ -859,7 +765,7 @@ class LocalSandbox:
                     )
                 )
             except ValidationError as exc:
-                refused.append((exc, _by_field(_SOURCE_FIELDS)))
+                refused.append((exc, by_field(SOURCE_FIELDS)))
             try:
                 agent = AgentConnection(
                     connector=request.connector,
@@ -868,7 +774,7 @@ class LocalSandbox:
                     secret_refs=job_refs,
                 )
             except ValidationError as exc:
-                refused.append((exc, _by_field(_AGENT_FIELDS)))
+                refused.append((exc, by_field(AGENT_FIELDS)))
             try:
                 artifacts = HarnessArtifactPolicy(
                     level="full", allow_bundle_download=True
@@ -877,14 +783,11 @@ class LocalSandbox:
                 # Submit chooses the policy: nothing the caller sent is at fault.
                 refused.append((exc, None))
             manifest = request.metadata.get("execution_manifest")
-            if isinstance(manifest, list):
-                for index, entry in enumerate(manifest):
-                    try:
-                        HarnessExecutionManifestEntry.model_validate(entry)
-                    except ValidationError as exc:
-                        refused.append(
-                            (exc, _under("metadata", "execution_manifest", index))
-                        )
+            if manifest is not None:
+                try:
+                    parse_execution_manifest(manifest, request.scenario_count)
+                except ValidationError as exc:
+                    refused.append((exc, in_plan))
             if refused or source_spec is None or agent is None or artifacts is None:
                 raise JobRefused(refused, job_id=identifier)
             try:
@@ -918,7 +821,7 @@ class LocalSandbox:
                     },
                 )
             except ValidationError as exc:
-                raise JobRefused([(exc, _in_job)], job_id=identifier) from None
+                raise JobRefused([(exc, in_job)], job_id=identifier) from None
             directory = self.jobs_root / identifier
             directory.mkdir()
             if request.provider_only:

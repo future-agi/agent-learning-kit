@@ -293,6 +293,7 @@ jobs:
           tests/harness/test_process_runtime.py
           tests/harness/test_source_folder.py
           tests/test_harness_sandbox_server.py
+          tests/test_harness_refusals.py
           tests/test_harness_generated_runtime.py
           tests/test_harness_service_environments.py
           tests/test_harness_architecture.py
