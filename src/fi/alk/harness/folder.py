@@ -177,12 +177,36 @@ def _clean_entries(entries: Any, kept: tuple[str, ...]) -> Any:
     ]
 
 
+def _clean_trigger(trigger: Any) -> Any:
+    # `where` is matched against the world's records, so it is kept exactly (and refused when it
+    # holds a credential, in scenario._credentials_in_kept_fields).
+    if not isinstance(trigger, dict):
+        return redact_strings(trigger)
+    return _clean_except(trigger, ("where",))
+
+
+def _clean_scheduled(entry: Any) -> Any:
+    if not isinstance(entry, dict):
+        return redact_strings(entry)
+    cleaned = _clean_except(entry, ("arguments", "trigger"))
+    if "trigger" in entry:
+        cleaned["trigger"] = _clean_trigger(entry["trigger"])
+    return cleaned
+
+
 def _clean_actor(entry: Any) -> Any:
     if not isinstance(entry, dict):
         return redact_strings(entry)
-    cleaned = _clean_except(entry, ("actions",))
+    cleaned = _clean_except(entry, ("actions", "trigger"))
+    if "trigger" in entry:
+        cleaned["trigger"] = _clean_trigger(entry["trigger"])
     if "actions" in entry:
-        cleaned["actions"] = _clean_entries(entry["actions"], ("arguments",))
+        actions = entry["actions"]
+        cleaned["actions"] = (
+            [_clean_scheduled(one) for one in actions]
+            if isinstance(actions, list)
+            else redact_strings(actions)
+        )
     return cleaned
 
 

@@ -524,8 +524,13 @@ def _credentials_in_kept_fields(scenario: Scenario) -> list[str]:
         "persona.scripted_caller": persona.scripted_caller if persona else None,
     }
     for index, actor in enumerate(scenario.actors):
+        # Matched against the world's records to decide whether the actor comes in.
+        if actor.trigger is not None:
+            kept[f"actors[{index}].trigger.where"] = actor.trigger.where
         for step, action in enumerate(actor.actions):
             kept[f"actors[{index}].actions[{step}].arguments"] = action.arguments
+            if action.trigger is not None:
+                kept[f"actors[{index}].actions[{step}].trigger.where"] = action.trigger.where
     for index, session in enumerate(scenario.pre_run):
         for step, message in enumerate(session.thread):
             kept[f"pre_run[{index}].thread[{step}].arguments"] = message.arguments
@@ -558,8 +563,8 @@ def _credentials_in_copied_files(scenario: Scenario, catalogue: Catalogue) -> li
 def _fields_the_cleaner_would_change(scenario: Scenario) -> list[str]:
     """Fields the saved file would hold differently from the document submitted.
 
-    The run replays `instruction`, the persona's prose, `starts_with.text` and each actor's
-    instruction and knowledge from the saved copy, and names the folder and the checks from `name`, `scenario_key` and the sub-goal
+    The run replays `instruction`, the persona's prose, `starts_with.text`, each fault's
+    `message` and each actor's instruction and knowledge from the saved copy, and names the folder and the checks from `name`, `scenario_key` and the sub-goal
     ids, so each must come back from cleaning exactly as it went in. Refused instead of masked, so
     the proof never changes after submission. The value is never echoed back."""
     persona = scenario.persona
@@ -576,6 +581,9 @@ def _fields_the_cleaner_would_change(scenario: Scenario) -> list[str]:
         )
     if scenario.starts_with is not None:
         replayed["starts_with.text"] = scenario.starts_with.text
+    for index, fault in enumerate(scenario.faults):
+        # The error the world returns to the agent, which the call runner matches on.
+        replayed[f"faults[{index}].message"] = fault.message
     for index, actor in enumerate(scenario.actors):
         replayed[f"actors[{index}].instruction"] = actor.instruction
         replayed[f"actors[{index}].knowledge"] = actor.knowledge

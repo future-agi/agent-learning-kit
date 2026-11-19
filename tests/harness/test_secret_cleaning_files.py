@@ -354,12 +354,43 @@ STRUCTURED = [
             ]
         },
     ),
+    # Matched against the world's records to decide whether the actor comes in, on the actor
+    # and on each of its scheduled actions.
+    (
+        "actors[0].trigger.where",
+        {
+            "actors": [
+                {"id": "it_desk", "trigger": {"kind": "conditional", "collection": "keys", "where": {"key_id": AWS}}}
+            ]
+        },
+    ),
+    (
+        "actors[0].actions[0].trigger.where",
+        {
+            "actors": [
+                {
+                    "id": "it_desk",
+                    "actions": [
+                        {
+                            "action": "rotate",
+                            "trigger": {"kind": "conditional", "collection": "keys", "where": {"key_id": AWS}},
+                        }
+                    ],
+                }
+            ]
+        },
+    ),
 ]
 
 PROSE = [
     ("starts_with.text ", {"starts_with": {"text": f"Please rotate key {AWS}"}}),
     ("actors[0].instruction ", {"actors": [{"id": "it_desk", "instruction": f"You hold {AWS}"}]}),
     ("actors[0].knowledge ", {"actors": [{"id": "it_desk", "knowledge": [{"kind": "facts", "text": f"the key is {AWS}"}]}]}),
+    # The error the world returns to the agent, which the call runner matches on.
+    (
+        "faults[0].message ",
+        {"faults": [{"action": "rotate", "mode": "error", "status": 403, "message": f"key {AWS} is revoked"}]},
+    ),
 ]
 
 
@@ -394,7 +425,8 @@ def test_honest_structured_and_prose_replayed_fields_are_not_refused():
             }
         ],
         faults=[
-            {"action": "rotate", "mode": "approval_required", "approval": "approve", "approved_when": {"key_id": "k-77"}}
+            {"action": "rotate", "mode": "approval_required", "approval": "approve", "approved_when": {"key_id": "k-77"}},
+            {"action": "rotate", "mode": "error", "status": 403, "message": "key k-77 is revoked"},
         ],
     )
     assert _cleaning_problems(scenario) == []
