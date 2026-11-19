@@ -595,6 +595,15 @@ def agent_source_kind(job: HarnessJob, profile: dict[str, object] | None) -> str
     return kind if kind in {"repo", "spec"} else "repo"
 
 
+def build_deadline(args: argparse.Namespace, started: float) -> float:
+    """When this build is stopped, in epoch seconds: the job's own deadline when it gives one, else its start plus the
+    build's time budget (`ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS`)."""
+    from .chat_call_runner import _build_budget_seconds
+
+    given = getattr(args, "deadline_at", None)
+    return float(given) if given is not None else started + _build_budget_seconds()
+
+
 def _await_harness(output: Path) -> int:
     """Wait while the conversation's harness builds the environment in this sandbox."""
     finished = output / ".futureagi-build-finished.json"
@@ -681,6 +690,7 @@ def _review_while_writing(job: HarnessJob, source: Path, output: Path, done: thr
 
 
 def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> int:
+    started = time.time()
     parser = argparse.ArgumentParser()
     parser.add_argument("job", type=Path)
     parser.add_argument("--source", type=Path, required=True)
@@ -919,7 +929,10 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
                     )
                 asyncio.run(
                     validate_and_repair(
-                        runtime_job, args.source.resolve(), args.output.resolve()
+                        runtime_job,
+                        args.source.resolve(),
+                        args.output.resolve(),
+                        deadline_at=build_deadline(args, started),
                     )
                 )
                 # A fresh build shows each case's verdict from the live runtime it was just played on.
