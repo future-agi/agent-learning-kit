@@ -1709,6 +1709,12 @@ def _saved_record(path: Path) -> dict[str, Any]:
     return {READING_RECORD: saved[READING_RECORD]}
 
 
+class ContractCredentialRefused(ValueError):
+    """A contract that holds a credential in a field kept exactly as written; it is not saved.
+
+    The message names each field, never its value, since the value is the secret."""
+
+
 def write_contract(
     contract: AgentContract,
     destination: Path,
@@ -1729,7 +1735,15 @@ def write_contract(
 
     ``shape``, when given, is applied to what is written and the contract saved before it (an
     edit's save keeps the saved file's shape, with no new empty fields).
+
+    A contract with a credential in a field kept exactly as written (`_credential_problems`) is
+    refused with ``ContractCredentialRefused`` before anything is written, so the contract
+    already saved stays as it was. `validate_contract` names the same problems, but not every
+    writer calls it (a runtime repair, the data-store promotion), and every writer comes here.
     """
+    problems = _credential_problems(contract)
+    if problems:
+        raise ContractCredentialRefused("contract not saved: " + " ".join(problems))
     body = contract.model_dump()
     places: list[tuple[Any, Any, Any, str]] = []
     for name in FREE_TEXT:
