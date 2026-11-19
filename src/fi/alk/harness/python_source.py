@@ -856,15 +856,6 @@ def unparsed_note(
     }
 
 
-def _is_file(path: Path) -> bool:
-    """A file, or False when the path can't be checked: a name past the system's limit, or a
-    folder this process may not read. Such a module is not one the tool check reads either."""
-    try:
-        return path.is_file()
-    except OSError:
-        return False
-
-
 def _agent_files(
     root: Path, base: Path, subfolder: str | None, tool_modules: Iterable[str]
 ) -> list[Path]:
@@ -880,6 +871,10 @@ def _agent_files(
         )
         and _inside(path, root)
     ]
+    # The tool check's own test of a module path: a file inside the source, and False for a path
+    # that can't be checked (a name past the system's limit, a folder that can't be read).
+    from .source_tool_evidence import _file_in
+
     extra: set[Path] = set()
     # The tool check reads the module each entry names, wherever it is, tests/ included.
     bases = [base, base / "src", root, root / "src"] if subfolder else [root, root / "src"]
@@ -889,7 +884,7 @@ def _agent_files(
         relative = Path(*module.split("."))
         for one in bases:
             for candidate in (relative.with_suffix(".py"), relative / "__init__.py"):
-                if _is_file(one / candidate):
+                if _file_in(one / candidate, root):
                     extra.add(one / candidate)
     if subfolder:
         from .agent_type_check import code_the_agent_reaches
