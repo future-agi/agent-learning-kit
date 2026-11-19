@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -14,6 +15,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .call_actor import NAME_MAX_LENGTH, ROLE_MAX_LENGTH
+from .job import ActorsSwitch, actors_on, current_actors_switch
+
+_logger = logging.getLogger(__name__)
 
 ACTORS_FILE = "actors.json"
 ACTORS_SCHEMA = "futureagi.actors.v1"
@@ -488,6 +492,10 @@ def load_actors(root: Path) -> ActorList:
 
 
 def save_actors(root: Path, listing: ActorList) -> None:
+    """Write the environment's actors, unless the job's actors switch is off: then no actors.json is written."""
+    if not actors_on(current_actors_switch()):
+        _logger.info("actors are off for this environment; actors.json not written")
+        return
     body = {"schema": ACTORS_SCHEMA, **listing.model_dump(exclude_none=True)}
     (Path(root) / ACTORS_FILE).write_text(
         json.dumps(body, indent=2) + "\n", encoding="utf-8"
@@ -835,6 +843,20 @@ def acting_fields(actor: "Actor | None") -> dict[str, Any]:
         # What the fallback action is taken with, the same as when the world's dispatcher takes it.
         "fallback_arguments": dict(activation.fallback_arguments) if activation else {},
     }
+
+
+# The scenario fields that only exist with actors: who takes part, what happened before the call, who speaks first,
+# and the faults the world plays on the agent's calls. With the job's actors switch off a scenario takes none, and a
+# run plays none of them even when an earlier document carries them.
+ACTOR_SCENARIO_FIELDS = ("actors", "pre_run", "starts_with", "faults")
+
+
+def as_played(doc: dict[str, Any], root: Path, switch: ActorsSwitch | None) -> dict[str, Any]:
+    """A scenario document as a run plays it: with the environment's caller record (`with_caller_actor`), or, with
+    the actors switch off, without any actor, pre-run, first speaker or fault, and without the caller record."""
+    if actors_on(switch):
+        return with_caller_actor(doc, root)
+    return {name: value for name, value in doc.items() if name not in ACTOR_SCENARIO_FIELDS}
 
 
 def ensure_caller(root: Path) -> bool:
