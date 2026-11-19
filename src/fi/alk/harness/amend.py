@@ -140,7 +140,7 @@ def add_rule(
     return True, (
         f"added. The agent now has {len(contract.hard_constraints)} rules, and this one is "
         "graded from here on."
-    )
+    ) + old_values_left(contract, destination)
 
 
 def set_modality(
@@ -223,7 +223,7 @@ def drop_rule(
     contract.hard_constraints.remove(match)
     contract.amendments.append(f"rule removed — {match}: {why.strip()}")
     _persist(contract, destination)
-    return True, f"removed. {len(contract.hard_constraints)} rules left"
+    return True, f"removed. {len(contract.hard_constraints)} rules left" + old_values_left(contract, destination)
 
 
 def fix_tool(
@@ -323,7 +323,7 @@ def fix_tool(
     if problems:
         return False, "the amended contract would not be valid: " + "; ".join(problems)
     _persist(contract, destination)
-    return True, f"{tool_name}: {', '.join(changed)}"
+    return True, f"{tool_name}: {', '.join(changed)}" + old_values_left(contract, destination)
 
 
 def drop_tool_references(contract: AgentContract) -> list[str]:
@@ -396,6 +396,25 @@ def set_worker_tools(
         f"{worker} may now use {', '.join(wanted)}"
         + (f"; the test world refuses its {', '.join(refused)}" if refused else "")
         + ". The change takes effect in the next saved version."
+    )
+
+
+def old_values_left(contract: AgentContract, destination: Path) -> str:
+    """After a rule or tool changed, the case and sub-goal texts that still state a value it no longer does, as the
+    rest of the reply: the writer carries the new value into each before saving."""
+    from .catalogue import load_catalogue
+    from .rule_values import old_value_notes
+    from .scenario_tools import load_scenarios
+
+    try:
+        notes = old_value_notes(contract, load_scenarios(destination), load_catalogue(destination).sub_goals)
+    except Exception:  # noqa: BLE001 - the change is made; this only says what to update next
+        return ""
+    if not notes:
+        return ""
+    return (
+        "\nThese texts still state a value this rule or tool no longer states. Update each now, to what the rules "
+        "say (edit_scenario for a case, add_sub_goal for a sub-goal):\n  - " + "\n  - ".join(notes[:40])
     )
 
 
