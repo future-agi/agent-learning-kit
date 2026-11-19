@@ -1924,6 +1924,9 @@ def accept_scenario(
     keys = {one.scenario_key for one in kept} | (used or set())
     if previous is not None:
         scenario.scenario_key = previous.scenario_key
+    elif named and used is not None and named in used and named not in {one.scenario_key for one in kept}:
+        # A case this environment had and no longer holds comes back under its own key, so its history is its own.
+        scenario.scenario_key = named
     else:
         scenario.scenario_key = unused_key(
             scenario_slug(scenario.name) if named else scenario.scenario_key, keys
@@ -3399,6 +3402,7 @@ def scenario_tools(
                 )
             kept.clear()
             return _ok(_EMPTIED)
+        key = next((one.scenario_key for one in kept if one.name == name), "")
         before = len(kept)
         kept[:] = [one for one in kept if one.name != name]
         if len(kept) == before:
@@ -3406,7 +3410,10 @@ def scenario_tools(
         if not kept:
             return _ok(_EMPTIED)
         write_scenarios(kept, destination, catalogue)
-        return _ok(f"{name} dropped. {len(kept)} left")
+        return _ok(
+            f"{name} dropped (scenario_key {key}). {len(kept)} left. To restore it, submit it with that scenario_key: "
+            "it takes the key back, and its history with it"
+        )
 
     @tool(
         "save_scenarios",

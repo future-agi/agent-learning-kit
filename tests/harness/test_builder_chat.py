@@ -3627,3 +3627,52 @@ def test_a_change_waiting_on_the_person_asks_to_be_answered_with_an_option(tmp_p
     asyncio.run(guarded("edit_scenario")({"scenario_key": "one", "instruction": "ask for an exchange"}))
 
     assert [one.get("options_only") for one in asked] == [True]
+
+
+def test_check_health_names_text_still_stating_a_value_a_changed_rule_no_longer_states(tmp_path):
+    from test_nudge_turn import _edit_scenario, _suite
+
+    from fi.alk.harness.catalogue import load_catalogue, save_catalogue
+    from fi.alk.harness.contract import write_contract
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root = _suite(tmp_path, "adds-a-big-mac", "adds-one-big-mac")
+    contract = builder.contract_of(root)
+    contract.hard_constraints = ["Refund only within 30 days of delivery.", "Never sell more than 130 items."]
+    write_contract(contract, root)
+    _edit_scenario(root, "adds-a-big-mac", use_case="Refuse a refund past 30 days", tests="the 130-item cap holds")
+    catalogue = load_catalogue(root)
+    catalogue.sub_goals[0].what = "Keeps to the 30-day window."
+    save_catalogue(catalogue, root)
+    server = builder.suite_server(root, load_scenarios(root))
+    health = next(one for one in server.tools if one.name == "check_health")
+
+    def said() -> str:
+        return asyncio.run(health.handler({}))["content"][0]["text"]
+
+    assert "still says" not in said()
+    # The window becomes 20 days; the cap is untouched.
+    contract.hard_constraints = ["Refund only within 20 days of delivery.", "Never sell more than 130 items."]
+    write_contract(contract, root)
+    report = said()
+    assert "adds-a-big-mac.use_case still says 30" in report
+    assert f"sub-goal {catalogue.sub_goals[0].name}.what still says 30" in report
+    assert "still says 130" not in report and ".tests still says" not in report
+    # A note, never a problem: health still reads as nothing broken.
+    assert report.startswith("Healthy: nothing broken found.")
+
+
+def test_dropping_a_case_names_the_key_that_restores_it(tmp_path):
+    from test_nudge_turn import _suite
+
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root = _suite(tmp_path, "adds-a-big-mac", "adds-one-big-mac")
+    kept = load_scenarios(root)
+    key = next(one.scenario_key for one in kept if one.name == "adds-a-big-mac")
+    server = builder.suite_server(root, kept)
+    drop = next(one for one in server.tools if one.name == "drop_scenarios")
+
+    said = asyncio.run(drop.handler({"names": ["adds-a-big-mac"]}))["content"][0]["text"]
+    assert f"adds-a-big-mac (scenario_key {key})" in said
+    assert "submit it with its scenario_key: it takes that key back" in said

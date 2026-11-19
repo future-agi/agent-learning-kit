@@ -1752,6 +1752,7 @@ async def _rewrite_held_cases(
     before = load_scenarios(authoring)
     catalogue_before = load_catalogue(authoring)
     before_tree = _authoring_digest(authoring)
+    passing_files = _passing_case_files(held, before, authoring)
     try:
         status = await repair("scenarios", held_case_guidance(held) + "\n\n" + guidance)
     except Exception as error:  # noqa: BLE001 - a writer that cannot repair leaves the cases held
@@ -1761,6 +1762,8 @@ async def _rewrite_held_cases(
         return False
     if restored := _keep_shared_checks(held, catalogue_before, authoring):
         print(f"runtime validation: checks other cases rely on put back: {', '.join(restored)}", flush=True)
+    if restored := _put_back_files(passing_files):
+        print(f"runtime validation: cases that were not held put back: {', '.join(restored)}", flush=True)
     if _authoring_digest(authoring) == before_tree:
         return False
     try:
@@ -1799,6 +1802,33 @@ def _keep_shared_checks(held: dict[str, str], catalogue_before, authoring: Path)
         # A scenario folder carries the checks it names: rewrite them from the catalogue as put back.
         write_scenarios(scenarios, authoring, catalogue)
     return restored
+
+
+def _passing_case_files(held: dict[str, str], scenarios, authoring: Path) -> dict[Path, dict[Path, bytes]]:
+    """Every file of each case that was not held, as it is now, by its folder."""
+    from .folder import folder_for
+    from .proofs import proof_key
+
+    folders = [folder_for(authoring, one.name) for one in scenarios if proof_key(one) not in held]
+    return {folder: {path: path.read_bytes() for path in folder.rglob("*") if path.is_file()} for folder in folders}
+
+
+def _put_back_files(files: dict[Path, dict[Path, bytes]]) -> list[str]:
+    """Each folder given back exactly as it was (its reference, fixed values, expected outcome and checks): a rewrite
+    of the held cases never changes a case that was not held. The folders it touched, by name."""
+    touched = []
+    for folder, kept in files.items():
+        now = {path for path in folder.rglob("*") if path.is_file()} if folder.is_dir() else set()
+        changed = [path for path in kept if path not in now or path.read_bytes() != kept[path]] + sorted(now - set(kept))
+        if not changed:
+            continue
+        for path in now - set(kept):
+            path.unlink()
+        for path, body in kept.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+        touched.append(folder.name)
+    return touched
 
 
 def _authoring_digest(authoring: Path) -> str:

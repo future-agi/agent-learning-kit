@@ -3750,3 +3750,34 @@ def test_a_certify_only_validation_never_reads_or_hands_back_held_cases(tmp_path
     asyncio.run(validate_and_repair(job, source, authoring, validate=validate, repair=refuse, controller=controller))
     assert calls == ["validate"]
     assert controller.history.decisions[-1].action is RepairAction.CERTIFY
+
+
+def test_a_rewrite_that_edits_a_passing_case_s_own_data_is_put_back(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal
+
+    root = _two_cases(tmp_path)
+    folder = next(p for p in (root / "scenarios").iterdir() if p.is_dir() and "kept" in p.name)
+    kept = {p: p.read_bytes() for p in folder.rglob("*") if p.is_file()}
+
+    def edit(catalogue):
+        # Weakens the passing case without touching a check: another reference value, and a stray file.
+        body = json.loads((folder / "scenario.json").read_text(encoding="utf-8"))
+        body["solution"][0]["arguments"]["id"] = "2"
+        (folder / "scenario.json").write_text(json.dumps(body), encoding="utf-8")
+        (folder / "extra.txt").write_text("x", encoding="utf-8")
+        catalogue.sub_goals.append(SubGoal(name="no_refund", what="no refund", check=_STRICT))
+
+    assert _rewrite(root, edit) is True  # the new sub-goal stays
+    assert {p: p.read_bytes() for p in folder.rglob("*") if p.is_file()} == kept
+
+
+def test_a_rewrite_that_only_edits_a_passing_case_changes_nothing(tmp_path):
+    root = _two_cases(tmp_path)
+    folder = next(p for p in (root / "scenarios").iterdir() if p.is_dir() and "kept" in p.name)
+
+    def edit(catalogue):
+        body = json.loads((folder / "scenario.json").read_text(encoding="utf-8"))
+        body["tests"] = "anything"
+        (folder / "scenario.json").write_text(json.dumps(body), encoding="utf-8")
+
+    assert _rewrite(root, edit) is False

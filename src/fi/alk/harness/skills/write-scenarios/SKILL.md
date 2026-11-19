@@ -532,8 +532,8 @@ that did the right thing:
 - **A value the tool decides.** An amount the tool computes is in its `result`, not in an argument it
   does not take.
 
-`same_value(a, b)` compares numbers, dates, times and ids however they were written (`89` and `89.00`,
-`$89` and `89 USD` but never `€89` or a bare `89`, `2026-11-20` and `20 November 2026`, `14:00` and `2 pm`);
+`same_value(a, b)` compares numbers, dates, times and ids however they were written (`89` and
+`"$89.00"` or `"89 dollars"`, never `$89` and `€89`; `2026-11-20` and `20 November 2026`, `14:00` and `2 pm`);
 `same_id(a, b)` compares ids.
 
 **A check that only asks whether a tool was called is not a check.** It proves the plumbing worked, not
