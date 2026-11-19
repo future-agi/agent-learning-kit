@@ -35,6 +35,8 @@ class ControlResult(_PlayedControl, total=False):
     error: str
     # The tools the control called that the reference solution never calls.
     unmatched: list[str]
+    # The tools the control tried that the reference never calls and the world refused: nothing committed.
+    attempted: list[str]
 
 
 class _CitedSource(TypedDict):

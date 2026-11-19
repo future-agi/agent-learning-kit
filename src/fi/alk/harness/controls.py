@@ -42,7 +42,11 @@ def play_controls(
             outcomes = [run_check(source, world, calls, name=name, reference=reference) for name, source in checks]
         finally:
             world.close()
-        played.append(played_control(control, outcomes, assumed, unmatched_calls(scenario, calls)))
+        played.append(
+            played_control(
+                control, outcomes, assumed, unmatched_calls(scenario, calls), refused_attempts(scenario, calls)
+            )
+        )
     return played
 
 
@@ -53,8 +57,21 @@ def unmatched_calls(scenario: Scenario, calls: Sequence[Call]) -> list[str]:
     return sorted({call.name for call in calls if call.ok and not call.refused and call.name not in solved})
 
 
+def refused_attempts(scenario: Scenario, calls: Sequence[Call]) -> list[str]:
+    """The tools a control tried that the reference never calls and the world refused: the wrong action attempted, with
+    nothing committed, so only a check on the attempt can fail it."""
+    solved = {str(step.tool) for step in getattr(scenario, "solution", None) or ()}
+    went_through = set(unmatched_calls(scenario, calls))
+    # Every call outside the reference that did not go through (`unmatched_calls`) was refused or failed.
+    return sorted({call.name for call in calls if call.name not in solved and call.name not in went_through})
+
+
 def played_control(
-    control: NegativeControl, outcomes: Sequence[Outcome], assumed: list[str], unmatched: Sequence[str] = ()
+    control: NegativeControl,
+    outcomes: Sequence[Outcome],
+    assumed: list[str],
+    unmatched: Sequence[str] = (),
+    attempted: Sequence[str] = (),
 ) -> ControlResult:
     """A control as played: it fails when a check it names (every check when it names none) fails. A check that raised
     under it is broken, not failing: no evidence. With no outcomes it was not played, and with a step assumed (recorded
@@ -75,6 +92,7 @@ def played_control(
         "assumed": assumed,
         # The tools it called that the reference never calls: the wrong action itself, when a refusal is the case.
         "unmatched": list(unmatched),
+        "attempted": list(attempted),
     }
 
 
