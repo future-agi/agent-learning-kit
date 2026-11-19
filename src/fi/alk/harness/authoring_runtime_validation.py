@@ -1750,13 +1750,18 @@ async def _rewrite_held_cases(
 
     print(f"runtime validation: {len(held)} cases held after the live proof, back to the writer", flush=True)
     before = load_scenarios(authoring)
+    catalogue_before = load_catalogue(authoring)
     before_tree = _authoring_digest(authoring)
     try:
         status = await repair("scenarios", held_case_guidance(held) + "\n\n" + guidance)
     except Exception as error:  # noqa: BLE001 - a writer that cannot repair leaves the cases held
         print(f"runtime validation: held cases not rewritten ({type(error).__name__})", flush=True)
         return False
-    if status or _authoring_digest(authoring) == before_tree:
+    if status:
+        return False
+    if restored := _keep_shared_checks(held, catalogue_before, authoring):
+        print(f"runtime validation: checks other cases rely on put back: {', '.join(restored)}", flush=True)
+    if _authoring_digest(authoring) == before_tree:
         return False
     try:
         certify_scenario_repair(before, load_scenarios(authoring), expected_count=expected_count, diagnostic_codes=set())
@@ -1767,6 +1772,33 @@ async def _rewrite_held_cases(
             print(f"runtime validation: held-case rewrite undone: {rejected}", flush=True)
             return False
     return True
+
+
+def _keep_shared_checks(held: dict[str, str], catalogue_before, authoring: Path) -> list[str]:
+    """Put back each sub-goal a case that was not held names whose check the rewrite changed or removed: rewriting a
+    held case may add sub-goals or change those only held cases name, never loosen a check a passing case relies on."""
+    from .catalogue import save_catalogue
+    from .proofs import proof_key
+    from .scenario_tools import load_scenarios, write_scenarios
+
+    scenarios = load_scenarios(authoring)
+    catalogue = load_catalogue(authoring)
+    shared = {goal for one in scenarios if proof_key(one) not in held for goal in one.sub_goals}
+    now = {goal.name: goal for goal in catalogue.sub_goals}
+    restored = sorted(
+        goal.name
+        for goal in catalogue_before.sub_goals
+        if goal.name in shared and (goal.name not in now or now[goal.name].check != goal.check)
+    )
+    if restored:
+        previous = {goal.name: goal for goal in catalogue_before.sub_goals if goal.name in restored}
+        catalogue.sub_goals = [previous.get(one.name, one) for one in catalogue.sub_goals] + [
+            goal for name, goal in previous.items() if name not in now
+        ]
+        save_catalogue(catalogue, authoring)
+        # A scenario folder carries the checks it names: rewrite them from the catalogue as put back.
+        write_scenarios(scenarios, authoring, catalogue)
+    return restored
 
 
 def _authoring_digest(authoring: Path) -> str:
@@ -2264,9 +2296,10 @@ async def _validate_and_repair(
                     raise
                 candidate_hash = after_hash
             else:
+                # A validation that may not repair scenarios (certify-only) never reads or hands back held cases.
                 held = (
                     held_for_the_writer(authoring)
-                    if not readiness_only and held_rounds < HELD_CASE_REPAIRS
+                    if not readiness_only and budgets.scenario_patches and held_rounds < HELD_CASE_REPAIRS
                     else {}
                 )
                 if held and await _rewrite_held_cases(

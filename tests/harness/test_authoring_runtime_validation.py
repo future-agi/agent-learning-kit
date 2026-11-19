@@ -3585,7 +3585,7 @@ def test_certificate_carries_the_isolation_the_runtime_recorded(tmp_path, record
 
 
 
-def _held_loop(tmp_path, monkeypatch, held_rounds, *, rewrites=True):
+def _held_loop(tmp_path, monkeypatch, held_rounds, *, rewrites=True, budgets=None):
     """A generic validation that passes every time, with `held_rounds` lists of held cases read after each pass."""
     from fi.alk.harness import authoring_runtime_validation as module
 
@@ -3609,7 +3609,7 @@ def _held_loop(tmp_path, monkeypatch, held_rounds, *, rewrites=True):
             (authoring / "sub_goals.json").write_text(json.dumps({"n": len(guidance)}), encoding="utf-8")
         return 0
 
-    controller = RepairController(RepairBudgets())
+    controller = RepairController(budgets or RepairBudgets())
     job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=0)
     asyncio.run(validate_and_repair(job, source, authoring, validate=validate, repair=repair, controller=controller))
     return calls, guidance, controller
@@ -3640,4 +3640,113 @@ def test_a_rewrite_that_changes_nothing_is_not_validated_again(tmp_path, monkeyp
     calls, guidance, controller = _held_loop(tmp_path, monkeypatch, [{"case": "unchecked"}], rewrites=False)
 
     assert calls == ["validate"] and len(guidance) == 1
+    assert controller.history.decisions[-1].action is RepairAction.CERTIFY
+
+
+_STRICT = "def check(world, calls):\n    return None if any(c.name == 'lookup' and c.ok for c in calls) else 'not looked up'\n"
+_LOOSE = "def check(world, calls):\n    return None\n"
+
+
+def _two_cases(tmp_path):
+    """A suite where one case passed (`kept`) and one was held (`held`); both name `looked_up`."""
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.scenario import Scenario, Step
+    from fi.alk.harness.scenario_tools import write_scenarios
+
+    catalogue = Catalogue(
+        sub_goals=[
+            SubGoal(name="looked_up", what="looked it up", check=_STRICT),
+            SubGoal(name="refused", what="refused it", check=_STRICT.replace("not looked up", "not refused")),
+        ]
+    )
+    save_catalogue(catalogue, tmp_path)
+
+    def case(name, goals):
+        solution = [Step(tool="lookup", arguments={"id": "1"}, fixed={"id": "the caller"})]
+        return Scenario(name=name, use_case="u", instruction="i", tests="t", fixture={"origin": "seed"},
+                        solution=solution, sub_goals=goals)
+
+    write_scenarios([case("kept", ["looked_up"]), case("held", ["looked_up", "refused"])], tmp_path, catalogue)
+    return tmp_path
+
+
+def _rewrite(root, edit):
+    from fi.alk.harness import authoring_runtime_validation as module
+    from fi.alk.harness.catalogue import load_catalogue, save_catalogue
+
+    from fi.alk.harness.scenario_tools import load_scenarios, write_scenarios
+
+    async def repair(phase, text):
+        catalogue = load_catalogue(root)
+        edit(catalogue)
+        save_catalogue(catalogue, root)
+        # As add_sub_goal does: every scenario naming a changed sub-goal has its check rewritten in its folder.
+        write_scenarios(load_scenarios(root), root, catalogue)
+        return 0
+
+    return asyncio.run(module._rewrite_held_cases({"held": "negative_control_passed"}, root, repair=repair,
+                                                  guidance="", expected_count=2))
+
+
+def test_a_rewrite_that_loosens_a_check_a_passing_case_relies_on_is_put_back(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal, load_catalogue
+
+    root = _two_cases(tmp_path)
+    kept_folder = {p.name: p.read_bytes() for p in (root / "scenarios").rglob("*") if p.is_file() and "kept" in str(p)}
+    assert any(_STRICT.encode() in body for body in kept_folder.values())
+
+    def edit(catalogue):
+        for goal in catalogue.sub_goals:
+            goal.check = _LOOSE  # loosens the shared check and rewrites the held-only one
+        catalogue.sub_goals.append(SubGoal(name="no_refund", what="no refund", check=_STRICT))
+
+    assert _rewrite(root, edit) is True
+    checks = {goal.name: goal.check for goal in load_catalogue(root).sub_goals}
+    assert checks["looked_up"] == _STRICT  # put back: `kept` names it
+    assert checks["refused"] == _LOOSE and "no_refund" in checks  # held-only edit and new sub-goal stay
+    assert {p.name: p.read_bytes() for p in (root / "scenarios").rglob("*") if p.is_file() and "kept" in str(p)} == (
+        kept_folder
+    )
+
+
+def test_a_rewrite_that_only_loosens_a_shared_check_changes_nothing(tmp_path):
+    from fi.alk.harness.catalogue import load_catalogue
+
+    root = _two_cases(tmp_path)
+    before = (root / "sub_goals.json").read_bytes()
+
+    def edit(catalogue):
+        catalogue.sub_goals[0].check = _LOOSE
+
+    assert _rewrite(root, edit) is False
+    assert (root / "sub_goals.json").read_bytes() == before
+    assert load_catalogue(root).sub_goals[0].check == _STRICT
+
+
+def test_a_certify_only_validation_never_reads_or_hands_back_held_cases(tmp_path, monkeypatch):
+    from fi.alk.harness import authoring_runtime_validation as module
+
+    def unread(root):
+        raise AssertionError("certify-only must not prove the suite again for held cases")
+
+    monkeypatch.setattr(module, "held_for_the_writer", unread)
+    budgets = RepairBudgets(compiler_candidates=0, environment_patches=0, scenario_patches=0)
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        return 1
+
+    async def refuse(phase, text, *more, **options):
+        raise RuntimeValidationError(phase, "Certify-only does not repair")
+
+    controller = RepairController(budgets)
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=0)
+    asyncio.run(validate_and_repair(job, source, authoring, validate=validate, repair=refuse, controller=controller))
+    assert calls == ["validate"]
     assert controller.history.decisions[-1].action is RepairAction.CERTIFY

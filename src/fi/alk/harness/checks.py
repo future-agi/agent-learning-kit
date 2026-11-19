@@ -145,9 +145,13 @@ def same_id(first: Any, second: Any) -> bool:
     return bool(mine) and mine == theirs
 
 
-# A number as text: an optional sign and currency symbol, thousands commas, a fraction. A leading zero (`007`) is an
-# identifier's, never a number's.
-_NUMBER_TEXT = re.compile(r"^[-+]?[$€£₹]?\s?(?:0|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?:\.\d+)?$")
+# A number as text: an optional sign, a currency (a symbol or a code, before or after), thousands commas, a fraction.
+# A leading zero (`007`) is an identifier's, never a number's.
+_NUMBER_TEXT = re.compile(
+    r"^(?P<sign>[-+]?)(?P<before>[$€£₹]|[A-Za-z]{3}(?=\s?\d))?\s?"
+    r"(?P<digits>(?:0|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?:\.\d+)?)\s?(?P<after>[A-Za-z]{3})?$"
+)
+_CURRENCY_SYMBOLS = {"$": "USD", "€": "EUR", "£": "GBP", "₹": "INR"}
 _MONTHS = {
     name: number
     for number, month in enumerate(
@@ -165,15 +169,19 @@ _MONTH_DAY = re.compile(r"^(?:[a-z]+,?\s+)?([a-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th
 _CLOCK = re.compile(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?$")
 
 
-def _number(value: Any) -> Decimal | None:
+def _number(value: Any) -> tuple[str, Decimal] | None:
+    """A number and the currency it is written in ("" for none): `$89` and `89 USD` are one amount, `€89` another,
+    and a bare `89` is neither, so a check never takes one currency, or none, for another."""
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float, Decimal)):
-        return Decimal(str(value))
-    text = str(value).strip() if isinstance(value, str) else ""
-    if not _NUMBER_TEXT.match(text):
+        return "", Decimal(str(value))
+    found = _NUMBER_TEXT.match(value.strip()) if isinstance(value, str) else None
+    if not found or (found["before"] and found["after"]):
         return None
-    return Decimal(re.sub(r"[^\d.+-]", "", text))
+    marker = found["before"] or found["after"] or ""
+    currency = _CURRENCY_SYMBOLS.get(marker, marker.upper())
+    return currency, Decimal(found["sign"] + found["digits"].replace(",", ""))
 
 
 def _day(value: Any) -> date | None:
@@ -211,7 +219,7 @@ def _minute(value: Any) -> int | None:
 
 def same_value(first: Any, second: Any) -> bool:
     """Whether two values are the same value however they were written: a number by its value (`89`, `89.0`,
-    `"$89.00"`), a date by its day (`2026-11-20`, `20 November 2026`), a time by its minute (`14:00`, `2 pm`), and
+    `"89.00"`) and its currency (`"$89.00"` is `"89 USD"`, never `"€89"` or a bare `89`), a date by its day (`2026-11-20`, `20 November 2026`), a time by its minute (`14:00`, `2 pm`), and
     any other text as `same_id` reads it (case and separators ignored). Lists and objects compare item by item.
 
     It never makes two different values the same: another number, day, minute or id is still different."""
