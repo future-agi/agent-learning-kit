@@ -23,6 +23,12 @@ loop costs little, but:
   answers 503 instead of 200;
 - ``close()`` is for tests: it ends the loop for good, because clients built at import may
   be bound to it.
+
+Each request's ``thread_id`` reaches the graph as LangGraph's own thread,
+``config={"configurable": {"thread_id": ...}}``, so a node or tool can tell conversations apart
+with ``langgraph.config.get_config()``. A graph compiled with a checkpointer of its own gets no
+thread: it would store each turn, and the kit sends the whole history every turn, so the graph
+would see it twice. It is called as it would be without the thread.
 """
 
 from __future__ import annotations
@@ -103,7 +109,23 @@ def _start_loop() -> None:
         _LOOP, _LOOP_THREAD = loop, thread
 
 
-async def _run_graph(messages: list[dict[str, str]], timeout: float, abandoned: threading.Event) -> Any:
+def _thread_config(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """The conversation as the graph's thread, or None: no thread named, or a graph that keeps
+    its own checkpoints."""
+    thread = payload.get("thread_id")
+    if not isinstance(thread, str) or not thread.strip():
+        return None
+    if getattr(GRAPH, "checkpointer", None) not in (None, False):
+        return None
+    return {"configurable": {"thread_id": thread}}
+
+
+async def _run_graph(
+    messages: list[dict[str, str]],
+    timeout: float,
+    abandoned: threading.Event,
+    config: dict[str, Any] | None = None,
+) -> Any:
     if abandoned.is_set():
         # Answered already, while the loop was busy: never start the graph.
         raise RequestTimeout(f"graph did not answer within {timeout:g}s")
@@ -119,7 +141,9 @@ async def _run_graph(messages: list[dict[str, str]], timeout: float, abandoned: 
     # graph's own TimeoutError on every Python version, and SystemExit can't stop the loop.
     deadline = asyncio.get_running_loop().call_later(timeout, expire)
     try:
-        return await GRAPH.ainvoke({"messages": messages})
+        if config is None:
+            return await GRAPH.ainvoke({"messages": messages})
+        return await GRAPH.ainvoke({"messages": messages}, config=config)
     except asyncio.CancelledError:
         # Once the request is abandoned nobody reads this task's result, so it ends cancelled.
         if expired and not abandoned.is_set():
@@ -131,10 +155,17 @@ async def _run_graph(messages: list[dict[str, str]], timeout: float, abandoned: 
         deadline.cancel()
 
 
-def _submit(messages: list[dict[str, str]], timeout: float, abandoned: threading.Event):
+def _submit(
+    messages: list[dict[str, str]],
+    timeout: float,
+    abandoned: threading.Event,
+    config: dict[str, Any] | None = None,
+):
     with _LOOP_LOCK:
         _start_loop()
-        return asyncio.run_coroutine_threadsafe(_run_graph(messages, timeout, abandoned), _LOOP)
+        return asyncio.run_coroutine_threadsafe(
+            _run_graph(messages, timeout, abandoned, config), _LOOP
+        )
 
 
 async def _shutdown() -> None:
@@ -193,7 +224,7 @@ def _invoke(payload: dict[str, Any]) -> dict[str, str]:
         raise ValueError("chat request contains no messages")
     timeout = float(os.environ.get("ALK_LANGGRAPH_TIMEOUT_SECONDS", "110"))
     abandoned = threading.Event()
-    future = _submit(messages, timeout, abandoned)
+    future = _submit(messages, timeout, abandoned, _thread_config(payload))
     try:
         # The margin lets the deadline fire first; this wait covers a node that ignores cancellation.
         state = future.result(timeout + _WAIT_MARGIN_SECONDS)
