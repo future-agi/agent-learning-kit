@@ -260,13 +260,9 @@ def graph_route(manifest, output) -> bool:
 
 
 def todays_route(manifest, output, body) -> None:
-    """The command is run as written, the interface and execution as the reading wrote them."""
-    agent = _agent_of(manifest)
-    assert "ALK_LANGGRAPH_ENTRYPOINT" not in agent.environment
-    assert agent.run_command[-len(body["runtime"]["command"]) :] == body["runtime"]["command"]
-    sealed = _sealed(output)["runtime"]
-    for key in ("command", "execution", "interface", "workdir", "source_subfolder"):
-        assert sealed[key] == body["runtime"][key], key
+    """The graph route is not taken: the reading's command route stands, served as the kit serves a framework's
+    server (`langgraph dev` from its config folder, on the sandbox's port, without its file watcher)."""
+    assert not graph_route(manifest, output)
 
 
 def test_the_12_nov_deep_agents_reading_takes_the_graph_route(tmp_path):
@@ -531,7 +527,10 @@ def test_an_auto_selected_compose_file_bundles_as_on_the_old_kit(
     manifest, output = bundled(tmp_path, source, DEEP, contract=body)
     sealed = _sealed(output)["runtime"]
     assert sealed["interface"]["kind"] == "http"
-    assert sealed["interface"]["path"] == "/runs/wait"
+    # A native `langgraph dev` is served by the kit, which runs each conversation on its own thread (TH-8887).
+    assert sealed["interface"]["path"] == (
+        "/threads/{{langgraph_thread_id}}/runs/wait" if execution == "native" else "/runs/wait"
+    )
     assert sealed["command"] == body["runtime"]["command"]
 
 
