@@ -464,7 +464,7 @@ def test_importing_twice_under_different_environments(example_module) -> None:
 
 
 def test_requirements_and_python_version_are_pinned() -> None:
-    assert_pins(EXAMPLE, ["langchain==1.5.0", "langchain-openai==1.7.3"])
+    assert_pins(EXAMPLE, ["langchain==1.5.0", "langchain-openai==1.7.3", "langgraph==1.2.23"])
 
 
 def test_langgraph_json_declares_exactly_the_agent() -> None:
@@ -537,7 +537,7 @@ def test_example_has_plain_tools_a_module_level_agent_and_the_literal_default_mo
 
 # The example on the libraries it pins ------------------------------------------------------
 
-PINS = {"langchain": "1.5.0", "langchain-openai": "1.7.3"}
+PINS = {"langchain": "1.5.0", "langchain-openai": "1.7.3", "langgraph": "1.2.23"}
 
 
 def _require_pins() -> None:
