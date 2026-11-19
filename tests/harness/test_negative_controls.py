@@ -1002,3 +1002,14 @@ def test_a_422_that_is_not_only_fields_the_agent_adds_stays_refused(monkeypatch,
 
     assert saved["kept_as_written"] is False and saved["blocked_reason"] == "not_solvable"
     assert saved["assumed"] == []
+
+
+def test_an_older_service_s_missing_field_spelling_reads_the_same(monkeypatch, tmp_path):
+    def older(self, endpoint, arguments=None, *, record_as="", record=True):
+        args = dict(arguments or {})
+        missing = {"type": "value_error.missing", "loc": ["body", "caller_id"], "msg": "field required"}
+        return _rejected(endpoint, args, {"detail": [missing]})
+
+    saved = _validated(monkeypatch, tmp_path, refund_case(), older)
+
+    assert saved["kept_as_written"] is True and saved["assumed"] == ["lookup_order", "refund_order"]
