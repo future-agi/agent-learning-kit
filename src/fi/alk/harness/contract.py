@@ -969,6 +969,9 @@ class Runtime(BaseModel):
         data = handler(self)
         if not data.get("source_subfolder"):
             data.pop("source_subfolder", None)
+        # A runtime with no tools server of its own writes the same bytes as before the field existed.
+        if data.get("tool_service") is None:
+            data.pop("tool_service", None)
         return data
 
     @model_validator(mode="after")

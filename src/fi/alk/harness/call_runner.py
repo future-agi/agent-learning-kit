@@ -1763,34 +1763,10 @@ def trial_faults_readable(dsn: str) -> bool:
     return isinstance(faults, list) and all(isinstance(one, dict) for one in faults)
 
 
-# The values a record's decision field takes, as the verdict each is.
-_DECIDED = {
-    **dict.fromkeys(("approved", "approve", "accepted", "accept", "granted", "allowed", "yes", "true"), "approved"),
-    **dict.fromkeys(
-        ("denied", "deny", "declined", "decline", "rejected", "reject", "refused", "refuse", "no", "false"), "refused"
-    ),
-}
-_DECISION_FIELDS = ("decision", "verdict", "status", "approval", "approved")
-
-
-def _decision_of(row: Mapping[str, Any]) -> str | None:
-    """The decision an approver's record carries, in its own decision field: what it wrote, or set on a change."""
-    arguments = row_arguments(row.get("arguments"))
-    if isinstance(arguments, dict) and isinstance(arguments.get("set"), dict):
-        arguments = arguments["set"]
-    if not isinstance(arguments, dict):
-        return None
-    for field in _DECISION_FIELDS:
-        decided = _DECIDED.get(str(arguments.get(field)).strip().lower()) if field in arguments else None
-        if decided is not None:
-            return decided
-    return None
-
-
 def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
     """One line per approval, read from the action log only: the agent's request, the decision, and the agent's
-    writes before and after it. `verdict` is the one the actor gave, else the decision the record it wrote carries, a
-    fallback's included (`refused` too for a declining timeout); None when nothing says."""
+    writes before and after it. `verdict` is the one the actor gave (`VERDICTS`), `refused` for a declining timeout,
+    and None when nothing structured says: a record's own fields are never read for words that sound like one."""
     rows = [
         row
         for row in log
@@ -1824,23 +1800,13 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
             said.remove(sent)
         verdict = sent.get("verdict") if sent is not None else None
         if verdict not in VERDICTS:
-            # Unsaid, the record the actor wrote says it, a fallback's too: the decision it carries.
-            verdict = _decision_of(row)
+            verdict = None
         found.append((parent, {"by": row.get("actor_id"), "action": action, "outcome": row.get("outcome"),
                                "at": row.get("at"), "verdict": verdict}))
     for one in decisions:
         if one.get("play") == "timeout" and one.get("parent") in by_id:
-            # A timeout's verdict is its fallback's: a decline refuses, a fallback action says what its record says.
-            taken = next(
-                (
-                    row
-                    for row in rows
-                    if str(row.get("actor_id")) == str(one.get("actor"))
-                    and str(row.get("parent_event_id") or "") == str(one.get("parent"))
-                ),
-                None,
-            )
-            verdict = "refused" if one.get("fallback") == "decline" else _decision_of(taken) if taken else None
+            # A timeout's verdict is its fallback's: a decline refuses; a fallback action gives none of its own.
+            verdict = "refused" if one.get("fallback") == "decline" else None
             found.append((by_id[one["parent"]], {"by": one.get("actor"), "action": f"timeout: {one.get('fallback')}",
                                                  "outcome": one.get("outcome"), "at": one.get("at"),
                                                  "verdict": verdict}))

@@ -1054,3 +1054,15 @@ def test_tool_names_are_not_read_from_a_link_or_a_pipe_or_a_file_without_end(
     monkeypatch.setattr(Path, "open", open_)
 
     assert defined_tool_names(source) == {"lookup_weather"}
+
+
+@pytest.mark.parametrize("name", ["refuses_refund", "never_discloses_card", "order_lookup"])
+def test_a_sub_goal_s_name_never_decides_what_its_check_must_test(name):
+    """Whether a check can fail the wrong behaviour is the replayed negative control's to show, not the name's."""
+    from fi.alk.harness.catalogue import validate_sub_goal
+
+    goal = _goal(
+        name,
+        check="def check(world, calls):\n    return None if any(c.name == 'lookup' for c in calls) else 'no lookup'\n",
+    )
+    assert not any("legitimate path" in one for one in validate_sub_goal(goal))
