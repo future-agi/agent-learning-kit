@@ -10,11 +10,10 @@ from .targets import AgentCandidate, CandidateEvaluation
 
 class SimulationEvaluator:
     """
-    Evaluates an AgentCandidate through simulate-sdk and optionally ai-evaluation.
+    Evaluate an AgentCandidate with the kit's simulation and evaluation engines.
 
-    The bridge is dependency-light by design:
-    - pass fake runner/evaluate functions in tests,
-    - or install `agent-simulate` and `ai-evaluation` for real runs.
+    Pass a runner or evaluation function to use a test double. Both engines
+    ship with agent-learning-kit; hosted runs still require their credentials.
     """
 
     def __init__(
