@@ -74,6 +74,13 @@ def _file(world_root: Path, ref: str, source_root: Path | None = None) -> tuple[
     return None
 
 
+def _holds_a_secret(quote: str) -> bool:
+    """Whether the kit's one outbound secret scrub would change these words."""
+    from .outbound import redact_outbound_text
+
+    return redact_outbound_text(quote) != quote
+
+
 class RuleSource(Protocol):
     """Anything holding the agent's rules a `rule` source cites, as an `AgentContract` does."""
 
@@ -119,6 +126,13 @@ def resolve_sources(
                 entry["matched_digest"] = "sha256:" + hashlib.sha256(text).hexdigest()
                 if normalise(quote) not in normalise(text.decode("utf-8", errors="replace")):
                     entry.update(resolved=False, problem=f"{path.name} does not contain the quoted words")
+                elif origin == "agent_source" and _holds_a_secret(quote):
+                    entry.update(
+                        resolved=False,
+                        problem=f"the words quoted from {path.name} hold what reads as a secret (a key, token or "
+                        "credential), and a citation is shown wherever the case is: quote words of the agent's "
+                        "source that hold none",
+                    )
         elif kind == "requirement":
             if not quote.strip():
                 entry.update(resolved=False, problem="a requirement needs the person's own words")
