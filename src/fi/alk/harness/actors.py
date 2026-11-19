@@ -851,6 +851,18 @@ def acting_fields(actor: "Actor | None") -> dict[str, Any]:
 ACTOR_SCENARIO_FIELDS = ("actors", "pre_run", "starts_with", "faults")
 
 
+def without_actors(scenario: Any) -> Any:
+    """A scenario model as a run with actors off plays it: each of `ACTOR_SCENARIO_FIELDS` at its empty default."""
+    fields = type(scenario).model_fields
+    return scenario.model_copy(
+        update={
+            name: fields[name].get_default(call_default_factory=True)
+            for name in ACTOR_SCENARIO_FIELDS
+            if name in fields
+        }
+    )
+
+
 def as_played(doc: dict[str, Any], root: Path, switch: ActorsSwitch | None) -> dict[str, Any]:
     """A scenario document as a run plays it: with the environment's caller record (`with_caller_actor`), or, with
     the actors switch off, without any actor, pre-run, first speaker or fault, and without the caller record."""
