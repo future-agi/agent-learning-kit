@@ -29,8 +29,9 @@ Each request's ``thread_id`` reaches the graph as LangGraph's own thread,
 with ``langgraph.config.get_config()``. The kit sends the whole history every turn, so what a
 graph keeps of a thread would see it twice. So:
 
-- a graph compiled with a checkpointer of its own gets no thread, and is called as it would be
-  without one;
+- a graph compiled with a checkpointer of its own is refused once, when it is loaded, with a
+  message that names the checkpointer: it would keep every turn and see the history again on
+  each, and LangGraph refuses such a graph called without a thread;
 - an object whose ``ainvoke`` takes no ``config`` (neither by name nor through ``**kwargs``) is
   called as before, with the state alone;
 - not covered: a subgraph compiled with its own checkpointer under a parent with none, and a
@@ -69,6 +70,14 @@ def _load_graph() -> Any:
     graph = getattr(importlib.import_module(".".join(parts)), attribute)
     if not callable(getattr(graph, "ainvoke", None)):
         raise TypeError("declared LangGraph object has no ainvoke method")
+    checkpointer = getattr(graph, "checkpointer", None)
+    if checkpointer is not None and checkpointer is not False:
+        named = checkpointer if isinstance(checkpointer, bool) else type(checkpointer).__name__
+        raise ValueError(
+            f"declared LangGraph graph is compiled with a checkpointer ({named}); compile it "
+            "without one: the kit sends the whole conversation every turn, so a checkpointer "
+            "would keep each turn and the graph would see the history twice"
+        )
     return graph
 
 
@@ -118,12 +127,10 @@ def _start_loop() -> None:
 
 
 def _thread_config(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """The conversation as the graph's thread, or None: no thread named, or a graph that keeps
-    its own checkpoints."""
+    """The conversation as the graph's thread, or None: no thread named, or an ``ainvoke`` that
+    takes no config."""
     thread = payload.get("thread_id")
-    if not isinstance(thread, str) or not thread.strip():
-        return None
-    if getattr(GRAPH, "checkpointer", None) not in (None, False) or not _TAKES_CONFIG:
+    if not isinstance(thread, str) or not thread.strip() or not _TAKES_CONFIG:
         return None
     return {"configurable": {"thread_id": thread}}
 
