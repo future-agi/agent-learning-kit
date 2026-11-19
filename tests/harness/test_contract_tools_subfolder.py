@@ -1893,7 +1893,8 @@ def test_a_prompt_path_named_again_is_resolved_once(tmp_path, repo, monkeypatch)
         ({"system_prompt_from": [{"path": "agents/a/p\x00.txt", "start_line": 1, "end_line": 1}]}, "is not a file in the source"),
         # Not found, so the tool's evidence is unproven, not refused.
         ({"tool_entrypoints": [{"tool": "add", "mode": "import", "module": "x." * 2500 + "t", "callable": "add"}]}, None),
-        ({"tool_entrypoints": [{"tool": "add", "mode": "import", "module": "x\x00.t", "callable": "add"}]}, None),
+        # A module that isn't a dotted name is refused for its form.
+        ({"tool_entrypoints": [{"tool": "add", "mode": "import", "module": "x\x00.t", "callable": "add"}]}, "module-not-dotted-identifier"),
         ({"runtime": {"language": "python", "compose_file": "x/" * 2500 + "compose.yaml"}}, "runtime_compose_file_outside_subfolder"),
         # A program no system can open can't leave the folder; bundling refuses it.
         ({"runtime": {"language": "python", "command": ["python", "x/" * 2500 + "a.py"]}}, None),

@@ -2665,12 +2665,12 @@ class HostedScheduler:
             )
         else:
             status = "passed"
-        failure = None
         if call_outcome.duplicates:
             # The world applied a write twice after the agent's answer was lost: a failure of the agent's, whatever
-            # the sub-goals say.
+            # the sub-goals say. A graded receipt carries no `failure` (that is an errored run's), so why is its reason,
+            # beside any note on the trial.
             status = "failed"
-            failure = _failure("duplicate_commit", duplicate_reason(call_outcome.duplicates))
+            note = "; ".join(one for one in (note, duplicate_reason(call_outcome.duplicates)) if one)
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,
@@ -2680,7 +2680,7 @@ class HostedScheduler:
             sub_goals=tuple(sub_goal_results),
             evaluations=(),
             call=self._call_summary(call_outcome),
-            failure=failure,
+            failure=None,
             reason=note,
         )
 
