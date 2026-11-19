@@ -1,0 +1,274 @@
+{"reading_inputs": {"version":1,"source":{"kind":"github","repository":"future-agi/agent-learning-kit","commit_sha":"d687a0db00000000000000000000000000000000"},"subfolder":"examples/harness/deep_agents_support","evals_sha256":null,"generic_harness_v1":true}, 
+  "agent": "deep_agents_support",
+  "one_liner": "A customer-support chat agent for an online store (LangChain Deep Agents graph) that looks up orders, starts returns for delivered orders, and states the return policy.",
+  "modality": "chat",
+  "call_direction": "inbound",
+  "agent_languages": [],
+  "conversational": true,
+  "system_prompt_excerpt": "    system_prompt=(\n        \"You are a customer support agent for an online store. Use the order tools to \"\n        \"look up orders and start returns, and never guess an order's status. Answer \"\n        \"briefly.\"\n    ),",
+  "system_prompt_from": [
+    {
+      "path": "examples/harness/deep_agents_support/agent.py",
+      "start_line": 55,
+      "end_line": 59
+    }
+  ],
+  "model": {
+    "provider": "openai",
+    "name": "vertex_ai/gemini-3.7-flash",
+    "path": "examples/harness/deep_agents_support/agent.py",
+    "line": 6
+  },
+  "hard_constraints": [
+    "Use the order tools to look up orders and start returns, and never guess an order's status.",
+    "Answer briefly."
+  ],
+  "tools": [
+    {
+      "name": "look_up_order",
+      "args": [
+        "order_id"
+      ],
+      "arg_types": {
+        "order_id": "str"
+      },
+      "arg_values": {},
+      "description": "Look up an order by its id and report its item, status and any return.",
+      "requires": [],
+      "refuses": "Unknown order_id (lookup is exact and case-sensitive) returns the ordinary string 'No order {order_id} exists.' and does not raise.",
+      "effects": "Read-only. Reads the in-memory _ORDERS dict. On success returns 'Order {id}: {item}, status {status}, return: {reason or none}.'",
+      "inputs_from": {}
+    },
+    {
+      "name": "start_return",
+      "args": [
+        "order_id",
+        "reason"
+      ],
+      "arg_types": {
+        "order_id": "str",
+        "reason": "str"
+      },
+      "arg_values": {},
+      "description": "Start a return for a delivered order, giving the customer's reason.",
+      "requires": [],
+      "refuses": "Returned as ordinary strings, never raised, checked in this order: unknown order -> 'No order {id} exists.'; status other than 'delivered' (e.g. A1002 shipped) -> 'Order {id} is {status} and cannot be returned yet.'; return already set -> 'Order {id} already has a return started.'. The reason is not validated (an empty string is accepted, and then the order's return is falsy, so look_up_order shows 'none' and a second start_return is allowed).",
+      "effects": "On success sets _ORDERS[order_id]['return'] = reason (in-memory, persists for the process lifetime) and returns 'Return started for order {id}: {reason}.'. The reason text is free text, taken from the customer or written by the agent. A later look_up_order shows the reason in 'return:'.",
+      "inputs_from": {}
+    },
+    {
+      "name": "return_policy",
+      "args": [],
+      "arg_types": {},
+      "arg_values": {},
+      "description": "State the store's return policy.",
+      "requires": [],
+      "refuses": "Never refuses.",
+      "effects": "Read-only. Always returns 'Delivered items can be returned within 30 days for a full refund.' The 30 days are not checked against any order date.",
+      "inputs_from": {}
+    }
+  ],
+  "data_schema": {
+    "orders": {
+      "order_id": "str, dict key in _ORDERS",
+      "item": "str",
+      "status": "str (only 'delivered' and 'shipped' appear in the data; start_return requires 'delivered')",
+      "return": "str|None, the return reason once started, None otherwise"
+    }
+  },
+  "base_environment": {
+    "orders": [
+      {
+        "order_id": "A1001",
+        "item": "trail running shoes",
+        "status": "delivered"
+      },
+      {
+        "order_id": "A1002",
+        "item": "rain jacket",
+        "status": "shipped"
+      },
+      {
+        "order_id": "A1003",
+        "item": "water bottle",
+        "status": "delivered"
+      }
+    ]
+  },
+  "dependencies": [
+    {
+      "name": "in_memory_orders",
+      "kind": "datastore",
+      "what": "_ORDERS dict of three seeded orders (A1001 and A1003 delivered, A1002 shipped), all with no return.",
+      "used_by": [
+        "look_up_order",
+        "start_return"
+      ],
+      "engine": "in_process python dict",
+      "version": "",
+      "reached": {
+        "dsn_env": "",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "",
+        "loader_function": ""
+      }
+    }
+  ],
+  "runtime_dependencies": [
+    {
+      "name": "openai_compatible_chat_completions",
+      "kind": "inference",
+      "what": "Chat-completions endpoint for the agent's LLM. OPENAI_BASE_URL sets the base URL, and unset means the OpenAI API. OPENAI_API_KEY is the key; the module imports with a placeholder 'unset' but a turn fails without a real key. OPENAI_MODEL defaults to vertex_ai/gemini-3.7-flash, a gateway model name.",
+      "used_by": [],
+      "engine": "ChatOpenAI (langchain-openai), use_responses_api=False",
+      "version": "",
+      "reached": {
+        "dsn_env": "OPENAI_BASE_URL",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "",
+        "loader_function": ""
+      }
+    }
+  ],
+  "implementation": "present",
+  "tool_entrypoints": [
+    {
+      "tool": "look_up_order",
+      "mode": "import",
+      "module": "examples.harness.deep_agents_support.agent",
+      "callable": "look_up_order",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Module-level function. It reads the module global _ORDERS, so no state argument."
+    },
+    {
+      "tool": "start_return",
+      "mode": "import",
+      "module": "examples.harness.deep_agents_support.agent",
+      "callable": "start_return",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Module-level function that mutates the module global _ORDERS."
+    },
+    {
+      "tool": "return_policy",
+      "mode": "import",
+      "module": "examples.harness.deep_agents_support.agent",
+      "callable": "return_policy",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Module-level function, no arguments."
+    }
+  ],
+  "refusal_signature": "Refusals are ordinary returned strings, not exceptions. They are 'No order {id} exists.', 'Order {id} is {status} and cannot be returned yet.', and 'Order {id} already has a return started.'. Success strings begin 'Order {id}: ' (look_up_order), 'Return started for order ' (start_return), and 'Delivered items can be returned' (return_policy).",
+  "data_store": {
+    "kind": "in_process",
+    "version": "",
+    "configured_by": "Hardcoded module-level dict _ORDERS in agent.py. There is no connection setting. State is mutated in memory by start_return and resets on process restart.",
+    "config_key": "",
+    "host": "",
+    "port": null,
+    "database": "",
+    "user": "",
+    "password_from": "",
+    "schema_from": "",
+    "loaded_by": "examples.harness.deep_agents_support.agent (module import)",
+    "loader_module": "examples.harness.deep_agents_support.agent"
+  },
+  "runtime": {
+    "language": "python",
+    "version": "3.12",
+    "install": "pip install -r requirements.txt",
+    "extras": [],
+    "requirements_files": [],
+    "observations": {},
+    "workspaces": {},
+    "workdir": "examples/harness/deep_agents_support",
+    "execution": "native",
+    "compose_file": "",
+    "compose_overrides": [],
+    "compose_image_services": [],
+    "service": "",
+    "additional_services": [],
+    "required_environment": {
+      "agent": [
+        "OPENAI_API_KEY"
+      ]
+    },
+    "secret_files": {},
+    "config_files": {},
+    "directories": [],
+    "dockerfile": "",
+    "command": [
+      "langgraph",
+      "dev",
+      "--no-browser",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "2024"
+    ],
+    "context_excludes": [],
+    "platform": "",
+    "interface": {
+      "kind": "http",
+      "protocol": "json_template",
+      "model": null,
+      "port": 2024,
+      "path": "/runs/wait",
+      "health_path": "/ok",
+      "include_tools": false,
+      "request_template": {
+        "assistant_id": "support",
+        "input": {
+          "messages": "{{messages}}"
+        }
+      },
+      "response_path": "messages.-1.content",
+      "headers_template": {},
+      "completed_tool_events": null,
+      "completed_tools": null,
+      "local_auth": null,
+      "setup_secrets": {},
+      "failure_rule": null,
+      "setup_requests": []
+    },
+    "source_subfolder": "examples/harness/deep_agents_support"
+  },
+  "real_use_cases": [
+    "Look up an order by id and report its item, status and any return on it.",
+    "Start a return for a delivered order with the customer's reason.",
+    "Refuse to start a return for an order that has not been delivered, or that already has a return started.",
+    "Tell the customer the store's return policy.",
+    "Report that an order id does not exist rather than guessing its status."
+  ],
+  "caller_identity": "The agent never identifies the person. No login, number or account is used. The customer supplies an order id in the conversation, and any order id works for any caller.",
+  "notes": "Single agent, one graph: langgraph.json maps 'support' to ./agent.py:graph, a deepagents create_deep_agent graph built once at import. The agent folder has no Dockerfile or Compose file, so the user's note about a standalone Dockerfile does not apply, and native Python 3.12 is the deployment declared. ASSUMPTION, NOT PROVEN IN THE AGENT'S SOURCE: the folder ships no HTTP server, agent_callback or command entrypoint. The README says only that the kit's own LangGraph adapter loads agent.py:graph and sends each turn the whole conversation as `messages`, replying with the last message's text. The runtime command and interface declared here (`langgraph dev` on port 2024, stateless POST /runs/wait with assistant_id 'support', reply read from messages.-1.content, health /ok) come from the standard LangGraph server convention applied to langgraph.json. `langgraph-cli` (with the inmem extra) is NOT in requirements.txt and would have to be installed in the runtime, and the declared interface has not been verified by a readiness check. If it fails, the kit's adapter entrypoint should replace it. Deep Agents' built-in tools (filesystem, planning todos, sub-agent task) are added by the framework and are not traced, so they are not listed as tools. Tool failures never raise, so a refusal is only visible in the returned string. The 'return' key is falsy for an empty reason, which lets a second return be started on that order. Order lookup is case-sensitive. Order state is process-global and not per conversation, so a return started in one conversation persists into later ones in the same process.",
+  "open_questions": [
+    "The chat ingress is assumed to be `langgraph dev` plus POST /runs/wait because the source has no ingress of its own. Confirm this, or give the kit adapter's real entrypoint.",
+    "langgraph-cli is not in requirements.txt, so how should it be installed in the runtime?",
+    "Which model endpoint and key will be supplied (OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL)? The default model name is a gateway name that the OpenAI API does not accept."
+  ],
+  "chosen_evals": [],
+  "amendments": [],
+  "instrumentation": "none"
+}

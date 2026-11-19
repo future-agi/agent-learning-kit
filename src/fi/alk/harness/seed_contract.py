@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -46,7 +47,10 @@ SEED_LIMIT_BYTES = _CONTRACT_LIMIT_BYTES
 
 _CONTRACT = "contract.json"
 _SOURCE_MODEL = Path("generic-harness") / "source-model.json"
+# What a build compares before it reuses a reading. `made_by` is deliberately not here.
 _COMPARED = ("source", "subfolder", "evals_sha256", "generic_harness_v1")
+# The kit build is the commit the sandbox template was built from; nothing else is accepted.
+_BUILD_ID = re.compile(r"[0-9a-fA-F]{7,40}")
 
 
 class Problem(NamedTuple):
@@ -158,6 +162,26 @@ def record_for(job: HarnessJob) -> dict[str, Any] | None:
     }
 
 
+def _kit_version() -> str:
+    """The installed package's version (its metadata), not pyproject's: a release bump made on
+    main never reaches dev's constant."""
+    from .. import __version__
+
+    return str(__version__)
+
+
+def _build_id() -> str:
+    value = os.environ.get("ALK_BUILD_ID", "")
+    # fullmatch: `$` would let a trailing newline through.
+    return value.lower() if _BUILD_ID.fullmatch(value) else ""
+
+
+def _made_by() -> dict[str, str]:
+    """Which kit build is writing the reading, for information only. Nothing is caught here: a
+    failure goes to `document()`, which logs it with the trace and keeps the reading."""
+    return {"kit_version": _kit_version(), "build_id": _build_id()}
+
+
 def _splice(raw: bytes, record: dict[str, Any], *, empty: bool) -> bytes:
     # Every byte the reading saved is kept, so the world is still built from its own rows.
     start = raw.index(b"{") + 1
@@ -181,6 +205,11 @@ def with_record(job: HarnessJob, raw: bytes) -> bytes | None:
     body = json.loads(raw.decode("utf-8"))
     if not isinstance(body, dict) or RECORD_KEY in body:
         return None
+    # Added here, not in `record_for`: it says who wrote the reading, not what it was made from.
+    spliced = _splice(raw, {**record, "made_by": _made_by()}, empty=not body)
+    if len(spliced) <= SEED_LIMIT_BYTES:
+        return spliced
+    # made_by is what tipped it over: the record alone is worth more than who wrote it.
     spliced = _splice(raw, record, empty=not body)
     # A reading at the edge stays as it was rather than crossing the platform's cap.
     if len(spliced) > SEED_LIMIT_BYTES:
@@ -203,7 +232,10 @@ def replace_if_unchanged(path: Path, expected: bytes, new: bytes) -> bool:
 
 
 def differs(body: dict[str, Any], job: HarnessJob) -> list[str]:
-    """The names that keep this reading from being reused for ``job``; empty when it matches."""
+    """The names that keep this reading from being reused for ``job``; empty when it matches.
+
+    Only ``_COMPARED`` is looked at: ``made_by`` (which kit build wrote the reading) never is.
+    """
     record = body.get(RECORD_KEY)
     if not isinstance(record, dict):
         return [RECORD_KEY]

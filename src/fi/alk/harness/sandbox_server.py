@@ -2164,17 +2164,26 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
             str(name): _redact(str(value), key=str(name))
             for name, value in dict(environment.get("overrides") or {}).items()
         }
+        # Names only: the job's settings the kit skipped because Compose
+        # also reads them, so the owner can see their agent ran without them.
+        skipped = sorted(
+            str(name)
+            for name in environment.get("skipped_setting_names") or []
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", str(name))
+        )
         outputs.append(
             {
                 "id": "environment",
                 "kind": "environment",
                 "title": "Execution environment",
-                "summary": f"{len(services)} services ready",
+                "summary": f"{len(services)} services ready"
+                + (f"; settings not passed to the agent: {', '.join(skipped)}" if skipped else ""),
                 "data": {
                     "services": services,
                     "project": str(environment.get("project") or ""),
                     "managed": bool(environment.get("managed")),
                     "overrides": overrides,
+                    "skipped_settings": skipped,
                 },
             }
         )

@@ -570,6 +570,28 @@ def test_local_sandbox_reports_committed_scenario_progress_while_worker_runs(
     assert executed == [True]
 
 
+def test_the_environment_output_names_the_settings_the_kit_skipped(tmp_path):
+    # A setting the kit skipped is in the job's result, by name only.
+    from fi.alk.harness.sandbox_server import _stage_outputs
+
+    (tmp_path / "environment.json").write_text(
+        json.dumps(
+            {
+                "services": ["agent-runtime"],
+                "project": "fagi-harness-1",
+                "skipped_setting_names": ["LANG", "NO_PROXY"],
+            }
+        )
+    )
+
+    [environment] = [
+        item for item in _stage_outputs(tmp_path) if item["kind"] == "environment"
+    ]
+
+    assert environment["data"]["skipped_settings"] == ["LANG", "NO_PROXY"]
+    assert "LANG, NO_PROXY" in environment["summary"]
+
+
 def test_local_sandbox_exposes_secret_safe_live_stage_outputs(tmp_path, monkeypatch):
     source = tmp_path / "sources" / "agent"
     source.mkdir(parents=True)
@@ -3529,6 +3551,23 @@ def test_the_agent_runtime_is_started_without_publishing_its_service_ports(
     command, _environment = _agent_runtime_command({}, tmp_path, monkeypatch, label="ports")
     assert "--no-deps" in command
     assert "-P" not in command and "--service-ports" not in command
+
+
+def test_a_tool_credential_reaches_the_agent_runtime_env_list(tmp_path, monkeypatch):
+    # GIT_TOKEN is the agent's own setting, so it is named in `--env` like MY_KEY; a reserved
+    # name that is not a tool credential (DOCKER_CONFIG) stays out.
+    worker = {
+        "ALK_RUNTIME_CONFIGURATION_NAMES": "GIT_TOKEN,MY_KEY,DOCKER_CONFIG",
+        "ALK_RUNTIME_VALUE_GIT_TOKEN": "git-canary",
+        "ALK_RUNTIME_VALUE_MY_KEY": "key-canary",
+        "ALK_RUNTIME_VALUE_DOCKER_CONFIG": "/steer",
+    }
+    argv, _environment = _agent_runtime_command(worker, tmp_path, monkeypatch, label="toolcred")
+    pairs = [argv[i : i + 2] for i in range(len(argv) - 1)]
+    assert ["--env", "GIT_TOKEN"] in pairs
+    assert ["--env", "MY_KEY"] in pairs
+    assert ["--env", "DOCKER_CONFIG"] not in pairs
+    assert "git-canary" not in " ".join(argv)
 
 
 @pytest.mark.parametrize("name", ["GIT_TOKEN", "DOCKER_PASSWORD", "SSH_PRIVATE_KEY"])
