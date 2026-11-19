@@ -206,7 +206,7 @@ def suite_server(
             if scenario is None:
                 lines.append(f"{name}: not in the suite")
                 continue
-            proof = prove(scenario, catalogue, out)
+            proof = prove(scenario, catalogue, out, as_written=True)
             record_proof(out, proof_key(scenario), proof, solution_steps=len(scenario.solution))
             gates = ", ".join(f"{gate} {'yes' if held else 'no'}" for gate, held in proof.gates().items())
             lines.append(

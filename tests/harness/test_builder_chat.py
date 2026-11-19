@@ -1747,6 +1747,23 @@ def test_prove_scenarios_records_each_proof(tmp_path):
     )
 
 
+def test_proving_an_old_case_again_keeps_it_as_written(tmp_path):
+    from test_nudge_turn import _edit_scenario, _suite
+
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _edit_scenario(root, "adds-a-big-mac", negative_controls=[])
+    server = builder.suite_server(root, load_scenarios(root))
+    prove = next(one for one in server.tools if one.name == "prove_scenarios")
+
+    asyncio.run(prove.handler({"names": ["adds-a-big-mac"]}))
+
+    entry = load_proofs(root)["adds-a-big-mac"]
+    assert (entry["kept_as_written"], entry["blocked_reason"]) == (True, "no_negative_control")
+
+
 def test_a_write_after_the_last_report_runs_the_checks_again(tmp_path, monkeypatch):
     from test_nudge_turn import _break_scenario
 

@@ -836,10 +836,10 @@ def test_the_save_names_a_case_its_submit_was_too_early_to_judge(monkeypatch, tm
     _saved_with(tmp_path, {target.scenario_key: module.prove(target, goals, tmp_path, case_goals=[])})
     _saved_with(tmp_path, {one.scenario_key: module.prove(one, goals, tmp_path) for one in suite[1:]})
 
-    said = controls_off_their_case(suite, tmp_path)
+    said = controls_off_their_case(suite, suite, tmp_path)
 
     assert len(said) == 1 and said[0].startswith("refund_case:") and "refund_once" in said[0]
-    assert controls_off_their_case(suite[:2], tmp_path) == []
+    assert controls_off_their_case(suite[:2], suite[:2], tmp_path) == []
 
 
 def test_a_build_holds_a_case_whose_control_breaks_only_the_shared_step_and_a_validate_keeps_today_s_rule(
@@ -870,3 +870,16 @@ def test_only_a_build_s_proving_judges_controls_against_the_suite(monkeypatch, t
     authoring_entrypoint._prove_scenarios(tmp_path, None, stage="build")
     authoring_entrypoint._prove_scenarios(tmp_path, None)
     assert asked == [True, False]
+
+
+def test_the_save_judges_only_the_cases_written_in_this_session(monkeypatch, tmp_path):
+    from fi.alk.harness.scenario_tools import controls_off_their_case
+
+    install(monkeypatch)
+    target, suite = _suite(3, _WRONG_LOOKUP)
+    goals = catalogue(**_SUITE_GOALS, own_0=LOOKS_UP_ANY, own_1=LOOKS_UP_ANY)
+    _saved_with(tmp_path, {one.scenario_key: module.prove(one, goals, tmp_path) for one in suite})
+
+    # The shared-control case was left untouched (it may predate the rule); only the others were written now.
+    assert controls_off_their_case(suite[1:], suite, tmp_path) == []
+    assert len(controls_off_their_case([target], suite, tmp_path)) == 1

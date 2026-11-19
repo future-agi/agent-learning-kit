@@ -209,7 +209,9 @@ def _no_longer_hold(
         if scenario.name not in wanted:
             continue
         try:
-            proof = prove(scenario, catalogue, world_root, case_goals=distinctive_goals(scenario, suite))
+            proof = prove(
+                scenario, catalogue, world_root, case_goals=distinctive_goals(scenario, suite), as_written=True
+            )
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
             record_unprovable(destination, proof_key(scenario), type(exc).__name__)
             failed.append((scenario.name, type(exc).__name__))
@@ -2147,13 +2149,14 @@ def _coverage_gaps(coverage: dict[str, Any]) -> str:
 SAVE_REFUSALS_BEFORE_ACCEPTING = 2
 
 
-def controls_off_their_case(kept: list[Scenario], world_root: Path) -> list[str]:
-    """Each case whose saved proof shows its negative controls break only goals the whole suite shares. A submit
-    judges a case against the cases kept so far, so the first ones and any judged before later cases narrowed what
-    is shared are judged again here, against the suite as it is saved."""
+def controls_off_their_case(written: list[Scenario], kept: list[Scenario], world_root: Path) -> list[str]:
+    """Each case written or changed in this session whose saved proof shows its negative controls break only goals the
+    whole suite (`kept`) shares. A submit judges a case against the cases kept so far, so the first ones and any judged
+    before later cases narrowed what is shared are judged again here, against the suite as it is saved. A case left
+    untouched is never judged: it may predate the rule."""
     proofs = load_proofs(world_root)
     out: list[str] = []
-    for one in kept:
+    for one in written:
         goals = distinctive_goals(one, kept)
         entry = proofs.get(proof_key(one)) or {}
         if misses_case_goals(
@@ -3493,7 +3496,7 @@ def scenario_tools(
             except Exception as unreadable:  # noqa: BLE001 - advisory only, never fatal
                 logger.warning("suite remark skipped: %s", unreadable)
         diversity = (
-            controls_off_their_case(kept, world_root)
+            controls_off_their_case(written, kept, world_root)
             + suite_diversity_problems(kept)
             + keyword_problems(kept)
             + safety_allowance_problems(kept)

@@ -97,8 +97,9 @@ LANE_CODES = frozenset(
 )
 # A case with no negative control at all: refused at submit, kept not proved through a rebuild.
 NO_NEGATIVE_CONTROL = BlockedReason.NO_NEGATIVE_CONTROL
-# Refused at submit, but kept not proved through a rebuild: a case written before the rule existed (no control at
-# all, or a control that misses the case's own goal) stays in the suite, held out of runs, so an older suite rebuilds.
+# Refused at submit, where a case is written or edited. A case proved again as it was written (a Validate, a rebuild
+# that leaves it untouched) was written before these rules existed: it stays runnable, kept as written with the reason
+# as its note, so a new rule never stops an older suite from running (`Proof.as_written`).
 KEPT_THROUGH_REBUILD = frozenset({BlockedReason.NO_NEGATIVE_CONTROL, BlockedReason.CONTROL_MISSES_CASE_GOAL})
 # A writer's fault: the scenario is not kept. The lane codes (an unbound tool) are kept and labelled.
 REFUSED_CODES = frozenset(
@@ -206,6 +207,9 @@ class Proof:
     # The sub-goals that make this case its own, not a step every case in its suite shares (`distinctive_goals`). Set
     # only where a case is written or rebuilt, so a saved proof is never re-judged by this rule on read.
     case_goals: list[str] = field(default_factory=list)
+    # Proved again as it was written, not written or edited here: a reason in `KEPT_THROUGH_REBUILD` keeps it as
+    # written instead of holding it.
+    as_written: bool = False
     # Tools the reference solution calls that the agent under test does not have, read from its agent version's
     # tools when they are known: the world's service may still answer them, but no agent could pass the case.
     missing_tools: list[str] = field(default_factory=list)
@@ -249,8 +253,10 @@ class Proof:
 
     @property
     def kept_as_written(self) -> bool:
-        """Not proved only because this lane could not execute something; nothing that ran failed."""
-        return not self.proved and self.blocked_reason() in LANE_CODES
+        """Not proved only because this lane could not execute something, or, proved again as it was written, only for
+        a rule its case predates; nothing that ran failed."""
+        blocked = self.blocked_reason()
+        return not self.proved and (blocked in LANE_CODES or (self.as_written and blocked in KEPT_THROUGH_REBUILD))
 
     def blocked_reason(self) -> BlockedReason | None:
         """The first reason this proof is not proved, faults before the lane's own limits."""
@@ -1152,6 +1158,7 @@ def prove(
     conflict_judge: Callable[[str, str], tuple[bool | None, str]] | None = None,
     case_goals: Sequence[str] = (),
     agent_tools: Collection[str] | None = None,
+    as_written: bool = False,
 ) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping.
 
@@ -1159,7 +1166,7 @@ def prove(
     case's controls; None uses the harness judge. `conflict_judge(expected, rule) -> (conflict, why)`
     decides whether a cited rule contradicts the expected outcome; None uses the harness judge.
     `agent_tools` are the tools the agent version under test has, when known; None skips that check."""
-    proof = Proof(case_goals=list(case_goals))
+    proof = Proof(case_goals=list(case_goals), as_written=as_written)
     if agent_tools is not None:
         proof.missing_tools = sorted({str(step.tool) for step in scenario.solution} - set(agent_tools))
     if contract is None:
