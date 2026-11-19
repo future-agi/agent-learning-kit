@@ -25,7 +25,7 @@ import sys
 import tempfile
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 from urllib import error as urllib_error
@@ -124,6 +124,10 @@ class ProvisionedEnvironment:
     # Names only. Values are resolved from the job secret environment immediately before the
     # ephemeral worker starts and are never serialized into environment.json or a bundle.
     runtime_configuration_names: list[str] = field(default_factory=list)
+    # Names only: the job's own settings Compose also reads for itself (a proxy, CA bundle or
+    # locale), skipped rather than handed over until they can go to the agent's own service
+    # (a later change). Shown to the owner in the job's result.
+    skipped_setting_names: list[str] = field(default_factory=list)
 
     def save(self, destination: Path) -> Path:
         destination.mkdir(parents=True, exist_ok=True)
@@ -136,7 +140,11 @@ class ProvisionedEnvironment:
         target = Path(destination) / MANIFEST
         if not target.exists():
             return None
-        return cls(**json.loads(target.read_text(encoding="utf-8")))
+        record = json.loads(target.read_text(encoding="utf-8"))
+        # Keep the fields this kit knows: a newer kit may have written more (a rolled-back
+        # template reading a newer kit's record), and that must not stop the job.
+        known = {item.name for item in fields(cls)}
+        return cls(**{key: value for key, value in record.items() if key in known})
 
 
 def compose_file(source: str | Path) -> Path | None:
@@ -310,35 +318,98 @@ def _log_skipped_reserved(names: set[str]) -> None:
         )
 
 
+def _agent_setting_compose_also_reads(name: str) -> bool:
+    """A setting intake admits as the agent's own (a proxy, CA bundle or locale) that Compose
+    also reads for itself under the same name."""
+    return (
+        client_name_reserved(name)
+        and not tool_credential_name(name)
+        and not agent_value_name_reserved(name)
+    )
+
+
+def skipped_setting_names(environment: ProvisionedEnvironment) -> list[str]:
+    """The job's settings ``_runtime_values`` skips because Compose also reads them: names
+    only, for the job's result."""
+    if environment.managed:
+        # Delivered to the agent's own service instead (``_agent_settings_override``).
+        return []
+    return sorted(_agent_settings(environment))
+
+
+def _agent_settings(environment: ProvisionedEnvironment) -> dict[str, str]:
+    """The job's own proxy, CA bundle and locale values, which Compose also reads for itself."""
+    values: dict[str, str] = {}
+    for name in environment.runtime_configuration_names:
+        if not _agent_setting_compose_also_reads(name):
+            continue
+        value = runtime_configuration_value(name).strip()
+        if value:
+            values[name] = value
+    return values
+
+
+def _delivered_agent_settings(environment: ProvisionedEnvironment) -> set[str]:
+    """The names ``_agent_settings_override`` hands to the agent's own service: not skipped."""
+    return set(_agent_settings(environment)) if environment.managed else set()
+
+
+def _agent_settings_override(
+    environment: ProvisionedEnvironment, service: str
+) -> Path | None:
+    """For a service file the kit wrote, a private override giving the agent's service its
+    proxy, CA bundle and locale values as that service's own ``env_file``.
+
+    A service ``env_file`` reaches only that service's container: unlike the project
+    ``--env-file``, Compose doesn't take it into its own environment or that of anything it
+    starts, on either Compose version the sandbox carries. Only the agent's service names it,
+    and only the ``run`` that starts the agent is given the override, never ``config``, which
+    would print the values. Both files are 0600 in a private job directory that the caller
+    removes, and that ``stop`` sweeps if a worker dies first. A customer's own Compose file
+    gets none: only they know which service a proxy or locale is for, so those values are
+    skipped and named."""
+    if not environment.managed:
+        return None
+    values = _agent_settings(environment)
+    if not values:
+        return None
+    directory = Path(
+        tempfile.mkdtemp(prefix=_job_directory_prefix(environment.project))
+    )
+    try:
+        descriptor, settings_file = tempfile.mkstemp(dir=directory)
+        _write_env_file(descriptor, values)
+        descriptor, override = tempfile.mkstemp(dir=directory, suffix=".json")
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump({"services": {service: {"env_file": [settings_file]}}}, handle)
+    except BaseException:
+        _remove_job_directory(directory)
+        raise
+    return Path(override)
+
+
 def _runtime_values(
     environment: ProvisionedEnvironment, skipped: set[str] | None = None
 ) -> dict[str, str]:
-    """The job's own values for the names it declared, minus names it may not set."""
+    """The job's own values for the names it declared, minus names it may not set.
+
+    A proxy, CA bundle or locale setting is skipped, as it was before kit #337: Compose reads
+    the same names for itself, and passing them would steer the tool, not the agent. The skip
+    is logged and recorded in the job's result (``skipped_setting_names``) until the value can
+    go to the agent's own service."""
     values: dict[str, str] = {}
-    refused: list[str] = []
     under_sandbox = _under_sandbox()
     for name in environment.runtime_configuration_names:
         value = runtime_configuration_value(name).strip()
         if not value:
             continue
         if client_name_reserved(name) and not tool_credential_name(name):
-            if not agent_value_name_reserved(name):
-                # Intake admits it as the agent's own setting (a proxy, CA bundle or locale),
-                # which a Compose service can't get under its own name: refuse, never drop.
-                refused.append(name)
-            elif skipped is not None:
-                # Intake refuses these; this is the backstop.
+            if skipped is not None:
                 skipped.add(name)
             continue
         if not under_sandbox and _local_denied(name):
             continue
         values[name] = value
-    if refused:
-        raise ProvisionError(
-            f"compose_value_name_reserved: {', '.join(sorted(refused))} (a Compose service "
-            "can't get a proxy, CA bundle or locale value under its own name; send it under "
-            "another name and set the name in the Compose file from it)"
-        )
     return values
 
 
@@ -362,7 +433,7 @@ def _compose_values(
                 skipped.add(name)
             else:
                 values[name] = value
-    _log_skipped_reserved(skipped)
+    _log_skipped_reserved(skipped - _delivered_agent_settings(environment))
     return values
 
 
@@ -455,6 +526,7 @@ def _run(
     timeout: int = 900,
     process_overrides: dict[str, str] | None = None,
     teardown: bool = False,
+    extra_files: tuple[str, ...] = (),
 ) -> str:
     """Run one ``docker compose`` call.
 
@@ -517,6 +589,8 @@ def _run(
             files = ["--file", environment.compose_file]
             if environment.compose_override_file:
                 files.extend(("--file", environment.compose_override_file))
+            for path in extra_files:
+                files.extend(("--file", path))
             # Giving Compose an explicit --env-file stops it reading the repository's ``.env`` by
             # itself, so that file goes first (as today, now explicit) and the job file, which
             # wins, after it. A ``.env`` directory would break an explicit --env-file.
@@ -2246,6 +2320,7 @@ def provision(
             existing.overrides = _overrides(existing, config)
             existing.internal_overrides = _internal_overrides(existing, config)
             existing.runtime_configuration_names = runtime_configuration_names
+            existing.skipped_setting_names = skipped_setting_names(existing)
             existing.save(destination)
             return existing
 
@@ -2277,6 +2352,7 @@ def provision(
         runtime_fingerprint=runtime_fingerprint,
         runtime_configuration_names=runtime_configuration_names,
     )
+    environment.skipped_setting_names = skipped_setting_names(environment)
     _write_initial_env_file_override(destination, environment)
     # Record the project before the first Compose call, not running: a worker killed mid-boot
     # then leaves an environment that ``stop`` can find, so it removes the job file and tears the
@@ -2825,10 +2901,14 @@ def start_runtime(
         "TOOLS_API_URL",
     }
     # No ``--env`` may name a client-steering name, whatever put it in ``injected``.
-    for name in [name for name in injected if client_name_reserved(name)]:
+    for name in [
+        name
+        for name in injected
+        if client_name_reserved(name) and not tool_credential_name(name)
+    ]:
         del injected[name]
         skipped_reserved.add(name)
-    _log_skipped_reserved(skipped_reserved)
+    _log_skipped_reserved(skipped_reserved - _delivered_agent_settings(environment))
     for name in sorted(injected):
         value = f"{name}={injected[name]}" if name in explicit_non_secret else name
         arguments.extend(("--env", value))
@@ -2838,7 +2918,18 @@ def start_runtime(
         for name, value in injected.items()
         if runtime_only.get(name) != value
     }
-    _run(environment, *arguments, timeout=900, process_overrides=process_overrides)
+    agent_settings = _agent_settings_override(environment, service)
+    try:
+        _run(
+            environment,
+            *arguments,
+            timeout=900,
+            process_overrides=process_overrides,
+            extra_files=(str(agent_settings),) if agent_settings else (),
+        )
+    finally:
+        if agent_settings is not None:
+            _remove_job_directory(agent_settings.parent)
     deadline = time.monotonic() + 60
     # LiveKit workers commonly stay alive while warming VAD/STT/TTS processes and only register
     # for dispatch afterwards.  Starting a room after five seconds races that registration: the

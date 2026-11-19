@@ -9,9 +9,11 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from livekit.agents.llm import ChatMessage
 
+# Before the first livekit import, so an environment without LiveKit skips this file.
 pytest.importorskip("livekit")
+
+from livekit.agents.llm import ChatMessage  # noqa: E402
 
 from fi.simulate.agent.definition import AgentDefinition, TelephonyTransport
 from fi.simulate.recording.room_recorder import (

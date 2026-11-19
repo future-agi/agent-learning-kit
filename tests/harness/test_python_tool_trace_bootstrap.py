@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -9,6 +10,45 @@ import sys
 import time
 
 import pytest
+
+# Every case below runs once per tracing mechanism: `sys.monitoring` (Python 3.12+) and the
+# profile function that stays as the fallback. `ALK_TOOL_TRACE_MECHANISM` is an internal knob
+# that only the profile value acts on; anything else lets the bootstrap choose.
+MECHANISMS = [
+    pytest.param(
+        "monitoring",
+        marks=pytest.mark.skipif(
+            sys.version_info < (3, 12), reason="sys.monitoring needs Python 3.12"
+        ),
+    ),
+    "profile",
+]
+
+
+@pytest.fixture(autouse=True, params=MECHANISMS)
+def mechanism(request, monkeypatch) -> str:
+    monkeypatch.setenv("ALK_TOOL_TRACE_MECHANISM", request.param)
+    return request.param
+
+
+# The tracer is standard library only, so the tool-tracing cases can run under another interpreter
+# (ALK_TEST_PYTHON=/path/to/python3.13) to check how it reads that version's frames.
+_TRACED_PYTHON = os.environ.get("ALK_TEST_PYTHON") or sys.executable
+
+
+def _version_of(python: str) -> tuple[int, int]:
+    major, minor = subprocess.run(
+        [python, "-c", "import sys; print(*sys.version_info[:2])"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.split()
+    return int(major), int(minor)
+
+
+# The version the tracer runs under, which is not the version running pytest when
+# ALK_TEST_PYTHON is set.
+_TRACED_VERSION = _version_of(_TRACED_PYTHON)
 
 
 def _trace_environment(tmp_path: Path, bindings: list[dict[str, str]]):
@@ -39,7 +79,7 @@ def test_declared_python_tool_is_traced_without_changing_result(tmp_path: Path) 
     started = time.time()
     result = subprocess.run(
         [
-            sys.executable,
+            _TRACED_PYTHON,
             "-c",
             "import asyncio\n"
             "from agent import get_forecast, get_weather\n"
@@ -85,7 +125,7 @@ def test_a_large_tool_result_is_cut_without_breaking_the_trace_line(
     )
 
     subprocess.run(
-        [sys.executable, "-c", "from agent import search\nsearch('q' * 30000)\n"],
+        [_TRACED_PYTHON, "-c", "from agent import search\nsearch('q' * 30000)\n"],
         check=True,
         env=env,
     )
@@ -109,7 +149,7 @@ def test_a_cut_keeps_the_type_of_every_value_that_fits(tmp_path: Path) -> None:
 
     subprocess.run(
         [
-            sys.executable,
+            _TRACED_PYTHON,
             "-c",
             "from agent import list_slots\nlist_slots(5, ['mon', 'tue'])\n",
         ],
@@ -136,7 +176,7 @@ def test_a_record_of_many_small_values_stays_bounded(tmp_path: Path) -> None:
     )
 
     subprocess.run(
-        [sys.executable, "-c", "from agent import export\nexport(7)\n"],
+        [_TRACED_PYTHON, "-c", "from agent import export\nexport(7)\n"],
         check=True,
         env=env,
     )
@@ -166,7 +206,7 @@ def test_declared_python_tool_does_not_match_same_named_functions_in_other_modul
 
     subprocess.run(
         [
-            sys.executable,
+            _TRACED_PYTHON,
             "-c",
             "from agent import lookup as declared\n"
             "from my_agent import lookup as look_alike\n"
@@ -195,7 +235,7 @@ def test_declared_python_tool_is_traced_when_module_runs_as_script(
     )
 
     result = subprocess.run(
-        [sys.executable, "agent.py"],
+        [_TRACED_PYTHON, "agent.py"],
         check=True,
         cwd=tmp_path,
         text=True,
@@ -208,6 +248,699 @@ def test_declared_python_tool_is_traced_when_module_runs_as_script(
     assert [(record["name"], record["output"]) for record in records] == [
         ("lookup", "declared")
     ]
+
+
+def _records(trace: Path) -> list[dict]:
+    return [json.loads(line) for line in trace.read_text().splitlines()]
+
+
+def test_an_async_tool_with_two_awaits_records_one_call_with_its_real_result(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "agent.py").write_text(
+        "import asyncio\n"
+        "async def start_return(order_id, reason):\n"
+        "    await asyncio.sleep(0.01)\n"
+        "    await asyncio.sleep(0.01)\n"
+        "    return f'Return started for order {order_id}: {reason}.'\n"
+    )
+    trace, env = _trace_environment(
+        tmp_path,
+        [{"name": "start_return", "module": "agent", "callable": "start_return"}],
+    )
+
+    subprocess.run(
+        [
+            _TRACED_PYTHON,
+            "-c",
+            "import asyncio\nfrom agent import start_return\n"
+            "asyncio.run(start_return('A1001', 'too small'))\n",
+        ],
+        check=True,
+        env=env,
+    )
+
+    (record,) = _records(trace)
+    assert record["name"] == "start_return"
+    assert record["arguments"] == {"order_id": "A1001", "reason": "too small"}
+    assert record["output"] == "Return started for order A1001: too small."
+    assert record["is_error"] is False
+
+
+def test_a_sync_tool_is_still_recorded_once(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text("def look_up(order_id):\n    return order_id\n")
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "look_up", "module": "agent", "callable": "look_up"}]
+    )
+
+    subprocess.run(
+        [_TRACED_PYTHON, "-c", "from agent import look_up\nlook_up('A1')\n"],
+        check=True,
+        env=env,
+    )
+
+    assert [(r["name"], r["output"]) for r in _records(trace)] == [("look_up", "A1")]
+
+
+def _run_bindings(
+    tmp_path: Path, source: str, bindings: list[dict[str, str]], driver: str
+) -> list[dict]:
+    (tmp_path / "agent.py").write_text(source)
+    trace, env = _trace_environment(tmp_path, bindings)
+    subprocess.run([_TRACED_PYTHON, "-c", driver], check=True, env=env, cwd=tmp_path)
+    return _records(trace) if trace.exists() else []
+
+
+def _run_agent(tmp_path: Path, source: str, names: list[str], driver: str) -> list[dict]:
+    return _run_bindings(
+        tmp_path,
+        source,
+        [{"name": n, "module": "agent", "callable": n} for n in names],
+        driver,
+    )
+
+
+def test_a_generator_tool_is_recorded_once_per_call(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def stream_rows(n):\n    for i in range(n):\n        yield i\n    return 'done'\n",
+        ["stream_rows"],
+        "from agent import stream_rows\nassert list(stream_rows(3)) == [0, 1, 2]\n",
+    )
+    assert [(r["name"], r["arguments"], r["is_error"]) for r in records] == [
+        ("stream_rows", {"n": 3}, False)
+    ]
+    assert records[0]["output"] == "done"
+
+
+def test_an_async_generator_tool_is_recorded_once_per_call(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "import asyncio\n"
+        "async def stream_rows(n):\n"
+        "    for i in range(n):\n"
+        "        await asyncio.sleep(0.001)\n"
+        "        yield i\n",
+        ["stream_rows"],
+        "import asyncio\nfrom agent import stream_rows\n"
+        "async def main():\n    return [i async for i in stream_rows(3)]\n"
+        "assert asyncio.run(main()) == [0, 1, 2]\n",
+    )
+    assert [(r["name"], r["arguments"]) for r in records] == [("stream_rows", {"n": 3})]
+
+
+def test_a_sync_tool_that_calls_another_bound_tool_records_both_once(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def inner(x):\n    return x * 2\n"
+        "def outer(x):\n    return inner(x) + 1\n",
+        ["inner", "outer"],
+        "from agent import outer\nassert outer(5) == 11\n",
+    )
+    assert sorted((r["name"], r["arguments"]["x"], r["output"]) for r in records) == [
+        ("inner", 5, 10),
+        ("outer", 5, 11),
+    ]
+
+
+def test_an_async_tool_that_awaits_another_bound_tool_records_both_once(
+    tmp_path: Path,
+) -> None:
+    records = _run_agent(
+        tmp_path,
+        "import asyncio\n"
+        "async def inner(x):\n    await asyncio.sleep(0.001)\n    return x * 2\n"
+        "async def outer(x):\n    await asyncio.sleep(0.001)\n"
+        "    y = await inner(x)\n    await asyncio.sleep(0.001)\n    return y + 1\n",
+        ["inner", "outer"],
+        "import asyncio\nfrom agent import outer\nassert asyncio.run(outer(5)) == 11\n",
+    )
+    assert sorted((r["name"], r["arguments"]["x"], r["output"]) for r in records) == [
+        ("inner", 5, 10),
+        ("outer", 5, 11),
+    ]
+
+
+@pytest.mark.parametrize("module", [".", "/", "..", "agent\x00"])
+def test_a_binding_with_an_odd_module_never_raises_into_the_agents_call(
+    tmp_path: Path, module: str
+) -> None:
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "look_up", "module": module, "callable": "look_up"}]
+    )
+    # A frame of the main script carries the callable's name, so the path match is reached.
+    result = subprocess.run(
+        [_TRACED_PYTHON, "-c", "def look_up(x):\n    return x\nprint(look_up(7))\n"],
+        text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "7"
+    assert not trace.exists()
+
+
+RAISED = "the tool raised an exception"
+
+
+def test_a_sync_tool_that_raises_is_recorded_as_an_error(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def start_return(order_id):\n    raise ValueError('order not delivered')\n",
+        ["start_return"],
+        "from agent import start_return\n"
+        "try:\n    start_return('A1')\nexcept ValueError:\n    pass\n",
+    )
+    (record,) = records
+    assert record["name"] == "start_return"
+    assert record["arguments"] == {"order_id": "A1"}
+    assert record["is_error"] is True
+    assert record["output"] == RAISED
+
+
+def test_an_async_tool_that_raises_after_an_await_is_recorded_once_as_an_error(
+    tmp_path: Path,
+) -> None:
+    records = _run_agent(
+        tmp_path,
+        "import asyncio\n"
+        "async def start_return(order_id):\n"
+        "    await asyncio.sleep(0.001)\n"
+        "    raise KeyError(order_id)\n",
+        ["start_return"],
+        "import asyncio\nfrom agent import start_return\n"
+        "try:\n    asyncio.run(start_return('A1'))\nexcept KeyError:\n    pass\n",
+    )
+    (record,) = records
+    assert (record["is_error"], record["output"]) == (True, RAISED)
+
+
+def test_a_nested_raise_marks_every_bound_tool_it_unwinds_through(tmp_path: Path) -> None:
+    source = (
+        "def helper(x):\n    raise RuntimeError('no')\n"
+        "def outer(x):\n    return helper(x)\n"
+        "def careful(x):\n    try:\n        return helper(x)\n    except RuntimeError:\n"
+        "        return 'recovered'\n"
+    )
+    records = _run_agent(
+        tmp_path,
+        source,
+        ["helper", "outer", "careful"],
+        "from agent import outer, careful\n"
+        "try:\n    outer(1)\nexcept RuntimeError:\n    pass\n"
+        "assert careful(2) == 'recovered'\n",
+    )
+    seen = sorted((r["name"], r["arguments"]["x"], r["is_error"]) for r in records)
+    assert seen == [
+        ("careful", 2, False),
+        ("helper", 1, True),
+        ("helper", 2, True),
+        ("outer", 1, True),
+    ]
+
+
+def test_a_normal_return_is_unchanged(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def note(x):\n    return None\ndef value(x):\n    return x\n",
+        ["note", "value"],
+        "from agent import note, value\nnote(1)\nvalue(2)\n",
+    )
+    assert [(r["name"], r["output"], r["is_error"]) for r in records] == [
+        ("note", None, False),
+        ("value", 2, False),
+    ]
+
+
+def test_generators_are_not_recorded_as_errors(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "import asyncio\n"
+        "def rows(n):\n    for i in range(n):\n        yield i\n"
+        "async def arows(n):\n    for i in range(n):\n        await asyncio.sleep(0.001)\n        yield i\n",
+        ["rows", "arows"],
+        "import asyncio\nfrom agent import rows, arows\n"
+        "assert list(rows(2)) == [0, 1]\n"
+        "async def main():\n    return [i async for i in arows(2)]\n"
+        "assert asyncio.run(main()) == [0, 1]\n",
+    )
+    assert sorted((r["name"], r["is_error"]) for r in records) == [
+        ("arows", False),
+        ("rows", False),
+    ]
+
+
+def test_the_semantic_reader_grades_a_raised_tool_as_a_refused_call(tmp_path: Path) -> None:
+    from fi.alk.harness.run.simulation import _semantic_calls
+
+    _run_agent(
+        tmp_path,
+        "def start_return(order_id):\n    raise ValueError('x')\n",
+        ["start_return"],
+        "from agent import start_return\n"
+        "try:\n    start_return('A1')\nexcept ValueError:\n    pass\n",
+    )
+    (call,) = _semantic_calls(tmp_path / "calls.jsonl")
+    assert (call.ok, call.refused, call.error) == (False, True, RAISED)
+
+
+@pytest.mark.parametrize(
+    "first_call",
+    [
+        pytest.param("agent.t(agent.Bad())", id="unprintable-argument"),
+        pytest.param("agent.t(2000)", id="deeply-nested-return"),
+    ],
+)
+def test_a_value_that_cannot_be_printed_never_reaches_the_agents_call(
+    tmp_path: Path, first_call: str
+) -> None:
+    """Observation never changes a tool's outcome, and tracing stays on after a failed record."""
+    source = (
+        "class Bad:\n"
+        "    def __str__(self):\n        raise RuntimeError('lazy load')\n"
+        "    __repr__ = __str__\n"
+        "def t(x):\n"
+        "    if x == 2000:\n"
+        "        deep = {}\n"
+        "        for _ in range(x):\n            deep = {'k': deep}\n"
+        "        return deep\n"
+        "    return 'ok'\n"
+    )
+    records = _run_agent(
+        tmp_path,
+        source,
+        ["t"],
+        f"import agent\n{first_call}\nassert agent.t('second') == 'ok'\n",
+    )
+    assert [r["arguments"] for r in records if r["arguments"] == {"x": "second"}] == [
+        {"x": "second"}
+    ]
+
+
+GENERATORS = (
+    "def bare(n):\n    yield 1\n    yield 2\n"
+    "def guarded(n):\n    try:\n        yield 1\n        yield 2\n    finally:\n        pass\n"
+)
+
+
+@pytest.mark.parametrize(
+    "driver",
+    [
+        pytest.param("g = agent.{n}(3); next(g); g.close()", id="closed"),
+        pytest.param("g = agent.{n}(3); next(g); del g", id="abandoned"),
+        pytest.param("for _ in agent.{n}(3):\n    break", id="break"),
+    ],
+)
+@pytest.mark.parametrize("name", ["bare", "guarded"])
+def test_a_generator_closed_early_is_recorded_and_is_not_an_error(
+    tmp_path: Path, name: str, driver: str, mechanism: str
+) -> None:
+    records = _run_agent(
+        tmp_path, GENERATORS, [name], "import agent\n" + driver.format(n=name) + "\n"
+    )
+    seen = [(r["name"], r["arguments"], r["is_error"]) for r in records]
+    if mechanism == "profile" and _TRACED_VERSION >= (3, 13):
+        # The profile path cannot tell a close from a raise on 3.13 and later (its call event no
+        # longer carries the thrown exception, and 3.14 ends the closed frame on a RESUME), so
+        # the one record it writes is marked failed. It never writes a second one.
+        expected = [(name, {"n": 3}, True)]
+    else:
+        expected = [(name, {"n": 3}, False)]
+    if mechanism == "profile" and _TRACED_VERSION in {(3, 12), (3, 13)} and name == "bare":
+        # Early 3.12 and 3.13 releases (3.12.3, 3.13.3) close a generator paused at a `yield`
+        # outside any `try` without running its frame and fire no profile or monitoring event, so
+        # the profile path sees no end and leaves the call unrecorded; later releases (CI's newest
+        # 3.12 and 3.13) run the frame, and it is recorded as on 3.14. Never a wrong record. The
+        # monitoring path settles the open call when its generator is gone, so it records it.
+        assert seen in ([], expected)
+    else:
+        assert seen == expected
+
+
+@pytest.mark.parametrize("later", ["agent.other_tool(1)", "agent.not_a_tool()"])
+def test_a_generator_closed_at_a_bare_yield_is_settled_when_it_is_dropped(
+    tmp_path: Path, mechanism: str, later: str
+) -> None:
+    """Where a close fires no event, the open call is settled when its generator is let go, and the
+    exception events go off again."""
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path keeps process-wide events on while a call is open")
+    source = (
+        "def bare(n):\n    yield 1\n    yield 2\n"
+        "def other_tool(x):\n    return x\n"
+        "def not_a_tool():\n    return 0\n"
+    )
+    (tmp_path / "agent.py").write_text(source)
+    trace, env = _trace_environment(
+        tmp_path,
+        [{"name": n, "module": "agent", "callable": n} for n in ("bare", "other_tool")],
+    )
+    result = subprocess.run(
+        [
+            _TRACED_PYTHON,
+            "-c",
+            "import sys, agent\n"
+            "g = agent.bare(3); next(g); g.close(); del g\n"
+            f"{later}\n"
+            "tool = next(i for i in range(6) if sys.monitoring.get_tool(i) == 'alk-tool-trace')\n"
+            "print(sys.monitoring.get_events(tool))\n",
+        ],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    # Only PY_START (1) is left on; PY_UNWIND and PY_THROW are off again.
+    assert result.stdout.split()[-1] == "1"
+    seen = [(r["name"], r["arguments"], r["is_error"], r["output"]) for r in _records(trace)]
+    closed = ("bare", {"n": 3}, False, "the generator was closed before it finished")
+    assert seen[0] == closed
+    assert seen.count(closed) == 1
+
+
+CLOSE_THEN_LOOK_UP = (
+    "def search(n):\n    yield 1\n    yield 2\n"
+    "def look_up(x):\n    return x\n"
+)
+
+
+def _close_driver(body: str) -> str:
+    """A traced process that runs ``body`` three times, reading and clearing the trace after each
+    step the way the runner does between calls, and prints the tool names each read saw."""
+    return (
+        "import json, os, sys, agent\n"
+        "path = os.environ['HARNESS_TOOL_TRACE']\n"
+        "def read():\n"
+        "    if not os.path.exists(path):\n        return []\n"
+        "    names = [json.loads(l)['name'] + ':' + json.loads(l)['output'] "
+        "for l in open(path).read().splitlines()]\n"
+        "    open(path, 'w').close()\n"
+        "    return names\n"
+        "for turn in range(3):\n"
+        + "".join(f"    {line}\n" for line in body.splitlines())
+    )
+
+
+def test_a_generator_closed_at_a_bare_yield_is_recorded_in_its_own_calls_trace(
+    tmp_path: Path, mechanism: str
+) -> None:
+    """The close is read right after it, never after the next tool call (the runner clears the
+    trace between calls, so a record settled later lands in the next call's evidence)."""
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path settles a close it was not told about")
+    (tmp_path / "agent.py").write_text(CLOSE_THEN_LOOK_UP)
+    result = subprocess.run(
+        [_TRACED_PYTHON, "-c", _close_driver(
+            "g = agent.search(3); next(g); g.close(); del g\n"
+            "after_close = read()\n"
+            "agent.look_up('x')\n"
+            "after_look_up = read()\n"
+            "print(json.dumps([after_close, after_look_up]))"
+        )],
+        check=True, text=True, capture_output=True, cwd=tmp_path,
+        env=_trace_environment(tmp_path, [
+            {"name": n, "module": "agent", "callable": n} for n in ("search", "look_up")
+        ])[1],
+    )
+    closed = "search:the generator was closed before it finished"
+    assert [json.loads(line) for line in result.stdout.splitlines()] == [
+        [[closed], ["look_up:x"]]
+    ] * 3
+
+
+def test_a_closed_generator_that_is_still_held_never_lands_on_the_next_call(
+    tmp_path: Path, mechanism: str
+) -> None:
+    """Where the close fires no event, a closed generator that is still held is not recorded (as on
+    the profile path), and it is never recorded against the call that follows."""
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path settles a close it was not told about")
+    (tmp_path / "agent.py").write_text(CLOSE_THEN_LOOK_UP)
+    trace, env = _trace_environment(
+        tmp_path, [{"name": n, "module": "agent", "callable": n} for n in ("search", "look_up")]
+    )
+    driver = _close_driver(
+        "g = agent.search(3); next(g); g.close(); held.append(g); del g\n"
+        "after_close = read()\n"
+        "agent.look_up('x')\n"
+        "after_look_up = read()\n"
+        "print(json.dumps([after_close, after_look_up, list(sys.version_info[:3])]))"
+    ).replace("for turn in range(3):", "held = []\nfor turn in range(3):", 1)
+    result = subprocess.run(
+        [_TRACED_PYTHON, "-c", driver],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    closed = "search:the generator was closed before it finished"
+    for after_close, after_look_up, version in map(json.loads, result.stdout.splitlines()):
+        assert after_look_up == ["look_up:x"]
+        if tuple(version) == (3, 12, 3):
+            # Nothing fires at this close, and the generator is still held.
+            assert after_close == []
+        else:
+            assert after_close in ([], [closed])
+
+
+STREAM_TOOL = "def stream_rows(n):\n    for i in range(n):\n        yield i\n    return 'done'\n"
+
+
+def test_a_generator_tool_call_scans_for_its_owner_only_where_a_bare_close_fires_nothing(
+    tmp_path: Path, mechanism: str
+) -> None:
+    """`gc.get_referrers` walks every tracked object, so it is the cost of a generator tool call
+    that grows with the agent's heap. The tracer probes its own tool id once, when it is
+    installed, for whether closing a generator paused at a bare `yield` fires an event, and looks
+    for the owner only where it does not and the frame cannot name its generator."""
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path looks for a generator's owner")
+    (tmp_path / "agent.py").write_text(STREAM_TOOL)
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "stream_rows", "module": "agent", "callable": "stream_rows"}]
+    )
+    result = subprocess.run(
+        [
+            _TRACED_PYTHON,
+            "-c",
+            "import gc, sys, sitecustomize, agent\n"
+            "scans = []\n"
+            "real = gc.get_referrers\n"
+            "gc.get_referrers = lambda *a: scans.append(1) or real(*a)\n"
+            "assert list(agent.stream_rows(3)) == [0, 1, 2]\n"
+            "g = agent.stream_rows(3); next(g); g.close()\n"
+            "print(getattr(sitecustomize, '_TOOL_TRACE_NEEDS_OWNER', 'unset'), len(scans), *sys.version_info[:3])\n",
+        ],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    needs, scans, *version = result.stdout.split()
+    version = tuple(map(int, version))
+    if version == (3, 12, 3):
+        # This release fires nothing for a close at a bare `yield`, and its frames name no generator.
+        assert (needs, int(scans) > 0) == ("True", True)
+    elif version >= (3, 14):
+        assert (needs, scans) == ("False", "0")
+    elif needs == "False":
+        assert scans == "0"
+    else:
+        assert int(scans) > 0
+    # The close is recorded either way: by the event, or by the owner when it is let go.
+    assert [r["output"] for r in _records(trace)][0] == "done"
+
+
+def test_a_failed_probe_means_the_owner_is_needed(tmp_path: Path, mechanism: str) -> None:
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path looks for a generator's owner")
+    (tmp_path / "agent.py").write_text(STREAM_TOOL)
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "stream_rows", "module": "agent", "callable": "stream_rows"}]
+    )
+    # A hook that raises for the probe's own events must not stop the tracer from installing.
+    source = (tmp_path / "sitecustomize.py").read_text().replace(
+        "                g = probe()\n", "                raise RuntimeError('probe failed')\n"
+    )
+    assert "probe failed" in source
+    (tmp_path / "sitecustomize.py").write_text(source)
+    result = subprocess.run(
+        [_TRACED_PYTHON, "-c", "import sitecustomize\nprint(sitecustomize._TOOL_TRACE_NEEDS_OWNER)\n"],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert result.stdout.strip() == "True"
+
+
+ARGUMENT_TOOL = "def t(blob, n=1):\n    return 'ok'\n"
+
+
+def _traced_line(tmp_path: Path, mechanism: str, call: str) -> str:
+    """The one line a tool call writes under ``mechanism``, minus its start time."""
+    folder = tmp_path / mechanism
+    folder.mkdir()
+    (folder / "agent.py").write_text(ARGUMENT_TOOL)
+    trace, env = _trace_environment(folder, [{"name": "t", "module": "agent", "callable": "t"}])
+    env["ALK_TOOL_TRACE_MECHANISM"] = mechanism
+    subprocess.run(
+        [_TRACED_PYTHON, "-c", f"import agent\n{call}\n"], check=True, env=env, cwd=folder
+    )
+    (line,) = trace.read_text().splitlines()
+    return re.sub(r'"at": [0-9.e+-]+', '"at": 0', line)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param("agent.t('x' * 50_000_000)", id="a-50-mb-string"),
+        pytest.param("agent.t([[i, 'row %d' % i] for i in range(300_000)])", id="a-300k-row-list"),
+        pytest.param("agent.t('x' * 9_999, 'y' * 3_000)", id="a-string-that-fits-beside-one-that-is-cut"),
+        pytest.param(
+            "agent.t(['x' * 20_000], {'a': 'k' * 3_000, 'b': 'z' * 30_000})",
+            id="a-dict-beside-a-list",
+        ),
+        pytest.param("agent.t(*['q' * 12_000, 'r' * 12_000])", id="two-cut-values-over-the-line-limit"),
+        pytest.param("agent.t(tuple(range(20_000)))", id="a-tuple"),
+    ],
+)
+def test_an_oversize_argument_is_recorded_as_the_profile_path_records_it(
+    tmp_path: Path, mechanism: str, call: str
+) -> None:
+    if mechanism != "monitoring":
+        pytest.skip("compares the monitoring path with the profile path")
+    profile = _traced_line(tmp_path, "profile", call)
+    monitoring = _traced_line(tmp_path, "monitoring", call)
+    assert monitoring == profile
+
+
+def test_a_large_argument_is_not_copied_in_full_at_entry(tmp_path: Path, mechanism: str) -> None:
+    """Only what is written is copied: a 50 MB string costs a few KB, not its JSON and its copy."""
+    if mechanism != "monitoring":
+        pytest.skip("only the monitoring path reads the arguments at entry")
+    (tmp_path / "agent.py").write_text(ARGUMENT_TOOL)
+    trace, env = _trace_environment(tmp_path, [{"name": "t", "module": "agent", "callable": "t"}])
+    result = subprocess.run(
+        [
+            _TRACED_PYTHON,
+            "-c",
+            "import resource, sys, agent\n"
+            "scale = 1 if sys.platform == 'darwin' else 1024\n"
+            "blob = 'x' * 50_000_000\n"
+            "before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale\n"
+            "agent.t(blob)\n"
+            "print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale - before)\n",
+        ],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert int(result.stdout) < 20_000_000
+
+
+ASYNC_TOOLS = (
+    "import asyncio\n"
+    "async def inner():\n    await asyncio.sleep(10)\n"
+    "async def direct(q):\n    await asyncio.sleep(10)\n    return 1\n"
+    "async def nested(q):\n    await inner()\n    return 1\n"
+    "async def guarded(q):\n    try:\n        await asyncio.sleep(10)\n    finally:\n        pass\n"
+    "async def reraises(q):\n    try:\n        await asyncio.sleep(10)\n"
+    "    except asyncio.CancelledError:\n        await asyncio.sleep(0)\n        raise\n"
+    "async def replaces(q):\n    try:\n        await asyncio.sleep(10)\n"
+    "    except asyncio.CancelledError:\n        raise ValueError('own')\n"
+    "async def fails(q):\n    await asyncio.sleep(0)\n    raise ValueError('own')\n"
+)
+CANCEL_DRIVER = (
+    "import asyncio, agent\n"
+    "async def main():\n"
+    "    task = asyncio.ensure_future(agent.{n}('x'))\n"
+    "    await asyncio.sleep(0.05)\n"
+    "    task.cancel()\n"
+    "    try:\n        await task\n    except BaseException:\n        pass\n"
+    "asyncio.run(main())\n"
+)
+
+
+@pytest.mark.parametrize("name", ["direct", "nested", "guarded", "reraises"])
+def test_a_cancelled_coroutine_is_recorded_as_cancelled_not_as_a_raise(
+    tmp_path: Path, name: str, mechanism: str
+) -> None:
+    records = _run_agent(tmp_path, ASYNC_TOOLS, [name], CANCEL_DRIVER.format(n=name))
+    if mechanism == "profile" and _TRACED_VERSION >= (3, 13):
+        # The profile call event carries None instead of the cancel from 3.13 on, so the
+        # fallback reads the cancel as the tool raising: one record, marked failed.
+        assert [(r["name"], r["is_error"], r["output"]) for r in records] == [
+            (name, True, RAISED)
+        ]
+        return
+    assert [(r["name"], r["is_error"]) for r in records] == [(name, False)]
+    assert "cancel" in records[0]["output"]
+
+
+@pytest.mark.parametrize("name", ["replaces", "fails"])
+def test_a_tool_that_raises_its_own_error_is_still_an_error(
+    tmp_path: Path, name: str
+) -> None:
+    records = _run_agent(tmp_path, ASYNC_TOOLS, [name], CANCEL_DRIVER.format(n=name))
+    assert [(r["name"], r["is_error"]) for r in records] == [(name, True)]
+
+
+BAD_EXITS = (
+    "class BadExit:\n    def __str__(self):\n        raise SystemExit(3)\n    __repr__ = __str__\n"
+    "class BadInt:\n    def __str__(self):\n        raise KeyboardInterrupt\n    __repr__ = __str__\n"
+    "def t(x):\n    return 'ok'\n"
+)
+
+
+@pytest.mark.parametrize("bad", ["BadExit", "BadInt"])
+def test_an_argument_whose_text_exits_never_ends_the_agent(tmp_path: Path, bad: str) -> None:
+    records = _run_agent(
+        tmp_path, BAD_EXITS, ["t"],
+        f"import agent\nassert agent.t(agent.{bad}()) == 'ok'\nassert agent.t('second') == 'ok'\n",
+    )
+    assert {"x": "second"} in [r["arguments"] for r in records]
+    assert any(r["arguments"] == {"x": f"<unprintable {bad}>"} for r in records)
+
+
+def test_an_unprintable_argument_is_recorded_as_a_placeholder(tmp_path: Path) -> None:
+    source = (
+        "class Bad:\n    def __str__(self):\n        raise RuntimeError('lazy load')\n"
+        "    __repr__ = __str__\n"
+        "def t(x):\n    return 'ok'\n"
+    )
+    records = _run_agent(
+        tmp_path, source, ["t"], "import agent\nagent.t(agent.Bad())\nagent.t('second')\n"
+    )
+    assert [r["arguments"] for r in records] == [{"x": "<unprintable Bad>"}, {"x": "second"}]
+
+
+@pytest.mark.parametrize(
+    "first_call",
+    [
+        pytest.param("agent.t(2000)", id="deep-return"),
+        pytest.param("agent.t({(1, 2): 'a'})", id="tuple-key-argument"),
+        pytest.param("agent.t({1: 'a', 'b': 2})", id="mixed-key-argument"),
+    ],
+)
+def test_a_value_that_cannot_be_encoded_still_records_the_call(
+    tmp_path: Path, first_call: str
+) -> None:
+    source = (
+        "def t(x):\n"
+        "    if x == 2000:\n"
+        "        deep = {}\n"
+        "        for _ in range(x):\n            deep = {'k': deep}\n"
+        "        return deep\n"
+        "    return 'ok'\n"
+    )
+    records = _run_agent(
+        tmp_path, source, ["t"], f"import agent\n{first_call}\nagent.t('second')\n"
+    )
+    assert [r["name"] for r in records] == ["t", "t"]
+    assert records[0]["is_error"] is False
+    assert records[1]["arguments"] == {"x": "second"}
+
+
+def test_a_caught_recursion_error_does_not_turn_tracing_off(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def t(x):\n    return 'ok'\n",
+        ["t"],
+        "import agent\n"
+        "agent.t('first')\n"
+        "def down(n):\n    return down(n + 1)\n"
+        "try:\n    down(0)\nexcept RecursionError:\n    pass\n"
+        "open('agent.py').close()\n"
+        "agent.t('second')\n",
+    )
+    assert [r["arguments"] for r in records] == [{"x": "first"}, {"x": "second"}]
+
+
 
 
 _CHAT_MARK = "ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"
@@ -973,3 +1706,191 @@ def test_where_the_hook_cant_wrap_the_sdk_the_builds_switch_is_left_on(
     assert os.environ.get("OPENAI_AGENTS_DISABLE_TRACING") == "1"
     # A finder that raised may be tried again on a later import: the hook stays armed for it.
     assert finder.armed is (other is _RaisingFinder)
+
+
+def test_the_mechanism_in_use_is_the_one_asked_for(tmp_path: Path, mechanism: str) -> None:
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "t", "module": "agent", "callable": "t"}]
+    )
+    result = subprocess.run(
+        [_TRACED_PYTHON, "-c", "import sitecustomize\nprint(sitecustomize._TOOL_TRACE_MECHANISM)\n"],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert result.stdout.strip() == mechanism
+
+
+def test_a_taken_tool_id_falls_back_to_the_profile_path(
+    tmp_path: Path, mechanism: str
+) -> None:
+    if mechanism != "monitoring":
+        pytest.skip("the id is only claimed on the monitoring path")
+    (tmp_path / "agent.py").write_text("def t(x):\n    return x\n")
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "t", "module": "agent", "callable": "t"}]
+    )
+    # The tracer under another module name, behind a sitecustomize that takes ids 4 and 3 first.
+    (tmp_path / "tracer_under_test.py").write_text(
+        (tmp_path / "sitecustomize.py").read_text()
+    )
+    (tmp_path / "sitecustomize.py").write_text(
+        "import sys\n"
+        "sys.monitoring.use_tool_id(4, 'other-a')\n"
+        "sys.monitoring.use_tool_id(3, 'other-b')\n"
+        "import tracer_under_test\n"
+    )
+    result = subprocess.run(
+        [
+            _TRACED_PYTHON,
+            "-c",
+            "import tracer_under_test, agent\n"
+            "agent.t('A')\nprint(tracer_under_test._TOOL_TRACE_MECHANISM)\n",
+        ],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert result.stdout.strip() == "profile"
+    assert [(r["name"], r["arguments"], r["output"]) for r in _records(trace)] == [
+        ("t", {"x": "A"}, "A")
+    ]
+
+
+def test_the_tracer_never_takes_the_reserved_optimizer_id(
+    tmp_path: Path, mechanism: str
+) -> None:
+    if mechanism != "monitoring":
+        pytest.skip("the id is only claimed on the monitoring path")
+    (tmp_path / "agent.py").write_text("def t(x):\n    return x\n")
+    trace, env = _trace_environment(
+        tmp_path, [{"name": "t", "module": "agent", "callable": "t"}]
+    )
+    result = subprocess.run(
+        [
+            _TRACED_PYTHON,
+            "-c",
+            "import sys, agent\n"
+            "agent.t('A')\n"
+            "print(sys.monitoring.get_tool(5), sys.monitoring.OPTIMIZER_ID)\n"
+            "print([i for i in range(6) if sys.monitoring.get_tool(i) == 'alk-tool-trace'])\n",
+        ],
+        check=True, text=True, capture_output=True, env=env, cwd=tmp_path,
+    )
+    assert result.stdout.splitlines() == ["None 5", "[4]"]
+
+
+def test_a_list_the_tool_mutates_is_recorded_as_it_was_passed(
+    tmp_path: Path, mechanism: str
+) -> None:
+    if mechanism != "monitoring":
+        pytest.skip("the profile path reads the arguments when the call ends")
+    records = _run_agent(
+        tmp_path,
+        "def t(xs, opts):\n    xs.append(9)\n    opts['seen'] = True\n    return len(xs)\n",
+        ["t"],
+        "import agent\nagent.t([1], {'a': 1})\n",
+    )
+    assert [(r["arguments"], r["output"]) for r in records] == [
+        ({"xs": [1], "opts": {"a": 1}}, 2)
+    ]
+
+
+def test_a_tool_called_on_a_thread_is_recorded(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def t(x):\n    return x\n",
+        ["t"],
+        "import threading, agent\n"
+        "th = threading.Thread(target=agent.t, args=('on-thread',))\n"
+        "th.start()\nth.join()\n",
+    )
+    assert [(r["arguments"], r["is_error"]) for r in records] == [
+        ({"x": "on-thread"}, False)
+    ]
+
+
+def test_a_hot_function_that_is_not_a_tool_is_not_recorded(tmp_path: Path) -> None:
+    records = _run_agent(
+        tmp_path,
+        "def t(x):\n    return x\ndef busy(i):\n    return i + 1\n",
+        ["t"],
+        "import agent\n"
+        "n = 0\nfor _ in range(2000):\n    n = agent.busy(n)\n"
+        "agent.t(n)\n",
+    )
+    assert [(r["name"], r["arguments"]) for r in records] == [("t", {"x": 2000})]
+
+
+def test_a_tool_defined_inside_a_function_is_matched_by_its_own_name(
+    tmp_path: Path,
+) -> None:
+    records = _run_bindings(
+        tmp_path,
+        "def make():\n    def lookup(q):\n        return q.upper()\n    return lookup\n"
+        "def lookup(q):\n    return 'module level'\n",
+        [{"name": "lookup", "module": "agent", "callable": "lookup", "qualname": "lookup"}],
+        "import agent\nagent.make()('a')\n",
+    )
+    assert [(r["arguments"], r["output"]) for r in records] == [({"q": "a"}, "A")]
+
+
+def test_a_method_is_matched_by_its_qualname_not_by_its_name_alone(tmp_path: Path) -> None:
+    records = _run_bindings(
+        tmp_path,
+        "class Tools:\n    def lookup(self, q):\n        return q\n"
+        "class Other:\n    def lookup(self, q):\n        return 'other'\n",
+        [{"name": "lookup", "module": "agent", "callable": "lookup", "qualname": "Tools.lookup"}],
+        "import agent\nagent.Other().lookup('x')\nagent.Tools().lookup('y')\n",
+    )
+    assert [(r["arguments"], r["output"]) for r in records] == [({"q": "y"}, "y")]
+
+
+def test_a_method_inherited_from_a_base_is_matched_by_the_receivers_class(
+    tmp_path: Path,
+) -> None:
+    records = _run_bindings(
+        tmp_path,
+        "class Base:\n    def lookup(self, q):\n        return q\n"
+        "class Child(Base):\n    pass\n"
+        "class Sibling(Base):\n    pass\n"
+        "class Maker:\n    @classmethod\n    def build(cls, q):\n        return q\n"
+        "class Made(Maker):\n    pass\n",
+        [
+            {"name": "lookup", "module": "agent", "callable": "lookup", "qualname": "Child.lookup"},
+            {"name": "build", "module": "agent", "callable": "build", "qualname": "Made.build"},
+        ],
+        "import agent\n"
+        "agent.Sibling().lookup('s')\nagent.Child().lookup('c')\n"
+        "agent.Maker.build('m')\nagent.Made.build('d')\n",
+    )
+    assert [(r["name"], r["arguments"]) for r in records] == [
+        ("lookup", {"q": "c"}),
+        ("build", {"q": "d"}),
+    ]
+
+
+LATE_ERROR_AFTER_CANCEL = (
+    "import asyncio\n"
+    "async def catches(q):\n"
+    "    try:\n        await asyncio.sleep(10)\n"
+    "    except asyncio.CancelledError:\n        pass\n"
+    "    try:\n        await asyncio.sleep(0)\n        raise ValueError('own')\n"
+    "    finally:\n        pass\n"
+)
+
+
+def test_a_coroutine_that_catches_the_cancel_and_later_ends_on_its_own_error(
+    tmp_path: Path, mechanism: str
+) -> None:
+    records = _run_agent(
+        tmp_path, LATE_ERROR_AFTER_CANCEL, ["catches"], CANCEL_DRIVER.format(n="catches")
+    )
+    ((name, is_error, output),) = [(r["name"], r["is_error"], r["output"]) for r in records]
+    assert name == "catches"
+    if mechanism == "monitoring":
+        # The unwinding exception is known, so an error of its own is an error.
+        assert (is_error, output) == (True, RAISED)
+    elif _TRACED_VERSION >= (3, 13):
+        # From 3.13 the profile path reads every cancel as a raise, this one included.
+        assert (is_error, output) == (True, RAISED)
+    else:
+        # The profile path cannot see which exception ended the frame: it reads the re-raise
+        # after a cancel as the cancel. Pinned as known behaviour of the fallback.
+        assert (is_error, "cancel" in output) == (False, True)
