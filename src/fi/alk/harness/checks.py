@@ -145,13 +145,17 @@ def same_id(first: Any, second: Any) -> bool:
     return bool(mine) and mine == theirs
 
 
-# A number as text: an optional sign, a currency (a symbol or a code, before or after), thousands commas, a fraction.
-# A leading zero (`007`) is an identifier's, never a number's.
+# A number as text: an optional sign, a currency (a symbol, a code or a word, before or after), thousands commas, a
+# fraction. A leading zero (`007`) is an identifier's, never a number's.
 _NUMBER_TEXT = re.compile(
     r"^(?P<sign>[-+]?)(?P<before>[$€£₹]|[A-Za-z]{3}(?=\s?\d))?\s?"
-    r"(?P<digits>(?:0|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?:\.\d+)?)\s?(?P<after>[A-Za-z]{3})?$"
+    r"(?P<digits>(?:0|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?:\.\d+)?)\s?(?P<after>[A-Za-z]+)?$"
 )
-_CURRENCY_SYMBOLS = {"$": "USD", "€": "EUR", "£": "GBP", "₹": "INR"}
+_CURRENCIES = {
+    "$": "USD", "€": "EUR", "£": "GBP", "₹": "INR",
+    "dollar": "USD", "dollars": "USD", "euro": "EUR", "euros": "EUR",
+    "pound": "GBP", "pounds": "GBP", "rupee": "INR", "rupees": "INR",
+}
 _MONTHS = {
     name: number
     for number, month in enumerate(
@@ -170,8 +174,7 @@ _CLOCK = re.compile(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?$")
 
 
 def _number(value: Any) -> tuple[str, Decimal] | None:
-    """A number and the currency it is written in ("" for none): `$89` and `89 USD` are one amount, `€89` another,
-    and a bare `89` is neither, so a check never takes one currency, or none, for another."""
+    """A number and the currency it is written in ("" for none): `$89`, `89 USD` and `89 dollars` are one currency."""
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float, Decimal)):
@@ -180,8 +183,17 @@ def _number(value: Any) -> tuple[str, Decimal] | None:
     if not found or (found["before"] and found["after"]):
         return None
     marker = found["before"] or found["after"] or ""
-    currency = _CURRENCY_SYMBOLS.get(marker, marker.upper())
+    currency = _CURRENCIES.get(marker.casefold(), marker.upper() if len(marker) in (0, 3) else None)
+    if currency is None:
+        # A word after the number that names no currency (`89 items`) makes it something other than an amount.
+        return None
     return currency, Decimal(found["sign"] + found["digits"].replace(",", ""))
+
+
+def _same_amount(mine: tuple[str, Decimal], theirs: tuple[str, Decimal]) -> bool:
+    """One amount: the same number, and never two different currencies. A bare number matches an amount in one
+    currency, since the world often holds the number and the person says the currency."""
+    return mine[1] == theirs[1] and (not mine[0] or not theirs[0] or mine[0] == theirs[0])
 
 
 def _day(value: Any) -> date | None:
@@ -219,8 +231,9 @@ def _minute(value: Any) -> int | None:
 
 def same_value(first: Any, second: Any) -> bool:
     """Whether two values are the same value however they were written: a number by its value (`89`, `89.0`,
-    `"89.00"`) and its currency (`"$89.00"` is `"89 USD"`, never `"€89"` or a bare `89`), a date by its day (`2026-11-20`, `20 November 2026`), a time by its minute (`14:00`, `2 pm`), and
-    any other text as `same_id` reads it (case and separators ignored). Lists and objects compare item by item.
+    `"$89.00"`, `"89 dollars"`; two different currencies never match), a date by its day (`2026-11-20`,
+    `20 November 2026`), a time by its minute (`14:00`, `2 pm`), and any other text as `same_id` reads it (case and
+    separators ignored). Lists and objects compare item by item.
 
     It never makes two different values the same: another number, day, minute or id is still different."""
     if first is None or second is None:
@@ -241,7 +254,10 @@ def same_value(first: Any, second: Any) -> bool:
             and len(first) == len(second)
             and all(same_value(one, two) for one, two in zip(first, second))
         )
-    for read in (_number, _day, _minute):
+    amounts = _number(first), _number(second)
+    if amounts[0] is not None and amounts[1] is not None:
+        return _same_amount(*amounts)
+    for read in (_day, _minute):
         mine, theirs = read(first), read(second)
         if mine is not None and theirs is not None:
             return mine == theirs

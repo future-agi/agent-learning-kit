@@ -171,8 +171,15 @@ def test_a_value_is_the_same_however_it_was_written() -> None:
 
     for one, two in [
         (89, "89.00"),
+        # A bare number matches an amount in one currency: the world holds 89, the person said "$89".
+        (89, "$89.00"),
+        ("89", "$89"),
+        ("$89", "89 dollars"),
         ("$89.00", "89 USD"),
         ("€1,250.50", "EUR 1250.5"),
+        ("£12", "12 pounds"),
+        ("₹500", "500 rupees"),
+        ("40 euros", "€40"),
         ("1,250.50", 1250.5),
         (1043, "1043"),
         ("2026-11-20", "20 November 2026"),
@@ -194,12 +201,14 @@ def test_a_different_value_is_never_the_same() -> None:
     for one, two in [
         (89, 90),
         ("$89.00", "$89.01"),
-        # Another currency, or a currency against none, is never the same amount.
+        # Two different currencies are never the same amount, however each is written.
         ("$89", "€89"),
-        ("89", "£89.00"),
-        (89, "$89"),
-        ("89", "$89"),
+        ("89 dollars", "£89.00"),
         ("89 USD", "89 EUR"),
+        ("₹500", "500 dollars"),
+        ("$89", "90 dollars"),
+        # A word that names no currency makes it no amount.
+        ("89 items", 89),
         ("007", 7),
         ("2026-11-20", "21 November 2026"),
         ("11/12/2026", "2026-11-12"),
@@ -219,5 +228,5 @@ def test_a_different_value_is_never_the_same() -> None:
 def test_every_check_is_given_same_value() -> None:
     from fi.alk.harness.world.runtime import Call
 
-    assert run_check(SAME, _World(), [Call("pay", {"v": "89.00", "w": 89})]).held
-    assert not run_check(SAME, _World(), [Call("pay", {"v": "$89.00", "w": 89})]).held
+    assert run_check(SAME, _World(), [Call("pay", {"v": "$89.00", "w": 89})]).held
+    assert not run_check(SAME, _World(), [Call("pay", {"v": "$89.00", "w": "€89"})]).held
