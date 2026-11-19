@@ -311,6 +311,10 @@ class Scenario(BaseModel):
     # A failure here blocks the release: the platform marks the case must-pass and names it on a run
     # whose result it failed. Set by the person or the builder; versioned with the case.
     must_pass: bool = False
+    # A case the suite had and lost, brought back as the same case: `{"key": its original scenario_key,
+    # "suite_version": the saved suite version it last existed in}` ("" when it was removed in this conversation).
+    # Only a case carrying it may take a key the environment gave before; the platform's save reads it as a restore.
+    restored_from: dict[str, str] | None = None
 
     # What this scenario changes about the world after it is reset, as code: a file defining
     # ``setup(world)``. Rows in a table were enough while every world was a database, and they

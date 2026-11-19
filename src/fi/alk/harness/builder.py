@@ -192,7 +192,8 @@ def suite_server(
             f"dropped {len(gone)}: {', '.join(f'{name} (scenario_key {keys[name]})' for name in gone)}. "
             f"{len(kept)} left"
             + (f". Not found: {', '.join(missing)}" if missing else "")
-            + ". To restore one, submit it with its scenario_key: it takes that key back, and its history with it"
+            + '. To restore one as it was, submit it with its scenario_key and restored_from {"key": its scenario_key}:'
+            " it takes that key back, and its history with it"
         )
 
     @tool(

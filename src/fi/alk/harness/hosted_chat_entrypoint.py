@@ -1031,7 +1031,9 @@ class HostedChatRuntime:
             "persona.location, persona.personality, persona.communication_style, "
             "background_noise, coverage.overlay, coverage.overlay_intensity, coverage.task, "
             "sub_goals, keywords; append _not to exclude). `full` returns every field. Pages "
-            "hold up to 100 rows.",
+            "hold up to 100 rows. `removed` reads instead the cases this environment had and no longer holds, "
+            "each with its scenario_key, the saved suite_version it last existed in and its content, to restore "
+            "one or copy it.",
             schema(
                 {
                     "numbers": _NUMBERS,
@@ -1042,6 +1044,7 @@ class HostedChatRuntime:
                     "page": int,
                     "page_size": int,
                     "full": bool,
+                    "removed": bool,
                 },
                 [],
             ),
