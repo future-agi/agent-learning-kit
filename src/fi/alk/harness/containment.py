@@ -158,7 +158,9 @@ def probe(
         trial.mkdir()
         try:
             # `cgroup.kill` (Linux 5.14+) is what stops a whole leaf at once.
-            usable = (trial / "cgroup.kill").exists() and (trial / "cgroup.procs").exists()
+            usable = (trial / "cgroup.kill").exists() and (
+                trial / "cgroup.procs"
+            ).exists()
         finally:
             trial.rmdir()
     except OSError:
@@ -252,7 +254,9 @@ def _abort_child(process: subprocess.Popen, leaf: Leaf | None) -> None:
         try:
             leaf.close()  # Includes descendants; reports a leaf that could not be removed.
         except OSError as exc:
-            logger.warning("containment: could not close leaf for child %s (%s)", process.pid, exc)
+            logger.warning(
+                "containment: could not close leaf for child %s (%s)", process.pid, exc
+            )
     try:
         process.wait(timeout=_EMPTY_WAIT_SECONDS)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -287,7 +291,16 @@ def popen(
         go_read, go_write = os.pipe()
         done_read, done_write = os.pipe()
         process = subprocess.Popen(
-            [sys.executable, "-I", "-S", "-c", _GATE, str(go_read), str(done_write), *argv],
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-c",
+                _GATE,
+                str(go_read),
+                str(done_write),
+                *argv,
+            ],
             env=_GATE_ENVIRONMENT,
             pass_fds=(*pass_fds, go_read, done_write),
             **kwargs,
@@ -303,7 +316,11 @@ def popen(
         _close(go_write)
         go_write = -1
         # EOF once the command is executing.
-        failure = _read_all(done_read) if _deadline is None else _read_all(done_read, _deadline)
+        failure = (
+            _read_all(done_read)
+            if _deadline is None
+            else _read_all(done_read, _deadline)
+        )
         if failure:
             code = int(failure) or errno.ENOEXEC
             raise OSError(code, os.strerror(code), argv[0])
@@ -348,7 +365,9 @@ def run(
         except ProcessLookupError:
             pass
         except OSError as kill_error:
-            logger.warning("containment: could not kill group %s (%s)", process.pid, kill_error)
+            logger.warning(
+                "containment: could not kill group %s (%s)", process.pid, kill_error
+            )
         _abort_child(process, leaf)
         if deadline is not None and isinstance(exc, subprocess.TimeoutExpired):
             raise subprocess.TimeoutExpired(
@@ -359,5 +378,7 @@ def run(
         if leaf is not None:
             leaf.close()
     if check and process.returncode:
-        raise subprocess.CalledProcessError(process.returncode, list(args), stdout, stderr)
+        raise subprocess.CalledProcessError(
+            process.returncode, list(args), stdout, stderr
+        )
     return subprocess.CompletedProcess(list(args), process.returncode, stdout, stderr)

@@ -36,7 +36,9 @@ class _FailingSubtree:
 
 
 @pytest.mark.parametrize("backpressure", [False, True], ids=["done-read", "go-write"])
-def test_stalled_gate_reaped_and_owned_pipes_closed(monkeypatch, tmp_path, caplog, backpressure):
+def test_stalled_gate_reaped_and_owned_pipes_closed(
+    monkeypatch, tmp_path, caplog, backpressure
+):
     subtree = _FailingSubtree()
     monkeypatch.setattr(containment, "_containment", subtree)
     monkeypatch.setattr(containment, "_GATE", "import time; time.sleep(8)")
@@ -47,7 +49,9 @@ def test_stalled_gate_reaped_and_owned_pipes_closed(monkeypatch, tmp_path, caplo
     before = set(os.listdir(fds))
     start = time.monotonic()
     with pytest.raises(subprocess.TimeoutExpired) as caught:
-        containment.run(command, input=b"data", capture_output=True, env=env, timeout=0.5)
+        containment.run(
+            command, input=b"data", capture_output=True, env=env, timeout=0.5
+        )
 
     assert time.monotonic() - start < 5
     assert (caught.value.cmd, caught.value.timeout) == (command, 0.5)
@@ -63,8 +67,14 @@ def test_stalled_gate_reaped_and_owned_pipes_closed(monkeypatch, tmp_path, caplo
 def test_successful_handshake_spends_execution_budget(monkeypatch, tmp_path, caplog):
     subtree = _FailingSubtree()
     monkeypatch.setattr(containment, "_containment", subtree)
-    monkeypatch.setattr(containment, "_GATE", "import time; time.sleep(1)\n" + containment._GATE)
-    command = [sys.executable, "-c", "import time; print('started', flush=True); time.sleep(2)"]
+    monkeypatch.setattr(
+        containment, "_GATE", "import time; time.sleep(1)\n" + containment._GATE
+    )
+    command = [
+        sys.executable,
+        "-c",
+        "import time; print('started', flush=True); time.sleep(2)",
+    ]
     with (tmp_path / "output").open("w+") as output:
         with pytest.raises(subprocess.TimeoutExpired) as caught:
             containment.run(command, env={}, timeout=2.5, stdout=output)
