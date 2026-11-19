@@ -375,7 +375,8 @@ CHECK_RULES = (
     "typed without its separators. `retried_timeouts(world)`, `repeated_commits(world)` and "
     "`committed_writes(world)` list the agent's writes from the action log: one the world timed out "
     "on and the agent tried again, a second commit to the same record, and every committed write; pass the "
-    "check's `reference` as their second argument so a retry that rewords free text is still the same record; "
+    "check's `reference` as their second argument, and the arguments that hold the agent's own words (a note it "
+    "may reword) as `own_words=[...]`, so a retry that rewords them is still the same record; "
     "whether a reply claims a change that `committed_writes` does not hold is judged, never matched "
     "as text. Check the outcome, not the route: where the "
     "outcome leaves a record, "
@@ -527,18 +528,6 @@ def compares_to_a_value(source: str) -> bool:
                 continue
             return True
     return False
-
-
-def judged_refusal_advisory(sub_goal: SubGoal) -> str:
-    """What to say about a refusal left to the judge alone, whose control no code check can then fail."""
-    if sub_goal.check.strip() or not is_refusal(sub_goal.name):
-        return ""
-    return (
-        f"{sub_goal.name}: only the judge grades this refusal. If what it refuses is a change (a refund, a "
-        "cancellation, a discount), give it a check that fails when that change commits for this caller's record "
-        "and keep the criteria for how it was explained (verifier both); otherwise no check can fail the "
-        "negative control that makes the change, and the case is held"
-    )
 
 
 def weak_check_advisory(sub_goal: SubGoal) -> str:

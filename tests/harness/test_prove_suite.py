@@ -104,7 +104,7 @@ def test_a_crash_s_reason_is_written_without_the_secrets_in_it(monkeypatch, tmp_
     monkeypatch.setattr(suite_module, "prove", crashes)
     proofs = prove_suite(tmp_path, tmp_path / "proofs.json")
 
-    assert "hunter2" not in proofs["one"]["why"] and "postgresql://admin:" in proofs["one"]["why"]
+    assert "hunter2" not in proofs["one"]["why"] and "db:5432/world" in proofs["one"]["why"]
 
 
 def test_a_large_suite_writes_its_proofs_in_batches_and_ends_with_every_case(monkeypatch, tmp_path):

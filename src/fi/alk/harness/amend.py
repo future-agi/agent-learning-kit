@@ -26,7 +26,8 @@ from ..providers.agent import _redact
 from .contract import (
     CONTRACT_FILE,
     AgentContract,
-    ValueChange,
+    AmendmentRecord,
+    rule_id,
     known_modalities,
     validate_contract,
     write_contract,
@@ -101,6 +102,7 @@ def widen(
         contract.amendments.pop()
         return False, "the amended contract would not be valid: " + "; ".join(problems)
 
+    contract.amendment_records.append(AmendmentRecord(kind="tool", key=tool_name, action="changed"))
     _persist(contract, destination)
     return True, (
         f"{tool_name}.{argument} now accepts {', '.join(fresh)}. "
@@ -109,13 +111,15 @@ def widen(
 
 
 def add_rule(
-    contract: AgentContract, destination: Path, *, rule: str, why: str
+    contract: AgentContract, destination: Path, *, rule: str, why: str, replaces: str = ""
 ) -> tuple[bool, str]:
-    """Give the agent a rule its source did not state.
+    """Give the agent a rule its source did not state, or (`replaces`) reword one it has.
 
     A hard constraint is not decoration: the agent under test is told it, and the judge grades
     against it. So this is a real change to what is being tested, and like a widened argument it
-    is recorded rather than blended into what was read from the source.
+    is recorded rather than blended into what was read from the source. `replaces` names the rule
+    this one rewrites, by its id or its exact words, a current rule or one removed earlier: the
+    records then link the two (`replaced_by`), and nothing is inferred from how alike they read.
     """
     rule = rule.strip()
     if not rule:
@@ -128,21 +132,65 @@ def add_rule(
     cleaned, *existing = _redact([rule, *contract.hard_constraints])
     if cleaned.lower() in (one.lower() for one in existing):
         return False, f"the agent already has that rule: {cleaned}"
+    current, removed = _replaced(contract, replaces) if replaces.strip() else (None, None)
+    if replaces.strip() and current is None and removed is None:
+        return False, (
+            f"no rule {replaces.strip()!r} to replace: name it by its id or its exact words. It has:\n  - "
+            + "\n  - ".join(f"{rule_id(one)}: {one}" for one in contract.hard_constraints)
+        )
 
+    if current is not None:
+        contract.hard_constraints.remove(current)
     contract.hard_constraints.append(rule)
     contract.amendments.append(f"rule added — {rule}: {why.strip()}")
     problems = validate_contract(contract)
     if problems:
         contract.hard_constraints.pop()
         contract.amendments.pop()
+        if current is not None:
+            contract.hard_constraints.append(current)
         return False, "the amended contract would not be valid: " + "; ".join(problems)
 
-    _replaces_dropped_rule(contract, rule)
+    old = current if current is not None else (removed.text if removed is not None else "")
+    new_id = rule_id(contract.hard_constraints[-1])
+    if current is not None:
+        contract.amendment_records.append(
+            AmendmentRecord(kind="rule", key=rule_id(current), action="removed", replaced_by=new_id, text=current)
+        )
+    elif removed is not None:
+        removed.replaced_by = new_id
+    contract.amendment_records.append(
+        AmendmentRecord(
+            kind="rule",
+            key=new_id,
+            action="added",
+            previous=rule_id(old) if old else "",
+            text=contract.hard_constraints[-1],
+        )
+    )
     _persist(contract, destination)
     return True, (
         f"added. The agent now has {len(contract.hard_constraints)} rules, and this one is "
         "graded from here on."
-    ) + old_values_left(contract, destination)
+    ) + (cases_citing(destination, rule=old) if old else "")
+
+
+def _replaced(contract: AgentContract, named: str) -> tuple[str | None, AmendmentRecord | None]:
+    """The rule `named` (by id or exact words) among the current rules, else among those removed and not yet
+    replaced."""
+    named = named.strip()
+    current = next((one for one in contract.hard_constraints if named in (rule_id(one), one)), None)
+    if current is not None:
+        return current, None
+    removed = next(
+        (
+            one
+            for one in reversed(contract.amendment_records)
+            if one.kind == "rule" and one.action == "removed" and not one.replaced_by and named in (one.key, one.text)
+        ),
+        None,
+    )
+    return None, removed
 
 
 def set_modality(
@@ -184,6 +232,9 @@ def set_modality(
         contract.amendments.pop()
         return False, "the amended contract would not be valid: " + "; ".join(problems)
 
+    contract.amendment_records.append(
+        AmendmentRecord(kind="modality", key=str(named), action="changed", previous=str(was or ""))
+    )
     _persist(contract, destination)
     reached = {
         "voice": "a call placed to the agent where it is hosted, its own tools answered over a "
@@ -224,10 +275,12 @@ def drop_rule(
         )
     contract.hard_constraints.remove(match)
     contract.amendments.append(f"rule removed — {match}: {why.strip()}")
-    # Open until a rule that reads alike replaces it, so what the change retired is known.
-    contract.value_changes.append(ValueChange(kind="rule", before=match))
+    contract.amendment_records.append(AmendmentRecord(kind="rule", key=rule_id(match), action="removed", text=match))
     _persist(contract, destination)
-    return True, f"removed. {len(contract.hard_constraints)} rules left" + old_values_left(contract, destination)
+    return True, (
+        f"removed ({rule_id(match)}). {len(contract.hard_constraints)} rules left. To reword it instead, add the new "
+        "rule with replaces naming this id." + cases_citing(destination, rule=match)
+    )
 
 
 def fix_tool(
@@ -272,8 +325,9 @@ def fix_tool(
             for field in ("tools", "tool_entrypoints", "dependencies", "amendments"):
                 setattr(contract, field, getattr(before, field))
             return False, "cannot remove it: " + "; ".join(problems)
+        contract.amendment_records.append(AmendmentRecord(kind="tool", key=tool_name, action="removed"))
         _persist(contract, destination)
-        return True, f"{tool_name} removed. {len(contract.tools)} tools left"
+        return True, f"{tool_name} removed. {len(contract.tools)} tools left" + cases_citing(destination, tool=tool_name)
 
     changed = []
     if args is not None:
@@ -309,7 +363,6 @@ def fix_tool(
     if returns:
         spec.returns.update(returns)
         changed.append("returned fields updated")
-    stated = {"description": spec.description, "refuses": spec.refuses}
     if description:
         spec.description = description
         changed.append("description updated")
@@ -317,12 +370,6 @@ def fix_tool(
         if value:
             setattr(spec, field, value)
             changed.append(f"{field} updated")
-    # The tool's own words before and after, so the values the correction replaced are known.
-    contract.value_changes += [
-        ValueChange(kind="tool", name=tool_name, before=str(before), after=str(getattr(spec, field)))
-        for field, before in stated.items()
-        if before and str(getattr(spec, field)) != str(before)
-    ]
     if not changed:
         return False, (
             "nothing to change: give args, arg_types, arg_units, returns, description, refuses, effects, inputs_from, "
@@ -333,8 +380,9 @@ def fix_tool(
     problems = validate_contract(contract)
     if problems:
         return False, "the amended contract would not be valid: " + "; ".join(problems)
+    contract.amendment_records.append(AmendmentRecord(kind="tool", key=tool_name, action="changed"))
     _persist(contract, destination)
-    return True, f"{tool_name}: {', '.join(changed)}" + old_values_left(contract, destination)
+    return True, f"{tool_name}: {', '.join(changed)}" + cases_citing(destination, tool=tool_name)
 
 
 def drop_tool_references(contract: AgentContract) -> list[str]:
@@ -401,6 +449,7 @@ def set_worker_tools(
         found.tools, found.allowed_tools = was_tools, was_allowed
         contract.amendments.pop()
         return False, "the amended contract would not be valid: " + "; ".join(problems)
+    contract.amendment_records.append(AmendmentRecord(kind="worker", key=worker, action="changed"))
     _persist(contract, destination)
     refused = sorted(set(held) - set(wanted))
     return True, (
@@ -410,38 +459,45 @@ def set_worker_tools(
     )
 
 
-def _replaces_dropped_rule(contract: AgentContract, rule: str) -> None:
-    """Close the latest dropped rule this one reads like (the same words, other values): that pair is the change."""
-    from .rule_values import same_rule
-
-    opened = next(
-        (
-            one
-            for one in reversed(contract.value_changes)
-            if one.kind == "rule" and not one.after and same_rule(one.before, rule)
-        ),
-        None,
-    )
-    if opened is not None:
-        opened.after = rule
-
-
-def old_values_left(contract: AgentContract, destination: Path) -> str:
-    """After a rule or tool changed, the case and sub-goal texts that still state a value it no longer does, as the
-    rest of the reply: the writer carries the new value into each before saving."""
-    from .catalogue import load_catalogue
-    from .rule_values import old_value_notes
+def cases_citing(destination: Path, *, rule: str = "", tool: str = "") -> str:
+    """The cases that rest on a rule or tool that just changed, as the rest of the reply: those whose `rule` source
+    cites it (resolved as the case's sources are, `grounding.resolve_sources`, against the rule as it read), or whose
+    solution or negative controls call the tool. Nothing in their text is read for values: the builder re-reads each
+    against the current rules."""
+    from .grounding import Rules, resolve_sources
     from .scenario_tools import load_scenarios
 
     try:
-        notes = old_value_notes(contract, load_scenarios(destination), load_catalogue(destination).sub_goals)
-    except Exception:  # noqa: BLE001 - the change is made; this only says what to update next
+        scenarios = load_scenarios(destination)
+    except Exception:  # noqa: BLE001 - the change is made; this only says what to review next
         return ""
-    if not notes:
+    citing = [
+        one
+        for one in scenarios
+        if (
+            rule
+            and any(
+                entry["kind"] == "rule" and entry["resolved"]
+                for entry in resolve_sources(one, Rules(hard_constraints=[rule]), destination)
+            )
+        )
+        or (
+            tool
+            and any(
+                step.tool == tool
+                for step in [*one.solution, *(step for control in one.negative_controls for step in control.steps)]
+            )
+        )
+    ]
+    if not citing:
         return ""
+    lines = [
+        f"{one.scenario_key or one.name}: {one.name}" + (f" ({one.use_case})" if getattr(one, "use_case", "") else "")
+        for one in citing
+    ]
     return (
-        "\nThese texts still state a value this rule or tool no longer states. Update each now, to what the rules "
-        "say (edit_scenario for a case, add_sub_goal for a sub-goal):\n  - " + "\n  - ".join(notes[:40])
+        f"\n{len(citing)} case(s) rest on what changed. Review each against the current rules: edit_scenario where it "
+        "no longer holds; one left as it is shows Source changed until it is reviewed.\n  - " + "\n  - ".join(lines)
     )
 
 

@@ -11,7 +11,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Protocol
@@ -344,20 +344,6 @@ def named_alike(action: str, name: str) -> bool:
     return action.rsplit(".", 1)[-1] == name.rsplit(".", 1)[-1]
 
 
-# The last word of an argument that holds the agent's own words (`note`, `customer_note`, `reasonText`), never which
-# record is written. Any other argument, `order`, `orderId`, `reference`, `account`, says which record it is.
-_FREE_TEXT_WORDS = frozenset(
-    {"note", "notes", "reason", "message", "comment", "comments", "description", "text", "body", "summary", "content",
-     "subject", "details", "memo", "explanation", "remarks"}
-)
-
-
-def free_text(field: str) -> bool:
-    """Whether an argument is the agent's own words, by its last word: `customer_note`, `reasonText`."""
-    words = [one for one in re.split(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])", field) if one]
-    return bool(words) and words[-1].lower() in _FREE_TEXT_WORDS
-
-
 def fixed_fields(solution: Sequence[Any], action: str) -> set[str]:
     """The arguments the reference solution fixes for this action, over every step that takes it."""
     fields: set[str] = set()
@@ -368,9 +354,23 @@ def fixed_fields(solution: Sequence[Any], action: str) -> set[str]:
     return fields
 
 
-def same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[str]) -> bool:
+def chosen_fields(solution: Sequence[Any], action: str) -> set[str]:
+    """The arguments the reference solution gives this action without fixing them: values the agent chooses (a note,
+    a category), so a retry may word them otherwise."""
+    fields: set[str] = set()
+    for step in solution or ():
+        step = step.model_dump() if hasattr(step, "model_dump") else step
+        if isinstance(step, Mapping) and named_alike(action, str(step.get("tool") or "")):
+            fields |= set(step.get("arguments") or {}) - set(step.get("fixed") or {})
+    return fields
+
+
+def same_write(
+    first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[str], own_words: Collection[str] = ()
+) -> bool:
     """Whether two writes of one action are the same write: equal arguments, or equal on every fixed argument and on
-    every other argument but the agent's own free text, so a reworded retry is the same write and another value
+    every other argument but those the caller names as the agent's own words (`own_words`, a note it may reword on a
+    retry). Nothing is read from an argument's name: unnamed, every argument has to match, so another value
     (order-A, order-B) is another write."""
     one, two = row_arguments(first.get("arguments")), row_arguments(later.get("arguments"))
     if exactly(one, two):
@@ -384,7 +384,7 @@ def same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[st
     return all(exactly(one.get(field), two.get(field)) for field in carried) and all(
         exactly(one.get(field), two.get(field))
         for field in others
-        if not (free_text(field) and isinstance(one.get(field), str) and isinstance(two.get(field), str))
+        if not (field in own_words and isinstance(one.get(field), str) and isinstance(two.get(field), str))
     )
 
 

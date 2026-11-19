@@ -31,6 +31,7 @@ from fi.simulate.simulation.call_actors import (
 )
 
 from .backends import tool, tool_server
+from .job import actors_on, current_actors_switch
 
 from .amend import add_rule, drop_rule, fix_tool, set_worker_tools, widen
 from .background_noise import place_for, places
@@ -54,7 +55,6 @@ from .catalogue import (
     SubGoal,
     load_catalogue,
     save_catalogue,
-    judged_refusal_advisory,
     judged_wording_advisory,
     validate_sub_goal,
     without_delivery_overlay,
@@ -74,7 +74,7 @@ from .folder import (
     write_folder,
     write_index,
 )
-from .checks import reference_of, run_check
+from .checks import reference_of, run_check, same_id
 from .proofs import load_proofs, proof_key, record_proof, record_unprovable
 from .understand import load as load_contract
 from .prove import (
@@ -92,6 +92,7 @@ from .prove import (
     workspace_fixture,
 )
 from .actors import (
+    ACTOR_SCENARIO_FIELDS,
     ACTORS_FILE,
     CALLER,
     Actor,
@@ -228,6 +229,19 @@ def _no_longer_hold(
             )
             failed.append((scenario.name, why))
     return failed
+
+
+def actors_off_fields(args: dict[str, Any]) -> list[str]:
+    """The actor-only fields (`ACTOR_SCENARIO_FIELDS`) a submission sends that carry anything."""
+    return [name for name in ACTOR_SCENARIO_FIELDS if args.get(name) not in (None, [], {}, "")]
+
+
+def actors_off_refusal(sent: list[str]) -> str:
+    return (
+        "Not kept. Actors and faults are off for this environment, so a scenario takes none of: "
+        + ", ".join(sent)
+        + ". Send it without them."
+    )
 
 
 def _actor_fields() -> dict[str, Any]:
@@ -1381,21 +1395,15 @@ def _identifiers_the_instruction_invents(
     ]
 
 
-# A column's name read as an id: its last word, split on `_`, `-` or a space.
-_ID_COLUMN_WORDS = frozenset({"id", "number", "no"})
-
-
 def _id_column(column: str, argument_names: set[str]) -> bool:
-    """A column that holds ids: one named like an id (`id`, `order_id`, `orderId`, `order number`, `order_no`), or
-    one the tools' argument names match."""
-    name = str(column).strip()
-    words = re.split(r"[_\-\s]+", name.lower())
-    return name in argument_names or words[-1] in _ID_COLUMN_WORDS or name.endswith("Id")
+    """A column that holds the ids the reference passes: one named as a tool argument the reference fills (case and
+    separators aside, `same_id`). A column no argument names is never read as ids, however it is named."""
+    return any(same_id(str(column).strip(), name) for name in argument_names)
 
 
 def _seed_file_ids(path: Path, argument_names: set[str]) -> set[str]:
     """The row ids an attached records file lists, of a CSV or of a JSON list of objects: the values of its id
-    columns (`_id_column`). A date, an amount or a name column is never read as ids, wherever it stands."""
+    columns (`_id_column`). A date, an amount or a name column no argument names is never read as ids."""
     try:
         text = path.read_text(encoding="utf-8")
         rows = json.loads(text) if path.suffix == ".json" else list(csv.DictReader(text.splitlines()))
@@ -2308,6 +2316,9 @@ def scenario_tools(
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
+    # The job's actors switch: off, no scenario takes actors, a pre-run, a first speaker or faults.
+    switch = current_actors_switch()
+    with_actors = actors_on(switch)
     # The share an earlier session recorded carries over; an environment without one draws the default.
     if (saved := load_actors(destination).actor_share) is not None:
         target["actor_share"] = saved.model_dump()
@@ -2326,9 +2337,14 @@ def scenario_tools(
     def call_actor_share() -> float:
         """The share of scenarios that include an actor: drawn within the range the person asked for
         through `aim_for`, else within this environment's default range."""
+        if not with_actors:
+            return 0.0
         seed = os.environ.get("ALK_HARNESS_JOB_ID") or str(destination)
         asked = target.get("actor_share")
-        return default_share(seed, (asked["min"], asked["max"])) if asked else default_share(seed)
+        if asked:
+            return default_share(seed, (asked["min"], asked["max"]))
+        # The platform's default range when it sent one, else the kit's own.
+        return default_share(seed, (switch.share[0], switch.share[1])) if switch is not None else default_share(seed)
 
     def usable_call_actors() -> list[str]:
         """The listed actors a run can deliver to this agent."""
@@ -2614,7 +2630,6 @@ def scenario_tools(
             one
             for one in (
                 judged_wording_advisory(sub_goal),
-                judged_refusal_advisory(sub_goal),
                 already_claimed(sub_goal, catalogue),
             )
             if one
@@ -2714,7 +2729,7 @@ def scenario_tools(
                     "which the agent has to work hardest for.",
                 },
                 **_mailbox_fields(),
-                **_actor_fields(),
+                **(_actor_fields() if with_actors else {}),
                 "instruction": {
                     "type": "string",
                     "description": "What this person is trying to achieve, written to them. "
@@ -2913,6 +2928,8 @@ def scenario_tools(
         ),
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        if not with_actors and (sent := actors_off_fields(args)):
+            return _err(actors_off_refusal(sent))
         if external_runtime_target and args.get("solution"):
             # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}
@@ -3122,8 +3139,8 @@ def scenario_tools(
     @tool(
         "add_rule",
         "Give the agent a hard rule its source did not state, when asked for one. It is told to "
-        "the agent under test and graded, so this changes what is being tested. Say why.",
-        schema({"rule": str, "why": str}, ["rule", "why"]),
+        "the agent under test and graded, so this changes what is being tested. To reword a rule, add the new one with `replaces` naming the old one by its id or exact words: the two are linked and the cases citing the old one are listed. Say why.",
+        schema({"rule": str, "why": str, "replaces": str}, ["rule", "why"]),
     )
     async def add_rule_tool(args: dict[str, Any]) -> dict[str, Any]:
         done, said = add_rule(
@@ -3131,6 +3148,7 @@ def scenario_tools(
             world_root,
             rule=str(args.get("rule") or ""),
             why=str(args.get("why") or ""),
+            replaces=str(args.get("replaces") or ""),
         )
         return _ok(said) if done else _err(said)
 
@@ -3296,6 +3314,8 @@ def scenario_tools(
                 if people == "alike"
                 else ". No accent, language or location may dominate the suite"
             )
+        if args.get("actor_share") is not None and not with_actors:
+            return _err("actor_share is not taken: actors are off for this environment, so no scenario includes one.")
         if args.get("actor_share") is not None:
             given = args["actor_share"]
             try:
@@ -3378,7 +3398,7 @@ def scenario_tools(
                 f". {len(vocabulary)} keywords are the suite's vocabulary; deal them in the briefs, "
                 "because a writer that never sees the list cannot stay inside it"
             )
-        usable = usable_call_actors()
+        usable = usable_call_actors() if with_actors else []
         share = call_actor_share()
         if usable:
             said += (
@@ -3710,6 +3730,8 @@ def scenario_tools(
         edit_schema,
     )
     async def edit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        if not with_actors and (sent := actors_off_fields(args)):
+            return _err(actors_off_refusal(sent).replace("Not kept.", "Not changed."))
         key = str(args.get("scenario_key") or "").strip()
         held = next((one for one in kept if one.scenario_key == key), None)
         if held is None:

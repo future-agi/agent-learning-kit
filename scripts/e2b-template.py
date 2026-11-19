@@ -162,13 +162,32 @@ def _load_catalog(path: Path) -> dict[str, Any]:
     return catalog
 
 
-def _assert_clean_checkout(repo: Path, *, allow_dirty: bool) -> None:
+def _assert_clean_checkout(repo: Path, *, allow_dirty: bool) -> bool:
+    """Whether the checkout has changes (only possible with --allow-dirty)."""
     dirty = _git(repo, "status", "--porcelain")
     if dirty and not allow_dirty:
         raise SystemExit(
             "refusing to publish from a dirty tracked checkout; commit the release "
             "or pass --allow-dirty for an explicit local experiment"
         )
+    return bool(dirty)
+
+
+def _image_revision(source_revision: str, *, dirty: bool) -> str:
+    """The revision an image built here is labelled with, which Dockerfile.hosted also makes the
+    build id its readings record. A dirty checkout's code is not its HEAD: the suffix keeps the
+    label telling and fails the build id's hex rule, so its readings record no build."""
+    return f"{source_revision}-dirty" if dirty else source_revision
+
+
+def _template_envs(image_revision: str | None) -> dict[str, str]:
+    """The template's environment. The image carries ALK_BUILD_ID, but the template does not
+    count on the image's ENV reaching the process (HOSTED_RUNTIME_ENV repeats it), so the id is
+    set here too, only for an image this run built, with the value the image was built with. A
+    given --image-reference keeps whatever its own image says."""
+    if image_revision is None:
+        return dict(HOSTED_RUNTIME_ENV)
+    return {**HOSTED_RUNTIME_ENV, "ALK_BUILD_ID": image_revision}
 
 
 def _parse_image_digest(metadata_path: Path) -> str:
@@ -235,6 +254,7 @@ def publish_e2b_template(
     cpu_count: int,
     memory_mb: int,
     source_revision: str,
+    image_revision: str | None,
     api_key: str,
     skip_cache: bool,
 ):
@@ -255,7 +275,7 @@ def publish_e2b_template(
     template = (
         Template()
         .from_image(image_reference, **image_kwargs)
-        .set_envs(HOSTED_RUNTIME_ENV)
+        .set_envs(_template_envs(image_revision))
         .set_user("svc-control")
         .set_workdir("/work")
     )
@@ -732,7 +752,9 @@ def main() -> int:
     if args.env_file:
         _load_selected_env(args.env_file.expanduser().resolve())
     source_revision = _git(repo, "rev-parse", "HEAD")
-    _assert_clean_checkout(repo, allow_dirty=args.allow_dirty)
+    dirty = _assert_clean_checkout(repo, allow_dirty=args.allow_dirty)
+    # Set only when this run builds the image: a given image or template keeps its own.
+    image_revision: str | None = None
     image_tag = args.image_tag or source_revision
 
     print(f"ALK_SOURCE_REVISION={source_revision}")
@@ -766,11 +788,12 @@ def main() -> int:
         image_tag_value = ""
         image_digest = ""
     else:
+        image_revision = _image_revision(source_revision, dirty=dirty)
         image = build_and_push_image(
             repo=repo,
             repository=args.image_repository,
             image_tag=image_tag,
-            source_revision=source_revision,
+            source_revision=image_revision,
             no_cache=args.no_cache,
         )
         image_reference = image.reference
@@ -799,6 +822,7 @@ def main() -> int:
             cpu_count=args.cpu_count,
             memory_mb=args.memory_mb,
             source_revision=source_revision,
+            image_revision=image_revision,
             api_key=api_key,
             skip_cache=args.no_cache,
         )

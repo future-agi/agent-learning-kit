@@ -1,0 +1,254 @@
+{"reading_inputs": {"version":1,"source":{"kind":"github","repository":"future-agi/agent-learning-kit","commit_sha":"d687a0db00000000000000000000000000000000"},"subfolder":"examples/harness/pydantic_ai_support","evals_sha256":null,"generic_harness_v1":true}, 
+  "agent": "pydantic_ai_support",
+  "one_liner": "A customer support chat agent for an online store that looks up orders, starts returns on delivered orders and states the return policy.",
+  "modality": "chat",
+  "call_direction": "inbound",
+  "agent_languages": [],
+  "conversational": true,
+  "system_prompt_excerpt": "    instructions=(\n        \"You are a customer support agent for an online store. Use the tools to look up \"\n        \"orders and start returns, and never guess an order's status. Answer briefly.\"\n    ),",
+  "system_prompt_from": [
+    {
+      "path": "examples/harness/pydantic_ai_support/agent.py",
+      "start_line": 49,
+      "end_line": 52
+    }
+  ],
+  "model": {
+    "provider": "openai",
+    "name": "vertex_ai/gemini-3.7-flash",
+    "path": "examples/harness/pydantic_ai_support/agent.py",
+    "line": 9
+  },
+  "hard_constraints": [
+    "Use the tools to look up orders and start returns, and never guess an order's status.",
+    "Answer briefly."
+  ],
+  "tools": [
+    {
+      "name": "look_up_order",
+      "args": [
+        "order_id"
+      ],
+      "arg_types": {
+        "order_id": "str"
+      },
+      "arg_values": {},
+      "description": "Look up an order by its id and report its item, status and any return.",
+      "requires": [],
+      "refuses": "Returned as an ordinary string, not raised: unknown order_id gives 'No order {order_id} exists.' Ids are case-sensitive exact matches.",
+      "effects": "Read only. Returns 'Order {id}: {item}, status {status}, return: {reason or none}.' from the in-memory _ORDERS dict.",
+      "inputs_from": {}
+    },
+    {
+      "name": "start_return",
+      "args": [
+        "order_id",
+        "reason"
+      ],
+      "arg_types": {
+        "order_id": "str",
+        "reason": "str"
+      },
+      "arg_values": {},
+      "description": "Start a return for a delivered order, giving the customer's reason.",
+      "requires": [],
+      "refuses": "Returned as ordinary strings: unknown id -> 'No order {id} exists.'; status not 'delivered' (e.g. A1002 shipped) -> 'Order {id} is {status} and cannot be returned yet.'; return already set -> 'Order {id} already has a return started.' Checks run in that order. No time-window check is made in code (the 30 day policy is only stated by return_policy).",
+      "effects": "Sets the order's 'return' field to the reason string (free text, written from the customer's reason or the agent's own wording) in the in-memory _ORDERS; subsequent look_up_order shows it. Returns 'Return started for order {id}: {reason}.'",
+      "inputs_from": {}
+    },
+    {
+      "name": "return_policy",
+      "args": [],
+      "arg_types": {},
+      "arg_values": {},
+      "description": "State the store's return policy.",
+      "requires": [],
+      "refuses": "Never refuses.",
+      "effects": "Read only. Returns the fixed string 'Delivered items can be returned within 30 days for a full refund.'",
+      "inputs_from": {}
+    }
+  ],
+  "data_schema": {
+    "_ORDERS": {
+      "key": "order_id (str)",
+      "fields": {
+        "item": "str",
+        "status": "str (observed values: delivered, shipped)",
+        "return": "str | None (the customer's return reason once started; None otherwise)"
+      }
+    }
+  },
+  "base_environment": {
+    "_ORDERS": {
+      "A1001": {
+        "item": "trail running shoes",
+        "status": "delivered"
+      },
+      "A1002": {
+        "item": "rain jacket",
+        "status": "shipped"
+      },
+      "A1003": {
+        "item": "water bottle",
+        "status": "delivered"
+      }
+    }
+  },
+  "dependencies": [],
+  "runtime_dependencies": [
+    {
+      "name": "openai_chat_completions_endpoint",
+      "kind": "inference",
+      "what": "Model inference through AsyncOpenAI using OpenAIChatModel (not the Responses API). Default model vertex_ai/gemini-3.7-flash is a model-gateway name.",
+      "used_by": [],
+      "engine": "OpenAI-compatible chat completions",
+      "version": "",
+      "reached": {
+        "dsn_env": "OPENAI_BASE_URL",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "",
+        "loader_function": ""
+      }
+    },
+    {
+      "name": "openai_api_key",
+      "kind": "inference",
+      "what": "API key for the endpoint, required for a turn.",
+      "used_by": [],
+      "engine": "",
+      "version": "",
+      "reached": {
+        "dsn_env": "OPENAI_API_KEY",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "",
+        "loader_function": ""
+      }
+    }
+  ],
+  "implementation": "present",
+  "tool_entrypoints": [
+    {
+      "tool": "look_up_order",
+      "mode": "import",
+      "module": "agent",
+      "callable": "look_up_order",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Plain module-level function in agent.py (workdir examples/harness/pydantic_ai_support, so importable as 'agent'). Operates on module-level dict _ORDERS; fully local, no dependency endpoint."
+    },
+    {
+      "tool": "start_return",
+      "mode": "import",
+      "module": "agent",
+      "callable": "start_return",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Mutates module-level _ORDERS in process memory; state resets on process restart."
+    },
+    {
+      "tool": "return_policy",
+      "mode": "import",
+      "module": "agent",
+      "callable": "return_policy",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Fully local constant."
+    }
+  ],
+  "refusal_signature": "Tools return plain strings rather than raising: 'No order {id} exists.', 'Order {id} is {status} and cannot be returned yet.', 'Order {id} already has a return started.'",
+  "data_store": {
+    "kind": "in_process",
+    "version": "",
+    "configured_by": "Hardcoded module-level dict _ORDERS in agent.py; no env var or config seam. State is mutated by start_return and lives in process memory only.",
+    "config_key": "",
+    "host": "",
+    "port": null,
+    "database": "",
+    "user": "",
+    "password_from": "",
+    "schema_from": "",
+    "loaded_by": "",
+    "loader_module": ""
+  },
+  "runtime": {
+    "language": "python",
+    "version": "3.12",
+    "install": "pip install -r requirements.txt",
+    "extras": [],
+    "requirements_files": [],
+    "observations": {},
+    "workspaces": {},
+    "workdir": "examples/harness/pydantic_ai_support",
+    "execution": "auto",
+    "compose_file": "",
+    "compose_overrides": [],
+    "compose_image_services": [],
+    "service": "",
+    "additional_services": [],
+    "required_environment": {
+      "agent": [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL"
+      ]
+    },
+    "secret_files": {},
+    "config_files": {},
+    "directories": [],
+    "dockerfile": "",
+    "command": [],
+    "context_excludes": [],
+    "platform": "",
+    "interface": {
+      "kind": "callable",
+      "protocol": "fi.alk",
+      "model": "vertex_ai/gemini-3.7-flash",
+      "port": null,
+      "path": "",
+      "health_path": "",
+      "include_tools": false,
+      "request_template": null,
+      "response_path": "",
+      "headers_template": {},
+      "completed_tool_events": null,
+      "completed_tools": null,
+      "local_auth": null,
+      "setup_secrets": {},
+      "failure_rule": null,
+      "setup_requests": []
+    },
+    "source_subfolder": "examples/harness/pydantic_ai_support"
+  },
+  "real_use_cases": [
+    "Look up an order by id and report its item, status and any return.",
+    "Start a return for a delivered order with the customer's reason.",
+    "State the store's return policy.",
+    "Decline to start a return for an order that has not been delivered, already has a return, or does not exist."
+  ],
+  "caller_identity": "The agent never identifies the customer. No login, phone number or account is loaded; the person supplies an order id in conversation. The harness calls agent_callback once per turn with the full message history.",
+  "notes": "Single agent in examples/harness/pydantic_ai_support; no Dockerfile or Compose file exists in the folder (so the user's standalone-Dockerfile limitation does not apply; execution is native Python 3.12 with pydantic-ai-slim[openai]==2.61.0, agent-simulate==0.1.3). Entry is the async function agent_callback(agent_input) in agent.py, a source-exported agent_callback (callable ingress, no command/server). agent_input.messages is a list of {role, content} dicts with the new user message last; earlier user/assistant turns become message history. It returns only {'content': str(result.output)}; Pydantic AI executes tools internally, and the README says the kit's tool tracer records calls to the three tool functions. A fresh AsyncOpenAI client is created per call from OPENAI_BASE_URL / OPENAI_API_KEY; model from OPENAI_MODEL with default vertex_ai/gemini-3.7-flash. _ORDERS is shared process state, so a return started in one conversation persists in the same process. The 30-day policy is not enforced in start_return.",
+  "open_questions": [
+    "How the kit's tool tracer is attached to the three tool functions was not visible in this folder (README only); assumed supplied by the harness."
+  ],
+  "chosen_evals": [],
+  "amendments": [],
+  "instrumentation": "none"
+}

@@ -3312,7 +3312,7 @@ def _ledger_root(tmp_path: Path, *, mode: str = "service", roles: dict | None = 
     orders.csv listing 1043 and 2001."""
     (tmp_path / "knowledge").mkdir()
     (tmp_path / "knowledge" / "orders.csv").write_text(
-        "id,customer_id,item\n1043,C-2,Rain jacket\n2001,C-1,Tent\n", encoding="utf-8"
+        "order_id,customer_id,item\n1043,C-2,Rain jacket\n2001,C-1,Tent\n", encoding="utf-8"
     )
     (tmp_path / "knowledge" / "roles.json").write_text(
         json.dumps(roles if roles is not None else {"knowledge/orders.csv": "seed_records"}), encoding="utf-8"
@@ -3423,6 +3423,32 @@ def test_a_column_the_tools_argument_names_match_is_read_as_ids(tmp_path: Path) 
 
     said = _records_only_a_context_file_holds(case, SimpleNamespace(state=lambda: {}), root)
     assert said and "R-2001" in said[0]
+
+
+@pytest.mark.parametrize("column", ["id", "Order No", "number"])
+def test_a_column_no_argument_names_is_never_guessed_to_hold_ids(tmp_path: Path, column: str) -> None:
+    """Nothing declares that `id` holds what `order_id` carries: the harness does not guess from the column's name."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    (root / "knowledge" / "orders.csv").write_text(f"{column},item\n2001,Tent\n", encoding="utf-8")
+
+    assert _records_only_a_context_file_holds(_order_case("2001"), SimpleNamespace(state=lambda: {}), root) == []
+
+
+@pytest.mark.parametrize("column", ["order_id", "Order ID", "order-id", "ORDER_ID"])
+def test_a_column_named_as_the_argument_is_read_whatever_its_case_or_separators(tmp_path: Path, column: str) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    (root / "knowledge" / "orders.csv").write_text(f"{column},item\n2001,Tent\n", encoding="utf-8")
+
+    said = _records_only_a_context_file_holds(_order_case("2001"), SimpleNamespace(state=lambda: {}), root)
+    assert said and "2001" in said[0]
 
 
 def test_a_lookup_expected_to_come_back_not_found_is_never_refused_for_a_context_only_row(tmp_path: Path) -> None:

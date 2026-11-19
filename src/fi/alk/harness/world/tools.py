@@ -28,6 +28,7 @@ from typing import Any
 from fi.simulate.simulation.call_actors import CHANNELS, available_channels, described
 
 from ..backends import tool, tool_server
+from ..job import actors_on, current_actors_switch
 
 from ..actors import (
     Actor,
@@ -54,7 +55,6 @@ from ..catalogue import (
     save_catalogue,
     compares_to_a_value,
     validate_sub_goal,
-    judged_refusal_advisory,
     judged_wording_advisory,
     weak_check_advisory,
     without_delivery_overlay,
@@ -641,6 +641,9 @@ def world_actor_tools(
 ) -> list[Any]:
     """The tools that keep the environment's actors: for the build and the builder chat. `collections` reads the
     world's collections while it is being built; without it they come from the saved source model."""
+    if not actors_on(current_actors_switch()):
+        # Actors are off for this environment: none is offered, so none is kept.
+        return []
 
     def world_actions() -> list[str]:
         # Read when called, so actions adopted later in the build count.
@@ -1537,8 +1540,8 @@ def world_tools(
         "add_rule",
         "Give the agent a hard rule its source did not state, when the operator asks for one. "
         "The agent under test is told every rule and the judge grades against them, so this "
-        "changes what is being tested. Say why in one line; it is recorded on the contract.",
-        {"rule": str, "why": str},
+        "changes what is being tested. To reword a rule, add the new one with `replaces` naming the old one by its id or exact words: the two are linked and the cases citing the old one are listed. Say why in one line; it is recorded on the contract.",
+        {"rule": str, "why": str, "replaces": str},
     )
     async def add_rule_tool(args: dict[str, Any]) -> dict[str, Any]:
         done, said = add_rule(
@@ -1546,6 +1549,7 @@ def world_tools(
             destination,
             rule=str(args.get("rule") or ""),
             why=str(args.get("why") or ""),
+            replaces=str(args.get("replaces") or ""),
         )
         return _ok(said) if done else _err(said)
 
@@ -1801,7 +1805,6 @@ def world_tools(
             for one in (
                 weak_check_advisory(sub_goal),
                 judged_wording_advisory(sub_goal),
-                judged_refusal_advisory(sub_goal),
                 already_claimed(sub_goal, catalogue),
             )
             if one
@@ -2008,7 +2011,8 @@ def world_tools(
             )
         listed = ""
         if (
-            available_channels(str(contract.modality or ""))
+            actors_on(current_actors_switch())
+            and available_channels(str(contract.modality or ""))
             and not load_call_actors(destination).call_actors
         ):
             listed = (

@@ -86,11 +86,11 @@ def test_only_a_committed_write_counts_as_a_change_made() -> None:
 
 REWORDED = (
     "def check(world, calls, reference):\n"
-    "    return 'retried' if retried_timeouts(world, reference) else None\n"
+    "    return 'retried' if retried_timeouts(world, reference, own_words=['reason']) else None\n"
 )
 TWICE = (
     "def check(world, calls, reference):\n"
-    "    return 'committed twice' if repeated_commits(world, reference) else None\n"
+    "    return 'committed twice' if repeated_commits(world, reference, own_words=['reason']) else None\n"
 )
 
 
@@ -111,7 +111,7 @@ def test_a_reworded_retry_is_the_same_record_for_every_duplicate_reader() -> Non
     solution = [
         {
             "tool": "refunds.issue",
-            "arguments": {"order_id": "1045", "amount": 35},
+            "arguments": {"order_id": "1045", "amount": 35, "reason": "damaged"},
             "fixed": ["order_id"],
         }
     ]
@@ -128,6 +128,20 @@ def test_a_reworded_retry_is_the_same_record_for_every_duplicate_reader() -> Non
     assert not duplicate_commits(other.rows, solution)
     assert run_check(REWORDED, other, [], reference=reference).held
     assert run_check(TWICE, other, [], reference=reference).held
+
+
+def test_a_reworded_argument_nothing_declares_as_the_agent_s_words_is_another_write() -> None:
+    """Nothing is read from an argument's name: `reason` is the agent's own words only when the reference lists it
+    unfixed or the check names it."""
+    from fi.alk.harness.call_runner import duplicate_commits
+
+    solution = [{"tool": "refunds.issue", "arguments": {"order_id": "1045"}, "fixed": ["order_id"]}]
+    reference = [{"tool": "refunds.issue", "arguments": {"order_id": "1045"}}]
+    world = _World(_refund("committed", "1045", "damaged", error="response_lost"), _refund("committed", "1045", "broken"))
+    unnamed = "def check(world, calls, reference):\n    return 'twice' if repeated_commits(world, reference) else None\n"
+
+    assert duplicate_commits(world.rows, solution) == []
+    assert run_check(unnamed, world, [], reference=reference).held
 
 
 def test_a_log_kept_before_outcomes_were_recorded_still_lists_its_committed_writes() -> (
@@ -190,10 +204,10 @@ def test_a_value_is_the_same_however_it_was_written() -> None:
         ("GBP 12", "£12"),
         ("1,250.50", 1250.5),
         (1043, "1043"),
-        ("2026-11-20", "20 November 2026"),
-        ("November 20, 2026", "Friday, 20th Nov 2026"),
-        ("14:00", "2 pm"),
-        ("9:30 a.m.", "09:30"),
+        # ISO 8601 dates and times, read by the standard library.
+        ("14:00", "14:00:00"),
+        ("2026-11-20T14:00:00+00:00", "2026-11-20T14:00Z"),
+        ("2026-11-20", "2026-11-20"),
         ("CLM-88213", "clm88213"),
         ("#1043", "1043"),
         ({"order": "O-1", "items": [1, "2"]}, {"order": "o1", "items": ["1", 2.0]}),
@@ -221,10 +235,16 @@ def test_a_different_value_is_never_the_same() -> None:
         # A word that names no currency makes it no amount.
         ("89 items", 89),
         ("007", 7),
-        ("2026-11-20", "21 November 2026"),
+        ("2026-11-20", "2026-11-21"),
         ("11/12/2026", "2026-11-12"),
-        ("14:00", "2:30 pm"),
+        ("14:00", "14:30:00"),
+        ("2026-11-20T14:00:00+00:00", "2026-11-20T14:00:00+05:30"),
         ("2", "14:00"),
+        ("14", "14:00"),
+        ("2026-11-20", "2026-11-20T00:00:00"),
+        # A date or time said in words is text: no parser reads it, so it matches only itself.
+        ("2026-11-20", "20 November 2026"),
+        ("14:00", "2 pm"),
         ("CLM-88213", "CLM-88214"),
         (True, 1),
         (None, ""),
