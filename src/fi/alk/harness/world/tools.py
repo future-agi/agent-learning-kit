@@ -28,6 +28,7 @@ from typing import Any
 from fi.simulate.simulation.call_actors import CHANNELS, available_channels, described
 
 from ..backends import tool, tool_server
+from ..job import actors_on, current_actors_switch
 
 from ..actors import (
     Actor,
@@ -640,6 +641,9 @@ def world_actor_tools(
 ) -> list[Any]:
     """The tools that keep the environment's actors: for the build and the builder chat. `collections` reads the
     world's collections while it is being built; without it they come from the saved source model."""
+    if not actors_on(current_actors_switch()):
+        # Actors are off for this environment: none is offered, so none is kept.
+        return []
 
     def world_actions() -> list[str]:
         # Read when called, so actions adopted later in the build count.
@@ -2006,7 +2010,8 @@ def world_tools(
             )
         listed = ""
         if (
-            available_channels(str(contract.modality or ""))
+            actors_on(current_actors_switch())
+            and available_channels(str(contract.modality or ""))
             and not load_call_actors(destination).call_actors
         ):
             listed = (

@@ -103,7 +103,7 @@ from .actors import (
     actor_brief,
     brief_text,
     load_actors,
-    with_caller_actor,
+    as_played,
     with_knowledge_read,
 )
 from .background_noise import place_of, scenario_source
@@ -116,7 +116,7 @@ from .call_actor import (
 )
 from .hosted_scheduler import WORKER_LIMITS_NOT_ENFORCED, CallAborted, CallCancelled, CallOutcome, call_sealed
 from .hosted_scheduler import Scenario as HostedScenario
-from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode
+from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode, job_actors_switch
 from .isolated_process import run_json_worker
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
@@ -4174,7 +4174,7 @@ class CallRunnerImpl:
         doc = _with_scenario_edits(
             doc, getattr(self._context.job, "metadata", None), source_key
         )
-        doc = with_caller_actor(doc, self._context.bundle_dir)
+        doc = as_played(doc, self._context.bundle_dir, job_actors_switch(self._context.job))
         if held := limits_not_held(doc, self._context.bundle_dir):
             # Known before the call: a trial relying on limits nobody can hold is held without placing it.
             return replace(self._timing_only_outcome(datetime.now(timezone.utc)), notices=tuple(held))

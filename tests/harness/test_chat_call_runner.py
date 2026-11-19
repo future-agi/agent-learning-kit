@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+from dataclasses import replace
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -328,6 +329,8 @@ def _context(tmp_path: Path) -> CallRunnerContext:
             "agent": {"connector": "http"},
             "scenario_count": 1,
             "runtime": {"isolation": RuntimeIsolation.DEDICATED_VM.value},
+            # A hosted job plays actors and faults only when its platform turns them on.
+            "metadata": {"actors": {"enabled": True, "share": [0.15, 0.25]}},
         }
     )
     return CallRunnerContext(
@@ -2515,3 +2518,49 @@ def test_a_trial_on_a_seal_without_a_world_door_says_its_world_actions_were_not_
     assert calls_passed_no_door(calls, [{"name": "find_items", "actor_id": "agent", "outcome": "committed"}]) is False
     assert calls_passed_no_door([], []) is False
     assert calls_passed_no_door(calls, None) is False
+
+
+def test_a_hosted_job_that_does_not_turn_actors_on_plays_no_actor_and_no_fault(tmp_path: Path, monkeypatch: Any) -> None:
+    """A bundle authored with actors and faults, run by a hosted job whose metadata has no actors switch."""
+    from fi.alk.harness import call_runner
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    context = _context(tmp_path)
+    context = replace(context, job=context.job.model_copy(update={"metadata": {}}))
+    save_actors(context.bundle_dir, ActorList(actors=[
+        Actor(id="manager", name="Mia", play="mocked", permitted_actions=["lookup_account"]),
+    ]))
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["actors"] = [{"id": "manager", "actions": [{"action": "lookup_account",
+                                                          "arguments": {"account_id": "ACC-1"}}]}]
+    document["faults"] = [{"action": "crm.apply_discount", "mode": "timeout_after_commit", "on_call": 1}]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    written: list[list] = []
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, _request: Any) -> AgentResponse:
+            await asyncio.sleep(0.05)
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime)
+    )
+
+    assert all(faults == [] for faults in written)
+    assert not outcome.world_actions and not outcome.call_actors

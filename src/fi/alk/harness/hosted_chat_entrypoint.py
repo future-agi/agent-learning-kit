@@ -28,6 +28,7 @@ from .backends import (
 )
 from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
 from .failure_file import FAILURE_FILE
+from .job import publish_actors_switch
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 from .chat_policy import EffectiveChatPolicy, apply_chat_policy, load_chat_policy
 from .hosted_conversation import (
@@ -662,6 +663,8 @@ class HostedChatRuntime:
         self.workspace = workspace
         self.source = source
         self.job = job
+        # A builder chat is always a hosted job: with no switch in it, actors are off.
+        publish_actors_switch(job.get("metadata") if isinstance(job, dict) else None, hosted=True)
         from .scenario import used_keys
 
         # Every key the environment has given a scenario, a dropped one's included, so a new

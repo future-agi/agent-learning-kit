@@ -108,6 +108,8 @@ def _job(
             cpu_units=1,
         ),
         seed=1,
+        # A hosted job plays actors and faults only when its platform turns them on.
+        metadata={"actors": {"enabled": True, "share": [0.15, 0.25]}},
     )
 
 
