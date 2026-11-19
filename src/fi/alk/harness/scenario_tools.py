@@ -54,6 +54,7 @@ from .catalogue import (
     SubGoal,
     load_catalogue,
     save_catalogue,
+    judged_refusal_advisory,
     judged_wording_advisory,
     validate_sub_goal,
     without_delivery_overlay,
@@ -2011,6 +2012,12 @@ def accept_scenario(
             f"\nNOT PROVED: {proof.why()} Give each negative control a `transcript` of the wrong behaviour as said; "
             "the judge must fail it."
         )
+    if proof is not None and proof.retried:
+        unproved += (
+            "\nNOTE: these checks fail an agent whose first try the world refused and who then made the call as the "
+            "reference does: " + "; ".join(proof.retried) + ". A refused try the agent corrects is not a mistake: "
+            "match the reference to any successful call."
+        )
     if proof is not None and proof.outcome == "no_change" and proof.proved:
         unproved += "\nA refusal case: nothing should change, and each negative control's forbidden change fails its checks."
     if proof is None:
@@ -2512,7 +2519,13 @@ def scenario_tools(
         # A rewritten check can break scenarios proved against the old one.
         broken = _no_longer_hold(destination, catalogue, restated, world_root)
         reword = "; ".join(
-            one for one in (judged_wording_advisory(sub_goal), already_claimed(sub_goal, catalogue)) if one
+            one
+            for one in (
+                judged_wording_advisory(sub_goal),
+                judged_refusal_advisory(sub_goal),
+                already_claimed(sub_goal, catalogue),
+            )
+            if one
         )
         return _ok(
             f"{sub_goal.name} added"

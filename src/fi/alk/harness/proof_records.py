@@ -33,6 +33,8 @@ class ControlResult(_PlayedControl, total=False):
     judged: bool
     verdicts: dict[str, JudgeVerdict]
     error: str
+    # The tools the control called that the reference solution never calls.
+    unmatched: list[str]
 
 
 class _CitedSource(TypedDict):

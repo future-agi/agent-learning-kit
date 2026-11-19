@@ -42,11 +42,15 @@ def play_controls(
             outcomes = [run_check(source, world, calls, name=name, reference=reference) for name, source in checks]
         finally:
             world.close()
-        played.append(played_control(control, outcomes, assumed))
+        solved = {str(step.tool) for step in getattr(scenario, "solution", None) or ()}
+        unmatched = sorted({call.name for call in calls if call.ok and not call.refused and call.name not in solved})
+        played.append(played_control(control, outcomes, assumed, unmatched))
     return played
 
 
-def played_control(control: NegativeControl, outcomes: Sequence[Outcome], assumed: list[str]) -> ControlResult:
+def played_control(
+    control: NegativeControl, outcomes: Sequence[Outcome], assumed: list[str], unmatched: Sequence[str] = ()
+) -> ControlResult:
     """A control as played: it fails when a check it names (every check when it names none) fails. A check that raised
     under it is broken, not failing: no evidence. With no outcomes it was not played, and with a step assumed (recorded
     unrun, no call made) it did not run as written: a check failing then shows nothing about the wrong behaviour, so
@@ -64,6 +68,8 @@ def played_control(control: NegativeControl, outcomes: Sequence[Outcome], assume
         "failing": [one.name for one in outcomes if one.name in named and not one.held and not one.broken],
         "broken": [one.name for one in outcomes if one.broken and one.name in named],
         "assumed": assumed,
+        # The tools it called that the reference never calls: the wrong action itself, when a refusal is the case.
+        "unmatched": list(unmatched),
     }
 
 

@@ -78,6 +78,42 @@ def test_refusal_case_outcome_no_change(monkeypatch, tmp_path):
     assert proof.controls[0]["name"] == "refund_anyway" and proof.controls[0]["failed"] is True
 
 
+def _refused_by_the_agent(sub_goals):
+    # The world would refund O-10; the agent's own rules say no (the caller is not the buyer), so only it can refuse.
+    return scenario(
+        [LOOKUP_O10],
+        name="refuse_not_the_buyer",
+        sub_goals=list(sub_goals),
+        negative_controls=[control("refund_anyway", "refunds someone else's order", [LOOKUP_O10, REFUND_O10])],
+    )
+
+
+def test_a_refusal_whose_only_check_is_the_lookup_names_the_call_its_control_made(monkeypatch, tmp_path):
+    # The refusal itself is left to the judge, so the control that refunds anyway passes every code check.
+    install(monkeypatch)
+    looked_up = REFUND_CATALOGUE["looked_up"]
+    proof = module.prove(_refused_by_the_agent(["looked_up"]), catalogue(looked_up=looked_up), tmp_path)
+    assert proof.blocked_reason() == "negative_control_passed"
+    assert proof.controls[0]["unmatched"] == ["refund_order"]
+    why = proof.why()
+    assert "it called refund_order, which the reference never calls, and no check fails on that" in why
+    assert "committed_writes(world, reference)" in why
+    # A check on the refund's effect makes the same control fail, and the case proves.
+    no_refund = check("return 'refunded' if world.data['refunds'] else None")
+    fixed = module.prove(
+        _refused_by_the_agent(["looked_up", "no_refund"]), catalogue(looked_up=looked_up, no_refund=no_refund), tmp_path
+    )
+    assert fixed.controls[0]["failed"] is True and fixed.proved is True
+
+
+def test_a_control_that_calls_only_what_the_reference_calls_keeps_the_tighten_advice(monkeypatch, tmp_path):
+    install(monkeypatch)
+    loose = check("return None if len(world.data['refunds']) >= 1 else 'no refund'")
+    proof = module.prove(refund_case(), catalogue(refund_once=loose, looked_up=REFUND_CATALOGUE["looked_up"]), tmp_path)
+    assert proof.controls[0]["unmatched"] == []
+    assert proof.why().endswith("Tighten the named checks so this wrong behaviour fails them.")
+
+
 def test_no_change_case_holds_despite_weak_checks(monkeypatch, tmp_path):
     install(monkeypatch)
     proof = module.prove(_refusal(), catalogue(no_refund=NO_REFUND, looked_up_o20=LOOKED_UP_O20), tmp_path)
@@ -713,6 +749,8 @@ def test_a_control_that_only_breaks_the_shared_step_is_refused(monkeypatch, tmp_
     assert proof.misses_case_goal is True
     assert proof.blocked_reason() == "control_misses_case_goal" and module.refuses_keeping(proof)
     assert "refund_once" in proof.why() and proof.proved is False
+    # A case about a value only it fixes is told how to give that value its own goal.
+    assert "add a sub-goal for that value with add_sub_goal" in proof.why()
 
 
 def test_a_control_aimed_at_the_case_s_own_goal_passes(monkeypatch, tmp_path):
