@@ -1,7 +1,8 @@
 """The LiveKit reference agent, and how the kit's hosted path handles it.
 
-Written as LiveKit's documentation writes a voice agent (ADR-006, "what a reference agent is"):
-an ``AgentServer`` worker whose session hears with OpenAI's speech-to-text, thinks with its
+A reference agent is written as the framework's own documentation writes one, with pinned
+versions. This one is written as LiveKit's documentation writes a voice agent: an
+``AgentServer`` worker whose session hears with OpenAI's speech-to-text, thinks with its
 chat model and speaks with its text-to-speech, all through the gateway, and an ``Agent``
 subclass whose tools are ``@function_tool`` methods.
 
