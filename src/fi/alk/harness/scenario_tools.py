@@ -3027,7 +3027,9 @@ def scenario_tools(
                     "description": "Where each requirement comes from: {kind (rule, file, chat_message, "
                     "evidence_case, requirement, assumption), ref (rule:<n>, file:<path>, chat:<id>, "
                     "evidence:<id>), quote (the exact words; required for rule and file), supports}. A "
-                    "requirement the person stated is cited in their words; a guess is an assumption.",
+                    "file:<path> names an attached file, or a file of the agent's own source, where its tools "
+                    "live, by its path from the source root (file:agent/app.py). A requirement the person "
+                    "stated is cited in their words; a guess is an assumption.",
                     "items": {"type": "object"},
                 },
                 "sub_goals": {

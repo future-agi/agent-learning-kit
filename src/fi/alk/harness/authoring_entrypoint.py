@@ -788,6 +788,10 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         help="A reading's raw contract.json at /work/seed/contract.json; the build reuses it when it matches the job",
     )
     args = parser.parse_args(argv)
+    from .grounding import publish_source_root
+
+    # A `file:` source may cite the agent's own source: every proof this process runs reads it from here.
+    publish_source_root(args.source)
     raw_job = _job_document(args.job)
     publish_actors_switch(
         raw_job.get("metadata") if isinstance(raw_job.get("metadata"), dict) else None,

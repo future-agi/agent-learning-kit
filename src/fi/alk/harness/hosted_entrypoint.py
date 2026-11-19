@@ -3066,6 +3066,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", required=True, type=Path, help="/work/artifacts")
     args = parser.parse_args(argv)
+    from .grounding import publish_source_root
+
+    # A `file:` source may cite the agent's own source: every proof this process runs reads it from here.
+    publish_source_root(args.source)
     try:
         establish_isolation()
     except IsolationUnavailable as exc:

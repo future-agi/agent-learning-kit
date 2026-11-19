@@ -48,7 +48,7 @@ from .controls import (
     play_judged_controls,
 )
 from .folder import apply_setup, check_ready
-from .grounding import policy_conflicts, resolve_sources, unresolved
+from .grounding import agent_source_root, policy_conflicts, resolve_sources, unresolved
 from .leaks import leaks
 from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
 from .scenario import Scenario
@@ -1345,6 +1345,7 @@ def prove(
     case_goals: Sequence[str] = (),
     agent_tools: Collection[str] | None = None,
     as_written: bool = False,
+    source_root: Path | None = None,
 ) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping.
 
@@ -1365,9 +1366,16 @@ def prove(
         one.as_dict()
         for one in leaks(scenario, catalogue, contract, world_state, actors, world_root=world_root)
     ]
-    proof.sources = resolve_sources(scenario, contract, world_root)
+    # The agent's own source, which a `file:` source may cite: what this process was given, else what the session
+    # recorded, the same for the submit, the live and the run's proofs.
+    source_root = source_root if source_root is not None else agent_source_root(world_root)
+    proof.sources = resolve_sources(scenario, contract, world_root, source_root)
     rules = [str(one) for one in (getattr(contract, "hard_constraints", None) or [])] if contract is not None else []
-    proof.policy_checks = policy_conflicts(scenario, catalogue, rules, world_root, judge=conflict_judge) if rules else []
+    proof.policy_checks = (
+        policy_conflicts(scenario, catalogue, rules, world_root, judge=conflict_judge, source_root=source_root)
+        if rules
+        else []
+    )
     checks = checks_for(scenario, catalogue)
     proof.evidence = {name: check_evidence(source) for name, source in checks}
     if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
