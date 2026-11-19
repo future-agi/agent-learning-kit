@@ -14,7 +14,7 @@ from fi.alk.harness import scenario_source as ss
 from fi.alk.harness.contract import AgentContract
 from fi.alk.harness.framework_detection import FrameworkFolders
 from fi.alk.harness.job import SourceKind
-from fi.alk.providers.agent import AgentBuildError, build_authored_agent
+from fi.alk.providers.agent import Agent, AgentBuildError, build_authored_agent
 
 
 class _RecordingClient:
@@ -454,6 +454,34 @@ def test_the_document_and_the_reading_hold_the_same_cleaned_prompt(tmp_path: Pat
     assert payload["agent"]["agent"]["behaviour"][0]["instructions"] == cleaned
     assert reading["agent"]["behaviour"][0]["instructions"] == cleaned
     assert "hunter2" not in json.dumps(reading) and "sk-1" not in json.dumps(reading)
+
+
+def test_a_build_names_an_unparsed_file_inside_the_documents_hash(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    _write_bundle(bundle, _contract("You book visits."))
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("x = 1\n", encoding="utf-8")
+    (source / "broken.py").write_text("def f(:\n", encoding="utf-8")
+
+    payload = _provision(
+        bundle,
+        SourceKind.GITHUB,
+        ss.BundleScenarioSource(framework_folders=FrameworkFolders(source, source, None)),
+    )
+
+    agent = payload["agent"]["agent"]
+    assert [one["path"] for one in agent["extension"]["source"]["unparsed"]] == ["broken.py"]
+    Agent.model_validate(agent)
+    # The reading of the same contract and source stores the same document.
+    reading = ss.authored_agent_document(
+        (bundle / "contract.json").read_text(encoding="utf-8"),
+        subfolder=None,
+        framework=agent["extension"].get("framework"),
+        source=source,
+    )
+    assert reading == payload["agent"]
 
 
 # -- TH-9500: the persona record is cleaned before it leaves (plan v1.1 section 5, test P1) ------

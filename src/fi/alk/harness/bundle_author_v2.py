@@ -1777,6 +1777,9 @@ def _reads_port_from_environment(root: Path) -> bool:
     return False
 
 
+_MODULE_LEVEL_CALLBACK = re.compile(r"^(?:async[ \t]+)?def[ \t]+agent_callback\b", re.MULTILINE)
+
+
 def _discover_callback_entrypoint(root: Path) -> str | None:
     """Return the repository's unique module-level ``agent_callback``, if present.
 
@@ -1785,22 +1788,38 @@ def _discover_callback_entrypoint(root: Path) -> str | None:
     canonical callback.  Treating that omission as authoritative used to compile such agents as
     ``python agent.py`` HTTP services, which can never pass the generated port readiness probe.
     """
+    from .python_source import TokenBudget, newer_syntax
+
     candidates: list[str] = []
+    # Found by a line search in modules written for a newer Python than the kit's (newer_syntax
+    # names the whole failure): used only when no module that parses defines the callback. A
+    # file that doesn't parse on any Python, a leftover from Python 2, is never the callback.
+    searched: list[str] = []
+    naming = TokenBudget()
     for path in sorted(root.rglob("*.py")):
         relative = path.relative_to(root)
         if any(part in _IGNORED_ARTIFACT_PARTS for part in relative.parts):
             continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        module = ".".join(relative.with_suffix("").parts)
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
-        except SyntaxError:
+            tree = ast.parse(text)
+        except SyntaxError as error:
+            # A ``def`` at the start of a line is a module-level one.
+            if (
+                _MODULE_LEVEL_CALLBACK.search(text) is not None
+                and newer_syntax(text, budget=naming, line=error.lineno) is not None
+            ):
+                searched.append(f"{module}:agent_callback")
             continue
         if any(
             isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and node.name == "agent_callback"
             for node in tree.body
         ):
-            module = ".".join(relative.with_suffix("").parts)
             candidates.append(f"{module}:agent_callback")
+    if not candidates:
+        candidates = searched
     if not candidates:
         return None
     if len(candidates) != 1:

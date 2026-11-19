@@ -223,9 +223,11 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
             repo_root=source,
             package_dir=None,
         )
-        # The build's own document, made by the build's own code.
+        # The build's own document, made by the build's own code. A file the kit's own Python
+        # can't parse was not read: the document says which and why, so an agent is never read
+        # in part without a word.
         made = authored_agent_document(
-            contract_text, subfolder=job.source.subfolder, framework=framework
+            contract_text, subfolder=job.source.subfolder, framework=framework, source=source
         )
         body = json.dumps(made, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         stored = json.dumps(made["agent"], ensure_ascii=False).encode("utf-8")
