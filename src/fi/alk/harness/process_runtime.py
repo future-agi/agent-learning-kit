@@ -483,6 +483,31 @@ def _cgroup_memory_limit_gib() -> float | None:
     return None
 
 
+def _cgroup_memory_use_gib() -> float | None:
+    """The memory the sandbox's own cgroup is using now, in GiB: cgroup v2 `memory.current` from the delegated subtree,
+    then cgroup v1 `memory.usage_in_bytes`. None when unreadable, read with `_cgroup_memory_limit_gib`."""
+    text = _read_cgroup_v2("memory.current")
+    candidates = [text] if text is not None else []
+    try:
+        candidates.append(Path("/sys/fs/cgroup/memory/memory.usage_in_bytes").read_text(encoding="utf-8"))
+    except OSError:
+        pass
+    for raw in candidates:
+        try:
+            value = int(raw.strip())
+        except ValueError:
+            continue
+        if value >= 0:
+            return value / (1024**3)
+    return None
+
+
+def memory_headroom() -> tuple[float, float] | None:
+    """`(used, limit)` GiB of the sandbox's own cgroup, or None when either cannot be read or there is no limit."""
+    limit, used = _cgroup_memory_limit_gib(), _cgroup_memory_use_gib()
+    return (used, limit) if limit is not None and used is not None else None
+
+
 def admit_parallelism(
     requested: int,
     *,
