@@ -4162,6 +4162,8 @@ def test_a_door_row_from_before_channels_is_not_a_bypass(monkeypatch) -> None:
     assert shared.channel == ""
 
 
+# The key column the world declares for orders (`record_key_columns`).
+_KEYS = frozenset({"order_id"})
 _RETURNS_TOOLS = {
     "tools": [
         {"name": "list_refunds", "effects": ""},
@@ -4188,7 +4190,7 @@ def test_shared_records_list_two_participants_on_one_order() -> None:
         _row("list_refunds", "refund", order_id="1042"),
         _row("issue_refund", "refund", order_id="1042", amount=120),
     ]
-    (record,) = cr.trial_shared_records(log, _RETURNS_TOOLS)
+    (record,) = cr.trial_shared_records(log, _RETURNS_TOOLS, _KEYS)
     assert record["key"] == "order_id=1042"
     assert [(one["who"], one["tool"]) for one in record["actions"]] == [
         ("worker:order_lookup", "list_refunds"),
@@ -4198,9 +4200,52 @@ def test_shared_records_list_two_participants_on_one_order() -> None:
     assert record["committed_writes"] == 1
 
 
+def test_an_argument_the_world_declares_no_key_for_names_no_shared_record_whatever_its_name() -> None:
+    log = [_row("list_refunds", "order_lookup", order_id="1042"), _row("list_refunds", "refund", order_id="1042")]
+    assert cr.trial_shared_records(log, _RETURNS_TOOLS) == []
+    # A declared key is read whatever it is called.
+    log = [_row("list_refunds", "order_lookup", ref="R-9"), _row("list_refunds", "refund", ref="R-9")]
+    (record,) = cr.trial_shared_records(log, _RETURNS_TOOLS, {"ref"})
+    assert record["key"] == "ref=R-9"
+
+
+def test_the_world_s_record_keys_are_its_declared_single_column_keys(tmp_path: Path) -> None:
+    import sqlite3
+
+    (tmp_path / "seed").mkdir()
+    connection = sqlite3.connect(tmp_path / "seed" / "world.sqlite")
+    connection.executescript(
+        "CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT, total REAL);"
+        "CREATE TABLE customers(id INTEGER PRIMARY KEY, email TEXT UNIQUE);"
+        "CREATE TABLE lines(order_id TEXT, line INTEGER, PRIMARY KEY (order_id, line));"
+        "CREATE INDEX by_customer ON orders(customer_id);"
+    )
+    connection.close()
+
+    # A composite key names no one record by one argument; a column merely named like an id is not a key.
+    assert cr.record_key_columns(tmp_path) == {"order_id", "id", "email"}
+    assert cr.record_key_columns(tmp_path / "missing") == frozenset()
+    assert cr.record_key_columns(None) == frozenset()
+
+
+def test_a_voice_trial_s_shared_records_read_the_world_s_declared_keys(tmp_path: Path, monkeypatch) -> None:
+    import sqlite3
+
+    (tmp_path / "seed").mkdir()
+    connection = sqlite3.connect(tmp_path / "seed" / "world.sqlite")
+    connection.executescript("CREATE TABLE orders(order_id TEXT PRIMARY KEY, total REAL);")
+    connection.close()
+    log = [_row("list_refunds", "order_lookup", order_id="1042"), _row("list_refunds", "refund", order_id="1042")]
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda runtime: SimpleNamespace(address="db"))
+    monkeypatch.setattr(cr, "_read_action_log", lambda address: log)
+
+    (record,) = cr._shared_records(object(), tmp_path)["shared_records"]
+    assert record["key"] == "order_id=1042"
+
+
 def test_a_record_one_participant_touched_is_not_shared() -> None:
     log = [_row("list_refunds", "refund", order_id="1043"), _row("issue_refund", "refund", order_id="1043")]
-    assert cr.trial_shared_records(log, _RETURNS_TOOLS) == []
+    assert cr.trial_shared_records(log, _RETURNS_TOOLS, _KEYS) == []
 
 
 def test_write_comes_from_contract_effects_and_unknown_is_null() -> None:
@@ -4210,7 +4255,7 @@ def test_write_comes_from_contract_effects_and_unknown_is_null() -> None:
         _row("list_refunds", "refund", order_id="1"),
         _row("unknown_tool", "refund", order_id="1"),
     ]
-    (record,) = cr.trial_shared_records(log, _RETURNS_TOOLS)
+    (record,) = cr.trial_shared_records(log, _RETURNS_TOOLS, _KEYS)
     assert [one["write"] for one in record["actions"]] == [True, None, None]
 
 
@@ -4227,7 +4272,7 @@ def test_a_read_the_door_logged_is_never_a_committed_write_whatever_the_tool_des
         {**_row("issue_refund", "refund", order_id="1042"), "effect": "write"},
         {**_row("issue_refund", "refund", order_id="1042"), "effect": "write"},
     ]
-    (record,) = cr.trial_shared_records(log, contract)
+    (record,) = cr.trial_shared_records(log, contract, _KEYS)
     assert [one["write"] for one in record["actions"]] == [False, True, True]
     assert record["committed_writes"] == 2
 
@@ -4241,7 +4286,7 @@ def test_a_row_without_a_logged_effect_takes_the_contract_s_declared_effect() ->
         ],
     }
     log = [_row("list_refunds", "order_lookup", order_id="7"), _row("issue_refund", "refund", order_id="7")]
-    (record,) = cr.trial_shared_records(log, contract)
+    (record,) = cr.trial_shared_records(log, contract, _KEYS)
     assert [one["write"] for one in record["actions"]] == [False, True]
     assert record["committed_writes"] == 1
 
@@ -4251,7 +4296,7 @@ def test_shared_records_say_which_cap_cut_them() -> None:
         log = [_row("list_refunds", "order_lookup", order_id=str(n)) for n in range(records)]
         log += [_row("list_refunds", "refund", order_id=str(n)) for n in range(records)]
         log += [_row("list_refunds", "refund", order_id="0") for _ in range(actions - 2)]
-        return cr.trial_shared_record_fields(log, _RETURNS_TOOLS)
+        return cr.trial_shared_record_fields(log, _RETURNS_TOOLS, _KEYS)
 
     below = fields(cr._SHARED_RECORD_KEYS, cr._SHARED_RECORD_ACTIONS)
     assert below["shared_records_truncated"] is False

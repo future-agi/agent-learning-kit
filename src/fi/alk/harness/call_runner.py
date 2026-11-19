@@ -1577,19 +1577,59 @@ def _row_writes(row: Mapping[str, Any], declared: bool | None) -> bool | None:
     return declared
 
 
-def trial_shared_records(log: list[dict[str, Any]], contract: Any) -> list[dict[str, Any]]:
-    """Each record (`<argument>=<value>` for an `id` or `*_id` argument) two or more participants named in this trial,
-    and what the world made of each call. `write` is the door's logged effect, else the contract's declared one, else
-    true when the tool describes effects; null when nothing says."""
-    return trial_shared_record_fields(log, contract).get("shared_records", [])
+def record_key_columns(bundle_dir: Path | None) -> frozenset[str]:
+    """The columns the world declares as a record's key: each table's single-column primary key and unique keys, read
+    from the sealed world's seed (`seed/world.sqlite`, else `world.sqlite`). Empty when the bundle holds no such world:
+    then no argument is taken for a record's key."""
+    import sqlite3
+
+    for path in (Path(bundle_dir) / "seed" / "world.sqlite", Path(bundle_dir) / "world.sqlite") if bundle_dir else ():
+        if not path.is_file():
+            continue
+        try:
+            connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        except sqlite3.Error:
+            continue
+        try:
+            keys: set[str] = set()
+            tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")]
+            for table in tables:
+                quoted = '"' + table.replace('"', '""') + '"'
+                primary = [row[1] for row in connection.execute(f"PRAGMA table_info({quoted})") if row[5]]
+                if len(primary) == 1:
+                    keys.add(primary[0])
+                for index in connection.execute(f"PRAGMA index_list({quoted})"):
+                    if index[2]:
+                        columns = [row[2] for row in connection.execute(f"PRAGMA index_info(\"{index[1]}\")")]
+                        if len(columns) == 1:
+                            keys.add(columns[0])
+            return frozenset(keys)
+        except sqlite3.Error:
+            return frozenset()
+        finally:
+            connection.close()
+    return frozenset()
 
 
-def trial_shared_record_fields(log: list[dict[str, Any]], contract: Any) -> dict[str, Any]:
+def trial_shared_records(
+    log: list[dict[str, Any]], contract: Any, keys: Collection[str] = frozenset()
+) -> list[dict[str, Any]]:
+    """Each record (`<argument>=<value>`, the argument named as a key column the world declares, `record_key_columns`)
+    two or more participants named in this trial, and what the world made of each call. `write` is the door's logged
+    effect, else the contract's declared one, else true when the tool describes effects; null when nothing says."""
+    return trial_shared_record_fields(log, contract, keys).get("shared_records", [])
+
+
+def trial_shared_record_fields(
+    log: list[dict[str, Any]], contract: Any, keys: Collection[str] = frozenset()
+) -> dict[str, Any]:
     """The trial's sealed `shared_records` and `shared_records_truncated` (more records than the cap), empty when no
-    record is shared. Each record says `actions_truncated` (more actions than the cap); `truncated` is either one, for
-    older readers."""
+    record is shared. A record is named by an argument the world declares as a key column (`keys`); nothing is read
+    from an argument's name, so with no declared key no record is shared. Each record says `actions_truncated` (more
+    actions than the cap); `truncated` is either one, for older readers."""
     effects = _tool_effects(contract)
-    keys: dict[str, dict[str, Any]] = {}
+    key_columns = set(keys)
+    named: dict[str, dict[str, Any]] = {}
     for row in log:
         if is_pre_run(row.get("idempotency_key")):
             continue
@@ -1605,16 +1645,16 @@ def trial_shared_record_fields(log: list[dict[str, Any]], contract: Any) -> dict
             "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
         )
         for argument, value in arguments.items():
-            if not (argument == "id" or str(argument).endswith("_id")):
+            if argument not in key_columns:
                 continue
             if isinstance(value, bool) or not isinstance(value, (str, int)):
                 continue
             key = f"{argument}={value}"
-            entry = keys.setdefault(key, {"key": key, "argument": str(argument), "value": str(value), "actions": []})
+            entry = named.setdefault(key, {"key": key, "argument": str(argument), "value": str(value), "actions": []})
             entry["actions"].append(
                 {"who": who, "tool": tool, "outcome": str(outcome), "write": _row_writes(row, effects.get(tool))}
             )
-    shared = [entry for entry in keys.values() if len({one["who"] for one in entry["actions"]}) >= 2]
+    shared = [entry for entry in named.values() if len({one["who"] for one in entry["actions"]}) >= 2]
     if not shared:
         return {}
     truncated = len(shared) > _SHARED_RECORD_KEYS
@@ -1645,7 +1685,7 @@ def _shared_records(runtime: EnvironmentRuntime, bundle_dir: Path) -> dict[str, 
     except Exception as exc:  # noqa: BLE001 - no shared records, never a failed call
         logger.debug("shared records unreadable: %s", type(exc).__name__)
         return {}
-    return trial_shared_record_fields(log, _bundle_contract(Path(bundle_dir)))
+    return trial_shared_record_fields(log, _bundle_contract(Path(bundle_dir)), record_key_columns(Path(bundle_dir)))
 
 
 def duplicate_commits(log: Sequence[Mapping[str, Any]], solution: Sequence[Any] = ()) -> list[dict[str, Any]]:

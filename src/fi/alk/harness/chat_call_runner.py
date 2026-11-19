@@ -25,6 +25,7 @@ from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
     ToolCaptureFailed,
+    record_key_columns,
     _clear_file_tool_calls,
     _with_scenario_edits,
     collect_seam_calls,
@@ -474,6 +475,7 @@ def _world_actors_record(
     limits: dict[str, Any],
     since: float = 0.0,
     contract: Any = None,
+    keys: Any = frozenset(),
 ) -> dict[str, Any] | None:
     """What actors did in the world this trial and what each participant changed, sealed beside the transcript as a
     call seals it, on every trial with a door, actors or not (`actions` and `decisions` then empty); None only when
@@ -516,7 +518,7 @@ def _world_actors_record(
         "usage": meter.rows(),
     }
     # Which participants named the same record and what the world made of each call.
-    record.update(trial_shared_record_fields(log, contract))
+    record.update(trial_shared_record_fields(log, contract, keys))
     return record
 
 
@@ -1311,7 +1313,15 @@ class HostedChatCallRunner:
         capture_failed = capture_failed and not graded_calls(transcript.calls)
 
         world_record = _world_actors_record(
-            door, listing, dispatcher, cast, meter, limits, since=trial_started, contract=self._contract
+            door,
+            listing,
+            dispatcher,
+            cast,
+            meter,
+            limits,
+            since=trial_started,
+            contract=self._contract,
+            keys=record_key_columns(self._context.bundle_dir),
         )
         from .call_runner import (
             NOT_RECORDED,
