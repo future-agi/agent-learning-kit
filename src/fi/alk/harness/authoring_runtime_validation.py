@@ -18,6 +18,7 @@ import shutil
 import tempfile
 import time
 from collections import Counter
+from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from pathlib import Path
@@ -1668,6 +1669,11 @@ _held_clock = time.monotonic
 _wall_clock = time.time
 
 
+# Holds that say the case cannot be passed as it is grounded (a record the world cannot serve, a tool the agent lacks):
+# only these may be replaced by a new case in the same plan cell. Every other hold is repaired, never swapped.
+REPLACEABLE = frozenset({"not_solvable", "not_ready", "tool_not_on_agent"})
+
+
 def read_held(authoring: Path, *, budget: float = 300) -> tuple[dict[str, str], dict[str, Any] | None]:
     """Prove the suite with this attempt's live plays, as a build judges it (`judge_case_goals`), and return the cases
     held for a reason its writer can fix, in the proof's own words, with the tally: how many cases are runnable
@@ -1688,12 +1694,19 @@ def read_held(authoring: Path, *, budget: float = 300) -> tuple[dict[str, str], 
         for entry in proofs.values()
         if entry.get("proved") is not True and entry.get("kept_as_written") is not True
     )
-    held = {
-        key: str(entry.get("why") or entry.get("blocked_reason"))
+    handed = {
+        key: str(entry.get("blocked_reason"))
         for key, entry in proofs.items()
-        if entry.get("blocked_reason") in WRITER_FIXABLE and entry.get("kept_as_written") is not True
+        if entry.get("blocked_reason") in WRITER_FIXABLE | REPLACEABLE and entry.get("kept_as_written") is not True
     }
-    tally = {"runnable": counts["proved"] + counts["kept_as_written"], "cases": len(proofs), "held": dict(reasons)}
+    held = {key: str(proofs[key].get("why") or code) for key, code in handed.items()}
+    tally = {
+        "runnable": counts["proved"] + counts["kept_as_written"],
+        "cases": len(proofs),
+        "held": dict(reasons),
+        # Each handed-back case's hold, which decides whether it may be replaced (`REPLACEABLE`).
+        "held_cases": handed,
+    }
     return held, tally
 
 
@@ -1742,16 +1755,21 @@ def write_yield(authoring: Path, asked: int, tally: dict[str, Any] | None, round
     write_json_atomic(path, body)
 
 
-def held_case_guidance(held: dict[str, str]) -> str:
-    """What the writer is told about the cases the proof held."""
+def held_case_guidance(held: dict[str, str], replaceable: Collection[str] = ()) -> str:
+    """What the writer is told about the cases the proof held: each to repair, and those `replaceable` (held for how
+    they are grounded) that it may instead replace."""
+    replaceable = set(replaceable)
+    lines = [
+        f"- {key}: {why}" + (" [may be replaced]" if key in replaceable else "") for key, why in sorted(held.items())
+    ]
     return (
         "The live proof held these cases, each for the reason given. Rewrite each so it proves: fix its checks, its "
         "negative controls or its reference solution as the reason says, and add or amend a sub-goal with "
-        "add_sub_goal where it says so. Keep its name and intent, and never drop a sub-goal it names. Where the "
-        "reason shows the case cannot be passed as it is grounded (a record the world cannot serve, a request "
-        "the tools cannot carry out), replace it instead: write a new case for the same plan cell, with the same "
-        "coverage, and remove the held one with drop_scenario. Every other case stays as it is, and the number of cases stays the "
-        "same.\n" + "\n".join(f"- {key}: {why}" for key, why in sorted(held.items()))
+        "add_sub_goal where it says so. Keep its name and intent, and never drop a sub-goal it names. Only a case "
+        "marked [may be replaced] is held for how it is grounded (a record the world cannot serve, a tool the "
+        "agent lacks); you may replace it instead: write a new case for the same plan cell, with the same "
+        "coverage and every sub-goal it names, and remove the held one with drop_scenario. Never replace any other "
+        "case. Every other case stays as it is, and the number of cases stays the same.\n" + "\n".join(lines)
     )
 
 
@@ -1820,7 +1838,14 @@ def _promote_data_store(contract, authoring: Path, candidate_dir: Path) -> int:
 
 
 async def _rewrite_held_cases(
-    held: dict[str, str], authoring: Path, *, repair, guidance: str, expected_count: int, seconds: float = 300
+    held: dict[str, str],
+    authoring: Path,
+    *,
+    repair,
+    guidance: str,
+    expected_count: int,
+    seconds: float = 300,
+    replaceable: Collection[str] = (),
 ) -> bool:
     """Hand the held cases back to the writer once. True when it changed something and kept every case, its name and
     its sub-goals; otherwise the suite is left as it was and the cases stay held, never failing the build."""
@@ -1837,7 +1862,7 @@ async def _rewrite_held_cases(
         return False
     try:
         status = await asyncio.wait_for(
-            repair("scenarios", held_case_guidance(held) + "\n\n" + guidance), timeout=seconds
+            repair("scenarios", held_case_guidance(held, replaceable) + "\n\n" + guidance), timeout=seconds
         )
     except Exception as error:  # noqa: BLE001 - a writer that cannot repair, or runs out of time, leaves them held
         print(f"runtime validation: held cases not rewritten ({type(error).__name__})", flush=True)
@@ -1854,7 +1879,11 @@ async def _rewrite_held_cases(
         return False
     try:
         certify_scenario_repair(
-            before, load_scenarios(authoring), expected_count=expected_count, diagnostic_codes=set(), replaceable=held
+            before,
+            load_scenarios(authoring),
+            expected_count=expected_count,
+            diagnostic_codes=set(),
+            replaceable=set(replaceable),
         )
     except ValueError as rejected:
         # A rewrite of the catalogue alone (a check added to a shared sub-goal) changes no scenario file.
@@ -2478,6 +2507,8 @@ async def _validate_and_repair(
                 from .scenario_tools import load_scenarios
 
                 keys_before = {one.scenario_key for one in load_scenarios(authoring)} if held else set()
+                codes = (tally or {}).get("held_cases") or {}
+                replaceable = {key for key in held if codes.get(key) in REPLACEABLE}
                 rewritten = bool(held) and await _rewrite_held_cases(
                     held,
                     authoring,
@@ -2485,6 +2516,7 @@ async def _validate_and_repair(
                     guidance=base_guidance,
                     expected_count=job.scenario_count,
                     seconds=left - (_held_clock() - round_started),
+                    replaceable=replaceable,
                 )
                 if held:
                     print(
@@ -2500,7 +2532,12 @@ async def _validate_and_repair(
                             "round": held_rounds + 1,
                             "held": len(held),
                             "rewritten": rewritten,
-                            "replaced": len(keys_before - kept_keys) if rewritten else 0,
+                            "replaced": [
+                                {"removed": key, "reason": codes.get(key)} for key in sorted(keys_before - kept_keys)
+                            ]
+                            if rewritten
+                            else [],
+                            "added": sorted(kept_keys - keys_before) if rewritten else [],
                             "seconds": round(_held_clock() - round_started, 1),
                         }
                     )

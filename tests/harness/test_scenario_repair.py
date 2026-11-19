@@ -137,3 +137,15 @@ def test_a_held_case_with_no_declared_cell_is_never_replaced() -> None:
         certify_scenario_repair(
             before, after, expected_count=2, diagnostic_codes=set(), replaceable={before[0].scenario_key}
         )
+
+
+def test_a_replacement_that_drops_a_sub_goal_of_the_held_case_is_refused() -> None:
+    before = [_cell("late-refund", _LATE, goals=["refund_refused", "policy_explained"]), _cell("on-time", _ON_TIME)]
+    after = [_cell("late-refund-by-email", _LATE, goals=["policy_explained"]), _cell("on-time", _ON_TIME)]
+    with pytest.raises(ValueError, match="names its sub-goals"):
+        certify_scenario_repair(
+            before, after, expected_count=2, diagnostic_codes=set(), replaceable={before[0].scenario_key}
+        )
+    # Naming them all (and more) stands in for it.
+    after[0] = _cell("late-refund-by-email", _LATE, goals=["refund_refused", "policy_explained", "lookup"])
+    certify_scenario_repair(before, after, expected_count=2, diagnostic_codes=set(), replaceable={before[0].scenario_key})

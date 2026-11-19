@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import Counter
 from collections.abc import Collection
 from enum import Enum
 
@@ -81,8 +80,8 @@ def certify_scenario_repair(
     replaceable: Collection[str] = (),
 ) -> ScenarioRepairReceipt:
     """Reject deletions, renamed tests, reduced checks, count drift, and no-op repair. A case named in `replaceable`
-    (a held case) may be removed when a case added in the same repair covers the same plan cell (`coverage`), one
-    added case for each one removed."""
+    (a held case) may be removed when a case added in the same repair covers the same plan cell (`coverage`) and names
+    every sub-goal it named, one added case for each one removed."""
 
     if len(after) != expected_count:
         raise ValueError("scenario_repair_count_mismatch")
@@ -153,15 +152,24 @@ def _cell(scenario: Scenario) -> tuple[tuple[str, str], ...]:
 def _unreplaced(
     removed: list[str], before: dict[str, Scenario], after: dict[str, Scenario], replaceable: set[str]
 ) -> list[str]:
-    """The removed cases nothing stands in for: not replaceable, or with no added case left in their cell."""
-    added = Counter(_cell(one) for key, one in after.items() if key not in before)
+    """The removed cases nothing stands in for, each with why: not replaceable, or no added case left in its cell that
+    names every sub-goal it named."""
+    added = [one for key, one in after.items() if key not in before]
     unreplaced = []
     for key in removed:
-        cell = _cell(before[key])
-        if key in replaceable and cell and added[cell] > 0:
-            added[cell] -= 1
-        else:
+        held = before[key]
+        cell = _cell(held)
+        if key not in replaceable:
             unreplaced.append(key)
+            continue
+        stand_in = next(
+            (one for one in added if cell and _cell(one) == cell and set(held.sub_goals) <= set(one.sub_goals)),
+            None,
+        )
+        if stand_in is None:
+            unreplaced.append(f"{key} (a replacement covers its plan cell and names its sub-goals)")
+        else:
+            added.remove(stand_in)
     return unreplaced
 
 

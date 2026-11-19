@@ -5278,9 +5278,17 @@ def test_finding_removed_cases_asks_the_platform_for_them(tmp_path, monkeypatch)
     assert kept == {"refund-late": {"name": "refund_late", "instruction": "Ask for a refund."}}
 
 
-def test_a_plan_is_confirmed_once_and_its_changes_then_run_without_asking(tmp_path, monkeypatch):
+def _drop_30():
+    return {"rule": "Refund only within 30 days.", "why": "policy changed"}
+
+
+def _add_20():
+    return {"rule": "Refund only within 20 days.", "why": "policy changed", "replaces": "Refund only within 30 days."}
+
+
+def test_a_plan_is_confirmed_once_and_its_exact_calls_then_run_without_asking(tmp_path, monkeypatch):
     questions = []
-    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "Yes, apply these 3 changes")
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "No")
 
     async def ask(tool, payload, context):
         questions.append(payload)
@@ -5288,39 +5296,59 @@ def test_a_plan_is_confirmed_once_and_its_changes_then_run_without_asking(tmp_pa
 
     runtime._ask = ask
     runtime._turn_message_id = "m1"
-    plan = [
-        {"tool": "drop_rule", "what": "Remove the 30-day refund rule (affects #3, #7)"},
-        {"tool": "add_rule", "what": "Add a 20-day refund rule"},
-        {"tool": "edit_scenario", "what": "#3: refuse a refund on day 25"},
-    ]
+    plan = [{"tool": "drop_rule", "arguments": _drop_30()}, {"tool": "add_rule", "arguments": _add_20()}]
     said = asyncio.run(runtime._confirm_plan(plan))
     assert not said.get("is_error"), said
-    # One question, listing every change, with one Yes for all of them.
+    # One question; each change shown as the call it is, from its own arguments, never the model's summary.
     [question] = questions
-    assert question["question"].startswith("Apply these 3 changes?")
-    assert "2. Add a 20-day refund rule" in question["question"]
-    assert question["options"] == ["Yes, apply these 3 changes", "No"] and question["options_only"] is True
+    assert question["question"].startswith("Apply these 2 changes?")
+    assert "1. drop_rule (rule: Refund only within 30 days.; why: policy changed)" in question["question"]
+    assert question["options"] == ["Yes, apply these 2 changes", "No"] and question["options_only"] is True
 
-    asyncio.run(guarded("drop_rule")({"rule": "30 days", "why": "x"}))
-    asyncio.run(guarded("add_rule")({"rule": "20 days", "why": "x"}))
+    # The listed calls run unasked, arguments in any order.
+    asyncio.run(guarded("drop_rule")(dict(reversed(list(_drop_30().items())))))
+    asyncio.run(guarded("add_rule")(_add_20()))
     assert len(ran) == 2 and len(questions) == 1
-    # A change the plan did not list (a second rule) is asked about on its own.
-    asyncio.run(guarded("add_rule")({"rule": "another", "why": "x"}))
+    # A listed call runs once: the same call again is asked about.
+    asyncio.run(guarded("drop_rule")(_drop_30()))
     assert len(questions) == 2
-    # The next message starts without a plan.
-    runtime._turn_message_id = "m2"
-    asyncio.run(guarded("drop_rule")({"rule": "20 days", "why": "x"}))
-    assert len(questions) == 3
+
+
+def test_a_listed_tool_called_with_other_arguments_is_asked_about(tmp_path, monkeypatch):
+    """A plan approves drop_rule on rule A, never drop_rule on rule B."""
+    asked = []
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda n: "No")
+
+    async def yes_to_plan(tool, payload, context):
+        asked.append(tool)
+        return {"content": [{"type": "text", "text": payload["options"][0] if tool == "confirm_plan" else "No"}]}
+
+    runtime._ask = yes_to_plan
+    runtime._turn_message_id = "m1"
+    asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "arguments": _drop_30()}]))
+
+    asyncio.run(guarded("drop_rule")({"rule": "Never sell more than 130 items.", "why": "policy changed"}))
+
+    assert asked == ["confirm_plan", "drop_rule"] and ran == []
+
+
+def test_a_plan_without_exact_arguments_is_not_offered(tmp_path, monkeypatch):
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda n: "Yes, apply this change")
+    runtime._turn_message_id = "m1"
+
+    said = asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "what": "Remove the 30-day rule"}]))
+
+    assert said["is_error"] and "exact arguments" in said["content"][0]["text"] and offered == []
 
 
 def test_a_plan_the_person_turns_down_makes_no_change(tmp_path, monkeypatch):
     runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "No")
     runtime._turn_message_id = "m1"
 
-    said = asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "what": "Remove the 30-day rule"}]))
+    said = asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "arguments": _drop_30()}]))
 
     assert said["is_error"] and "did not approve" in said["content"][0]["text"]
-    asyncio.run(guarded("drop_rule")({"rule": "30 days", "why": "x"}))
+    asyncio.run(guarded("drop_rule")(_drop_30()))
     assert ran == [] and len(offered) == 2
 
 
@@ -5328,12 +5356,11 @@ def test_a_plan_approved_for_one_message_is_not_used_for_the_next(tmp_path, monk
     runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "No")
 
     async def yes(tool, payload, context):
-        offered.append(payload["options"])
         return {"content": [{"type": "text", "text": payload["options"][0]}]}
 
     runtime._ask = yes
     runtime._turn_message_id = "m1"
-    asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "what": "Remove the 30-day rule"}]))
+    asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "arguments": _drop_30()}]))
     asked = []
 
     async def no(tool, payload, context):
@@ -5342,5 +5369,5 @@ def test_a_plan_approved_for_one_message_is_not_used_for_the_next(tmp_path, monk
 
     runtime._ask = no
     runtime._turn_message_id = "m2"
-    asyncio.run(guarded("drop_rule")({"rule": "30 days", "why": "x"}))
+    asyncio.run(guarded("drop_rule")(_drop_30()))
     assert ran == [] and len(asked) == 1

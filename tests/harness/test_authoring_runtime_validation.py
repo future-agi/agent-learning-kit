@@ -3964,19 +3964,29 @@ def test_a_build_with_as_many_runnable_cases_as_it_asked_for_hands_nothing_back(
 
 def test_a_build_short_of_what_it_asked_for_hands_its_held_cases_back_and_records_each_round(tmp_path, monkeypatch):
     held = {"late": "negative_control_passed", "lost": "not_solvable"}
-    first = (held, _tally(3, 5, negative_control_passed=1, not_solvable=1))
+    first = (
+        held,
+        {**_tally(3, 5, negative_control_passed=1, not_solvable=1),
+         "held_cases": {"late": "negative_control_passed", "lost": "not_solvable"}},
+    )
     second = ({}, _tally(5, 5))
     from fi.alk.harness import authoring_runtime_validation as module
 
-    async def rewrite(held, authoring, *, repair, guidance, expected_count, seconds=300):
-        await repair("scenarios", module.held_case_guidance(held))
+    passed = []
+
+    async def rewrite(held, authoring, *, repair, guidance, expected_count, seconds=300, replaceable=()):
+        passed.append(set(replaceable))
+        await repair("scenarios", module.held_case_guidance(held, replaceable))
         return True
 
     monkeypatch.setattr(module, "_rewrite_held_cases", rewrite)
     calls, guidance, _controller = _held_loop(tmp_path, monkeypatch, [first, second], scenario_count=5)
 
     assert calls == ["validate", "validate"] and len(guidance) == 1
-    assert "replace it instead: write a new case for the same plan cell" in guidance[0][1]
+    # Only the case held for how it is grounded may be replaced; the one whose checks pass a wrong behaviour is repaired.
+    assert passed == [{"lost"}]
+    assert "- lost: not_solvable [may be replaced]" in guidance[0][1]
+    assert "- late: negative_control_passed\n" in guidance[0][1] + "\n"
     record = json.loads((tmp_path / "authoring" / "generic-harness" / "yield.json").read_text(encoding="utf-8"))
     assert (record["asked"], record["runnable"], record["held"]) == (5, 5, {})
     assert [(one["round"], one["held"], one["rewritten"]) for one in record["rounds"]] == [(1, 2, True)]
@@ -4060,7 +4070,12 @@ def test_reading_held_cases_counts_runnable_and_held_from_the_proofs(tmp_path, m
     held, tally = read_held(tmp_path, budget=60)
 
     assert held == {"late": "it calls issue_refund"}
-    assert tally == {"runnable": 2, "cases": 4, "held": {"negative_control_passed": 1, "validation_incomplete": 1}}
+    assert tally == {
+        "runnable": 2,
+        "cases": 4,
+        "held": {"negative_control_passed": 1, "validation_incomplete": 1},
+        "held_cases": {"late": "negative_control_passed"},
+    }
 
 
 def test_a_held_case_replaced_by_a_case_in_its_own_cell_is_kept(tmp_path):
@@ -4085,6 +4100,58 @@ def test_a_held_case_replaced_by_a_case_in_its_own_cell_is_kept(tmp_path):
         write_scenarios([*kept, new], root)
         return 0
 
+    snapshot = {p: p.read_bytes() for p in (root / "scenarios").rglob("*") if p.is_file()}
+    # Held for a reason it must repair, it is never swapped: the replacement is undone.
+    assert asyncio.run(module._rewrite_held_cases({held_key: "negative_control_passed"}, root, repair=repair,
+                                                  guidance="", expected_count=2)) is False
+    assert sorted(one.name for one in load_scenarios(root)) == ["held", "kept"]
+    import shutil
+
+    shutil.rmtree(root / "scenarios")
+    for path, body in snapshot.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
     assert asyncio.run(module._rewrite_held_cases({held_key: "not_solvable"}, root, repair=repair, guidance="",
-                                                  expected_count=2)) is True
+                                                  expected_count=2, replaceable={held_key})) is True
     assert sorted(one.name for one in load_scenarios(root)) == ["held-by-email", "kept"]
+
+
+def test_a_case_held_for_how_it_is_grounded_is_handed_back_to_be_replaced(tmp_path, monkeypatch):
+    from fi.alk.harness import prove_suite as suite_module
+    from fi.alk.harness.authoring_runtime_validation import read_held
+
+    proofs = {
+        "missing": {"proved": False, "blocked_reason": "not_ready", "why": "order O-999 is not in the world"},
+        "no-tool": {"proved": False, "blocked_reason": "tool_not_on_agent", "why": "it calls refund_v2"},
+    }
+    monkeypatch.setattr(suite_module, "prove_suite", lambda *args, **kwargs: proofs)
+
+    held, tally = read_held(tmp_path, budget=60)
+
+    assert set(held) == {"missing", "no-tool"}
+    assert tally["held_cases"] == {"missing": "not_ready", "no-tool": "tool_not_on_agent"}
+
+
+def test_each_replacement_is_recorded_with_the_reason_it_was_allowed(tmp_path, monkeypatch):
+    from fi.alk.harness import authoring_runtime_validation as module
+    from fi.alk.harness.scenario import Scenario
+
+    on_disk = [["lost", "kept"], ["kept", "lost-by-email"]]
+    monkeypatch.setattr(
+        "fi.alk.harness.scenario_tools.load_scenarios",
+        lambda root: [Scenario(name=key, scenario_key=key, instruction="i") for key in on_disk[0]],
+    )
+
+    async def rewrite(held, authoring, *, repair, guidance, expected_count, seconds=300, replaceable=()):
+        on_disk.pop(0)
+        return True
+
+    monkeypatch.setattr(module, "_rewrite_held_cases", rewrite)
+    first = ({"lost": "order 1046 cannot be refunded"},
+             {**_tally(1, 2, not_solvable=1), "held_cases": {"lost": "not_solvable"}})
+    _held_loop(tmp_path, monkeypatch, [first, ({}, _tally(2, 2))], scenario_count=2)
+
+    record = json.loads((tmp_path / "authoring" / "generic-harness" / "yield.json").read_text(encoding="utf-8"))
+    [round_] = record["rounds"]
+    assert round_["replaced"] == [{"removed": "lost", "reason": "not_solvable"}]
+    assert round_["added"] == ["lost-by-email"]

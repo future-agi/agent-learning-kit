@@ -13,7 +13,7 @@ import time
 import traceback
 import uuid
 from collections import Counter
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
@@ -167,6 +167,24 @@ _ASKS_ALONE = frozenset(
 _SUBMITS = ("submit_scenario", "edit_scenario")
 _CONFIRM = "Yes, make this change"
 _CONFIRM_ALL = "Yes, make every change for this request"
+
+
+def _canonical(arguments: Any) -> str:
+    return json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False)
+
+
+def _call_digest(tool: str, arguments: Any) -> str:
+    """One exact call: its tool and its arguments, canonically ordered."""
+    import hashlib
+
+    return hashlib.sha256(f"{tool}\n{_canonical(arguments)}".encode()).hexdigest()
+
+
+def _call_line(tool: str, arguments: Mapping[str, Any]) -> str:
+    """A call as the person reads it in a plan: the tool and each argument it is called with, as given."""
+    shown = "; ".join(f"{name}: {_canonical(value) if not isinstance(value, str) else value}"
+                      for name, value in sorted(arguments.items()))
+    return f"{tool} ({shown})" if shown else tool
 _NUDGE_NOTE = (
     "\n\nLoad `builder/agent-update` with read_skill first, and end the turn with "
     "report_update."
@@ -730,10 +748,10 @@ class HostedChatRuntime:
         # The message whose turn is running, and the one whose every change the person approved.
         self._turn_message_id = ""
         self._approved_all_in: str | None = None
-        # A plan the person said yes to (`confirm_plan`): the message it answers, and how many calls of each tool it
-        # still covers.
+        # A plan the person said yes to (`confirm_plan`): the message it answers, and the exact calls it still covers,
+        # each by its digest (`_call_digest`), one use per listed call.
         self._plan_turn: str | None = None
-        self._plan_left: dict[str, int] = {}
+        self._plan_left: Counter[str] = Counter()
         # One confirmation open at a time: the platform takes an answer to the latest only.
         self._confirming = asyncio.Lock()
         self._restart_after_turn = False
@@ -1048,9 +1066,10 @@ class HostedChatRuntime:
                 return await handler(args)
             if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
                 return await handler(args)
-            if self._plan_turn == self._turn_message_id and self._plan_left.get(spec.name, 0) > 0:
-                # Part of the plan the person said yes to for this message: asked once, not again per change.
-                self._plan_left[spec.name] -= 1
+            digest = _call_digest(spec.name, args)
+            if self._plan_turn == self._turn_message_id and self._plan_left[digest] > 0:
+                # This very call is part of the plan the person said yes to for this message: asked once, not again.
+                self._plan_left[digest] -= 1
                 return await handler(args)
             alone = spec.name in _ASKS_ALONE
             async with self._confirming:
@@ -1088,16 +1107,18 @@ class HostedChatRuntime:
         return replace(spec, handler=guarded)
 
     async def _confirm_plan(self, changes: list[Any]) -> dict[str, Any]:
-        """One question for a whole plan: each change listed so the person reviews it, one Yes or No for all."""
+        """One question for a whole plan. Each change is a tool and the exact arguments it will be called with; the
+        person reads each as this tool renders it from those arguments (`_call_line`), never the model's own summary,
+        and answers once. On yes, only those exact calls run unasked, each once."""
         listed = [
-            (str(one.get("tool") or "").strip(), " ".join(str(one.get("what") or "").split()))
+            (str(one.get("tool") or "").strip(), one.get("arguments"))
             for one in changes
             if isinstance(one, dict)
         ]
-        listed = [(tool, what) for tool, what in listed if tool and what]
-        if not listed:
-            return {"content": [{"type": "text", "text": "List at least one change, each with its tool and what it "
-                                 "changes."}], "is_error": True}
+        listed = [(tool, arguments) for tool, arguments in listed if tool and isinstance(arguments, dict)]
+        if not listed or len(listed) != len(changes):
+            return {"content": [{"type": "text", "text": "List each change as its tool and the exact arguments you "
+                                 "will call it with."}], "is_error": True}
         yes = f"Yes, apply these {len(listed)} changes" if len(listed) > 1 else "Yes, apply this change"
         async with self._confirming:
             answer = await self._ask(
@@ -1105,7 +1126,7 @@ class HostedChatRuntime:
                 {
                     "question": (f"Apply these {len(listed)} changes?" if len(listed) > 1 else "Apply this change?")
                     + "\n"
-                    + "\n".join(f"{at}. {what}" for at, (_tool, what) in enumerate(listed, 1)),
+                    + "\n".join(f"{at}. {_call_line(tool, arguments)}" for at, (tool, arguments) in enumerate(listed, 1)),
                     "options": [yes, "No"],
                     "options_only": True,
                 },
@@ -1123,9 +1144,9 @@ class HostedChatRuntime:
                 "is_error": True,
             }
         self._plan_turn = self._turn_message_id
-        self._plan_left = dict(Counter(tool for tool, _what in listed))
-        return {"content": [{"type": "text", "text": f"Approved: make the {len(listed)} listed changes now, without "
-                             "asking again."}]}
+        self._plan_left = Counter(_call_digest(tool, arguments) for tool, arguments in listed)
+        return {"content": [{"type": "text", "text": f"Approved: make the {len(listed)} listed calls now, each with "
+                             "exactly the arguments listed; any other call is asked about on its own."}]}
 
     def _changes_situation(self, args: dict[str, Any]) -> bool:
         """Whether a submission changes what an existing scenario tests, not how it is graded."""
@@ -1425,19 +1446,19 @@ class HostedChatRuntime:
 
         @tool(
             "confirm_plan",
-            "Ask the person once to approve every change you are about to make for their message: list each one "
-            "(`tool` it is made with, `what` it changes, in plain words) and they answer Yes or No for the whole "
-            "plan. On Yes, those changes run without asking again during this message, up to the number of each "
-            "tool listed; a change you did not list is asked about on its own. Never ask in your own words whether "
-            "to go ahead.",
+            "Ask the person once to approve every change you are about to make for their message: list each one as "
+            "the `tool` and the exact `arguments` you will call it with. The person sees each call as written and "
+            "answers Yes or No for the whole plan. On Yes, each listed call runs once without asking again during "
+            "this message; a call with any other arguments, or one you did not list, is asked about on its own. "
+            "Never ask in your own words whether to go ahead.",
             schema(
                 {
                     "changes": {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "properties": {"tool": {"type": "string"}, "what": {"type": "string"}},
-                            "required": ["tool", "what"],
+                            "properties": {"tool": {"type": "string"}, "arguments": {"type": "object"}},
+                            "required": ["tool", "arguments"],
                         },
                     }
                 },
