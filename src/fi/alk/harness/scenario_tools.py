@@ -71,11 +71,12 @@ from .folder import (
     write_index,
 )
 from .checks import reference_of, run_check
-from .proofs import proof_key, record_proof, record_unprovable
+from .proofs import load_proofs, proof_key, record_proof, record_unprovable
 from .understand import load as load_contract
 from .prove import (
     BlockedReason,
     distinctive_goals,
+    misses_case_goals,
     refuses_keeping,
     executes,
     native_runtime,
@@ -2062,6 +2063,26 @@ def _coverage_gaps(coverage: dict[str, Any]) -> str:
 SAVE_REFUSALS_BEFORE_ACCEPTING = 2
 
 
+def controls_off_their_case(kept: list[Scenario], world_root: Path) -> list[str]:
+    """Each case whose saved proof shows its negative controls break only goals the whole suite shares. A submit
+    judges a case against the cases kept so far, so the first ones and any judged before later cases narrowed what
+    is shared are judged again here, against the suite as it is saved."""
+    proofs = load_proofs(world_root)
+    out: list[str] = []
+    for one in kept:
+        goals = distinctive_goals(one, kept)
+        entry = proofs.get(proof_key(one)) or {}
+        if misses_case_goals(
+            entry.get("controls") or [], entry.get("evidence") or {}, goals, judged_only=bool(entry.get("judged_only"))
+        ):
+            out.append(
+                f"{one.name}: its negative controls only make checks fail that every scenario in this suite shares. "
+                "Write the most plausible wrong behaviour for this case, naming in must_fail one of: "
+                + ", ".join(goals)
+            )
+    return out
+
+
 def scenario_tools(
     contract: AgentContract,
     world_root: Path,
@@ -3388,7 +3409,8 @@ def scenario_tools(
             except Exception as unreadable:  # noqa: BLE001 - advisory only, never fatal
                 logger.warning("suite remark skipped: %s", unreadable)
         diversity = (
-            suite_diversity_problems(kept)
+            controls_off_their_case(kept, world_root)
+            + suite_diversity_problems(kept)
             + keyword_problems(kept)
             + safety_allowance_problems(kept)
             + duplicated_branches(kept)

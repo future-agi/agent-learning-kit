@@ -1807,3 +1807,17 @@ def test_a_builder_add_leaves_the_cases_it_did_not_write_byte_identical(tmp_path
     assert {one.name: one.keywords for one in load_scenarios(root)}["adds-two-big-macs"] == [
         "Cart order"
     ]
+
+
+def test_a_save_is_refused_while_a_case_s_controls_break_only_what_the_suite_shares(tmp_path, monkeypatch):
+    from fi.alk.harness import scenario_tools as tools_module
+
+    root = _suite(tmp_path, "adds-a-big-mac")
+    scenarios, _server, _catalogue, _kept = _session(root, "suite")
+    monkeypatch.setattr(
+        tools_module, "controls_off_their_case", lambda kept, world_root: [f"{kept[0].name}: shared control"]
+    )
+
+    saved = _call(scenarios, "save_scenarios", {})
+
+    assert saved.get("is_error") and "adds-a-big-mac: shared control" in saved["content"][0]["text"], saved

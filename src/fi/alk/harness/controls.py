@@ -59,8 +59,9 @@ def played_control(control: NegativeControl, outcomes: Sequence[Outcome], assume
         "ran": ran,
         "failed": any(not one.held and not one.broken for one in outcomes if one.name in named) if ran else None,
         "held": [one.name for one in outcomes if one.held],
-        # Every check the control's steps made fail, named or not, whether or not every step ran.
-        "failing": [one.name for one in outcomes if not one.held and not one.broken],
+        # The checks the control names that its steps made fail, whether or not every step ran: a check it does not
+        # name failing only because the control did less (nothing refunded after a wrong lookup) shows nothing.
+        "failing": [one.name for one in outcomes if one.name in named and not one.held and not one.broken],
         "broken": [one.name for one in outcomes if one.broken and one.name in named],
         "assumed": assumed,
     }
