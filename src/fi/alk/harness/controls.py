@@ -42,10 +42,15 @@ def play_controls(
             outcomes = [run_check(source, world, calls, name=name, reference=reference) for name, source in checks]
         finally:
             world.close()
-        solved = {str(step.tool) for step in getattr(scenario, "solution", None) or ()}
-        unmatched = sorted({call.name for call in calls if call.ok and not call.refused and call.name not in solved})
-        played.append(played_control(control, outcomes, assumed, unmatched))
+        played.append(played_control(control, outcomes, assumed, unmatched_calls(scenario, calls)))
     return played
+
+
+def unmatched_calls(scenario: Scenario, calls: Sequence[Call]) -> list[str]:
+    """The tools a control called that went through and that the reference never calls: the wrong action itself, when
+    a refusal is the case."""
+    solved = {str(step.tool) for step in getattr(scenario, "solution", None) or ()}
+    return sorted({call.name for call in calls if call.ok and not call.refused and call.name not in solved})
 
 
 def played_control(

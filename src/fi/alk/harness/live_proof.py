@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from .catalogue import Catalogue, load_catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
-from .controls import control_broken, played_control
+from .controls import control_broken, played_control, unmatched_calls
 from .folder import apply_setup, check_ready
 from .json_file import write_json_atomic
 from .outbound import redact_outbound_text
@@ -191,7 +191,9 @@ async def prove_live(
                          "error": redact_outbound_text(f"{type(exc).__name__}: {exc}")[:300]}
                     )
                     continue
-                controls.append(played_control(control, outcomes, control_assumed))
+                controls.append(
+                    played_control(control, outcomes, control_assumed, unmatched_calls(scenario, control_calls))
+                )
         except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play keeps its offline proof
             logger.warning("live proof skipped for %s: %s", key, redact_outbound_text(f"{type(exc).__name__}: {exc}"))
             continue

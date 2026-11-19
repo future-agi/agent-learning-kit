@@ -1051,3 +1051,25 @@ def test_an_older_service_s_missing_field_spelling_reads_the_same(monkeypatch, t
     saved = _validated(monkeypatch, tmp_path, refund_case(), older)
 
     assert saved["kept_as_written"] is True and saved["assumed"] == ["lookup_order", "refund_order"]
+
+
+def test_on_the_live_runtime_a_passing_control_names_the_call_no_check_reads(monkeypatch, tmp_path):
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [_refused_by_the_agent(["looked_up"])])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(looked_up=REFUND_CATALOGUE["looked_up"]))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    stack = Stack()
+    results = asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path,
+            contract=_contract({"lookup_order": "service", "refund_order": "service"}),
+            runtime=stack,
+            provider=stack,
+            factory=stack,
+            work=tmp_path,
+        )
+    )
+
+    control = results["refuse_not_the_buyer"]["controls"][0]
+    assert control["failed"] is False and control["unmatched"] == ["refund_order"]
+    proof = live_proof.apply_live(Proof(deferred=True), results["refuse_not_the_buyer"])
+    assert "it called refund_order, which the reference never calls, and no check fails on that" in proof.why()
