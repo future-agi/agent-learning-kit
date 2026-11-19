@@ -21,6 +21,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
 
+from .json_file import write_json_atomic
+
 CATALOGUE = "sub_goals.json"
 
 class SubGoal(BaseModel):
@@ -575,10 +577,8 @@ def save_catalogue(catalogue: Catalogue, destination: Path) -> Path:
         if goal.get("subject") == "task":
             # A task check is written exactly as before the field existed.
             goal.pop("subject", None)
-    path.write_text(
-        json.dumps(body, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    # Whole or not at all: writers add sub-goals side by side and a reader never sees half a catalogue.
+    write_json_atomic(path, body, sort_keys=False)
     return path
 
 
