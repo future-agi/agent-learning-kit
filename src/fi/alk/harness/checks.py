@@ -148,11 +148,11 @@ def same_id(first: Any, second: Any) -> bool:
 # A number as text: an optional sign, a currency (a symbol, a code or a word, before or after), thousands commas, a
 # fraction. A leading zero (`007`) is an identifier's, never a number's.
 _NUMBER_TEXT = re.compile(
-    r"^(?P<sign>[-+]?)(?P<before>[$€£₹]|[A-Za-z]{3}(?=\s?\d))?\s?"
-    r"(?P<digits>(?:0|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?:\.\d+)?)\s?(?P<after>[A-Za-z]+)?$"
+    r"^(?P<sign>[-+]?)(?P<before>US\$|[$€£₹]|Rs\.?|[A-Za-z]{3}(?=\s?\d))?\s?"
+    r"(?P<digits>(?:0|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?:\.\d+)?)\s?(?P<after>[A-Za-z]+\.?)?$"
 )
 _CURRENCIES = {
-    "$": "USD", "€": "EUR", "£": "GBP", "₹": "INR",
+    "$": "USD", "us$": "USD", "€": "EUR", "£": "GBP", "₹": "INR", "rs": "INR", "rs.": "INR",
     "dollar": "USD", "dollars": "USD", "euro": "EUR", "euros": "EUR",
     "pound": "GBP", "pounds": "GBP", "rupee": "INR", "rupees": "INR",
 }
