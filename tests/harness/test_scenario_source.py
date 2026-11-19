@@ -3388,3 +3388,38 @@ def test_submitting_a_case_on_a_context_only_row_is_refused(tmp_path: Path) -> N
     )
 
     assert said.get("is_error") and "2001 is only in knowledge/orders.csv" in said["content"][0]["text"], said
+
+
+def test_a_records_file_led_by_a_date_or_an_amount_refuses_no_case_on_a_served_record(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    (root / "knowledge" / "orders.csv").write_text(
+        "delivered_on,amount,order_id\n2026-11-01,89.00,1043\n2026-11-02,210.00,2001\n", encoding="utf-8"
+    )
+    since = Scenario(
+        name="refund-since",
+        instruction="You want a refund.",
+        solution=[{"tool": "get_order", "arguments": {"order_id": "1043", "since": "2026-11-02"}}],
+    )
+    world = SimpleNamespace(state=lambda: {})
+
+    assert _records_only_a_context_file_holds(since, world, root) == []
+    assert "2001" in _records_only_a_context_file_holds(_order_case("2001"), world, root)[0]
+
+
+def test_a_column_the_tools_argument_names_match_is_read_as_ids(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    (root / "knowledge" / "orders.csv").write_text("item,ref\nTent,R-2001\n", encoding="utf-8")
+    case = Scenario(name="by-ref", instruction="x", solution=[{"tool": "get_order", "arguments": {"ref": "R-2001"}}])
+
+    said = _records_only_a_context_file_holds(case, SimpleNamespace(state=lambda: {}), root)
+    assert said and "R-2001" in said[0]
