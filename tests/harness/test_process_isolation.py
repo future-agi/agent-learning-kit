@@ -68,6 +68,27 @@ def test_the_granted_capabilities_turn_on_per_user_isolation(tmp_path, monkeypat
     assert enabled == [subtree]  # every customer execution in a cgroup of its own
 
 
+def test_per_user_isolation_never_changes_the_harness_s_own_user(tmp_path, monkeypatch):
+    """Only the harness's children switch users. The harness keeps its own, so the files it writes privately (proofs
+    under umask 077) stay readable to the sandbox user that packs and downloads them."""
+    switched = []
+    for name in ("setuid", "seteuid", "setreuid", "setresuid", "setgid", "setegid", "setregid", "setresgid"):
+        monkeypatch.setattr(privilege.os, name, lambda *args, name=name: switched.append(name), raising=False)
+    monkeypatch.setattr(privilege, "_clear_ambient_capabilities", lambda: None)
+    monkeypatch.setattr(privilege.containment, "enable", lambda subtree: None)
+    before = os.umask(0o022)
+    try:
+        mode = privilege.establish_isolation(
+            {privilege.ISOLATION_ENV: "required"},
+            status_path=_status(tmp_path, _ALL),
+            protected_hardlinks=_hardlinks(tmp_path),
+            contain=lambda: privilege.containment.Containment(tmp_path / "cgroup"),
+        )
+    finally:
+        os.umask(before)
+    assert mode is IsolationMode.PER_USER and switched == []
+
+
 def test_a_required_isolation_without_containment_refuses_to_start(tmp_path, monkeypatch):
     monkeypatch.setattr(
         privilege, "_clear_ambient_capabilities", lambda: pytest.fail("isolation went on")
