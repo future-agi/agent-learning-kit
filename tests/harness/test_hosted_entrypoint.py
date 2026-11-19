@@ -3227,11 +3227,21 @@ def test_a_receipt_note_with_a_secret_across_the_platform_s_limit_never_sends_pa
     assert "sk-live-" not in sent and "qqqq" not in sent
 
 
-def test_a_receipt_note_whose_url_credentials_grow_when_masked_still_fits_the_platform_s_limit() -> None:
+def test_a_receipt_note_whose_url_credentials_are_dropped_fits_the_limit() -> None:
+    # The cleaner drops a URL's userinfo outright (TH-9500), so this note shrinks when cleaned.
     sent = _receipt_reason_sent("did not reach the agent: " + "s://u:p@h " * 47)
 
+    assert len(sent) <= he._RECEIPT_REASON_MAX_CHARS
+    assert "u:p" not in sent and "p@" not in sent
+
+
+def test_a_receipt_note_that_grows_when_cleaned_is_cut_to_the_limit() -> None:
+    # Each "token=a1b2 " (11 chars) becomes "token=[redacted] " (17), so 47 of them pass the
+    # limit only after cleaning: the note must be cleaned before it is cut.
+    sent = _receipt_reason_sent("did not reach the agent: " + "token=a1b2 " * 47)
+
     assert len(sent) <= he._RECEIPT_REASON_MAX_CHARS and sent.endswith("…[truncated]")
-    assert ":p@" not in sent and "s://u:***@h" in sent
+    assert "a1b2" not in sent
 
 
 def test_cancel_before_provision_skips_provisioning_entirely() -> None:
@@ -5693,6 +5703,26 @@ def test_activity_events_in_the_job_response_lose_url_credentials(tmp_path, monk
     assert payload["text"] == "grep found: hook = 'https://hooks.example/v1"
     assert payload["detail"] == {"target": "https://hooks.example/v1", "path": "agent.py"}
     assert "hunter2" not in events and "sk-1" not in events
+
+
+def test_a_tool_result_is_cleaned_before_it_is_cut_at_600_characters():
+    """TH-9500 X1 (plan v1.1 section 6, r1 M1): session.py:388 cleans before it cuts, so a key
+    past character 597 is masked whole, and a query URL before it can't move the cut rules."""
+    from fi.alk.harness.backends.base import SessionSpec, ToolReturned
+    from fi.alk.harness.session import RESULT, Stage, Turn
+
+    key = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+    # Cut first, 6 of the key's characters would be left before the "...": too few for the
+    # rule that masks a key cut short.
+    text = "see https://h.example/x?a=1 then " + "y " * 277 + key
+    assert text.index(key) + len("ghp_A1b2C3") == 597
+    stage = Stage(SessionSpec(system_prompt=""), name="understand")
+
+    [event] = stage._events(ToolReturned(id="c1", text=text), Turn())
+
+    assert event.kind == RESULT
+    assert "A1b2C3" not in event.text
+    assert event.text == "see https://h.example/x then " + "y " * 277 + "[redacted]"
 
 
 def test_the_activity_printed_to_stdout_loses_url_credentials(capsys, monkeypatch):

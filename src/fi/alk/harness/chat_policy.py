@@ -106,7 +106,8 @@ def apply_chat_policy(
             permission_override=spec.permission_override,
             idle_timeout_seconds=spec.idle_timeout_seconds,
             conversation=spec.conversation,
-            workers=dict(spec.workers),
+            # No workers either: each brings its own tools, so the stage could still act.
+            workers={},
         )
     builtins = tuple(
         name

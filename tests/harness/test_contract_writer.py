@@ -385,6 +385,20 @@ def test_write_contract_keeps_the_record_saved_beside_the_contract(
     ) == runtime_repair._contract_hash(held)
 
 
+def test_write_contract_keeps_made_by_inside_the_saved_record(tmp_path: Path) -> None:
+    held = _full_contract()
+    record = {**RECORD, "made_by": {"kit_version": "0.3.0", "build_id": "abc1234"}}
+    body = {**held.model_dump(), contract_module.READING_RECORD: record}
+    (tmp_path / "contract.json").write_text(json.dumps(body), encoding="utf-8")
+
+    write_contract(held, tmp_path)
+    write_contract(held, tmp_path)
+    again = json.loads((tmp_path / "contract.json").read_text(encoding="utf-8"))
+
+    assert _canon(again[contract_module.READING_RECORD]) == _canon(record)
+    assert "made_by" not in again
+
+
 @pytest.mark.parametrize(
     "saved",
     [
@@ -609,7 +623,7 @@ def test_one_save_logs_one_line_however_many_urls_are_refused(
 
     logged = [record for record in caplog.records if record.name == "fi.alk.providers.agent"]
     assert [record.getMessage() for record in logged] == [
-        "a URL was redacted whole: class=ValueError"
+        "secrets redacted: url=ValueError"
     ]
     assert PASSWORD not in caplog.text
     assert PASSWORD not in (tmp_path / "contract.json").read_text(encoding="utf-8")
