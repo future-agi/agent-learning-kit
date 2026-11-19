@@ -3789,12 +3789,13 @@ def test_a_rewrite_that_only_edits_a_passing_case_changes_nothing(tmp_path):
 
 
 def test_a_spent_time_budget_never_reads_or_hands_back_held_cases(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HELD_CASE_REPAIR_SECONDS", "0")
     asked = []
     calls, guidance, controller = _held_loop(
         tmp_path,
         monkeypatch,
         [{"case": "unchecked"}],
-        budgets=RepairBudgets(held_case_seconds=0),
+        budgets=RepairBudgets(),
         asked=asked,
     )
     # Not even the proof that finds held cases runs.
@@ -3835,7 +3836,21 @@ def test_the_held_case_rounds_stop_when_their_time_budget_runs_out(tmp_path, mon
     monkeypatch.setattr(module, "_held_clock", lambda: next(clock))
     held = {"case": "negative_control_passed"}
     # Each read of the clock moves 100 s on: one round fits in 250 s, a second never starts.
-    calls, guidance, _ = _held_loop(
-        tmp_path, monkeypatch, [held] * 5, budgets=RepairBudgets(held_case_seconds=250)
-    )
+    monkeypatch.setenv("ALK_HELD_CASE_REPAIR_SECONDS", "250")
+    calls, guidance, controller = _held_loop(tmp_path, monkeypatch, [held] * 5, budgets=RepairBudgets())
     assert len(guidance) == 1 and calls == ["validate", "validate"]
+    # Out of time, the cases stay held and the validation still passes.
+    assert controller.history.decisions[-1].action is RepairAction.CERTIFY
+
+
+@pytest.mark.parametrize(
+    "setting,seconds",
+    [(None, 1200.0), ("3600", 3600.0), ("0", 0.0), ("soon", 1200.0), ("-5", 1200.0), ("999999", 1200.0)],
+    ids=["default-20-minutes", "longer", "off", "not-a-number", "negative", "beyond-the-ceiling"],
+)
+def test_the_held_case_budget_is_generous_and_set_by_its_environment_setting(monkeypatch, setting, seconds):
+    if setting is None:
+        monkeypatch.delenv("ALK_HELD_CASE_REPAIR_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("ALK_HELD_CASE_REPAIR_SECONDS", setting)
+    assert RepairBudgets().held_case_seconds == seconds
