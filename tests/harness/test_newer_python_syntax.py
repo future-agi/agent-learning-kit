@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from fi.alk.harness.python_source import newer_syntax, unparsed_note
+from fi.alk.harness.python_source import newer_syntax, parsed_or_syntax_error, unparsed_note
 
 pytestmark = pytest.mark.skipif(
     sys.version_info >= (3, 13), reason="the kit's own interpreter is 3.12; 3.13 parses these"
@@ -40,10 +40,39 @@ def test_a_newer_python_construct_is_named(source, python, construct) -> None:
         "class Box[T: int]:\n    pass\n",  # 3.12 syntax, parses
         "try:\n    pass\nexcept (ValueError, TypeError):\n    pass\n",
         "d = {'a': 1}\nprint(d['a'])\n",
+        # A newer construct that is not the whole failure: 3.14 can't parse these either.
+        'try:\n    pass\nexcept ValueError, e:\n    print "hello"\n',
+        'x = t"a"\nprint "b"\n',
     ],
 )
 def test_nothing_else_is_called_newer_syntax(source) -> None:
     assert newer_syntax(source) is None
+    tree = parsed_or_syntax_error(source)
+    if isinstance(tree, SyntaxError):
+        assert newer_syntax(source, line=tree.lineno) is None
+
+
+def test_a_file_a_newer_construct_does_not_explain_is_a_plain_error(tmp_path) -> None:
+    (tmp_path / "py2").mkdir()
+    (tmp_path / "py2" / "legacy.py").write_text(
+        'try:\n    pass\nexcept ValueError, e:\n    print "hello"\n', encoding="utf-8"
+    )
+    (tmp_path / "mix").mkdir()
+    (tmp_path / "mix" / "both.py").write_text('x = t"a"\nprint "b"\n', encoding="utf-8")
+
+    assert {one["path"]: one["python"] for one in unparsed_note(tmp_path)["unparsed"]} == {
+        "mix/both.py": "",
+        "py2/legacy.py": "",
+    }
+
+
+def test_the_newest_construct_on_the_stopping_line_is_named() -> None:
+    text = 'class Box[T=int](t"x"):\n    pass\n'
+    assert newer_syntax(text) == ("3.14", "a template string")
+    assert newer_syntax(text, line=parsed_or_syntax_error(text).lineno) == (
+        "3.14",
+        "a template string",
+    )
 
 
 def test_the_files_the_kits_python_cannot_parse_are_listed(tmp_path) -> None:

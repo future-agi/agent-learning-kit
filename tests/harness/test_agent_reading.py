@@ -424,8 +424,14 @@ def test_a_document_naming_an_unparsed_file_is_a_valid_stored_agent(tmp_path, mo
     output = tmp_path / "reading"
     written = (output / "agent.json").read_bytes()
     document = json.loads(written)
-    assert [one["path"] for one in document["agent"]["extension"]["source"]["unparsed"]] == [
-        "broken.py"
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert document["agent"]["extension"]["source"]["unparsed"] == [
+        {
+            "path": "broken.py",
+            "python": "",
+            "reason": f"broken.py doesn't parse on Python {version} (line 1), "
+            "so this file was not read",
+        }
     ]
     # The hash covers the note: the platform validates the stored agent this way.
     Agent.model_validate(document["agent"])

@@ -14,6 +14,7 @@ import functools
 import io
 import logging
 import re
+import sys
 import tokenize
 import unicodedata
 from collections.abc import Iterable
@@ -617,13 +618,15 @@ def _marks_in(char: str) -> tuple[bool, int]:
     return trailing == len(decomposed), trailing
 
 
-# --- Source written for a newer Python than the kit's own (TH-8802) --------------------------
+# --- Source written for a newer Python than the one reading it --------------------------------
 #
-# The kit reads a customer's Python with its own interpreter, the hosted image's 3.12. The image
-# runs customers' code on 3.13 and 3.14 as well, and three constructs of those versions don't
-# parse on 3.12. A file using one is named with the version it needs; any other syntax error is
-# named as one, never as newer syntax.
-KIT_PYTHON = "3.12"
+# The kit reads a customer's Python with the Python it runs on: the hosted image's 3.12, or the
+# user's own for a local reading. Customers' code may be written for a newer one, and three
+# constructs of 3.13 and 3.14 don't parse on older ones. A file is named with the version it needs
+# only when those constructs are the whole reason it doesn't parse; any other syntax error is
+# named as one.
+KIT_PYTHON = f"{sys.version_info.major}.{sys.version_info.minor}"
+_KIT_VERSION = sys.version_info[:2]
 _TEMPLATE_PREFIXES = frozenset({"t", "tr", "rt"})
 _NOT_AGENT_CODE = frozenset({"tests", "test", "node_modules", "site-packages", "venv", "__pycache__"})
 _UNPARSED_LISTED = 50
@@ -633,20 +636,27 @@ _UNPARSED_WALK_TOTAL = 4 * 1024 * 1024
 # And a count, as framework detection has: past it the rest is not checked, and the flag says so.
 _UNPARSED_WALK_FILES = 5000
 
+# An edit to a line: (row, start column, end column, replacement), columns in characters.
+_Edit = tuple[int, int, int, str]
+
 
 def newer_syntax(
     text: str, *, budget: TokenBudget | None = None, line: int | None = None
 ) -> tuple[str, str] | None:
-    """``(python, construct)`` for a 3.13 or 3.14 construct in ``text``, or None.
+    """``(python, construct)`` for a construct of a Python newer than this one that is the whole
+    reason ``text`` doesn't parse here, or None.
 
-    Read from the tokens, which 3.12 still makes for these files: a type parameter default
-    (3.13, ``class Box[T=int]``), a template string (3.14, ``t'...'``) and an except clause
-    naming several exceptions without parentheses (3.14). The newest one found is named.
+    Read from the tokens, which an older Python still makes for these files: a type parameter
+    default (3.13, ``class Box[T=int]``), a template string (3.14, ``t'...'``) and an except
+    clause naming several exceptions without parentheses (3.14). Each one found is rewritten to
+    the form this Python reads (the default dropped, the ``t`` dropped, the list put in
+    parentheses) and the file parsed again: only when that parses is the newest construct named.
+    Otherwise the file stops for something else too (``print "hi"`` from Python 2), and no newer
+    Python reads it either.
 
-    Given ``line``, where 3.12's parser stopped, a construct must sit on it: otherwise the file
-    stops for something else first (``print "hi"`` in Python 2), and no newer Python reads it
-    either. Given ``budget``, the scan's tokenizing is charged to it, and None is the answer
-    once it runs out: a crafted line costs the tokenizer the square of its length.
+    Given ``line``, where this Python's parser stopped, a construct must sit on it before the
+    file is parsed again. Given ``budget``, the scan's tokenizing is charged to it, and None is
+    the answer once it runs out: a crafted line costs the tokenizer the square of its length.
     """
     try:
         if budget is None:
@@ -657,6 +667,7 @@ def newer_syntax(
         return None
     tokens = [token for token in raw if token.type not in (tokenize.NL, tokenize.COMMENT)]
     found: list[tuple[str, str]] = []
+    edits: list[_Edit] = []
     lines: set[int] = set()
     for index, token in enumerate(tokens):
         after = tokens[index + 1] if index + 1 < len(tokens) else None
@@ -667,67 +678,107 @@ def newer_syntax(
             and after.type == tokenize.STRING
             and after.start == token.end
         ):
-            found.append(("3.14", "a template string"))
-        elif token.type == tokenize.NAME and token.string == "except" and _bare_except_list(
-            tokens, index + 1
+            made = ("3.14", "a template string")
+            # A raw template keeps its r.
+            kept = "r" if "r" in token.string.lower() else ""
+            change = [(token.start[0], token.start[1], token.end[1], kept)]
+        elif token.type == tokenize.NAME and token.string == "except" and (
+            listed := _bare_except_list(tokens, index + 1)
         ):
-            found.append(("3.14", "an except clause without parentheses"))
-        elif (
-            token.type == tokenize.NAME
-            and token.string in ("class", "def", "type")
-            and _type_parameter_default(tokens, index + 1)
+            made = ("3.14", "an except clause without parentheses")
+            first, colon = listed
+            change = [
+                (colon.start[0], colon.start[1], colon.start[1], ")"),
+                (first.start[0], first.start[1], first.start[1], "("),
+            ]
+        elif token.type == tokenize.NAME and token.string in ("class", "def", "type") and (
+            defaults := _type_parameter_defaults(tokens, index + 1)
         ):
-            found.append(("3.13", "a type parameter default"))
+            made = ("3.13", "a type parameter default")
+            change = defaults
         else:
             continue
+        if tuple(int(part) for part in made[0].split(".")) <= _KIT_VERSION:
+            # This Python reads it.
+            continue
+        found.append(made)
+        edits.extend(change)
         lines.add(token.start[0])
-    if line is not None and line not in lines:
+    if not found or (line is not None and line not in lines):
         return None
-    return max(found, default=None)
+    rewritten = parsed_or_syntax_error(_apply(text, edits))
+    if rewritten is None or isinstance(rewritten, SyntaxError):
+        return None
+    return max(found)
 
 
-def _bare_except_list(tokens: list[tokenize.TokenInfo], start: int) -> bool:
-    """An except clause's exceptions, up to its colon, listed with a comma and no parentheses
-    around the list: ``except (KeyError), ValueError:`` is one."""
+def _apply(text: str, edits: list[_Edit]) -> str:
+    """``text`` with ``edits`` made, the last first so earlier columns stay where they were."""
+    rows = text.splitlines(keepends=True)
+    for row, start, end, replacement in sorted(edits, reverse=True):
+        if 0 < row <= len(rows):
+            one = rows[row - 1]
+            rows[row - 1] = one[:start] + replacement + one[end:]
+    return "".join(rows)
+
+
+def _bare_except_list(
+    tokens: list[tokenize.TokenInfo], start: int
+) -> tuple[tokenize.TokenInfo, tokenize.TokenInfo] | None:
+    """An except clause's exceptions listed with a comma and no parentheses around the list
+    (``except (KeyError), ValueError:`` is one): its first token and its colon, or None. 3.14
+    reads one only without ``as``."""
     depth = 0
+    listed = False
     for token in tokens[start:]:
         if token.type in (tokenize.NEWLINE, tokenize.ENDMARKER):
-            return False
+            return None
         if token.string in "([{" and token.type == tokenize.OP:
             depth += 1
         elif token.string in ")]}" and token.type == tokenize.OP:
             depth -= 1
         elif depth == 0 and token.string == ":":
-            return False
+            return (tokens[start], token) if listed else None
         elif depth == 0 and token.string == "," and token.type == tokenize.OP:
-            return True
+            listed = True
         elif depth == 0 and token.string == "as":
-            return False
+            return None
         elif token.type == tokenize.NAME and token.string == "except":
             # The next clause: scanning on past it would make a file of excepts quadratic.
-            return False
-    return False
+            return None
+    return None
 
 
-def _type_parameter_default(tokens: list[tokenize.TokenInfo], start: int) -> bool:
-    """``NAME [ ... = ... ]`` after class, def or type: a default inside its type parameters."""
+def _type_parameter_defaults(tokens: list[tokenize.TokenInfo], start: int) -> list[_Edit]:
+    """``NAME [ ... = ... ]`` after class, def or type: an edit dropping each default inside its
+    type parameters, from its ``=`` to the next ``,`` or the closing ``]``. Empty when there is
+    none."""
     if start + 1 >= len(tokens) or tokens[start].type != tokenize.NAME:
-        return False
+        return []
     if tokens[start + 1].string != "[":
-        return False
+        return []
     depth = 0
+    edits: list[_Edit] = []
+    default: tokenize.TokenInfo | None = None
     for token in tokens[start + 1 :]:
+        if token.type in (tokenize.NEWLINE, tokenize.ENDMARKER):
+            return []
+        closes = depth == 1 and token.type == tokenize.OP and token.string in ",]"
+        if closes and default is not None:
+            if default.start[0] != token.start[0]:
+                # A default over several lines: a single-line edit can't drop it.
+                return []
+            edits.append((default.start[0], default.start[1], token.start[1], ""))
+            default = None
         if token.type == tokenize.OP and token.string in "([{":
             depth += 1
         elif token.type == tokenize.OP and token.string in ")]}":
             depth -= 1
             if depth == 0:
-                return False
+                return edits
         elif depth == 1 and token.type == tokenize.OP and token.string == "=":
-            return True
-        elif token.type in (tokenize.NEWLINE, tokenize.ENDMARKER):
-            return False
-    return False
+            default = token
+    return []
 
 
 def unparsed_note(
