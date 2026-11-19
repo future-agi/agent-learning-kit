@@ -26,6 +26,13 @@ from fi.alk.harness.world.runtime import Call
             Call("select", {"method": "card"}, ok=False, refused=True),
             False,
         ),
+        # A lookup the world answered with a not-found, read with `answered`: a crash is no answer, so nothing is
+        # credited for one.
+        (
+            "answered([c], 'select', method='card')",
+            Call("select", {"method": "card"}, ok=False, refused=True, refusal_code="world_rule"),
+            True,
+        ),
     ],
 )
 def test_proof_requires_outcome_not_just_attempt(

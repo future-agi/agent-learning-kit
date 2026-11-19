@@ -432,8 +432,9 @@ class Proof:
                 "the world or returning a result:\n  - "
                 + "\n  - ".join(self.failed_attempts)
                 + "\n\nArguments and a tool name are not evidence of success. Require a "
-                "successful outcome or the corresponding world effect. For a refusal, require "
-                "evidence of the intended refusal, not an arbitrary execution error."
+                "successful outcome or the corresponding world effect. For a refusal or a not-found, "
+                "require the world's own answer, not an arbitrary execution error: read the call with "
+                "`answered(calls, tool, ...)`, which counts a not-found or a refusal and never a crash."
             )
         if self.weak and self.outcome == "change":
             return (
@@ -1568,7 +1569,7 @@ def prove(
         # This is not a business refusal: a timeout does not prove correct refusal either.
         crashed = [
             replace(
-                call, ok=False, result=None, error="execution failed", refused=False
+                call, ok=False, result=None, error="execution failed", refused=False, refusal_code=""
             )
             for call in calls
         ]
