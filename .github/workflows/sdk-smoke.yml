@@ -328,6 +328,7 @@ jobs:
           tests/harness/test_instrumentation_evidence.py
           tests/harness/test_agent_type_refusal.py
           tests/harness/test_google_adk_reference.py
+          tests/harness/test_livekit_reference.py
           tests/harness/test_python_source_codecs.py
           tests/harness/test_executor_completed_counts.py
           tests/harness/test_deep_agents_reference.py
@@ -352,3 +353,11 @@ jobs:
           tests/test_e2b_template_build_id.py
           tests/test_release_pr_step.py
           tests/episode
+      - name: Run the LiveKit reference on the version it pins, failing if it skips
+        if: matrix.dependencies == 'minimum-livekit'
+        # This row installs livekit-agents 1.8.3, the reference's pin. The newest row has no
+        # livekit extra, so the tests that import the example skip there.
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_livekit_reference.py | tee livekit.out
+          ! grep -q "skipped" livekit.out

@@ -6,6 +6,7 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
+    JobProcess,
     RunContext,
     cli,
     function_tool,
@@ -27,12 +28,17 @@ def _setting(name: str) -> str:
     return os.getenv(name, "").strip()
 
 
-# With no base URL the OpenAI client falls back to api.openai.com and would send the key there.
-if _setting("OPENAI_API_KEY") and not _setting("OPENAI_BASE_URL"):
-    raise RuntimeError(
-        "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
-        "endpoint the key belongs to."
-    )
+def _check_base_url() -> None:
+    # With no base URL the OpenAI client falls back to api.openai.com and would send the key
+    # there.
+    if _setting("OPENAI_API_KEY") and not _setting("OPENAI_BASE_URL"):
+        raise RuntimeError(
+            "OPENAI_API_KEY is set but OPENAI_BASE_URL is empty: set OPENAI_BASE_URL to the "
+            "endpoint the key belongs to."
+        )
+
+
+_check_base_url()
 
 _SEED_ORDERS = {
     "A1001": {"item": "trail running shoes", "status": "delivered", "return": None},
@@ -62,7 +68,9 @@ class SupportAgent(Agent):
         return f"Order {order_id}: {order['item']}, status {order['status']}, return: {returned}."
 
     @function_tool
-    async def start_return(self, context: RunContext, order_id: str, reason: str) -> str:
+    async def start_return(
+        self, context: RunContext, order_id: str, reason: str
+    ) -> str:
         """Start a return for a delivered order, giving the customer's reason.
 
         Args:
@@ -88,19 +96,31 @@ class SupportAgent(Agent):
 server = AgentServer()
 
 
+def prewarm(proc: JobProcess) -> None:
+    # Loaded once per worker process, before any call, and shared by its calls.
+    proc.userdata["vad"] = silero.VAD.load()
+
+
+server.setup_fnc = prewarm
+
+
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
+    # The plugins below read the key and the base URL when they are built, here.
+    _check_base_url()
     # Speech in, the model and speech out all go to the OpenAI-compatible endpoint named by
     # OPENAI_BASE_URL, on its plain routes: /v1/audio/transcriptions (with the VAD to cut the
     # caller's turns), /v1/chat/completions and /v1/audio/speech. No realtime socket.
     session = AgentSession(
-        stt=openai.STT(use_realtime=False),
+        stt=openai.STT(model="gpt-4o-mini-transcribe", use_realtime=False),
         llm=openai.LLM(model=MODEL),
-        tts=openai.TTS(),
-        vad=silero.VAD.load(),
+        tts=openai.TTS(model="gpt-4o-mini-tts"),
+        vad=ctx.proc.userdata["vad"],
     )
     await session.start(agent=SupportAgent(), room=ctx.room)
-    await session.generate_reply(instructions="Greet the caller and ask how you can help.")
+    await session.generate_reply(
+        instructions="Greet the caller and ask how you can help."
+    )
 
 
 if __name__ == "__main__":
