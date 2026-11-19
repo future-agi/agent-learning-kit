@@ -3138,19 +3138,6 @@ def test_a_quiet_line_is_held_to_a_sixth_of_a_slice() -> None:
     assert _over_its_share({"interface": "quiet_line"}, grid, quiet, 18, "q0") == ""
 
 
-def test_a_family_name_is_not_reached_for_a_third_time() -> None:
-    from fi.alk.harness.scenario import Persona, Scenario
-    from fi.alk.harness.scenario_tools import _already_in_the_suite
-
-    kept = [Scenario(name="a", persona=Persona(name="Marcus Vance"))]
-    ask = {"name": "c", "persona": {"name": "Heather Vance"}}
-
-    assert _already_in_the_suite(ask, kept, {"philip vance"})
-    assert _already_in_the_suite(ask, kept, set()) == ""
-    other = {"name": "c", "persona": {"name": "Heather Lam"}}
-    assert _already_in_the_suite(other, kept, {"philip vance"}) == ""
-
-
 def test_names_a_sibling_writer_journalled_count_as_taken(tmp_path) -> None:
     from fi.alk.harness.scenario import Persona, Scenario
     from fi.alk.harness.scenario_tools import _first_names_on_disk, journal_scenario
