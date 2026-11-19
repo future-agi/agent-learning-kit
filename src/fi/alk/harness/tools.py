@@ -11,9 +11,10 @@ import asyncio
 import json
 import logging
 import secrets
+import sys
 import weakref
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from fi.simulate.agent.wrappers.http_events import (
@@ -42,6 +43,7 @@ from .contract import (
     AgentContract,
     Runtime,
     RuntimeInterface,
+    ToolEntry,
     RuntimeSecretFile,
     RuntimeConfigFile,
     HttpObservation,
@@ -62,6 +64,7 @@ from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
     PathLookupsSpent,
     RuntimeSelectionError,
+    charged_path,
     path_lookup_budget,
     select_runtime,
 )
@@ -75,7 +78,7 @@ from .model_citation import (
     source_lines,
 )
 from .python_source import utf8_size
-from .source_folder import SubfolderNotFound, agent_folder, bind_runtime
+from .source_folder import SubfolderNotFound, agent_folder, bind_runtime, is_within
 
 if TYPE_CHECKING:
     from .save_checker import Mode
@@ -238,6 +241,17 @@ def _checked_contract(
     contract.unconfirmed_prompt_from = []
 
     problems = validate_contract(contract)
+    for entry in contract.tool_entrypoints:
+        if (
+            entry.mode in _ROOTED_MODES
+            and entry.module
+            and not all(part.isidentifier() for part in entry.module.split("."))
+        ):
+            problems.append(
+                f"tool[{entry.tool}]:module-not-dotted-identifier: module {entry.module[:80]!r} "
+                "must be a dotted Python name such as `agent` or `pkg.tools`, each part an "
+                "identifier; it is not a file path."
+            )
     if (
         require_setup_contract
         and contract.modality != "voice"
@@ -463,6 +477,10 @@ def _checked_against_source(
                 )
             if refusal := _builds_a_sibling(source_root, runtime, subfolder):
                 problems.append(refusal)
+            if rooted := _modules_as_the_process_imports_them(
+                contract.tool_entrypoints, source_root, runtime.workdir, subfolder
+            ):
+                contract = contract.model_copy(update={"tool_entrypoints": rooted})
         except SubfolderNotFound:
             problems.append(
                 f"subfolder_not_found: {subfolder} is not a folder with files in the source, "
@@ -511,6 +529,85 @@ def _checked_against_source(
             else detect_instrumentation(source_root)
         )
     return contract.model_copy(update={"instrumentation": instrumentation, "runtime": runtime})
+
+
+def _modules_as_the_process_imports_them(
+    entries: list[ToolEntry], source_root: Path, workdir: str, subfolder: str = ""
+) -> list[ToolEntry] | None:
+    """The entries with each module written as the agent's own process imports it, or None when
+    none changes. Only with a subfolder, where the process starts in the bound ``workdir``: a
+    reading writes ``examples.harness.x.agent`` for the file the process knows as ``agent``,
+    and the tracer matches a frame's module name exactly.
+
+    A module is rewritten when all of these hold; each is a file check, never an import, and
+    each is charged to the save's lookup budget:
+    - it starts with the workdir's path written dotted, and the rest names a file under the
+      workdir (``<rest>.py`` or ``<rest>/__init__.py``);
+    - the name as written is not itself a file under the workdir (``svc/agent.py`` beside
+      ``svc/svc/agent.py``: with the process in ``svc``, ``svc.agent`` is the inner one);
+    - no folder from the repository root down to the workdir has an ``__init__.py``: one that
+      does is part of a regular package, whose code knows its modules by the qualified name
+      (``GeneratedWorld.reach`` puts the package root on the path for exactly that).
+
+    An ``import`` or ``construct`` entry is also compiled to a handler, which imports through
+    ``GeneratedWorld.reach(source_root, subfolder)``: the root and the subfolder are on its path,
+    never the workdir. So those entries are rewritten only when the workdir is the subfolder
+    itself; an ``unreachable`` entry has no handler and only the tracer reads it, so it keeps the
+    workdir as its root.
+    """
+    from .source_tool_evidence import _file_in
+
+    folders = [part for part in PurePosixPath(workdir or "").parts if part != "."]
+    if not folders or ".." in folders or not all(part.isidentifier() for part in folders):
+        return None
+    if not any(entry.module and entry.mode in _ROOTED_MODES for entry in entries):
+        return None
+    root = Path(source_root).resolve()
+    try:
+        start = charged_path(root / Path(*folders))
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not is_within(start, root) or start == root:
+        return None
+    # The root and every folder down to the workdir, along the dotted path.
+    for depth in range(len(folders) + 1):
+        if _file_in(root.joinpath(*folders[:depth], "__init__.py"), root):
+            return None
+    prefix = ".".join(folders) + "."
+    subfolder_parts = [part for part in PurePosixPath(subfolder or "").parts if part != "."]
+    handler_root = subfolder_parts == folders
+
+    resolved: dict[str, bool] = {}
+
+    def names_a_file(dotted: str) -> bool:
+        # One resolution per name within a save: many entries can name one module.
+        if dotted not in resolved:
+            module = start.joinpath(*dotted.split("."))
+            resolved[dotted] = _file_in(module.with_suffix(".py"), start) or _file_in(
+                module / "__init__.py", start
+            )
+        return resolved[dotted]
+
+    rewritten, changed = [], False
+    for entry in entries:
+        module = entry.module
+        if (
+            entry.mode in _ROOTED_MODES
+            and (handler_root or entry.mode == "unreachable")
+            and module.startswith(prefix)
+            and all(part.isidentifier() for part in module.split("."))
+            and not names_a_file(module)
+            and names_a_file(rest := module[len(prefix) :])
+            # `calendar.py` in the folder is not what `import calendar` finds first.
+            and rest.split(".")[0] not in sys.stdlib_module_names
+        ):
+            entry = entry.model_copy(update={"module": rest})
+            changed = True
+        rewritten.append(entry)
+    return rewritten if changed else None
+
+
+_ROOTED_MODES = {"import", "construct", "unreachable"}
 
 
 def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
@@ -1173,12 +1270,21 @@ def contract_tools(
                                 "that has to be built first. service: its effect is implemented "
                                 "by a shipped HTTP service. unreachable: no runnable seam exists, "
                                 "which blocks environment creation rather than generating a "
-                                "replacement.",
+                                "replacement. The kit can't call it, but traces it when `module` "
+                                "and `callable` say where it is. Use it for a tool whose module "
+                                "attribute is an object the kit can't call, such as the OpenAI "
+                                "Agents SDK's `@function_tool`: name the module and the def's own "
+                                "name. A LangChain `@tool` or a LiveKit `@function_tool` method "
+                                "stays `import` or `construct`.",
                             },
                             "module": {
                                 "type": "string",
-                                "description": "Importable path as the agent's own code would "
-                                "write it, e.g. package.module.file. Not a filesystem path.",
+                                "description": "The dotted name the agent's own process imports, "
+                                "from the folder it runs in: `agent` for the file agent.py "
+                                "there, not the name counted from the repository root. For "
+                                "`import` and `construct` the name is counted from the "
+                                "subfolder, and is rewritten only when the runtime's workdir "
+                                "is that subfolder. Not a filesystem path.",
                             },
                             "callable": {
                                 "type": "string",

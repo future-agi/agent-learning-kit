@@ -68,6 +68,7 @@ from .bundle_v2 import (
 from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
+    _python_install,
     framework_instrumentation_command,
     uv_run_project,
     _python_language_version,
@@ -80,7 +81,12 @@ from .generated_runtime import (
 )
 from .credentials import assess_configuration, discover_credentials
 from .secrets import process_secret_environment_names
-from .runtime_selection import ComposeSelection, bounded_yaml_load, select_runtime
+from .runtime_selection import (
+    COMPOSE_FILE_NAMES,
+    ComposeSelection,
+    bounded_yaml_load,
+    select_runtime,
+)
 from .agent_type_check import EXIT_REFUSED
 from .source_folder import (
     SubfolderNotFound,
@@ -1944,6 +1950,105 @@ def _runtime_component(root: Path, configured_workdir: str) -> Path:
     return component
 
 
+_LANGGRAPH_JSON_LARGEST = 64 * 1024
+_REQUIREMENT_INCLUDE = re.compile(r"^(?:-r|--requirement|-c|--constraint)(?:\s|=|[^\s-]|$)")
+# A requirement that installs from a path, a URL or a VCS: the package may depend on the CLI
+# unseen. (`-e`, `--editable`, `./lib`, `/abs/lib`, `lib @ file:./lib`, `git+https://...`.)
+_UNSEEN_INSTALL = re.compile(r"^(?:-e\b|--editable\b|\.|/|[^#]*(?:\s@\s|://|git\+))")
+_LANGGRAPH_CLI = re.compile(r"^langgraph[-_.]cli(?:\s|\[|[<>=!~@;]|$)", re.IGNORECASE)
+
+
+def _langgraph_command_cannot_run(
+    source_root: Path, run_folder: Path, runtime: dict[str, Any]
+) -> bool:
+    """Whether a chat agent's ``langgraph dev``/``up`` command can't start because nothing the
+    build installs declares ``langgraph-cli``, and its source is one graph the kit can serve.
+
+    Every one of these must hold, and any doubt keeps today's route (the command run as written):
+    no ``agent_callback``; the command is exactly ``langgraph dev`` or ``langgraph up``; no
+    requirement or project dependency names ``langgraph-cli``; ``langgraph.json`` is at most
+    64 KB, has no ``http`` or ``auth`` key (custom routes or auth make the app more than its
+    graph), and declares one graph; no requirements line is an include (``-r``, ``-c``) and no
+    uv dependency group or dev dependency is declared, since either may install the CLI unseen;
+    the install strategy the build picks is not a poetry or ``setup.py`` one (their dependencies
+    are not read), and ``requirements.txt`` is read whenever that strategy installs it; no editable, path
+    or URL requirement and no Dockerfile (for the same reason); and no Compose
+    selection: a Compose service builds its own
+    image, which this can't see, and a ``callable`` interface is refused on a Compose selection.
+    """
+    if runtime.get("execution") == "compose" or runtime.get("compose_file") or runtime.get("service"):
+        return False
+    lookup = (
+        source_root / runtime["source_subfolder"]
+        if runtime.get("source_subfolder")
+        else source_root
+    )
+    if any((lookup / name).is_file() for name in COMPOSE_FILE_NAMES):
+        # `auto`, which a native reading becomes on the graph route, would select this file.
+        return False
+    if (run_folder / "Dockerfile").is_file() or runtime.get("dockerfile"):
+        # The app's own image may install the CLI, which this can't see.
+        return False
+    command = runtime.get("command")
+    if (
+        not isinstance(command, list)
+        or len(command) < 2
+        or command[0] != "langgraph"
+        or command[1] not in {"dev", "up"}
+    ):
+        return False
+    try:
+        if _discover_callback_entrypoint(run_folder) is not None:
+            return False
+        parsed = Runtime.model_validate(runtime)
+        component = _runtime_component(source_root, parsed.workdir)
+        strategy = _install_strategy(component, parsed)
+        requirements = _declared_requirements(source_root, parsed)
+        if strategy == "pip-requirements" and (component / "pyproject.toml").is_file():
+            # pip-requirements wins over a pyproject: the build installs `requirements.txt` too.
+            requirements.extend(
+                (component / "requirements.txt").read_text(encoding="utf-8").splitlines()
+            )
+        if any(
+            _LANGGRAPH_CLI.match(requirement.strip())
+            or _REQUIREMENT_INCLUDE.match(requirement.strip())
+            or _UNSEEN_INSTALL.match(requirement.strip())
+            for requirement in requirements
+            if isinstance(requirement, str)
+        ):
+            # An include or a constraint file is not followed, so the CLI may be in it.
+            return False
+        pyproject = _pyproject_document(
+            _runtime_component(source_root, parsed.workdir) / "pyproject.toml"
+        )
+        uv_settings = pyproject.get("tool", {}).get("uv", {}) or {}
+        if "dependency-groups" in pyproject or {"default-groups", "dev-dependencies"} & set(
+            uv_settings
+        ):
+            # `uv sync` installs the default groups and the dev dependencies, which are not read here.
+            return False
+        if strategy in {None, "poetry-locked", "pip-setup-project-unlocked"}:
+            # The build installs from a poetry project or a `setup.py`, which are not read here;
+            # an install strategy the build can't pick at all is a doubt too.
+            return False
+        if strategy == "pip-project":
+            # `pip install .` installs whatever the build backend declares. Only a `[project]`
+            # table with static `dependencies` is read here; a poetry-core or setuptools
+            # (`setup.cfg`) pyproject, or `dynamic = ["dependencies"]`, may install the CLI unseen.
+            project = pyproject.get("project")
+            if not isinstance(project, dict) or "dependencies" in (project.get("dynamic") or []):
+                return False
+        path = run_folder / "langgraph.json"
+        if not path.is_file() or path.stat().st_size > _LANGGRAPH_JSON_LARGEST:
+            return False
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict) or {"http", "auth"} & set(document):
+            return False
+        return _langgraph_entrypoint(run_folder) is not None
+    except Exception:  # noqa: BLE001 - any doubt keeps the command as the reading wrote it
+        return False
+
+
 def _is_adk_web_command(command: list[str]) -> bool:
     """Return whether argv starts Google ADK's source-owned HTTP development server."""
 
@@ -3448,6 +3553,33 @@ def resolve_environment_plan(
     )
 
 
+def _install_strategy(component: Path, runtime: Runtime) -> str | None:
+    """The install strategy the generated runtime's build picks for this component, or ``None``
+    when it picks none."""
+    try:
+        return _python_install(component, runtime, list(runtime.command or []))[1]
+    except GeneratedRuntimeError:
+        return None
+
+
+def _declared_requirements(source: Path, runtime: Runtime) -> list[Any]:
+    """What the build installs, as the project's dependencies, the chosen extras, the requirement
+    files the runtime names, and ``requirements.txt`` when there is no ``pyproject.toml``."""
+    component = _runtime_component(source, runtime.workdir)
+    project = _pyproject_document(component / "pyproject.toml").get("project", {})
+    requirements = list(project.get("dependencies", []))
+    for extra in runtime.extras:
+        requirements.extend(project.get("optional-dependencies", {}).get(extra, []))
+    requirement_files = list(runtime.requirements_files)
+    if not (component / "pyproject.toml").is_file():
+        requirement_files.append("requirements.txt")
+    for name in requirement_files:
+        path = (component / name).resolve()
+        if path.is_relative_to(source) and path.is_file():
+            requirements.extend(path.read_text(encoding="utf-8").splitlines())
+    return requirements
+
+
 def _sdk_tracing_off_until_the_hook(environment: dict[str, str]) -> None:
     """Turn the Agents SDK's tracing off for a gateway-routed process. The marker tells the kit's
     hook the switch is the kit's to turn back on once the SDK's export is local; a customer's own
@@ -3481,18 +3613,7 @@ def _source_tool_trace_environment(
     }
     if declared:
         environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(declared, sort_keys=True)
-    component = _runtime_component(source, runtime.workdir)
-    project = _pyproject_document(component / "pyproject.toml").get("project", {})
-    requirements = list(project.get("dependencies", []))
-    for extra in runtime.extras:
-        requirements.extend(project.get("optional-dependencies", {}).get(extra, []))
-    requirement_files = list(runtime.requirements_files)
-    if not (component / "pyproject.toml").is_file():
-        requirement_files.append("requirements.txt")
-    for name in requirement_files:
-        path = (component / name).resolve()
-        if path.is_relative_to(source) and path.is_file():
-            requirements.extend(path.read_text(encoding="utf-8").splitlines())
+    requirements = _declared_requirements(source, runtime)
     if any(
         re.match(r"^crewai(?:\s|\[|[<>=!~@;]|$)", requirement.strip(), re.IGNORECASE)
         for requirement in requirements
@@ -3745,7 +3866,20 @@ def _environment_tools(contract: dict[str, Any]) -> list[str]:
     )
 
 
-def _source_tool_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]]:
+def _observed_by_frameworks(processes: Sequence[Any]) -> bool:
+    """Whether a process already records its tool calls: it runs the framework span observer
+    (the command route's), or carries the LiveKit tool-trace hook (``FI_WORKER_HEALTH_PORT``,
+    which only a LiveKit worker is given)."""
+    return any(
+        {"ALK_OBSERVE_FRAMEWORKS", "FI_WORKER_HEALTH_PORT"}
+        & set(getattr(process, "environment", None) or {})
+        for process in processes
+    )
+
+
+def _source_tool_trace_bindings(
+    contract: dict[str, Any], *, watch_unreachable: bool = True
+) -> list[dict[str, str]]:
     bindings = []
     for raw in contract.get("tool_entrypoints", []):
         if not isinstance(raw, dict):
@@ -3754,10 +3888,19 @@ def _source_tool_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]
             entry = ToolEntry.model_validate(raw)
         except ValueError as exc:
             raise BundleAuthorError(f"contract_tool_entry_invalid: {exc}") from exc
-        if entry.mode == "import" and entry.module and entry.callable:
-            bindings.append(
-                {"name": entry.tool, "module": entry.module, "callable": entry.callable}
-            )
+        # An `unreachable` entry that says where the function is is watched, not called: no
+        # handler is compiled for it, and a name that never runs records nothing. (The command
+        # route binds `import` and `construct` only: its framework observer already sees these
+        # calls, and a second binding there could record one call twice.)
+        modes = {"import", "unreachable"} if watch_unreachable else {"import"}
+        if entry.mode in modes and entry.module and entry.callable:
+            binding = {"name": entry.tool, "module": entry.module, "callable": entry.callable}
+            if entry.mode == "unreachable":
+                # Nothing checks an `unreachable` entry, so the tracer matches the whole
+                # callable: two methods called `_run` are two tools, and a function that calls
+                # a same-named method is one call.
+                binding["qualname"] = entry.callable
+            bindings.append(binding)
     return bindings
 
 
@@ -3884,6 +4027,26 @@ def author_bundle_v2(
             )
             contract_body = {**contract_body, "runtime": runtime}
         interface = runtime.get("interface") if isinstance(runtime, dict) else None
+        if contract_modality == "chat" and _langgraph_command_cannot_run(
+            source_root, run_folder, runtime
+        ):
+            # The reading wrote `langgraph dev`, and nothing installs the CLI: serve the graph
+            # as `langgraph.json` declares it, as with no command. A native run needs a command
+            # (`runtime_native_command_missing`), so it becomes `auto`.
+            runtime = {
+                **runtime,
+                "command": [],
+                **({"execution": "auto"} if runtime.get("execution") == "native" else {}),
+                "interface": {
+                    "kind": "callable",
+                    "protocol": "fi.alk",
+                    "path": "",
+                    "health_path": "",
+                    "include_tools": False,
+                },
+            }
+            contract_body = {**contract_body, "runtime": runtime}
+            interface = runtime["interface"]
         if isinstance(interface, dict):
             contract_interface_kind = str(interface.get("kind") or "").strip().lower()
             adk_interface = _adk_web_interface(source_root, runtime)
@@ -3985,7 +4148,9 @@ def author_bundle_v2(
         tool_entrypoints=contract_body.get("tool_entrypoints"),
     )
     trace_bindings = (
-        _source_tool_trace_bindings(contract_body)
+        _source_tool_trace_bindings(
+            contract_body, watch_unreachable=not _observed_by_frameworks(plan.processes)
+        )
         if contract_modality == "chat"
         else []
     )
@@ -4588,7 +4753,9 @@ def _carry_contract(
         str(body.get("modality") or "").strip().lower() == "chat"
         and not traced_command
     ):
-        bindings = _source_tool_trace_bindings(body)
+        bindings = _source_tool_trace_bindings(
+            body, watch_unreachable=not _observed_by_frameworks(processes)
+        )
         processes = list(
             _with_source_tool_trace(
                 processes,

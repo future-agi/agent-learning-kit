@@ -37,9 +37,56 @@ jobs:
             -k real_openai_agents_sdk | tee pytest.out
           ! grep -q "skipped" pytest.out
 
+  tool-trace-other-pythons:
+    # The tool tracer's own subprocesses on another Python, which reads frames differently from
+    # 3.12 (a suspension ends on a RESUME on 3.13; a close or a cancel is not carried by the
+    # profile call event). pytest runs on 3.12 as in the other jobs; ALK_TEST_PYTHON points the
+    # tracer's subprocesses at the matrix Python.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        traced-python: ["3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      # The traced Python first and 3.12 last: the last one set up is `python` on the path, which
+      # runs pytest.
+      - uses: actions/setup-python@v5
+        id: traced
+        with:
+          python-version: ${{ matrix.traced-python }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit
+        run: python -m pip install . pytest
+      - name: Run the tool tracer tests with the tracer on Python ${{ matrix.traced-python }}
+        env:
+          ALK_TEST_PYTHON: ${{ steps.traced.outputs.python-path }}
+        run: python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py
+
+  tool-trace-python-3-12-3:
+    # 3.12.3 is the release the sandbox runs, and it closes a generator paused at a bare yield
+    # without an event, as 3.13.3 does; "3.12" elsewhere floats to the newest release.
+    # setup-python has no 3.12.3 build for the current Ubuntu image, so this runs in the official
+    # 3.12.3 image, where pytest and the tracer's subprocesses both run on it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container: python:3.12.3-slim-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the interpreter is 3.12.3
+        run: python -c "import sys; assert sys.version_info[:3] == (3, 12, 3), sys.version"
+      - name: Install the kit
+        run: python -m pip install . pytest
+      - name: Run the tool tracer tests on Python 3.12.3
+        run: python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py
+
   clean-install:
     # Install, doctor, the local simulation and the suites that need their own SDK versions. The
-    # long test run is kit-tests, so neither job sits near its limit.
+    # long test run is kit-tests: this job takes 1 to 4 of its 15 minutes.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -141,21 +188,23 @@ jobs:
       - name: Run the raw-request measuring tests and the OpenAI instrumentor on openai 3
         if: matrix.dependencies == 'minimum-livekit'
         # The steps above run on openai 2: LiveKit 1.8.3, the minimum the kit supports, needs it.
-        # openai 3 sends through httpx2, so measuring must see a raw call there too. Fails if any
-        # of these skip.
+        # openai 3 sends through httpx2, so measuring must see a raw call there too. The tests are
+        # chosen by node id, so no filter deselects a file, and the step fails if any of them skip.
         shell: bash
         run: |
           python -m pip install 'openai>=3,<4'
-          python -m pytest -q -rs tests/harness/test_simulation_measure.py -k raw_model_request \
+          python -m pytest -q -rs \
+            tests/harness/test_simulation_measure.py::test_a_raw_model_request_marks_its_call_partial \
+            tests/harness/test_simulation_measure.py::test_a_request_through_the_real_httpx2_marks_partial \
             tests/test_evals_openai_instrumentor.py | tee openai3.out
           ! grep -q "skipped" openai3.out
 
   kit-tests:
     # The engine, dispatch, acceptance and harness suites, split out of clean-install, where they
     # took 8.5 to 11.5 of its 15 minutes and cancelled runs at random. Same install and SDK pin
-    # as clean-install's.
+    # as clean-install's. 40 minutes: a run takes 12 to 27.
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -218,6 +267,8 @@ jobs:
           tests/test_harness_sandbox_server.py
           --deselect tests/test_harness_sandbox_server.py::test_private_github_submission_becomes_hosted_job
           --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref
+          tests/test_harness_generated_runtime.py
+          tests/test_harness_service_environments.py
           tests/test_harness_architecture.py
           tests/test_harness_credentials.py
           tests/harness/test_controller_env.py
@@ -251,6 +302,11 @@ jobs:
           tests/harness/test_hosted_authoring_entrypoint.py
           tests/harness/test_certify_only.py
           tests/harness/test_bundle_author_v2.py
+          tests/harness/test_tool_module_rewrite.py
+          tests/harness/test_reading_routes.py
+          tests/harness/test_reading_guidance.py
+          tests/harness/test_reading_replay.py
+          tests/harness/test_chat_readiness.py
           tests/harness/test_python_tool_trace_bootstrap.py
           tests/harness/test_workflow_intent.py
           tests/harness/test_simulation_mark_bootstrap.py
@@ -264,6 +320,7 @@ jobs:
           tests/harness/test_outbound.py
           tests/harness/test_contract_writer.py
           tests/harness/test_framework_detection.py
+          tests/harness/test_framework_support.py
           tests/harness/test_openai_agents_reference.py
           tests/harness/test_hosted_entrypoint.py
           tests/harness/test_hosted_entrypoint_provision_retry.py
@@ -292,5 +349,6 @@ jobs:
           tests/harness/test_seed_contract.py
           tests/test_bump_deployment_values.py
           tests/test_release_workflow.py
+          tests/test_e2b_template_build_id.py
           tests/test_release_pr_step.py
           tests/episode
