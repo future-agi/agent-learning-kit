@@ -647,16 +647,34 @@ def test_each_requests_thread_reaches_the_graph_as_its_langgraph_thread(load) ->
     ]
 
 
-def test_a_graph_with_its_own_checkpointer_gets_no_thread(load) -> None:
-    # It would store each turn, and every turn carries the whole history.
-    adapter = load(
-        THREAD_GRAPH.replace("checkpointer = None", "checkpointer = object()"),
-        "checkpointed_graph",
+@pytest.mark.parametrize(
+    "checkpointer,named",
+    [("InMemorySaver()", "InMemorySaver"), ("True", "True")],
+    ids=["saver", "inherit"],
+)
+def test_a_graph_compiled_with_a_checkpointer_is_refused_when_it_is_loaded(
+    tmp_path, monkeypatch, checkpointer, named
+) -> None:
+    # It would keep every turn, and every turn carries the whole history.
+    graph_source = THREAD_GRAPH.replace(
+        "class Graph:\n    checkpointer = None",
+        f"class InMemorySaver:\n    pass\n\n\nclass Graph:\n    checkpointer = {checkpointer}",
     )
+    assert graph_source != THREAD_GRAPH
+    source = tmp_path / "source"
+    try:
+        with pytest.raises(ValueError) as refused:
+            _load_adapter(tmp_path, monkeypatch, graph_source, "checkpointed_graph")
+    finally:
+        sys.modules.pop("fi.alk.harness.langgraph_http_adapter", None)
+        sys.modules.pop("checkpointed_graph.graph", None)
+        sys.modules.pop("checkpointed_graph", None)
+        if str(source / "src") in sys.path:
+            sys.path.remove(str(source / "src"))
 
-    adapter._invoke({"thread_id": "one", "new_message": {"content": "hi"}})
-
-    assert sys.modules["checkpointed_graph.graph"].SEEN == ["no config"]
+    message = str(refused.value)
+    assert f"compiled with a checkpointer ({named})" in message
+    assert "sends the whole conversation every turn" in message
 
 
 @pytest.mark.parametrize(
