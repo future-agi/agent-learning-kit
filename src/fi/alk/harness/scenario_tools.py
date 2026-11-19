@@ -1953,11 +1953,18 @@ def accept_scenario(
         renamed_from = previous.name
         del kept[spot]
     keys = {one.scenario_key for one in kept} | (used or set())
+    restored = str((scenario.restored_from or {}).get("key") or "").strip()
+    if restored and restored != named:
+        return _err(
+            f"Not kept. restored_from names {restored!r}, but the case is submitted under another key: give it "
+            f"scenario_key {restored!r} to restore it, or drop restored_from to add it as a new case."
+        )
+    # Restored and already back (an edit of the restored case) is an ordinary edit of it.
     if previous is not None:
         scenario.scenario_key = previous.scenario_key
-    elif named and used is not None and named in used and named not in {one.scenario_key for one in kept}:
-        # A case this environment had and no longer holds comes back under its own key, so its history is its own.
-        scenario.scenario_key = named
+    elif restored:
+        # A case this environment had and lost comes back as itself, under its own key, so its history is its own.
+        scenario.scenario_key = restored
     else:
         scenario.scenario_key = unused_key(
             scenario_slug(scenario.name) if named else scenario.scenario_key, keys
@@ -3442,8 +3449,8 @@ def scenario_tools(
             return _ok(_EMPTIED)
         write_scenarios(kept, destination, catalogue)
         return _ok(
-            f"{name} dropped (scenario_key {key}). {len(kept)} left. To restore it, submit it with that scenario_key: "
-            "it takes the key back, and its history with it"
+            f"{name} dropped (scenario_key {key}). {len(kept)} left. To restore it as it was, submit it with that "
+            f'scenario_key and restored_from {{"key": "{key}"}}: it takes the key back, and its history with it'
         )
 
     @tool(

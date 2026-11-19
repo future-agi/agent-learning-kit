@@ -154,6 +154,8 @@ def document_for(scenario: Scenario) -> dict:
         body.pop("actors", None)
     if body.get("worker_budget_seconds") is None:
         body.pop("worker_budget_seconds", None)
+    if not body.get("restored_from"):
+        body.pop("restored_from", None)
     return body
 
 

@@ -3697,4 +3697,17 @@ def test_dropping_a_case_names_the_key_that_restores_it(tmp_path):
 
     said = asyncio.run(drop.handler({"names": ["adds-a-big-mac"]}))["content"][0]["text"]
     assert f"adds-a-big-mac (scenario_key {key})" in said
-    assert "submit it with its scenario_key: it takes that key back" in said
+    assert 'restored_from {"key": its scenario_key}: it takes that key back' in said
+
+
+def test_finding_removed_cases_asks_the_platform_for_them(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    spec = next(spec for spec in runtime._builder_platform_server().tools if spec.name == "find_scenarios")
+
+    asyncio.run(spec.handler({"removed": True, "search": "refund"}))
+
+    assert client.queries == [{"removed": True, "search": "refund"}]
+    # The builder is told it can ask, and what a removed case comes back with.
+    assert "removed" in str(spec.input_schema)
+    assert "suite_version it last existed in" in spec.description

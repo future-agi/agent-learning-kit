@@ -2784,7 +2784,8 @@ def test_a_check_that_fails_a_corrected_try_is_named_when_the_case_is_kept(tmp_p
     assert [one.name for one in kept] == ["adds-a-big-mac"]
 
 
-def test_a_removed_case_submitted_with_its_key_comes_back_under_that_key(tmp_path):
+def _removed_case(tmp_path):
+    """An environment that had `adds-a-big-mac` and lost it: its key is used, no case holds it."""
     from fi.alk.harness.scenario_tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
@@ -2792,28 +2793,80 @@ def test_a_removed_case_submitted_with_its_key_comes_back_under_that_key(tmp_pat
     first = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
     assert not first.get("is_error"), first
     key = kept[0].scenario_key
-    kept.clear()  # dropped: the environment has had the key, no case holds it now
+    kept.clear()
+    return root, catalogue, kept, used, key
 
-    said = accept_scenario(_delta(scenario_key=key), world_root=root, catalogue=catalogue, kept=kept, used=used)
+
+def test_a_removed_case_restored_exactly_as_it_was_comes_back_under_its_own_key(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario, load_scenarios
+
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    restored_from = {"key": key, "suite_version": "v-12"}
+
+    said = accept_scenario(
+        _delta(scenario_key=key, restored_from=restored_from), world_root=root, catalogue=catalogue, kept=kept, used=used
+    )
     assert not said.get("is_error"), said
+    assert [(one.scenario_key, one.restored_from) for one in kept] == [(key, restored_from)]
+    # Written with the case, so the platform's save reads it as a restore.
+    assert load_scenarios(root)[0].restored_from == restored_from
+
+
+def test_a_removed_case_restored_with_a_change_as_the_same_case_keeps_its_key(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    changed = _delta(
+        scenario_key=key,
+        restored_from={"key": key, "suite_version": "v-12"},
+        instruction="Order one Big Mac, no pickles.",
+    )
+    said = accept_scenario(changed, world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert not said.get("is_error"), said
+    assert kept[0].scenario_key == key and kept[0].instruction == "Order one Big Mac, no pickles."
+    # Edited again later, still carrying the marker, it is an ordinary edit of itself.
+    again = accept_scenario({**changed, "tests": "whether it is one Big Mac"}, world_root=root, catalogue=catalogue,
+                            kept=kept, used=used)
+    assert not again.get("is_error"), again
     assert [one.scenario_key for one in kept] == [key]
 
 
-def test_a_new_case_never_takes_a_removed_case_s_key_unless_it_names_it(tmp_path):
+def test_a_copy_or_a_new_case_never_takes_a_removed_case_s_key(tmp_path):
     from fi.alk.harness.scenario_tools import accept_scenario
 
-    root, _contract, catalogue = _built_environment(tmp_path)
-    kept, used = [], set()
-    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
-    key = kept[0].scenario_key
-    kept.clear()
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    # A copy under a new name.
+    accept_scenario(_delta(name="adds-a-big-mac-copy"), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    # The same content under the old key but no restored_from: a new case, a new key.
+    accept_scenario(_delta(scenario_key=key), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert key not in [one.scenario_key for one in kept] and len(kept) == 2
+    assert all(one.restored_from is None for one in kept)
 
-    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
-    assert [one.scenario_key for one in kept] == [f"{key}-2"]
-    # A key this environment never had is not taken on the writer's say-so.
-    kept.clear()
-    accept_scenario(_delta(scenario_key="never-had-it"), world_root=root, catalogue=catalogue, kept=kept, used=used)
-    assert kept[0].scenario_key != "never-had-it"
+
+def test_a_restore_naming_another_key_than_the_case_carries_is_refused(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    said = accept_scenario(
+        _delta(scenario_key="something-else", restored_from={"key": key}),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+        used=used,
+    )
+    assert said.get("is_error") and "give it scenario_key" in said["content"][0]["text"]
+    assert kept == []
+
+
+def test_the_builder_asks_one_question_for_a_changed_restore_and_which_case_when_two_fit():
+    from fi.alk.harness.config import load_skill
+
+    skill = load_skill("builder")
+    # Which one, when the person's words fit more than one removed case.
+    assert "If more than one" in skill and "ask which one with\n  `AskUserQuestion`" in skill
+    # The one question for a changed restore, with its two outcomes.
+    assert "its past runs stay linked, and\n    results from before the change are marked 'test changed'" in skill
+    assert "Bring it back as a new case: a new\n    name, no history" in skill
 
 
 def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
