@@ -51,3 +51,11 @@ def _isolated_run_ledger():
             yield
         finally:
             os.environ.pop("AGENT_LEARNING_LEDGER_PATH", None)
+
+
+@pytest.fixture(autouse=True)
+def _no_published_actors_switch(monkeypatch):
+    """A hosted entrypoint publishes its job's actors switch to the process; each test starts without one."""
+    from fi.alk.harness.job import ACTORS_SWITCH_ENV
+
+    monkeypatch.delenv(ACTORS_SWITCH_ENV, raising=False)
