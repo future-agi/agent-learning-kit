@@ -3564,15 +3564,15 @@ def _named(name: str, person: str, **fields):
     return Scenario(name=name, instruction="i", persona={"name": person}, **fields)
 
 
-@pytest.mark.parametrize("wanted,refused_at", [(0, 2), (12, 2), (200, 4), (1000, 20)])
-def test_a_family_name_recurs_as_often_as_a_suite_of_that_size_allows(wanted, refused_at):
+def test_only_a_repeated_full_name_is_refused_never_a_shared_word_of_one():
     from fi.alk.harness.scenario_tools import _already_in_the_suite
 
-    kept = [_named(f"s{n}", f"Given{n} Sterling") for n in range(refused_at)]
-    ask = {"name": "next", "persona": {"name": "Another Sterling"}}
+    kept = [_named(f"s{n}", f"Given{n} Sterling") for n in range(5)]
 
-    assert "family name 'Sterling'" in _already_in_the_suite(ask, kept, wanted=wanted)
-    assert _already_in_the_suite(ask, kept[:-1], wanted=wanted) == ""
+    assert _already_in_the_suite({"name": "next", "persona": {"name": "Another Sterling"}}, kept, wanted=12) == ""
+    assert "already has a caller named" in _already_in_the_suite(
+        {"name": "next", "persona": {"name": "Given3 Sterling"}}, kept, wanted=12
+    )
 
 
 def test_a_cell_holds_its_share_of_a_large_suite_before_a_like_case_is_refused():
