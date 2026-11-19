@@ -610,10 +610,10 @@ def play_reference_step(world: GeneratedWorld, step: object) -> Call:
     if endpoint and callable(forward):
         dependency_arguments = environment_arguments or arguments
         effect = forward(endpoint, dependency_arguments, record=False)
-        if not environment_arguments and effect.refusal_code == REQUEST_NOT_ACCEPTED:
+        if not environment_arguments and _only_fields_the_agent_adds(effect, arguments):
             # The step names no request for the service, so it was sent the agent-facing arguments. The service
-            # would not take them as a request: the agent's own tool builds that request, adding what it holds
-            # from the conversation. The step never ran as the agent runs it, so it is recorded unrun, not refused.
+            # asked only for fields those arguments do not have: the agent's own tool adds them from the
+            # conversation. The step never ran as the agent runs it, so it is recorded unrun, not refused.
             logger.warning("reference step assumed rather than executed: tool=%s reason=request not accepted", name)
             world.not_replayed = {*getattr(world, "not_replayed", ()), name}
             world.calls.append(Call(name=name, arguments=arguments))
@@ -642,6 +642,31 @@ def play_reference_step(world: GeneratedWorld, step: object) -> Call:
         semantic = Call(name=name, arguments=arguments)
     world.calls.append(semantic)
     return semantic
+
+
+def _only_fields_the_agent_adds(effect: Call, arguments: Mapping[str, Any]) -> bool:
+    """Whether the service refused `effect` only for missing fields: a request-shape refusal
+    (`REQUEST_NOT_ACCEPTED`) whose body is a validation error listing at least one error, every one of type
+    missing, for a field the step's own arguments do not hold. A wrong value, an unknown choice, a refusal of the
+    action itself or a body that cannot be read is the reference's own, and stays refused."""
+    if effect.refusal_code != REQUEST_NOT_ACCEPTED:
+        return False
+    body = effect.result
+    if not isinstance(body, dict):
+        try:
+            body = json.loads(effect.error)
+        except (TypeError, ValueError):
+            return False
+    errors = body.get("detail") if isinstance(body, dict) else None
+    if not isinstance(errors, list) or not errors:
+        return False
+    for one in errors:
+        where = one.get("loc") if isinstance(one, dict) else None
+        if not isinstance(where, list) or not where or one.get("type") != "missing":
+            return False
+        if str(where[-1]) in arguments:
+            return False
+    return True
 
 
 def _resolve_reference_values(value: object, calls: list[Call]) -> object:

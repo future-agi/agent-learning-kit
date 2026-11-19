@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import copy
 from types import SimpleNamespace
 
@@ -914,9 +915,15 @@ def _needs_the_call_s_session(self, endpoint, arguments=None, *, record_as="", r
     agent-facing arguments, it rejects the request's shape."""
     args = dict(arguments or {})
     if "caller_id" not in args:
-        return Call(endpoint, args, ok=False, refused=True, error='{"detail": "caller_id: Field required"}',
-                    refusal_code=REQUEST_NOT_ACCEPTED)
+        missing = {"type": "missing", "loc": ["body", "caller_id"], "msg": "Field required"}
+        return _rejected(endpoint, args, {"detail": [missing]})
     return Call(endpoint, args, result={"ok": True}, ok=True)
+
+
+def _rejected(endpoint, args, body):
+    """The service's 422, with `body` as it answered (a dict, or text that is not JSON)."""
+    error = body if isinstance(body, str) else json.dumps(body)
+    return Call(endpoint, args, result=body, ok=False, refused=True, error=error, refusal_code=REQUEST_NOT_ACCEPTED)
 
 
 def test_an_old_case_whose_service_wants_what_the_agent_adds_stays_kept_as_written(monkeypatch, tmp_path):
@@ -961,3 +968,37 @@ def test_only_a_request_the_service_cannot_take_reads_as_not_accepted(monkeypatc
     call = world.forward("lookup", {"order_id": "O-10"}, record=False)
 
     assert call.ok is False and call.refusal_code == code
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"detail": [{"type": "enum", "loc": ["body", "order_id"], "msg": "Input should be one of the orders"}]},
+        {"detail": [{"type": "missing", "loc": ["body", "order_id"], "msg": "Field required"}]},
+        {"detail": [
+            {"type": "missing", "loc": ["body", "caller_id"], "msg": "Field required"},
+            {"type": "string_type", "loc": ["body", "order_id"], "msg": "Input should be a valid string"},
+        ]},
+        {"detail": [{"type": "value_error", "loc": ["body", "caller_id"], "msg": "Value error, unknown caller"}]},
+        {"detail": "this order was refunded already"},
+        {"detail": []},
+        "<html>Unprocessable</html>",
+    ],
+    ids=[
+        "wrong-value",
+        "missing-a-field-the-step-sends",
+        "missing-and-wrong",
+        "bad-value-for-a-field-the-agent-adds",
+        "refusal-as-422",
+        "no-errors",
+        "unreadable",
+    ],
+)
+def test_a_422_that_is_not_only_fields_the_agent_adds_stays_refused(monkeypatch, tmp_path, body):
+    def rejecting(self, endpoint, arguments=None, *, record_as="", record=True):
+        return _rejected(endpoint, dict(arguments or {}), body)
+
+    saved = _validated(monkeypatch, tmp_path, refund_case(), rejecting)
+
+    assert saved["kept_as_written"] is False and saved["blocked_reason"] == "not_solvable"
+    assert saved["assumed"] == []
