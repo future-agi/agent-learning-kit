@@ -73,3 +73,67 @@ def test_a_branch_loses_a_pasted_kind_label_and_keeps_its_description():
         "a reference with no referent when the caller asks for the usual airport"
     ) == "The caller asks for the usual airport"
     assert _without_kind_label("The caller corrects the drop-off") == "The caller corrects the drop-off"
+
+
+def _cell(name: str, coverage: dict | None, **fields) -> Scenario:
+    return _scenario(name, **fields).model_copy(update={"coverage": coverage})
+
+
+_LATE = {"intent": "refund", "situation": "past the window"}
+_ON_TIME = {"intent": "refund", "situation": "inside the window"}
+
+
+def test_a_held_case_may_be_replaced_by_a_new_case_in_its_own_cell() -> None:
+    before = [_cell("late-refund", _LATE), _cell("on-time-refund", _ON_TIME)]
+    after = [_cell("late-refund-by-email", _LATE), _cell("on-time-refund", _ON_TIME)]
+    late, new = before[0].scenario_key, after[0].scenario_key
+
+    receipt = certify_scenario_repair(before, after, expected_count=2, diagnostic_codes=set(), replaceable={late})
+
+    assert {(one.scenario_key, one.kind) for one in receipt.changes} == {
+        (late, ScenarioChangeKind.REMOVED),
+        (new, ScenarioChangeKind.ADDED),
+    }
+
+
+@pytest.mark.parametrize(
+    "after,replaceable",
+    [
+        # Another cell.
+        ([_cell("late-refund-by-email", _ON_TIME), _cell("on-time-refund", _ON_TIME)], {"late"}),
+        # A case that was not held.
+        ([_cell("late-refund", _LATE), _cell("on-time-refund-again", _ON_TIME)], {"late"}),
+        # A case with no declared cell is never matched to one.
+        ([_cell("late-refund-by-email", None), _cell("on-time-refund", _ON_TIME)], {"late"}),
+    ],
+    ids=["another_cell", "not_held", "no_cell"],
+)
+def test_a_removal_nothing_stands_in_for_is_refused(after, replaceable) -> None:
+    before = [_cell("late-refund", _LATE), _cell("on-time-refund", _ON_TIME)]
+    keys = {"late": before[0].scenario_key}
+    with pytest.raises(ValueError, match="scenario_repair_deleted_scenarios"):
+        certify_scenario_repair(
+            before, after, expected_count=2, diagnostic_codes=set(), replaceable={keys[one] for one in replaceable}
+        )
+
+
+def test_two_held_cases_in_one_cell_need_two_replacements() -> None:
+    before = [_cell("late-a", _LATE), _cell("late-b", _LATE), _cell("on-time", _ON_TIME)]
+    after = [_cell("late-c", _LATE), _cell("on-time", _ON_TIME), _cell("on-time-2", _ON_TIME)]
+    with pytest.raises(ValueError, match="scenario_repair_deleted_scenarios"):
+        certify_scenario_repair(
+            before,
+            after,
+            expected_count=3,
+            diagnostic_codes=set(),
+            replaceable={before[0].scenario_key, before[1].scenario_key},
+        )
+
+
+def test_a_held_case_with_no_declared_cell_is_never_replaced() -> None:
+    before = [_cell("late-refund", None), _cell("on-time-refund", _ON_TIME)]
+    after = [_cell("late-refund-by-email", None), _cell("on-time-refund", _ON_TIME)]
+    with pytest.raises(ValueError, match="scenario_repair_deleted_scenarios"):
+        certify_scenario_repair(
+            before, after, expected_count=2, diagnostic_codes=set(), replaceable={before[0].scenario_key}
+        )

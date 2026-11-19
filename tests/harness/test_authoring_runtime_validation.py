@@ -3586,7 +3586,16 @@ def test_certificate_carries_the_isolation_the_runtime_recorded(tmp_path, record
 
 
 def _held_loop(
-    tmp_path, monkeypatch, held_rounds, *, rewrites=True, budgets=None, asked=None, deadline_at=None, repair_sleep=0.0
+    tmp_path,
+    monkeypatch,
+    held_rounds,
+    *,
+    rewrites=True,
+    budgets=None,
+    asked=None,
+    deadline_at=None,
+    repair_sleep=0.0,
+    scenario_count=0,
 ):
     """A generic validation that passes every time, with `held_rounds` lists of held cases read after each pass."""
     from fi.alk.harness import authoring_runtime_validation as module
@@ -3600,9 +3609,12 @@ def _held_loop(
     def read(root, budget=300):
         if asked is not None:
             asked.append(budget)
-        return reads.pop(0) if reads else {}
+        held = reads.pop(0) if reads else {}
+        if isinstance(held, tuple):
+            return held
+        return held, {"runnable": 0, "cases": len(held), "held": {}}
 
-    monkeypatch.setattr(module, "held_for_the_writer", read)
+    monkeypatch.setattr(module, "read_held", read)
     calls, guidance = [], []
 
     async def validate(*args):
@@ -3620,7 +3632,7 @@ def _held_loop(
         return 0
 
     controller = RepairController(budgets or RepairBudgets())
-    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=0)
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=scenario_count)
     asyncio.run(
         validate_and_repair(
             job, source, authoring, validate=validate, repair=repair, controller=controller, deadline_at=deadline_at
@@ -3640,13 +3652,12 @@ def test_a_case_the_live_proof_holds_goes_back_to_the_writer_and_is_validated_ag
 
 
 def test_cases_still_held_after_the_bounded_rewrites_are_kept_held_and_the_build_passes(tmp_path, monkeypatch):
-    from fi.alk.harness.authoring_runtime_validation import HELD_CASE_REPAIRS
-
+    rounds = RepairBudgets().held_case_rounds
     held = {"case": "negative_control_passed"}
-    calls, guidance, controller = _held_loop(tmp_path, monkeypatch, [held] * (HELD_CASE_REPAIRS + 3))
+    calls, guidance, controller = _held_loop(tmp_path, monkeypatch, [held] * (rounds + 3))
 
-    assert len(guidance) == HELD_CASE_REPAIRS
-    assert calls == ["validate"] * (HELD_CASE_REPAIRS + 1)
+    assert len(guidance) == rounds == 3
+    assert calls == ["validate"] * (rounds + 1)
     assert controller.history.decisions[-1].action is RepairAction.CERTIFY
 
 
@@ -3743,7 +3754,7 @@ def test_a_certify_only_validation_never_reads_or_hands_back_held_cases(tmp_path
     def unread(root, budget=300):
         raise AssertionError("certify-only must not prove the suite again for held cases")
 
-    monkeypatch.setattr(module, "held_for_the_writer", unread)
+    monkeypatch.setattr(module, "read_held", unread)
     budgets = RepairBudgets(compiler_candidates=0, environment_patches=0, scenario_patches=0)
     source = tmp_path / "source"
     authoring = tmp_path / "authoring"
@@ -3934,3 +3945,146 @@ def test_a_held_case_round_leaves_room_for_a_validation_as_long_as_the_last_one(
     )
     # 50 s would fit a round, but not a round and another 100 s validation.
     assert asked == [] and guidance == [] and calls == ["validate"]
+
+
+def _tally(runnable, cases, **held):
+    return {"runnable": runnable, "cases": cases, "held": held}
+
+
+def test_a_build_with_as_many_runnable_cases_as_it_asked_for_hands_nothing_back(tmp_path, monkeypatch):
+    held = {"late": "negative_control_passed"}
+    calls, guidance, _controller = _held_loop(
+        tmp_path, monkeypatch, [(held, _tally(4, 5, negative_control_passed=1))], scenario_count=4
+    )
+
+    assert guidance == [] and calls == ["validate"]
+    record = json.loads((tmp_path / "authoring" / "generic-harness" / "yield.json").read_text(encoding="utf-8"))
+    assert record["line"] == "4 of 4 runnable; held: 1 because no check fails the wrong behaviour its control plays"
+
+
+def test_a_build_short_of_what_it_asked_for_hands_its_held_cases_back_and_records_each_round(tmp_path, monkeypatch):
+    held = {"late": "negative_control_passed", "lost": "not_solvable"}
+    first = (held, _tally(3, 5, negative_control_passed=1, not_solvable=1))
+    second = ({}, _tally(5, 5))
+    from fi.alk.harness import authoring_runtime_validation as module
+
+    async def rewrite(held, authoring, *, repair, guidance, expected_count, seconds=300):
+        await repair("scenarios", module.held_case_guidance(held))
+        return True
+
+    monkeypatch.setattr(module, "_rewrite_held_cases", rewrite)
+    calls, guidance, _controller = _held_loop(tmp_path, monkeypatch, [first, second], scenario_count=5)
+
+    assert calls == ["validate", "validate"] and len(guidance) == 1
+    assert "replace it instead: write a new case for the same plan cell" in guidance[0][1]
+    record = json.loads((tmp_path / "authoring" / "generic-harness" / "yield.json").read_text(encoding="utf-8"))
+    assert (record["asked"], record["runnable"], record["held"]) == (5, 5, {})
+    assert [(one["round"], one["held"], one["rewritten"]) for one in record["rounds"]] == [(1, 2, True)]
+    assert record["line"] == "5 of 5 runnable"
+
+
+def test_the_yield_line_names_each_hold_in_plain_words_most_common_first():
+    from fi.alk.harness.authoring_runtime_validation import yield_line
+
+    line = yield_line(200, _tally(170, 200, not_solvable=4, negative_control_passed=20, some_new_code=6))
+    assert line == (
+        "170 of 200 runnable; held: 20 because no check fails the wrong behaviour its control plays, "
+        "6 because some new code, 4 because its reference solution does not pass on the world"
+    )
+
+
+def test_a_build_s_default_held_case_time_grows_with_the_cases_it_asked_for(tmp_path, monkeypatch):
+    from fi.alk.harness import authoring_runtime_validation as module
+
+    monkeypatch.delenv("ALK_HELD_CASE_REPAIR_SECONDS", raising=False)
+    budgets = []
+
+    def read(root, budget=300):
+        budgets.append(budget)
+        return {}, _tally(0, 0)
+
+    monkeypatch.setattr(module, "read_held", read)
+    source, authoring = tmp_path / "source", tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+
+    async def validate(*args):
+        return 1
+
+    async def repair(*args, **kwargs):
+        return 0
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=200)
+    asyncio.run(validate_and_repair(job, source, authoring, validate=validate, repair=repair))
+    # 30 s for each of 200 cases, above the 20-minute floor.
+    assert 5990 <= budgets[0] <= 6000
+
+
+@pytest.mark.parametrize(
+    "cases,setting,seconds",
+    [(0, None, 1200.0), (10, None, 1200.0), (200, None, 6000.0), (1000, None, 14400.0), (200, "600", 600.0),
+     (200, "0", 0.0)],
+)
+def test_the_held_case_budget_scales_with_the_cases_and_its_setting_wins(monkeypatch, cases, setting, seconds):
+    from fi.alk.harness.repair_controller import held_case_repair_seconds
+
+    if setting is None:
+        monkeypatch.delenv("ALK_HELD_CASE_REPAIR_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("ALK_HELD_CASE_REPAIR_SECONDS", setting)
+    assert held_case_repair_seconds(cases) == seconds
+
+
+@pytest.mark.parametrize("setting,rounds", [(None, 3), ("5", 5), ("0", 0), ("11", 3), ("many", 3)])
+def test_the_held_case_rounds_are_set_by_their_setting(monkeypatch, setting, rounds):
+    if setting is None:
+        monkeypatch.delenv("ALK_HELD_CASE_ROUNDS", raising=False)
+    else:
+        monkeypatch.setenv("ALK_HELD_CASE_ROUNDS", setting)
+    assert RepairBudgets().held_case_rounds == rounds
+
+
+def test_reading_held_cases_counts_runnable_and_held_from_the_proofs(tmp_path, monkeypatch):
+    from fi.alk.harness import prove_suite as suite_module
+    from fi.alk.harness.authoring_runtime_validation import read_held
+
+    proofs = {
+        "ok": {"proved": True, "blocked_reason": None},
+        "kept": {"proved": False, "kept_as_written": True, "blocked_reason": "no_negative_control"},
+        "late": {"proved": False, "blocked_reason": "negative_control_passed", "why": "it calls issue_refund"},
+        "slow": {"proved": False, "blocked_reason": "validation_incomplete", "why": "ran out"},
+    }
+    monkeypatch.setattr(suite_module, "prove_suite", lambda *args, **kwargs: proofs)
+
+    held, tally = read_held(tmp_path, budget=60)
+
+    assert held == {"late": "it calls issue_refund"}
+    assert tally == {"runnable": 2, "cases": 4, "held": {"negative_control_passed": 1, "validation_incomplete": 1}}
+
+
+def test_a_held_case_replaced_by_a_case_in_its_own_cell_is_kept(tmp_path):
+    from fi.alk.harness import authoring_runtime_validation as module
+    from fi.alk.harness.scenario_tools import load_scenarios, write_scenarios
+
+    root = _two_cases(tmp_path)
+    cases = load_scenarios(root)
+    cell = {"intent": "refund", "situation": "past the window"}
+    write_scenarios([one.model_copy(update={"coverage": cell}) for one in cases], root)
+    held_key = next(one.scenario_key for one in load_scenarios(root) if one.name == "held")
+
+    async def repair(phase, text):
+        kept = [one for one in load_scenarios(root) if one.name != "held"]
+        new = next(one for one in load_scenarios(root) if one.name == "held").model_copy(
+            update={"name": "held-by-email", "scenario_key": "held-by-email", "scenario_id": "held-by-email"}
+        )
+        import shutil
+
+        # As the writer's drop does: the held case's folder goes.
+        shutil.rmtree(root / "scenarios" / "held")
+        write_scenarios([*kept, new], root)
+        return 0
+
+    assert asyncio.run(module._rewrite_held_cases({held_key: "not_solvable"}, root, repair=repair, guidance="",
+                                                  expected_count=2)) is True
+    assert sorted(one.name for one in load_scenarios(root)) == ["held-by-email", "kept"]
