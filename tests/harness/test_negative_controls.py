@@ -1209,9 +1209,9 @@ def _prove_lanes(monkeypatch, tmp_path, lanes: Lanes, cases, **options):
 
 def test_cases_proved_on_several_instances_read_exactly_as_one_after_another(monkeypatch, tmp_path):
     cases = _many(12)
-    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "1")
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "1")
     serial, _ = _prove_lanes(monkeypatch, tmp_path, Lanes(4), cases)
-    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "4")
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
     lanes = Lanes(4)
     parallel, _ = _prove_lanes(monkeypatch, tmp_path, lanes, cases)
 
@@ -1223,7 +1223,7 @@ def test_cases_proved_on_several_instances_read_exactly_as_one_after_another(mon
 
 
 def test_concurrency_one_plays_every_case_on_one_instance_as_before(monkeypatch, tmp_path):
-    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "1")
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "1")
     lanes = Lanes(4)
     results, _ = _prove_lanes(monkeypatch, tmp_path, lanes, _many(6))
     assert len(results) == 6 and lanes.most_at_once == 1
@@ -1232,14 +1232,14 @@ def test_concurrency_one_plays_every_case_on_one_instance_as_before(monkeypatch,
 
 
 def test_no_case_starts_on_any_instance_once_the_deadline_has_passed(monkeypatch, tmp_path):
-    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "4")
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
     lanes = Lanes(4)
     results, _ = _prove_lanes(monkeypatch, tmp_path, lanes, _many(8), until=0.0)
     assert results == {} and lanes.most_at_once == 0
 
 
 def test_short_of_memory_the_lanes_shrink_and_every_case_is_still_proved(monkeypatch, tmp_path):
-    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "4")
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
     # 95% of the limit in use the whole time: lanes fall back to one; nothing is lost.
     monkeypatch.setattr(live_proof, "_memory", lambda: (7.6, 8.0))
     lanes = Lanes(4)
@@ -1260,7 +1260,7 @@ def test_the_lanes_used_fit_the_first_case_s_measured_memory(monkeypatch, tmp_pa
 
 
 def test_a_case_that_fails_beside_others_is_played_again_alone_not_dropped(monkeypatch, tmp_path):
-    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "4")
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
     lanes = Lanes(4)
     failed_once = set()
     original = live_proof._prove_case
@@ -1305,19 +1305,19 @@ def test_the_sandbox_s_memory_is_read_from_its_own_cgroup(monkeypatch):
 
 @pytest.mark.parametrize(
     "setting,ceiling",
-    [(None, live_proof.DEFAULT_PROVE_CONCURRENCY), ("1", 1), ("16", 16), ("0", 8), ("many", 8)],
+    [(None, 4), ("1", 1), ("16", 16), ("0", 4), ("many", 4)],
     ids=["default", "one", "more", "zero", "not-a-number"],
 )
 def test_the_prove_concurrency_setting_is_a_ceiling_of_at_least_one(monkeypatch, setting, ceiling):
     if setting is None:
-        monkeypatch.delenv("ALK_PROVE_CONCURRENCY", raising=False)
+        monkeypatch.delenv("ALK_VALIDATION_INSTANCES", raising=False)
     else:
-        monkeypatch.setenv("ALK_PROVE_CONCURRENCY", setting)
+        monkeypatch.setenv("ALK_VALIDATION_INSTANCES", setting)
     assert live_proof.prove_concurrency() == ceiling
 
 
 def test_a_live_run_cut_off_part_way_keeps_what_it_had_proved(monkeypatch, tmp_path):
-    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "1")
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "1")
     monkeypatch.setattr(live_proof, "SAVE_EVERY_SECONDS", 0.0)
     original = live_proof._prove_case
 
@@ -1377,3 +1377,40 @@ def test_a_refused_call_the_reference_also_makes_is_no_attempt_to_name(monkeypat
     # The lookup is the reference's own call; a refund that went through once is the unmatched call, not an attempt.
     assert refused_attempts(case, calls) == []
     assert refused_attempts(case, calls[:2]) == ["refund_order"]
+
+
+def test_a_live_pass_keeps_its_lane_decisions_and_each_case_s_time_with_the_job(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
+    monkeypatch.setattr(live_proof, "_memory", lambda: None)
+    lanes = Lanes(3)
+    lanes.degrade_events = [{"reason": "resource_limited", "from_w": 4, "to_w": 3}]
+
+    _prove_lanes(monkeypatch, tmp_path, lanes, _many(6))
+
+    record = json.loads((tmp_path / live_proof.LANES_FILE).read_text(encoding="utf-8"))
+    assert (record["requested_instances"], record["provisioned_instances"], record["lanes"]) == (4, 3, 3)
+    assert record["admission"] == [{"reason": "resource_limited", "from_w": 4, "to_w": 3}]
+    assert sorted(one["key"] for one in record["cases"]) == [f"case-{n:02d}" for n in range(6)]
+    assert {one["lane"] for one in record["cases"]} == {0, 1, 2}
+    assert all(one["seconds"] >= 0 for one in record["cases"]) and record["seconds"] >= 0
+    assert record["cases_total"] == 6 and record["lane_changes"] == []
+    # The line read first when a pass gave no speed-up reaches the job's output too.
+    assert "live proof: 6 cases on 3 of 3 runtime instances" in capsys.readouterr().out
+
+
+def test_a_live_pass_records_why_it_used_fewer_lanes(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
+    monkeypatch.setattr(live_proof, "_lanes_that_fit", lambda lanes, before, peak: 1)
+
+    _prove_lanes(monkeypatch, tmp_path, Lanes(3), _many(4))
+
+    record = json.loads((tmp_path / live_proof.LANES_FILE).read_text(encoding="utf-8"))
+    assert record["lanes"] == 1
+    assert record["lane_changes"] == [{"to": 1, "reason": "first_case_memory_growth"}]
+
+
+def test_a_live_control_the_world_refuses_names_the_attempt(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "1")
+    results, _played = _prove_lanes(monkeypatch, tmp_path, Lanes(1), [_refusal(sub_goals=("looked_up_o20",))])
+    [result] = results.values()
+    assert result["controls"][0]["attempted"] == ["refund_order"]

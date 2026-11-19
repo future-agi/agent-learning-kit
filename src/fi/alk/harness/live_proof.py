@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from .catalogue import Catalogue, load_catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
-from .controls import control_broken, played_control, unmatched_calls
+from .controls import control_broken, played_control, refused_attempts, unmatched_calls
 from .folder import apply_setup, check_ready
 from .json_file import write_json_atomic
 from .outbound import redact_outbound_text
@@ -127,9 +127,12 @@ def _digest(world: Any) -> str | None:
         return None
 
 
-# The most cases proved at once in one sandbox (`ALK_PROVE_CONCURRENCY`): a ceiling, never a target. How many runtime
-# instances the sandbox can hold is decided where they are made (`admit_parallelism`, from its own cgroup limits).
-DEFAULT_PROVE_CONCURRENCY = 8
+# The most runtime instances in one sandbox (`ALK_VALIDATION_INSTANCES`, the one setting for a build's validation and a
+# Validate's proof): a ceiling, never a target. How many the sandbox can hold is decided where they are made
+# (`admit_parallelism`, from its own cgroup limits, and one when the agent holds a fixed port).
+DEFAULT_PROVE_CONCURRENCY = 4
+# What the live pass decided and how long each case took, kept with the job's files: the sandbox is gone afterwards.
+LANES_FILE = "generic-harness/live-proof-lanes.json"
 # Memory a lane keeps free of the sandbox's limit: under it, lanes stop taking cases until one is left.
 MEMORY_FLOOR = 0.15
 # The share of the memory limit the lanes may fill, from the first case's measured growth.
@@ -141,11 +144,11 @@ SAVE_EVERY_SECONDS = 5.0
 
 
 def prove_concurrency() -> int:
-    """`ALK_PROVE_CONCURRENCY` when it is a whole number of at least 1, else the default ceiling."""
+    """`ALK_VALIDATION_INSTANCES` when it is a whole number of at least 1, else the default ceiling."""
     import os
 
     try:
-        value = int(str(os.environ.get("ALK_PROVE_CONCURRENCY") or "").strip())
+        value = int(str(os.environ.get("ALK_VALIDATION_INSTANCES") or "").strip())
     except ValueError:
         return DEFAULT_PROVE_CONCURRENCY
     return value if value >= 1 else DEFAULT_PROVE_CONCURRENCY
@@ -200,6 +203,16 @@ async def prove_live(
     among them), up to `prove_concurrency()` cases are played at once, one per instance; one instance plays them one
     after another, as before."""
     lanes = [runtime, *(one for one in runtimes or () if one is not runtime)][: prove_concurrency()]
+    started = time.monotonic()
+    record: dict[str, Any] = {
+        "requested_instances": prove_concurrency(),
+        "provisioned_instances": len(lanes),
+        # Why provisioning made fewer instances than asked (`resource_limited`, `fixed_port`, ...), as it recorded.
+        "admission": [dict(one) for one in getattr(provider, "degrade_events", ()) or ()],
+        "lanes": 1,
+        "lane_changes": [],
+        "cases": [],
+    }
     bound = service_endpoints(contract, runtime.endpoints, served_by_toolbox(runtime.endpoints))
     if not bound:
         return {}
@@ -229,6 +242,15 @@ async def prove_live(
             flushed["at"] = time.monotonic()
 
     async def prove_on(lane: Any, scenario: Scenario) -> LiveResult:
+        began = time.monotonic()
+        try:
+            return await _prove_on(lane, scenario)
+        finally:
+            record["cases"].append(
+                {"key": proof_key(scenario), "lane": lanes.index(lane), "seconds": round(time.monotonic() - began, 2)}
+            )
+
+    async def _prove_on(lane: Any, scenario: Scenario) -> LiveResult:
         endpoints = service_endpoints(contract, lane.endpoints, served_by_toolbox(lane.endpoints))
         proxy = _address(lane.endpoints.get(TOOL_PROXY, ""))
         toolbox = _address(lane.endpoints.get(MCP_TOOLBOX, ""))
@@ -259,7 +281,19 @@ async def prove_live(
             first = pending.pop(0)
             before, peak = await _measured(prove_on(lanes[0], first), keep, retry, first)
         active = _lanes_that_fit(len(lanes), before, peak)
-        logger.info("live proof: %d cases on %d of %d runtime instances", len(order), active, len(lanes))
+        reading = _memory()
+        record["memory_gib"] = {
+            "before_first_case": before,
+            "peak_first_case": peak,
+            "used": reading[0] if reading else None,
+            "limit": reading[1] if reading else None,
+        }
+        record["lanes"] = active
+        if active < len(lanes):
+            record["lane_changes"].append({"to": active, "reason": "first_case_memory_growth"})
+        line = f"live proof: {len(order)} cases on {active} of {len(lanes)} runtime instances"
+        logger.info(line)
+        print(line, flush=True)
         state = {"active": active, "failed": False}
         queue: asyncio.Queue[Scenario] = asyncio.Queue()
         for scenario in pending:
@@ -274,6 +308,7 @@ async def prove_live(
                 if state["active"] > 1 and _short_of_memory():
                     # Fewer lanes, down to one; this lane's cases go to the others.
                     state["active"] = max(1, state["active"] - 1)
+                    record["lane_changes"].append({"to": state["active"], "reason": "memory_short"})
                     logger.warning("live proof: memory is short; %d lanes now", state["active"])
                     continue
                 try:
@@ -290,6 +325,10 @@ async def prove_live(
                     )
                     retry.append(scenario)
                     # A failure among several lanes may be the sandbox's limits: no more cases at once.
+                    if state["active"] > 1:
+                        record["lane_changes"].append(
+                            {"to": 1, "reason": "case_failed_beside_others", "key": proof_key(scenario)}
+                        )
                     state["active"] = 1
 
         await asyncio.gather(*(worker(lane, index) for index, lane in enumerate(lanes[:active])))
@@ -307,7 +346,20 @@ async def prove_live(
         await provider.reset(lane, work_directory=work)
     ordered = {proof_key(one): results[proof_key(one)] for one in order if proof_key(one) in results}
     write_live(authoring, ordered)
+    record["cases_total"] = len(order)
+    record["seconds"] = round(time.monotonic() - started, 2)
+    _write_lanes(authoring, record)
     return ordered
+
+
+def _write_lanes(authoring: Path, record: Mapping[str, Any]) -> None:
+    """Keep the live pass's lane decisions and timings with the job's files; never fails the pass."""
+    try:
+        path = Path(authoring) / LANES_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(path, dict(record))
+    except Exception as exc:  # noqa: BLE001 - diagnostics only
+        logger.warning("live proof: lanes record not written (%s)", type(exc).__name__)
 
 
 def _drained(queue: asyncio.Queue) -> list[Scenario]:
@@ -366,7 +418,15 @@ async def _prove_case(scenario: Scenario, catalogue: Catalogue, fresh: Any) -> L
                  "error": redact_outbound_text(f"{type(exc).__name__}: {exc}")[:300]}
             )
             continue
-        controls.append(played_control(control, outcomes, control_assumed, unmatched_calls(scenario, control_calls)))
+        controls.append(
+            played_control(
+                control,
+                outcomes,
+                control_assumed,
+                unmatched_calls(scenario, control_calls),
+                refused_attempts(scenario, control_calls),
+            )
+        )
     return {
         "assumed": assumed,
         "refused": refused,

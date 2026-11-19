@@ -6524,6 +6524,11 @@ class ProcessRuntimeProvider:
 
     # --- C2 §1/§2/§4/§6 pipeline helpers -----------------------------------------------------
 
+    @property
+    def degrade_events(self) -> list[dict[str, JsonValue]]:
+        """Why this provider made fewer instances than asked, in order (`resource_limited`, `fixed_port`, ...)."""
+        return [dict(event) for event in self._degrade_ledger]
+
     def _append_degrade(self, reason: str, from_w: int, to_w: int) -> None:
         """C2 §6 dedup rule: a repeat failure with an already-present reason UPDATES that entry's
         `to_w` downward — never a second entry. After any mutation the ledger is normalized to a

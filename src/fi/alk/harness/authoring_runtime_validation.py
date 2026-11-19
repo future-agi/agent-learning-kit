@@ -943,7 +943,8 @@ async def validate_once(
             job, secrets, authoring, local_runtime=local_runtime, generic=generic
         )
         # Parallel runtime instances inside the one sandbox, each with its own ports and databases.
-        requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4))
+        # One setting for a build's validation and a Validate's proof (`live_proof.prove_concurrency`).
+        requested_lanes = live_proof.prove_concurrency()
         # Setup checks touch only the world's database, so a single-database world checks each
         # scenario on its own clone of the sealed baseline instead of a whole agent stack.
         database_lanes = _database_lanes()
