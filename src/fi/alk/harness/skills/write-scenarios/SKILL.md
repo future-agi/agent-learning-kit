@@ -545,9 +545,10 @@ do nothing. Write them on purpose and never drop one for asking:
   missing tool. A check fails when the action happens another way; the judge reads how it was declined.
 - **Not allowed.** As any refusal: a check on the forbidden change, a control that makes it.
 
-`same_value(a, b)` compares numbers, dates, times and ids however they were written (`89` and
-`"$89.00"` or `"89 dollars"`, never `$89` and `€89`; `2026-11-20` and `20 November 2026`, `14:00` and `2 pm`);
-`same_id(a, b)` compares ids.
+`same_value(a, b)` compares numbers and amounts however they were written (`89` and `"$89.00"` or
+`"89 dollars"`, never `$89` and `€89`), ISO dates and times by their value (`14:00` and `14:00:00`), and
+ids; a date or time said in words is compared as text, so compare against the value in the form the
+world holds it. `same_id(a, b)` compares ids.
 
 **A check that only asks whether a tool was called is not a check.** It proves the plumbing worked, not
 that the agent behaved: any agent that reaches the tool at all passes it, and no agent that behaves
@@ -846,8 +847,9 @@ played exactly like `solution`.
 - On a no-change (refusal) scenario, the control performs the forbidden change, and the checks must
   fail it. The checks of such a scenario may hold on an untouched world; the control is what shows
   they can fail. So one of its checks has to read that change: the refusal sub-goal's check fails when
-  the change commits for this caller's record. A case whose refusal only the judge grades has nothing
-  that can fail its control, and it is held.
+  the change commits for this caller's record. A control is replayed against the checks, never the
+  judge, so a case whose refusal only the judge grades has nothing that can fail its control, and it is
+  held.
 - A no-change scenario whose solution looks a record up with a fixed id also checks that the right
   record was read (for example `any(c.name == "<the lookup tool>" and same_id(c.arguments.get("<its id
   argument>"), "<the fixed id>") for c in calls)`), or leaves that argument out of `fixed`. A read-only lookup with a wrong id

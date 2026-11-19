@@ -27,7 +27,7 @@ import ast
 import inspect
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Mapping, Sequence
 
@@ -156,23 +156,6 @@ _CURRENCIES = {
     "dollar": "USD", "dollars": "USD", "euro": "EUR", "euros": "EUR",
     "pound": "GBP", "pounds": "GBP", "rupee": "INR", "rupees": "INR",
 }
-_MONTHS = {
-    name: number
-    for number, month in enumerate(
-        ("january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
-         "november", "december"),
-        start=1,
-    )
-    for name in (month, month[:3], month[:4])
-}
-_ISO_DAY = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
-# `20 November 2026`, `November 20, 2026`, `Tuesday, 20th Nov 2026`: the forms a date is said in, never `11/12/2026`,
-# whose order is a convention the text does not carry.
-_DAY_MONTH = re.compile(r"^(?:[a-z]+,?\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)\.?,?\s+(\d{4})$")
-_MONTH_DAY = re.compile(r"^(?:[a-z]+,?\s+)?([a-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$")
-_CLOCK = re.compile(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?$")
-
-
 def _number(value: Any) -> tuple[str, Decimal] | None:
     """A number and the currency it is written in ("" for none): `$89`, `89 USD` and `89 dollars` are one currency."""
     if isinstance(value, bool):
@@ -196,46 +179,26 @@ def _same_amount(mine: tuple[str, Decimal], theirs: tuple[str, Decimal]) -> bool
     return mine[1] == theirs[1] and (not mine[0] or not theirs[0] or mine[0] == theirs[0])
 
 
-def _day(value: Any) -> date | None:
-    if not isinstance(value, str):
+def _iso(value: Any) -> date | time | datetime | None:
+    """A date, time or date and time written in ISO 8601, read by the standard library; anything else is None."""
+    if not isinstance(value, str) or not value.strip() or value.strip().isdigit():
         return None
-    text = " ".join(value.strip().casefold().split())
-    try:
-        if found := _ISO_DAY.match(text):
-            return date(int(found[1]), int(found[2]), int(found[3]))
-        if found := _DAY_MONTH.match(text):
-            day, month, year = found[1], found[2], found[3]
-        elif found := _MONTH_DAY.match(text):
-            month, day, year = found[1], found[2], found[3]
-        else:
-            return None
-        return date(int(year), _MONTHS[month], int(day)) if month in _MONTHS else None
-    except ValueError:
-        return None
-
-
-def _minute(value: Any) -> int | None:
-    """A time of day said with a colon or am/pm, as minutes after midnight; a bare number is not a time."""
-    if not isinstance(value, str):
-        return None
-    found = _CLOCK.match(value.strip().casefold())
-    if not found or not (found[2] or found[3]):
-        return None
-    hour, minute, half = int(found[1]), int(found[2] or 0), (found[3] or "").replace(".", "")
-    if minute > 59 or hour > (12 if half else 23) or (half and hour == 0):
-        return None
-    if half:
-        hour = hour % 12 + (12 if half == "pm" else 0)
-    return hour * 60 + minute
+    for kind in (date, datetime, time):
+        try:
+            return kind.fromisoformat(value.strip())
+        except ValueError:
+            continue
+    return None
 
 
 def same_value(first: Any, second: Any) -> bool:
     """Whether two values are the same value however they were written: a number by its value (`89`, `89.0`,
-    `"$89.00"`, `"89 dollars"`; two different currencies never match), a date by its day (`2026-11-20`,
-    `20 November 2026`), a time by its minute (`14:00`, `2 pm`), and any other text as `same_id` reads it (case and
-    separators ignored). Lists and objects compare item by item.
+    `"$89.00"`, `"89 dollars"`; two different currencies never match), an ISO 8601 date or time by its value
+    (`14:00` and `14:00:00`), and any other text as `same_id` reads it (case and separators ignored). A date said in
+    words is compared as text: write the reference in the form the world holds. Lists and objects compare item by
+    item.
 
-    It never makes two different values the same: another number, day, minute or id is still different."""
+    It never makes two different values the same: another number, moment or id is still different."""
     if first is None or second is None:
         return first is None and second is None
     if isinstance(first, bool) or isinstance(second, bool):
@@ -257,10 +220,9 @@ def same_value(first: Any, second: Any) -> bool:
     amounts = _number(first), _number(second)
     if amounts[0] is not None and amounts[1] is not None:
         return _same_amount(*amounts)
-    for read in (_day, _minute):
-        mine, theirs = read(first), read(second)
-        if mine is not None and theirs is not None:
-            return mine == theirs
+    moments = _iso(first), _iso(second)
+    if moments[0] is not None and moments[1] is not None:
+        return moments[0] == moments[1]
     return same_id(first, second)
 
 
