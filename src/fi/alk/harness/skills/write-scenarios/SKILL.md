@@ -532,6 +532,19 @@ that did the right thing:
 - **A value the tool decides.** An amount the tool computes is in what it returned (the call's
   result), not in an argument it does not take.
 
+**Keep the cases that ask for what is not there.** A caller who asks about an order that does not
+exist, for something the agent has no tool to do, or for what its rules forbid is one of the most
+useful cases a suite has: the right answer is to say it was not found, to decline or hand over, or to
+do nothing. Write them on purpose and never drop one for asking:
+
+- **Not found.** The reference looks the record up with the read-only tool and stops. A check reads
+  the world's answer (the not-found result or error it returned), not only that a lookup was tried:
+  a lookup that crashed shows nothing. Another check fails when anything is changed for that record,
+  and the control acts on it anyway.
+- **No such tool.** The reference uses only what the agent has (the lookup, the hand-over), never the
+  missing tool. A check fails when the action happens another way; the judge reads how it was declined.
+- **Not allowed.** As any refusal: a check on the forbidden change, a control that makes it.
+
 `same_value(a, b)` compares numbers, dates, times and ids however they were written (`89` and
 `"$89.00"` or `"89 dollars"`, never `$89` and `€89`; `2026-11-20` and `20 November 2026`, `14:00` and `2 pm`);
 `same_id(a, b)` compares ids.
