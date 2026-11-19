@@ -127,6 +127,56 @@ def _digest(world: Any) -> str | None:
         return None
 
 
+# The most cases proved at once in one sandbox (`ALK_PROVE_CONCURRENCY`): a ceiling, never a target. How many runtime
+# instances the sandbox can hold is decided where they are made (`admit_parallelism`, from its own cgroup limits).
+DEFAULT_PROVE_CONCURRENCY = 8
+# Memory a lane keeps free of the sandbox's limit: under it, lanes stop taking cases until one is left.
+MEMORY_FLOOR = 0.15
+# The share of the memory limit the lanes may fill, from the first case's measured growth.
+MEMORY_SHARE = 0.85
+# How often the sandbox's memory is read while the first case is measured.
+MEMORY_SAMPLE_SECONDS = 0.25
+
+
+def prove_concurrency() -> int:
+    """`ALK_PROVE_CONCURRENCY` when it is a whole number of at least 1, else the default ceiling."""
+    import os
+
+    try:
+        value = int(str(os.environ.get("ALK_PROVE_CONCURRENCY") or "").strip())
+    except ValueError:
+        return DEFAULT_PROVE_CONCURRENCY
+    return value if value >= 1 else DEFAULT_PROVE_CONCURRENCY
+
+
+def _memory() -> tuple[float, float] | None:
+    """`(used, limit)` GiB of this sandbox, read the way its runtime instances were sized."""
+    from .process_runtime import memory_headroom
+
+    try:
+        return memory_headroom()
+    except Exception:  # noqa: BLE001 - unreadable memory leaves the lanes as provisioned
+        return None
+
+
+def _short_of_memory() -> bool:
+    reading = _memory()
+    return reading is not None and reading[1] > 0 and (reading[1] - reading[0]) / reading[1] < MEMORY_FLOOR
+
+
+def _lanes_that_fit(lanes: int, before: float | None, peak: float | None) -> int:
+    """How many lanes the first case's measured growth leaves room for, at least 1."""
+    reading = _memory()
+    if lanes <= 1 or reading is None or before is None or peak is None:
+        return lanes
+    used, limit = reading
+    growth = max(peak - before, 0.0)
+    if growth <= 0:
+        return lanes
+    room = limit * MEMORY_SHARE - used
+    return max(1, min(lanes, 1 + int(room // growth)))
+
+
 async def prove_live(
     *,
     authoring: Path,
@@ -138,76 +188,183 @@ async def prove_live(
     seed: int = 0,
     keys: set[str] | None = None,
     until: float | None = None,
+    runtimes: list[EnvironmentRuntime] | None = None,
 ) -> dict[str, LiveResult]:
     """Play each case's reference, an empty run and its controls on the live runtime; write and
     return `{scenario_key: live result}`. Returns {} when no tool is bound to a running server.
 
     `keys` plays only those cases. No case starts once `until` (epoch seconds) has passed: a case not
-    reached keeps its offline proof."""
+    reached keeps its offline proof. With `runtimes` (instances of the same sealed runtime in this sandbox, `runtime`
+    among them), up to `prove_concurrency()` cases are played at once, one per instance; one instance plays them one
+    after another, as before."""
+    lanes = [runtime, *(one for one in runtimes or () if one is not runtime)][: prove_concurrency()]
     bound = service_endpoints(contract, runtime.endpoints, served_by_toolbox(runtime.endpoints))
     if not bound:
         return {}
-    proxy = _address(runtime.endpoints.get(TOOL_PROXY, ""))
-    toolbox = _address(runtime.endpoints.get(MCP_TOOLBOX, ""))
     scenarios = load_scenarios(authoring)
     catalogue = load_catalogue(authoring)
+    order = [
+        scenario
+        for scenario in scenarios
+        if (keys is None or proof_key(scenario) in keys)
+        and (
+            any(str(step.tool) in bound for step in scenario.solution)
+            or any(str(step.tool) in bound for control in scenario.negative_controls for step in control.steps)
+        )
+    ]
     results: dict[str, LiveResult] = {}
+    retry: list[Scenario] = []
 
-    async def fresh() -> Any:
-        await provider.reset(runtime, work_directory=work)
-        world = await factory.create(runtime, rng=random.Random(seed))
-        world.bind_tools(proxy, bound, contract.tool_names(), mcp_toolbox=toolbox)
-        return world
+    def due() -> bool:
+        return until is None or time.time() < until
 
-    for scenario in scenarios:
-        key = proof_key(scenario)
-        if keys is not None and key not in keys:
-            continue
-        if until is not None and time.time() >= until:
-            logger.warning("live proof: time budget spent before %s; it keeps its offline proof", key)
-            continue
-        if not any(str(step.tool) in bound for step in scenario.solution) and not any(
-            str(step.tool) in bound for control in scenario.negative_controls for step in control.steps
-        ):
-            continue
+    async def prove_on(lane: Any, scenario: Scenario) -> LiveResult:
+        endpoints = service_endpoints(contract, lane.endpoints, served_by_toolbox(lane.endpoints))
+        proxy = _address(lane.endpoints.get(TOOL_PROXY, ""))
+        toolbox = _address(lane.endpoints.get(MCP_TOOLBOX, ""))
+
+        async def fresh() -> Any:
+            await provider.reset(lane, work_directory=work)
+            world = await factory.create(lane, rng=random.Random(seed))
+            world.bind_tools(proxy, endpoints, contract.tool_names(), mcp_toolbox=toolbox)
+            return world
+
+        return await _prove_case(scenario, catalogue, fresh)
+
+    if len(lanes) == 1 or len(order) <= 1:
+        # One instance: today's loop, case after case.
+        for scenario in order:
+            if not due():
+                logger.warning("live proof: time budget spent before %s; it keeps its offline proof", proof_key(scenario))
+                continue
+            try:
+                results[proof_key(scenario)] = await prove_on(lanes[0], scenario)
+            except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play keeps its offline proof
+                _skipped(scenario, exc)
+    else:
+        pending = list(order)
+        # The first case alone, its memory growth measured, so the lanes used fit what this agent takes.
+        before = peak = None
+        if due():
+            first = pending.pop(0)
+            before, peak = await _measured(prove_on(lanes[0], first), results, retry, first)
+        active = _lanes_that_fit(len(lanes), before, peak)
+        logger.info("live proof: %d cases on %d of %d runtime instances", len(order), active, len(lanes))
+        state = {"active": active, "failed": False}
+        queue: asyncio.Queue[Scenario] = asyncio.Queue()
+        for scenario in pending:
+            queue.put_nowait(scenario)
+
+        async def worker(lane: Any, index: int) -> None:
+            while True:
+                if index >= state["active"]:
+                    return
+                if not due():
+                    return
+                if state["active"] > 1 and _short_of_memory():
+                    # Fewer lanes, down to one; this lane's cases go to the others.
+                    state["active"] = max(1, state["active"] - 1)
+                    logger.warning("live proof: memory is short; %d lanes now", state["active"])
+                    continue
+                try:
+                    scenario = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                try:
+                    results[proof_key(scenario)] = await prove_on(lane, scenario)
+                except Exception as exc:  # noqa: BLE001 - played again alone, never dropped
+                    logger.warning(
+                        "live proof: %s failed beside other cases (%s); it is played again alone",
+                        proof_key(scenario),
+                        redact_outbound_text(f"{type(exc).__name__}: {exc}")[:200],
+                    )
+                    retry.append(scenario)
+                    # A failure among several lanes may be the sandbox's limits: no more cases at once.
+                    state["active"] = 1
+
+        await asyncio.gather(*(worker(lane, index) for index, lane in enumerate(lanes[:active])))
+        # What the lanes did not reach (time, or shrunk to one) and what failed beside others: one at a time.
+        leftover = [*retry, *_drained(queue)]
+        for scenario in sorted(leftover, key=order.index):
+            if not due():
+                logger.warning("live proof: time budget spent before %s; it keeps its offline proof", proof_key(scenario))
+                continue
+            try:
+                results[proof_key(scenario)] = await prove_on(lanes[0], scenario)
+            except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play keeps its offline proof
+                _skipped(scenario, exc)
+    for lane in lanes:
+        await provider.reset(lane, work_directory=work)
+    ordered = {proof_key(one): results[proof_key(one)] for one in order if proof_key(one) in results}
+    write_live(authoring, ordered)
+    return ordered
+
+
+def _drained(queue: asyncio.Queue) -> list[Scenario]:
+    out = []
+    while not queue.empty():
+        out.append(queue.get_nowait())
+    return out
+
+
+def _skipped(scenario: Scenario, exc: Exception) -> None:
+    logger.warning(
+        "live proof skipped for %s: %s", proof_key(scenario), redact_outbound_text(f"{type(exc).__name__}: {exc}")
+    )
+
+
+async def _measured(
+    play: Any, results: dict[str, LiveResult], retry: list[Scenario], scenario: Scenario
+) -> tuple[float | None, float | None]:
+    """Run one case alone while sampling the sandbox's memory: `(before, peak)` GiB, None when unreadable."""
+    reading = _memory()
+    before = reading[0] if reading is not None else None
+    peak = before
+    task = asyncio.ensure_future(play)
+    while not task.done():
+        await asyncio.sleep(MEMORY_SAMPLE_SECONDS)
+        now = _memory()
+        if now is not None and (peak is None or now[0] > peak):
+            peak = now[0]
+    try:
+        results[proof_key(scenario)] = task.result()
+    except Exception as exc:  # noqa: BLE001 - played again alone at the end
+        logger.warning("live proof: %s failed (%s); it is played again", proof_key(scenario), type(exc).__name__)
+        retry.append(scenario)
+    return before, peak
+
+
+async def _prove_case(scenario: Scenario, catalogue: Catalogue, fresh: Any) -> LiveResult:
+    """One case on one runtime instance: its reference, an empty run and each control, each on a fresh world."""
+    world = await fresh()
+    calls, assumed, refused = await asyncio.to_thread(_play, scenario, world, list(scenario.solution))
+    with_solution = await asyncio.to_thread(_outcomes, scenario, catalogue, world, calls)
+    right = await asyncio.to_thread(_digest, world)
+    world = await fresh()
+    nothing_calls, _, _ = await asyncio.to_thread(_play, scenario, world, [])
+    with_nothing = await asyncio.to_thread(_outcomes, scenario, catalogue, world, nothing_calls)
+    untouched = await asyncio.to_thread(_digest, world)
+    controls: list[ControlResult] = []
+    for control in scenario.negative_controls:
         try:
             world = await fresh()
-            calls, assumed, refused = await asyncio.to_thread(_play, scenario, world, list(scenario.solution))
-            with_solution = await asyncio.to_thread(_outcomes, scenario, catalogue, world, calls)
-            right = await asyncio.to_thread(_digest, world)
-            world = await fresh()
-            nothing_calls, _, _ = await asyncio.to_thread(_play, scenario, world, [])
-            with_nothing = await asyncio.to_thread(_outcomes, scenario, catalogue, world, nothing_calls)
-            untouched = await asyncio.to_thread(_digest, world)
-            controls: list[ControlResult] = []
-            for control in scenario.negative_controls:
-                try:
-                    world = await fresh()
-                    control_calls, control_assumed, _ = await asyncio.to_thread(_play, scenario, world, list(control.steps))
-                    outcomes = await asyncio.to_thread(_outcomes, scenario, catalogue, world, control_calls)
-                except Exception as exc:  # noqa: BLE001 - a control that cannot be played is no evidence, the case still is
-                    controls.append(
-                        {"name": control.name, "why": control.why, "ran": False, "failed": None, "held": [], "assumed": [],
-                         "error": redact_outbound_text(f"{type(exc).__name__}: {exc}")[:300]}
-                    )
-                    continue
-                controls.append(
-                    played_control(control, outcomes, control_assumed, unmatched_calls(scenario, control_calls))
-                )
-        except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play keeps its offline proof
-            logger.warning("live proof skipped for %s: %s", key, redact_outbound_text(f"{type(exc).__name__}: {exc}"))
+            control_calls, control_assumed, _ = await asyncio.to_thread(_play, scenario, world, list(control.steps))
+            outcomes = await asyncio.to_thread(_outcomes, scenario, catalogue, world, control_calls)
+        except Exception as exc:  # noqa: BLE001 - a control that cannot be played is no evidence, the case still is
+            controls.append(
+                {"name": control.name, "why": control.why, "ran": False, "failed": None, "held": [], "assumed": [],
+                 "error": redact_outbound_text(f"{type(exc).__name__}: {exc}")[:300]}
+            )
             continue
-        results[key] = {
-            "assumed": assumed,
-            "refused": refused,
-            "with_solution": [{"name": one.name, "held": one.held, "said": one.said, "broken": one.broken} for one in with_solution],
-            "with_nothing": [{"name": one.name, "held": one.held, "said": one.said, "broken": one.broken} for one in with_nothing],
-            "outcome": "no_change" if not assumed and right is not None and right == untouched else "change",
-            "controls": controls,
-        }
-    await provider.reset(runtime, work_directory=work)
-    write_live(authoring, results)
-    return results
+        controls.append(played_control(control, outcomes, control_assumed, unmatched_calls(scenario, control_calls)))
+    return {
+        "assumed": assumed,
+        "refused": refused,
+        "with_solution": [{"name": one.name, "held": one.held, "said": one.said, "broken": one.broken} for one in with_solution],
+        "with_nothing": [{"name": one.name, "held": one.held, "said": one.said, "broken": one.broken} for one in with_nothing],
+        "outcome": "no_change" if not assumed and right is not None and right == untouched else "change",
+        "controls": controls,
+    }
 
 
 def live_summary(results: Mapping[str, LiveResult]) -> str:

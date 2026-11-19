@@ -1443,6 +1443,7 @@ async def validate_once(
                 # service-backed and MCP Toolbox tools for real; never fails validation.
                 try:
                     await play_this_attempt(
+                        runtimes=runtimes,
                         authoring=authoring,
                         contract=AgentContract.model_validate_json(
                             (bundle / "contract.json").read_text(encoding="utf-8")
@@ -1612,13 +1613,25 @@ async def prove_on_sealed_runtime(
         secrets = _prepare_runtime_work(job, work, secrets_path, local_runtime=local_runtime)
         provider = _runtime_provider(job, secrets, authoring, local_runtime=local_runtime, generic=generic)
         try:
+            # Up to `prove_concurrency()` instances in this one sandbox; provisioning admits only what its own CPU and
+            # memory limits fit (`admit_parallelism`), and one when the agent holds a fixed port.
+            from .scenario_tools import load_scenarios
+            from .proofs import proof_key
+
+            cases = sum(1 for one in load_scenarios(authoring) if keys is None or proof_key(one) in keys)
             runtimes = await provider.provision(
-                manifest, source=source, bundle_dir=bundle, work_directory=work, instances=1
+                manifest,
+                source=source,
+                bundle_dir=bundle,
+                work_directory=work,
+                # Never more instances than cases: each one costs its start-up.
+                instances=max(1, min(live_proof.prove_concurrency(), cases)),
             )
             return await live_proof.prove_live(
                 authoring=authoring,
                 contract=contract,
                 runtime=runtimes[0],
+                runtimes=runtimes,
                 provider=provider,
                 factory=hosted_entrypoint.ProcessWorldFactory(work, bundle),
                 work=work,
@@ -1684,6 +1697,7 @@ def held_case_guidance(held: dict[str, str]) -> str:
 
 async def play_this_attempt(
     *,
+    runtimes: list | None = None,
     authoring: Path,
     contract: AgentContract,
     runtime,
@@ -1699,6 +1713,7 @@ async def play_this_attempt(
         authoring=authoring,
         contract=contract,
         runtime=runtime,
+        runtimes=runtimes,
         provider=provider,
         factory=factory,
         work=work,

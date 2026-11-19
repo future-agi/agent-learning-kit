@@ -1131,3 +1131,186 @@ def test_a_request_the_policy_forbids_is_kept_and_proved(monkeypatch, tmp_path):
     proof = module.prove(_refusal(), catalogue(no_refund=NO_REFUND, looked_up_o20=LOOKED_UP_O20), tmp_path)
     assert proof.blocked_reason() is None and proof.proved is True, proof.why()
     assert proof.outcome == "no_change" and proof.controls[0]["failed"] is True
+
+
+# Parallel proving: several runtime instances of one sealed runtime, in the same sandbox, each with its own datastore.
+class Lane:
+    def __init__(self, index: int, *, fail_first: set[str] | None = None) -> None:
+        self.index = index
+        self.store = copy.deepcopy(BASE)
+        self.endpoints = {"tool_proxy": SimpleNamespace(address="http://proxy"), "target_http": f"x{index}"}
+        self.played: list[str] = []
+        self.fail_first = set(fail_first or ())
+
+
+class Lanes:
+    """Provider and factory over several lanes: each reset and world is that lane's own."""
+
+    def __init__(self, count: int, **lane) -> None:
+        self.lanes = [Lane(index, **(lane if index else {})) for index in range(count)]
+        self.concurrent = 0
+        self.most_at_once = 0
+
+    async def reset(self, runtime, *, work_directory) -> None:
+        runtime.store.clear()
+        runtime.store.update(copy.deepcopy(BASE))
+
+    async def create(self, runtime, *, rng):
+        lanes = self
+
+        class Counted(ServiceWorld):
+            def forward(self, endpoint, arguments=None, *, record_as="", record=True):
+                lanes.concurrent += 1
+                lanes.most_at_once = max(lanes.most_at_once, lanes.concurrent)
+                try:
+                    import time as clock
+
+                    clock.sleep(0.02)  # a service call takes a moment, so lanes overlap
+                    return super().forward(endpoint, arguments, record_as=record_as, record=record)
+                finally:
+                    lanes.concurrent -= 1
+
+        world = Counted(runtime.store)
+        return world
+
+
+def _many(count: int):
+    """`count` refund cases on the two orders, alternating, each its own key."""
+    return [refund_case(name=f"case_{n:02d}", scenario_key=f"case-{n:02d}") for n in range(count)]
+
+
+def _prove_lanes(monkeypatch, tmp_path, lanes: Lanes, cases, **options):
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: cases)
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    played = {}
+    original = live_proof._prove_case
+
+    async def tracking(scenario, catalogue_, fresh):
+        result = await original(scenario, catalogue_, fresh)
+        return result
+
+    monkeypatch.setattr(live_proof, "_prove_case", tracking)
+    contract = _contract({"lookup_order": "service", "refund_order": "service"})
+    results = asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path,
+            contract=contract,
+            runtime=lanes.lanes[0],
+            runtimes=lanes.lanes,
+            provider=lanes,
+            factory=lanes,
+            work=tmp_path,
+            **options,
+        )
+    )
+    return results, played
+
+
+def test_cases_proved_on_several_instances_read_exactly_as_one_after_another(monkeypatch, tmp_path):
+    cases = _many(12)
+    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "1")
+    serial, _ = _prove_lanes(monkeypatch, tmp_path, Lanes(4), cases)
+    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "4")
+    lanes = Lanes(4)
+    parallel, _ = _prove_lanes(monkeypatch, tmp_path, lanes, cases)
+
+    assert lanes.most_at_once > 1
+    # Every case once, none lost or doubled, in the suite's order, with the same verdicts.
+    assert list(parallel) == [f"case-{n:02d}" for n in range(12)]
+    assert parallel == serial
+    assert live_proof.load_live(tmp_path) == parallel
+
+
+def test_concurrency_one_plays_every_case_on_one_instance_as_before(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "1")
+    lanes = Lanes(4)
+    results, _ = _prove_lanes(monkeypatch, tmp_path, lanes, _many(6))
+    assert len(results) == 6 and lanes.most_at_once == 1
+    # Only the first instance was ever reset to a case's data.
+    assert all(lane.store == BASE for lane in lanes.lanes[1:])
+
+
+def test_no_case_starts_on_any_instance_once_the_deadline_has_passed(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "4")
+    lanes = Lanes(4)
+    results, _ = _prove_lanes(monkeypatch, tmp_path, lanes, _many(8), until=0.0)
+    assert results == {} and lanes.most_at_once == 0
+
+
+def test_short_of_memory_the_lanes_shrink_and_every_case_is_still_proved(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "4")
+    # 95% of the limit in use the whole time: lanes fall back to one; nothing is lost.
+    monkeypatch.setattr(live_proof, "_memory", lambda: (7.6, 8.0))
+    lanes = Lanes(4)
+    results, _ = _prove_lanes(monkeypatch, tmp_path, lanes, _many(8))
+    assert list(results) == [f"case-{n:02d}" for n in range(8)]
+    assert lanes.most_at_once == 1
+
+
+def test_the_lanes_used_fit_the_first_case_s_measured_memory(monkeypatch, tmp_path):
+    # 3 GiB in use now, of an 8 GiB limit.
+    monkeypatch.setattr(live_proof, "_memory", lambda: (3.0, 8.0))
+    # Before the first case 1 GiB, at its peak 3 GiB: it grew 2 GiB; 85% of 8 GiB less the 3 in use leaves 3.8, so
+    # one more lane beside the first.
+    assert live_proof._lanes_that_fit(4, 1.0, 3.0) == 2
+    # No growth measured, or no reading at all: the instances as provisioned.
+    monkeypatch.setattr(live_proof, "_memory", lambda: None)
+    assert live_proof._lanes_that_fit(4, None, None) == 4
+
+
+def test_a_case_that_fails_beside_others_is_played_again_alone_not_dropped(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_PROVE_CONCURRENCY", "4")
+    lanes = Lanes(4)
+    failed_once = set()
+    original = live_proof._prove_case
+
+    async def flaky(scenario, catalogue_, fresh):
+        # The first time case-05 runs beside others, its instance runs out of memory.
+        if scenario.scenario_key == "case-05" and lanes.most_at_once > 1 and "case-05" not in failed_once:
+            failed_once.add("case-05")
+            raise MemoryError("the instance ran out of memory")
+        return await original(scenario, catalogue_, fresh)
+
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: _many(8))
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    monkeypatch.setattr(live_proof, "_prove_case", flaky)
+    results = asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path,
+            contract=_contract({"lookup_order": "service", "refund_order": "service"}),
+            runtime=lanes.lanes[0],
+            runtimes=lanes.lanes,
+            provider=lanes,
+            factory=lanes,
+            work=tmp_path,
+        )
+    )
+    assert failed_once == {"case-05"}
+    assert "case-05" in results and list(results) == [f"case-{n:02d}" for n in range(8)]
+
+
+def test_the_sandbox_s_memory_is_read_from_its_own_cgroup(monkeypatch):
+    from fi.alk.harness import process_runtime
+
+    files = {"memory.max": "8589934592\n", "memory.current": "2147483648\n"}
+    monkeypatch.setattr(process_runtime, "_read_cgroup_v2", lambda name: files.get(name))
+    assert process_runtime.memory_headroom() == (2.0, 8.0)
+    # No limit (or none readable): nothing to size against, so the instances stay as provisioned.
+    files["memory.max"] = "max\n"
+    monkeypatch.setattr(process_runtime, "Path", lambda *_: SimpleNamespace(read_text=lambda **_: (_ for _ in ()).throw(OSError())))
+    assert process_runtime.memory_headroom() is None
+
+
+@pytest.mark.parametrize(
+    "setting,ceiling",
+    [(None, live_proof.DEFAULT_PROVE_CONCURRENCY), ("1", 1), ("16", 16), ("0", 8), ("many", 8)],
+    ids=["default", "one", "more", "zero", "not-a-number"],
+)
+def test_the_prove_concurrency_setting_is_a_ceiling_of_at_least_one(monkeypatch, setting, ceiling):
+    if setting is None:
+        monkeypatch.delenv("ALK_PROVE_CONCURRENCY", raising=False)
+    else:
+        monkeypatch.setenv("ALK_PROVE_CONCURRENCY", setting)
+    assert live_proof.prove_concurrency() == ceiling
