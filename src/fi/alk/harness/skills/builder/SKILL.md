@@ -171,6 +171,14 @@ what the gates check. Then:
   its usual share.
 - **Delete**: resolve numbers, a range or a description to names with `find_scenarios` (filters find
   "everything with accent X"), then `drop_scenarios`.
+- **Restore one that was removed**: submit it as it was with its original `scenario_key` (the drop
+  reply, the versions list or the review names it). A key the environment had and no case now holds is
+  taken back, so the case returns with its number and history. Submitted without its key it comes back
+  as a new case, `-2` and all.
+- **Change a rule or a fixed value** (a 30-day window made 20): carry the new value into every place
+  that states the old one: each affected scenario's use case, tests, instruction and controls' `why`,
+  and each sub-goal's description, criteria and reference. `check_health` lists any text still stating
+  a value no rule or tool states any more.
 - **Duplicate or vary**: read the original, then submit a copy under a new name with only the asked
   difference. "Twenty more like #5" is `aim_for` plus a writer brief naming #5's cell and what differs.
 - **Prove again without changing**: `prove_scenarios`.
