@@ -423,8 +423,7 @@ signal on `interface`, in the forms the kind file gives this channel, and an act
 to act for someone who is not the person it serves is an `overlay`. Give each actor such a level, named for it. Together,
 the scenarios that include an actor reach the share `aim_for` reports, never the two or three a rare
 level gets; when the person's request says in any words how many scenarios include an actor,
-whether every one, none or a range, pass that share to `aim_for` as `actor_share` with `change_actor_share`.
-Otherwise pass neither: the environment's share stands. Deal them to scenarios whose situation has someone else around, never to one where
+whether every one, none or a range, pass that share to `aim_for` as `actor_share`. Deal them to scenarios whose situation has someone else around, never to one where
 the person would be alone. Such a level sits on top of whatever else the scenario tests, so it costs no scenario of
 its own: deal each one, even in a small suite, alongside another coordinate. A brief, or a scenario you
 write yourself, that has one of those levels includes that actor.

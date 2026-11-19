@@ -10181,9 +10181,8 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
     )
     monkeypatch.delenv("ALK_HARNESS_JOB_ID")
     assert "At least 16 of the 40" in said(actor_share={"min": 0.4, "max": 0.4})
-    # A share is now set, so a different one replaces it only when the person asked to change it.
     assert "No scenario includes an actor, as the person asked" in said(
-        actor_share={"min": 0, "max": 0}, change_actor_share=True
+        actor_share={"min": 0, "max": 0}
     )
 
 

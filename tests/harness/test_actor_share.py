@@ -148,27 +148,3 @@ def test_renaming_an_actor_free_scenario_does_not_reset_the_loop_breaker(tmp_pat
     assert all(SHARE_REFUSAL in one for one in said)
     assert "submitting it again will not work" not in said[1]
     assert "refusal 3 across the scenarios written here" in said[2]
-
-
-def _saved_share(tmp_path: Path) -> Any:
-    contract = _environment(tmp_path)
-    save_actors(tmp_path, load_actors(tmp_path).model_copy(update={"actor_share": ActorShare(min=0.16, max=0.5)}))
-    server, _ = scenario_tools(contract, tmp_path, tmp_path, wanted=10)
-    return next(one.handler for one in server.tools if one.name == "aim_for")
-
-
-def test_adding_a_case_keeps_the_environment_s_share(tmp_path):
-    aim = _saved_share(tmp_path)
-
-    said = asyncio.run(aim({"count": 11, "actor_share": {"min": 0.1, "max": 0.3}}))
-
-    assert not said.get("is_error") and "stays 0.16-0.5" in said["content"][0]["text"]
-    assert load_actors(tmp_path).actor_share == ActorShare(min=0.16, max=0.5)
-
-
-def test_a_share_the_person_asked_to_change_replaces_the_environment_s(tmp_path):
-    aim = _saved_share(tmp_path)
-
-    asyncio.run(aim({"count": 11, "actor_share": {"min": 0.1, "max": 0.3}, "change_actor_share": True}))
-
-    assert load_actors(tmp_path).actor_share == ActorShare(min=0.1, max=0.3)
