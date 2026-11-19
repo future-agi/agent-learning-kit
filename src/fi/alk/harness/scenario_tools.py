@@ -953,11 +953,26 @@ def _first_names_on_disk(destination: Path, excluding: str = "") -> set[str]:
         return set()
 
 
-# How many distinct cases one cell of the plan holds before another is the same test again. Generous, and a setting.
-CASES_PER_CELL = int(os.environ.get("ALK_HARNESS_CASES_PER_CELL", "4") or 4)
-# How many cases one writer is dealt: worth reading the world once for, and few enough that no one writer's session
-# carries the suite. A setting.
-CASES_PER_WRITER = int(os.environ.get("ALK_HARNESS_CASES_PER_WRITER", "16") or 16)
+def _count_setting(name: str, default: int, most: int) -> int:
+    """A whole-number setting read when it is used: a value that is not a number, or is under 1, is the default, and
+    one over `most` is `most`."""
+    try:
+        value = int(str(os.environ.get(name) or "").strip())
+    except ValueError:
+        return default
+    return min(value, most) if value >= 1 else default
+
+
+def cases_per_cell() -> int:
+    """How many distinct cases one cell of the plan holds before another is the same test again. Generous."""
+    return _count_setting("ALK_HARNESS_CASES_PER_CELL", 4, 1000)
+
+
+def cases_per_writer() -> int:
+    """How many cases one writer is dealt: worth reading the world once for, and few enough that no one writer's
+    session carries the suite."""
+    return _count_setting("ALK_HARNESS_CASES_PER_WRITER", 16, 200)
+
 # The levels the framework pairs with no overlay, so an attack's vector and intensity only vary under an attack.
 _NO_ATTACK = {"overlay": "none", "overlay_vector": "none", "overlay_intensity": "absent"}
 
@@ -981,8 +996,9 @@ def _cells_in(grid: dict[str, list[str]] | None) -> int:
 
 
 def suite_capacity(grid: dict[str, list[str]] | None) -> int:
-    """About how many distinct cases the plan supports: each of its cells holding `CASES_PER_CELL`. 0 without a plan."""
-    return _cells_in(grid) * CASES_PER_CELL if grid else 0
+    """About how many distinct cases the plan supports: each of its cells holding `cases_per_cell()`. 0 without a
+    plan."""
+    return _cells_in(grid) * cases_per_cell() if grid else 0
 
 
 def capacity_line(supports: int, written: int, asked: int) -> str:
@@ -1007,7 +1023,7 @@ def deal_cells(
     remaining: int,
     *,
     writers_at_once: int,
-    per_writer: int = CASES_PER_WRITER,
+    per_writer: int = 0,
 ) -> list[Counter[tuple[str, ...]]]:
     """The cases still to write, divided across writers: each writer's cells of the dealt axes, with how many to
     write in each. At most `writers_at_once` writers and `per_writer` cases a writer; the cells the suite holds
@@ -1015,6 +1031,8 @@ def deal_cells(
     if remaining <= 0:
         return []
     import itertools
+
+    per_writer = per_writer or cases_per_writer()
 
     dealt = _dealt_axes(grid)
     names = list(dealt)
@@ -3099,34 +3117,52 @@ def scenario_tools(
         async with admitting:
             return admit(args, _refuse)
 
-    def _off_its_deal(args: dict[str, Any], same: str) -> str:
-        """Why this new scenario is outside the deal it names, or outside every deal while a round is out."""
-        if any(one.name == same for one in kept):
-            return ""
-        name = str(args.get("deal") or "").strip()
-        dealt = deals.get(name)
-        if dealt is None:
-            out = sorted(key for key, one in deals.items() if one["open"])
+    def _round_out() -> list[str]:
+        """The deals still being written: open, with cases left to write."""
+        return sorted(
+            name
+            for name, one in deals.items()
+            if one["open"] and len(one["owned"]) < sum(one["cells"].values())
+        )
+
+    def _off_its_deal(deal: str, held: Scenario | None, coverage: Any) -> str:
+        """Why this deal may not write, change or remove this case, or "" when it may. `held` is the case being
+        changed or removed, None for a new one; `coverage` where it would sit, None for a removal. While a round is
+        out, a case is changed or removed only under the deal that wrote it; without a deal, only between rounds."""
+        out = _round_out()
+        dealt = deals.get(deal)
+        if not deal:
+            if not out:
+                return ""
             return (
-                f"This suite is written in deals ({', '.join(out)}): pass the deal your brief names."
-                if out
-                else (f"There is no deal {name!r}." if name else "")
+                f"A round of writers is out ({', '.join(out)}): a case is written, changed or removed only under "
+                "the deal your brief names. Whoever dealt the round changes the suite once it ends: dealing again, "
+                "or suite_progress with end_round once every writer has reported."
             )
+        if dealt is None:
+            return f"There is no deal {deal!r}."
         if not dealt["open"]:
-            return f"Deal {name} was closed when the next round was dealt. Report what you wrote and stop."
-        if sum(dealt["wrote"].values()) >= sum(dealt["cells"].values()):
-            return f"Deal {name} is written. Report what you wrote and stop."
-        cell = _cell_of(args.get("coverage"), dealt["axes"])
-        if dealt["wrote"][cell] < dealt["cells"].get(cell, 0):
+            return f"Deal {deal} was closed when its round ended. Report what you wrote and stop."
+        if held is not None and held.scenario_key not in dealt["owned"]:
+            return f"{held.name} was not written under deal {deal}: a deal changes or removes only its own cases."
+        if coverage is None:
+            return ""
+        if held is None and len(dealt["owned"]) >= sum(dealt["cells"].values()):
+            return f"Deal {deal} is written. Report what you wrote and stop."
+        cell = _cell_of(coverage, dealt["axes"])
+        taken = Counter(
+            where for key, where in dealt["owned"].items() if held is None or key != held.scenario_key
+        )
+        if taken[cell] < dealt["cells"].get(cell, 0):
             return ""
         free = [
             ", ".join(f"{axis}={level}" for axis, level in zip(dealt["axes"], one))
             for one, n in sorted(dealt["cells"].items())
-            if dealt["wrote"][one] < n
+            if taken[one] < n
         ]
         return (
             f"{', '.join(f'{axis}={level}' for axis, level in zip(dealt['axes'], cell))} is not a cell of deal "
-            f"{name} with room left. Place it on one that is: " + "; ".join(free)
+            f"{deal} with room left. Place it on one that is: " + ("; ".join(free) or "none is left")
         )
 
     def admit(args: dict[str, Any], _refuse: Callable[..., dict[str, Any]]) -> dict[str, Any]:
@@ -3139,10 +3175,14 @@ def scenario_tools(
             str(args.get("name") or "").strip(),
         )
         # Cheap label checks run before the gates, since proving is expensive.
-        strayed = _off_the_grid(args.get("coverage"), target.get("axes")) or _off_its_deal(args, same)
+        deal = str(args.get("deal") or "").strip()
+        held = next((one for one in kept if one.name == same), None)
+        strayed = _off_the_grid(args.get("coverage"), target.get("axes")) or _off_its_deal(
+            deal, held, args.get("coverage") or {}
+        )
         if strayed:
             return _refuse(strayed)
-        fresh = not any(one.name == same for one in kept)
+        keys_before = {one.scenario_key for one in kept}
         crowded_level = _over_its_share(
             args.get("coverage"),
             target.get("axes"),
@@ -3238,8 +3278,14 @@ def scenario_tools(
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
-            if fresh and (dealt := deals.get(str(args.get("deal") or "").strip())):
-                dealt["wrote"][_cell_of(args.get("coverage"), dealt["axes"])] += 1
+            if dealt := deals.get(deal):
+                # The deal owns what it wrote, by key, on the cell it now sits on.
+                if held is not None:
+                    dealt["owned"].pop(held.scenario_key, None)
+                added = {one.scenario_key for one in kept} - keys_before
+                owner = next(iter(added), held.scenario_key if held is not None else "")
+                if owner:
+                    dealt["owned"][owner] = _cell_of(args.get("coverage") or {}, dealt["axes"])
             try:
                 result["content"][0]["text"] += cast_read_back(
                     Scenario.model_validate(args), world_root, _first_names_on_disk(destination)
@@ -3458,6 +3504,13 @@ def scenario_tools(
                     "for none, or the range they gave. It replaces the environment's default share. Leave it out "
                     "otherwise.",
                 },
+                "cannot_widen": {
+                    "type": "string",
+                    "description": "Only when the plan's cells hold fewer distinct cases than were asked for and "
+                    "you have already added every level this agent's tools and world genuinely support: why it "
+                    "cannot vary further, in one line. The suite is then written to what the plan holds, and the "
+                    "build reports it with this reason.",
+                },
                 "axes": {
                     "type": "object",
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
@@ -3567,19 +3620,38 @@ def scenario_tools(
                         "for each with add_sub_goal before you hand any of them out"
                     )
         supports = suite_capacity(target.get("axes"))
-        if supports and asked_count() > supports:
-            target["supports"] = supports
+        why = " ".join(str(args.get("cannot_widen") or "").split())
+        thin = bool(supports) and asked_count() > supports
+        holds = (
+            f"the plan's {_cells_in(target.get('axes'))} cells hold about {cases_per_cell()} distinct cases each, "
+            f"about {supports} of the {asked_count()} asked for"
+        )
+        if thin and why:
+            target["supports"], target["narrow_because"] = supports, why
             said += (
-                f". {capacity_line(supports, len(kept), asked_count())}: the plan's {_cells_in(target.get('axes'))} cells "
-                f"hold about {CASES_PER_CELL} distinct cases each, so the suite is written to {supports} and the "
-                "build finishes there. A level the plan is missing, declared here, makes room for more"
+                f". {capacity_line(supports, len(kept), asked_count())}: {holds}, so the suite is written to "
+                f"{supports} and the build finishes there, because {why}"
             )
         else:
             target.pop("supports", None)
+            target.pop("narrow_because", None)
+        if thin and not why:
+            said += (
+                f". {holds[0].upper()}{holds[1:]}. Widen the plan before anything is written short: add the levels "
+                "this agent's tools and world genuinely support, on any axis, and call aim_for again with them. Only "
+                "when the agent and its world cannot vary further, call aim_for with `cannot_widen` saying why, and "
+                "the suite is written to what the plan holds"
+            )
         if can_save and target.get("axes"):
             from .authoring_runtime_validation import record_capacity
 
-            record_capacity(destination, int(target.get("supports") or 0), len(kept), asked_count())
+            record_capacity(
+                destination,
+                int(target.get("supports") or 0),
+                len(kept),
+                asked_count(),
+                str(target.get("narrow_because") or ""),
+            )
         if vocabulary:
             target["keywords"] = vocabulary
             said += (
@@ -3622,17 +3694,22 @@ def scenario_tools(
         "`names` only when you need to name a scenario, as `inspect_scenario` does: the list is "
         "the one expensive part of this reply.\n\n"
         "`deal` divides what is still to write across writers: each deal is one writer's own cells of the "
-        f"plan, at most {CASES_PER_WRITER} cases, and at most {MOST_WORKERS_AT_ONCE} deals a round. Brief one "
+        f"plan, at most {cases_per_writer()} cases, and at most {MOST_WORKERS_AT_ONCE} deals a round. Brief one "
         "`scenario_writer` per deal, all in one message, each with its deal as given and the suite summary that "
         "comes with them, never the cases already written. A writer submits under its deal and is stopped when "
-        "the deal is written; dealing again closes the round before it.",
-        schema({"names": bool, "deal": bool}, []),
+        "the deal is written; dealing again closes the round before it. While a round is out, a case is changed or "
+        "removed only under the deal that wrote it; `end_round` closes the round once every writer has reported, "
+        "so you can change the suite yourself.",
+        schema({"names": bool, "deal": bool, "end_round": bool}, []),
     )
     async def suite_progress(args: dict[str, Any]) -> dict[str, Any]:
         design = {"axes": target.get("axes") or {}}
         lines = [f"{len(kept)} of {cap()} written."]
         if target.get("supports"):
             lines.append(capacity_line(int(target["supports"]), len(kept), asked_count()) + ".")
+        if bool(args.get("end_round")) or bool(args.get("deal")):
+            for one in deals.values():
+                one["open"] = False
         if bool(args.get("deal")):
             if not target.get("axes"):
                 return _err("Declare the grid with aim_for first: a deal is cells of it.")
@@ -3645,7 +3722,7 @@ def scenario_tools(
             briefs = []
             for share in shares:
                 name = f"d{len(deals) + 1}"
-                deals[name] = {"axes": axes, "cells": share, "wrote": Counter(), "open": True}
+                deals[name] = {"axes": axes, "cells": share, "owned": {}, "open": True}
                 briefs.append(deal_brief(name, share, axes))
             return _ok(
                 "\n".join(lines)
@@ -3716,10 +3793,23 @@ def scenario_tools(
         "drop_scenario",
         "Remove a scenario by name. Removing every scenario takes name '*' with "
         "everything=true, and only when the person asked to start the suite over.",
-        schema({"name": str, "everything": bool}, ["name"]),
+        schema({"name": str, "everything": bool, "deal": str}, ["name"]),
     )
     async def drop_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        async with admitting:
+            return dropped(args)
+
+    def dropped(args: dict[str, Any]) -> dict[str, Any]:
+        """The drop itself, checked against the round and done as one step while `admitting` is held."""
         name = str(args.get("name") or "")
+        deal = str(args.get("deal") or "").strip()
+        if name == "*" and (deal or _round_out()):
+            return _err("Not dropped: the whole suite is never dropped while a round of writers is out, nor under a deal.")
+        held = next((one for one in kept if one.name == name), None)
+        if held is not None and (problem := _off_its_deal(deal, held, None)):
+            return _err(f"Not dropped. {problem}")
+        if held is not None and (dealt := deals.get(deal)):
+            dealt["owned"].pop(held.scenario_key, None)
         if name == "*":
             if args.get("everything") is not True:
                 return _err(
@@ -3811,7 +3901,9 @@ def scenario_tools(
         if target.get("supports"):
             from .authoring_runtime_validation import record_capacity
 
-            record_capacity(destination, int(target["supports"]), len(kept), asked_count())
+            record_capacity(
+                destination, int(target["supports"]), len(kept), asked_count(), str(target.get("narrow_because") or "")
+            )
         design = _args.get("design") if isinstance(_args.get("design"), dict) else None
         # Reuse the grid declared to aim_for as the design's axes.
         if target.get("axes"):
@@ -3982,6 +4074,14 @@ def scenario_tools(
                     "keeps its saved value; to remove one, name it in `clear`."
                 )
             return await submit_scenario.handler(edited(held, args))
+        async with admitting:
+            # A rename keeps the case on its cell, so only who may touch it is in question.
+            problem = _off_its_deal(str(args.get("deal") or "").strip(), held, held.coverage or {})
+            if problem:
+                return _err(f"Not changed. {problem}")
+            return renamed(held, name)
+
+    def renamed(held: Scenario, name: str) -> dict[str, Any]:
         result = accept_scenario(
             {**held.model_dump(), "name": name},
             world_root=world_root,

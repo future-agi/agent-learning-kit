@@ -923,9 +923,14 @@ deal word for word, that summary, and what its cells mean; never the cases alrea
 submits under its deal, is refused outside its cells and is stopped when its count is written, so no one
 writer carries the suite. Dealing again closes the round before it.
 
-When the plan's cells cannot hold the count, `aim_for` says so and the suite is written to what they hold
-("this agent supports about X distinct scenarios"). Finish there, or declare the level the plan is missing
-if the agent really has more to test.
+When the plan's cells cannot hold the count, `aim_for` says so. Widen the plan first: add the levels this
+agent's tools and world genuinely support, on any axis, and declare them with `aim_for`. Only when the agent
+and its world cannot vary further, call `aim_for` with `cannot_widen` saying why; the suite is then written to
+what the plan holds, and the build reports "this agent supports about X distinct scenarios" with that reason.
+
+While a round is out, a case is changed or removed only under the deal that wrote it. Change the suite
+yourself between rounds: deal again, or call `suite_progress` with `end_round` once every writer has
+reported.
 
 **Keep writers busy, not rounds tidy.** Writers briefed in the same turn run together, and your
 next turn starts when the last of them reports. Throughput is how many are working at once and how
