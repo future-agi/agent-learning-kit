@@ -54,7 +54,6 @@ from .catalogue import (
     SubGoal,
     load_catalogue,
     save_catalogue,
-    judged_refusal_advisory,
     judged_wording_advisory,
     validate_sub_goal,
     without_delivery_overlay,
@@ -2614,7 +2613,6 @@ def scenario_tools(
             one
             for one in (
                 judged_wording_advisory(sub_goal),
-                judged_refusal_advisory(sub_goal),
                 already_claimed(sub_goal, catalogue),
             )
             if one

@@ -529,18 +529,6 @@ def compares_to_a_value(source: str) -> bool:
     return False
 
 
-def judged_refusal_advisory(sub_goal: SubGoal) -> str:
-    """What to say about a refusal left to the judge alone, whose control no code check can then fail."""
-    if sub_goal.check.strip() or not is_refusal(sub_goal.name):
-        return ""
-    return (
-        f"{sub_goal.name}: only the judge grades this refusal. If what it refuses is a change (a refund, a "
-        "cancellation, a discount), give it a check that fails when that change commits for this caller's record "
-        "and keep the criteria for how it was explained (verifier both); otherwise no check can fail the "
-        "negative control that makes the change, and the case is held"
-    )
-
-
 def weak_check_advisory(sub_goal: SubGoal) -> str:
     """What to say about a check that reads the arguments but only tests that they are there."""
     if not sub_goal.check.strip() or compares_to_a_value(sub_goal.check):

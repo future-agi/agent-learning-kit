@@ -54,7 +54,6 @@ from ..catalogue import (
     save_catalogue,
     compares_to_a_value,
     validate_sub_goal,
-    judged_refusal_advisory,
     judged_wording_advisory,
     weak_check_advisory,
     without_delivery_overlay,
@@ -1801,7 +1800,6 @@ def world_tools(
             for one in (
                 weak_check_advisory(sub_goal),
                 judged_wording_advisory(sub_goal),
-                judged_refusal_advisory(sub_goal),
                 already_claimed(sub_goal, catalogue),
             )
             if one
