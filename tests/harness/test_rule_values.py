@@ -168,3 +168,23 @@ def test_a_legacy_removed_rule_and_an_unrelated_added_rule_are_never_paired():
         "receiving it and log every request.: privacy review",
     )
     assert retired_values(contract) == set()
+
+
+def test_a_value_retired_before_changes_were_recorded_stays_retired_after_a_recorded_change():
+    """30 became 20 and 20 became 14 before changes were recorded; 14 then became 10 with the change recorded."""
+    contract = {
+        "hard_constraints": ["Refund only within 10 days of delivery."],
+        "tools": [],
+        "amendments": [
+            "rule removed — Refund only within 30 days of delivery.: shorter window",
+            "rule added — Refund only within 20 days of delivery.: shorter window",
+            "rule removed — Refund only within 20 days of delivery.: shorter again",
+            "rule added — Refund only within 14 days of delivery.: shorter again",
+            "rule removed — Refund only within 14 days of delivery.: shortest",
+            "rule added — Refund only within 10 days of delivery.: shortest",
+        ],
+        "value_changes": [
+            {"kind": "rule", "before": "Refund only within 14 days of delivery.", "after": "Refund only within 10 days of delivery."}
+        ],
+    }
+    assert retired_values(contract) == {("30", "day"), ("20", "day"), ("14", "day")}
