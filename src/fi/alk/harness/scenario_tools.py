@@ -1333,9 +1333,38 @@ def _world_identifiers(state: dict[str, list[dict[str, Any]]]) -> set[str]:
 _AN_IDENTIFIER = re.compile(r"[a-z]{2,5}_[a-z0-9_]{2,40}")
 
 
-def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list[str]:
-    """Identifiers the caller is told to say that the world does not hold after setup."""
-    spoken = set(_AN_IDENTIFIER.findall(scenario.instruction or ""))
+def _read_only_tools(contract: Any) -> set[str]:
+    """The tools the contract declares read-only: they look records up and change nothing."""
+    entries = contract.get("tool_entrypoints") if isinstance(contract, dict) else None
+    return {
+        str(entry.get("tool"))
+        for entry in entries or []
+        if isinstance(entry, dict) and str(entry.get("effect") or "").strip().lower() == "read"
+    }
+
+
+def _only_looked_up(scenario: Scenario, world_root: Path | None) -> set[str]:
+    """Every argument value the reference names only in steps of declared read-only tools: a record it looks up and
+    never acts on, which an adversarial case may expect to be missing."""
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8")) if world_root else {}
+    except (OSError, ValueError):
+        contract = {}
+    reads = _read_only_tools(contract)
+    looked: set[str] = set()
+    acted: set[str] = set()
+    for step in scenario.solution:
+        values = {str(value).strip() for value in (step.arguments or {}).values()}
+        (looked if step.tool in reads else acted).update(values)
+    return looked - acted
+
+
+def _identifiers_the_instruction_invents(
+    scenario: Scenario, trial: Any, world_root: Path | None = None
+) -> list[str]:
+    """Identifiers the caller is told to say that the world does not hold after setup. One the reference only looks
+    up with a read-only tool is left alone: the case may be about it not existing."""
+    spoken = set(_AN_IDENTIFIER.findall(scenario.instruction or "")) - _only_looked_up(scenario, world_root)
     if not spoken:
         return []
     try:
@@ -1399,9 +1428,9 @@ def _held_values(data: Any) -> set[str]:
 
 
 def _records_only_a_context_file_holds(scenario: Scenario, trial: Any, world_root: Path) -> list[str]:
-    """Records the reference asks the tools for that only an attached `seed_records` file lists, where the agent's
-    tools serve their own data (`seed_records_loaded`): no such file reaches them, so a case on one of its rows cannot
-    be passed. What the tools do serve is the agent's real starting data, read from its source, else the world that
+    """Records the reference acts on that only an attached `seed_records` file lists, where the agent's tools serve
+    their own data (`seed_records_loaded`): no such file reaches them, so a case on one of its rows cannot be passed.
+    A record a declared read-only tool only looks up is left to the proof: an adversarial case may expect it missing. What the tools do serve is the agent's real starting data, read from its source, else the world that
     replicates it."""
     try:
         contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
@@ -1420,7 +1449,16 @@ def _records_only_a_context_file_holds(scenario: Scenario, trial: Any, world_roo
         return []
     if not served:
         return []
-    named = {str(value).strip() for step in scenario.solution for value in (step.arguments or {}).values()}
+    # A tool the contract declares read-only only looks a record up: a case may expect it not to be found (an order
+    # that is not in the system), and the proof decides whether the case can be passed. Any other step acts on the
+    # record, so the record has to be one the tools serve.
+    reads = _read_only_tools(contract)
+    named = {
+        str(value).strip()
+        for step in scenario.solution
+        if step.tool not in reads
+        for value in (step.arguments or {}).values()
+    }
     missing = sorted(value for value in named & set(listed) if value not in served)
     if not missing:
         return []
@@ -1860,7 +1898,7 @@ def accept_scenario(
                 )
                 problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
                 problems.extend(_credentials_the_world_lacks(scenario, trial))
-                problems.extend(_identifiers_the_instruction_invents(scenario, trial))
+                problems.extend(_identifiers_the_instruction_invents(scenario, trial, world_root))
                 problems.extend(_records_only_a_context_file_holds(scenario, trial, world_root))
                 problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
                 problems.extend(_steps_the_contract_refuses(scenario, world_root))

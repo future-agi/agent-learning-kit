@@ -3423,3 +3423,78 @@ def test_a_column_the_tools_argument_names_match_is_read_as_ids(tmp_path: Path) 
 
     said = _records_only_a_context_file_holds(case, SimpleNamespace(state=lambda: {}), root)
     assert said and "R-2001" in said[0]
+
+
+def test_a_lookup_expected_to_come_back_not_found_is_never_refused_for_a_context_only_row(tmp_path: Path) -> None:
+    """An adversarial case: the caller asks about order 2001, which is not in the agent's system, and the right answer
+    is "not found". Only acting on the row (a refund) needs the tools to serve it."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    contract = json.loads((root / "contract.json").read_text(encoding="utf-8"))
+    contract["tool_entrypoints"] = [
+        {"tool": "get_order", "mode": "service", "effect": "read"},
+        {"tool": "issue_refund", "mode": "service", "effect": "write"},
+    ]
+    (root / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    world = SimpleNamespace(state=lambda: {})
+
+    not_found = Scenario(
+        name="order-not-in-the-system",
+        instruction="You ask about order 2001.",
+        solution=[{"tool": "get_order", "arguments": {"order_id": "2001"}}],
+    )
+    assert _records_only_a_context_file_holds(not_found, world, root) == []
+    refunded = Scenario(
+        name="refund-2001",
+        instruction="You want a refund for order 2001.",
+        solution=[
+            {"tool": "get_order", "arguments": {"order_id": "2001"}},
+            {"tool": "issue_refund", "arguments": {"order_id": "2001"}},
+        ],
+    )
+    said = _records_only_a_context_file_holds(refunded, world, root)
+    assert said and "2001 is only in knowledge/orders.csv" in said[0]
+
+
+def test_an_instruction_naming_a_missing_record_the_reference_only_looks_up_is_kept(tmp_path: Path) -> None:
+    """An adversarial case: the caller asks to be picked up at plc_blr_airport, which the service does not know, and
+    the right answer is that it cannot find it. Booking a ride from it would still be refused."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _identifiers_the_instruction_invents
+
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "tool_entrypoints": [
+                    {"tool": "find_place", "mode": "service", "effect": "read"},
+                    {"tool": "book_ride", "mode": "service", "effect": "write"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    world = SimpleNamespace(state=lambda: {"places": [{"place_id": "plc_market_st"}]})
+    instruction = "You ask for a ride from plc_blr_airport."
+
+    looked_up = Scenario(
+        name="unknown-pickup",
+        instruction=instruction,
+        solution=[{"tool": "find_place", "arguments": {"place_id": "plc_blr_airport"}}],
+    )
+    assert _identifiers_the_instruction_invents(looked_up, world, tmp_path) == []
+    booked = Scenario(
+        name="book-unknown-pickup",
+        instruction=instruction,
+        solution=[
+            {"tool": "find_place", "arguments": {"place_id": "plc_blr_airport"}},
+            {"tool": "book_ride", "arguments": {"pickup": "plc_blr_airport"}},
+        ],
+    )
+    said = _identifiers_the_instruction_invents(booked, world, tmp_path)
+    assert said and "plc_blr_airport" in said[0]

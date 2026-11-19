@@ -142,3 +142,29 @@ def test_a_dropped_rule_replaced_by_one_that_reads_alike_is_recorded_before_and_
         ("tool", "Refunds inside the 30-day window.", "Refunds inside the 20-day window."),
     ]
     assert retired_values(contract) == {("30", "day")}
+
+
+def _legacy(*lines):
+    return {"hard_constraints": ["Refund only within 14 days of delivery."], "tools": [], "amendments": list(lines)}
+
+
+def test_a_legacy_rule_change_with_different_whys_is_still_found_and_its_whys_never_count():
+    contract = _legacy(
+        "rule removed — Refund only within 30 days of delivery.: 2 complaints this week: shorten the window",
+        "rule added — Refund only within 14 days of delivery.: Legal asked for 14 days after 3 audits",
+    )
+    assert retired_values(contract) == {("30", "day")}
+    texts = [
+        ("a.use_case", "Refuse a refund outside the 30-day window"),
+        ("b.instruction", "You have 2 complaints and 3 audits on file."),
+    ]
+    assert old_value_mentions(contract, texts) == [("a.use_case", "30 day")]
+
+
+def test_a_legacy_removed_rule_and_an_unrelated_added_rule_are_never_paired():
+    contract = _legacy(
+        "rule removed — Refund only within 30 days of delivery.: policy changed",
+        "rule added — Never share another customer's order details; answer a data request within 2 days of "
+        "receiving it and log every request.: privacy review",
+    )
+    assert retired_values(contract) == set()

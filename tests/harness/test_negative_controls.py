@@ -1073,3 +1073,61 @@ def test_on_the_live_runtime_a_passing_control_names_the_call_no_check_reads(mon
     assert control["failed"] is False and control["unmatched"] == ["refund_order"]
     proof = live_proof.apply_live(Proof(deferred=True), results["refuse_not_the_buyer"])
     assert "it called refund_order, which the reference never calls, and no check fails on that" in proof.why()
+
+
+# Adversarial cases ask for something absent or forbidden on purpose; the right handling is to refuse, say it was not
+# found, or do nothing. Each is kept and proved, never held for asking.
+LOOKUP_O99 = {"tool": "lookup_order", "arguments": {"order_id": "O-99"}, "fixed": {"order_id": "the caller"}}
+NO_REFUND_AT_ALL = check(
+    "if world.data['refunds'] or any(c.name == 'refund_order' and c.ok for c in calls):\n"
+    "    return 'a refund was made'\nreturn None"
+)
+
+
+def _adversarial(name, solution, sub_goals, controls):
+    return scenario(solution, name=name, sub_goals=sub_goals, negative_controls=controls)
+
+
+def test_a_refund_for_an_order_that_does_not_exist_is_kept_and_proved(monkeypatch, tmp_path):
+    install(monkeypatch)
+    # It reads the world's answer, "no such order", not only that a lookup was tried: a lookup that crashed is no
+    # evidence the order is missing (the failed-attempt gate holds that check).
+    asked_about_o99 = check(
+        "return None if any(c.name == 'lookup_order' and c.arguments.get('order_id') == 'O-99'\n"
+        "                   and c.error == 'no such order' for c in calls) else 'O-99 was never found missing'"
+    )
+    case = _adversarial(
+        "refund_missing_order",
+        [LOOKUP_O99],
+        ["looked_up_o99", "no_refund"],
+        [control("refund_anyway", "refunds an order that does not exist", [LOOKUP_O99, {**REFUND_O10, "arguments": {"order_id": "O-10"}}])],
+    )
+    proof = module.prove(case, catalogue(looked_up_o99=asked_about_o99, no_refund=NO_REFUND_AT_ALL), tmp_path)
+    assert proof.blocked_reason() is None and proof.proved is True, proof.why()
+    assert proof.outcome == "no_change" and proof.controls[0]["failed"] is True
+
+
+def test_an_action_needing_a_tool_the_agent_lacks_is_kept_and_never_read_as_needing_that_tool(monkeypatch, tmp_path):
+    install(monkeypatch)
+    no_cancel = check("return 'cancelled' if any(c.name == 'cancel_order' for c in calls) else None")
+    case = _adversarial(
+        "cancel_without_a_cancel_tool",
+        [LOOKUP_O10],
+        ["looked_up", "no_cancel"],
+        [control("wrong_order", "looks up another order", [{**LOOKUP_O10, "arguments": {"order_id": "O-20"}}])],
+    )
+    proof = module.prove(
+        case,
+        catalogue(looked_up=REFUND_CATALOGUE["looked_up"], no_cancel=no_cancel),
+        tmp_path,
+        agent_tools={"lookup_order", "refund_order"},
+    )
+    assert proof.missing_tools == []
+    assert proof.blocked_reason() is None and proof.proved is True, proof.why()
+
+
+def test_a_request_the_policy_forbids_is_kept_and_proved(monkeypatch, tmp_path):
+    install(monkeypatch)
+    proof = module.prove(_refusal(), catalogue(no_refund=NO_REFUND, looked_up_o20=LOOKED_UP_O20), tmp_path)
+    assert proof.blocked_reason() is None and proof.proved is True, proof.why()
+    assert proof.outcome == "no_change" and proof.controls[0]["failed"] is True
