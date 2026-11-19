@@ -15,7 +15,11 @@ is imported. The graph is the usual tool loop:
 - the `tools` node's results go back to `agent`.
 
 The kit runs it with its LangGraph adapter. Each turn, the adapter sends the whole conversation
-as `messages` and replies with the last message's text. Tool calls are not returned: the graph
+as `messages` and replies with the last message's text. It names the conversation as the run's
+thread, `config={"configurable": {"thread_id": ...}}`, and the tools read it with
+`get_config()`, so each conversation has its own copy of the orders. The graph is compiled
+without a checkpointer: the kit sends the whole history each turn, so a checkpointer would make
+the graph see it twice. Tool calls are not returned: the graph
 runs the tools itself, and the kit's tool tracer records each call made to the three tool
 functions, including the ones made from a worker thread.
 
@@ -39,8 +43,3 @@ Install with `pip install -r requirements.txt` on Python 3.12.
   the loop. A node added later that blocks it would stall the other requests in flight until
   it returns. A stalled request answers with a timeout error once
   `ALK_LANGGRAPH_TIMEOUT_SECONDS` has passed.
-- Every conversation the agent process serves shares the same orders, so a return started in
-  one scenario is still there in the next. The kit's LangGraph adapter calls the graph with no
-  thread, so the tools can't tell conversations apart. The graph is compiled without a
-  checkpointer. The kit sends the whole history each turn, so a checkpointer would make the
-  graph see it twice.
