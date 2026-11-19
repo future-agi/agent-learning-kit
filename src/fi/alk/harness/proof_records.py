@@ -122,3 +122,6 @@ class ProofEntry(_ProofFields, total=False):
     live: bool
     # Whether a submit refuses a case with this proof (`prove.refuses_keeping`): the one rule, so no reader copies it.
     refused: bool
+    # Tools the reference solution calls that the agent version under test lacks (`tool_not_on_agent`), by name;
+    # empty when none, or when the agent's tools are not known.
+    missing_tools: list[str]
