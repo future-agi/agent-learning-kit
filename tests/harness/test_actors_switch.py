@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -200,3 +202,44 @@ def test_with_actors_off_a_run_plays_no_actor_pre_run_first_speaker_or_fault(tmp
 
     on = as_played(doc, tmp_path, None)
     assert on["actors"] == ACTOR and on["faults"] and "Be brief." in on["instruction"]
+
+
+def test_a_hosted_process_with_no_published_switch_reads_actors_off(tmp_path, monkeypatch):
+    # A child process that lost the published switch: in a hosted sandbox (its job file present) it fails closed.
+    job_file = tmp_path / "job.json"
+    monkeypatch.setattr(job_module, "HOSTED_JOB_PATH", job_file)
+    assert current_actors_switch() is None
+    job_file.write_text("{}")
+    assert current_actors_switch() == ACTORS_OFF
+
+
+def _hosted_job(tmp_path: Path) -> Path:
+    path = tmp_path / "job.json"
+    path.write_text(json.dumps({
+        "job_id": "j", "run_id": "r", "execution": "hosted", "source": {"kind": "archive", "archive_artifact_id": "s"},
+        "agent": {"connector": "http"}, "scenario_count": 1, "runtime": {"isolation": "dedicated_vm"}, "metadata": {},
+    }))
+    return path
+
+
+def test_each_hosted_entrypoint_publishes_actors_off_for_a_job_with_no_switch(tmp_path):
+    from fi.alk.harness import authoring_entrypoint, hosted_entrypoint
+    from fi.alk.harness.chat_policy import load_chat_policy
+    from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
+
+    job = _hosted_job(tmp_path)
+    hosted_entrypoint.load_job(job)
+    assert current_actors_switch() == ACTORS_OFF
+
+    publish_actors_switch({}, hosted=False)
+    # Certify-only without its bundle output stops at its own check, after the switch is published.
+    with pytest.raises(SystemExit):
+        authoring_entrypoint.main([str(job), "--source", str(tmp_path), "--output", str(tmp_path), "--certify-only"])
+    assert current_actors_switch() == ACTORS_OFF
+
+    publish_actors_switch({}, hosted=False)
+    policy = tmp_path / "policy.yaml"
+    policy.write_text("schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8")
+    HostedChatRuntime(client=SimpleNamespace(turn_context={}, capabilities=SimpleNamespace(turn_context={})), policy=load_chat_policy(policy), workspace=tmp_path, source=tmp_path,
+                      job={"metadata": {}, "scenario_count": 1})
+    assert current_actors_switch() == ACTORS_OFF

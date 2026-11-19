@@ -14,6 +14,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
@@ -286,14 +287,11 @@ class HarnessExecutionManifestEntry(BaseModel):
 
 
 class ActorsSwitch(BaseModel):
-    """Whether this environment's scenarios include actors, and the share of them that do when the person did not
-    ask for one. The platform writes it into every job's metadata as `actors`; its absence is the kit's own default."""
+    """`metadata.actors`: whether scenarios include actors and faults, and the default share of scenarios with one."""
 
-    # Strict on the two fields it reads; a field added later is ignored rather than read as malformed.
     model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
 
     enabled: bool
-    # [min, max], each a fraction of the suite; with `enabled` false, [0.0, 0.0].
     share: list[float]
 
     @model_validator(mode="after")
@@ -303,11 +301,11 @@ class ActorsSwitch(BaseModel):
         return self
 
 
-# What a malformed `actors` entry reads as: actors are off, never on by mistake.
 ACTORS_OFF = ActorsSwitch(enabled=False, share=[0.0, 0.0])
-# Where a hosted process publishes its job's switch, so every part of it reads the same one.
+# Where a hosted entrypoint publishes its job's switch for the rest of its process.
 ACTORS_SWITCH_ENV = "ALK_ACTORS_SWITCH"
-_logger = logging.getLogger(__name__)
+# Present only in a hosted sandbox: there, a process with no published switch reads actors off.
+HOSTED_JOB_PATH = Path("/work/job.json")
 
 
 class HarnessJobMetadata(BaseModel):
@@ -325,59 +323,48 @@ class HarnessJobMetadata(BaseModel):
     customer_code_environment: dict[str, str] = Field(default_factory=dict)
     # The hosts a controlled run lets the agent reach; absent when the platform does not control its egress.
     egress_allowed_hosts: list[str] | None = None
-    # Whether scenarios include actors and faults (`ActorsSwitch`); absent keeps the kit's own default, actors on.
     actors: ActorsSwitch | None = None
 
 
 def actors_switch(metadata: Mapping[str, Any] | None, *, hosted: bool) -> ActorsSwitch | None:
-    """The job's actors switch. With no `actors` in its metadata: off for a hosted job (a platform that sends no
-    switch has not turned actors on), and None, the kit's own default with actors on, for a local one. A malformed
-    switch reads as `ACTORS_OFF`, logged, and never fails the job."""
+    """The job's switch. Absent: off for a hosted job, None (the kit's default, on) for a local one. Malformed: off."""
     if not isinstance(metadata, Mapping) or "actors" not in metadata:
         return ACTORS_OFF if hosted else None
-    raw = metadata["actors"]
     try:
-        switch = HarnessJobMetadata.model_validate({"actors": raw}).actors
-    except ValueError as exc:
-        _logger.warning("actors switch in the job is malformed, so actors are off: %s", type(exc).__name__)
-        return ACTORS_OFF
+        switch = HarnessJobMetadata.model_validate({"actors": metadata["actors"]}).actors
+    except ValueError:
+        switch = None
     if switch is None:
-        _logger.warning("actors switch in the job is empty, so actors are off")
+        logging.getLogger(__name__).warning("actors switch in the job is malformed, so actors are off")
         return ACTORS_OFF
     return switch
 
 
-def publish_actors_switch(metadata: Mapping[str, Any] | None, *, hosted: bool) -> ActorsSwitch | None:
-    """Read the job's switch and publish it to this process and the ones it starts (`current_actors_switch`)."""
+def publish_actors_switch(metadata: Mapping[str, Any] | None, *, hosted: bool) -> None:
+    """Publish the job's switch to this process and the ones it starts (`current_actors_switch`)."""
     switch = actors_switch(metadata, hosted=hosted)
     if switch is None:
         os.environ.pop(ACTORS_SWITCH_ENV, None)
     else:
         os.environ[ACTORS_SWITCH_ENV] = switch.model_dump_json()
-    return switch
 
 
 def current_actors_switch() -> ActorsSwitch | None:
-    """The switch this process's job published; None when it published none (the kit's default, actors on)."""
+    """The published switch; with none, off in a hosted sandbox and None (the kit's default) elsewhere."""
     raw = os.environ.get(ACTORS_SWITCH_ENV)
     if raw is None:
-        return None
+        return ACTORS_OFF if HOSTED_JOB_PATH.is_file() else None
     try:
         return ActorsSwitch.model_validate_json(raw)
     except ValueError:
-        _logger.warning("published actors switch is malformed, so actors are off")
         return ACTORS_OFF
 
 
 def job_actors_switch(job: Any) -> ActorsSwitch | None:
-    """``job``'s actors switch, hosted or not by its execution mode."""
-    return actors_switch(
-        getattr(job, "metadata", None), hosted=getattr(job, "execution", None) is ExecutionMode.HOSTED
-    )
+    return actors_switch(getattr(job, "metadata", None), hosted=getattr(job, "execution", None) is ExecutionMode.HOSTED)
 
 
 def actors_on(switch: ActorsSwitch | None) -> bool:
-    """Whether scenarios may include actors and faults under ``switch``."""
     return switch is None or switch.enabled
 
 
@@ -747,13 +734,6 @@ __all__ = [
     "HarnessExecutionManifestEntry",
     "HarnessJob",
     "HarnessJobMetadata",
-    "ActorsSwitch",
-    "ACTORS_OFF",
-    "actors_switch",
-    "job_actors_switch",
-    "actors_on",
-    "current_actors_switch",
-    "publish_actors_switch",
     "HarnessJobStatus",
     "HarnessRetryPolicy",
     "HarnessStage",
