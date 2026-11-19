@@ -86,7 +86,7 @@ jobs:
 
   clean-install:
     # Install, doctor, the local simulation and the suites that need their own SDK versions. The
-    # long test run is kit-tests, so neither job sits near its limit.
+    # long test run is kit-tests: this job takes 1 to 4 of its 15 minutes.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -200,7 +200,7 @@ jobs:
   kit-tests:
     # The engine, dispatch, acceptance and harness suites, split out of clean-install, where they
     # took 8.5 to 11.5 of its 15 minutes and cancelled runs at random. Same install and SDK pin
-    # as clean-install's. 40 minutes: a run takes 20 to 22.
+    # as clean-install's. 40 minutes: a run takes 12 to 27.
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -265,6 +265,8 @@ jobs:
           tests/test_harness_sandbox_server.py
           --deselect tests/test_harness_sandbox_server.py::test_private_github_submission_becomes_hosted_job
           --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref
+          tests/test_harness_generated_runtime.py
+          tests/test_harness_service_environments.py
           tests/test_harness_architecture.py
           tests/test_harness_credentials.py
           tests/harness/test_controller_env.py
