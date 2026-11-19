@@ -154,6 +154,9 @@ class Proof:
     too_strict: list[str] = field(default_factory=list)
     # Values the scenario marks fixed that no code check notices when they are wrong.
     unchecked: list[str] = field(default_factory=list)
+    # Checks that fail an agent whose attempt the world refused and who then made the call as the reference does. Named
+    # rather than refused: the case still proves, and the writer is told to judge the successful calls.
+    retried: list[str] = field(default_factory=list)
     # Each negative control played: {name, why, failed, held, assumed}. A control with assumed
     # steps did not run: its tools have no endpoint, so the world never changed.
     controls: list[ControlResult] = field(default_factory=list)
@@ -433,16 +436,32 @@ class Proof:
                 if one.get("failed") is False
             ]
             if passed:
+                unmatched = any(one.get("unmatched") for one in passed)
                 return "the checks pass a wrong behaviour, so they cannot tell it from the right one:\n  - " + "\n  - ".join(
                     f"{one['name']} ({one['why']}): held {', '.join(one.get('held') or []) or 'every check'}"
+                    + (
+                        f"; it called {', '.join(one['unmatched'])}, which the reference never calls, and no check "
+                        "fails on that"
+                        if one.get("unmatched")
+                        else ""
+                    )
                     for one in passed
-                ) + "\n\nTighten the named checks so this wrong behaviour fails them."
+                ) + (
+                    "\n\nA check on that call's effect catches it: give a sub-goal of this case a check that fails "
+                    "when that call commits for this caller's record (read `committed_writes(world, reference)` or the "
+                    "record it changes). A refusal left to the judge alone cannot fail a control."
+                    if unmatched
+                    else "\n\nTighten the named checks so this wrong behaviour fails them."
+                )
         if self.misses_case_goal and not self.deferred:
             return (
                 "the negative controls only make checks fail that every scenario in this suite shares, so they show "
                 "nothing about what this scenario is for. Write a control that is the most plausible wrong behaviour "
                 "for this case, the mistake its own check exists to catch, so that at least one of these fails:\n  - "
                 + "\n  - ".join(self.case_goals)
+                + "\n\nWhen what this case is about is a value only it fixes (a corrected number, a changed date) and "
+                "the check that reads it is one every case shares, add a sub-goal for that value with add_sub_goal, "
+                "name it on this case, and let the control fail it."
             )
         if not self.controls and not self.judged_only and not self.deferred:
             return (
@@ -1123,6 +1142,31 @@ def _unseparated_ids(scenario: Scenario) -> list[tuple[str, list[Any]]]:
     return out
 
 
+def _other_value(value: Any) -> Any:
+    """Another value of the same kind, or None when there is none to make."""
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, (int, float)):
+        return value + 1
+    if isinstance(value, str) and value and not value.startswith("$"):
+        return f"{value}-other"
+    return None
+
+
+def _corrected_attempts(scenario: Scenario) -> list[tuple[str, list[Any]]]:
+    """For each fixed value, the solution with that step first tried with only that value wrong and then made as
+    written: an agent that tries a value, is refused, and corrects it."""
+    steps = list(getattr(scenario, "solution", None) or ())
+    out = []
+    for at, step in enumerate(steps):
+        for name in step.fixed or ():
+            other = _other_value(step.arguments.get(name))
+            tried = _with_value(step, name, other) if other is not None else None
+            if tried is not None:
+                out.append((f"{step.tool}.{name}", [*steps[:at], tried, step, *steps[at + 1 :]]))
+    return out
+
+
 def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
     """For each fixed value, the solution with only that value changed, and whether a later step
     sets that argument again (a draft the solution itself corrects)."""
@@ -1130,14 +1174,8 @@ def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
     wrong = []
     for at, step in enumerate(steps):
         for name in step.fixed or ():
-            value = step.arguments.get(name)
-            if isinstance(value, bool):
-                other: Any = not value
-            elif isinstance(value, (int, float)):
-                other = value + 1
-            elif isinstance(value, str) and value and not value.startswith("$"):
-                other = f"{value}-other"
-            else:
+            other = _other_value(step.arguments.get(name))
+            if other is None:
                 continue
             changed = _with_value(step, name, other)
             if changed is not None:
@@ -1342,6 +1380,19 @@ def prove(
                 ]
         finally:
             typed_world.close()
+    for label, steps in _corrected_attempts(scenario) if held else ():
+        tried_world, tried_calls, tried_refused, _ = run_steps(scenario, world_root, with_solution=True, steps=steps)
+        try:
+            # Only the wrong attempt was refused and the world ended where the reference does: the agent got it right.
+            if len(tried_refused) == len(refused) + 1 and right_state is not None:
+                if _end_state(tried_world) == right_state:
+                    proof.retried += [
+                        f"{name} (a value the world refused, then corrected: {label})"
+                        for name, source in held
+                        if not run_check(source, tried_world, tried_calls, name=name, reference=reference).held
+                    ]
+        finally:
+            tried_world.close()
     said, spoken = _said_another_way(scenario)
     if spoken and held:
         said_world, said_calls, said_refused, _ = run_steps(scenario, world_root, with_solution=True, steps=said)

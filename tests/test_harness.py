@@ -2762,6 +2762,28 @@ def _delta(**overrides):
     return payload
 
 
+def test_a_check_that_fails_a_corrected_try_is_named_when_the_case_is_kept(tmp_path, monkeypatch):
+    from fi.alk.harness import scenario_tools
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    proved = scenario_tools.prove
+
+    def named(*args, **kwargs):
+        proof = proved(*args, **kwargs)
+        proof.retried = ["right-item (a value the world refused, then corrected: add.item_id)"]
+        return proof
+
+    monkeypatch.setattr(scenario_tools, "prove", named)
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    text = said["content"][0]["text"]
+    assert not said.get("is_error"), said
+    assert "NOTE: these checks fail an agent whose first try the world refused" in text
+    assert "right-item (a value the world refused, then corrected: add.item_id)" in text
+    assert [one.name for one in kept] == ["adds-a-big-mac"]
+
+
 def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
     from fi.alk.harness.scenario_tools import accept_scenario
 
@@ -10829,6 +10851,32 @@ def test_the_build_stage_writes_a_worker_s_own_check_and_a_repair_keeps_whose_ch
     # A worker the contract does not declare is refused.
     refused = asyncio.run(call("add_sub_goal", {**goal, "name": "ghost", "subject": "worker:ghost"}))
     assert "subject_unknown_worker" in refused
+
+
+def test_a_refusal_only_the_judge_grades_is_accepted_with_advice_to_check_what_it_refuses(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract, _catalogue = _built_environment(tmp_path)
+    server, _world = world_tools.world_tools(contract, tmp_path / "w", external_runtime=True)
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(_instance(server), "tools/call")
+        result = await handler.handler(None, CallToolRequestParams(name=name, arguments=payload))
+        return result.content[0].text
+
+    judged = (
+        "Applies when: the person asks for a refund the rules do not allow.\n"
+        "Pass when: the agent declines it and says why.\n"
+        "Fail when: the agent issues it.\n"
+        "If it does not arise: Pass, since no such refund was asked for."
+    )
+    said = asyncio.run(call("add_sub_goal", {"name": "ineligible_refund_declined", "what": "declines", "judged": judged}))
+    assert "Not added" not in said, said
+    assert "give it a check that fails when that change commits" in said
 
 
 def test_both_stages_tools_for_sub_goals_name_the_declared_workers_as_subjects(tmp_path):

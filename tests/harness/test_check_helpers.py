@@ -161,3 +161,55 @@ def test_the_proof_world_s_log_carries_what_the_helpers_read() -> None:
     rows = proof.events(actor_id="agent")
     assert [row["error"] for row in rows] == ["timeout", None]
     assert len({row["action_id"] for row in rows}) == 2
+
+
+SAME = "def check(world, calls):\n    return None if same_value(calls[0].arguments['v'], calls[0].arguments['w']) else 'differ'\n"
+
+
+def test_a_value_is_the_same_however_it_was_written() -> None:
+    from fi.alk.harness.checks import same_value
+
+    for one, two in [
+        (89, "$89.00"),
+        ("1,250.50", 1250.5),
+        (1043, "1043"),
+        ("2026-11-20", "20 November 2026"),
+        ("November 20, 2026", "Friday, 20th Nov 2026"),
+        ("14:00", "2 pm"),
+        ("9:30 a.m.", "09:30"),
+        ("CLM-88213", "clm88213"),
+        ("#1043", "1043"),
+        ({"order": "O-1", "items": [1, "2"]}, {"order": "o1", "items": ["1", 2.0]}),
+        (None, None),
+    ]:
+        assert same_value(one, two), (one, two)
+        assert same_value(two, one), (two, one)
+
+
+def test_a_different_value_is_never_the_same() -> None:
+    from fi.alk.harness.checks import same_value
+
+    for one, two in [
+        (89, 90),
+        ("$89.00", "89.01"),
+        ("007", 7),
+        ("2026-11-20", "21 November 2026"),
+        ("11/12/2026", "2026-11-12"),
+        ("14:00", "2:30 pm"),
+        ("2", "14:00"),
+        ("CLM-88213", "CLM-88214"),
+        (True, 1),
+        (None, ""),
+        ("Callum", "Calum"),
+        ({"a": 1}, {"a": 1, "b": 2}),
+        ([1, 2], [1]),
+    ]:
+        assert not same_value(one, two), (one, two)
+        assert not same_value(two, one), (two, one)
+
+
+def test_every_check_is_given_same_value() -> None:
+    from fi.alk.harness.world.runtime import Call
+
+    assert run_check(SAME, _World(), [Call("pay", {"v": "$89.00", "w": 89})]).held
+    assert not run_check(SAME, _World(), [Call("pay", {"v": "$89.00", "w": 90})]).held

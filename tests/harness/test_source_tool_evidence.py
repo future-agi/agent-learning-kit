@@ -1054,3 +1054,22 @@ def test_tool_names_are_not_read_from_a_link_or_a_pipe_or_a_file_without_end(
     monkeypatch.setattr(Path, "open", open_)
 
     assert defined_tool_names(source) == {"lookup_weather"}
+
+
+def test_a_refusal_only_the_judge_grades_is_told_to_check_the_change_it_refuses():
+    """A live build's two refusal cases were held: their refusal sub-goal had no check, so the control that refunded
+    anyway passed every code check."""
+    from fi.alk.harness.catalogue import judged_refusal_advisory, validate_sub_goal
+
+    judged = _goal("ineligible_refund_declined", judged="Pass when: the agent declines the refund.")
+    checked = _goal(
+        "ineligible_refund_declined",
+        check="def check(world, calls):\n    return 'refunded' if world.state()['refunds'] else None\n",
+    )
+    task = _goal("eligible_refund_issued", judged="Pass when: the agent issues the refund.")
+
+    assert "give it a check that fails when that change commits" in judged_refusal_advisory(judged)
+    assert judged_refusal_advisory(checked) == ""
+    assert judged_refusal_advisory(task) == ""
+    # Advisory, never a refusal.
+    assert not any("change commits" in one for one in validate_sub_goal(judged))

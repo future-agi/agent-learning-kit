@@ -27,6 +27,8 @@ import ast
 import inspect
 import re
 from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 from typing import Any, Mapping, Sequence
 
 from .actors import is_pre_run
@@ -143,6 +145,101 @@ def same_id(first: Any, second: Any) -> bool:
     return bool(mine) and mine == theirs
 
 
+# A number as text: an optional sign and currency symbol, thousands commas, a fraction. A leading zero (`007`) is an
+# identifier's, never a number's.
+_NUMBER_TEXT = re.compile(r"^[-+]?[$€£₹]?\s?(?:0|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?:\.\d+)?$")
+_MONTHS = {
+    name: number
+    for number, month in enumerate(
+        ("january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+         "november", "december"),
+        start=1,
+    )
+    for name in (month, month[:3], month[:4])
+}
+_ISO_DAY = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+# `20 November 2026`, `November 20, 2026`, `Tuesday, 20th Nov 2026`: the forms a date is said in, never `11/12/2026`,
+# whose order is a convention the text does not carry.
+_DAY_MONTH = re.compile(r"^(?:[a-z]+,?\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)\.?,?\s+(\d{4})$")
+_MONTH_DAY = re.compile(r"^(?:[a-z]+,?\s+)?([a-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$")
+_CLOCK = re.compile(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?$")
+
+
+def _number(value: Any) -> Decimal | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        return Decimal(str(value))
+    text = str(value).strip() if isinstance(value, str) else ""
+    if not _NUMBER_TEXT.match(text):
+        return None
+    return Decimal(re.sub(r"[^\d.+-]", "", text))
+
+
+def _day(value: Any) -> date | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.strip().casefold().split())
+    try:
+        if found := _ISO_DAY.match(text):
+            return date(int(found[1]), int(found[2]), int(found[3]))
+        if found := _DAY_MONTH.match(text):
+            day, month, year = found[1], found[2], found[3]
+        elif found := _MONTH_DAY.match(text):
+            month, day, year = found[1], found[2], found[3]
+        else:
+            return None
+        return date(int(year), _MONTHS[month], int(day)) if month in _MONTHS else None
+    except ValueError:
+        return None
+
+
+def _minute(value: Any) -> int | None:
+    """A time of day said with a colon or am/pm, as minutes after midnight; a bare number is not a time."""
+    if not isinstance(value, str):
+        return None
+    found = _CLOCK.match(value.strip().casefold())
+    if not found or not (found[2] or found[3]):
+        return None
+    hour, minute, half = int(found[1]), int(found[2] or 0), (found[3] or "").replace(".", "")
+    if minute > 59 or hour > (12 if half else 23) or (half and hour == 0):
+        return None
+    if half:
+        hour = hour % 12 + (12 if half == "pm" else 0)
+    return hour * 60 + minute
+
+
+def same_value(first: Any, second: Any) -> bool:
+    """Whether two values are the same value however they were written: a number by its value (`89`, `89.0`,
+    `"$89.00"`), a date by its day (`2026-11-20`, `20 November 2026`), a time by its minute (`14:00`, `2 pm`), and
+    any other text as `same_id` reads it (case and separators ignored). Lists and objects compare item by item.
+
+    It never makes two different values the same: another number, day, minute or id is still different."""
+    if first is None or second is None:
+        return first is None and second is None
+    if isinstance(first, bool) or isinstance(second, bool):
+        return type(first) is type(second) and first == second
+    if isinstance(first, Mapping) or isinstance(second, Mapping):
+        return (
+            isinstance(first, Mapping)
+            and isinstance(second, Mapping)
+            and first.keys() == second.keys()
+            and all(same_value(first[key], second[key]) for key in first)
+        )
+    if isinstance(first, (list, tuple)) or isinstance(second, (list, tuple)):
+        return (
+            isinstance(first, (list, tuple))
+            and isinstance(second, (list, tuple))
+            and len(first) == len(second)
+            and all(same_value(one, two) for one, two in zip(first, second))
+        )
+    for read in (_number, _day, _minute):
+        mine, theirs = read(first), read(second)
+        if mine is not None and theirs is not None:
+            return mine == theirs
+    return same_id(first, second)
+
+
 # What the action log says of a call the world timed out on: refused before its commit, or committed with the answer
 # lost (`world_door._faulted`).
 TIMED_OUT = ("timeout_before_commit", "response_lost")
@@ -219,6 +316,7 @@ def committed_writes(world: Any) -> list[dict[str, Any]]:
 # Read-only helpers every check is given beside `world` and `calls`.
 CHECK_HELPERS = {
     "same_id": same_id,
+    "same_value": same_value,
     "retried_timeouts": retried_timeouts,
     "repeated_commits": repeated_commits,
     "committed_writes": committed_writes,

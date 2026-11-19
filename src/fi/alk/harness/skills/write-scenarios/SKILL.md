@@ -507,10 +507,33 @@ Every sub-goal is graded one of two ways, and **you choose which by whether you 
   invented.
 
 Use a check only for a change the call must leave in the records, made as it should be. Whether a
-forbidden thing happened is judged from the records: a check that holds on an untouched world grades
-nothing and is refused. The judge reads every call with its arguments and the records as well as
-the conversation, so judged does not mean read from the transcript alone, and anything the agent says
-is judged.
+forbidden change happened is settled in code from the records, never by the judge alone: the refusal
+sub-goal is verifier `both`, its check fails when that change commits for this caller's record, and
+its criteria judge how the refusal was explained. That check holds on an untouched world, which is
+fine on a refusal case as long as another of its checks fails when nothing is done (the lookup it
+makes). The judge reads every call with its arguments and the records as well as the conversation,
+so judged does not mean read from the transcript alone, and anything the agent says is judged.
+
+**Hold the agent to what was fixed, never to how it got there.** Each of these failed a real agent
+that did the right thing:
+
+- **A search's wording.** The caller asked for Dune; the agent searched "dune frank herbert" and found
+  it. A check on the query text failed it. Check what the search found, or the record the agent then
+  acted on; where the results do not show what was asked for (a genre), leave it to the judge.
+- **A route.** A read before a write, the worker that made the read, `find_items` instead of
+  `get_item`, one identity factor instead of another the rules allow. Check the outcome; a check that
+  a step comes first fails only when the later thing happened without it.
+- **A corrected try.** The world refused the agent's first value and it then sent the right one. Match
+  the reference to any successful call, never to every call.
+- **A faulted call.** Where the scenario makes a tool fail, never require that call to succeed; check
+  what the agent did about it. A write the world committed counts even when its answer was lost.
+- **Spelling heard on a call.** "Callum" and "Calum" sound the same. Compare the record a spoken name
+  or place resolved to, or leave the spelling to the judge, never its exact letters.
+- **A value the tool decides.** An amount the tool computes is in its `result`, not in an argument it
+  does not take.
+
+`same_value(a, b)` compares numbers, dates, times and ids however they were written (`89` and
+`"$89.00"`, `2026-11-20` and `20 November 2026`, `14:00` and `2 pm`); `same_id(a, b)` compares ids.
 
 **A check that only asks whether a tool was called is not a check.** It proves the plumbing worked, not
 that the agent behaved: any agent that reaches the tool at all passes it, and no agent that behaves
@@ -808,7 +831,9 @@ played exactly like `solution`.
 - "Do nothing" is never a control. The third gate already covers it.
 - On a no-change (refusal) scenario, the control performs the forbidden change, and the checks must
   fail it. The checks of such a scenario may hold on an untouched world; the control is what shows
-  they can fail.
+  they can fail. So one of its checks has to read that change: the refusal sub-goal's check fails when
+  the change commits for this caller's record. A case whose refusal only the judge grades has nothing
+  that can fail its control, and it is held.
 - A no-change scenario whose solution looks a record up with a fixed id also checks that the right
   record was read (for example `any(c.name == "<the lookup tool>" and same_id(c.arguments.get("<its id
   argument>"), "<the fixed id>") for c in calls)`), or leaves that argument out of `fixed`. A read-only lookup with a wrong id
