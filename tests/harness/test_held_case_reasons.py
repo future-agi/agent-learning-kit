@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from fi.alk.harness.actors import Fault
 from fi.alk.harness.checks import Outcome, answered, check_namespace, succeeded
 from fi.alk.harness.controls import writes_beyond
@@ -166,3 +168,115 @@ def test_a_control_played_on_a_proof_world_names_its_extra_write(tmp_path):
 
     assert played["failed"] is False
     assert played["changed"] == ["issue_refund(amount=35, order_id='1045')"]
+
+
+def _routed_shop(root: Path) -> None:
+    """A shop whose tools are reached by route: `cancel_order` is the world action `orders.{id}.cancel`, and two tools
+    share `orders.{id}`, one by GET and one by DELETE."""
+    import json
+
+    from fi.alk.harness.contract import AgentContract, ToolEntry, ToolSpec
+
+    class Shop(GeneratedWorld):
+        name = "shop"
+        tools = [{"name": "cancel_order"}, {"name": "get_order"}, {"name": "delete_order"}]
+        handlers = {name: "def handle(args, db):\n    return {'ok': 1}\n" for name in ("cancel_order", "get_order", "delete_order")}
+
+    world = Shop(":memory:")
+    world.connection.executescript("CREATE TABLE orders(id TEXT);")
+    save(world, root, notes="test", sequences=[])
+    contract = AgentContract(
+        agent="shop",
+        tools=[ToolSpec(name=name) for name in ("cancel_order", "get_order", "delete_order")],
+        tool_entrypoints=[
+            ToolEntry(tool="cancel_order", mode="service", endpoint="/orders/{id}/cancel", method="POST"),
+            ToolEntry(tool="get_order", mode="service", endpoint="/orders/{id}", method="GET"),
+            ToolEntry(tool="delete_order", mode="service", endpoint="/orders/{id}", method="DELETE"),
+        ],
+    )
+    (root / "contract.json").write_text(json.dumps(contract.model_dump(mode="json")), encoding="utf-8")
+
+
+def _faulted_steps(root: Path, solution: list[dict], fault: Fault) -> list[str]:
+    case = Scenario(name="routed", instruction="i", solution=solution, faults=[fault])
+    world, _calls, _refused, _ = run_steps(case, root, with_solution=True)
+    try:
+        return list(world.faulted)
+    finally:
+        world.close()
+
+
+def test_a_fault_on_a_tool_s_world_action_holds_the_tool_whose_name_differs(tmp_path):
+    _routed_shop(tmp_path)
+    cancel = {"tool": "cancel_order", "arguments": {"id": "1043"}}
+
+    assert _faulted_steps(tmp_path, [cancel], Fault(action="orders.{id}.cancel", mode="unavailable")) == [
+        "cancel_order({'id': '1043'}): unavailable"
+    ]
+    # Named by the tool, it is routed the same way.
+    assert _faulted_steps(tmp_path, [cancel], Fault(action="cancel_order", mode="unavailable")) == [
+        "cancel_order({'id': '1043'}): unavailable"
+    ]
+
+
+def test_a_fault_naming_a_method_counts_only_the_calls_made_with_it(tmp_path):
+    _routed_shop(tmp_path)
+    get = {"tool": "get_order", "arguments": {"id": "1043"}}
+    delete = {"tool": "delete_order", "arguments": {"id": "1043"}}
+    # Named by the tool, the fault is routed to `orders.{id}` with the tool's method, DELETE.
+    second_delete = Fault(action="delete_order", mode="error", message="locked", on_call=2)
+
+    assert _faulted_steps(tmp_path, [get, delete, get, delete], second_delete) == [
+        "delete_order({'id': '1043'}): error"
+    ]
+    # The GETs never count toward it: with one DELETE, nothing is faulted.
+    assert _faulted_steps(tmp_path, [get, get, delete], second_delete) == []
+
+
+def test_a_fault_on_a_shared_route_counts_every_tool_that_calls_it(tmp_path):
+    _routed_shop(tmp_path)
+    get = {"tool": "get_order", "arguments": {"id": "1043"}}
+    delete = {"tool": "delete_order", "arguments": {"id": "1043"}}
+    # No method named: the door counts every call of `orders.{id}`, the GET included, so the DELETE is the second.
+    second_call = Fault(action="orders.{id}", mode="error", message="busy", on_call=2)
+
+    assert _faulted_steps(tmp_path, [get, delete], second_call) == ["delete_order({'id': '1043'}): error"]
+
+
+class _Answer:
+    def __init__(self, status: int, body: object) -> None:
+        self.status_code, self._body, self.text = status, body, str(body)
+
+    def json(self):
+        return self._body
+
+
+def _hosted(status: int, body: object, monkeypatch) -> Call:
+    from fi.alk.harness.world import handle
+
+    world = handle.HostedWorld.__new__(handle.HostedWorld)
+    world._tool_proxy, world.calls = "http://proxy", []
+    monkeypatch.setattr(handle.requests, "post", lambda *a, **k: _Answer(status, body))
+    return world.forward("orders/lookup", {"order_id": "6619"}, record_as="get_order")
+
+
+def _provisioned(status: int, body: object, monkeypatch) -> Call:
+    from fi.alk.harness.world import provisioned
+
+    world = provisioned.ProvisionedWorld.__new__(provisioned.ProvisionedWorld)
+    world.endpoints, world.base_url, world.calls = {"orders/lookup"}, "http://service", []
+    monkeypatch.setattr(provisioned.requests, "post", lambda *a, **k: _Answer(status, body))
+    return world.forward("orders/lookup", {"order_id": "6619"}, record_as="get_order")
+
+
+@pytest.mark.parametrize("forward", [_hosted, _provisioned])
+def test_a_live_not_found_is_answered_a_bad_request_and_a_server_fault_are_not(forward, monkeypatch):
+    from fi.alk.harness.world.runtime import REQUEST_NOT_ACCEPTED
+
+    missing = forward(404, {"error": "no order 6619"}, monkeypatch)
+    rejected = forward(422, {"detail": "order_id must be a number"}, monkeypatch)
+    broke = forward(500, {"error": "boom"}, monkeypatch)
+
+    assert missing.refusal_code == "world_rule" and rejected.refusal_code == REQUEST_NOT_ACCEPTED
+    assert broke.refusal_code == ""
+    assert answered([missing, rejected, broke], "get_order", order_id="6619") == [missing]

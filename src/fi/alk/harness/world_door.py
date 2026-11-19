@@ -310,6 +310,37 @@ def routed_faults(faults: Sequence[Any], contract: Any) -> list[dict[str, Any]]:
     ]
 
 
+def faults_named(
+    faults: Sequence[Any], *, action: str, name: str = "", tool: str = "", method: str = "", by_tool: bool = False
+) -> list[dict[str, Any]]:
+    """The faults that hold this call, whichever call of its action they name: by its world action (a route with a
+    part, `orders.{id}.cancel`, holding every call of it), by its logged name too when `by_tool`, and by the agent's
+    own tool name for it. A fault that names its method holds only calls made with that method."""
+    names = {action, name} if by_tool else {action}
+    if tool:
+        names.add(tool)
+    names.discard("")
+    return [
+        one
+        for one in faults or []
+        if isinstance(one, dict)
+        and any(action_matches(called, str(one.get("action") or "")) for called in names)
+        and (not one.get("method") or str(one["method"]).upper() == (method or "").upper())
+    ]
+
+
+def fault_slot(named: Sequence[Mapping[str, Any]], action: str, method: str = "") -> tuple[str, str | None]:
+    """What a fault's `on_call` counts: the calls of the action the first fault names (else the call's own), and only
+    those made with the call's method when any of the faults names one."""
+    by_method = any(one.get("method") for one in named)
+    return str(named[0].get("action") or action), (method or "").upper() if by_method else None
+
+
+def fault_numbered(named: Sequence[Mapping[str, Any]], made: int) -> dict[str, Any] | None:
+    """The fault set on the next call when `made` calls of its slot have been made already."""
+    return next((dict(one) for one in named if _int(one.get("on_call"), 1) == made + 1), None)
+
+
 def same_action(row: Mapping[str, Any], action: str) -> bool:
     """Whether a log row is a call of this world action. A row names its action in full (`service_a.update`), so
     `ticket.update` is never taken for it; one written before actions were recorded has only its name, the action
@@ -1043,20 +1074,16 @@ class WorldDoor:
     def _named_faults(self, call: ToolCall) -> list[dict[str, Any]]:
         """The faults this trial sets on this action of the agent's, whichever call of it they name; raises when the
         trial's faults cannot be read."""
-        faults = [one for one in self.faults() or [] if isinstance(one, dict)]
-        names = {call.action, call.name} if self.faults_by_tool else {call.action}
-        if call.tool:
-            # A route's sealed tool is the agent's own name for it: a fault naming the tool holds its call on every
-            # surface, a worker's channel included.
-            names.add(call.tool)
-        # A fault on a route with a part (`orders.{id}.cancel`) holds every call of it (`orders.1043.cancel`); one that
-        # names its method holds only calls made with it.
-        return [
-            one
-            for one in faults
-            if any(action_matches(name, str(one.get("action") or "")) for name in names)
-            and (not one.get("method") or str(one["method"]).upper() == (call.method or "").upper())
-        ]
+        # A route's sealed tool is the agent's own name for it: a fault naming the tool holds its call on every
+        # surface, a worker's channel included.
+        return faults_named(
+            self.faults() or [],
+            action=call.action,
+            name=call.name,
+            tool=call.tool or "",
+            method=call.method or "",
+            by_tool=self.faults_by_tool,
+        )
 
     def _approved(self, fault: Mapping[str, Any]) -> bool:
         """Whether an actor has committed the fault's `approval` action in this trial, with arguments that include its
@@ -1083,13 +1110,10 @@ class WorldDoor:
         """The fault set on this call of the action, by which call of it this is. A fault that names its method counts
         only the calls made with that method (a GET of the route is not a call of its DELETE), which the log, keeping
         no method, cannot tell apart: this door's own count numbers them."""
-        by_method = any(one.get("method") for one in named)
         # A fault on a route with a part counts every call of the route (`orders.1043`, then `orders.1044`).
-        counted = str(named[0].get("action") or call.action)
+        counted, by_method = fault_slot(named, call.action, call.method or "")
         try:
-            made = self.log.agent_calls(
-                counted, call.name, (call.method or "").upper() if by_method else None
-            )
+            made = self.log.agent_calls(counted, call.name, by_method)
         except Exception:  # noqa: BLE001 - which call this is is unknown: a guess would fault every call as the first
             return None
         if self.trial is not None:
@@ -1097,12 +1121,10 @@ class WorldDoor:
             if current != self._numbered_trial:
                 self._numbered.clear()
                 self._numbered_trial = current
-        slot = f"{counted}\x00{(call.method or '').upper()}" if by_method else counted
+        slot = f"{counted}\x00{by_method}" if by_method is not None else counted
         made = max(made, self._numbered.get(slot, 0))
         self._numbered[slot] = made + 1
-        return next(
-            (one for one in named if _int(one.get("on_call"), 1) == made + 1), None
-        )
+        return fault_numbered(named, made)
 
     def _faulted(self, call: ToolCall, fault: dict[str, Any], key: str | None = None) -> Outcome:
         """The fault the scenario sets on this call; only after a commit does the world see it. A retry with the first
