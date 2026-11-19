@@ -132,7 +132,8 @@ class SimulationEvaluator:
             from fi.simulate import TestRunner
         except Exception as exc:  # pragma: no cover - import clarity
             raise RuntimeError(
-                "agent-simulate is required for SimulationEvaluator unless runner/runner_cls is provided."
+                "Cannot import TestRunner from the kit's fi.simulate module. "
+                "Inspect the underlying import error, or supply runner or runner_cls."
             ) from exc
         return TestRunner()
 
@@ -143,7 +144,8 @@ class SimulationEvaluator:
                 from fi.simulate.evaluation import evaluate_report as imported
             except Exception as exc:  # pragma: no cover - import clarity
                 raise RuntimeError(
-                    "simulate-sdk evaluate_report is required unless evaluate_report_fn is provided."
+                    "Cannot import the kit's fi.simulate.evaluation.evaluate_report. "
+                    "Inspect the underlying import error, or supply evaluate_report_fn."
                 ) from exc
             evaluate_report = imported
 
@@ -167,8 +169,8 @@ class SimulationEvaluator:
                 from fi.evals.metrics.agents import evaluate_agent_report
             except Exception as exc:  # pragma: no cover - import clarity
                 raise RuntimeError(
-                    "SimulationEvaluator local agent report scoring requires "
-                    "simulate-sdk with evaluate_agent_report or ai-evaluation>=1.1."
+                    "Cannot import evaluate_agent_report from the kit's "
+                    "fi.simulate.evaluation or fi.evals.metrics.agents module."
                 ) from exc
 
         return evaluate_agent_report(
