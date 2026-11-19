@@ -1770,9 +1770,10 @@ def _read_yield(authoring: Path) -> dict[str, Any]:
     return found if isinstance(found, dict) else {}
 
 
-def record_capacity(authoring: Path, supports: int, written: int, asked: int) -> None:
+def record_capacity(authoring: Path, supports: int, written: int, asked: int, why: str = "") -> None:
     """Record in the yield that the plan holds about `supports` distinct cases of the `asked`, with the plain line
-    the build reports; `supports` 0 clears it, once a wider plan holds what was asked."""
+    the build reports and `why` the plan could not be widened; `supports` 0 clears it, once a wider plan holds what
+    was asked."""
     from .json_file import write_json_atomic
     from .scenario_tools import capacity_line
 
@@ -1785,6 +1786,7 @@ def record_capacity(authoring: Path, supports: int, written: int, asked: int) ->
             "asked": asked,
             "written": written,
             "line": capacity_line(supports, written, asked),
+            "why": why,
         }
     else:
         body.pop("supports", None)
