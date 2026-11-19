@@ -73,7 +73,7 @@ from .folder import (
     write_folder,
     write_index,
 )
-from .checks import reference_of, run_check
+from .checks import reference_of, run_check, same_id
 from .proofs import load_proofs, proof_key, record_proof, record_unprovable
 from .understand import load as load_contract
 from .prove import (
@@ -1380,21 +1380,15 @@ def _identifiers_the_instruction_invents(
     ]
 
 
-# A column's name read as an id: its last word, split on `_`, `-` or a space.
-_ID_COLUMN_WORDS = frozenset({"id", "number", "no"})
-
-
 def _id_column(column: str, argument_names: set[str]) -> bool:
-    """A column that holds ids: one named like an id (`id`, `order_id`, `orderId`, `order number`, `order_no`), or
-    one the tools' argument names match."""
-    name = str(column).strip()
-    words = re.split(r"[_\-\s]+", name.lower())
-    return name in argument_names or words[-1] in _ID_COLUMN_WORDS or name.endswith("Id")
+    """A column that holds the ids the reference passes: one named as a tool argument the reference fills (case and
+    separators aside, `same_id`). A column no argument names is never read as ids, however it is named."""
+    return any(same_id(str(column).strip(), name) for name in argument_names)
 
 
 def _seed_file_ids(path: Path, argument_names: set[str]) -> set[str]:
     """The row ids an attached records file lists, of a CSV or of a JSON list of objects: the values of its id
-    columns (`_id_column`). A date, an amount or a name column is never read as ids, wherever it stands."""
+    columns (`_id_column`). A date, an amount or a name column no argument names is never read as ids."""
     try:
         text = path.read_text(encoding="utf-8")
         rows = json.loads(text) if path.suffix == ".json" else list(csv.DictReader(text.splitlines()))
