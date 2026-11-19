@@ -504,7 +504,14 @@ def _prove_scenarios(
     """Prove every scenario on this authoring tree into `SCENARIO_PROOFS`, with what the validation just played on the
     live runtime applied as `--prove-only` applies it (nothing is played again); never fails the build or certify."""
     try:
-        prove_suite.prove_suite(output, output / SCENARIO_PROOFS, deadline_at=deadline_at, agent_document=agent_document)
+        prove_suite.prove_suite(
+            output,
+            output / SCENARIO_PROOFS,
+            deadline_at=deadline_at,
+            agent_document=agent_document,
+            # A build just wrote the suite, so each case's controls are judged against it, as a submit judges them.
+            judge_case_goals=stage == "build",
+        )
     except Exception as exc:  # noqa: BLE001 - a missing proofs file reads as "no new proofs"
         print(f"{stage}: scenario proofs not written: {_one_line(exc)}", file=sys.stderr, flush=True)
 

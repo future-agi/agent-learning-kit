@@ -797,3 +797,76 @@ def test_a_missing_or_unreadable_agent_document_skips_the_check(tmp_path, body, 
     assert agent_tools(path) is None
     assert agent_tools(None) is None
     assert "agent document not read" in caplog.text
+
+
+# The shape a fresh build wrote for every case: one wrong lookup, named as breaking the lookup every case shares. The
+# refund check fails under it too, only because nothing is refunded after a wrong lookup.
+_WRONG_LOOKUP = control(
+    "wrong_order_lookup",
+    "looks up an order that does not exist",
+    [{"tool": "lookup_order", "arguments": {"order_id": "O-99"}}],
+    must_fail=["looked_up"],
+)
+
+
+def test_a_control_naming_only_the_shared_step_is_refused_though_the_case_s_check_also_fails(monkeypatch, tmp_path):
+    install(monkeypatch)
+    target, suite = _suite(3, _WRONG_LOOKUP)
+
+    proof = module.prove(target, catalogue(**_SUITE_GOALS), tmp_path, case_goals=module.distinctive_goals(target, suite))
+
+    assert proof.controls[0]["failing"] == ["looked_up"]
+    assert proof.blocked_reason() == "control_misses_case_goal" and module.refuses_keeping(proof)
+
+
+def _saved_with(tmp_path, keyed):
+    from fi.alk.harness.proofs import record_proof
+
+    for key, proof in keyed.items():
+        record_proof(tmp_path, key, proof)
+
+
+def test_the_save_names_a_case_its_submit_was_too_early_to_judge(monkeypatch, tmp_path):
+    from fi.alk.harness.scenario_tools import controls_off_their_case
+
+    install(monkeypatch)
+    target, suite = _suite(3, _WRONG_LOOKUP)
+    goals = catalogue(**_SUITE_GOALS, own_0=LOOKS_UP_ANY, own_1=LOOKS_UP_ANY)
+    # The first case was submitted alone, so its submit read nothing as shared and kept it.
+    _saved_with(tmp_path, {target.scenario_key: module.prove(target, goals, tmp_path, case_goals=[])})
+    _saved_with(tmp_path, {one.scenario_key: module.prove(one, goals, tmp_path) for one in suite[1:]})
+
+    said = controls_off_their_case(suite, tmp_path)
+
+    assert len(said) == 1 and said[0].startswith("refund_case:") and "refund_once" in said[0]
+    assert controls_off_their_case(suite[:2], tmp_path) == []
+
+
+def test_a_build_holds_a_case_whose_control_breaks_only_the_shared_step_and_a_validate_keeps_today_s_rule(
+    monkeypatch, tmp_path
+):
+    from fi.alk.harness import prove_suite
+
+    install(monkeypatch)
+    target, suite = _suite(3, _WRONG_LOOKUP)
+    monkeypatch.setattr(prove_suite, "load_scenarios", lambda path: suite)
+    monkeypatch.setattr(
+        prove_suite, "load_catalogue", lambda path: catalogue(**_SUITE_GOALS, own_0=LOOKS_UP_ANY, own_1=LOOKS_UP_ANY)
+    )
+
+    built = prove_suite.prove_suite(tmp_path, tmp_path / "built.json", judge_case_goals=True)
+    validated = prove_suite.prove_suite(tmp_path, tmp_path / "validated.json")
+
+    assert built["refund_case"]["proved"] is False
+    assert built["refund_case"]["blocked_reason"] == "control_misses_case_goal"
+    assert validated["refund_case"]["blocked_reason"] != "control_misses_case_goal"
+
+
+def test_only_a_build_s_proving_judges_controls_against_the_suite(monkeypatch, tmp_path):
+    from fi.alk.harness import authoring_entrypoint, prove_suite
+
+    asked = []
+    monkeypatch.setattr(prove_suite, "prove_suite", lambda *args, **kwargs: asked.append(kwargs["judge_case_goals"]))
+    authoring_entrypoint._prove_scenarios(tmp_path, None, stage="build")
+    authoring_entrypoint._prove_scenarios(tmp_path, None)
+    assert asked == [True, False]

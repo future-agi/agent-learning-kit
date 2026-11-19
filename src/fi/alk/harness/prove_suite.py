@@ -29,7 +29,7 @@ from .live_proof import apply_live, load_live
 from .outbound import redact_outbound_text
 from .proof_records import ProofEntry
 from .proofs import proof_entry, proof_key, unprovable_entry
-from .prove import BlockedReason, load_proof_contract, load_world_actors, prove
+from .prove import BlockedReason, distinctive_goals, load_proof_contract, load_world_actors, prove
 from .scenario_tools import load_scenarios
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,10 @@ def prove_suite(
     deadline_at: float | None = None,
     keys: set[str] | None = None,
     agent_document: Path | None = None,
+    judge_case_goals: bool = False,
 ) -> dict[str, dict[str, Any]]:
+    """`judge_case_goals` holds a case whose controls break only goals its whole suite shares: set where the suite
+    was just written (a build), never on a Validate, so a saved proof is not re-judged by that rule on read."""
     scenarios = load_scenarios(authoring)
     catalogue = load_catalogue(authoring)
     contract = load_proof_contract(authoring)
@@ -93,7 +96,10 @@ def prove_suite(
             proofs[key] = _incomplete()
             continue
         try:
-            proof = prove(scenario, catalogue, authoring, contract=contract, actors=actors, agent_tools=tools)
+            goals = distinctive_goals(scenario, scenarios) if judge_case_goals else ()
+            proof = prove(
+                scenario, catalogue, authoring, contract=contract, actors=actors, agent_tools=tools, case_goals=goals
+            )
             if key in live:
                 # The certification just played this case on the live runtime: its gates win.
                 proof = apply_live(proof, live[key])

@@ -33,7 +33,7 @@ import re
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Collection, Sequence
+from typing import Any, Callable, Collection, Mapping, Sequence
 
 from .actors import load_actors
 from .catalogue import Catalogue
@@ -245,18 +245,7 @@ class Proof:
         A goal failing under a control counts when the control ran, or when its check reads only the calls: an
         unrun step is still recorded with its arguments, so the check judged what the control would do. A check of
         the world under an unrun step shows nothing, so a goal no control could show leaves the rule undecided."""
-        if not self.case_goals or self.judged_only or not self.controls:
-            return False
-        shown: set[str] = set()
-        for one in self.controls:
-            if one.get("judged") or "failing" not in one:
-                continue
-            for goal in self.case_goals:
-                if one.get("ran") or self.evidence.get(goal) == ["tool_calls"]:
-                    shown.add(goal)
-                    if goal in (one.get("failing") or []):
-                        return False
-        return shown == set(self.case_goals)
+        return misses_case_goals(self.controls, self.evidence, self.case_goals, judged_only=self.judged_only)
 
     @property
     def kept_as_written(self) -> bool:
@@ -468,6 +457,28 @@ class Proof:
         if self.judged_only and not self.controls_failed:
             return JUDGED_ONLY_TEXT
         return "holds"
+
+
+def misses_case_goals(
+    controls: Sequence[Mapping[str, Any]],
+    evidence: Mapping[str, Any],
+    case_goals: Sequence[str],
+    *,
+    judged_only: bool = False,
+) -> bool:
+    """`Proof.misses_case_goal` on a proof's parts, so a saved proof entry is judged by the same rule."""
+    if not case_goals or judged_only or not controls:
+        return False
+    shown: set[str] = set()
+    for one in controls:
+        if one.get("judged") or "failing" not in one:
+            continue
+        for goal in case_goals:
+            if one.get("ran") or evidence.get(goal) == ["tool_calls"]:
+                shown.add(goal)
+                if goal in (one.get("failing") or []):
+                    return False
+    return shown == set(case_goals)
 
 
 # Below this many scenarios, a sub-goal every scenario names may be what they are all about, not a shared step.

@@ -35,3 +35,13 @@ def test_a_failed_write_keeps_the_old_file_and_leaves_nothing_behind(tmp_path, m
 
     assert json.loads(path.read_text(encoding="utf-8")) == {"kept": True}
     assert sorted(os.listdir(tmp_path)) == ["proofs.json"]
+
+
+@pytest.mark.parametrize(("umask", "mode"), [(0o022, 0o644), (0o077, 0o600)], ids=["default", "per-user-isolation"])
+def test_the_file_takes_the_mode_a_plain_write_gets_under_the_umask(tmp_path, umask, mode):
+    before = os.umask(umask)
+    try:
+        write_json_atomic(tmp_path / "proofs.json", {})
+    finally:
+        os.umask(before)
+    assert oct((tmp_path / "proofs.json").stat().st_mode & 0o777) == oct(mode)
