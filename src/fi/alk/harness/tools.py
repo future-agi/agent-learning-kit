@@ -1051,6 +1051,12 @@ def contract_tools(
                                 "description": "The world's tables the tool adds to, changes or deletes from, "
                                 "declared from its code.",
                             },
+                            "world_free": {
+                                "type": "boolean",
+                                "description": "True only when the tool's code touches no table of the world and "
+                                "no service: it keeps the agent's own session memory or computes from its "
+                                "arguments alone. False when unsure.",
+                            },
                             "description": {"type": "string"},
                             "requires": {
                                 "type": "array",

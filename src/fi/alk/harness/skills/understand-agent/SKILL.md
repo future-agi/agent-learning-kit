@@ -126,7 +126,9 @@ Find, in roughly this order:
    "integer, <its minor unit and currency>"}`), read from the code that builds the result or the
    record it returns. `tables_read` and `tables_changed`: the world's tables the tool reads, and
    the ones it adds to, changes or deletes from, read from its code. Fill these for every
-   tool that has them; a writer sees nothing else.
+   tool that has them; a writer sees nothing else. `world_free`: true only for a tool whose code
+   touches no table of the world and no service (it keeps the agent's own session memory, or
+   computes from its arguments alone); false when you are not sure.
 
 6. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
    wording from its system prompt or its validation code. These matter: the agent under test is

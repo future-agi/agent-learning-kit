@@ -32,6 +32,7 @@ import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field, replace
+from functools import partial
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Collection, Mapping, Sequence
@@ -142,6 +143,8 @@ class Proof:
     refused: list[str] = field(default_factory=list)
     # Reference steps this scenario's own faults failed, as the run fails them (`run_steps`).
     faulted: list[str] = field(default_factory=list)
+    # Tools whose reference steps were recorded, not run: they touch no world and nothing here runs them.
+    recorded: list[str] = field(default_factory=list)
     broken: list[str] = field(default_factory=list)
     # Solution steps that were recorded without being executed, because the tool they name has no
     # endpoint bound in this lane. The condition was already detected and logged and then went
@@ -639,6 +642,70 @@ def executes(world: GeneratedWorld, tool: str) -> bool:
     return bool((getattr(world, "endpoint_for", {}) or {}).get(tool))
 
 
+# What a recorded step is called wherever a proof shows it: never run, never shown as executed.
+RECORDED_NOT_RUN = "recorded, not run (no world effect)"
+
+
+def record_unrun_step(world: Any, step: object) -> Call:
+    """Record a step of a tool that touches no world as the call the agent makes, with its arguments and no result,
+    without running it: what a check of the calls reads, and nothing a check of the world could. Listed in
+    `world.recorded`."""
+    tool = str(getattr(step, "tool", "") or "")
+    call = Call(name=tool, arguments=dict(getattr(step, "arguments", {}) or {}), result=None)
+    record = getattr(world, "_record", None)
+    call = record(call) if callable(record) else (world.calls.append(call) or call)
+    world.recorded = sorted({*getattr(world, "recorded", ()), tool})
+    return call
+
+
+def _reads_results(source: str) -> bool:
+    """Whether a check's code reads any call's result (`c.result`, a log row's `["result"]`); unreadable code is taken
+    to read one."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return True
+    return any(
+        (isinstance(node, ast.Attribute) and node.attr == "result")
+        or (isinstance(node, ast.Constant) and node.value == "result")
+        for node in ast.walk(tree)
+    )
+
+
+def _takes_from(step: object) -> set[str]:
+    """The tools whose results this step's values are taken from (`$call.<tool>.<field>`)."""
+    found: set[str] = set()
+
+    def walk(value: object) -> None:
+        if isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+        elif isinstance(value, str) and value.startswith("$call.") and len(value.split(".")) >= 3:
+            found.add(value.split(".")[1])
+
+    walk(dict(getattr(step, "arguments", {}) or {}))
+    walk(dict(getattr(step, "environment_arguments", {}) or {}))
+    return found
+
+
+def recordable_tools(scenario: Scenario, contract: Any, checks: Sequence[tuple[str, str]]) -> frozenset[str]:
+    """The tools whose steps a proof records, not runs, where nothing here can run them: each one the contract
+    declares `world_free` (it touches no table of the world and no service), when no step of the case takes a value
+    from its result and no check of the case reads any call's result. Anything else stays assumed."""
+    free = {tool.name for tool in getattr(contract, "tools", None) or () if getattr(tool, "world_free", False)}
+    if not free or any(_reads_results(source) for _, source in checks):
+        return frozenset()
+    steps = [
+        *(getattr(scenario, "solution", None) or ()),
+        *(step for control in getattr(scenario, "negative_controls", None) or () for step in control.steps),
+    ]
+    taken = {tool for step in steps for tool in _takes_from(step)}
+    return frozenset(free - taken)
+
+
 def assumed_tools(world: GeneratedWorld, steps: Sequence[Any]) -> list[str]:
     """The tools of `steps` recorded unrun: none bound here, or a request the service would not take as sent
     (`play_reference_step`)."""
@@ -770,10 +837,17 @@ def _resolve_reference_values(value: object, calls: list[Call]) -> object:
 
 
 def run_steps(
-    scenario: Scenario, world_root: Path, *, with_solution: bool, steps: Sequence[Any] | None = None
+    scenario: Scenario,
+    world_root: Path,
+    *,
+    with_solution: bool,
+    steps: Sequence[Any] | None = None,
+    recordable: Collection[str] = (),
 ) -> tuple[GeneratedWorld, list[Call], list[str], list[str]]:
     """A world set up for this scenario, optionally with the solution (or `steps`) played through it: the world, the
-    agent's calls, the steps the world refused and the tools assumed (not executed here). The caller closes the world."""
+    agent's calls, the steps the world refused and the tools assumed (not executed here). A step of a `recordable`
+    tool that nothing here runs is recorded as made, not run, and listed in `world.recorded`, never as executed. The
+    caller closes the world."""
     world, _applied, _ready = prepared(scenario, world_root)
     refused: list[str] = []
     assumed: list[str] = []
@@ -788,9 +862,13 @@ def run_steps(
         acting.act_on(None)
         faults = _Faults(scenario, world_root)
         world.faulted = []
+        world.recorded = []
         for step in scenario.solution if steps is None else steps:
             fault = faults.on(step)
-            if fault is None:
+            tool = str(getattr(step, "tool", "") or "")
+            if fault is None and tool in recordable and not executes(world, tool):
+                call = record_unrun_step(world, step)
+            elif fault is None:
                 call = play_reference_step(world, step)
             else:
                 # The scenario's own fault fails this step before any change, as the world door fails it in the run,
@@ -804,7 +882,11 @@ def run_steps(
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
             acting.act_on(step)
-        assumed = assumed_tools(world, scenario.solution if steps is None else steps)
+        assumed = [
+            tool
+            for tool in assumed_tools(world, scenario.solution if steps is None else steps)
+            if tool not in world.recorded
+        ]
         if assumed:
             logger.warning(
                 "scenario %s: %d of %d solution steps were assumed, not executed (%s). The "
@@ -1385,6 +1467,8 @@ def prove(
         else []
     )
     checks = checks_for(scenario, catalogue)
+    # A step whose tool touches no world and that nothing here can run is recorded, not run (`recordable_tools`).
+    run = partial(run_steps, recordable=recordable_tools(scenario, contract, checks))
     proof.evidence = {name: check_evidence(source) for name, source in checks}
     if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
         proof.deferred = True
@@ -1422,7 +1506,7 @@ def prove(
         proof.judged_only = True
         if proof.ready:
             proof.outcome = _outcome(scenario, world_root)
-            proof.controls = play_judged_controls(scenario, catalogue, world_root, run=run_steps, judge=judge)
+            proof.controls = play_judged_controls(scenario, catalogue, world_root, run=run, judge=judge)
         return proof
 
     # Gate 1: is the world ready for this scenario at all?
@@ -1441,7 +1525,7 @@ def prove(
     proof.ready = True
 
     # Gate 2: does the reference solution pass this scenario's own checks?
-    world, calls, refused, assumed = run_steps(scenario, world_root, with_solution=True)
+    world, calls, refused, assumed = run(scenario, world_root, with_solution=True)
     # What the proof below could not cover. Detected here since forever and logged into a void; a
     # scenario whose whole solution was assumed used to save as proved.
     proof.assumed = assumed
@@ -1461,7 +1545,7 @@ def prove(
         world.close()
     varied, changed = _other_choices(scenario, _declared_options(world_root))
     if changed:
-        other_world, other_calls, other_refused, _ = run_steps(
+        other_world, other_calls, other_refused, _ = run(
             scenario, world_root, with_solution=True, steps=varied
         )
         try:
@@ -1474,7 +1558,7 @@ def prove(
         finally:
             other_world.close()
     for label, steps in _bare_ids(scenario) if held else ():
-        bare_world, bare_calls, bare_refused, _ = run_steps(scenario, world_root, with_solution=True, steps=steps)
+        bare_world, bare_calls, bare_refused, _ = run(scenario, world_root, with_solution=True, steps=steps)
         try:
             # The world took the bare id and ended exactly where the reference does: the same choice.
             if not bare_refused and right_state is not None and _end_state(bare_world) == right_state:
@@ -1486,7 +1570,7 @@ def prove(
         finally:
             bare_world.close()
     for label, steps in _unseparated_ids(scenario) if held else ():
-        typed_world, typed_calls, typed_refused, _ = run_steps(scenario, world_root, with_solution=True, steps=steps)
+        typed_world, typed_calls, typed_refused, _ = run(scenario, world_root, with_solution=True, steps=steps)
         try:
             # The world took the id typed without separators and ended where the reference does: the same record.
             if not typed_refused and right_state is not None and _end_state(typed_world) == right_state:
@@ -1498,7 +1582,7 @@ def prove(
         finally:
             typed_world.close()
     for label, steps in _corrected_attempts(scenario) if held else ():
-        tried_world, tried_calls, tried_refused, _ = run_steps(scenario, world_root, with_solution=True, steps=steps)
+        tried_world, tried_calls, tried_refused, _ = run(scenario, world_root, with_solution=True, steps=steps)
         try:
             # Only the wrong attempt was refused and the world ended where the reference does: the agent got it right.
             if len(tried_refused) == len(refused) + 1 and right_state is not None:
@@ -1512,7 +1596,7 @@ def prove(
             tried_world.close()
     said, spoken = _said_another_way(scenario)
     if spoken and held:
-        said_world, said_calls, said_refused, _ = run_steps(scenario, world_root, with_solution=True, steps=said)
+        said_world, said_calls, said_refused, _ = run(scenario, world_root, with_solution=True, steps=said)
         try:
             # Only a world that took the spoken form and ended exactly where the reference does treats it as the
             # same date; one that refuses it or stores it as given leaves a check free to want the reference form.
@@ -1525,7 +1609,7 @@ def prove(
         finally:
             said_world.close()
     for number, other in enumerate(getattr(scenario, "alternatives", None) or (), start=1):
-        alt_world, alt_calls, _, _ = run_steps(scenario, world_root, with_solution=True, steps=other)
+        alt_world, alt_calls, _, _ = run(scenario, world_root, with_solution=True, steps=other)
         try:
             proof.too_strict += [
                 f"{name} (another way the instructions allow, alternative {number}: "
@@ -1540,7 +1624,7 @@ def prove(
             # A wrong value on an assumed step never reaches the world, so the excused checks that would notice it
             # cannot: no evidence that nothing checks it.
             continue
-        wrong_world, wrong_calls, _, _ = run_steps(scenario, world_root, with_solution=True, steps=steps)
+        wrong_world, wrong_calls, _, _ = run(scenario, world_root, with_solution=True, steps=steps)
         try:
             # Only a value a later step sets again, leaving the right end state, is a corrected draft
             # no check must notice; a read-only lookup leaves the same state and is still checked.
@@ -1554,11 +1638,12 @@ def prove(
             wrong_world.close()
     proof.refused = refused
     proof.faulted = list(getattr(world, "faulted", None) or [])
+    proof.recorded = list(getattr(world, "recorded", None) or [])
     proof.broken = [one.name for one in proof.with_solution if one.broken]
     proof.solvable = all(one.held or one.name in proof.excused for one in proof.with_solution) and not proof.broken
 
     # Gate 3: do those same checks fail when nothing is done?
-    untouched, nothing, _, _ = run_steps(scenario, world_root, with_solution=False)
+    untouched, nothing, _, _ = run(scenario, world_root, with_solution=False)
     try:
         untouched_state = _end_state(untouched)
         start = untouched_state
@@ -1627,7 +1712,7 @@ def prove(
         and right_state == untouched_state
         else "change"
     )
-    proof.controls = play_controls(scenario, world_root, checks, reference, run=run_steps)
+    proof.controls = play_controls(scenario, world_root, checks, reference, run=run)
     proof.broken += control_broken(proof.controls)
     if proof.outcome == "no_change" and any(one.get("failed") for one in proof.ran_controls):
         proof.vacuous = False

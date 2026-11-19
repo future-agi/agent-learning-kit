@@ -181,6 +181,10 @@ class ToolSpec(BaseModel):
     # Empty means not recorded.
     tables_read: list[str] = Field(default_factory=list)
     tables_changed: list[str] = Field(default_factory=list)
+    # True when the tool touches no table of the world and no service: it keeps the agent's own session memory or
+    # computes from its arguments. Declared from its code, false when unsure; a proof records such a tool's step it
+    # cannot run rather than assuming it.
+    world_free: bool = False
     description: str = ""
     # Tools that must have run before this one stops refusing, and only for state the agent builds
     # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
@@ -191,6 +195,15 @@ class ToolSpec(BaseModel):
     refuses: str = ""
     effects: str = ""
     inputs_from: dict[str, str] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_world_free(self, handler: Any) -> dict[str, Any]:
+        # A tool not declared world-free writes the same bytes as before the field existed, so no contract's
+        # fingerprint changes for it.
+        data = handler(self)
+        if not data.get("world_free"):
+            data.pop("world_free", None)
+        return data
 
 
 class ToolEntry(BaseModel):
@@ -1641,6 +1654,8 @@ KEPT_AS_WRITTEN = (
     # (tool_certification) and against the world's schema.
     "ToolSpec.tables_read",
     "ToolSpec.tables_changed",
+    # A flag a proof reads to record, not assume, a step it cannot run (`prove.recordable_tools`).
+    "ToolSpec.world_free",
     "ToolEntry.tool",
     "ToolEntry.mode",
     "ToolEntry.module",
