@@ -751,25 +751,29 @@ def test_ci_runs_these_tests():
 
 
 def test_ci_reruns_these_tests_on_the_locked_sdk():
-    """The hosted image installs from uv.lock, while the main pytest step gets pip's newest SDK. A
-    step after it must read the locked version, install exactly that, and then run these tests."""
+    """The hosted image installs from uv.lock, while the main pytest step (its own job, kit-tests)
+    may get another SDK. A clean-install step must read the locked version, install exactly that,
+    and then run these tests."""
     import yaml
 
     path = (
         Path(__file__).resolve().parents[2] / ".github" / "workflows" / "sdk-smoke.yml"
     )
-    job = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]["clean-install"]
-    steps = job["steps"]
-    main = next(
-        index
-        for index, step in enumerate(steps)
-        if "pytest" in step.get("run", "")
-        and "tests/harness/test_spend.py" in step["run"]
-    )
+    jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
+    main_jobs = [
+        name
+        for name, job in jobs.items()
+        for step in job["steps"]
+        if "pytest" in step.get("run", "") and "tests/harness/test_spend.py" in step["run"]
+    ]
+    assert main_jobs == ["kit-tests"]
+    job = jobs["clean-install"]
     reruns = [
         step
-        for step in steps[main + 1 :]
-        if "uv.lock" in step.get("run", "") and "claude-agent-sdk==" in step["run"]
+        for step in job["steps"]
+        if "uv.lock" in step.get("run", "")
+        and "claude-agent-sdk==" in step["run"]
+        and "tests/harness/test_claude_cost.py" in step["run"]
     ]
     assert len(reruns) == 1
     # A failed install or test must fail the job: nothing makes the step non-blocking, conditional

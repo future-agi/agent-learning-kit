@@ -21,7 +21,11 @@ from fi.utils.constants import (
     SECRET_KEY_ENVVAR_NAME,
     get_base_url,
 )
-from fi.utils.errors import DatasetNotFoundError, MissingAuthError
+from fi.utils.errors import (
+    DatasetNotFoundError,
+    EvaluationBatchDenied,
+    MissingAuthError,
+)
 from fi.utils.executor import BoundedExecutor
 
 T = TypeVar("T")
@@ -99,7 +103,9 @@ class HttpClient:
                 return response
 
             except Exception as exc:
-                if isinstance(exc, DatasetNotFoundError):
+                # A partially-executed batch must not be resent: the finished
+                # items would run (and be charged) again.
+                if isinstance(exc, (DatasetNotFoundError, EvaluationBatchDenied)):
                     raise
                 if attempt == config.retry_attempts - 1:
                     raise

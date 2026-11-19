@@ -70,6 +70,7 @@ from pydantic import (
 )
 from fi.simulate.results.futureagi import MAX_TARGET_LATENCY_TURNS
 
+from ..providers.agent import _log_redacted, _redact_text
 from .job import FailureDomain, HarnessStage
 
 logger = logging.getLogger(__name__)
@@ -277,28 +278,37 @@ _SHORTEST_REDACTABLE_SECRET = 8
 def redact_outbound_text(value: str, extra_secret_values: tuple[str, ...] = ()) -> str:
     """Scrubs a single free-text field before it can leave the sandbox on any of the three
     channels (outbound-channels.md v1.3 "Redaction (enforced before emit)"; hosted-execution-
-    seams.md v1.11 §3 "any outbound projection ... redacts userinfo"). Two things, applied in
-    order:
+    seams.md v1.11 §3 "any outbound projection ... redacts userinfo"). Three things, applied in
+    order (TH-9500):
 
-    1. URL userinfo (`_USERINFO_PATTERN`/`_mask_userinfo`, above) -- a password is masked and the
-       username kept (matching the contract's own `postgresql://harness:***@...` example); a bare
-       token/username-only userinfo (no `:`) is masked outright, since that shape is how a bearer
-       token appears, not a username.
-    2. `extra_secret_values` -- exact-substring replacement for a caller-supplied list of secret
-       values. Always `()` today: the adapter (P10) is what will know the job's declared secrets
-       and pass them in -- this parameter exists now so `build_event_record`/`build_result_receipt`
-       never need to change shape when that wiring lands.
+    1. `extra_secret_values` -- exact-substring replacement for a caller-supplied list of secret
+       values. First, so a declared secret is matched whole before the cleaner below can mask
+       part of it and leave the rest unmatched. Always `()` today: the adapter (P10) is what will
+       know the job's declared secrets and pass them in -- this parameter exists now so
+       `build_event_record`/`build_result_receipt` never need to change shape when that wiring
+       lands.
+    2. The kit's one cleaner, `providers.agent._redact_text`, all three of its steps: a URL loses
+       its userinfo, query and fragment, and keys, key blocks and named values are masked by
+       their shape. It logs nothing itself; one line names what it removed, on the cleaner's
+       own logger (not one of the loggers `MaskSecrets` filters, so the filter never re-enters),
+       and only when it changed the text.
+    3. URL userinfo (`_USERINFO_PATTERN`/`_mask_userinfo`, above), for whatever step 2 left: a
+       password is masked and the username kept; a bare token/username-only userinfo (no `:`)
+       is masked outright, since that shape is how a bearer token appears, not a username.
 
-    NOT a general secret-content scanner -- the contract's "same secret-content scan as the
-    artifact sealer" is a separate, sealer-side obligation. This is the narrow subset this module
-    can enforce on every string field it controls without false-positiving on ordinary diagnostic
-    text.
+    Step 2 removes a URL's userinfo outright, so `https://user:pw@host` now comes out as
+    `https://host`, not `https://user:***@host`.
     """
-    redacted = _USERINFO_PATTERN.sub(_mask_userinfo, value)
+    redacted = value
     for secret in extra_secret_values:
         if len(secret) >= _SHORTEST_REDACTABLE_SECRET:
             redacted = redacted.replace(secret, "***")
-    return redacted
+    refused: list[str] = []
+    hits: list[str] = []
+    cleaned = _redact_text(redacted, refused, hits)
+    if (refused or hits) and cleaned != redacted:
+        _log_redacted(refused, hits)
+    return _USERINFO_PATTERN.sub(_mask_userinfo, cleaned)
 
 
 # =================================================================================================

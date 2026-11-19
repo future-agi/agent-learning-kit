@@ -1374,7 +1374,9 @@ CUT_SECRET = "sk-live-A1b2C3d4E5f6G7h8J9k0"
 def _cut_through(length, secret=CUT_SECRET):
     """What traceai records when it cuts a value of `length` characters one character short of
     the end of the secret: a short .env-like head, then all of the secret but its last character."""
-    lead = "HOME=/home/app PATH=/usr/bin:/bin LANG=C.UTF-8 TERM=xterm OPENAI_API_KEY="
+    # An ordinary name before the secret: under a credential name the shared cleaner masks the
+    # whole value itself, and the cut rule this checks would never be reached.
+    lead = "HOME=/home/app PATH=/usr/bin:/bin LANG=C.UTF-8 TERM=xterm OPENAI_NOTE="
     lead = lead + "x" * (length - len(secret) + 1 - len(lead))
     return lead, (lead + secret)[:length]
 
@@ -1703,7 +1705,8 @@ def test_a_secret_cut_by_the_environments_attribute_limit_is_replaced(
 
 def test_text_of_the_limits_length_is_kept_when_no_limit_is_set(monkeypatch):
     _with_limits(monkeypatch)
-    text = _cut_by_limit(4000)
+    # An ordinary name before the head: under a credential name the shared cleaner masks it.
+    text = _cut_by_limit(4000).replace("OPENAI_API_KEY=", "OPENAI_NOTE====")
 
     out = _export_one(_readable(**{"output.value": text}), (CUT_SECRET,)).attributes[
         "output.value"
@@ -1876,7 +1879,7 @@ def test_a_short_head_at_the_environments_limit_is_replaced(monkeypatch):
 @pytest.mark.parametrize(
     "text",
     [
-        "PASSWORD=hunter1... then more",
+        "NOTE=hunter1... then more",
         "the key Zq7...",
         "x" * 4980 + "Zq7 and more...",
         "x" * 4990 + "Zq7Hk is it",

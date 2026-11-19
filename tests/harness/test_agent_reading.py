@@ -53,7 +53,7 @@ from fi.alk.harness.job import (
 from fi.alk.harness.reading_entry import READING_JOB_INVALID, run_reading_mode
 from fi.alk.harness.tools import CONTRACT_SERVER, _checked_contract
 from fi.alk.harness.understand import SUBMIT_REMINDER, reading_settings
-from fi.alk.providers.agent import build_authored_agent
+from fi.alk.providers.agent import Agent, build_authored_agent
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples" / "frameworks"
 SUPPORT = "agents/support"
@@ -388,6 +388,88 @@ def test_the_framework_is_a_builds_shape(tmp_path, model, write, expected):
 
     agent = json.loads((tmp_path / "reading" / "agent.json").read_text(encoding="utf-8"))
     assert agent["agent"]["extension"]["framework"] == expected
+
+
+@pytest.mark.skipif(
+    sys.version_info >= (3, 13), reason="the kit's own interpreter is 3.12; 3.13 parses these"
+)
+def test_a_file_the_kits_python_cannot_parse_is_named_in_the_agent_document(tmp_path, model):
+    # The kit reads the agent's source on Python 3.12; a file in 3.13's or 3.14's syntax isn't
+    # read, and the agent document says which file and why, never a reading in part without a
+    # word.
+    source = _repo(tmp_path)
+    (source / "box.py").write_text("class Box[T=int]:\n    item: T\n", encoding="utf-8")
+    (source / "greet.py").write_text("def greet(n):\n    return t'hi {n}'\n", encoding="utf-8")
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    agent = json.loads((tmp_path / "reading" / "agent.json").read_text(encoding="utf-8"))
+    unparsed = agent["agent"]["extension"]["source"]["unparsed"]
+    assert {one["path"]: one["python"] for one in unparsed} == {
+        "box.py": "3.13",
+        "greet.py": "3.14",
+    }
+    assert all("the kit reads source with Python 3.12" in one["reason"] for one in unparsed)
+
+
+def test_a_document_naming_an_unparsed_file_is_a_valid_stored_agent(tmp_path, model):
+    # A plain syntax error is unparsed on every Python, so this runs everywhere.
+    source = _repo(tmp_path)
+    (source / "broken.py").write_text("def f(:\n", encoding="utf-8")
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    output = tmp_path / "reading"
+    written = (output / "agent.json").read_bytes()
+    document = json.loads(written)
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert document["agent"]["extension"]["source"]["unparsed"] == [
+        {
+            "path": "broken.py",
+            "python": "",
+            "reason": f"broken.py doesn't parse on Python {version} (line 1), "
+            "so this file was not read",
+        }
+    ]
+    # The hash covers the note: the platform validates the stored agent this way.
+    Agent.model_validate(document["agent"])
+    # A build of the same contract and source makes the same document.
+    built = scenario_source.authored_agent_document(
+        (output / "contract.json").read_text(encoding="utf-8"),
+        subfolder=None,
+        framework=document["agent"]["extension"].get("framework"),
+        source=source,
+    )
+    assert written == json.dumps(built, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def test_an_agent_the_kits_python_reads_whole_has_no_unparsed_list(tmp_path, model):
+    _repo(tmp_path)
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    agent = json.loads((tmp_path / "reading" / "agent.json").read_text(encoding="utf-8"))
+    assert "unparsed" not in agent["agent"]["extension"].get("source", {})
+
+
+def test_an_agent_the_kits_python_reads_whole_gets_the_document_it_got_before(tmp_path, model):
+    # The platform keeps one description per version and refuses a second, different one, so a
+    # reading with nothing unparsed writes the very bytes a build of the same contract writes.
+    _repo(tmp_path)
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    output = tmp_path / "reading"
+    written = (output / "agent.json").read_bytes()
+    framework = json.loads(written)["agent"]["extension"].get("framework")
+    before = scenario_source.authored_agent_document(
+        (output / "contract.json").read_text(encoding="utf-8"), subfolder=None, framework=framework
+    )
+    assert written == json.dumps(before, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def test_with_no_folder_named_the_framework_comes_from_the_contracts_folder(tmp_path, model):
@@ -1875,6 +1957,8 @@ def test_a_cancelled_contract_save_writes_nothing(tmp_path, monkeypatch, where, 
     only after the scan, and the refusing call reaches its write with no wait after the scan.
     So the scan is its only wait (``scan-browser``).
     """
+    # It patches checks the save would otherwise run in a child, so they run in this process.
+    monkeypatch.setenv("ALK_SAVE_CHECKS", "thread")
     subfolder = SCRAPER if where == "scan-browser" else SUPPORT
     spec, output = _reading_spec(tmp_path, _job(subfolder=subfolder))
     tool = _submit_contract(spec)
@@ -1930,6 +2014,8 @@ def test_the_readings_gemini_tools_run_on_its_loop(tmp_path, monkeypatch):
     So the reading's last cancel reaches it. ADK's tool_thread_pool_config would move it to a
     thread's own loop, but only in live mode in the locked 2.7.1, which a reading never uses.
     """
+    # It patches checks the save would otherwise run in a child, so they run in this process.
+    monkeypatch.setenv("ALK_SAVE_CHECKS", "thread")
     from google.adk.models.google_llm import Gemini
     from google.adk.models.llm_response import LlmResponse
     from google.adk.runners import Runner
