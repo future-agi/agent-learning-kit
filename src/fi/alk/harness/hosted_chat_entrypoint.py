@@ -12,6 +12,7 @@ import threading
 import time
 import traceback
 import uuid
+from collections import Counter
 from collections.abc import Awaitable
 from contextlib import suppress
 from dataclasses import replace
@@ -729,6 +730,10 @@ class HostedChatRuntime:
         # The message whose turn is running, and the one whose every change the person approved.
         self._turn_message_id = ""
         self._approved_all_in: str | None = None
+        # A plan the person said yes to (`confirm_plan`): the message it answers, and how many calls of each tool it
+        # still covers.
+        self._plan_turn: str | None = None
+        self._plan_left: dict[str, int] = {}
         # One confirmation open at a time: the platform takes an answer to the latest only.
         self._confirming = asyncio.Lock()
         self._restart_after_turn = False
@@ -1043,6 +1048,10 @@ class HostedChatRuntime:
                 return await handler(args)
             if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
                 return await handler(args)
+            if self._plan_turn == self._turn_message_id and self._plan_left.get(spec.name, 0) > 0:
+                # Part of the plan the person said yes to for this message: asked once, not again per change.
+                self._plan_left[spec.name] -= 1
+                return await handler(args)
             alone = spec.name in _ASKS_ALONE
             async with self._confirming:
                 if alone or self._approved_all_in != self._turn_message_id:
@@ -1077,6 +1086,46 @@ class HostedChatRuntime:
             return await handler(args)
 
         return replace(spec, handler=guarded)
+
+    async def _confirm_plan(self, changes: list[Any]) -> dict[str, Any]:
+        """One question for a whole plan: each change listed so the person reviews it, one Yes or No for all."""
+        listed = [
+            (str(one.get("tool") or "").strip(), " ".join(str(one.get("what") or "").split()))
+            for one in changes
+            if isinstance(one, dict)
+        ]
+        listed = [(tool, what) for tool, what in listed if tool and what]
+        if not listed:
+            return {"content": [{"type": "text", "text": "List at least one change, each with its tool and what it "
+                                 "changes."}], "is_error": True}
+        yes = f"Yes, apply these {len(listed)} changes" if len(listed) > 1 else "Yes, apply this change"
+        async with self._confirming:
+            answer = await self._ask(
+                "confirm_plan",
+                {
+                    "question": (f"Apply these {len(listed)} changes?" if len(listed) > 1 else "Apply this change?")
+                    + "\n"
+                    + "\n".join(f"{at}. {what}" for at, (_tool, what) in enumerate(listed, 1)),
+                    "options": [yes, "No"],
+                    "options_only": True,
+                },
+                None,
+            )
+        said = (
+            " ".join(str(part.get("text") or "") for part in (answer.get("content") or [])).strip()
+            if isinstance(answer, dict)
+            else ""
+        )
+        if said != yes:
+            return {
+                "content": [{"type": "text", "text": f"The person did not approve the plan (they said: "
+                             f"{said or 'nothing'}). Make none of these changes; follow what they said."}],
+                "is_error": True,
+            }
+        self._plan_turn = self._turn_message_id
+        self._plan_left = dict(Counter(tool for tool, _what in listed))
+        return {"content": [{"type": "text", "text": f"Approved: make the {len(listed)} listed changes now, without "
+                             "asking again."}]}
 
     def _changes_situation(self, args: dict[str, Any]) -> bool:
         """Whether a submission changes what an existing scenario tests, not how it is graded."""
@@ -1374,7 +1423,31 @@ class HostedChatRuntime:
                 "is done, and this conversation carries on there."
             )
 
-        tools = [find_scenarios, save_changes, read_runs, run_scenarios, remember]
+        @tool(
+            "confirm_plan",
+            "Ask the person once to approve every change you are about to make for their message: list each one "
+            "(`tool` it is made with, `what` it changes, in plain words) and they answer Yes or No for the whole "
+            "plan. On Yes, those changes run without asking again during this message, up to the number of each "
+            "tool listed; a change you did not list is asked about on its own. Never ask in your own words whether "
+            "to go ahead.",
+            schema(
+                {
+                    "changes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"tool": {"type": "string"}, "what": {"type": "string"}},
+                            "required": ["tool", "what"],
+                        },
+                    }
+                },
+                ["changes"],
+            ),
+        )
+        async def confirm_plan(args: dict[str, Any]) -> dict[str, Any]:
+            return await self._confirm_plan(args.get("changes") or [])
+
+        tools = [find_scenarios, save_changes, read_runs, run_scenarios, remember, confirm_plan]
         if self._control_only():
             tools.append(finish_build)
         return tool_server(name="platform", version="0.1.0", tools=tools)

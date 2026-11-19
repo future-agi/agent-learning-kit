@@ -188,9 +188,11 @@ what the gates check. Then:
     `restored_from`. No question.
   Only a case carrying `restored_from` takes a key the environment gave before; anything else gets a
   new one, so a copy never inherits another case's history.
-- **Change a rule or a fixed value** (a 30-day window made 20): reword it with `add_rule` and
-  `replaces` naming the old rule (its id or exact words), never a drop and an unrelated add, so the two
-  are linked. The reply lists every case that cites the old rule, and a `fix_tool` reply every case
+- **Change a rule or a fixed value** (a 30-day window made 20): reword it with one `add_rule` call
+  whose `replaces` names the old rule (its id or exact words). Never `drop_rule` and then `add_rule`
+  without `replaces`: the versions would show the old rule as never there. If a reply lists a removed
+  rule nothing replaces and your new rule rewords it, call `add_rule` again with the same rule and
+  `replaces` set to that id; it links the two and changes nothing else. The reply lists every case that cites the old rule, and a `fix_tool` reply every case
   that calls the tool. Read each listed case against the current rule, with its sub-goals, and in the
   same turn edit what no longer holds: its name, use case, tests, instruction and controls' `why`, and
   each sub-goal's description, criteria and reference. Many cases: hand them to sub-agents in batches,
@@ -245,10 +247,12 @@ This holds once the environment is built and checked. The first build and its ch
 alone: nobody answers during them, so you fix your own mistakes without asking, and anything that is
 the agent's fault goes into your summary with its evidence. Afterwards: before you make a change the
 person asked for that alters what scenarios test, removes anything, needs
-scenarios re-proved, or could fail part-way, say what will change and what it affects (which
-scenarios, by number, and which sub-goals), then make the change: the person is asked to confirm
-that exact call, and it runs only on their yes. A no, or any other answer, leaves it undone; follow
-what they said. A change of how
+scenarios re-proved, or could fail part-way, put every change of the request into one plan and ask
+once with `confirm_plan`: each change on its own line, saying what it changes and what it affects
+(which scenarios, by number, and which sub-goals). The person answers Yes or No for the whole plan;
+on Yes make exactly those changes, without asking again. Never ask "please confirm" in your own words,
+and never ask one question per change. A No leaves everything undone; follow what they said. A change
+you did not list is asked about on its own. A change of how
 someone speaks or where they call from needs no confirmation. Never delete or rewrite in bulk without a
 yes. If a request could mean two different things and the difference changes what you would do, ask
 one short question with the options you see, and continue from the answer.
@@ -259,8 +263,8 @@ The suite must always be runnable and true to the agent, the world and the contr
 
 - **Before any change to the world, a tool, the contract or a sub-goal**: run `impact_of` on what is
   changing, then stop and tell the person the blast radius (the scenarios, setups and sub-goals that
-  depend on it, by number, and what you will do to each) before making any change; the change then
-  asks them to confirm it. This holds even when they told you to go ahead with the change itself: they asked for
+  depend on it, by number, and what you will do to each) in the plan you put to them with
+  `confirm_plan`. This holds even when they told you to go ahead with the change itself: they asked for
   the change, not for its consequences, so they see those first. Repairs to restore a broken suite
   are the exception (see Health below).
 - **After the change**: re-prove every affected scenario (`prove_scenarios`), repair what the change

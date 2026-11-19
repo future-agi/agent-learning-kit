@@ -5139,7 +5139,9 @@ def test_rewording_a_rule_links_the_two_by_id_and_lists_only_the_cases_citing_th
         {"kind": "rule", "key": rule_id(new), "action": "added", "previous": rule_id(old), "replaced_by": "",
          "text": new},
     ]
-    assert f"{_key(root, 'adds-a-big-mac')}: adds-a-big-mac (Refuse a refund past the window)" in said
+    assert f"{_key(root, 'adds-a-big-mac')}: adds-a-big-mac\n      use case: Refuse a refund past the window" in said
+    # Every text that states what the case tests is shown for review, its controls' descriptions included.
+    assert "\n      control adds_twice: " in said
     assert "adds-one-big-mac" not in said
     # Saved as records, so a reader never parses the amendment line.
     saved = json.loads((root / "contract.json").read_text(encoding="utf-8"))
@@ -5164,14 +5166,39 @@ def test_a_rule_dropped_first_is_linked_when_its_rewrite_names_it(tmp_path):
 
 def test_a_rule_added_with_no_replaces_is_never_linked_to_one_that_reads_alike(tmp_path):
     from fi.alk.harness.amend import add_rule, drop_rule
+    from fi.alk.harness.contract import rule_id
 
     root, contract = _cited_suite(tmp_path)
-    drop_rule(contract, root, rule="Refund only within 30 days of delivery.", why="gone")
-    done, said = add_rule(contract, root, rule="Refund only within 20 days of delivery.", why="new")
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 20 days of delivery."
+    drop_rule(contract, root, rule=old, why="gone")
+    done, said = add_rule(contract, root, rule=new, why="new")
 
     assert done and [one.replaced_by for one in contract.amendment_records] == ["", ""]
     assert [one.previous for one in contract.amendment_records] == ["", ""]
     assert "rest on what changed" not in said
+    # The reply names the removal nothing replaces, so a rewrite made as remove and add can still be declared.
+    assert f"{rule_id(old)}: {old}" in said and "replaces" in said
+
+    done, said = add_rule(contract, root, rule=new, why="it rewords the 30-day rule", replaces=rule_id(old))
+
+    assert done, said
+    assert contract.hard_constraints.count(new) == 1
+    removed, added = contract.amendment_records
+    assert (removed.replaced_by, added.previous) == (rule_id(new), rule_id(old))
+    assert "adds-a-big-mac" in said
+    # Linked, it is no longer listed as a removal nothing replaces.
+    done, said = add_rule(contract, root, rule="Never sell gift cards.", why="new")
+    assert done and rule_id(old) not in said
+
+
+def test_an_existing_rule_with_no_removal_to_link_is_still_refused(tmp_path):
+    from fi.alk.harness.amend import add_rule
+
+    root, contract = _cited_suite(tmp_path)
+    done, said = add_rule(
+        contract, root, rule="Never sell more than 130 items.", why="x", replaces="Refund only within 7 days."
+    )
+    assert not done and contract.amendment_records == []
 
 
 def test_replacing_a_rule_that_is_not_there_changes_nothing(tmp_path):
@@ -5249,3 +5276,71 @@ def test_finding_removed_cases_asks_the_platform_for_them(tmp_path, monkeypatch)
 
     kept = json.loads((tmp_path / REMOVED_CASES).read_text(encoding="utf-8"))
     assert kept == {"refund-late": {"name": "refund_late", "instruction": "Ask for a refund."}}
+
+
+def test_a_plan_is_confirmed_once_and_its_changes_then_run_without_asking(tmp_path, monkeypatch):
+    questions = []
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "Yes, apply these 3 changes")
+
+    async def ask(tool, payload, context):
+        questions.append(payload)
+        return {"content": [{"type": "text", "text": payload["options"][0]}]}
+
+    runtime._ask = ask
+    runtime._turn_message_id = "m1"
+    plan = [
+        {"tool": "drop_rule", "what": "Remove the 30-day refund rule (affects #3, #7)"},
+        {"tool": "add_rule", "what": "Add a 20-day refund rule"},
+        {"tool": "edit_scenario", "what": "#3: refuse a refund on day 25"},
+    ]
+    said = asyncio.run(runtime._confirm_plan(plan))
+    assert not said.get("is_error"), said
+    # One question, listing every change, with one Yes for all of them.
+    [question] = questions
+    assert question["question"].startswith("Apply these 3 changes?")
+    assert "2. Add a 20-day refund rule" in question["question"]
+    assert question["options"] == ["Yes, apply these 3 changes", "No"] and question["options_only"] is True
+
+    asyncio.run(guarded("drop_rule")({"rule": "30 days", "why": "x"}))
+    asyncio.run(guarded("add_rule")({"rule": "20 days", "why": "x"}))
+    assert len(ran) == 2 and len(questions) == 1
+    # A change the plan did not list (a second rule) is asked about on its own.
+    asyncio.run(guarded("add_rule")({"rule": "another", "why": "x"}))
+    assert len(questions) == 2
+    # The next message starts without a plan.
+    runtime._turn_message_id = "m2"
+    asyncio.run(guarded("drop_rule")({"rule": "20 days", "why": "x"}))
+    assert len(questions) == 3
+
+
+def test_a_plan_the_person_turns_down_makes_no_change(tmp_path, monkeypatch):
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "No")
+    runtime._turn_message_id = "m1"
+
+    said = asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "what": "Remove the 30-day rule"}]))
+
+    assert said["is_error"] and "did not approve" in said["content"][0]["text"]
+    asyncio.run(guarded("drop_rule")({"rule": "30 days", "why": "x"}))
+    assert ran == [] and len(offered) == 2
+
+
+def test_a_plan_approved_for_one_message_is_not_used_for_the_next(tmp_path, monkeypatch):
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "No")
+
+    async def yes(tool, payload, context):
+        offered.append(payload["options"])
+        return {"content": [{"type": "text", "text": payload["options"][0]}]}
+
+    runtime._ask = yes
+    runtime._turn_message_id = "m1"
+    asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "what": "Remove the 30-day rule"}]))
+    asked = []
+
+    async def no(tool, payload, context):
+        asked.append(payload)
+        return {"content": [{"type": "text", "text": "No"}]}
+
+    runtime._ask = no
+    runtime._turn_message_id = "m2"
+    asyncio.run(guarded("drop_rule")({"rule": "30 days", "why": "x"}))
+    assert ran == [] and len(asked) == 1

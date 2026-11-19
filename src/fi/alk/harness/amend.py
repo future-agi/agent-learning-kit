@@ -130,9 +130,13 @@ def add_rule(
     # hold its rules raw. One call, so a refused URL is logged once. The reply names the rule as
     # saved too, since the chat sends it on to the platform.
     cleaned, *existing = _redact([rule, *contract.hard_constraints])
-    if cleaned.lower() in (one.lower() for one in existing):
-        return False, f"the agent already has that rule: {cleaned}"
     current, removed = _replaced(contract, replaces) if replaces.strip() else (None, None)
+    if cleaned.lower() in (one.lower() for one in existing):
+        held = next(one for one, saved in zip(contract.hard_constraints, existing) if saved.lower() == cleaned.lower())
+        if removed is not None:
+            # Added before it was said to replace the removed rule: the two are linked now, nothing else changes.
+            return _link(contract, destination, removed, held)
+        return False, f"the agent already has that rule: {cleaned}"
     if replaces.strip() and current is None and removed is None:
         return False, (
             f"no rule {replaces.strip()!r} to replace: name it by its id or its exact words. It has:\n  - "
@@ -172,7 +176,40 @@ def add_rule(
     return True, (
         f"added. The agent now has {len(contract.hard_constraints)} rules, and this one is "
         "graded from here on."
-    ) + (cases_citing(destination, rule=old) if old else "")
+    ) + (cases_citing(destination, rule=old) if old else _unlinked_removals(contract, new_id))
+
+
+def _link(contract: AgentContract, destination: Path, removed: AmendmentRecord, rule: str) -> tuple[bool, str]:
+    """Record that `rule`, already among the rules, replaced the removed one."""
+    new_id = rule_id(rule)
+    removed.replaced_by = new_id
+    added = next(
+        (one for one in reversed(contract.amendment_records) if one.kind == "rule" and one.key == new_id), None
+    )
+    if added is not None:
+        added.previous = removed.key
+    else:
+        contract.amendment_records.append(
+            AmendmentRecord(kind="rule", key=new_id, action="added", previous=removed.key, text=rule)
+        )
+    _persist(contract, destination)
+    return True, f"linked: {new_id} replaces {removed.key}." + cases_citing(destination, rule=removed.text)
+
+
+def _unlinked_removals(contract: AgentContract, new_id: str) -> str:
+    """The rules removed and not replaced by any rule: one this rule rewords is linked with `replaces`."""
+    open_ = [
+        one
+        for one in contract.amendment_records
+        if one.kind == "rule" and one.action == "removed" and not one.replaced_by
+    ]
+    if not open_:
+        return ""
+    return (
+        "\nThese rules were removed and nothing replaces them yet. If this rule rewords one, link them now: "
+        f"add_rule with this rule and replaces naming that rule's id ({new_id} is this one).\n  - "
+        + "\n  - ".join(f"{one.key}: {one.text}" for one in open_)
+    )
 
 
 def _replaced(contract: AgentContract, named: str) -> tuple[str | None, AmendmentRecord | None]:
@@ -459,6 +496,14 @@ def set_worker_tools(
     )
 
 
+def _case_texts(scenario: Any) -> str:
+    """A listed case with the texts that state what it tests, so the review reads each against the current rule."""
+    head = f"{scenario.scenario_key or scenario.name}: {scenario.name}"
+    texts = [("use case", scenario.use_case), ("tests", scenario.tests), ("instruction", scenario.instruction)]
+    texts += [(f"control {control.name}", control.why) for control in scenario.negative_controls]
+    return head + "".join(f"\n      {label}: {' '.join(str(text).split())}" for label, text in texts if text)
+
+
 def cases_citing(destination: Path, *, rule: str = "", tool: str = "") -> str:
     """The cases that rest on a rule or tool that just changed, as the rest of the reply: those whose `rule` source
     cites it (resolved as the case's sources are, `grounding.resolve_sources`, against the rule as it read), or whose
@@ -491,10 +536,7 @@ def cases_citing(destination: Path, *, rule: str = "", tool: str = "") -> str:
     ]
     if not citing:
         return ""
-    lines = [
-        f"{one.scenario_key or one.name}: {one.name}" + (f" ({one.use_case})" if getattr(one, "use_case", "") else "")
-        for one in citing
-    ]
+    lines = [_case_texts(one) for one in citing]
     return (
         f"\n{len(citing)} case(s) rest on what changed. Review each against the current rules: edit_scenario where it "
         "no longer holds; one left as it is shows Source changed until it is reviewed.\n  - " + "\n  - ".join(lines)
