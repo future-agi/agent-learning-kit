@@ -3437,20 +3437,23 @@ def scenario_tools(
         ),
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
-        if not with_actors and (sent := actors_off_fields(args)):
-            return _err(actors_off_refusal(sent))
+        unread = ""
         if args.get("as_it_was"):
             # Restored exactly as last saved: the content is the removed record's, never a copy the model wrote.
             key = str((args.get("restored_from") or {}).get("key") or args.get("scenario_key") or "").strip()
             record = await removed_record(key) if key else None
             if record is None:
-                return _err(
+                unread = (
                     f"Not kept. No removed case {key!r} could be read. Read it with find_scenarios(removed: true) "
                     "and restore it from that row, with its scenario_key and restored_from."
                 )
-            args = {**record, "scenario_key": key, "restored_from": {"key": key}}
+            else:
+                args = {**record, "scenario_key": key, "restored_from": {"key": key}}
         else:
             await read_removed_case(args)
+        # Checked on what would be kept, a restored record included.
+        if not with_actors and (sent := actors_off_fields(args)):
+            return _err(actors_off_refusal(sent))
         if external_runtime_target and args.get("solution"):
             # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}
@@ -3472,6 +3475,8 @@ def scenario_tools(
                 )
             return as_given or _err(said)
 
+        if unread:
+            return _refuse(unread)
         if scenario_problem:
             problem = scenario_problem(args)
             if problem:

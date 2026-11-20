@@ -2977,6 +2977,40 @@ def test_restore_as_it_was_brings_back_the_last_saved_revision_not_a_copy(tmp_pa
     assert refused.get("is_error") and "No removed case 'gone' could be read" in refused["content"][0]["text"]
 
 
+def test_restoring_as_it_was_never_brings_back_actors_while_actors_are_off(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import remember_removed, scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    record = {**document_for(Scenario.model_validate(_delta())), "faults": [{"action": "add", "mode": "unavailable"}]}
+    remember_removed(root, [{"scenario_key": "adds-a-big-mac", "content": record}])
+    monkeypatch.setenv("ALK_ACTORS_SWITCH", '{"enabled": false, "share": [0.0, 0.0]}')
+    server, kept = scenario_tools(contract, root, root, wanted=4)
+    said = asyncio.run({one.name: one.handler for one in server.tools}["submit_scenario"](
+        {**_delta(), "restored_from": {"key": "adds-a-big-mac"}, "as_it_was": True}
+    ))
+    assert said.get("is_error") and "Actors and faults are off" in said["content"][0]["text"] and kept == []
+
+
+def test_an_unreadable_as_it_was_restore_is_counted_like_any_refusal(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    server, _kept = scenario_tools(contract, root, root, wanted=4)
+    submit = {one.name: one.handler for one in server.tools}["submit_scenario"]
+    said = [
+        asyncio.run(submit({**_delta(), "restored_from": {"key": "gone"}, "as_it_was": True}))["content"][0]["text"]
+        for _ in range(3)
+    ]
+    assert all("No removed case 'gone' could be read" in one for one in said)
+    assert "submitting it again will not work" in said[-1]
+
+
 def test_a_removed_case_the_platform_cannot_read_falls_back_to_a_new_key_and_a_note(tmp_path):
     import asyncio
 

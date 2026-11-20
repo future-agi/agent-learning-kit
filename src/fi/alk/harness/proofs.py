@@ -44,8 +44,9 @@ def load_shown_proofs(destination: Path) -> dict[str, ProofEntry]:
         here = mine.get(key)
         if not isinstance(entry, dict):
             continue
-        # Newer wins; a validated proof with no time is the platform's record and wins too.
-        if here is None or not entry.get("proved_at") or str(entry["proved_at"]) >= str(here.get("proved_at") or ""):
+        # Newer wins. A validated proof with no time wins only over a local one that has none either.
+        local, theirs = str((here or {}).get("proved_at") or ""), str(entry.get("proved_at") or "")
+        if here is None or (theirs >= local if theirs else not local):
             shown[key] = entry
     return shown
 
@@ -174,21 +175,24 @@ def proof_status(entry: Mapping[str, Any] | None) -> tuple[str, str]:
 
 def status_lines(
     proofs: Mapping[str, ProofEntry], kept: list[Scenario], *, names: list[str] | None = None, state: str = "",
-    most: int = 200,
+    most: int = 200, since: str = "",
 ) -> list[str]:
-    """The suite's counts, then one line per scenario (`name: state, reason`), narrowed by `names` and `state`, at
-    most `most` lines: what the builder reads before it says anything about a scenario's state."""
-    counts = proof_counts(proofs, [proof_key(one) for one in kept])
+    """How many scenarios there are, then one line per scenario proved here since `since` (`name: state, reason`),
+    narrowed by `names` and `state`, at most `most` lines. No counts of states: each scenario's state is the
+    Scenarios tab's, and a proof older than `since` was not made here and may not be what the tab shows."""
     lines = [
-        f"{len(kept)} scenarios. Proofs on record: {counts['proved']} proved, {counts['kept_as_written']} kept as "
-        f"written, {counts['not_proved']} not proved."
+        f"{len(kept)} scenarios. Each one's state is the one its row on the Scenarios tab shows; below are only the "
+        "proofs made in this chat, with their reasons."
     ]
     wanted = {one.strip() for one in names or [] if one.strip()}
     shown = 0
     for scenario in kept:
         if wanted and scenario.name not in wanted and proof_key(scenario) not in wanted:
             continue
-        said, why = proof_status(proofs.get(proof_key(scenario)))
+        entry = proofs.get(proof_key(scenario))
+        if entry is None or str(entry.get("proved_at") or "") < since:
+            continue
+        said, why = proof_status(entry)
         if state and said != state:
             continue
         if shown >= most:
@@ -196,6 +200,8 @@ def status_lines(
             break
         lines.append(f"{scenario.name}: {said}" + (f", {why.splitlines()[0][:400]}" if why else ""))
         shown += 1
+    if shown == 0:
+        lines.append("No scenario was proved in this chat" + (" among those named." if wanted else "."))
     missing = sorted(wanted - {one.name for one in kept} - {proof_key(one) for one in kept})
     if missing:
         lines.append("not in the suite: " + ", ".join(missing))

@@ -49,7 +49,7 @@ from .hosted_conversation import (
     PlatformSessionStore,
     load_conversation_capabilities,
 )
-from .proofs import load_proofs, load_shown_proofs, proof_counts, proof_key
+from .proofs import load_proofs, proof_counts, proof_key
 from .session import (
     ARTIFACT,
     DONE,
@@ -116,22 +116,39 @@ def _with_proof_counts(text: str, counts: dict[str, int]) -> str:
     return "\n\n".join(part for part in (text, line) if part)
 
 
-def _status_line(workspace: Path, kept: list[Any] | None, saved: str, unapplied: int = 0) -> str:
-    """The line that closes every builder reply, written by code from the files, never by the model: how many
-    scenarios there are and what their proofs say, and whether this working copy's changes are in the environment.
-    `saved` is `saved`, `saved_except` (with `unapplied` scenarios left out), `unsaved`, `building` or `unknown`,
-    which says nothing about saving rather than guess."""
-    counts = proof_counts(load_shown_proofs(workspace), [proof_key(one) for one in kept or []])
-    changes = {
-        "saved": "; every change is saved to the environment",
-        "saved_except": f"; saved to the environment except {unapplied} scenarios that could not be applied",
-        "unsaved": "; changes in this chat are NOT saved to the environment",
-        "building": "; the environment is still being built, so nothing is saved to it yet",
+# Where a change this chat publishes lands, in the words of the environment's own page.
+UNDER_UNSAVED = "Changes from this chat are under Unsaved changes; Validate, then Save to keep them as a new version"
+
+
+def _changes_said(saved: str, unapplied: int = 0) -> str:
+    """Where this chat's changes stand, in the words the environment's page uses, or "" when that is not known.
+    `saved` is `published` (under Unsaved changes, `unapplied` of them left out), `none` (nothing changed in this
+    chat), `unsaved` (changed here and not yet under Unsaved changes), `building` or `unknown`."""
+    return {
+        "published": UNDER_UNSAVED
+        + (f", except {unapplied} scenarios that could not be applied" if unapplied else "")
+        + ".",
+        "none": "No changes in this chat.",
+        "unsaved": "Changes in this chat are not yet under Unsaved changes.",
+        "building": "The environment is still being built.",
         "unknown": "",
     }[saved]
-    return (
-        f"Status: {len(kept or [])} scenarios ({counts['proved']} proved, {counts['kept_as_written']} kept as "
-        f"written, {counts['not_proved']} not proved){changes}."
+
+
+def _status_line(
+    workspace: Path, kept: list[Any] | None, saved: str, unapplied: int = 0, counts: Mapping[str, Any] | None = None
+) -> str:
+    """The line that closes every builder reply, written by code, never by the model: how many scenarios there are,
+    the Scenarios tab's own counts when the platform sent them (never counts from this chat's proofs, which can
+    contradict the tab), and where this chat's changes stand."""
+    tab = (
+        f" On the Scenarios tab: {int(counts.get('proved') or 0)} proved, {int(counts.get('kept_as_written') or 0)} "
+        f"kept as written, {int(counts.get('not_proved') or 0)} not proved."
+        if isinstance(counts, Mapping)
+        else ""
+    )
+    return " ".join(
+        part for part in (f"Status: {len(kept or [])} scenarios.{tab}", _changes_said(saved, unapplied)) if part
     )
 
 
@@ -159,8 +176,8 @@ def _with_removed_hint(answer: Any, query: Mapping[str, Any], removed: list[dict
                 {
                     **row,
                     "removed": f"removed after suite version {row.get('suite_version')}; it is not in the suite. "
-                    f"Restore it with scenario_key {row.get('scenario_key')!r} and restored_from "
-                    f'{{"key": "{row.get("scenario_key")}", "suite_version": "{row.get("suite_version")}"}}',
+                    f'Restore it exactly as it was with restored_from {{"key": "{row.get("scenario_key")}"}} and '
+                    "as_it_was true; with a change, with its scenario_key and restored_from",
                 }
                 for row in removed
             ],
@@ -175,25 +192,16 @@ def _with_removed_hint(answer: Any, query: Mapping[str, Any], removed: list[dict
     }
 
 
-def _status_note(workspace: Path, kept: list[Any] | None, unsaved: bool | None = None) -> str:
-    """The suite's proof counts as they stand now, and whether this working copy holds changes not saved to the
-    environment, put at the head of every message so a status the conversation stated earlier can never stand in
-    for them."""
+def _status_note(workspace: Path, kept: list[Any] | None, saved: str = "unknown") -> str:
+    """How many scenarios there are and where this chat's changes stand, put at the head of every message so a
+    status the conversation stated earlier can never stand in for them."""
     if not kept:
         return ""
-    counts = proof_counts(load_shown_proofs(workspace), [proof_key(one) for one in kept])
-    saved = (
-        ""
-        if unsaved is None
-        else " Changes in this working copy are NOT yet saved to the environment."
-        if unsaved
-        else " Nothing in this working copy is waiting to be saved."
-    )
+    where = _changes_said(saved)
     return (
-        f"[Suite now: {len(kept)} scenarios; proofs on record: {counts['proved']} proved, "
-        f"{counts['kept_as_written']} kept as written, {counts['not_proved']} not proved.{saved} Anything said earlier "
-        "about their state may be stale: call scenario_status before saying why a scenario is in its state, and say "
-        "saved only after save_changes reports it applied.]\n\n"
+        f"[Suite now: {len(kept)} scenarios.{' ' + where if where else ''} Anything said earlier about their state "
+        "may be stale. Give a scenario's state, or counts of states, only as scenario_status reads them from the "
+        "Scenarios tab, and say a change is under Unsaved changes only after save_changes reports it applied.]\n\n"
     )
 
 
@@ -983,6 +991,7 @@ class HostedChatRuntime:
             else self._cast_servers(contract),
             catalogue=catalogue,
             removed_lookup=self._removed_with_key,
+            tab_status=self._tab_status,
         )
         if self._nudge is not None:
             self._nudge_tools(stage, catalogue)
@@ -1427,11 +1436,12 @@ class HostedChatRuntime:
 
         @tool(
             "save_changes",
-            "Put every change made in this conversation into the environment: scenarios added, "
-            "rewritten or dropped, sub-goals and contract corrections. Seals them so runs play "
-            "them, and returns exactly what changed by tab number. Until this says applied, "
-            "nothing you changed is in the environment. `force` reseals and publishes even when "
-            "nothing changed here, to repair a sealed bundle or index out of step.",
+            "Put every change made in this conversation under the environment's Unsaved changes: scenarios "
+            "added, rewritten or dropped, sub-goals and contract corrections. Seals them so runs play them, and "
+            "returns exactly what changed by tab number. Until this says applied, nothing you changed is there. "
+            "Under Unsaved changes is not a saved version: the person keeps them as one with Validate, then Save. "
+            "`force` reseals and publishes even when nothing changed here, to repair a sealed bundle or index out "
+            "of step.",
             schema({"force": bool}, []),
         )
         async def save_changes(args: dict[str, Any]) -> dict[str, Any]:
@@ -1649,29 +1659,49 @@ class HostedChatRuntime:
             + "."
         )
 
+    async def _tab_status_counts(self) -> dict[str, Any]:
+        """The Scenarios tab's counts from the overview, or {} when it sends none."""
+        try:
+            overview = await self.client.overview()
+        except Exception:  # noqa: BLE001 - no counts is said as none, never guessed
+            return {}
+        counts = overview.get("lifecycle_counts") if isinstance(overview, dict) else None
+        return counts if isinstance(counts, dict) else {}
+
+    async def _tab_status(self, names: list[str]) -> dict[str, Any]:
+        """The Scenarios tab's own states: the overview's `lifecycle_counts` and the rows of `names` (the first page
+        when none are named), each with its `lifecycle`. {} for whatever the platform does not answer."""
+        counts = await self._tab_status_counts()
+        found: dict[str, Any] = {"counts": counts} if counts else {}
+        try:
+            query: dict[str, Any] = {"page_size": 100, **({"names": names} if names else {})}
+            answer = await self.client.scenarios(query)
+            found["rows"] = list((answer or {}).get("rows") or []) if isinstance(answer, dict) else []
+        except Exception:  # noqa: BLE001 - no rows is said as none, never guessed
+            pass
+        return found
+
     async def _removed_with_key(self, key: str) -> list[dict[str, Any]]:
         """The removed cases with this exact key, as find_scenarios(removed: true) reads them."""
         answer = await self.client.scenarios({"removed": True})
         rows = answer.get("removed") if isinstance(answer, dict) else None
         return [row for row in rows or [] if isinstance(row, dict) and row.get("scenario_key") == key]
 
-    def _closing_status(self) -> str:
+    def _closing_status(self, counts: Mapping[str, Any] | None = None) -> str:
         """The code-written status line for the end of this reply, or "" before the environment has a suite."""
         kept = self._suite_here()
         if kept is None:
             return ""
         state = self._saved_state()
-        unapplied = int(self._published().get("unapplied") or 0) if state == "saved_except" else 0
-        return _status_line(self.workspace, kept, state, unapplied)
+        unapplied = int(self._published().get("unapplied") or 0) if state == "published" else 0
+        return _status_line(self.workspace, kept, state, unapplied, counts)
 
     def _turn_status_note(self) -> str:
         try:
             kept = self._suite_here()
             if not kept:
                 return ""
-            state = self._saved_state()
-            unsaved = None if state in ("building", "unknown") else state == "unsaved"
-            return _status_note(self.workspace, kept, unsaved)
+            return _status_note(self.workspace, kept, self._saved_state())
         except Exception:  # noqa: BLE001 - the note is read from files; one that cannot be read never costs the turn
             return ""
 
@@ -1747,7 +1777,8 @@ class HostedChatRuntime:
             self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
 
     def _saved_state(self) -> str:
-        """`building`, `unknown`, `unsaved`, `saved_except` (saved, with scenarios left unapplied) or `saved`."""
+        """`building`, `unknown`, `unsaved` (changed here, not under Unsaved changes), `published` (this chat's
+        changes are under Unsaved changes) or `none` (nothing changed in this chat)."""
         if self._control_only():
             return "building"
         published = self._published()
@@ -1755,7 +1786,7 @@ class HostedChatRuntime:
             return "unknown"
         if self._environment_fingerprint() != published["fingerprint"]:
             return "unsaved"
-        return "saved_except" if int(published.get("unapplied") or 0) else "saved"
+        return "published" if published.get("published") else "none"
 
     def _write_dotfile(self, name: str, body: dict[str, Any]) -> None:
         path = self.workspace / name
@@ -1767,7 +1798,7 @@ class HostedChatRuntime:
         """Seal and publish the workspace now, and return what the platform says changed."""
         fingerprint = self._environment_fingerprint()
         if fingerprint == self._published_fingerprint() and not force:
-            return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
+            return {"applied": True, "unchanged": True, "message": "nothing changed here since the last save_changes"}
         from .pre_run import refresh_stale
 
         # A scenario a run could not load is left out of the seal (it keeps its last sealed
@@ -1823,7 +1854,8 @@ class HostedChatRuntime:
                 self._write_dotfile(_AUTHORING_BASIS, {"authoring_revision": result["revision"]})
             # Saved, but a scenario left unapplied is not in the environment: the marker says how many.
             self._write_dotfile(
-                _PUBLISHED, {"fingerprint": self._environment_fingerprint(), "unapplied": len(failed)}
+                _PUBLISHED,
+                {"fingerprint": self._environment_fingerprint(), "unapplied": len(failed), "published": True},
             )
         return result
 
@@ -1840,11 +1872,11 @@ class HostedChatRuntime:
             if result.get("code") == "reseal_failed":
                 # Not a fault of one case: the change stays in this chat's working copy as a draft.
                 return (
-                    "These changes are kept as an unsaved draft and were NOT saved to the environment: "
+                    "These changes stay in this chat's working copy and are NOT under Unsaved changes: "
                     f"{result.get('message') or 'they could not be sealed for runs'}."
                 ), True
             return (
-                "These changes were NOT saved to the environment: "
+                "These changes are NOT under Unsaved changes: "
                 f"{result.get('message') or result.get('code') or 'unknown reason'}."
             ), False
 
@@ -1858,17 +1890,18 @@ class HostedChatRuntime:
         ]
         failed = result.get("failed") or []
         except_line = (
-            f" Saved, except {len(failed)} scenarios that could not be applied: "
+            f" Except {len(failed)} scenarios that could not be applied: "
             + "; ".join(f"{one['scenario_key']}: {one['reason']}" for one in failed)
             + "."
             if failed
             else ""
         )
         return (
-            "Saved to the environment: "
+            "Put under Unsaved changes: "
             + ("; ".join(parts) or "no scenario changed")
-            + f". It now has {result.get('scenario_count')} scenarios."
+            + f". With them the suite has {result.get('scenario_count')} scenarios."
             + except_line
+            + " Validate, then Save to keep them as a new version."
         ), False
 
     async def _selection_note(self, payload: dict[str, Any]) -> str:
@@ -2589,7 +2622,7 @@ class HostedChatRuntime:
         final_text = self._close_with_proof_counts(final_text, finished_before)
         # Every reply ends with it, one that was only tool calls included: the person always sees the real state.
         try:
-            truth = self._closing_status()
+            truth = self._closing_status((await self._tab_status_counts()) or None)
         except Exception:  # noqa: BLE001 - the line is read from files; one that cannot be read never costs the reply
             truth = ""
         if truth:

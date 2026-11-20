@@ -33,7 +33,7 @@ from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, wor
 from .scenarios import writer_worker
 from .session import Stage
 from .tools import schema
-from .proofs import load_shown_proofs, proof_key, record_proof, status_lines
+from .proofs import load_shown_proofs, proof_key, record_proof, status_lines, utc_stamp
 
 BUILDER = "builder"
 KNOWLEDGE_SERVER = "knowledge"
@@ -156,14 +156,42 @@ def knowledge_server(contract: AgentContract | None, destination: Path) -> ToolS
     )
 
 
+def tab_lines(tab: dict[str, Any]) -> list[str]:
+    """The Scenarios tab's counts and each row's state with its reason, as the platform sent them; nothing when it
+    sent none."""
+    lines = []
+    counts = tab.get("counts")
+    if isinstance(counts, dict):
+        lines.append(
+            "On the Scenarios tab: "
+            + ", ".join(
+                f"{int(counts.get(key) or 0)} {label}"
+                for key, label in (("proved", "proved"), ("kept_as_written", "kept as written"), ("not_proved", "not proved"))
+            )
+            + "."
+        )
+    for row in tab.get("rows") or []:
+        life = row.get("lifecycle") if isinstance(row, dict) else None
+        if not isinstance(life, dict):
+            continue
+        reason = str(life.get("reason_text") or "").strip()
+        lines.append(f"#{row.get('number')} {row.get('name')}: {life.get('state')}" + (f" ({reason})" if reason else ""))
+    return lines
+
+
 def suite_server(
     out: Path,
     kept: list,
     contract: AgentContract | None = None,
     source_root: Path | None = None,
     sealed: bool = True,
+    tab_status: Callable[[list[str]], Awaitable[dict[str, Any]]] | None = None,
 ) -> ToolServer:
-    """Whole-suite operations the single-scenario tools would take one call per scenario to do."""
+    """Whole-suite operations the single-scenario tools would take one call per scenario to do. ``tab_status`` reads
+    the Scenarios tab's own states where the platform can be asked: its counts, and the rows of the scenarios
+    named (all of the first page when none are), each with its `lifecycle`."""
+    # Proofs made from here on are this chat's own; older ones may not be what the Scenarios tab shows.
+    opened_at = utc_stamp()
     from .catalogue import load_catalogue
     from .prove import prove
     from .scenario_tools import write_scenarios
@@ -228,12 +256,9 @@ def suite_server(
 
     @tool(
         "scenario_status",
-        "Each scenario's state as its latest proof records it (the validation's, as the Scenarios tab shows it, or "
-        "one made here since), with the reason in the proof's own words, and the "
-        "suite's counts first: proved, kept as written, not proved. Call it before you say anything about how many "
-        "scenarios are proved, held or passing, or why one is in the state it is, and quote what it returns. The "
-        "Scenarios tab shows a not-proved case as Draft and a kept-as-written one as Kept as written; it can also "
-        "hold a proved case back as Draft for a reason found after the proof, which its row there names. Passing is "
+        "Each scenario's state and its reason as the Scenarios tab shows them, with the tab's counts, and each proof "
+        "made in this chat with its reason. Call it before you say how many scenarios are proved or held, or why one "
+        "is in its state, and quote it: the tab's state and reason are what the person sees. Passing is "
         "a run's result, never a proof's: read it with read_runs. `names` narrows to some scenarios, `state` to one "
         "of proved, kept as written, not proved.",
         schema(
@@ -245,11 +270,15 @@ def suite_server(
         ),
     )
     async def scenario_status(args: dict[str, Any]) -> dict[str, Any]:
-        lines = status_lines(
+        names = [str(one) for one in args.get("names") or []]
+        tab = await tab_status(names) if tab_status is not None else {}
+        lines = tab_lines(tab)
+        lines += status_lines(
             load_shown_proofs(out),
             kept,
             names=[str(one) for one in args.get("names") or []],
             state=str(args.get("state") or ""),
+            since=opened_at,
         )
         return _ok("\n".join(lines))
 
@@ -770,6 +799,7 @@ def open_builder(
     more_servers: dict[str, ToolServer] | None = None,
     catalogue: Catalogue | None = None,
     removed_lookup: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
+    tab_status: Callable[[list[str]], Awaitable[dict[str, Any]]] | None = None,
 ) -> Stage:
     """The one session that owns an environment once it has a world: every tool, every skill.
     ``sealed`` is False while the environment is still being built and has no sealed bundle yet.
@@ -789,7 +819,7 @@ def open_builder(
     servers: dict[str, ToolServer] = {
         SCENARIO_SERVER: server,
         KNOWLEDGE_SERVER: knowledge_server(contract, out),
-        "suite": suite_server(out, kept, contract, source_root, sealed=sealed),
+        "suite": suite_server(out, kept, contract, source_root, sealed=sealed, tab_status=tab_status),
     }
     if platform is not None:
         servers[platform.name] = platform
