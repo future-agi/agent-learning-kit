@@ -62,7 +62,7 @@ TURNS_EACH = 9
 TURNS_FLOOR = 120
 # One writer's own ceiling, so a single slice cannot spend the whole stage budget.
 WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "300") or 300)
-WRITER_TOOLS = ("inspect_world", "try_calls", "try_check", "add_sub_goal", "submit_scenario")
+WRITER_TOOLS = ("inspect_world", "try_calls", "try_check", "add_sub_goal", "names_taken", "submit_scenario")
 # Withheld from a loop that hands the suite out.
 WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
 # Above this, the loop hands the suite out instead of writing it. Zero: always.
@@ -148,7 +148,8 @@ def writer_worker(
                 "plan that are yours and how many to write in each. Pass its name as `deal` on "
                 "every submit_scenario; a scenario off your cells is refused, and once the deal is "
                 "written you are told to stop. The summary in your brief is all you need of the "
-                "rest of the suite; submit_scenario refuses a caller name already taken.\n\n"
+                "rest of the suite; submit_scenario refuses a caller name already taken, so check the names "
+                "you mean to give with names_taken before you write the cases.\n\n"
                 "Each scenario carries its use case verbatim and its own one-line `branch` "
                 "saying what makes it different from the others you write here. **Branches are "
                 "where the variety lives**: the branch that cannot be completed, the rule under "

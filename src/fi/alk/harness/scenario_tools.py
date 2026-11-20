@@ -1066,6 +1066,8 @@ def deal_brief(deal: str, share: Counter[tuple[str, ...]], axes: Sequence[str]) 
 
 # How many caller names a summary shows; submit_scenario refuses any repeat whether shown or not.
 NAMES_IN_A_SUMMARY = 30
+# How many names one names_taken call checks.
+NAMES_ASKED_AT_ONCE = 50
 
 
 def suite_summary(kept: list[Scenario], grid: dict[str, list[str]] | None) -> str:
@@ -3116,6 +3118,14 @@ def scenario_tools(
             problem = scenario_problem(args)
             if problem:
                 return _refuse(problem)
+        # A taken name is refused before anything costly runs (a pre-run conversation, the proof).
+        same_key = str(args.get("scenario_key") or "").strip()
+        clash = _name_clash(
+            args,
+            next((one.name for one in kept if same_key and one.scenario_key == same_key), str(args.get("name") or "")),
+        )
+        if clash:
+            return _refuse(clash)
         if args.get("pre_run"):
             # Checked first, so a session that cannot be written is refused with its fix before any model is asked.
             from .pre_run import session_problems, written
@@ -3133,6 +3143,34 @@ def scenario_tools(
             name
             for name, one in deals.items()
             if one["open"] and len(one["owned"]) < sum(one["cells"].values())
+        )
+
+    def needs_a_round() -> bool:
+        """Whether what is left to write is more than one writer's share, with a grid to deal and no round out."""
+        return bool(target.get("axes")) and cap() - len(kept) > cases_per_writer() and not _round_out()
+
+    def _name_clash(args: dict[str, Any], same: str) -> str:
+        """The case that already has this caller's full name, as a refusal, or "" when the name is free. Cheap: read
+        from the suite in hand and the names saved or journalled beside it, never from a proof."""
+        first = " ".join(str((args.get("persona") or {}).get("name") or "").lower().split())
+        if not first:
+            return ""
+        holder = next(
+            (
+                one.name
+                for one in kept
+                if one.name != same
+                and one.persona is not None
+                and " ".join(str(one.persona.name or "").lower().split()) == first
+            ),
+            "",
+        )
+        if not holder and first not in _first_names_on_disk(destination, same):
+            return ""
+        return (
+            f"the caller name {first.title()!r} is taken" + (f" by {holder!r}" if holder else " in this suite")
+            + ". Two results under one name cannot be told apart, so choose a full name the suite does not have; "
+            "names_taken checks a list of names before you write a case"
         )
 
     def _off_its_deal(deal: str, held: Scenario | None, coverage: Any) -> str:
@@ -3187,8 +3225,17 @@ def scenario_tools(
         # Cheap label checks run before the gates, since proving is expensive.
         deal = str(args.get("deal") or "").strip()
         held = next((one for one in kept if one.name == same), None)
-        strayed = _off_the_grid(args.get("coverage"), target.get("axes")) or _off_its_deal(
-            deal, held, args.get("coverage") or {}
+        unrounded = (
+            f"{cap() - len(kept)} cases are left to write, more than one writer's share ({cases_per_writer()}), so "
+            "this suite is written in deals: call suite_progress, which deals the round, and brief one "
+            "scenario_writer per deal in one message. A writer handed no deal reports this and stops."
+            if held is None and not deal and needs_a_round()
+            else ""
+        )
+        strayed = (
+            _off_the_grid(args.get("coverage"), target.get("axes"))
+            or unrounded
+            or _off_its_deal(deal, held, args.get("coverage") or {})
         )
         if strayed:
             return _refuse(strayed)
@@ -3709,7 +3756,9 @@ def scenario_tools(
         "comes with them, never the cases already written. A writer submits under its deal and is stopped when "
         "the deal is written; dealing again closes the round before it. While a round is out, a case is changed or "
         "removed only under the deal that wrote it; `end_round` closes the round once every writer has reported, "
-        "so you can change the suite yourself.",
+        "so you can change the suite yourself. When more is left to write than one writer's share and no round "
+        "is out, this deals the next round unless `deal` is false; a new case submitted without a deal then is "
+        "refused until a round is dealt.",
         schema({"names": bool, "deal": bool, "end_round": bool}, []),
     )
     async def suite_progress(args: dict[str, Any]) -> dict[str, Any]:
@@ -3717,10 +3766,15 @@ def scenario_tools(
         lines = [f"{len(kept)} of {cap()} written."]
         if target.get("supports"):
             lines.append(capacity_line(int(target["supports"]), len(kept), asked_count()) + ".")
-        if bool(args.get("end_round")) or bool(args.get("deal")):
+        dealing = (
+            bool(args["deal"])
+            if args.get("deal") is not None
+            else not args.get("end_round") and needs_a_round()
+        )
+        if bool(args.get("end_round")) or dealing:
             for one in deals.values():
                 one["open"] = False
-        if bool(args.get("deal")):
+        if dealing:
             if not target.get("axes"):
                 return _err("Declare the grid with aim_for first: a deal is cells of it.")
             for one in deals.values():
@@ -3797,6 +3851,33 @@ def scenario_tools(
                 "use cases written: "
                 + ", ".join(f"{name} ({n})" for name, n in by_worker.most_common(12))
             )
+        return _ok("\n".join(lines))
+
+    @tool(
+        "names_taken",
+        "Which of these full caller names the suite already has, and the case that has each. Check the names you "
+        "mean to give before writing the cases: a taken name is refused at submit.",
+        schema({"names": {"type": "array", "items": {"type": "string"}}}, ["names"]),
+    )
+    async def names_taken(args: dict[str, Any]) -> dict[str, Any]:
+        asked = [" ".join(str(one).split()) for one in (args.get("names") or [])[:NAMES_ASKED_AT_ONCE] if str(one).strip()]
+        if not asked:
+            return _err("Give the full names to check.")
+        saved = _first_names_on_disk(destination)
+        held = {
+            " ".join(str(one.persona.name or "").lower().split()): one.name
+            for one in kept
+            if one.persona is not None and one.persona.name
+        }
+        lines = []
+        for name in asked:
+            key = name.lower()
+            if key in held:
+                lines.append(f"{name}: taken by {held[key]!r}")
+            elif key in saved:
+                lines.append(f"{name}: taken in this suite")
+            else:
+                lines.append(f"{name}: free")
         return _ok("\n".join(lines))
 
     @tool(
@@ -4129,6 +4210,7 @@ def scenario_tools(
             fix_tool_tool,
             aim_for,
             suite_progress,
+            names_taken,
             drop_scenario,
         ]
         # Only the session that owns the suite may save; saving deletes unknown folders.
@@ -4152,6 +4234,7 @@ _ALWAYS = (
     "fix_tool",
     "aim_for",
     "suite_progress",
+    "names_taken",
     "drop_scenario",
     "save_scenarios",
 )

@@ -392,3 +392,52 @@ def test_while_a_round_is_out_edits_and_drops_go_only_through_the_deal_that_wrot
     # Once the round ends, whoever dealt it changes the suite freely.
     asyncio.run(handlers["suite_progress"]({"end_round": True}))
     assert "dropped" in _text(asyncio.run(handlers["drop_scenario"]({"name": "d1-0"})))
+
+
+def test_a_round_is_dealt_by_default_once_more_is_left_than_one_writer_s_share(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HARNESS_CASES_PER_WRITER", "4")
+    handlers, kept = _server(tmp_path, monkeypatch, 20, _grid(), can_grow=True)
+
+    # Nobody dealt yet: a new case with no deal is refused, before anything is proved.
+    stray = _text(asyncio.run(handlers["submit_scenario"](_case("alone", ("t1", "hurried")))))
+    assert "written in deals: call suite_progress" in stray and kept == []
+
+    # Asked for nothing in particular, progress deals the round itself; `deal: false` would not.
+    assert "Deal d" not in _text(asyncio.run(handlers["suite_progress"]({"deal": False})))
+    dealt = _deals_in(_text(asyncio.run(handlers["suite_progress"]({}))))
+    assert len(dealt) == 5 and all(len(cells) == 4 for cells in dealt.values())
+    said = _text(asyncio.run(handlers["submit_scenario"](_case("d1-0", dealt["d1"][0], "d1"))))
+    assert "kept" in said
+
+
+def test_a_suite_within_one_writer_s_share_needs_no_deal(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HARNESS_CASES_PER_WRITER", "16")
+    handlers, kept = _server(tmp_path, monkeypatch, 12, _grid(), can_grow=True)
+
+    assert "Deal d" not in _text(asyncio.run(handlers["suite_progress"]({})))
+    assert "kept" in _text(asyncio.run(handlers["submit_scenario"](_case("alone", ("t1", "hurried")))))
+
+
+def test_a_taken_name_is_refused_before_anything_costly_and_names_who_has_it(tmp_path, monkeypatch):
+    from fi.alk.harness import pre_run
+
+    handlers, kept = _server(tmp_path, monkeypatch, 12, _grid(), can_grow=True)
+    first = {**_case("first", ("t1", "hurried")), "persona": {"name": "Priya Raman"}}
+    assert "kept" in _text(asyncio.run(handlers["submit_scenario"](first)))
+
+    async def never(*_args, **_kwargs):
+        raise AssertionError("a pre-run conversation was written for a case with a taken name")
+
+    monkeypatch.setattr(pre_run, "written", never)
+    again = {
+        **_case("second", ("t2", "confused")),
+        "persona": {"name": "  priya  RAMAN "},
+        "pre_run": [{"actor": "x", "turns": 1}],
+    }
+    said = _text(asyncio.run(handlers["submit_scenario"](again)))
+
+    assert "'Priya Raman' is taken by 'first'" in said and [one.name for one in kept] == ["first"]
+    # The same case resubmitted under its own name keeps its name.
+    assert "kept" in _text(asyncio.run(handlers["submit_scenario"]({**first, "instruction": "Keep a note, please."})))
+    checked = _text(asyncio.run(handlers["names_taken"]({"names": ["Priya Raman", "Tomas Herrera"]})))
+    assert "Priya Raman: taken by 'first'" in checked and "Tomas Herrera: free" in checked

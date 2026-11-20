@@ -921,7 +921,10 @@ at most as many writers as run at once, and a summary of the suite (counts per l
 names taken) that is the same size at fifty cases or a thousand. Brief one writer per deal, each with its
 deal word for word, that summary, and what its cells mean; never the cases already written. A writer
 submits under its deal, is refused outside its cells and is stopped when its count is written, so no one
-writer carries the suite. Dealing again closes the round before it.
+writer carries the suite. Dealing again closes the round before it. Whenever more is left to write than one
+writer's share, `suite_progress` deals the next round by itself, and a new case submitted without a deal is
+refused until one is dealt: fanning out is how a large suite is written, never an option. Before writing,
+a writer checks the names it means to give with `names_taken`.
 
 When the plan's cells cannot hold the count, `aim_for` says so. Widen the plan first: add the levels this
 agent's tools and world genuinely support, on any axis, and declare them with `aim_for`. Only when the agent
