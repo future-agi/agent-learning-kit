@@ -93,6 +93,17 @@ def test_a_case_on_a_fault_level_needs_the_fault_or_a_record_that_carries_it():
     assert "Nothing here can give the agent this failure" in nothing
 
 
+def test_a_case_that_injects_a_fault_sits_on_a_fault_level():
+    fault = [{"action": "issue_refund", "mode": "unavailable"}]
+    elsewhere = _case("hurried", "1043", coverage={"disposition": "hurried"}, faults=fault)
+    said = _fault_level_unmet(elsewhere, FAULTS, faults_on=True)
+    assert "injects a fault but sits on no level the plan declares a fault" in said and "payment_timeout" in said
+    placed = _case("timed_out", "1043", coverage={"disposition": "payment_timeout"}, faults=fault)
+    assert _fault_level_unmet(placed, FAULTS, faults_on=True) == ""
+    # With no fault levels declared, a fault is not tied to a level.
+    assert _fault_level_unmet(elsewhere, {}, faults_on=True) == ""
+
+
 def test_a_checked_level_needs_a_sub_goal_whose_overlay_is_that_level_not_one_named_like_it():
     checked = {"interaction": ["resumed_after_pause"]}
     goals = Catalogue(

@@ -536,3 +536,36 @@ def test_a_lookup_the_service_answers_not_found_counts_as_made_and_a_fault_does_
     faulted = world_answering(500)
     play_reference_step(faulted, step)
     assert answered(faulted.calls, "get_order", order_id="9943") == []
+
+
+def test_a_reference_that_changes_someone_else_s_record_is_named_from_the_world_s_data(tmp_path):
+    """38 of 50 refund cases refunded an order whose holder in the world was not the caller."""
+    from fi.alk.harness.scenario import Persona, Scenario
+    from fi.alk.harness.scenario_tools import _writes_for_someone_else
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class Shop(GeneratedWorld):
+        name = "shop"
+        tools = [{"name": "get_order"}, {"name": "issue_refund"}]
+        handlers = {"get_order": "def handle(args, db):\n    return {}\n", "issue_refund": "def handle(args, db):\n    return {}\n"}
+
+    world = Shop(":memory:")
+    world.connection.executescript(
+        "CREATE TABLE orders(order_id TEXT, customer_name TEXT);"
+        "INSERT INTO orders VALUES ('1043', 'Ida Novak'), ('1044', 'Ian MacLeod');"
+    )
+    save(world, tmp_path, notes="test", sequences=[])
+
+    def case(order, steps=("get_order", "issue_refund")):
+        return Scenario(
+            name="refund",
+            persona=Persona(name="Ian MacLeod"),
+            solution=[{"tool": tool, "arguments": {"order_id": order}} for tool in steps],
+        )
+
+    said = _writes_for_someone_else(case("1043"), tmp_path, {"get_order"})
+    assert "issue_refund changes a record that belongs to Ida Novak, not to the caller Ian MacLeod" in said
+    # The caller's own order, or a case that only looks the other person's order up and declines: nothing said.
+    assert _writes_for_someone_else(case("1044"), tmp_path, {"get_order"}) == ""
+    assert _writes_for_someone_else(case("1043", steps=("get_order",)), tmp_path, {"get_order"}) == ""

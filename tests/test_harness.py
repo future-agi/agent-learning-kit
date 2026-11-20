@@ -3064,6 +3064,20 @@ def test_suite_progress_in_a_chat_calls_its_counts_the_proofs_made_here(tmp_path
     assert "Proofs on record" in said
 
 
+def test_the_someone_else_s_write_check_refuses_only_with_its_switch_on(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness import scenario_tools as module
+
+    monkeypatch.setattr(module, "_writes_for_someone_else", lambda *args: "changes a record that belongs to someone else")
+    _root, _catalogue, _kept, tools = _edit_tools(tmp_path)
+    monkeypatch.setenv("ALK_SOMEONE_ELSES_WRITE_GATE", "1")
+    said = asyncio.run(tools["submit_scenario"].handler(_delta()))
+    assert said.get("is_error") and "belongs to someone else" in said["content"][0]["text"]
+    monkeypatch.delenv("ALK_SOMEONE_ELSES_WRITE_GATE")
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+
+
 def test_a_repeated_restore_refusal_is_counted_like_any_other(tmp_path):
     import asyncio
 
