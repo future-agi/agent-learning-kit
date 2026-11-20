@@ -1086,15 +1086,16 @@ GOOD   same cell
         measures whether the agent holds to who may ask)
 ```
 
-Every rule of the agent governs a case that calls its tools, cited or not. The proof hands the case's
-expected outcome and situation to the same rule check a cited rule gets, and a possible conflict comes
-back in the submit reply as `POSSIBLE RULE CONFLICT`. Fix the case, or cite the rule that allows it.
+Every rule of the agent governs a case that calls its tools, cited or not, so check the case against all
+of them. Where the build reads the uncited rules too, a possible conflict comes back in the submit reply as
+`POSSIBLE RULE CONFLICT`, as advice. Fix the case, or cite the rule that allows it.
 
 **A fault level gives the agent the fault.** When the plan declares a level a fault (a payment that
 times out, a service that is down), the case on it has to make the agent meet that failure: inject it
 with `faults` on the call that meets it, or act on a record whose own data already carries it. A
 refund on an ordinary order labelled as a payment fault reports a failure path as tested that the agent
-never went near, and `submit_scenario` refuses it, naming the records that carry the fault.
+never went near. Where the build enforces fault levels, `submit_scenario` refuses such a case, naming the
+records that carry the fault.
 
 **A pause is a turn, not a sentence.** In a chat, "the person steps away for a moment" becomes "one
 moment please" and nothing more, so the level tests wording. Where the cell is a conversation resumed
@@ -1103,7 +1104,8 @@ comes back with a short follow-up that only makes sense with the earlier context
 that going through?"), or with one detail changed. The case names the sub-goal claimed for that level,
 which checks what the agent does on the return: it keeps the context, does not ask again for what it
 was told, does not repeat an action it already took, and finishes the task. When the plan lists the
-level as one that must be checked, a case on it that names no such sub-goal is refused.
+level as one that must be checked, the case should name such a sub-goal; where the build enforces checked
+levels, a case that names none is refused.
 
 ## Where difficulty actually comes from
 
@@ -1970,8 +1972,8 @@ fake reference) is yours to avoid. Two rules go beyond what any check can see:
 - **Spread the cases across the records the agent can read.** Every record that fits the situation is
   a candidate, and the one listed first is not the default. A task whose cases all sit on one order
   tests that order: measured on a two-hundred, 34 of 50 refunds were on one order and 22 of 50 refusals
-  on another. A suite may put only its share of a task's cases on one record, and `submit_scenario`
-  refuses one past it, naming the records still under their share.
+  on another. Put no more than the suite's share of a task's cases on one record; where the build
+  enforces the share, `submit_scenario` refuses one past it, naming the other records of that kind.
 
 ## One coherent terminal outcome
 

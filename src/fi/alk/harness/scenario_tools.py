@@ -3919,16 +3919,18 @@ def scenario_tools(
                     "description": "The levels of the grid that mean the agent meets a failure (a payment that times "
                     "out, a service that is down, a card the processor declines), by axis, each with the ids of the "
                     "records whose starting data already carries that failure, [] when none does: "
-                    '{"disposition": {"payment_timeout": ["<order id>"]}}. A case placed on one of these levels is '
-                    "refused unless it injects the failure with `faults` or its reference acts on one of those records.",
+                    '{"disposition": {"payment_timeout": ["<order id>"]}}. A case placed on one of these levels '
+                    "should inject the failure with `faults` or act on one of those records in its reference; where "
+                    "the build enforces fault levels, one that does neither is refused.",
                 },
                 "checked_levels": {
                     "type": "object",
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
                     "description": "The levels of the grid, overlays aside, that change what the agent must do and so "
                     "need their own check, by axis: a conversation resumed after a pause, a correction after the agent "
-                    'has committed. {"interaction": ["resumed_after_pause"]}. A case placed on one is refused until '
-                    "it names a sub-goal added with `overlay` set to that level.",
+                    'has committed. {"interaction": ["resumed_after_pause"]}. A case placed on one should name a '
+                    "sub-goal added with `overlay` set to that level; where the build enforces checked levels, one "
+                    "that does not is refused.",
                 },
             },
             ["count"],
