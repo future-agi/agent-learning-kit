@@ -1628,6 +1628,26 @@ class HostedChatRuntime:
         except Exception:  # noqa: BLE001 - a suite that cannot be read is not counted, never guessed
             return None
 
+    def _review_line(self) -> str:
+        """The texts a rule or tool change listed for review that still read as they did then: never left to the
+        model's account of what it reviewed."""
+        from .amend import review_still_open
+
+        try:
+            kept = self._suite_here() or []
+            still = review_still_open(self.workspace, kept)
+        except Exception:  # noqa: BLE001 - a review file that cannot be read never costs the reply
+            return ""
+        if not still:
+            return ""
+        names = {one.scenario_key: one.name for one in kept}
+        return (
+            "Still to review against the rule that changed (neither edited nor kept since): "
+            + "; ".join(f"{names.get(key, key)}: {', '.join(fields)}" for key, fields in list(still.items())[:20])
+            + ("; and more" if len(still) > 20 else "")
+            + "."
+        )
+
     def _closing_status(self) -> str:
         """The code-written status line for the end of this reply, or "" before the environment has a suite."""
         kept = self._suite_here()
@@ -2553,6 +2573,8 @@ class HostedChatRuntime:
                 + ("; and more" if len(problems) > 3 else "")
             ).strip()
         self._last_health = ""
+        if open_review := self._review_line():
+            final_text = f"{final_text}\n\n{open_review}".strip()
         self._report_again_if_written()
         final_text = self._close_with_proof_counts(final_text, finished_before)
         # Every reply ends with it, one that was only tool calls included: the person always sees the real state.

@@ -5333,6 +5333,57 @@ def test_a_rule_source_is_a_file_and_its_line_together(tmp_path):
     assert done and contract.rule_source("Never sell gift cards.").quote == "Gift cards are never sold."
 
 
+def test_a_listed_heading_left_unedited_stays_open_until_edited_or_kept(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.amend import add_rule, review_still_open
+    from fi.alk.harness.contract import rule_id
+    from fi.alk.harness.scenario_tools import load_scenarios, scenario_tools
+
+    root, contract = _cited_suite(tmp_path)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 14 days of delivery."
+    done, said = add_rule(contract, root, rule=new, why="window is 14 days", replaces=rule_id(old))
+    assert done and "`use_case` is its group's heading" in said
+    key = _key(root, "adds-a-big-mac")
+    assert "use_case" in review_still_open(root, load_scenarios(root))[key]
+
+    server, kept = scenario_tools(contract, root, root, wanted=2)
+    tools = {one.name: one.handler for one in server.tools}
+    # The builder rewrote the scenario's other texts but left its group heading as it was.
+    still = review_still_open(root, load_scenarios(root))[key]
+    assert "use_case" in still
+    # Kept explicitly: the heading is right as it reads.
+    said = asyncio.run(tools["edit_scenario"]({"scenario_key": key, "reviewed": ["use_case"]}))["content"][0]["text"]
+    assert "Kept as reviewed: use_case" in said
+    assert "use_case" not in review_still_open(root, load_scenarios(root)).get(key, [])
+    # Every other listed text closes the same way; then nothing is open.
+    asyncio.run(tools["edit_scenario"]({"scenario_key": key, "reviewed": list(still)}))
+    assert review_still_open(root, load_scenarios(root)) == {}
+
+
+def test_editing_a_listed_text_closes_it_and_the_reply_lists_what_is_open(tmp_path, monkeypatch):
+    from fi.alk.harness.amend import _open_review, review_still_open
+    from fi.alk.harness.scenario import Scenario
+
+    case = Scenario(
+        name="refund_late", scenario_key="refund_late", use_case="Refund within the 30-day window", tests="the 30-day window"
+    )
+    _open_review(tmp_path, [case])
+    assert review_still_open(tmp_path, [case]) == {"refund_late": ["tests", "use_case"]}
+    edited = case.model_copy(update={"use_case": "Refund within the 14-day window"})
+    assert review_still_open(tmp_path, [edited]) == {"refund_late": ["tests"]}
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._suite_here = lambda: [edited]  # type: ignore[method-assign]
+    runtime._mint_published()
+    runtime.conversation = EditingConversation(tmp_path, writes=False)
+    _turn(runtime, {"content": "change the window to 14 days"})
+    assert "Still to review against the rule that changed (neither edited nor kept since): refund_late: tests." in (
+        _reply(client)
+    )
+
+
 def test_a_rule_source_quote_longer_than_a_line_is_refused_before_anything_changes(tmp_path):
     from fi.alk.harness.amend import add_rule
 

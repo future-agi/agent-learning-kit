@@ -225,7 +225,10 @@ what the gates check. Then:
   that calls the tool. Read each listed case against the current rule, with its sub-goals, and in the
   same turn edit every text that still states the old rule: its name, use case (the heading its group
   is shown under), branch, tests, instruction and controls' `why`, and each sub-goal's description,
-  criteria and reference. Then search the whole suite (Grep over the scenario folders) for the old
+  criteria and reference. The use case is edited like any field, `edit_scenario` with `use_case`, for
+  every case of the group. A listed text that is right as it reads is kept with `edit_scenario`
+  `reviewed` naming its field; until each listed text is edited or kept, every reply ends by listing
+  it. Then search the whole suite (Grep over the scenario folders) for the old
   wording or value: a case that restates it without citing the rule is not listed, and is fixed the
   same way. A rule change edits the cases that rest on it and adds none: add a scenario only when the
   person asked for one, and if you think one is missing, propose it; in `confirm_plan` a submission

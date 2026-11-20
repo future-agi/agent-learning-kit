@@ -19,6 +19,7 @@ the same kind of guess it exists to prevent.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,7 @@ from .contract import (
     validate_contract,
     write_contract,
 )
+from .json_file import write_json_atomic
 
 CONTRACT = CONTRACT_FILE
 
@@ -565,17 +567,81 @@ def set_worker_tools(
     )
 
 
+# The texts a rule change listed for review that are not yet edited or kept, by scenario key and field.
+RULE_REVIEW = ".futureagi-rule-review.json"
+
+
+def _review_fields(scenario: Any) -> dict[str, str]:
+    """The texts that state what a case tests, by the field `edit_scenario` changes: its use case (the heading its
+    group is shown under), branch, tests, instruction, and each control's `why` as `control:<name>`."""
+    texts = {
+        "use_case": scenario.use_case,
+        "branch": scenario.branch,
+        "tests": scenario.tests,
+        "instruction": scenario.instruction,
+        **{f"control:{control.name}": control.why for control in scenario.negative_controls},
+    }
+    return {field: " ".join(str(text).split()) for field, text in texts.items() if text}
+
+
 def _case_texts(scenario: Any) -> str:
     """A listed case with the texts that state what it tests, so the review reads each against the current rule."""
     head = f"{scenario.scenario_key or scenario.name}: {scenario.name}"
-    texts = [
-        ("use case (its group heading)", scenario.use_case),
-        ("branch", scenario.branch),
-        ("tests", scenario.tests),
-        ("instruction", scenario.instruction),
-    ]
-    texts += [(f"control {control.name}", control.why) for control in scenario.negative_controls]
-    return head + "".join(f"\n      {label}: {' '.join(str(text).split())}" for label, text in texts if text)
+    shown = {"use_case": "use case (its group heading)"}
+    return head + "".join(
+        f"\n      {shown.get(field, field.replace(':', ' '))}: {text}" for field, text in _review_fields(scenario).items()
+    )
+
+
+def _load_review(destination: Path) -> dict[str, dict[str, str]]:
+    try:
+        held = json.loads((Path(destination) / RULE_REVIEW).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return held if isinstance(held, dict) else {}
+
+
+def _open_review(destination: Path, citing: list[Any]) -> None:
+    """Hold every listed text of the cases a rule change rests on as it reads now, until each is edited or kept."""
+    held = _load_review(destination)
+    for one in citing:
+        held[one.scenario_key or one.name] = {**held.get(one.scenario_key or one.name, {}), **_review_fields(one)}
+    write_json_atomic(Path(destination) / RULE_REVIEW, held)
+
+
+def review_still_open(destination: Path, scenarios: list[Any]) -> dict[str, list[str]]:
+    """The listed texts that still read as they did when the rule changed, by scenario key: a text edited since,
+    or a case no longer in the suite, is done and forgotten here."""
+    held = _load_review(destination)
+    if not held:
+        return {}
+    by_key = {one.scenario_key or one.name: one for one in scenarios}
+    still: dict[str, dict[str, str]] = {}
+    for key, fields in held.items():
+        if key not in by_key or not isinstance(fields, dict):
+            continue
+        now = _review_fields(by_key[key])
+        same = {field: text for field, text in fields.items() if now.get(field) == text}
+        if same:
+            still[key] = same
+    if still != held:
+        write_json_atomic(Path(destination) / RULE_REVIEW, still)
+    return {key: sorted(fields) for key, fields in still.items()}
+
+
+def keep_reviewed(destination: Path, key: str, fields: list[str]) -> list[str]:
+    """Mark listed texts of one case as read against the changed rule and kept as they are; returns those marked."""
+    held = _load_review(destination)
+    open_ = held.get(key) or {}
+    kept = [field for field in fields if field in open_]
+    for field in kept:
+        open_.pop(field)
+    if open_:
+        held[key] = open_
+    else:
+        held.pop(key, None)
+    write_json_atomic(Path(destination) / RULE_REVIEW, held)
+    return kept
 
 
 # The fewest characters of a rule's line a case's quote holds to cite that line, not a word in it.
@@ -664,10 +730,12 @@ def cases_citing(
     if not citing:
         return said
     lines = [_case_texts(one) for one in citing]
+    _open_review(destination, citing)
     return said + (
         f"\n{len(citing)} case(s) rest on what changed. Review each against the current rules and rewrite every "
-        "text below that states what changed, with edit_scenario; one left as it is shows Source changed until it is "
-        "reviewed. Other cases may restate the old wording without citing it: search the suite for it too.\n  - "
+        "text below that states what changed, with edit_scenario (`use_case` is its group's heading); a text that "
+        "is right as it reads, keep with edit_scenario `reviewed` naming its field. Each one neither edited nor kept "
+        "is listed after every reply, and shows Source changed until it is reviewed. Other cases may restate the old wording without citing it: search the suite for it too.\n  - "
         + "\n  - ".join(lines)
     )
 

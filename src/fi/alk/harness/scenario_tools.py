@@ -4617,6 +4617,13 @@ def scenario_tools(
                 "description": "Fields to set back to their default, a persona field as "
                 "`persona.accent`.",
             },
+            "reviewed": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "After a rule or tool change listed this scenario: the fields you read against the "
+                "current rule and keep exactly as they are (`use_case`, `branch`, `tests`, `instruction`, "
+                "`control:<name>`). A field you rewrite instead needs no mention.",
+            },
         },
         "required": ["scenario_key"],
     }
@@ -4639,6 +4646,17 @@ def scenario_tools(
             return _err(
                 f"Not changed: no scenario in this suite has the scenario_key {key!r}."
             )
+        reviewed = [str(one) for one in args.pop("reviewed", None) or []]
+        if reviewed:
+            from .amend import keep_reviewed
+
+            marked = keep_reviewed(world_root, key, reviewed)
+            if not set(args) - {"scenario_key"}:
+                return _ok(
+                    f"Kept as reviewed: {', '.join(marked) or 'nothing'} of {held.name}"
+                    + ("" if len(marked) == len(reviewed) else "; the others were not open for review")
+                    + "."
+                )
         change = {
             field: value for field, value in args.items() if field != "scenario_key"
         }
