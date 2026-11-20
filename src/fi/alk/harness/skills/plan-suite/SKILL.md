@@ -99,11 +99,11 @@ those questions get asked, and a question nobody asks is a failure nobody finds.
 So when you size the suite, spend it on distance across the axes rather than on more points near the
 same one.
 
-You own the suite end to end, and **your job is to plan it and hand it out, not to write it**. You
-find the tasks, decide which are worth testing, deal them to writers with everything each one needs,
-and save once at the end. Writing scenarios yourself is the exception, not the default.
+You own the suite end to end: you find the tasks, decide which are worth testing, and save once at
+the end. While dealing to writers is held (section 7), you write the suite yourself in this session;
+`suite_progress` refuses a `deal` until it is on.
 
-There is a hard reason for that, and it is not style. Everything you do accumulates in your own
+Dealing exists for a hard reason, and it is not style. Everything you do accumulates in your own
 context and is re-sent on every later turn, so your cost grows with the square of how long you work.
 A writer starts fresh, writes its slice, and ends. Ten writers cost ten short sessions; you writing
 the same ten slices costs one session that gets more expensive with every scenario. Measured on a
@@ -111,7 +111,7 @@ hosted fifty-scenario suite written entirely by the main loop: the turn budget r
 a repair pass had to finish the rest, and the run cost twenty two dollars.
 
 Work in this order: find the tasks, pick the ones worth testing, size them, decide who the people
-are, hand the work out, then collect and save once at the end.
+are, write the work (or hand it out once dealing is on), then save once at the end.
 
 ## 1. Find the tasks
 
