@@ -324,13 +324,15 @@ class _Cleanup:
         process, leaf, group_pending = record
         if group_pending and process is not None:
             try:
-                if process.returncode is None and hasattr(os, "waitid"):
-                    # Reject leaders auto-reaped during backoff. With SIGCHLD ignored,
-                    # a live leader can still exit between probe and signal; this residual
-                    # numeric-ID window is accepted, not an atomic group-ownership proof.
-                    os.waitid(
-                        os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT
-                    )
+                if process.returncode is None:
+                    if hasattr(os, "waitid"):
+                        # Reject auto-reap during backoff; SIGCHLD ignored still leaves
+                        # an accepted numeric-ID window between probe and signal.
+                        os.waitid(
+                            os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT
+                        )
+                    # Without waitid, the unreaped leader pins the PGID except when
+                    # SIGCHLD is ignored; that existing numeric-ID window is accepted.
                     os.killpg(process.pid, signal.SIGKILL)
             except (ChildProcessError, ProcessLookupError):
                 group_pending = False

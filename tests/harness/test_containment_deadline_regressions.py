@@ -401,7 +401,12 @@ def test_interrupted_group_signal_stops_ready_descendant(monkeypatch, tmp_path):
     _assert_group_cleanup(monkeypatch, tmp_path, interrupt=True)
 
 
-def _assert_group_cleanup(monkeypatch, tmp_path, interrupt):
+def test_group_retry_without_waitid_stops_ready_descendant(monkeypatch, tmp_path):
+    monkeypatch.delattr(os, "waitid", raising=False)
+    _assert_group_cleanup(monkeypatch, tmp_path, interrupt=True, probe=False)
+
+
+def _assert_group_cleanup(monkeypatch, tmp_path, interrupt, probe=True):
     subtree = _FailingSubtree(tmp_path / "absent")
     monkeypatch.setattr(containment, "_containment", subtree)
     read_ack = containment._read_all
@@ -418,7 +423,7 @@ def _assert_group_cleanup(monkeypatch, tmp_path, interrupt):
         "select.select([int(sys.argv[2])], [], [], 30)",
         str(write_fd),
         str(stop_fd),
-        "retry" if interrupt else "direct",
+        "retry" if interrupt and probe else "direct",
     ]
     spawn = subprocess.Popen
     processes = []
@@ -432,15 +437,16 @@ def _assert_group_cleanup(monkeypatch, tmp_path, interrupt):
     killpg = os.killpg
     attempts = []
 
-    wait_flags = (os.WEXITED | os.WNOWAIT | os.WNOHANG) if interrupt else 0
+    wait_flags = (os.WEXITED | os.WNOWAIT | os.WNOHANG) if interrupt and probe else 0
 
     def signal_group(pid, sig):
         assert pid == subtree.current.pid and sig == signal.SIGKILL
         if not attempts:
             attempts.append("interrupted")
             raise KeyboardInterrupt()
-        # WNOWAIT observes the already-exited leader without freeing its PGID.
-        assert os.waitid(os.P_PID, pid, wait_flags).si_pid == pid
+        if probe:
+            # WNOWAIT observes the already-exited leader without freeing its PGID.
+            assert os.waitid(os.P_PID, pid, wait_flags).si_pid == pid
         killpg(pid, sig)
         attempts.append("sent")
 
@@ -458,7 +464,7 @@ def _assert_group_cleanup(monkeypatch, tmp_path, interrupt):
             parent_writer.close()
             assert select.select([output], [], [], 5)[0] and output.read(1) == b"R"
             assert select.select([fd], [], [], 0)[0]  # Exec acknowledgement is ready.
-            if interrupt:
+            if interrupt and probe:
                 end = time.monotonic() + 3
                 while not os.waitid(os.P_PID, subtree.current.pid, wait_flags):
                     assert time.monotonic() < end, "leader did not exit"
@@ -482,7 +488,9 @@ def _assert_group_cleanup(monkeypatch, tmp_path, interrupt):
             end = time.monotonic() + 4
             while processes[0].returncode is None and time.monotonic() < end:
                 time.sleep(0.01)
-            assert processes[0].returncode == (0 if interrupt else -signal.SIGKILL)
+            assert processes[0].returncode == (
+                0 if interrupt and probe else -signal.SIGKILL
+            )
             if interrupt:
                 assert attempts == ["interrupted", "sent"]
             with pytest.raises(ChildProcessError):
@@ -843,7 +851,7 @@ def test_group_retry_precedes_leader_reap(monkeypatch, tmp_path):
     timeout = subprocess.TimeoutExpired(["true"], 1)
     process.poll.side_effect = poll
     # The synthetic leader is still running (and waitable) until poll above.
-    monkeypatch.setattr(os, "waitid", Mock(return_value=None))
+    monkeypatch.setattr(os, "waitid", Mock(return_value=None), raising=False)
     monkeypatch.setattr(os, "killpg", signal_group)
     monkeypatch.setattr(subprocess, "Popen", Mock(return_value=process))
     monkeypatch.setattr(containment, "_containment", subtree)
