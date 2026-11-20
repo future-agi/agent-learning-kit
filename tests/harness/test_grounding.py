@@ -63,7 +63,7 @@ def test_30_days_against_a_14_day_rule_conflicts(monkeypatch, tmp_path):
             "why": "the rule allows 14 days, the case expects 30",
         }
     ]
-    # The proof blocks on it, before a leak or an unresolved source would.
+    # A model's judgment never holds the case: it is kept as written, with the possible conflict as its warning.
     install(monkeypatch)
     proof = module.prove(
         refund_case(sources=list(case.sources)),
@@ -74,7 +74,8 @@ def test_30_days_against_a_14_day_rule_conflicts(monkeypatch, tmp_path):
         conflict_judge=judge,
     )
     assert proof.blocked_reason() == "policy_conflict" and proof.proved is False
-    assert "contradicts a cited rule" in proof.why()
+    assert proof.kept_as_written is True and module.refuses_keeping(proof) is False
+    assert "possible conflict with rule:0" in proof.why() and "a judgment, not a proof" in proof.why()
     no_conflict = module.prove(
         refund_case(sources=list(case.sources)),
         catalogue(**REFUND_CATALOGUE),
@@ -244,3 +245,42 @@ def test_a_quote_from_the_agent_s_source_that_holds_a_key_is_refused(tmp_path):
 
     assert keyed["resolved"] is False and "reads as a secret" in keyed["problem"]
     assert plain["resolved"] is True
+
+
+
+def test_a_tool_several_workers_hold_is_put_down_to_none_of_them(tmp_path):
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.contract import DeclaredWorker
+    from fi.alk.harness.grounding import expected_outcome
+    from fi.alk.harness.scenario import Step
+
+    goals = Catalogue(sub_goals=[SubGoal(name="booked", what="The flight is booked.", judged="x")])
+    case = SimpleNamespace(sub_goals=["booked"], solution=[Step(tool="memorize", arguments={})])
+    workers = [
+        DeclaredWorker(id="planning_agent", tools=["memorize"]),
+        DeclaredWorker(id="post_trip_agent", tools=["memorize"]),
+        DeclaredWorker(id="booking_agent", tools=[]),
+    ]
+
+    said = expected_outcome(case, goals, workers)
+
+    assert "done by the worker" not in said
+    assert "memorize (a tool planning_agent, post_trip_agent all hold)" in said
+    assert "a worker that uses no tools leaves no step" in grounding_prompt()
+
+
+def grounding_prompt() -> str:
+    from fi.alk.harness.grounding import _CONFLICT_PROMPT
+
+    return _CONFLICT_PROMPT
+
+
+def test_a_case_a_possible_conflict_keeps_is_handed_back_to_its_writer_first():
+    from fi.alk.harness.authoring_runtime_validation import hands_back
+
+    kept_for_a_conflict = {"blocked_reason": "policy_conflict", "kept_as_written": True}
+    kept_for_the_lane = {"blocked_reason": "solution_assumed", "kept_as_written": True}
+    held_for_a_check = {"blocked_reason": "not_solvable", "kept_as_written": False}
+
+    assert hands_back(kept_for_a_conflict) and hands_back(held_for_a_check)
+    assert not hands_back(kept_for_the_lane)

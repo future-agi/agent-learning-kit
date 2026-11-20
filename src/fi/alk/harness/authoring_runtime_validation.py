@@ -18,7 +18,7 @@ import shutil
 import tempfile
 import time
 from collections import Counter
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from pathlib import Path
@@ -38,6 +38,7 @@ from . import (
     tool_routing,
 )
 from .contract import AgentContract
+from .prove import JUDGED_CODES
 from .world.snapshot import world_state_digest
 from .catalogue import load_catalogue
 from .certification import CheckStatus
@@ -1665,6 +1666,8 @@ WRITER_FIXABLE = frozenset(
         "no_negative_control",
         "negative_control_passed",
         "control_misses_case_goal",
+        # Kept as written when it stands, but handed back first: a model's judgment the writer can answer.
+        "policy_conflict",
     }
 )
 # The held-case rounds' own clock, so their time budget can be read apart from the event loop's, and the wall clock
@@ -1676,6 +1679,16 @@ _wall_clock = time.time
 # Holds that say the case cannot be passed as it is grounded (a record the world cannot serve, a tool the agent lacks):
 # only these may be replaced by a new case in the same plan cell. Every other hold is repaired, never swapped.
 REPLACEABLE = frozenset({"not_solvable", "not_ready", "tool_not_on_agent"})
+
+
+def hands_back(entry: Mapping[str, Any]) -> bool:
+    """Whether a repair round hands this case back to its writer: held for a reason the writer can fix, and not kept as
+    written, except where a model's judgment alone keeps it (a possible rule conflict), which the writer answers
+    first."""
+    reason = entry.get("blocked_reason")
+    judged = reason in {str(code) for code in JUDGED_CODES}
+    return reason in WRITER_FIXABLE | REPLACEABLE and (entry.get("kept_as_written") is not True or judged)
+
 
 
 def read_held(authoring: Path, *, budget: float = 300) -> tuple[dict[str, str], dict[str, Any] | None]:
@@ -1698,11 +1711,7 @@ def read_held(authoring: Path, *, budget: float = 300) -> tuple[dict[str, str], 
         for entry in proofs.values()
         if entry.get("proved") is not True and entry.get("kept_as_written") is not True
     )
-    handed = {
-        key: str(entry.get("blocked_reason"))
-        for key, entry in proofs.items()
-        if entry.get("blocked_reason") in WRITER_FIXABLE | REPLACEABLE and entry.get("kept_as_written") is not True
-    }
+    handed = {key: str(entry.get("blocked_reason")) for key, entry in proofs.items() if hands_back(entry)}
     held = {key: str(proofs[key].get("why") or code) for key, code in handed.items()}
     tally = {
         "runnable": counts["proved"] + counts["kept_as_written"],
@@ -2545,9 +2554,15 @@ async def _validate_and_repair(
                 if tally is not None:
                     write_yield(authoring, asked, tally, yield_rounds)
                     print(f"runtime validation: {yield_line(asked, tally)}", flush=True)
-                    # The build asked for this many runnable cases and has them: nothing more to hand back.
+                    # The build asked for this many runnable cases and has them: nothing more to hand back but what a
+                    # model's judgment alone keeps as written, which its writer answers first.
                     if asked and tally["runnable"] >= asked:
-                        held = {}
+                        judged = {str(code) for code in JUDGED_CODES}
+                        held = {
+                            key: why
+                            for key, why in held.items()
+                            if (tally.get("held_cases") or {}).get(key) in judged
+                        }
                 from .scenario_tools import load_scenarios
 
                 keys_before = {one.scenario_key for one in load_scenarios(authoring)} if held else set()
