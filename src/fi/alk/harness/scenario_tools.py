@@ -3147,7 +3147,12 @@ def scenario_tools(
 
     def needs_a_round() -> bool:
         """Whether what is left to write is more than one writer's share, with a grid to deal and no round out."""
-        return bool(target.get("axes")) and cap() - len(kept) > cases_per_writer() and not _round_out()
+        return (
+            bool(target.get("axes"))
+            and not target.get("no_rounds")
+            and cap() - len(kept) > cases_per_writer()
+            and not _round_out()
+        )
 
     def _name_clash(args: dict[str, Any], same: str) -> str:
         """The case that already has this caller's full name, as a refusal, or "" when the name is free. Cheap: read
@@ -3227,8 +3232,10 @@ def scenario_tools(
         held = next((one for one in kept if one.name == same), None)
         unrounded = (
             f"{cap() - len(kept)} cases are left to write, more than one writer's share ({cases_per_writer()}), so "
-            "this suite is written in deals: call suite_progress, which deals the round, and brief one "
-            "scenario_writer per deal in one message. A writer handed no deal reports this and stops."
+            "this suite is written in deals: call suite_progress to deal the round, then either brief one "
+            "scenario_writer per deal in one message, or write a deal yourself by passing deal=<its name> on each "
+            "submit_scenario. To write the whole suite in this session instead, call suite_progress with "
+            "deal=false. A writer handed no deal reports this and stops."
             if held is None and not deal and needs_a_round()
             else ""
         )
@@ -3757,8 +3764,10 @@ def scenario_tools(
         "the deal is written; dealing again closes the round before it. While a round is out, a case is changed or "
         "removed only under the deal that wrote it; `end_round` closes the round once every writer has reported, "
         "so you can change the suite yourself. When more is left to write than one writer's share and no round "
-        "is out, this deals the next round unless `deal` is false; a new case submitted without a deal then is "
-        "refused until a round is dealt.",
+        "is out, this deals the next round, and a new case submitted without a deal is refused until one is dealt. "
+        "Then either brief one scenario_writer per deal in one message, or write a deal yourself by passing "
+        "deal=<its name> on each submit_scenario. `deal: false` writes the suite without rounds from then on: no "
+        "round is dealt and no case is refused for lacking one, until `deal: true` deals again.",
         schema({"names": bool, "deal": bool, "end_round": bool}, []),
     )
     async def suite_progress(args: dict[str, Any]) -> dict[str, Any]:
@@ -3766,6 +3775,9 @@ def scenario_tools(
         lines = [f"{len(kept)} of {cap()} written."]
         if target.get("supports"):
             lines.append(capacity_line(int(target["supports"]), len(kept), asked_count()) + ".")
+        if args.get("deal") is not None:
+            # An explicit choice for the build: false writes it without rounds, true deals again.
+            target["no_rounds"] = not bool(args["deal"])
         dealing = (
             bool(args["deal"])
             if args.get("deal") is not None

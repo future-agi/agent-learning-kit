@@ -402,8 +402,7 @@ def test_a_round_is_dealt_by_default_once_more_is_left_than_one_writer_s_share(t
     stray = _text(asyncio.run(handlers["submit_scenario"](_case("alone", ("t1", "hurried")))))
     assert "written in deals: call suite_progress" in stray and kept == []
 
-    # Asked for nothing in particular, progress deals the round itself; `deal: false` would not.
-    assert "Deal d" not in _text(asyncio.run(handlers["suite_progress"]({"deal": False})))
+    # Asked for nothing in particular, progress deals the round itself.
     dealt = _deals_in(_text(asyncio.run(handlers["suite_progress"]({}))))
     assert len(dealt) == 5 and all(len(cells) == 4 for cells in dealt.values())
     said = _text(asyncio.run(handlers["submit_scenario"](_case("d1-0", dealt["d1"][0], "d1"))))
@@ -441,3 +440,36 @@ def test_a_taken_name_is_refused_before_anything_costly_and_names_who_has_it(tmp
     assert "kept" in _text(asyncio.run(handlers["submit_scenario"]({**first, "instruction": "Keep a note, please."})))
     checked = _text(asyncio.run(handlers["names_taken"]({"names": ["Priya Raman", "Tomas Herrera"]})))
     assert "Priya Raman: taken by 'first'" in checked and "Tomas Herrera: free" in checked
+
+
+def test_one_session_deals_a_round_and_writes_a_deal_itself(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HARNESS_CASES_PER_WRITER", "4")
+    handlers, kept = _server(tmp_path, monkeypatch, 20, _grid(), can_grow=True)
+
+    refused = _text(asyncio.run(handlers["submit_scenario"](_case("alone", ("t1", "hurried")))))
+    assert "write a deal yourself by passing deal=<its name>" in refused
+
+    dealt = _deals_in(_text(asyncio.run(handlers["suite_progress"]({}))))
+    for index, cell in enumerate(dealt["d1"]):
+        said = _text(asyncio.run(handlers["submit_scenario"](_case(f"mine-{index}", cell, "d1"))))
+        assert "kept" in said, said
+    assert len(kept) == 4
+    assert "Deal d1 is written" in _text(
+        asyncio.run(handlers["submit_scenario"](_case("one-more", dealt["d1"][0], "d1")))
+    )
+
+
+def test_deal_false_lets_one_session_write_without_rounds(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HARNESS_CASES_PER_WRITER", "4")
+    handlers, kept = _server(tmp_path, monkeypatch, 20, _grid(), can_grow=True)
+
+    asyncio.run(handlers["suite_progress"]({"deal": False}))
+    for index, task in enumerate(TASKS):
+        said = _text(asyncio.run(handlers["submit_scenario"](_case(f"solo-{index}", (task, "hurried")))))
+        assert "kept" in said, said
+    # Later progress calls deal nothing while the choice stands; dealing again is explicit.
+    assert "Deal d" not in _text(asyncio.run(handlers["suite_progress"]({})))
+    assert "Deal d" in _text(asyncio.run(handlers["suite_progress"]({"deal": True})))
+    assert "A round of writers is out" in _text(
+        asyncio.run(handlers["submit_scenario"](_case("after", ("t1", "sceptical"))))
+    )
