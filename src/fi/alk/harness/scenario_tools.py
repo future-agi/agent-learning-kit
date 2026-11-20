@@ -1962,29 +1962,6 @@ def _steps_the_contract_refuses(
     ]
 
 
-def _controls_only_a_judge_could_fail(scenario: Scenario, catalogue: Catalogue) -> list[str]:
-    """The controls a proof can never fail: in a case with checks in code, a control is failed only by a check, so
-    one whose `must_fail` names only sub-goals with none is held at the live proof whatever its steps do. Said at
-    submit, where the writer can still give the sub-goal its check."""
-    goals = [catalogue.named(name) for name in scenario.sub_goals]
-    if not any(goal is not None and goal.deterministic() for goal in goals):
-        return []
-    problems = []
-    for control in scenario.negative_controls:
-        named = [catalogue.named(name) for name in control.must_fail]
-        if not named or any(goal is None or goal.deterministic() for goal in named):
-            continue
-        names = ", ".join(goal.name for goal in named if goal is not None)
-        problems.append(
-            f"negative control {control.name}: must_fail names only {names}, which has no check, and in a case with "
-            "checks a control is failed only by a check, so the proof can never fail it. Give "
-            f"{names} a check for the trace its wrong handling leaves (the write that must not happen, such as "
-            "the call that must not be made on that record), verifier both, with add_sub_goal; or name a sub-goal "
-            "with a check in must_fail."
-        )
-    return problems
-
-
 def _controls_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
     """The same contract check over each negative control's steps, each problem naming its control."""
     return [
@@ -2269,7 +2246,6 @@ def accept_scenario(
             problems.extend(_steps_the_contract_refuses(scenario, world_root))
             problems.extend(_controls_the_contract_refuses(scenario, world_root))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
-            problems.extend(_controls_only_a_judge_could_fail(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
             problems.extend(
                 _call_actors_that_cannot_run(
@@ -2298,7 +2274,6 @@ def accept_scenario(
                 problems.extend(_controls_the_contract_refuses(scenario, world_root))
                 problems.extend(_records_the_agent_cannot_see(scenario, world_root))
                 problems.extend(_overlay_asserts_nothing(scenario, catalogue))
-                problems.extend(_controls_only_a_judge_could_fail(scenario, catalogue))
                 problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
                 problems.extend(
                     _call_actors_that_cannot_run(

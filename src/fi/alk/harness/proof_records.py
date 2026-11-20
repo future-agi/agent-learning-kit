@@ -104,6 +104,8 @@ class LiveResult(_LiveFields, total=False):
     recorded: list[str]
     # Checks the reference failed only because an assumed step's outcome is unknown (`prove.inconclusive_on_assumed`).
     inconclusive: list[str]
+    # Where the reference failed its own checks: each call those checks were handed, with its outcome flags.
+    calls_checked: list[dict[str, Any]]
 
 
 class _ProofFields(TypedDict):
