@@ -2,6 +2,7 @@
 
 import errno
 import fcntl
+import multiprocessing
 import os
 import select
 import signal
@@ -841,6 +842,8 @@ def test_group_retry_precedes_leader_reap(monkeypatch, tmp_path):
 
     timeout = subprocess.TimeoutExpired(["true"], 1)
     process.poll.side_effect = poll
+    # The synthetic leader is still running (and waitable) until poll above.
+    monkeypatch.setattr(os, "waitid", Mock(return_value=None))
     monkeypatch.setattr(os, "killpg", signal_group)
     monkeypatch.setattr(subprocess, "Popen", Mock(return_value=process))
     monkeypatch.setattr(containment, "_containment", subtree)
@@ -853,3 +856,108 @@ def test_group_retry_precedes_leader_reap(monkeypatch, tmp_path):
     process.kill.assert_not_called()
     process.wait.assert_not_called()
     assert not subtree.current.path.exists()
+
+
+def test_decode_error_stops_descendant_after_leader_reap(monkeypatch):
+    monkeypatch.setattr(containment, "_containment", None)
+    read_fd, write_fd = os.pipe()
+    stop_fd, release_fd = os.pipe()
+    # Only the descendant writes R. It then releases the capture pipes so the
+    # leader can be reaped and communicate() can reach its strict text decode.
+    command = [
+        sys.executable,
+        "-c",
+        "import os,select,sys\n"
+        "if os.fork() == 0:\n"
+        " os.write(int(sys.argv[1]), b'R')\n"
+        " os.close(1); os.close(2)\n"
+        " select.select([int(sys.argv[2])], [], [], 30)\n"
+        "else: os.write(1, b'\\xff')",
+        str(write_fd),
+        str(stop_fd),
+    ]
+    with (
+        os.fdopen(read_fd, "rb", buffering=0) as monitor,
+        os.fdopen(write_fd, "wb") as writer,
+        os.fdopen(stop_fd, "rb"),
+        os.fdopen(release_fd, "wb"),  # EOF releases our child even on failure.
+    ):
+        with pytest.raises(UnicodeDecodeError):
+            containment.run(
+                command,
+                capture_output=True,
+                encoding="utf-8",
+                timeout=5,
+                pass_fds=(write_fd, stop_fd),
+            )
+        writer.close()
+        assert select.select([monitor], [], [], 3)[0] and monitor.read(1) == b"R"
+        assert select.select([monitor], [], [], 3)[0] and monitor.read(1) == b""
+
+
+def _check_autoreaped_group_retry():
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+    with subprocess.Popen(
+        [sys.executable, "-c", "pass"], start_new_session=True
+    ) as process:
+        flags = os.WEXITED | os.WNOWAIT | os.WNOHANG
+        end = time.monotonic() + 4
+        while True:
+            try:
+                os.waitid(os.P_PID, process.pid, flags)
+            except ChildProcessError:
+                break
+            assert time.monotonic() < end, "leader was not auto-reaped"
+            time.sleep(0.01)
+        assert process.returncode is None
+        state = containment._Cleanup()
+        with pytest.MonkeyPatch.context() as patch:
+            killpg = Mock()
+            patch.setattr(os, "killpg", killpg)
+            state._finish((process, None, True))
+            killpg.assert_not_called()
+        assert state.pending.empty()
+
+
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="needs non-reaping waitid")
+def test_deferred_group_retry_skips_autoreaped_leader():
+    # A fresh interpreter keeps SIGCHLD=SIG_IGN out of pytest and its workers.
+    runner = multiprocessing.get_context("spawn").Process(
+        target=_check_autoreaped_group_retry
+    )
+    runner.start()
+    try:
+        runner.join(12)
+        assert runner.exitcode == 0
+    finally:
+        if runner.is_alive():
+            runner.kill()
+            runner.join(3)
+        runner.close()
+
+
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="needs non-reaping waitid")
+def test_leaf_recovers_while_owned_group_retry_pending(monkeypatch, tmp_path):
+    path = tmp_path / "leaf"
+    path.mkdir()
+    busy = path / "busy"
+    busy.touch()  # First rmdir fails while the synthetic leaf is nonempty.
+    leaf = Mock(path=Mock(wraps=path))
+    leaf.kill.side_effect = [PermissionError(), None]
+    state = containment._Cleanup()
+    with subprocess.Popen(
+        [sys.executable, "-c", "pass"], start_new_session=True
+    ) as process:
+        # Keep an exited, waitable session leader for both cleanup passes.
+        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+        killpg = Mock(side_effect=PermissionError(errno.EPERM, "simulated group error"))
+        monkeypatch.setattr(os, "killpg", killpg)
+        state._finish((process, leaf, True))
+        assert path.exists()
+        busy.unlink()
+        state._finish(state.pending.get_nowait())
+        assert not path.exists()
+        assert leaf.path.rmdir.call_count == leaf.kill.call_count == killpg.call_count == 2
+        assert state.pending.get_nowait() == (process, None, True)
+        leader = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+        assert leader.si_pid == process.pid

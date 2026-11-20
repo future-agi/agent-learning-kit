@@ -324,13 +324,18 @@ class _Cleanup:
         process, leaf, group_pending = record
         if group_pending and process is not None:
             try:
-                if process.returncode is None:
+                if process.returncode is None and hasattr(os, "waitid"):
+                    # SIGCHLD may have auto-reaped the leader without updating Popen.
+                    os.waitid(
+                        os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT
+                    )
                     os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            except (ChildProcessError, ProcessLookupError):
+                group_pending = False
             except (OSError, KeyboardInterrupt):
-                self.pending.put((process, leaf, True))
-                return  # Keep the leader unreaped until the group attempt resolves.
+                pass  # Retry the group, but keep making progress on the leaf.
+            else:
+                group_pending = False
         if leaf is not None:
             try:
                 leaf.kill()
@@ -344,6 +349,9 @@ class _Cleanup:
                 pass  # Retry kill and removal together.
             else:
                 leaf = None
+        if group_pending and process is not None:
+            self.pending.put((process, leaf, True))
+            return  # Do not poll: the leader must stay waitable for the retry.
         try:
             reaped = process is None or process.poll() is not None
         except OSError:
@@ -378,7 +386,7 @@ def _abort_child(
     reaped = False
     group_pending = False
     try:
-        if owns_group and process.returncode is None:
+        if owns_group:  # communicate() may reap the leader before decoding fails.
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -474,7 +482,8 @@ def popen(
 
     Without containment this is a plain Popen. With it, the process starts as the gate, joins
     a fresh leaf, and only then runs ``args`` with ``env``; any process it starts is born inside
-    the leaf. If no cleanup worker can start, launch fails before allocating the leaf or pipes.
+    the leaf. If the cleanup worker cannot start, this raises ``RuntimeError`` before creating
+    a leaf, pipe or child. Cold thread startup may exceed the deadline by its startup time.
     A command that cannot be executed raises here, as ``subprocess.Popen`` does.
     """
     containment = _containment
@@ -553,7 +562,9 @@ def run(
     """``subprocess.run`` for a customer execution, in a session of its own: what it started never
     outlives it. On a timeout or any error its process group is killed, and its leaf with
     containment; with containment the leaf is also closed when it exits. A cleanup worker
-    must be available before launch, including when containment is disabled."""
+    must be available before launch, including when containment is disabled. If it cannot
+    start, this raises ``RuntimeError`` before creating a leaf, pipe or child. A caller
+    starting a cold worker may exceed its deadline by the thread startup time."""
     if capture_output:
         kwargs["stdout"] = subprocess.PIPE
         kwargs["stderr"] = subprocess.PIPE
