@@ -116,10 +116,53 @@ def _with_proof_counts(text: str, counts: dict[str, int]) -> str:
     return "\n\n".join(part for part in (text, line) if part)
 
 
-def _with_removed_hint(answer: Any, query: Mapping[str, Any]) -> Any:
-    """A search by name or words that matches nothing in the suite, with where a removed case is read: a case the
-    suite no longer holds is never written again from memory, it is read with `removed` and restored."""
-    if not isinstance(answer, dict) or answer.get("matching") or not (query.get("names") or query.get("search")):
+def _status_line(workspace: Path, kept: list[Any] | None, saved: str) -> str:
+    """The line that closes every builder reply, written by code from the files, never by the model: how many
+    scenarios there are and what their proofs say, and whether this working copy's changes are in the environment.
+    `saved` is `saved`, `unsaved` or `building`."""
+    counts = proof_counts(load_proofs(workspace), [proof_key(one) for one in kept or []])
+    changes = {
+        "saved": "every change is saved to the environment",
+        "unsaved": "changes in this chat are NOT saved to the environment",
+        "building": "the environment is still being built, so nothing is saved to it yet",
+    }[saved]
+    return (
+        f"Status: {len(kept or [])} scenarios ({counts['proved']} proved, {counts['kept_as_written']} kept as "
+        f"written, {counts['not_proved']} not proved); {changes}."
+    )
+
+
+def _removed_matching(removed: Any, query: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The removed cases whose key or name is exactly one the query names or searches for."""
+    wanted = {str(one).strip() for one in query.get("names") or []} | {str(query.get("search") or "").strip()}
+    wanted.discard("")
+    rows = removed.get("removed") if isinstance(removed, dict) else None
+    return [
+        row
+        for row in rows or []
+        if isinstance(row, dict) and (str(row.get("scenario_key") or "") in wanted or str(row.get("name") or "") in wanted)
+    ]
+
+
+def _with_removed_hint(answer: Any, query: Mapping[str, Any], removed: list[dict[str, Any]] | None = None) -> Any:
+    """The suite's rows, with each removed case the query names exactly, flagged as removed with how to restore it,
+    and, for a search by name or words that matches nothing at all, where removed cases are read."""
+    if not isinstance(answer, dict):
+        return answer
+    if removed:
+        answer = {
+            **answer,
+            "removed_matches": [
+                {
+                    **row,
+                    "removed": f"removed after suite version {row.get('suite_version')}; it is not in the suite. "
+                    f"Restore it with scenario_key {row.get('scenario_key')!r} and restored_from "
+                    f'{{"key": "{row.get("scenario_key")}", "suite_version": "{row.get("suite_version")}"}}',
+                }
+                for row in removed
+            ],
+        }
+    if answer.get("matching") or answer.get("removed_matches") or not (query.get("names") or query.get("search")):
         return answer
     return {
         **answer,
@@ -1354,7 +1397,18 @@ class HostedChatRuntime:
             if not query.get("removed"):
 
                 async def hinted() -> Any:
-                    return _with_removed_hint(await self.client.scenarios(query), query)
+                    answer = await self.client.scenarios(query)
+                    removed: list[dict[str, Any]] = []
+                    if query.get("names") or query.get("search"):
+                        try:
+                            removed = _removed_matching(await self.client.scenarios({"removed": True}), query)
+                        except ConversationTransportError:
+                            # The suite's own rows still answer; only the removed ones are not shown.
+                            removed = []
+                        from .scenario_tools import remember_removed
+
+                        remember_removed(self.workspace, removed)
+                    return _with_removed_hint(answer, query, removed)
 
                 return await call(hinted())
             try:
@@ -1554,6 +1608,20 @@ class HostedChatRuntime:
         except (OSError, ValueError):
             body = {}
         return body if isinstance(body, dict) else {}
+
+    def _closing_status(self) -> str:
+        """The code-written status line for the end of this reply, or "" before the environment has scenarios."""
+        kept = getattr(self.conversation.stage, "kept", None)
+        if not kept:
+            return ""
+        saved = (
+            "building"
+            if self._control_only()
+            else "unsaved"
+            if self._environment_fingerprint() != self._published_fingerprint()
+            else "saved"
+        )
+        return _status_line(self.workspace, kept, saved)
 
     def _turn_status_note(self) -> str:
         kept = getattr(self.conversation.stage, "kept", None)
@@ -2334,6 +2402,10 @@ class HostedChatRuntime:
                         "stage": self.conversation.stage_name,
                         "command_message_id": message_id,
                     }
+            if resume_invocation_id is None:
+                from .amend import begin_turn
+
+                begin_turn(self.workspace)
             turn = (
                 self.conversation.resume(resume_invocation_id, receive)
                 if resume_invocation_id is not None
@@ -2443,6 +2515,8 @@ class HostedChatRuntime:
         self._last_health = ""
         self._report_again_if_written()
         final_text = self._close_with_proof_counts(final_text, finished_before)
+        if final_text and (truth := self._closing_status()):
+            final_text = f"{final_text}\n\n{truth}"
         if final_text:
             await self.client.emit(
                 "assistant_message",

@@ -342,3 +342,35 @@ def test_a_search_that_finds_nothing_in_the_suite_points_at_the_removed_cases():
     assert "find_scenarios(removed: true)" in _with_removed_hint(empty, {"names": ["lookup_order"]})["note"]
     assert "note" not in _with_removed_hint({**empty, "matching": 1}, {"names": ["lookup_order"]})
     assert "note" not in _with_removed_hint(empty, {"numbers": [40]})
+
+
+def test_find_scenarios_flags_a_removed_case_the_query_names_exactly():
+    from fi.alk.harness.hosted_chat_entrypoint import _removed_matching, _with_removed_hint
+
+    removed = {"removed": [
+        {"scenario_key": "lookup_order_1046", "name": "lookup_order_1046", "suite_version": "v6", "content": {}},
+        {"scenario_key": "other_case", "name": "other_case", "suite_version": "v5", "content": {}},
+    ]}
+    query = {"names": ["lookup_order_1046"]}
+    found = _removed_matching(removed, query)
+    assert [one["scenario_key"] for one in found] == ["lookup_order_1046"]
+    # The copy the builder wrote is in the suite; the original is shown beside it, flagged as removed.
+    answer = _with_removed_hint({"matching": 1, "rows": [{"number": 8, "name": "lookup_order_1046"}]}, query, found)
+    [flagged] = answer["removed_matches"]
+    assert "it is not in the suite" in flagged["removed"]
+    assert 'restored_from {"key": "lookup_order_1046", "suite_version": "v6"}' in flagged["removed"]
+    assert _removed_matching(removed, {"search": "lookup"}) == []
+
+
+def test_every_builder_reply_closes_with_the_state_read_from_the_files(tmp_path):
+    from fi.alk.harness.hosted_chat_entrypoint import _status_line
+    from fi.alk.harness.scenario import Scenario
+
+    kept = [Scenario(name="a"), Scenario(name="b")]
+    record_proof(tmp_path, "a", Proof(ready=True, solvable=True, vacuous=False, controls=RAN), solution_steps=1)
+    line = _status_line(tmp_path, kept, "unsaved")
+    assert line == (
+        "Status: 2 scenarios (1 proved, 0 kept as written, 1 not proved); changes in this chat are NOT saved to the "
+        "environment."
+    )
+    assert _status_line(tmp_path, kept, "saved").endswith("every change is saved to the environment.")
