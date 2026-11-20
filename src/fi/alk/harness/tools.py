@@ -7,6 +7,7 @@ the next turn instead of surfacing once the session is already over.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import logging
@@ -353,7 +354,8 @@ def _checked_against_source(
         try:
             problems.extend(tool_evidence_problems(contract, source_root, subfolder))
             stage_ended("tool_evidence", "prompt_copy")
-            copy_problems = _copy_prompt(contract, source_root)
+            as_text: list[str] = []
+            copy_problems = _copy_prompt(contract, source_root, as_text=as_text)
             problems.extend(copy_problems)
             if contract.system_prompt_from and not copy_problems:
                 named = ", ".join(
@@ -431,6 +433,9 @@ def _checked_against_source(
                             "unconfirmed and keeps the quote, or saves no prompt if the quote has "
                             "fewer than 16 letters"
                         )
+                if not mismatch and as_text:
+                    # The lines hold the quote: the prompt is kept as the text they hold.
+                    contract.system_prompt_excerpt = as_text[0]
             stage_ended("prompt_copy", "model")
             if cited := model_problems(contract, source_root):
                 if asked is not None and "model" in asked:
@@ -515,6 +520,16 @@ def _checked_against_source(
                 "runtime: the command hands an interpreter its program as an argument "
                 "(-c, -e, -p, --eval, --print); name the source file it runs instead"
             )
+    if (
+        runtime is not None
+        and asked is not None
+        and "required-environment" not in asked
+        and (unanswered := _settings_unanswered(runtime))
+    ):
+        # Asked once, as the prompt's lines and the model are: a second contract with no answer
+        # is saved as it is, and the settings are then not known. Never a failed reading.
+        asked.add("required-environment")
+        problems.append(unanswered)
     stage_ended("runtime", None)
     if problems:
         return _problems(problems, arrived)
@@ -529,6 +544,32 @@ def _checked_against_source(
             else detect_instrumentation(source_root)
         )
     return contract.model_copy(update={"instrumentation": instrumentation, "runtime": runtime})
+
+
+def _settings_unanswered(runtime: Runtime | dict) -> str | None:
+    """What to ask when ``runtime.required_environment`` gives no answer for the selected
+    process, or None. An empty list for it is an answer: the process needs nothing. Takes the
+    runtime as sent too, so the question can go with the first call's other nudges."""
+    if isinstance(runtime, dict):
+        service, compose_file = runtime.get("service"), runtime.get("compose_file")
+        answers = runtime.get("required_environment")
+        if not isinstance(answers, dict):
+            # Malformed, or not sent: the schema says so when it is malformed.
+            answers = {} if answers is None else {"": answers}
+    else:
+        service, compose_file = runtime.service, runtime.compose_file
+        answers = runtime.required_environment
+    process = (service if isinstance(service, str) else "") or ("" if compose_file else "agent")
+    if (process and process in answers) or (not process and answers):
+        return None
+    under = f'under "{process}"' if process else "under the selected service's name"
+    empty = f'{{"{process}": []}}' if process else "an empty list for it"
+    return (
+        "runtime.required_environment: no answer for the process the agent runs as. Name the "
+        "environment variables it can't start or answer without (an API key, a base URL, a "
+        f"token), names only, {under}; or, if it needs none, give {empty}. A contract with no "
+        "answer again is saved as it is, and the settings are then not known."
+    )
 
 
 def _modules_as_the_process_imports_them(
@@ -646,10 +687,19 @@ _LARGEST_PROMPT_FILE = 1024 * 1024
 _LARGEST_PROMPT_READ = 4 * _LARGEST_PROMPT_FILE
 
 
-def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
-    """Replace the quoted excerpt with the lines `system_prompt_from` names, as written."""
+def _copy_prompt(
+    contract: AgentContract, source_root: Path, as_text: list[str] | None = None
+) -> list[str]:
+    """Replace the quoted excerpt with the lines `system_prompt_from` names, as written. When
+    ``as_text`` is given and every part reads as text (see ``prompt_text``), the prompt's text is
+    put in it: the save checks the quote against the lines as written, then keeps the text."""
+    from .prompt_text import prompt_text, python_tree
+
     root = source_root.resolve()
     parts: list[str] = []
+    # Each part as text, or None for one kept as written.
+    texts: list[str | None] = []
+    trees: dict[Path, ast.Module | None] = {}
     problems: list[str] = []
     lines_of: dict[Path, list[str]] = {}
     # A file past the limit is read once too, and what was read of it counts.
@@ -714,8 +764,23 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
             )
             break
         parts.append(excerpt)
+        if as_text is None:
+            continue
+        if path.suffix != ".py":
+            # A prompt file that isn't Python is text already.
+            texts.append(excerpt)
+            continue
+        if path not in trees:
+            trees[path] = python_tree(lines)
+        tree = trees[path]
+        texts.append(
+            None if tree is None else prompt_text(lines, where.start_line, where.end_line, tree)
+        )
     if parts and not problems:
         contract.system_prompt_excerpt = "\n\n".join(parts)
+        # All parts or none: a prompt partly text and partly code would be neither.
+        if as_text is not None and all(text is not None for text in texts):
+            as_text.append("\n\n".join(texts))
     return problems
 
 
@@ -969,8 +1034,11 @@ def contract_tools(
                     },
                     "description": "Where the agent's whole prompt is written: every part it is "
                     "assembled from, in order, as a path relative to the source root and the first "
-                    "and last line of each. Once they are checked against your quote in "
-                    "system_prompt_excerpt, these lines replace it as written: keep the quote too.",
+                    "and last line of each. Name the lines of the prompt's string itself, from the "
+                    "line it opens on to the line it closes on, not the whole call around it. "
+                    "Once they are checked against your quote in system_prompt_excerpt, these "
+                    "lines replace it, a string made only of plain literals as its text and "
+                    "anything else as written: keep the quote too.",
                 },
                 # Nothing required inside it either: a model sent without its line reaches the
                 # save, which says what is missing, instead of failing the whole call here.
@@ -1506,7 +1574,13 @@ def contract_tools(
                                 "items": {"type": "string"},
                                 "uniqueItems": True,
                             },
-                            "description": "Required environment names by selected process name. Native control process is agent. No values.",
+                            "description": "Always answer: the environment variables the "
+                            "selected process can't start or answer without (an API key, a base "
+                            "URL, a token), names only, by process name: agent for a native "
+                            "process, the Compose service's name otherwise. A variable the code "
+                            "gives a default is not required. If it needs none, give the process "
+                            'an empty list, {"agent": []}: an empty object says nothing, and the '
+                            "save asks for an answer.",
                         },
                         "compose_file": {
                             "type": "string",
@@ -2071,6 +2145,15 @@ def contract_tools(
                 "copied whole.",
             ),
         ]
+        # Asked with the nudges above when one is sent back, so it costs no call of its own; the
+        # save asks it otherwise. Either way once.
+        sent_runtime = payload.get("runtime")
+        if sent_runtime is None and subfolder:
+            # A job that names the agent's folder gets a runtime from the save anyway.
+            sent_runtime = {}
+        unanswered = _settings_unanswered(sent_runtime) if isinstance(sent_runtime, dict) else None
+        if unanswered and any(when and key not in asked_before for key, when, _ in thin):
+            thin.append(("required-environment", True, unanswered))
         # All of them together, and each only once. Nudging in sequence would cost a turn per
         # nudge and read as though the requirements were being invented one at a time.
         say = [said for key, when, said in thin if when and key not in asked_before]

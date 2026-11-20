@@ -1942,9 +1942,10 @@ def _submit_contract(spec):
     return next(t for t in spec.servers[CONTRACT_SERVER].tools if t.name == "submit_contract")
 
 
-# Saved on its first call: no tools to nudge for, and one hard constraint.
+# Saved on its first call: no tools to nudge for, one hard constraint, and the settings answered.
 SCAN_PAYLOAD = {k: v for k, v in CHAT.items() if k != "tools"} | {
-    "hard_constraints": ["Never share another customer's order."]
+    "hard_constraints": ["Never share another customer's order."],
+    "runtime": {"language": "python", "required_environment": {"agent": []}},
 }
 
 

@@ -367,6 +367,8 @@ jobs:
           tests/harness/test_scan_walk.py
           tests/harness/test_browser_scan_cut.py
           tests/harness/test_save_child.py
+          tests/harness/test_prompt_text.py
+          tests/harness/test_required_settings_asked.py
           tests/harness/test_save_checker.py
           tests/harness/test_import_lines.py
           tests/harness/test_import_lines_diff.py

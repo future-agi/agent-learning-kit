@@ -50,7 +50,12 @@ TRIAL_PAYLOAD: dict[str, Any] = {
     "tool_entrypoints": [{"tool": "t0", "mode": "import", "module": "main", "callable": "run"}],
     "system_prompt_from": [{"path": "agent/main.py", "start_line": 1, "end_line": 3}],
     "data_store": {"kind": "none"},
-    "runtime": {"language": "python", "compose_file": "agent/compose.yaml"},
+    # The trial's agent reads no settings, and says so: no answer would be asked for.
+    "runtime": {
+        "language": "python",
+        "compose_file": "agent/compose.yaml",
+        "required_environment": {"agent": []},
+    },
 }
 # The order _checked_contract reports its stages in; the trial holds the child to it.
 _STAGE_ORDER = ["contract", "tool_evidence", "prompt_copy", "model", "runtime"]

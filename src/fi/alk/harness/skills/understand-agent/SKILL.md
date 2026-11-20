@@ -274,6 +274,14 @@ Find, in roughly this order:
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
    startable but the simulator cannot honestly claim to have exercised it.
 
+   **The settings it can't run without.** Always say, in `runtime.required_environment`, which
+   environment variables the selected process needs before it can start or answer: an API key, a
+   base URL, a token. Key them by that process (`agent` for a native process, the Compose
+   service's name otherwise), names only, never values. Follow a helper that reads a setting by
+   its name, and read the README. A variable the code gives a default is not required. If it needs
+   none, give the process an empty list (`{"agent": []}`): an empty `required_environment` says
+   nothing, and the save asks once for an answer.
+
    **A LangGraph app comes first.** Before choosing a command or an HTTP interface, look for a
    `langgraph.json` that names a graph. When the requirements the app installs have no
    `langgraph-cli` (and no Compose file or Dockerfile of the app installs it), `langgraph dev` and
