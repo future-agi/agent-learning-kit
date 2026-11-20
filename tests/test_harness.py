@@ -2920,13 +2920,61 @@ def test_restore_exactly_without_searching_is_refused_with_the_restore_call_then
     tools = {one.name: one.handler for one in chat.tools}
     said = asyncio.run(tools["submit_scenario"](_delta()))
     assert said.get("is_error") and asked == [key] and [one.name for one in kept] == ["adds-two-big-macs"]
-    assert f'scenario_key {key!r} and restored_from {{"key": "{key}"}}' in said["content"][0]["text"]
+    assert f'restored_from {{"key": "{key}"}} and as_it_was true' in said["content"][0]["text"]
     restored = asyncio.run(
         tools["submit_scenario"](_delta(scenario_key=key, restored_from={"key": key, "suite_version": "v7"}))
     )
     assert not restored.get("is_error"), restored
     assert "Restored exactly as it was" in restored["content"][0]["text"]
     assert key in [one.scenario_key for one in kept]
+
+
+def test_restore_as_it_was_brings_back_the_last_saved_revision_not_a_copy(tmp_path):
+    """A case saved twice (two revisions), then deleted: restored exactly, it comes back as its second revision,
+    whatever older content the builder sends."""
+    import asyncio
+
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    first, kept = scenario_tools(contract, root, root, wanted=4)
+    tools = {one.name: one.handler for one in first.tools}
+    asyncio.run(tools["submit_scenario"](_delta()))
+    asyncio.run(tools["submit_scenario"](_delta(name="adds-two-big-macs")))
+    key = kept[0].scenario_key
+    revision_one = document_for(kept[0])
+    assert not asyncio.run(
+        tools["edit_scenario"]({"scenario_key": key, "instruction": "Order one Big Mac, no pickles."})
+    ).get("is_error")
+    revision_two = document_for(next(one for one in kept if one.scenario_key == key))
+    assert revision_two["instruction"] != revision_one["instruction"]
+    assert not asyncio.run(tools["drop_scenario"]({"name": "adds-a-big-mac"})).get("is_error")
+
+    async def platform(wanted):
+        return [{"scenario_key": key, "name": "adds-a-big-mac", "suite_version": "v9", "content": revision_two}]
+
+    chat, kept = scenario_tools(contract, root, root, wanted=4, can_grow=True, removed_lookup=platform)
+    tools = {one.name: one.handler for one in chat.tools}
+    # The builder found revision one somewhere and sends it; as_it_was restores the record, not what was sent.
+    said = asyncio.run(
+        tools["submit_scenario"]({**revision_one, "restored_from": {"key": key}, "as_it_was": True})
+    )
+    assert not said.get("is_error"), said
+    assert "Restored exactly as it was" in said["content"][0]["text"]
+    restored = next(one for one in kept if one.scenario_key == key)
+    assert restored.instruction == "Order one Big Mac, no pickles." and restored.restored_from == {"key": key}
+
+    async def nothing(wanted):
+        return []
+
+    empty, _kept = scenario_tools(contract, tmp_path / "other", tmp_path / "other", wanted=4, removed_lookup=nothing)
+    refused = asyncio.run(
+        {one.name: one.handler for one in empty.tools}["submit_scenario"](
+            {**revision_one, "restored_from": {"key": "gone"}, "as_it_was": True}
+        )
+    )
+    assert refused.get("is_error") and "No removed case 'gone' could be read" in refused["content"][0]["text"]
 
 
 def test_a_removed_case_the_platform_cannot_read_falls_back_to_a_new_key_and_a_note(tmp_path):

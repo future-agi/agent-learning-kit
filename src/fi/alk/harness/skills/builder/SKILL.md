@@ -195,9 +195,10 @@ what the gates check. Then:
   its `scenario_key`, the saved `suite_version` it last existed in and its content. If more than one
   fits what the person said ("the refund case" and there are two), ask which one with
   `AskUserQuestion`, naming each, before anything else. Then:
-  - **"Restore X" / "exactly as it was"**: submit its content unchanged, with its own `scenario_key`
-    and `restored_from: {"key": <that key>, "suite_version": <that version>}`. No question. It comes
-    back as an unsaved change, the same case, with its number and history.
+  - **"Restore X" / "exactly as it was"**: submit with `restored_from: {"key": <that key>}` and
+    `as_it_was: true`; the case comes back from its removed record as it was last saved, never from a
+    copy you write or a file you find. No question. It comes back as an unsaved change, the same case,
+    with its number and history.
   - **"Restore X but change …"** (a check, its data, its steps): ask one question with
     `AskUserQuestion`, two options: "Bring it back as the same case: its past runs stay linked, and
     results from before the change are marked 'test changed'" and "Bring it back as a new case: a new
