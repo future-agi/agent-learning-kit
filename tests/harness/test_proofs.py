@@ -419,3 +419,13 @@ def test_the_builder_reads_the_proofs_the_platform_shows_not_the_offline_ones(tm
     (tmp_path / "proofs.json").write_text(json.dumps({**offline, "refund": newer}), encoding="utf-8")
     assert load_shown_proofs(tmp_path)["refund"]["kept_as_written"] is True
     assert load_shown_proofs(tmp_path)["lookup"]["proved"] is True
+
+
+def test_a_validated_proof_with_no_time_is_the_platform_s_record(tmp_path):
+    import json
+
+    from fi.alk.harness.proofs import VALIDATED_PROOFS, load_shown_proofs
+
+    record_proof(tmp_path, "a", Proof(ready=True, solvable=True, vacuous=False, assumed=["x"], controls=NOT_RUN), solution_steps=1)
+    (tmp_path / VALIDATED_PROOFS).write_text(json.dumps({"a": {"proved": True}}), encoding="utf-8")
+    assert load_shown_proofs(tmp_path)["a"] == {"proved": True}
