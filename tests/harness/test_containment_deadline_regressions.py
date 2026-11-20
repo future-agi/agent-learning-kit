@@ -697,7 +697,9 @@ def test_concurrent_admission_shares_one_worker(monkeypatch):
         admitted.append(state.worker)
 
     monkeypatch.setattr(threading.Thread, "start", staged_start)
-    callers = [threading.Thread(target=admit, args=(second,)) for second in (False, True)]
+    callers = [
+        threading.Thread(target=admit, args=(second,)) for second in (False, True)
+    ]
     try:
         callers[0].start()
         assert starting.wait(3)

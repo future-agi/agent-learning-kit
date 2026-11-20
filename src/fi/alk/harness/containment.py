@@ -269,7 +269,9 @@ class _Cleanup:
             candidate = None
             try:
                 with self.election:
-                    left = deadline.require_remaining() if deadline is not None else None
+                    left = (
+                        deadline.require_remaining() if deadline is not None else None
+                    )
                     if self.starting is not None:
                         self.election.wait(left)
                         continue
@@ -307,7 +309,9 @@ class _Cleanup:
 
     def _consume(self) -> None:
         while True:
-            first = self.pending.get()  # Block indefinitely while idle; put() never waits.
+            first = (
+                self.pending.get()
+            )  # Block indefinitely while idle; put() never waits.
             others = self.pending.qsize()  # Bound the pass even if records need retry.
             self._finish(first)
             del first
