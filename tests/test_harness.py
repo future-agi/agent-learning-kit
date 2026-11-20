@@ -2850,22 +2850,27 @@ def test_a_copy_or_a_new_case_never_takes_a_removed_case_s_key(tmp_path):
     root, catalogue, kept, used, key = _removed_case(tmp_path)
     # A copy under a new name.
     accept_scenario(_delta(name="adds-a-big-mac-copy"), world_root=root, catalogue=catalogue, kept=kept, used=used)
-    # The same content under the old key but no restored_from: a new case, a new key.
-    accept_scenario(_delta(scenario_key=key), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    # The same content under the old key but no restored_from, asked for as new: a new case, a new key.
+    accept_scenario(_delta(scenario_key=key, as_new=True), world_root=root, catalogue=catalogue, kept=kept, used=used)
     assert key not in [one.scenario_key for one in kept] and len(kept) == 2
     assert all(one.restored_from is None for one in kept)
 
 
-def test_a_new_case_that_matches_a_removed_one_says_it_was_added_new_and_not_restored(tmp_path):
+def test_a_new_case_that_matches_a_removed_one_is_not_kept_unless_asked_for_as_new(tmp_path):
     from fi.alk.harness.scenario_tools import accept_scenario
 
     root, catalogue, kept, used, key = _removed_case(tmp_path)
     # The removed case's own name, submitted fresh with no restored_from, as a builder that skipped the restore did.
     said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
     text = said["content"][0]["text"]
-    assert not said.get("is_error"), said
-    assert f"NOT restored: it matches the removed case {key}" in text and "Restored exactly" not in text
-    assert f'restored_from {{"key": "{key}"}}' in text and kept[0].scenario_key != key
+    assert said.get("is_error") and kept == []
+    assert f"Not kept. It matches the removed case {key}" in text
+    assert f'restored_from {{"key": "{key}"}}' in text and "as_new" in text
+    # The person asked for a copy: kept as a new case, and the reply says so.
+    copied = accept_scenario(_delta(as_new=True), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert not copied.get("is_error"), copied
+    assert f"ADDED AS A NEW CASE under {kept[0].scenario_key}, as asked, NOT restored" in copied["content"][0]["text"]
+    assert kept[0].scenario_key != key
     # Asked for the original with a change, editing that new case instead still says it is not the removed one.
     edited = accept_scenario(
         _delta(scenario_key=kept[0].scenario_key, instruction="Order one Big Mac, no pickles."),
@@ -2876,7 +2881,7 @@ def test_a_new_case_that_matches_a_removed_one_says_it_was_added_new_and_not_res
     )
     # A copy under a name of its own matches nothing removed and says nothing about it.
     copy = accept_scenario(_delta(name="adds-two-big-macs"), world_root=root, catalogue=catalogue, kept=kept, used=used)
-    assert "NOT restored" not in copy["content"][0]["text"]
+    assert not copy.get("is_error") and "NOT restored" not in copy["content"][0]["text"]
 
 
 def test_a_restore_naming_another_key_than_the_case_carries_is_refused(tmp_path):
@@ -8944,8 +8949,12 @@ def test_a_scenario_dropped_in_the_chat_never_lends_its_key_to_a_new_one(tmp_pat
     assert not asyncio.run(
         tools["drop_scenario"].handler({"name": "adds-a-big-mac"})
     ).get("is_error")
-    assert not asyncio.run(
+    # The same name again is the dropped case: not kept as a silent copy.
+    assert asyncio.run(
         tools["submit_scenario"].handler(_delta(instruction="Order two Big Macs."))
+    ).get("is_error")
+    assert not asyncio.run(
+        tools["submit_scenario"].handler(_delta(instruction="Order two Big Macs.", as_new=True))
     ).get("is_error")
     assert kept[0].scenario_key not in ("", dropped)
 

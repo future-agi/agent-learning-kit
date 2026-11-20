@@ -385,3 +385,37 @@ def test_the_status_line_reads_zero_scenarios_and_says_nothing_about_saving_when
     )
     assert _status_line(tmp_path, [], "unknown") == "Status: 0 scenarios (0 proved, 0 kept as written, 0 not proved)."
     assert _status_line(tmp_path, [], "saved_except", 2).endswith("except 2 scenarios that could not be applied.")
+
+
+def test_the_builder_reads_the_proofs_the_platform_shows_not_the_offline_ones(tmp_path):
+    """The validation proved the cases on the live runtime; the chat's own offline proofs had them kept as written."""
+    import asyncio
+    import json
+
+    from fi.alk.harness.builder import suite_server
+    from fi.alk.harness.hosted_chat_entrypoint import _status_line
+    from fi.alk.harness.proofs import VALIDATED_PROOFS, load_shown_proofs, proof_entry
+    from fi.alk.harness.scenario import Scenario
+
+    kept = [Scenario(name="lookup"), Scenario(name="refund")]
+    assumed = Proof(ready=True, solvable=True, vacuous=False, assumed=["get_order"], controls=NOT_RUN)
+    for one in kept:
+        record_proof(tmp_path, one.name, assumed, solution_steps=1)
+    offline = load_proofs(tmp_path)
+    live = {
+        one.name: {**proof_entry(Proof(ready=True, solvable=True, vacuous=False, controls=RAN), 1), "live": True,
+                   "proved_at": "2999-01-01T00:00:00Z"}
+        for one in kept
+    }
+    (tmp_path / VALIDATED_PROOFS).write_text(json.dumps(live), encoding="utf-8")
+
+    assert all(entry["kept_as_written"] for entry in offline.values())
+    status = next(one.handler for one in suite_server(tmp_path, kept).tools if one.name == "scenario_status")
+    said = asyncio.run(status({}))["content"][0]["text"]
+    assert said.splitlines()[0] == "2 scenarios. Proofs on record: 2 proved, 0 kept as written, 0 not proved."
+    assert _status_line(tmp_path, kept, "saved").startswith("Status: 2 scenarios (2 proved, 0 kept as written")
+    # A case proved here after the validation (edited since) reads its own, newer proof.
+    newer = {**offline["refund"], "proved_at": "3000-01-01T00:00:00Z"}
+    (tmp_path / "proofs.json").write_text(json.dumps({**offline, "refund": newer}), encoding="utf-8")
+    assert load_shown_proofs(tmp_path)["refund"]["kept_as_written"] is True
+    assert load_shown_proofs(tmp_path)["lookup"]["proved"] is True

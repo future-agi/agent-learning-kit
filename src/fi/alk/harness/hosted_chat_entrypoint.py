@@ -49,7 +49,7 @@ from .hosted_conversation import (
     PlatformSessionStore,
     load_conversation_capabilities,
 )
-from .proofs import load_proofs, proof_counts, proof_key
+from .proofs import load_proofs, load_shown_proofs, proof_counts, proof_key
 from .session import (
     ARTIFACT,
     DONE,
@@ -121,7 +121,7 @@ def _status_line(workspace: Path, kept: list[Any] | None, saved: str, unapplied:
     scenarios there are and what their proofs say, and whether this working copy's changes are in the environment.
     `saved` is `saved`, `saved_except` (with `unapplied` scenarios left out), `unsaved`, `building` or `unknown`,
     which says nothing about saving rather than guess."""
-    counts = proof_counts(load_proofs(workspace), [proof_key(one) for one in kept or []])
+    counts = proof_counts(load_shown_proofs(workspace), [proof_key(one) for one in kept or []])
     changes = {
         "saved": "; every change is saved to the environment",
         "saved_except": f"; saved to the environment except {unapplied} scenarios that could not be applied",
@@ -181,7 +181,7 @@ def _status_note(workspace: Path, kept: list[Any] | None, unsaved: bool | None =
     for them."""
     if not kept:
         return ""
-    counts = proof_counts(load_proofs(workspace), [proof_key(one) for one in kept])
+    counts = proof_counts(load_shown_proofs(workspace), [proof_key(one) for one in kept])
     saved = (
         ""
         if unsaved is None
@@ -1612,9 +1612,25 @@ class HostedChatRuntime:
             body = {}
         return body if isinstance(body, dict) else {}
 
+    def _suite_here(self) -> list[Any] | None:
+        """The suite this conversation holds: its session's list, else the scenarios on disk; None before there is a
+        suite at all. Read from disk too, so every kind of conversation (the builder, the coordinator, a builder still
+        opening) closes with the same line."""
+        kept = getattr(getattr(self.conversation, "stage", None), "kept", None)
+        if kept is not None:
+            return kept
+        if not (self.workspace / "scenarios").is_dir():
+            return None
+        from .scenario_tools import load_scenarios
+
+        try:
+            return load_scenarios(self.workspace)
+        except Exception:  # noqa: BLE001 - a suite that cannot be read is not counted, never guessed
+            return None
+
     def _closing_status(self) -> str:
         """The code-written status line for the end of this reply, or "" before the environment has a suite."""
-        kept = getattr(self.conversation.stage, "kept", None)
+        kept = self._suite_here()
         if kept is None:
             return ""
         state = self._saved_state()
@@ -1622,7 +1638,7 @@ class HostedChatRuntime:
         return _status_line(self.workspace, kept, state, unapplied)
 
     def _turn_status_note(self) -> str:
-        kept = getattr(self.conversation.stage, "kept", None)
+        kept = self._suite_here()
         if not kept:
             return ""
         state = self._saved_state()
@@ -2538,8 +2554,9 @@ class HostedChatRuntime:
         self._last_health = ""
         self._report_again_if_written()
         final_text = self._close_with_proof_counts(final_text, finished_before)
-        if final_text and (truth := self._closing_status()):
-            final_text = f"{final_text}\n\n{truth}"
+        # Every reply ends with it, one that was only tool calls included: the person always sees the real state.
+        if truth := self._closing_status():
+            final_text = f"{final_text}\n\n{truth}".strip()
         if final_text:
             await self.client.emit(
                 "assistant_message",
