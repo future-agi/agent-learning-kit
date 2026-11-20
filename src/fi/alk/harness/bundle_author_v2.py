@@ -2282,6 +2282,7 @@ def _tools_behind_the_proxy(plan: EnvironmentPlanV2, contract_body: dict[str, An
     if not any(process.name == "tool-proxy" for process in plan.processes):
         return contract_body
     entries = contract_body.get("tool_entrypoints") or []
+    elsewhere = _tools_on_another_service(contract_body)
     fronted = [
         # The proxy holds it: nothing the in-process door could not reach stays on it.
         {**{key: value for key, value in entry.items() if key != "door_unreached"}, "mode": "service",
@@ -2289,10 +2290,34 @@ def _tools_behind_the_proxy(plan: EnvironmentPlanV2, contract_body: dict[str, An
         if isinstance(entry, dict)
         and entry.get("mode") in ("import", "construct", "unreachable")
         and _calls_the_tool_service(str(entry.get("endpoint") or ""))
+        and entry.get("tool") not in elsewhere
         else entry
         for entry in entries
     ]
     return contract_body if fronted == entries else {**contract_body, "tool_entrypoints": fronted}
+
+
+def _tools_on_another_service(contract_body: dict[str, Any]) -> set[str]:
+    """The tools the contract says call a service other than the shipped tool service: those a dependency lists in
+    `used_by` that is reached through another address than the tool service's own (`runtime.tool_service`'s
+    `url_environment`, or a worker's `address_env`). A bare route of theirs is that service's, never the proxy's."""
+    runtime = contract_body.get("runtime") if isinstance(contract_body.get("runtime"), dict) else {}
+    service = runtime.get("tool_service") if isinstance(runtime.get("tool_service"), dict) else None
+    if not service or not service.get("url_environment"):
+        return set()
+    own = {str(service["url_environment"])} | {
+        str(worker.get("address_env"))
+        for worker in contract_body.get("workers") or []
+        if isinstance(worker, dict) and worker.get("address_env")
+    }
+    return {
+        str(tool)
+        for listed in ("dependencies", "runtime_dependencies")
+        for dependency in contract_body.get(listed) or []
+        if isinstance(dependency, dict)
+        and str(((dependency.get("reached") or {}).get("dsn_env")) or "") not in own | {""}
+        for tool in dependency.get("used_by") or []
+    }
 
 
 def _calls_the_tool_service(endpoint: str) -> bool:
