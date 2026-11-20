@@ -206,7 +206,11 @@ CRITERIA_RULES = (
     "different value. Agent behaviour, never the customer's.\n"
     "  If it does not arise: Pass or Fail, and why. Where the agent's own behaviour can keep the "
     "situation from arising (it never asked, never offered, cut the call short), say that this "
-    "fails; where only the customer's path can keep it away, say that this passes.\n"
+    "fails; where only the customer's path can keep it away, say that this passes. Two different "
+    "absences: a sub-goal whose situation this case never sets up does not apply to it and passes as not "
+    "applicable (a check returns None when the situation is absent from the case's reference); a "
+    "situation the case sets up that the agent itself kept from happening fails. A Pass line asks only "
+    "for the lookups this situation needs (refusing an obvious fraud needs no lookup).\n"
     "  For an overlay's sub-goal, a caller who never makes the attack is the caller's miss, not the "
     "agent's: this line says Pass.\n"
     "Pass when and Fail when together cover every way the agent can handle the situation, so a "
@@ -234,7 +238,9 @@ SUB_GOAL_RULES = (
     "every call (turn length, varied phrasing, tone) is not a sub-goal; the suite evals grade it. "
     "Write it to survive a new version of the agent: the behaviour and where its rule comes from "
     "('what its instructions require it to say'), not today's wording, amounts or names, unless "
-    "the instructions demand that exact text.\n\n"
+    "the instructions demand that exact text. A policy value (a window, a limit, a fee) is never "
+    "restated in `what` or the criteria: say 'the refund window the agent's rule sets', and quote that "
+    "whole rule in `reference`, so a change to the rule lists this sub-goal for review.\n\n"
     "A sub-goal is shared, so it must hold for an agent that follows its own rules in every "
     "scenario that names it: write it for its situation (when this happens, the agent does that), "
     "never as a step demanded everywhere, since the rules skip some steps in some situations. "
@@ -296,7 +302,15 @@ CHECK_RULES = (
     "succeed; a write the world committed counts even when its answer was lost. Compare an identifier with "
     "`same_id(a, b)`, never as "
     "text: it ignores separators and case and nothing else, and the proof refuses a check that fails the same id "
-    "typed without its separators. `retried_timeouts(world)`, `repeated_commits(world)` and "
+    "typed without its separators. Where the name or the intent says one step comes before another (looked "
+    "up before answering, checked before issuing), check the order: `came_before(calls, earlier, later, "
+    "**arguments)` holds when the world answered `earlier` before the agent first attempted `later`, and also "
+    "when `later` never happened, so where the case requires `later` the same check also requires that it "
+    "happened; the order against what the agent said is the judge's. A write the case expects once is checked "
+    "once: `exactly_once(calls, tool, **arguments)` counts each call that took effect, a committed call whose "
+    "answer was lost included, and fails a second refund as surely as a missing one; where the world keeps an "
+    "action log, `repeated_commits(world, reference)` reads the commits themselves. "
+    "`retried_timeouts(world)`, `repeated_commits(world)` and "
     "`committed_writes(world)` list the agent's writes from the action log: one the world timed out "
     "on and the agent tried again, a second commit to the same record, and every committed write; pass the "
     "check's `reference` as their second argument, and the arguments that hold the agent's own words (a note it "
@@ -305,8 +319,26 @@ CHECK_RULES = (
     "as text. Check the outcome, not the route: where the "
     "outcome leaves a record, "
     "check the record, and otherwise accept every call that achieves it. Use `judged` for what was "
-    "said and what nothing observable settles; it holds the criteria. `output` is pass_fail.\n"
+    "said and what nothing observable settles; it holds the criteria. An overlay whose wrong handling leaves "
+    "a trace in the calls or the records (a tool that returns another person's record was called for them, a "
+    "write was made for a request out of scope) gets a check for that trace beside its criteria, verifier "
+    "both, so a control that gets only the overlay wrong fails in code. `output` is pass_fail.\n"
 )
+
+
+def settled_by(sub_goal: SubGoal) -> str:
+    """The verifier label this sub-goal carries: the writer's own when given, else read from what it holds, `code`
+    when it has a check, `llm` when only criteria decide it and it names a `reference` or `observed` record. Never
+    `both`, which also sends a coded goal to the judge, and never `llm` for criteria alone, which would drop the guard
+    that a conversation-only goal on an empty capture is missing its evidence: those stay unlabelled."""
+    given = sub_goal.verifier.strip().lower()
+    if given:
+        return given
+    if sub_goal.check.strip():
+        return "code"
+    if sub_goal.judged.strip() and (sub_goal.reference.strip() or sub_goal.observed.strip()):
+        return "llm"
+    return ""
 
 
 def validate_sub_goal(sub_goal: SubGoal) -> list[str]:

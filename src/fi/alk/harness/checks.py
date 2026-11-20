@@ -339,10 +339,33 @@ def succeeded(calls: Sequence[Any], name: str, **arguments: Any) -> list[Any]:
     ]
 
 
+def came_before(calls: Sequence[Any], earlier: str, later: str, **arguments: Any) -> bool:
+    """Whether the world answered a call of `earlier` (`answered`, with these `arguments`) before the agent's first
+    attempt at `later`, whatever came of that attempt. True when the agent never attempted `later`: a step that must
+    come before something only fails when that something happened without it."""
+    first = next((at for at, call in enumerate(calls) if call.name == later), None)
+    return first is None or bool(answered(list(calls)[:first], earlier, **arguments))
+
+
+def exactly_once(calls: Sequence[Any], name: str, **arguments: Any) -> bool:
+    """Whether exactly one call of tool `name` with these `arguments` took effect: each that went through
+    (`succeeded`), and each the world committed although its answer was lost (`response_lost`), so a retry after a
+    lost answer counts twice. A try the world refused is not counted. Where the world keeps an action log,
+    `repeated_commits(world, reference)` reads the commits themselves."""
+    lost = [
+        call
+        for call in calls
+        if call.name == name and getattr(call, "error", "") == "response_lost" and _with(call, arguments)
+    ]
+    return len(succeeded(calls, name, **arguments)) + len(lost) == 1
+
+
 # Read-only helpers every check is given beside `world` and `calls`.
 CHECK_HELPERS = {
     "answered": answered,
     "succeeded": succeeded,
+    "came_before": came_before,
+    "exactly_once": exactly_once,
     "same_id": same_id,
     "same_value": same_value,
     "retried_timeouts": retried_timeouts,
