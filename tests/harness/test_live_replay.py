@@ -126,3 +126,20 @@ def test_a_shared_change_after_the_round_proves_every_case(tmp_path, monkeypatch
     (root / "contract.json").write_text(json.dumps({"agent": "shop", "notes": "repaired"}), encoding="utf-8")
 
     assert _play(root, monkeypatch)["keys"] is None and live_proof.load_live(root) == {}
+
+
+def test_an_unknown_file_under_the_harness_s_folder_proves_every_case_again(tmp_path):
+    root = _authoring(tmp_path)
+    (root / "generic-harness").mkdir()
+    before = validation.proof_inputs(root)
+    _edit(root, "refund", "Refund it, the payment failed.")
+    # The harness's own run records never count.
+    (root / "generic-harness" / "process-logs").mkdir()
+    (root / "generic-harness" / "process-logs" / "agent.log").write_text("started\n", encoding="utf-8")
+    (root / "generic-harness" / "yield.json").write_text("{}", encoding="utf-8")
+    (root / "generic-harness" / "runtime-readiness.json").write_text("{}", encoding="utf-8")
+    assert validation.cases_to_replay(before, validation.proof_inputs(root)) == {"k-refund"}
+
+    # Anything else there is an input nobody listed: every case is proved again.
+    (root / "generic-harness" / "seed-overrides.json").write_text("{}", encoding="utf-8")
+    assert validation.cases_to_replay(before, validation.proof_inputs(root)) is None
