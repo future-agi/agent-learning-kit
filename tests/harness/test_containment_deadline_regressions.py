@@ -110,14 +110,18 @@ def test_startup_abort_signals_only_owned_group(monkeypatch, tmp_path, owns_grou
 
 
 @pytest.mark.parametrize("interrupted_signal", ["group", "child"])
-def test_signal_interrupt_preserves_startup_timeout(monkeypatch, tmp_path, interrupted_signal):
+def test_signal_interrupt_preserves_startup_timeout(
+    monkeypatch, tmp_path, interrupted_signal
+):
     subtree = _FailingSubtree(tmp_path / "missing-leaf")
     monkeypatch.setattr(containment, "_containment", subtree)
     process = Mock(pid=123)
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: process)
     group_kill = Mock()
     monkeypatch.setattr(os, "killpg", group_kill)
-    (group_kill if interrupted_signal == "group" else process.kill).side_effect = KeyboardInterrupt()
+    (
+        group_kill if interrupted_signal == "group" else process.kill
+    ).side_effect = KeyboardInterrupt()
     timeout = subprocess.TimeoutExpired(["true"], 1)
     monkeypatch.setattr(containment, "_write_all", Mock())
     monkeypatch.setattr(containment, "_read_all", Mock(side_effect=timeout))
@@ -137,7 +141,9 @@ def test_signal_interrupt_preserves_startup_timeout(monkeypatch, tmp_path, inter
 
 
 @pytest.mark.parametrize("failure", ["false", "error"])
-def test_second_pipe_emfile_releases_fds_before_unused_leaf_retry(monkeypatch, tmp_path, failure):
+def test_second_pipe_emfile_releases_fds_before_unused_leaf_retry(
+    monkeypatch, tmp_path, failure
+):
     path = tmp_path / "unused"
     path.mkdir()
     blocker = path / "busy"

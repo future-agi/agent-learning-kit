@@ -335,20 +335,26 @@ def _abort_child(
         try:
             process.kill()
         except (OSError, KeyboardInterrupt) as exc:
-            logger.warning("containment: could not kill child %s (%s)", process.pid, exc)
+            logger.warning(
+                "containment: could not kill child %s (%s)", process.pid, exc
+            )
         if leaf is not None:
             try:
                 if leaf.close() is not False:
                     leaf = None
             except (OSError, KeyboardInterrupt) as exc:
                 logger.warning(
-                    "containment: could not close leaf for child %s (%s)", process.pid, exc
+                    "containment: could not close leaf for child %s (%s)",
+                    process.pid,
+                    exc,
                 )
         try:
             process.wait(timeout=_EMPTY_WAIT_SECONDS)
             reaped = True
         except (OSError, subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
-            logger.warning("containment: could not reap child %s (%s)", process.pid, exc)
+            logger.warning(
+                "containment: could not reap child %s (%s)", process.pid, exc
+            )
     finally:
         # These attributes are populated for PIPE only, never for caller-owned file objects.
         for stream in (process.stdin, process.stdout, process.stderr):
@@ -356,7 +362,9 @@ def _abort_child(
                 try:
                     stream.close()
                 except (OSError, KeyboardInterrupt) as exc:
-                    logger.warning("containment: could not close child stream (%s)", exc)
+                    logger.warning(
+                        "containment: could not close child stream (%s)", exc
+                    )
         if not reaped or leaf is not None:
             _defer_cleanup(process, leaf)
 
@@ -393,7 +401,9 @@ class _GatePipe:
                 else:
                     os.close(fd)  # Interrupted before this FileIO took ownership.
             except (OSError, KeyboardInterrupt):
-                logger.warning("containment: secondary gate close failure", exc_info=True)
+                logger.warning(
+                    "containment: secondary gate close failure", exc_info=True
+                )
 
 
 def popen(
