@@ -2856,6 +2856,29 @@ def test_a_copy_or_a_new_case_never_takes_a_removed_case_s_key(tmp_path):
     assert all(one.restored_from is None for one in kept)
 
 
+def test_a_new_case_that_matches_a_removed_one_says_it_was_added_new_and_not_restored(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    # The removed case's own name, submitted fresh with no restored_from, as a builder that skipped the restore did.
+    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    text = said["content"][0]["text"]
+    assert not said.get("is_error"), said
+    assert f"NOT restored: it matches the removed case {key}" in text and "Restored exactly" not in text
+    assert f'restored_from {{"key": "{key}"}}' in text and kept[0].scenario_key != key
+    # Asked for the original with a change, editing that new case instead still says it is not the removed one.
+    edited = accept_scenario(
+        _delta(scenario_key=kept[0].scenario_key, instruction="Order one Big Mac, no pickles."),
+        world_root=root, catalogue=catalogue, kept=kept, used=used,
+    )
+    assert f"EDITED {kept[0].scenario_key}, a case of its own, NOT restored: it matches the removed case {key}" in (
+        edited["content"][0]["text"]
+    )
+    # A copy under a name of its own matches nothing removed and says nothing about it.
+    copy = accept_scenario(_delta(name="adds-two-big-macs"), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert "NOT restored" not in copy["content"][0]["text"]
+
+
 def test_a_restore_naming_another_key_than_the_case_carries_is_refused(tmp_path):
     from fi.alk.harness.scenario_tools import accept_scenario
 

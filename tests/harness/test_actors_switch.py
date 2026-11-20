@@ -34,7 +34,7 @@ ON = {"enabled": True, "share": [0.5, 0.6]}
 OFF = {"enabled": False, "share": [0.0, 0.0]}
 PLACED = {axis: "plain" for axis in CANONICAL_AXES}
 ACTOR = [{"id": "second", "instruction": "Take over when asked."}]
-SHARE_REFUSAL = "include an actor who speaks"
+SHARE_REFUSAL = "include an actor or a fault"
 
 
 # --- reading the switch ---------------------------------------------------------------------------------------------
