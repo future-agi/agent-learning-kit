@@ -902,70 +902,21 @@ one.
 
 ## 7. Hand it out, one round at a time
 
-**Above about twenty scenarios, delegate. Do not write the suite yourself.** Your turn budget is
-spent by writers as well as by you, and a scenario takes far more turns to explore, write and prove
-than the budget allows per scenario, so a suite you write alone runs out of budget long before it
-runs out of cells. That is not a risk, it is what happens: a fifty-scenario suite written by the
-main loop reached seventeen before the budget ended.
-
-Below about ten scenarios, write it yourself. Briefing a writer, having it read the world and having
-it report back costs real turns, and on a ten-scenario suite that overhead is the whole bill.
-Between ten and twenty, judge it on how rich the cells are.
-
-When you delegate, delegate the writing entirely. Splitting a suite and then writing half of it
-yourself gives you the overhead of both.
-
-**Deal each round with `suite_progress` and `deal`.** It divides what is still to write into deals, one
-per writer: the writer's own cells of your grid on the axes every case varies along, how many in each,
-at most as many writers as run at once, and a summary of the suite (counts per level, the latest caller
-names taken) that is the same size at fifty cases or a thousand. Brief one writer per deal, each with its
-deal word for word, that summary, and what its cells mean; never the cases already written. A writer
-submits under its deal, is refused outside its cells and is stopped when its count is written, so no one
-writer carries the suite. Dealing again closes the round before it. Whenever more is left to write than one
-writer's share, `suite_progress` deals the next round by itself, and a new case submitted without a deal is
-refused until one is dealt. Then brief one writer per deal in one message, or write a deal yourself by
-passing its name as `deal` on each `submit_scenario`; `suite_progress` with `deal: false` writes the suite in
-this session without rounds. Before writing,
-a writer checks the names it means to give with `names_taken`.
+**Write the suite in this session.** Dealing a round to parallel `scenario_writer` sub-agents is held for now:
+a deal's brief does not yet carry the records the agent's tools can read, and writers briefed without them invent
+record ids the agent does not hold, so their cases cannot pass. Do not call `suite_progress` with `deal: true` and
+do not brief writers in parallel. Write and submit each scenario here, and check the caller names you mean to
+give with `names_taken` before you write them.
 
 When the plan's cells cannot hold the count, `aim_for` says so. Widen the plan first: add the levels this
 agent's tools and world genuinely support, on any axis, and declare them with `aim_for`. Only when the agent
 and its world cannot vary further, call `aim_for` with `cannot_widen` saying why; the suite is then written to
 what the plan holds, and the build reports "this agent supports about X distinct scenarios" with that reason.
 
-While a round is out, a case is changed or removed only under the deal that wrote it. Change the suite
-yourself between rounds: deal again, or call `suite_progress` with `end_round` once every writer has
-reported.
-
-**Keep writers busy, not rounds tidy.** Writers briefed in the same turn run together, and your
-next turn starts when the last of them reports. Throughput is how many are working at once and how
-evenly their slices end, so:
-
-1. **Start wide.** While a lot remains, brief as many writers in one turn as run at once, each with a
-   slice of about fifteen to twenty scenarios. A writer reads the world once and then writes its whole
-   slice, so slices of three or four spend most of their turns re-reading.
-2. **Keep slices even.** The turn lasts as long as its slowest writer, so give no writer a slice much
-   larger or harder than the others. One writer stuck on refusals with a big slice leaves the rest idle.
-3. **Brief the next turn at once.** When a turn's writers report, call `suite_progress` with `deal` and brief the
-   next writers for what is still empty in the same turn. Do not stop to read scenarios back: a
-   writer's report says what it wrote, and `suite_progress` names what is empty without returning a
-   single scenario body, so it costs the same at any suite size. Brief only what it shows as empty, so
-   nothing is covered twice.
-4. **Finish wide too.** Near the end, split what remains across several writers in small, distinct
-   slices rather than handing it all to one. The last cells are usually the hardest, and one writer
-   working through them alone is where a large suite slows to a crawl.
-5. **Stop when the count is met.**
-
-A writer that misreads its brief is caught the next time you check progress, and the same loop writes
-fifty or a thousand without changing shape.
-
-**A writer has about a hundred turns of its own.** That is enough to read the world, write fifteen
-to twenty scenarios and report. One that runs out says so and stops; whatever it did not reach is
-still empty, `suite_progress` will show it, and the next round hands it to a fresh writer. So a
-writer that misjudges its slice costs one round, never the suite.
-
 
 ## 8. Hand each writer its part
+
+Held for now, with dealing (section 7): the rules below are for when writers are briefed again.
 
 The worker is called `scenario_writer`. **Every brief MUST carry, for each cell it deals:**
 

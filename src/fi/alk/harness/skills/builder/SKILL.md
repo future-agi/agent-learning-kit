@@ -172,8 +172,8 @@ what the gates check. Then:
   scenario and submit it again to edit or rename it: it would come back as a new one, without its
   history.
 - **Add**: `aim_for` the new total first, then write and submit each one. For more than a handful,
-  call `suite_progress` with `deal` and brief one `scenario_writer` per deal in one message, each with its
-  deal and the suite summary as given. When the person asks for a level of an axis (no
+  write them in this session too: dealing a round to parallel `scenario_writer` sub-agents is held until a
+  deal's brief carries the records the agent's tools can read. When the person asks for a level of an axis (no
   background noise, only one kind of caller), pass it in `aim_for`'s `asked_for` so it is not held to
   its usual share.
 - **Delete**: resolve numbers, a range or a description to names with `find_scenarios` (filters find
