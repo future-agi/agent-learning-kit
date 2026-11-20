@@ -317,6 +317,7 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
     world.native_runtime = bool(manifest.get("native_runtime", False))
     world.tools = manifest.get("tool_specs", [])
     world.refusal_signature = str(manifest.get("refusal_signature") or "")
+    world.refusals = record_refusals(root)
     # A world whose handlers bind to the agent's own code cannot run them unless that code
     # is importable again, and the frozen state is what those tools act on.
     reached = str(manifest.get("source_root") or "")
@@ -326,6 +327,22 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
     if frozen_state.exists():
         world.state_object = json.loads(frozen_state.read_text(encoding="utf-8"))
     return world
+
+
+def record_refusals(root: Path) -> dict[str, list[dict[str, Any]]]:
+    """The record refusals the contract beside this world declares, by tool; none when it has no readable contract.
+    Read from the contract rather than frozen with the world, so a refusal corrected after the world was saved holds."""
+    from ..understand import load as load_contract
+
+    try:
+        contract = load_contract(root)
+    except (OSError, ValueError):
+        return {}
+    if contract is None:
+        return {}
+    return {
+        tool.name: [refusal.model_dump() for refusal in tool.refusals] for tool in contract.tools if tool.refusals
+    }
 
 
 def read_manifest(path: str | Path) -> dict[str, Any]:
