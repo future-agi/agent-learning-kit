@@ -193,8 +193,9 @@ def _assumed_refund_world(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     class Desk(GeneratedWorld):
         name = "desk"
-        tools = [{"name": "issue_refund"}]
-        handlers = {}
+        tools = [{"name": "issue_refund"}, {"name": "note_order"}]
+        # A tool this world runs, so a control on it really runs.
+        handlers = {"note_order": "def handle(args, db):\n    return {'noted': args.get('order_id')}\n"}
 
     world = Desk(":memory:")
     world.connection.executescript("CREATE TABLE refunds(id TEXT);")
@@ -217,16 +218,24 @@ def _refund_case(order_id: str) -> Scenario:
         solution=[Step(tool="issue_refund", arguments={"order_id": order_id, "amount": 40.0})],
         negative_controls=[
             {
-                "name": "refunds_the_wrong_order",
-                "why": "refunds another order",
-                "steps": [{"tool": "issue_refund", "arguments": {"order_id": "1043", "amount": 40.0}}],
+                "name": "only_notes_the_order",
+                "why": "notes the order and never refunds it",
+                "steps": [{"tool": "note_order", "arguments": {"order_id": "1042"}}],
             }
         ],
     )
 
 
-def _prove_refund(root: Path, case: Scenario):
-    goals = Catalogue(sub_goals=[SubGoal(name="refunds_1042", what="Order 1042 is refunded.", check=SUCCEEDED)])
+REFUSED = (
+    "def check(world, calls):\n"
+    "    told = [c for c in calls if c.name == 'issue_refund' and c.refused\n"
+    "            and c.arguments.get('order_id') == '1042']\n"
+    "    return None if told else 'the refund of 1042 was not refused'\n"
+)
+
+
+def _prove_refund(root: Path, case: Scenario, check: str = SUCCEEDED):
+    goals = Catalogue(sub_goals=[SubGoal(name="refunds_1042", what="Order 1042 is refunded.", check=check)])
     contract = AgentContract(agent="desk", tools=[ToolSpec(name="issue_refund", args=["order_id", "amount"])])
     return prove.prove(case, goals, root, contract=contract, actors=[])
 
@@ -241,6 +250,32 @@ def test_a_success_check_on_an_assumed_step_is_inconclusive_so_the_case_is_kept_
     assert proof.assumed == ["issue_refund"] and proof.refused == []
     assert proof.excused == ["refunds_1042"]
     assert proof.solvable is True and proof.proved is False and proof.kept_as_written is True
+    # Locked in: excused is never proved, though its control ran and failed, and why it is kept names the step that
+    # never ran.
+    assert proof.controls[0]["failed"] is True
+    assert proof.blocked_reason() == prove.BlockedReason.SOLUTION_ASSUMED
+    assert "issue_refund" in proof.why()
+
+
+def test_a_failure_path_check_on_an_assumed_step_is_inconclusive_under_the_refused_reading(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _assumed_refund_world(tmp_path, monkeypatch)
+
+    proof = _prove_refund(tmp_path, _refund_case("1042"), REFUSED)
+
+    assert proof.refused == [] and proof.excused == ["refunds_1042"]
+    assert proof.solvable is True and proof.proved is False and proof.kept_as_written is True
+
+
+def test_a_failure_path_check_that_fails_under_both_readings_is_not_solvable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _assumed_refund_world(tmp_path, monkeypatch)
+
+    proof = _prove_refund(tmp_path, _refund_case("1043"), REFUSED)
+
+    assert proof.excused == [] and proof.solvable is False
 
 
 def test_a_reference_that_fails_its_check_even_if_the_assumed_step_went_through_is_not_solvable(
