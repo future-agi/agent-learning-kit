@@ -1658,12 +1658,15 @@ class HostedChatRuntime:
         return _status_line(self.workspace, kept, state, unapplied)
 
     def _turn_status_note(self) -> str:
-        kept = self._suite_here()
-        if not kept:
+        try:
+            kept = self._suite_here()
+            if not kept:
+                return ""
+            state = self._saved_state()
+            unsaved = None if state in ("building", "unknown") else state == "unsaved"
+            return _status_note(self.workspace, kept, unsaved)
+        except Exception:  # noqa: BLE001 - the note is read from files; one that cannot be read never costs the turn
             return ""
-        state = self._saved_state()
-        unsaved = None if state in ("building", "unknown") else state == "unsaved"
-        return _status_note(self.workspace, kept, unsaved)
 
     def _ledger_note(self) -> str:
         """The conversation's kept references, put at the head of every message so a summary

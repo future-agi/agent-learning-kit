@@ -44,7 +44,8 @@ def load_shown_proofs(destination: Path) -> dict[str, ProofEntry]:
         here = mine.get(key)
         if not isinstance(entry, dict):
             continue
-        if here is None or str(entry.get("proved_at") or "") >= str(here.get("proved_at") or ""):
+        # Newer wins; a validated proof with no time is the platform's record and wins too.
+        if here is None or not entry.get("proved_at") or str(entry["proved_at"]) >= str(here.get("proved_at") or ""):
             shown[key] = entry
     return shown
 

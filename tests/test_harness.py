@@ -2884,6 +2884,31 @@ def test_a_new_case_that_matches_a_removed_one_is_not_kept_unless_asked_for_as_n
     assert not copy.get("is_error") and "NOT restored" not in copy["content"][0]["text"]
 
 
+def test_a_used_key_whose_case_was_never_read_back_gets_a_new_key_and_a_note(tmp_path):
+    from fi.alk.harness.scenario_tools import REMOVED_CASES, accept_scenario
+
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    (root / REMOVED_CASES).unlink()
+    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert not said.get("is_error"), said
+    assert kept[0].scenario_key != key and f"NOT restored: it matches the removed case {key}" in said["content"][0]["text"]
+
+
+def test_a_repeated_restore_refusal_is_counted_like_any_other(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import remember_removed
+
+    _root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    key = kept[0].scenario_key
+    asyncio.run(tools["drop_scenario"].handler({"name": "adds-a-big-mac"}))
+    remember_removed(_root, [{"scenario_key": key, "content": {"name": "adds-a-big-mac"}}])
+    said = [asyncio.run(tools["submit_scenario"].handler(_delta()))["content"][0]["text"] for _ in range(3)]
+    assert all("It matches the removed case" in one for one in said)
+    assert "submitting it again will not work" in said[-1]
+
+
 def test_a_restore_naming_another_key_than_the_case_carries_is_refused(tmp_path):
     from fi.alk.harness.scenario_tools import accept_scenario
 
@@ -8949,13 +8974,9 @@ def test_a_scenario_dropped_in_the_chat_never_lends_its_key_to_a_new_one(tmp_pat
     assert not asyncio.run(
         tools["drop_scenario"].handler({"name": "adds-a-big-mac"})
     ).get("is_error")
-    # The same name again is the dropped case: not kept as a silent copy.
-    assert asyncio.run(
-        tools["submit_scenario"].handler(_delta(instruction="Order two Big Macs."))
-    ).get("is_error")
-    assert not asyncio.run(
-        tools["submit_scenario"].handler(_delta(instruction="Order two Big Macs.", as_new=True))
-    ).get("is_error")
+    # Dropped here and never read back as a removed case: kept as new under a new key, with the note.
+    said = asyncio.run(tools["submit_scenario"].handler(_delta(instruction="Order two Big Macs.")))
+    assert not said.get("is_error") and "NOT restored" in said["content"][0]["text"]
     assert kept[0].scenario_key not in ("", dropped)
 
 

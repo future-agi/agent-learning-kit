@@ -2321,10 +2321,11 @@ def accept_scenario(
             f"scenario_key {restored!r} to restore it, or drop restored_from to add it as a new case."
         )
     # A new case whose key or name is one the environment gave a case it no longer holds: added as new, and said so.
-    lost = "" if restored else _removed_case_matching(world_root, scenario, named, kept, keys)
+    lost, readable = ("", False) if restored else _removed_case_matching(world_root, scenario, named, kept, keys)
     if previous is not None and lost == previous.scenario_key:
         lost = ""
-    if lost and previous is None and not as_new:
+    # Refused only where the removed case was read here, so the restore call it names can bring it back as it was.
+    if lost and readable and previous is None and not as_new:
         # Never a silent copy: a case the environment had comes back only as itself, or as new when asked.
         return _err(
             f"Not kept. It matches the removed case {lost}. To restore that case with its history, read it with "
@@ -2495,7 +2496,7 @@ def accept_scenario(
     if lost:
         done += (
             (f". EDITED {scenario.scenario_key}, a case of its own" if previous is not None
-             else f". ADDED AS A NEW CASE under {scenario.scenario_key}, as asked")
+             else f". ADDED AS A NEW CASE under {scenario.scenario_key}" + (", as asked" if as_new else ""))
             + f", NOT restored: it matches the removed case {lost}, and its history stays with that one. To restore "
             "that case with its history, drop this one, "
             f"read it with find_scenarios(removed: true) and submit it with scenario_key {lost!r} and restored_from "
@@ -2540,25 +2541,25 @@ def remember_removed(destination: Path, rows: Any) -> None:
 
 def _removed_case_matching(
     destination: Path, scenario: Scenario, named: str, kept: list[Scenario], keys: set[str]
-) -> str:
+) -> tuple[str, bool]:
     """The key of a case this environment had and no longer holds that a new submission matches, by the key it
-    names, the key its name gives, or the name of a removed case read with find_scenarios, or ""."""
+    names, the key its name gives, or the name of a removed case read with find_scenarios, and whether that case
+    was read here (`REMOVED_CASES`), so a restore can bring it back as it was; ("", False) when none matches."""
     held = {one.scenario_key for one in kept}
-    for key in (named, scenario_slug(scenario.name)):
-        if key and key in keys and key not in held:
-            return key
     try:
         removed = json.loads((Path(destination) / REMOVED_CASES).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return ""
-    return next(
-        (
-            str(key)
-            for key, content in (removed.items() if isinstance(removed, dict) else [])
-            if isinstance(content, dict) and content.get("name") == scenario.name and key not in held
-        ),
-        "",
-    )
+        removed = {}
+    readable = {
+        str(key): content
+        for key, content in (removed.items() if isinstance(removed, dict) else [])
+        if isinstance(content, dict) and str(key) not in held
+    }
+    for key in (named, scenario_slug(scenario.name)):
+        if key and key in keys and key not in held:
+            return key, key in readable
+    named_alike = next((key for key, content in readable.items() if content.get("name") == scenario.name), "")
+    return named_alike, bool(named_alike)
 
 
 def restored_changes(destination: Path, scenario: Scenario) -> list[str] | None:
