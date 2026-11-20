@@ -4028,16 +4028,38 @@ def scenario_tools(
         declared = {
             level_name(axis): {level_name(one) for one in levels} for axis, levels in (target.get("axes") or {}).items()
         }
-        stray = [
-            f"{axis} {level}"
-            for axis, levels in [*faulted.items(), *checked.items()]
-            for level in levels
-            if level_name(level) not in declared.get(level_name(axis), set())
-        ]
-        if stray:
+        def off_grid(levels: dict[str, Any]) -> list[str]:
+            return [
+                f"{axis} {level}"
+                for axis, held in levels.items()
+                for level in held
+                if level_name(level) not in declared.get(level_name(axis), set())
+            ]
+
+        stray_faults, stray_checked = off_grid(faulted), off_grid(checked)
+        enforced = (stray_faults if gate_on(FAULT_LEVEL_GATE) else []) + (
+            stray_checked if gate_on(CHECKED_LEVEL_GATE) else []
+        )
+        if enforced:
             return _err(
-                "these are not levels of the grid, so no case can sit on them: " + ", ".join(stray) + ". Declare "
+                "these are not levels of the grid, so no case can sit on them: " + ", ".join(enforced) + ". Declare "
                 "them in `axes` first, in this call or an earlier one."
+            )
+        # With their gate off, levels off the grid are left out and the rest kept.
+        if stray_faults or stray_checked:
+            faulted = {
+                axis: {level: held for level, held in levels.items() if f"{axis} {level}" not in stray_faults}
+                for axis, levels in faulted.items()
+            }
+            faulted = {axis: levels for axis, levels in faulted.items() if levels}
+            checked = {
+                axis: [level for level in levels if f"{axis} {level}" not in stray_checked]
+                for axis, levels in checked.items()
+            }
+            checked = {axis: levels for axis, levels in checked.items() if levels}
+            said += (
+                ". Not levels of the grid, so left out: " + ", ".join(stray_faults + stray_checked) + "; declare "
+                "them in `axes` first if you meant them"
             )
         if faulted:
             target["fault_levels"] = {**(target.get("fault_levels") or {}), **faulted}
