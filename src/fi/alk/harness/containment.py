@@ -282,10 +282,16 @@ class _Cleanup:
                 candidate.start()  # Never hold the election lock here.
             except BaseException:
                 if candidate is not None:
-                    with self.election:
-                        if self.starting is candidate:
-                            self.starting = None  # Revoke a not-yet-entered candidate.
-                            self.election.notify_all()
+                    # Finish rollback before propagating the original startup error.
+                    while True:
+                        try:
+                            with self.election:
+                                if self.starting is candidate:
+                                    self.starting = None
+                                self.election.notify_all()
+                            break
+                        except KeyboardInterrupt:
+                            continue
                 raise
 
     def _entry(self) -> None:

@@ -492,8 +492,18 @@ def _assert_group_cleanup(monkeypatch, tmp_path, interrupt):
                 process.wait(timeout=4)
 
 
-@pytest.mark.parametrize("launch", ["contained-popen", "contained-run", "plain-run"])
-def test_worker_capacity_required_before_launch(monkeypatch, tmp_path, launch):
+@pytest.mark.parametrize(
+    ("launch", "interrupt_rollback"),
+    [
+        ("contained-popen", False),
+        ("contained-run", False),
+        ("plain-run", False),
+        pytest.param("contained-run", True, id="interrupted-rollback"),
+    ],
+)
+def test_worker_capacity_required_before_launch(
+    monkeypatch, tmp_path, launch, interrupt_rollback
+):
     state = containment._Cleanup()
     monkeypatch.setattr(containment, "_cleanup", state)
     subtree = _FailingSubtree(tmp_path / "leaf")
@@ -507,7 +517,22 @@ def test_worker_capacity_required_before_launch(monkeypatch, tmp_path, launch):
     state.pending.put(queued)
     failure = RuntimeError("thread capacity exhausted")
     with monkeypatch.context() as m:
-        m.setattr(threading.Thread, "start", Mock(side_effect=failure))
+        start = Mock(side_effect=failure)
+        m.setattr(threading.Thread, "start", start)
+        interrupted = False
+
+        class InterruptRollback(threading.Condition):
+            def __enter__(self):
+                nonlocal interrupted
+                if start.called and not interrupted:
+                    interrupted = True
+                    raise KeyboardInterrupt()
+                return super().__enter__()
+
+        if interrupt_rollback:
+            state.election = InterruptRollback()
+        notify = Mock(wraps=state.election.notify_all)
+        m.setattr(state.election, "notify_all", notify)
         pipe = Mock(side_effect=AssertionError("pipe opened before admission"))
         spawn = Mock(side_effect=AssertionError("child started before admission"))
         m.setattr(os, "pipe", pipe)
@@ -515,13 +540,24 @@ def test_worker_capacity_required_before_launch(monkeypatch, tmp_path, launch):
         with pytest.raises(RuntimeError) as caught:
             call(["true"])
         assert caught.value is failure and state.pending.get_nowait() == queued
+        assert interrupted == interrupt_rollback
+        assert state.starting is None and state.worker is None
+        notify.assert_called_once_with()
         leaf.assert_not_called()
         pipe.assert_not_called()
         spawn.assert_not_called()
 
     # The isolated worker lives through the next launch, not past this test.
     stop = threading.Event()
-    monkeypatch.setattr(state, "_consume", lambda: stop.wait(10))
+    consuming = threading.Event()
+    consumers = []
+
+    def consume():
+        consumers.append(threading.current_thread())
+        consuming.set()
+        stop.wait(10)
+
+    monkeypatch.setattr(state, "_consume", consume)
     monkeypatch.setattr(subtree.current, "close", lambda: True)
     try:
         result = call(["true"])
@@ -531,6 +567,7 @@ def test_worker_capacity_required_before_launch(monkeypatch, tmp_path, launch):
                 assert process.wait(timeout=3) == 0
         else:
             assert result.returncode == 0
+        assert consuming.wait(3) and consumers == [state.worker]
     finally:
         stop.set()
         if state.worker is not None:
