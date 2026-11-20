@@ -507,7 +507,12 @@ def set_worker_tools(
 def _case_texts(scenario: Any) -> str:
     """A listed case with the texts that state what it tests, so the review reads each against the current rule."""
     head = f"{scenario.scenario_key or scenario.name}: {scenario.name}"
-    texts = [("use case", scenario.use_case), ("tests", scenario.tests), ("instruction", scenario.instruction)]
+    texts = [
+        ("use case (its group heading)", scenario.use_case),
+        ("branch", scenario.branch),
+        ("tests", scenario.tests),
+        ("instruction", scenario.instruction),
+    ]
     texts += [(f"control {control.name}", control.why) for control in scenario.negative_controls]
     return head + "".join(f"\n      {label}: {' '.join(str(text).split())}" for label, text in texts if text)
 
@@ -548,8 +553,10 @@ def cases_citing(destination: Path, *, rule: str = "", tool: str = "") -> str:
         return ""
     lines = [_case_texts(one) for one in citing]
     return (
-        f"\n{len(citing)} case(s) rest on what changed. Review each against the current rules: edit_scenario where it "
-        "no longer holds; one left as it is shows Source changed until it is reviewed.\n  - " + "\n  - ".join(lines)
+        f"\n{len(citing)} case(s) rest on what changed. Review each against the current rules and rewrite every "
+        "text below that states what changed, with edit_scenario; one left as it is shows Source changed until it is "
+        "reviewed. Other cases may restate the old wording without citing it: search the suite for it too.\n  - "
+        + "\n  - ".join(lines)
     )
 
 

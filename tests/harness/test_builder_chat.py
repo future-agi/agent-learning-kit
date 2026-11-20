@@ -5108,6 +5108,7 @@ def _cited_suite(tmp_path):
         root,
         "adds-a-big-mac",
         use_case="Refuse a refund past the window",
+        branch="an order delivered 31 days ago",
         sources=[{"kind": "rule", "ref": "rule:0", "quote": "within 30 days of delivery"}],
     )
     _edit_scenario(
@@ -5139,7 +5140,12 @@ def test_rewording_a_rule_links_the_two_by_id_and_lists_only_the_cases_citing_th
         {"kind": "rule", "key": rule_id(new), "action": "added", "previous": rule_id(old), "replaced_by": "",
          "text": new},
     ]
-    assert f"{_key(root, 'adds-a-big-mac')}: adds-a-big-mac\n      use case: Refuse a refund past the window" in said
+    assert (
+        f"{_key(root, 'adds-a-big-mac')}: adds-a-big-mac\n      use case (its group heading): Refuse a refund past "
+        "the window" in said
+    )
+    # Its branch is listed too, and the builder is told to look for the old wording in cases that do not cite it.
+    assert "\n      branch: an order delivered 31 days ago" in said and "search the suite for it too" in said
     # Every text that states what the case tests is shown for review, its controls' descriptions included.
     assert "\n      control adds_twice: " in said
     assert "adds-one-big-mac" not in said
@@ -5312,6 +5318,26 @@ def test_a_plan_is_confirmed_once_and_its_exact_calls_then_run_without_asking(tm
     # A listed call runs once: the same call again is asked about.
     asyncio.run(guarded("drop_rule")(_drop_30()))
     assert len(questions) == 2
+
+
+def test_a_plan_says_outright_which_calls_add_a_new_scenario(tmp_path, monkeypatch):
+    questions = []
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "No")
+
+    async def ask(tool, payload, context):
+        questions.append(payload)
+        return {"content": [{"type": "text", "text": "No"}]}
+
+    runtime._ask = ask
+    runtime._turn_message_id = "m1"
+    edit = {"tool": "submit_scenario", "arguments": {"name": "late_refund", "scenario_key": "late-refund"}}
+    add = {"tool": "submit_scenario", "arguments": {"name": "late_refund_21_days"}}
+    asyncio.run(runtime._confirm_plan([{"tool": "add_rule", "arguments": _add_20()}, edit, add]))
+
+    [question] = questions
+    assert question["question"].startswith("Apply these 3 changes? 1 of them adds a new scenario.")
+    assert "\n3. NEW SCENARIO: submit_scenario (name: late_refund_21_days)" in question["question"]
+    assert "\n2. submit_scenario" in question["question"]
 
 
 def test_a_plan_shows_a_long_argument_cut_short_and_still_approves_the_whole_call():
