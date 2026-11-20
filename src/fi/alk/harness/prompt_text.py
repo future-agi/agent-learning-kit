@@ -4,7 +4,8 @@ A prompt written in Python is copied from its lines as the code that holds it: i
 name it is given to, the brackets around it. When the lines hold one string made only of plain
 literals, the prompt is that string's text instead. Nothing is run: the text is read from the
 parsed file. Anything whose text is only known when the agent runs (a name, a call, a ``{}``
-in an f-string) stays as written.
+in an f-string) stays as written, and so does a text holding a control character other than a
+line break or a tab: the escape as written is safer to store and show than the character.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import ast
 import io
 import re
 import tokenize
+import unicodedata
 
 from .python_source import LARGEST_PARSED_MODULE, parsed, utf8_size
 
@@ -23,6 +25,10 @@ _AROUND = re.compile(
     r"\s*(?:[A-Za-z_]\w*\s*(?::\s*[A-Za-z_][\w.\[\], ]*)?=\s*)?(?:\(\s*)*(?:\)\s*)*,?\s*"
 )
 _COMMENT = re.compile(r"#[^\n]*")
+# Characters that reorder how text is shown, so what a reader sees isn't what the model reads.
+_BIDI = frozenset(
+    "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+)
 
 
 def python_tree(lines: list[str]) -> ast.Module | None:
@@ -50,42 +56,76 @@ def prompt_text(lines: list[str], start: int, end: int, tree: ast.Module) -> str
         return None
     node, value = overlapping[0]
     if start <= node.lineno and node.end_lineno <= end:
-        return value if _only_around(lines, start, end, node) else None
-    if node.lineno < start and end < node.end_lineno and _one_triple_quoted(lines, node):
+        text = value if _only_around(lines, start, end, node) else None
+    elif node.lineno < start and end < node.end_lineno and _one_triple_quoted(lines, node):
         # Inside the string, with none of its quote marks on the lines: they are text already.
-        return "\n".join(lines[start - 1 : end])
-    return None
+        text = "\n".join(lines[start - 1 : end])
+    else:
+        return None
+    return None if text is None or _holds_a_control(text) else text
+
+
+def _holds_a_control(text: str) -> bool:
+    """Whether ``text`` holds a character a store or a page can't be trusted with: a control
+    character other than a line break or a tab (NUL among them), half of a surrogate pair, or one
+    that reorders how text is shown."""
+    return any(
+        character in _BIDI
+        or (unicodedata.category(character) in ("Cc", "Cs") and character not in "\n\t")
+        for character in text
+    )
 
 
 def _plain_strings(tree: ast.Module) -> list[tuple[ast.expr, str]]:
-    """Each string expression made only of plain literals, with its value, outermost only."""
+    """Each string expression made only of plain literals, with its value, outermost only.
+    Nothing here recurses: a file may hold a chain of ``+`` deeper than Python's call stack."""
     found: list[tuple[ast.expr, str]] = []
     waiting: list[ast.AST] = [tree]
     while waiting:
         node = waiting.pop()
-        if isinstance(node, ast.expr):
-            value = _plain_value(node)
-            if value is not None:
-                found.append((node, value))
-                continue
-            if isinstance(node, ast.JoinedStr):
-                # An f-string with a {} in it: its pieces are not strings of their own.
-                continue
-        waiting.extend(ast.iter_child_nodes(node))
+        if not isinstance(node, ast.expr):
+            waiting.extend(ast.iter_child_nodes(node))
+            continue
+        operands = _operands(node)
+        values = [_literal_value(operand) for operand in operands]
+        plain = [value for value in values if value is not None]
+        if len(plain) == len(values):
+            found.append((node, "".join(plain)))
+            continue
+        if len(operands) > 1:
+            # Joined with something else: each piece is looked at on its own.
+            waiting.extend(operands)
+        elif not isinstance(node, ast.JoinedStr):
+            # An f-string with a {} in it: its pieces are not strings of their own.
+            waiting.extend(ast.iter_child_nodes(node))
     return found
 
 
-def _plain_value(node: ast.expr) -> str | None:
-    """The value of a string made only of plain literals: one literal, literals side by side,
-    literals joined with ``+``, an f-string with no ``{}``. None for anything else."""
+def _operands(node: ast.expr) -> list[ast.expr]:
+    """What a chain of ``+`` joins, in order; the node alone when it isn't one."""
+    operands: list[ast.expr] = []
+    waiting = [node]
+    while waiting:
+        one = waiting.pop()
+        if isinstance(one, ast.BinOp) and isinstance(one.op, ast.Add):
+            waiting.extend((one.right, one.left))
+        else:
+            operands.append(one)
+    return operands
+
+
+def _literal_value(node: ast.expr) -> str | None:
+    """The value of one plain literal: a string, literals side by side, an f-string with no
+    ``{}``. None for anything else."""
     if isinstance(node, ast.Constant):
         return node.value if isinstance(node.value, str) else None
     if isinstance(node, ast.JoinedStr):
-        pieces = [_plain_value(piece) for piece in node.values]
-        return None if any(piece is None for piece in pieces) else "".join(pieces)
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        left, right = _plain_value(node.left), _plain_value(node.right)
-        return None if left is None or right is None else left + right
+        pieces = [
+            piece.value
+            for piece in node.values
+            if isinstance(piece, ast.Constant) and isinstance(piece.value, str)
+        ]
+        return "".join(pieces) if len(pieces) == len(node.values) else None
     return None
 
 

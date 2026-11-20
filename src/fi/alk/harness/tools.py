@@ -770,12 +770,21 @@ def _copy_prompt(
             # A prompt file that isn't Python is text already.
             texts.append(excerpt)
             continue
-        if path not in trees:
-            trees[path] = python_tree(lines)
-        tree = trees[path]
-        texts.append(
-            None if tree is None else prompt_text(lines, where.start_line, where.end_line, tree)
-        )
+        try:
+            if path not in trees:
+                trees[path] = python_tree(lines)
+            tree = trees[path]
+            text = (
+                None
+                if tree is None
+                else prompt_text(lines, where.start_line, where.end_line, tree)
+            )
+        except Exception as error:  # noqa: BLE001 - text is a nicety; the lines as written stand
+            # Whatever reading the text fails on, the lines as written are saved, as before.
+            trees[path] = None
+            text = None
+            _LOG.warning("prompt copy: kept as written (%s)", type(error).__name__)
+        texts.append(text)
     if parts and not problems:
         contract.system_prompt_excerpt = "\n\n".join(parts)
         # All parts or none: a prompt partly text and partly code would be neither.

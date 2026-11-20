@@ -202,3 +202,87 @@ def test_the_customers_code_is_never_run(tmp_path) -> None:
 
     assert copied(tmp_path, source, 3, 3)[1] == ["Be brief."]
     assert not marker.exists()
+
+
+# What the text can't be read from, or shouldn't be
+
+
+def _submit(
+    root: Path, destination: Path, start: int, end: int, quote: str, **options
+) -> dict:
+    server = contract_tools(destination, source_root=root, **options)
+    submit = next(tool for tool in server.tools if tool.name == "submit_contract")
+    return asyncio.run(
+        submit.handler(
+            {
+                "agent": "support",
+                "modality": "chat",
+                "real_use_cases": ["a return"],
+                "tools": [{"name": "look_up_order", "args": ["order_id"]}],
+                "system_prompt_excerpt": quote,
+                "system_prompt_from": [{"path": "agent.py", "start_line": start, "end_line": end}],
+            }
+        )
+    )
+
+
+def _saved_prompt(destination: Path) -> str:
+    saved = json.loads((destination / "contract.json").read_text(encoding="utf-8"))
+    return saved["system_prompt_excerpt"]
+
+
+@pytest.mark.parametrize("term", ["1", '"a"'], ids=["numbers", "strings"])
+def test_a_long_chain_elsewhere_in_the_file_is_read_past(tmp_path, term) -> None:
+    prompt = 'PROMPT = "Answer briefly and never guess an order\'s status."'
+    source = f"TOTAL = {' + '.join([term] * 1500)}\n{prompt}\n"
+    (tmp_path / "agent.py").write_text(source, encoding="utf-8")
+    destination = tmp_path / "out"
+
+    result = _submit(tmp_path, destination, 2, 2, "Answer briefly and never guess")
+
+    assert not result.get("is_error"), result
+    assert _saved_prompt(destination) == "Answer briefly and never guess an order's status."
+
+
+@pytest.mark.parametrize("failing", ["python_tree", "prompt_text"])
+def test_a_file_the_text_cant_be_read_from_keeps_the_lines_as_written(
+    tmp_path, monkeypatch, failing
+) -> None:
+    from fi.alk.harness import prompt_text
+
+    def fails(*args, **kwargs):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(prompt_text, failing, fails)
+    written = 'PROMPT = "Answer briefly and never guess an order\'s status."'
+    (tmp_path / "agent.py").write_text(written + "\n", encoding="utf-8")
+    destination = tmp_path / "out"
+
+    # Checked in this process, where the stand-in that fails is.
+    result = _submit(
+        tmp_path, destination, 1, 1, "Answer briefly and never guess", save_checks="thread"
+    )
+
+    assert not result.get("is_error"), result
+    assert _saved_prompt(destination) == written
+
+
+@pytest.mark.parametrize(
+    "escape",
+    ["\\x00", "\\x1b", "\\x7f", "\\x85", "\\u202e", "\\u2066", "\\u200f", "\\ud800", "\\r"],
+    ids=["nul", "escape", "delete", "c1-next-line", "right-to-left-override", "isolate",
+         "right-to-left-mark", "lone-surrogate", "carriage-return"],
+)
+def test_a_control_character_keeps_the_lines_as_written(tmp_path, escape) -> None:
+    source = f'PROMPT = "Be brief.{escape}Be kind."\n'
+
+    excerpt, as_text = copied(tmp_path, source, 1, 1)
+
+    assert as_text == []
+    assert excerpt == as_written(source, 1, 1)
+
+
+def test_a_tab_and_a_line_break_are_text(tmp_path) -> None:
+    source = 'PROMPT = "Be brief.\\tBe kind.\\nBe quick."\n'
+
+    assert copied(tmp_path, source, 1, 1)[1] == ["Be brief.\tBe kind.\nBe quick."]
