@@ -113,7 +113,12 @@ Find, in roughly this order:
    produced); which stored field and value decide what it returns, where a result appears only
    when a record says so; and each argument whose text the agent writes itself rather than takes
    from the person or a record. `refuses`: every refusal by value or by something outside the
-   call, and every refusal returned as an ordinary value rather than an error. `inputs_from`: an
+   call, and every refusal returned as an ordinary value rather than an error. Where a refusal turns on
+   a field of the record the call names (an order whose own fault field makes the payment service time out, an
+   account whose status is closed), record it in `refusals` too, as the code shows it: the HTTP `status`, the
+   `table` and `column` the call's `argument` is matched on, the record's `field` and the `values` that refuse, and
+   the `message`. The world scenarios are proved on answers each one the same way, so a scenario that expects
+   such a record to go through is refused before it is ever run. `inputs_from`: an
    argument whose value must come from an earlier tool's output, and that tool. `arg_units`: the
    unit or format of every amount, duration, date or time argument whose name does not say it
    (a currency's minor or major unit, seconds or milliseconds, an ISO date or a timestamp), from the

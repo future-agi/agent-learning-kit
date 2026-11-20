@@ -659,7 +659,8 @@ def cast_read_back(scenario: Scenario, world_root: Path, caller_names: set[str] 
         )
         + (
             " " + "; ".join(written_for_one) + ". An actor is the same in every scenario, so its role names people "
-            "by their part (the caller, the caller's spouse), never by one scenario's names: change it with `add_actor`."
+            "by their part (someone with the caller, the manager who approves), never by one scenario's names: change it with "
+            "`add_actor`."
             if written_for_one
             else ""
         )
@@ -1231,37 +1232,86 @@ def _red_team_short(
     )
 
 
+def _parties(fields: Any) -> list[str]:
+    """What a scenario brings in besides the person, one entry per kind: each actor by id, each fault by its mode, a
+    conversation before the run, an event start. Read alike from a submission and from a kept scenario."""
+
+    def field(one: Any, name: str) -> Any:
+        return one.get(name) if isinstance(one, dict) else getattr(one, name, None)
+
+    kinds = {str(field(one, "id") or "") for one in field(fields, "actors") or []}
+    kinds |= {f"fault:{field(one, 'mode')}" for one in field(fields, "faults") or []}
+    kinds |= {name for name in ("pre_run", "starts_with") if field(fields, name)}
+    return sorted(kind for kind in kinds if kind)
+
+
+def actor_kind_most_share() -> float:
+    """The most of a suite's actor scenarios one kind (the same actors and faults together) may take, while the
+    environment offers others. Generous: half by default, read from `ALK_ACTOR_KIND_MOST_SHARE`."""
+    try:
+        value = float(str(os.environ.get("ALK_ACTOR_KIND_MOST_SHARE") or "").strip())
+    except ValueError:
+        return 0.5
+    return value if 0 < value <= 1 else 0.5
+
+
 def _call_actors_short(
     args: dict[str, Any],
     kept: list[Scenario],
     wanted: int,
     share: float,
-    usable: list[str],
+    offered: list[str],
 ) -> str:
-    """Why this scenario without an actor would leave the suite short of its share of scenarios that
-    include one, or "" when it would not."""
-    if not usable or wanted < 4 or any(
-        (one or {}).get("id") in usable for one in args.get("actors") or []
-    ):
+    """Why this scenario without an actor or a fault would leave the suite short of its share of scenarios that
+    include one, or "" when it would not. `offered` says what the environment supports, one line per kind."""
+    if not offered or wanted < 4 or _parties(args):
         return ""
     name = str(args.get("name") or "")
     others = [one for one in kept if one.name != name]
     needed = at_least(share, wanted)
-    including = sum(
-        1 for one in others if any(entry.id in usable for entry in one.actors)
-    )
+    including = sum(1 for one in others if _parties(one))
     if including >= needed or len(others) - including < wanted - needed:
         return ""
     return (
-        f"{including} of the {wanted} scenarios you are writing include an actor who speaks on the call and at "
+        f"{including} of the {wanted} scenarios you are writing include an actor or a fault and at "
         f"least {needed} must, and the scenarios still to come can no longer make up the difference. Where "
-        f"someone else fits this person's situation, write this same task with one of the environment's "
-        f"speaking actors ({', '.join(usable)}) in `actors` with its instruction and trigger. Where nobody "
-        "fits, keep this one actor-free and give the actor to a scenario already written whose situation has "
-        "someone else around: resubmit that one with its `scenario_key` and the actor added, then submit this "
-        "one again. If the person asked for another share, call aim_for with `actor_share` set to it: "
-        '{"min": 1, "max": 1} for every scenario, {"min": 0, "max": 0} for none, or their range; no submission '
-        "is refused for the share after that."
+        f"someone or something else fits this person's situation, write this same task with one of what the "
+        f"environment supports: {'; '.join(offered)}. Where nothing fits, keep this one without and give one to a "
+        "scenario already written whose situation has room for it: resubmit that one with its `scenario_key` and "
+        "it added, then submit this one again. If the person asked for another share, call aim_for with "
+        '`actor_share` set to it: {"min": 1, "max": 1} for every scenario, {"min": 0, "max": 0} for none, or their '
+        "range; no submission is refused for the share after that."
+    )
+
+
+def _one_kind_crowds(
+    args: dict[str, Any],
+    kept: list[Scenario],
+    wanted: int,
+    share: float,
+    offered: list[str],
+    kinds_offered: int,
+) -> str:
+    """Why this scenario's actors and faults are a kind the suite's actor scenarios already hold enough of while the
+    environment offers others, or "" when they are not."""
+    mine = _parties(args)
+    if not mine or kinds_offered < 2:
+        return ""
+    name = str(args.get("name") or "")
+    others = [one for one in kept if one.name != name]
+    including = sum(1 for one in others if _parties(one))
+    room = max(at_least(share, wanted), including + 1)
+    if room < 4:
+        return ""
+    most = max(2, math.ceil(room * actor_kind_most_share()))
+    same = sum(1 for one in others if _parties(one) == mine)
+    if same < most:
+        return ""
+    return (
+        f"{same} of the suite's scenarios with an actor or a fault already carry {' + '.join(mine)}, and one kind "
+        f"takes at most {most} of the {room} while the environment supports others. A person around the caller "
+        "is one of the things that make real life hard, not the only one. Give this scenario what its situation "
+        f"motivates from the rest: {'; '.join(offered)}. Or write it with no actor or fault at all."
     )
 
 
@@ -2241,6 +2291,10 @@ def accept_scenario(
             f"Not kept. restored_from names {restored!r}, but the case is submitted under another key: give it "
             f"scenario_key {restored!r} to restore it, or drop restored_from to add it as a new case."
         )
+    # A new case whose key or name is one the environment gave a case it no longer holds: added as new, and said so.
+    lost = "" if restored else _removed_case_matching(world_root, scenario, named, kept, keys)
+    if previous is not None and lost == previous.scenario_key:
+        lost = ""
     # Restored and already back (an edit of the restored case) is an ordinary edit of it.
     if previous is not None:
         scenario.scenario_key = previous.scenario_key
@@ -2389,6 +2443,15 @@ def accept_scenario(
         if renamed_from
         else f"{scenario.name} {'replaced' if replaced else 'kept'}"
     )
+    if lost:
+        done += (
+            (f". EDITED {scenario.scenario_key}, a case of its own" if previous is not None
+             else f". ADDED AS A NEW CASE under {scenario.scenario_key}")
+            + f", NOT restored: it matches the removed case {lost}, and its history stays with that one. To restore "
+            "that case with its history, drop this one, "
+            f"read it with find_scenarios(removed: true) and submit it with scenario_key {lost!r} and restored_from "
+            f'{{"key": "{lost}"}}. If the person wants a new case, keep this one and tell them it is new'
+        )
     if restored:
         changes = restored_changes(world_root, scenario)
         done += (
@@ -2424,6 +2487,29 @@ def remember_removed(destination: Path, rows: Any) -> None:
     except (OSError, ValueError):
         kept = {}
     write_json_atomic(path, {**(kept if isinstance(kept, dict) else {}), **found})
+
+
+def _removed_case_matching(
+    destination: Path, scenario: Scenario, named: str, kept: list[Scenario], keys: set[str]
+) -> str:
+    """The key of a case this environment had and no longer holds that a new submission matches, by the key it
+    names, the key its name gives, or the name of a removed case read with find_scenarios, or ""."""
+    held = {one.scenario_key for one in kept}
+    for key in (named, scenario_slug(scenario.name)):
+        if key and key in keys and key not in held:
+            return key
+    try:
+        removed = json.loads((Path(destination) / REMOVED_CASES).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return next(
+        (
+            str(key)
+            for key, content in (removed.items() if isinstance(removed, dict) else [])
+            if isinstance(content, dict) and content.get("name") == scenario.name and key not in held
+        ),
+        "",
+    )
 
 
 def restored_changes(destination: Path, scenario: Scenario) -> list[str] | None:
@@ -2644,6 +2730,31 @@ def scenario_tools(
             for one in load_call_actors(destination).call_actors
             if one.channel in channels
         ]
+
+    def offered_parties() -> tuple[list[str], int]:
+        """What the environment supports bringing into a scenario besides the person, one line per kind, and how
+        many kinds that is: each actor who speaks, each who acts through the world, and faults on the agent's
+        own calls once there is a cast."""
+        speaking = usable_call_actors()
+        listed = load_actors(destination).actors
+        acting = [one for one in listed if one.permitted_actions and one.id not in speaking]
+        lines = [f"an actor who speaks ({', '.join(speaking)})"] if speaking else []
+        if acting:
+            lines.append(
+                "an actor who acts through the world ("
+                + ", ".join(f"{one.id}: {', '.join(one.permitted_actions[:4])}" for one in acting)
+                + "), brought in by what the agent does, deciding in the run: approves, refuses, answers late or "
+                "never"
+            )
+        faults = bool(speaking or acting) and bool(contract.tools)
+        if faults:
+            lines.append(
+                "a fault on one of the agent's own calls (timeout_before_commit, timeout_after_commit, unavailable, "
+                "error"
+                + (f", or approval_required held until {', '.join(one.id for one in acting)} approves" if acting else "")
+                + ")"
+            )
+        return lines, len(speaking) + len(acting) + (1 if faults else 0)
 
     exploration = {"since_submit": 0}
     # Identical-refusal counts per scenario, so an unsatisfiable gate ends the stage.
@@ -3418,6 +3529,7 @@ def scenario_tools(
         # The default share is a minimum held for new scenarios; a share the person set is never
         # refused for. A scenario already in the suite is never refused for it either, so editing one
         # never changes what it tests.
+        offered, kinds_offered = offered_parties() if with_actors else ([], 0)
         short = (
             ""
             if target.get("actor_share") or any(one.name == same for one in kept)
@@ -3426,11 +3538,21 @@ def scenario_tools(
                 kept,
                 cap(),
                 call_actor_share(),
-                usable_call_actors(),
+                offered,
             )
         )
         if short:
             return _refuse(short, gate="actor_share")
+        # Editing a scenario already in the suite never changes what it tests, so it is never refused for its kind.
+        crowded_kind = (
+            ""
+            if any(one.name == same for one in kept)
+            else _one_kind_crowds(
+                {**args, "name": same}, kept, cap(), call_actor_share(), offered, kinds_offered
+            )
+        )
+        if crowded_kind:
+            return _refuse(crowded_kind, gate="actor_kind")
         twin = _already_in_the_suite(
             {**args, "name": same},
             kept,
@@ -3610,7 +3732,9 @@ def scenario_tools(
         "is built from these, so a wrong argument name produces a world that refuses everything. `arg_units` "
         "records the unit or format of a field (a currency's minor or major unit, seconds or milliseconds); "
         "`returns` the fields "
-        "the tool hands back, each with its type and unit.",
+        "the tool hands back, each with its type and unit. "
+        "`refusals` replaces the refusals that turn on a record's field (each: `status`, `table`, `column`, "
+        "`argument`, `field`, `values`, `message`); the world answers each the way the tool does.",
         schema(
             {
                 "tool_name": str,
@@ -3620,6 +3744,7 @@ def scenario_tools(
                 "returns": dict,
                 "description": str,
                 "refuses": str,
+                "refusals": list,
                 "effects": str,
                 "inputs_from": dict,
                 "remove": bool,
@@ -3645,6 +3770,7 @@ def scenario_tools(
             effects=str(args.get("effects") or ""),
             inputs_from={str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()},
             remove=bool(args.get("remove")),
+            refusals=list(args["refusals"]) if isinstance(args.get("refusals"), list) else None,
         )
         return _ok(said) if done else _err(said)
 
@@ -3957,12 +4083,19 @@ def scenario_tools(
                 "because a writer that never sees the list cannot stay inside it"
             )
         usable = usable_call_actors() if with_actors else []
+        offered, kinds_offered = offered_parties() if with_actors else ([], 0)
         share = call_actor_share()
-        if usable:
+        if offered:
             said += (
-                f". At least {at_least(share, cap())} of the {cap()} scenarios include an actor"
+                f". At least {at_least(share, cap())} of the {cap()} scenarios include an actor or a fault"
                 if share > 0
                 else ". No scenario includes an actor, as the person asked"
+            )
+        if offered and share > 0 and kinds_offered > 1:
+            said += (
+                ". Spread them across what this environment supports, each where the scenario's situation motivates "
+                f"it, with no one kind on more than {round(actor_kind_most_share() * 100)}% of them: "
+                + "; ".join(offered)
             )
         listing = load_call_actors(destination) if usable and share > 0 else None
         named = {
@@ -3975,6 +4108,17 @@ def scenario_tools(
             for one in (listing.call_actors if listing else [])
             if one.id in usable and level_name(one.id) not in named
         ]
+        level_free = [
+            one.id
+            for one in (load_actors(destination).actors if offered and share > 0 else [])
+            if one.permitted_actions and one.id not in usable and level_name(one.id) not in named
+        ]
+        if level_free:
+            said += (
+                ". These actors act through the world and no level is named for them yet: "
+                + ", ".join(level_free)
+                + ". Give each a level, named for it, where a decision of theirs changes the right answer"
+            )
         if unplaced:
             said += (
                 ". The environment lists these actors and no level is named for them yet. Call aim_for "

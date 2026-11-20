@@ -54,7 +54,7 @@ from .leaks import leaks
 from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
 from .scenario import Scenario
 from .understand import load
-from .world.runtime import REQUEST_NOT_ACCEPTED, Call, GeneratedWorld
+from .world.runtime import REQUEST_NOT_ACCEPTED, Call, GeneratedWorld, record_refusal
 from .world.snapshot import read_manifest, restore, source_state
 from .world_door import fault_numbered, fault_slot, faults_named, route_action, routed_faults
 
@@ -722,8 +722,15 @@ def _takes_from(step: object) -> set[str]:
 def recordable_tools(scenario: Scenario, contract: Any, checks: Sequence[tuple[str, str]]) -> frozenset[str]:
     """The tools whose steps a proof records, not runs, where nothing here can run them: each one the contract
     declares `world_free` (it touches no table of the world and no service), when no step of the case takes a value
-    from its result and no check of the case reads any call's result. Anything else stays assumed."""
-    free = {tool.name for tool in getattr(contract, "tools", None) or () if getattr(tool, "world_free", False)}
+    from its result and no check of the case reads any call's result. Anything else stays assumed. A tool the contract
+    also maps to tables it reads or changes touches the world, whatever `world_free` says, so it is never recorded."""
+    free = {
+        tool.name
+        for tool in getattr(contract, "tools", None) or ()
+        if getattr(tool, "world_free", False)
+        and not getattr(tool, "tables_read", None)
+        and not getattr(tool, "tables_changed", None)
+    }
     if not free or any(_reads_results(source) for _, source in checks):
         return frozenset()
     steps = [
@@ -787,6 +794,12 @@ def play_reference_step(world: GeneratedWorld, step: object) -> Call:
             refused=effect.refused,
             at=effect.at,
         )
+    elif (refused := record_refusal(world, name, arguments)) is not None:
+        # Nothing here runs the tool, but the contract records that its service refuses this record (a fault the
+        # record carries in the agent's own data): answered as the service answers it live, never assumed to succeed.
+        # The step was decided here, so it is not counted among the assumed ones.
+        world.answered_by_record = [*getattr(world, "answered_by_record", ()), step]
+        semantic = refused
     else:
         # Reaching here means the tool is a declared runtime tool with nothing bound to call.
         # Two very different situations arrive at the same place: a local orchestration action
@@ -911,9 +924,11 @@ def run_steps(
             if not call.ok and not unrun:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
             acting.act_on(step)
+        answered = getattr(world, "answered_by_record", ())
+        played = scenario.solution if steps is None else steps
         assumed = [
             tool
-            for tool in assumed_tools(world, scenario.solution if steps is None else steps)
+            for tool in assumed_tools(world, [one for one in played if not any(one is it for it in answered)])
             if tool not in world.recorded
         ]
         if assumed:

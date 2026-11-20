@@ -114,6 +114,19 @@ def test_a_step_that_takes_a_value_from_its_result_keeps_it_assumed():
     assert module.recordable_tools(_case(), contract, [("remembers_destination", REMEMBERS_SEATTLE)]) == {"memorize"}
 
 
+def test_a_tool_mapped_to_world_tables_is_never_recorded_whatever_world_free_says():
+    from fi.alk.harness.contract import AgentContract, validate_contract
+
+    checks = [("remembers_destination", REMEMBERS_SEATTLE)]
+    reads = ToolSpec(name="memorize", world_free=True, tables_read=["orders"])
+    writes = ToolSpec(name="memorize", world_free=True, tables_changed=["refunds"])
+    assert module.recordable_tools(_case(), SimpleNamespace(tools=[reads]), checks) == frozenset()
+    assert module.recordable_tools(_case(), SimpleNamespace(tools=[writes]), checks) == frozenset()
+    problems = validate_contract(AgentContract(agent="shop", tools=[reads]))
+    assert "tool[memorize]:world-free-but-touches-tables:orders" in " ".join(problems)
+    assert not any("world-free" in one for one in validate_contract(AgentContract(agent="shop", tools=[writes.model_copy(update={"world_free": False})])))
+
+
 def test_the_live_proof_records_the_same_step_and_reports_it(tmp_path, monkeypatch):
     from fi.alk.harness import live_proof
     from fi.alk.harness.world.snapshot import restore
