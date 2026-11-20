@@ -54,7 +54,14 @@ from .leaks import leaks
 from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
 from .scenario import Scenario
 from .understand import load
-from .world.runtime import REQUEST_NOT_ACCEPTED, Call, GeneratedWorld, as_gone_through, record_refusal
+from .world.runtime import (
+    REQUEST_NOT_ACCEPTED,
+    Call,
+    GeneratedWorld,
+    as_gone_through,
+    as_refused,
+    record_refusal,
+)
 from .world.snapshot import read_manifest, restore, source_state
 from .world_door import fault_numbered, fault_slot, faults_named, route_action, routed_faults
 
@@ -602,21 +609,27 @@ def inconclusive_on_assumed(
     failed: Collection[str],
 ) -> list[str]:
     """Of the `failed` checks, those that failed only because an `assumed` step's outcome is unknown: each holds when
-    those steps are read as gone through. No evidence either way, so the case is kept as written and proved live,
-    never refused for it. A check that fails even then is the reference's own failure."""
+    those steps are read as gone through, or as refused by the tool (a failure-path reference). No evidence either
+    way, so the case is kept as written and proved live, never refused for it. A check that fails under both readings
+    is the reference's own failure."""
     if not assumed or not failed:
         return []
     held_calls = list(getattr(world, "calls", []))
-    world.calls = as_gone_through(held_calls, assumed)
+    found: set[str] = set()
     try:
-        through = as_gone_through(calls, assumed)
-        return sorted(
-            name
-            for name, source in checks
-            if name in failed and run_check(source, world, through, name=name, reference=reference).held
-        )
+        for reading in (as_gone_through, as_refused):
+            world.calls = reading(held_calls, assumed)
+            read = reading(calls, assumed)
+            found |= {
+                name
+                for name, source in checks
+                if name in failed
+                and name not in found
+                and run_check(source, world, read, name=name, reference=reference).held
+            }
     finally:
         world.calls = held_calls
+    return sorted(found)
 
 
 def check_evidence(source: str) -> list[str]:
