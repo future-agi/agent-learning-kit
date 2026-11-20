@@ -2279,7 +2279,9 @@ def door_outcome(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) 
 
 def _tools_behind_the_proxy(plan: EnvironmentPlanV2, contract_body: dict[str, Any]) -> dict[str, Any]:
     """The contract as the trial reads it: a tool whose code calls a route of the shipped tool service runs, once that
-    service is fronted, through the proxy, so it is the service's tool; one calling any other host stays the agent's."""
+    service is fronted, through the proxy, so it is the service's tool; one calling any other host stays the agent's.
+    The same for a tool recorded `unreachable` (an object the kit cannot call, such as the OpenAI Agents SDK's
+    `@function_tool`): what it does is the service route it calls, which the proxy fronts."""
     if not any(process.name == "tool-proxy" for process in plan.processes):
         return contract_body
     entries = contract_body.get("tool_entrypoints") or []
@@ -2288,7 +2290,7 @@ def _tools_behind_the_proxy(plan: EnvironmentPlanV2, contract_body: dict[str, An
         {**{key: value for key, value in entry.items() if key != "door_unreached"}, "mode": "service",
          "service": "tools-api"}
         if isinstance(entry, dict)
-        and entry.get("mode") in ("import", "construct")
+        and entry.get("mode") in ("import", "construct", "unreachable")
         and _calls_the_tool_service(str(entry.get("endpoint") or ""))
         else entry
         for entry in entries
