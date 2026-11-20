@@ -54,7 +54,7 @@ from .leaks import leaks
 from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
 from .scenario import Scenario
 from .understand import load
-from .world.runtime import REQUEST_NOT_ACCEPTED, Call, GeneratedWorld, record_refusal
+from .world.runtime import REQUEST_NOT_ACCEPTED, Call, GeneratedWorld, as_gone_through, record_refusal
 from .world.snapshot import read_manifest, restore, source_state
 from .world_door import fault_numbered, fault_slot, faults_named, route_action, routed_faults
 
@@ -593,6 +593,32 @@ def excused_by_assumed_steps(proof: Proof) -> list[str]:
     )
 
 
+def inconclusive_on_assumed(
+    checks: Sequence[tuple[str, str]],
+    world: Any,
+    calls: Sequence[Call],
+    reference: Any,
+    assumed: Collection[str],
+    failed: Collection[str],
+) -> list[str]:
+    """Of the `failed` checks, those that failed only because an `assumed` step's outcome is unknown: each holds when
+    those steps are read as gone through. No evidence either way, so the case is kept as written and proved live,
+    never refused for it. A check that fails even then is the reference's own failure."""
+    if not assumed or not failed:
+        return []
+    held_calls = list(getattr(world, "calls", []))
+    world.calls = as_gone_through(held_calls, assumed)
+    try:
+        through = as_gone_through(calls, assumed)
+        return sorted(
+            name
+            for name, source in checks
+            if name in failed and run_check(source, world, through, name=name, reference=reference).held
+        )
+    finally:
+        world.calls = held_calls
+
+
 def check_evidence(source: str) -> list[str]:
     """What a check's source reads: "tool_calls" if it uses its `calls` argument, "world_state" if it
     uses `world`. An unparsable check reads nothing."""
@@ -658,21 +684,26 @@ def executes(world: GeneratedWorld, tool: str) -> bool:
 RECORDED_NOT_RUN = "recorded, not run (no world effect)"
 
 
-def record_unrun_step(world: Any, step: object) -> Call:
-    """Record a step of a tool that touches no world as the call the agent makes, with its arguments and no result,
-    without running it: what a check of the calls reads, and nothing a check of the world could. Listed in
-    `world.recorded`."""
-    tool = str(getattr(step, "tool", "") or "")
-    # Never run, so nothing says it went through or was turned down: no check of success can pass on it.
-    call = Call(
-        name=tool,
-        arguments=dict(getattr(step, "arguments", {}) or {}),
+def not_run(name: str, arguments: Mapping[str, Any]) -> Call:
+    """A call made without running, so nothing says it went through or was turned down: no check of success can
+    pass on it, and none of refusal either."""
+    return Call(
+        name=name,
+        arguments=dict(arguments),
         result=None,
         ok=None,  # type: ignore[arg-type]
         refused=None,  # type: ignore[arg-type]
         refusal_code=None,  # type: ignore[arg-type]
         error=None,  # type: ignore[arg-type]
     )
+
+
+def record_unrun_step(world: Any, step: object) -> Call:
+    """Record a step of a tool that touches no world as the call the agent makes, with its arguments and no result,
+    without running it: what a check of the calls reads, and nothing a check of the world could. Listed in
+    `world.recorded`."""
+    tool = str(getattr(step, "tool", "") or "")
+    call = not_run(tool, dict(getattr(step, "arguments", {}) or {}))
     record = getattr(world, "_record", None)
     call = record(call) if callable(record) else (world.calls.append(call) or call)
     world.recorded = sorted({*getattr(world, "recorded", ()), tool})
@@ -776,7 +807,7 @@ def play_reference_step(world: GeneratedWorld, step: object) -> Call:
             # conversation. The step never ran as the agent runs it, so it is recorded unrun, not refused.
             logger.warning("reference step assumed rather than executed: tool=%s reason=request not accepted", name)
             world.not_replayed = {*getattr(world, "not_replayed", ()), name}
-            world.calls.append(Call(name=name, arguments=arguments))
+            world.calls.append(not_run(name, arguments))
             return world.calls[-1]
         semantic = Call(
             name=name,
@@ -791,7 +822,7 @@ def play_reference_step(world: GeneratedWorld, step: object) -> Call:
         # Nothing here runs the tool, but the contract records that its service refuses this record (a fault the
         # record carries in the agent's own data): answered as the service answers it live, never assumed to succeed.
         # The step was decided here, so it is not counted among the assumed ones.
-        world.answered_by_record = [*getattr(world, "answered_by_record", ()), step]
+        world.answered_by_record.append(step)
         semantic = refused
     else:
         # Reaching here means the tool is a declared runtime tool with nothing bound to call.
@@ -800,12 +831,12 @@ def play_reference_step(world: GeneratedWorld, step: object) -> Call:
         # authoring so no endpoint exists yet. The second cannot be proved, and recording it as
         # a pass is what lets a scenario be kept on a solution nothing ever executed. Say so.
         logger.warning(
-            "reference step assumed rather than executed: tool=%s reason=%s. Its result is "
-            "recorded ok with no call made, so this step proves nothing about the world.",
+            "reference step assumed rather than executed: tool=%s reason=%s. It is recorded with no "
+            "result and neither ok nor refused, so this step proves nothing about the world.",
             name,
             "no endpoint bound" if not endpoint else "no forwarder on the world",
         )
-        semantic = Call(name=name, arguments=arguments)
+        semantic = not_run(name, arguments)
     world.calls.append(semantic)
     return semantic
 
@@ -883,6 +914,7 @@ def run_steps(
     tool that nothing here runs is recorded as made, not run, and listed in `world.recorded`, never as executed. The
     caller closes the world."""
     world, _applied, _ready = prepared(scenario, world_root)
+    world.answered_by_record = []
     refused: list[str] = []
     assumed: list[str] = []
     by_actors: dict[int, str] = {}
@@ -914,10 +946,10 @@ def run_steps(
                     Call(name=str(step.tool), arguments=dict(step.arguments or {}), ok=False, error=reason)
                 )
                 world.faulted.append(f"{call.name}({step.arguments}): {mode}")
-            if not call.ok and not unrun:
+            if call.ok is False and not unrun:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
             acting.act_on(step)
-        answered = getattr(world, "answered_by_record", ())
+        answered = world.answered_by_record
         played = scenario.solution if steps is None else steps
         assumed = [
             tool
@@ -1576,6 +1608,14 @@ def prove(
         passing = {one.name for one in proof.with_solution if one.held}
         held = [(name, source) for name, source in checks if name in passing]
         proof.excused = excused_by_assumed_steps(proof)
+        proof.excused += inconclusive_on_assumed(
+            checks,
+            world,
+            calls,
+            reference,
+            assumed,
+            {one.name for one in proof.with_solution if not one.held and not one.broken} - set(proof.excused),
+        )
         right_state = _end_state(world)
         played = [call.name for call in calls if call.ok and not call.refused]
         others = len(world.calls) - len(calls) if right_state is not None else 0

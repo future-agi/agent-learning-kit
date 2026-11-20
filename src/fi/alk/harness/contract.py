@@ -123,7 +123,7 @@ _ALIASES = {
 class RecordRefusal(BaseModel):
     """One refusal a tool makes because of what a record holds, read from the tool's code or the service behind it:
     the tool answers HTTP `status` when the record of `table` whose `column` equals the call's `argument` has `field`
-    set to one of `values` (to any non-empty value when `values` is empty). The world a scenario is proved on gives
+    set to one of `values` (at least one). The world a scenario is proved on gives
     the same answer, so a reference that expects such a record to go through is refused there as it is live."""
 
     status: int
@@ -1423,7 +1423,7 @@ class AgentContract(BaseModel):
                             "refused by its record",
                             "; ".join(
                                 f"{one.status} when the {one.table} record whose {one.column} is {one.argument} has "
-                                f"{one.field} " + (f"in {json.dumps(one.values)}" if one.values else "set")
+                                f"{one.field} in {json.dumps(one.values)}"
                                 for one in tool.refusals
                             ),
                         ),
@@ -2049,6 +2049,8 @@ def validate_contract(contract: AgentContract) -> list[str]:
                 problems.append(f"tool[{tool.name}]:refusal-on-unknown-arg:{refusal.argument}")
             if not (refusal.table.strip() and refusal.column.strip() and refusal.field.strip()):
                 problems.append(f"tool[{tool.name}]:refusal-needs-table-column-and-field")
+            if not refusal.values:
+                problems.append(f"tool[{tool.name}]:refusal-needs-the-values-that-refuse")
             if not 400 <= refusal.status < 600:
                 problems.append(f"tool[{tool.name}]:refusal-status-not-an-http-error:{refusal.status}")
     # Conversational agents may expose no tools. Zero-argument tools are also legitimate;

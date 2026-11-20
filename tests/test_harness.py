@@ -3055,7 +3055,8 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
     finally:
         world.close()
 
-    assert call.ok is True
+    # Never run, so neither ok nor refused: a check of success cannot pass on it.
+    assert call.ok is None and call.refused is None
     assert call.result is None
     assert "assumed rather than executed" in caplog.text
     assert "lookup_rider_by_phone" in caplog.text
@@ -3141,7 +3142,7 @@ def test_source_reference_step_records_a_purely_local_agent_tool():
             world,
             Step(tool="confirm_address", arguments={"confirmed": True}),
         )
-        assert call.ok
+        assert call.ok is None
         assert world.calls == [call]
         assert call.arguments == {"confirmed": True}
     finally:

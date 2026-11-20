@@ -13,7 +13,7 @@ from .checks import Outcome, committed_writes, run_check, same_value
 from .judge import judge_sub_goal
 from .proof_records import ControlResult
 from .scenario import NegativeControl, Scenario
-from .world.runtime import Call, GeneratedWorld, settled
+from .world.runtime import Call, GeneratedWorld, as_gone_through, settled
 from .world_door import named_alike
 
 # Plays `steps` (else the scenario's solution) on a world set up for the scenario: (world, calls, refused, assumed).
@@ -40,6 +40,9 @@ def play_controls(
             continue
         world, calls, _refused, assumed = run(scenario, world_root, with_solution=True, steps=control.steps)
         try:
+            # A control's assumed step is read as gone through: an unknown result is no evidence that it fails.
+            calls = as_gone_through(calls, assumed)
+            world.calls = as_gone_through(world.calls, assumed)
             outcomes = [run_check(source, world, calls, name=name, reference=reference) for name, source in checks]
             changed = writes_beyond(world, reference)
         finally:

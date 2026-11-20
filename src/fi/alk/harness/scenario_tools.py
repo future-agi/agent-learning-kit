@@ -2650,13 +2650,13 @@ def scenario_tools(
                 except Exception as invalid:
                     return _err(f"invalid reference call: {invalid}"[:600])
                 call = play_reference_step(world, reference_step)
-                if not executes(world, call.name):
+                if call.refused:
+                    lines.append(f"{call.name}: refused — {call.error}")
+                elif not executes(world, call.name):
                     lines.append(
                         f"{call.name}: NOT RUN, it runs only inside the agent, so what it "
                         "returns and changes is unknown until a real call"
                     )
-                elif call.refused:
-                    lines.append(f"{call.name}: refused — {call.error}")
                 elif not call.ok:
                     lines.append(f"{call.name}: CRASHED — {call.error}")
                 else:
