@@ -10480,7 +10480,7 @@ def test_a_suite_keeps_its_share_of_scenarios_with_a_call_actor_unless_the_perso
     alone = [SimpleNamespace(name=f"p{i}", actors=[]) for i in range(8)]
     plain = {"name": "next"}
     # 9 written of 10, one with an actor; a 20% share needs 2, so the last one must include one.
-    refused = _call_actors_short(plain, [with_one, *alone], 10, 0.2, ["near"])
+    refused = _call_actors_short(plain, [with_one, *alone], 10, 0.2, ["near"], {"near"})
     assert (
         "1 of the 10 scenarios" in refused
         and "at least 2 must" in refused
@@ -10493,14 +10493,15 @@ def test_a_suite_keeps_its_share_of_scenarios_with_a_call_actor_unless_the_perso
             10,
             0.2,
             ["near"],
+            {"near"},
         )
         == ""
     )
     # Room left: the share can still be met by the scenarios still to come.
-    assert _call_actors_short(plain, [with_one, *alone[:3]], 10, 0.2, ["near"]) == ""
+    assert _call_actors_short(plain, [with_one, *alone[:3]], 10, 0.2, ["near"], {"near"}) == ""
     # None asked for, or nothing this agent can be reached by: no share to keep.
-    assert _call_actors_short(plain, [with_one, *alone], 10, 0.0, ["near"]) == ""
-    assert _call_actors_short(plain, [with_one, *alone], 10, 0.2, []) == ""
+    assert _call_actors_short(plain, [with_one, *alone], 10, 0.0, ["near"], {"near"}) == ""
+    assert _call_actors_short(plain, [with_one, *alone], 10, 0.2, [], {"near"}) == ""
 
 
 def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
