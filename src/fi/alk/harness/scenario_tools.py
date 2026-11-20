@@ -1883,10 +1883,21 @@ def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[
 
     if store.get("loader_module") or store.get("loaded_by"):
         # Refused only when the contract records that the loader runs once, at start; otherwise a note.
-        late = _late_record_changes(scenario)
-        if not late or str(store.get("loads") or "").strip().lower() != "start":
+        if str(store.get("loads") or "").strip().lower() != "start":
             return []
-        return [f"actors: {', '.join(late)} {_LOADED_ONCE}"]
+        found = []
+        setup = scenario.setup_code or ""
+        if _CREATES_A_RECORD.search(setup) or _ONLY_TOUCHES_EXISTING.search(setup):
+            # A trial's setup writes its world after the agent has started, as the run and the proof both play it.
+            found.append(
+                "this agent loads its data once, when it starts, and a trial's setup_code runs after that, so a record "
+                "it adds or changes is one the agent never sees and every run fails it for something the scenario "
+                "invented. Use only the records the world already holds, as they are, with an empty setup_code"
+            )
+        late = _late_record_changes(scenario)
+        if late:
+            found.append(f"actors: {', '.join(late)} {_LOADED_ONCE}")
+        return found
 
     out = []
     setup = scenario.setup_code or ""
