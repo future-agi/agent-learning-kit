@@ -471,6 +471,12 @@ def describe_call(
         f"{_reference_solution(scenario)}"
         f"Actions the agent took:\n{_dump_calls(calls)}\n\n"
         + (
+            "Each action's `at` and each transcript turn's [at ...] are the same clock, in seconds: a claim the "
+            "agent made about a tool's result before that tool was called is not supported by it.\n\n"
+            if any(getattr(call, "at", 0) for call in calls)
+            else ""
+        )
+        + (
             ""
             if calls
             else "No actions were recorded, so only the conversation is observable: judge what the "
@@ -638,7 +644,7 @@ def _others_present(messages: Sequence[Any]) -> str:
 def _transcript(messages: Sequence[Any]) -> str:
     """The turns as spoken, oldest first. A long call keeps its tail, where a readback would be."""
     body = "\n".join(
-        f"{_speaker(m)}: {str(m.get('content') or '').strip()}"
+        (f"[at {float(m['at']):.1f}] " if m.get("at") else "") + f"{_speaker(m)}: {str(m.get('content') or '').strip()}"
         for m in messages
         if isinstance(m, dict)
     )
@@ -731,6 +737,7 @@ def _recording(path: str) -> dict[str, Any]:
 
 
 def _call(call: Any) -> dict[str, Any]:
+    at = getattr(call, "at", 0.0) or 0.0
     return {
         "name": getattr(call, "name", ""),
         "arguments": getattr(call, "arguments", None) or {},
@@ -738,7 +745,9 @@ def _call(call: Any) -> dict[str, Any]:
         "ok": bool(getattr(call, "ok", False)),
         "refused": bool(getattr(call, "refused", False)),
         "error": str(getattr(call, "error", "") or ""),
+        **({"at": round(float(at), 1)} if at else {}),
     }
+
 
 
 def _say(text: str, *, error: bool = False) -> dict[str, Any]:
