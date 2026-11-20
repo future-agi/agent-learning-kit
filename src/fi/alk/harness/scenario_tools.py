@@ -2393,7 +2393,7 @@ def accept_scenario(
         if proof is None or not proof.assumed
         else "\nNot proved here (these tools run on the agent's service: "
         + ", ".join(proof.assumed)
-        + "); it will be proved live."
+        + "); it is proved live when the environment's live proof runs."
         if live
         else "\nNOT PROVED: "
         + f"{len(proof.assumed)} of {len(scenario.solution)} solution steps were recorded without "
@@ -2418,7 +2418,7 @@ def accept_scenario(
         unrun = sorted({tool for one in proof.controls for tool in one.get("assumed") or []})
         unproved += (
             f"\nIts negative controls are not played here either (these tools run on the agent's service: "
-            f"{', '.join(unrun)}); they will be played live."
+            f"{', '.join(unrun)}); they are played when the environment's live proof runs."
             if unrun and set(unrun) <= (service_tools or set())
             else "\nNOT PROVED: no negative control could run here, because these tools have no endpoint: "
             + ", ".join(unrun)
@@ -2447,8 +2447,8 @@ def accept_scenario(
         proof_summary = proof.why()
     elif proof.assumed:
         proof_summary = (
-            "Local checks passed with assumed tool results; the reference solution is proved live, against the "
-            "agent's service."
+            "Local checks passed with assumed tool results; the reference solution is proved against the agent's "
+            "service when the environment's live proof runs."
             if live
             else "Local checks passed with assumed tool results; the reference solution remains unverified."
         )
