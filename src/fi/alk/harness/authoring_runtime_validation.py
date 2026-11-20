@@ -687,6 +687,35 @@ class RuntimeValidationError(RuntimeError):
         super().__init__(detail)
 
 
+# The largest log the platform keeps from a failed attempt (`process_diagnostics.upload_process_logs`).
+_KEPT_LOG_BYTES = 32768
+
+
+def keep_rejected_certification(process_logs: Path, contract: AgentContract, rejected: Mapping[str, str]) -> None:
+    """Write each rejected tool's reason and the parts of the contract certification read (its tools, their
+    entrypoints, its workers and the runtime's tool service) as a log beside the process logs, which the platform
+    keeps with a failed attempt; bounded to what it keeps, credentials masked. Never raises: the failure is reported
+    either way."""
+    try:
+        record = {
+            "rejected": dict(sorted(rejected.items())),
+            "tools": [tool.name for tool in contract.tools],
+            "tool_entrypoints": [entry.model_dump(mode="json") for entry in contract.tool_entrypoints],
+            "workers": [worker.model_dump(mode="json") for worker in contract.workers],
+            "tool_service": (
+                contract.runtime.tool_service.model_dump(mode="json")
+                if contract.runtime is not None and contract.runtime.tool_service is not None
+                else None
+            ),
+        }
+        text = outbound.redact_outbound_text(json.dumps(record, indent=1, default=str))
+        body = text.encode("utf-8")[: _KEPT_LOG_BYTES - 128]
+        process_logs.mkdir(parents=True, exist_ok=True)
+        (process_logs / "tool-certification-rejected.log").write_bytes(body)
+    except Exception as exc:  # noqa: BLE001 - the error message still names each tool and its reason
+        print(f"runtime validation: rejected certification not kept: {type(exc).__name__}", flush=True)
+
+
 class _GeneratedWorldActionAdapter:
     """Expose the generated world through the generic action-probe boundary."""
 
@@ -1049,6 +1078,9 @@ async def validate_once(
                         )
                         for name in sorted(rejected)
                     )
+                    # The contract it was certified from, with each tool's reason, kept among the process logs the
+                    # platform stores with a failed attempt's diagnostics.
+                    keep_rejected_certification(authoring / "generic-harness" / "process-logs", contract, rejected)
                     # Each tool with its reason, in the message the platform keeps: the diagnostics alone are not stored.
                     raise RuntimeValidationError(
                         "environment",
