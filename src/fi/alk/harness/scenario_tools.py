@@ -2181,6 +2181,7 @@ def accept_scenario(
     # Whether a case matching a removed one is meant as a new case: the submission's word, never a field of the case.
     payload = dict(payload)
     as_new = bool(payload.pop("as_new", False))
+    payload.pop("as_it_was", None)
     try:
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
@@ -2328,9 +2329,10 @@ def accept_scenario(
     if lost and readable and previous is None and not as_new:
         # Never a silent copy: a case the environment had comes back only as itself, or as new when asked.
         return _err(
-            f"Not kept. It matches the removed case {lost}. To restore that case with its history, read it with "
-            f"find_scenarios(removed: true) and submit it with scenario_key {lost!r} and restored_from "
-            f'{{"key": "{lost}"}}. Only if the person asked for a copy or a new case, submit it again with as_new '
+            f"Not kept. It matches the removed case {lost}. To restore it exactly as it was last saved, with its "
+            f'history, submit it with restored_from {{"key": "{lost}"}} and as_it_was true: the case comes back from '
+            "its removed record, whatever else is sent. To restore it with a change, read it with find_scenarios(removed: true) and submit it with "
+            f'scenario_key {lost!r} and restored_from {{"key": "{lost}"}}. Only if the person asked for a copy or a new case, submit it again with as_new '
             "true; it is then a new case with no history."
         )
     # Restored and already back (an edit of the restored case) is an ordinary edit of it.
@@ -2786,25 +2788,33 @@ def scenario_tools(
             if one.channel in channels
         ]
 
-    async def read_removed_case(args: dict[str, Any]) -> None:
-        """For a new case whose key the environment gave a case it no longer holds, read that removed case from the
-        platform, exactly by key, and keep it beside the suite, so the case is restored rather than copied."""
-        if removed_lookup is None or (args.get("restored_from") or {}).get("key"):
-            return
-        key = str(args.get("scenario_key") or "").strip() or scenario_slug(str(args.get("name") or ""))
-        if not key or key not in used or any(one.scenario_key == key for one in kept):
-            return
+    async def removed_record(key: str) -> dict[str, Any] | None:
+        """The removed case with this key as it was last saved: as read here before, else read from the platform
+        exactly by key and kept beside the suite. None when it cannot be read."""
         try:
             remembered = json.loads((Path(world_root) / REMOVED_CASES).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             remembered = {}
-        if isinstance(remembered, dict) and key in remembered:
-            return
+        if isinstance(remembered, dict) and isinstance(remembered.get(key), dict):
+            return remembered[key]
+        if removed_lookup is None:
+            return None
         try:
             rows = await removed_lookup(key)
-        except Exception:  # noqa: BLE001 - not read, the case is kept as new with the note, as before
+        except Exception:  # noqa: BLE001 - not read, so nothing is restored from it
+            return None
+        rows = [row for row in rows or [] if isinstance(row, dict) and row.get("scenario_key") == key]
+        remember_removed(world_root, rows)
+        return next((row["content"] for row in rows if isinstance(row.get("content"), dict)), None)
+
+    async def read_removed_case(args: dict[str, Any]) -> None:
+        """For a new case whose key the environment gave a case it no longer holds, read that removed case, so the
+        case is restored rather than copied."""
+        if (args.get("restored_from") or {}).get("key"):
             return
-        remember_removed(world_root, [row for row in rows or [] if isinstance(row, dict) and row.get("scenario_key") == key])
+        key = str(args.get("scenario_key") or "").strip() or scenario_slug(str(args.get("name") or ""))
+        if key and key in used and not any(one.scenario_key == key for one in kept):
+            await removed_record(key)
 
     def offered_parties() -> tuple[list[str], int, set[str]]:
         """What the environment supports bringing into a scenario besides the person, one line per kind, and how
@@ -3165,6 +3175,12 @@ def scenario_tools(
         "long it takes), so the agent has to hold the thread past its first reply.",
         schema(
             {
+                "as_it_was": {
+                    "type": "boolean",
+                    "description": "With restored_from naming a removed case: bring it back exactly as it was last "
+                    "saved, from its removed record: whatever else is sent is ignored, so the content is never copied "
+                    "by hand.",
+                },
                 "as_new": {
                     "type": "boolean",
                     "description": "Only when the person asked for a copy or a new case of one the environment had "
@@ -3423,7 +3439,18 @@ def scenario_tools(
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
         if not with_actors and (sent := actors_off_fields(args)):
             return _err(actors_off_refusal(sent))
-        await read_removed_case(args)
+        if args.get("as_it_was"):
+            # Restored exactly as last saved: the content is the removed record's, never a copy the model wrote.
+            key = str((args.get("restored_from") or {}).get("key") or args.get("scenario_key") or "").strip()
+            record = await removed_record(key) if key else None
+            if record is None:
+                return _err(
+                    f"Not kept. No removed case {key!r} could be read. Read it with find_scenarios(removed: true) "
+                    "and restore it from that row, with its scenario_key and restored_from."
+                )
+            args = {**record, "scenario_key": key, "restored_from": {"key": key}}
+        else:
+            await read_removed_case(args)
         if external_runtime_target and args.get("solution"):
             # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}
