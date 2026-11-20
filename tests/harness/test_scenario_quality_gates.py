@@ -132,8 +132,20 @@ def test_the_fault_gate_is_off_by_default_and_never_refuses_an_edit_that_keeps_t
     handlers, kept = _server(tmp_path, monkeypatch)
     grid = {**_grid(), "disposition": ["hurried", "payment_timeout"], "interaction": ["plain", "resumed"]}
 
-    stray = asyncio.run(handlers["aim_for"]({"count": 4, "axes": grid, "fault_levels": {"disposition": {"declined": []}}}))
+    stray_args = {"count": 4, "axes": grid, "fault_levels": {"disposition": {"declined": []}}}
+    ignored = asyncio.run(handlers["aim_for"](stray_args))
+    assert not ignored.get("is_error") and "so left out: disposition declined" in ignored["content"][0]["text"]
+    monkeypatch.setenv(FAULT_LEVEL_GATE, "1")
+    stray = asyncio.run(handlers["aim_for"](stray_args))
     assert stray.get("is_error") and "disposition declined" in stray["content"][0]["text"]
+    monkeypatch.delenv(FAULT_LEVEL_GATE)
+    unchecked = asyncio.run(handlers["aim_for"]({"count": 4, "axes": grid, "checked_levels": {"interaction": ["x"]}}))
+    assert not unchecked.get("is_error") and "interaction x" in unchecked["content"][0]["text"]
+    monkeypatch.setenv(CHECKED_LEVEL_GATE, "1")
+    assert asyncio.run(handlers["aim_for"]({"count": 4, "axes": grid, "checked_levels": {"interaction": ["x"]}}))[
+        "is_error"
+    ]
+    monkeypatch.delenv(CHECKED_LEVEL_GATE)
     said = asyncio.run(
         handlers["aim_for"](
             {"count": 4, "axes": grid, "fault_levels": FAULTS, "checked_levels": {"interaction": ["resumed"]}}
