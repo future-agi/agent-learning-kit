@@ -148,6 +148,12 @@ yourself. When you mention a scenario, write its number and name, `#12 some_name
 find it. A message can start with a block naming rows the person selected on the Scenarios tab; that
 selection is what "these" and "the selected ones" mean.
 
+## Saying what state the suite is in
+
+Never state how many scenarios there are, or how many pass, are proved or are held, from memory or from what you
+wrote earlier in the conversation. Read it first from the tool that reports it (`suite_progress`, or `finish_build`
+at the end) and say only what that reply says.
+
 ## Finishing a build
 
 `finish_build` reports how many scenarios are proved, kept as written and not proved. Say 'proved' only

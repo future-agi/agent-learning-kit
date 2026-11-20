@@ -396,6 +396,7 @@ def test_while_a_round_is_out_edits_and_drops_go_only_through_the_deal_that_wrot
 
 def test_a_round_is_dealt_by_default_once_more_is_left_than_one_writer_s_share(tmp_path, monkeypatch):
     monkeypatch.setenv("ALK_HARNESS_CASES_PER_WRITER", "4")
+    monkeypatch.setenv("ALK_HARNESS_DEAL_ABOVE", "4")
     handlers, kept = _server(tmp_path, monkeypatch, 20, _grid(), can_grow=True)
 
     # Nobody dealt yet: a new case with no deal is refused, before anything is proved.
@@ -444,6 +445,7 @@ def test_a_taken_name_is_refused_before_anything_costly_and_names_who_has_it(tmp
 
 def test_one_session_deals_a_round_and_writes_a_deal_itself(tmp_path, monkeypatch):
     monkeypatch.setenv("ALK_HARNESS_CASES_PER_WRITER", "4")
+    monkeypatch.setenv("ALK_HARNESS_DEAL_ABOVE", "4")
     handlers, kept = _server(tmp_path, monkeypatch, 20, _grid(), can_grow=True)
 
     refused = _text(asyncio.run(handlers["submit_scenario"](_case("alone", ("t1", "hurried")))))
@@ -461,6 +463,7 @@ def test_one_session_deals_a_round_and_writes_a_deal_itself(tmp_path, monkeypatc
 
 def test_deal_false_lets_one_session_write_without_rounds(tmp_path, monkeypatch):
     monkeypatch.setenv("ALK_HARNESS_CASES_PER_WRITER", "4")
+    monkeypatch.setenv("ALK_HARNESS_DEAL_ABOVE", "4")
     handlers, kept = _server(tmp_path, monkeypatch, 20, _grid(), can_grow=True)
 
     asyncio.run(handlers["suite_progress"]({"deal": False}))
@@ -473,3 +476,37 @@ def test_deal_false_lets_one_session_write_without_rounds(tmp_path, monkeypatch)
     assert "A round of writers is out" in _text(
         asyncio.run(handlers["submit_scenario"](_case("after", ("t1", "sceptical"))))
     )
+
+
+def test_below_the_deal_threshold_one_session_writes_unless_a_round_is_asked_for(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HARNESS_CASES_PER_WRITER", "4")
+    monkeypatch.setenv("ALK_HARNESS_DEAL_ABOVE", "30")
+    handlers, kept = _server(tmp_path, monkeypatch, 20, _grid(), can_grow=True)
+
+    assert "Deal d" not in _text(asyncio.run(handlers["suite_progress"]({})))
+    assert "kept" in _text(asyncio.run(handlers["submit_scenario"](_case("alone", ("t1", "hurried")))))
+    # The builder may still deal a round itself.
+    assert "Deal d" in _text(asyncio.run(handlers["suite_progress"]({"deal": True})))
+
+
+@pytest.mark.parametrize("given,expected", [("", 300), ("0", 300), ("-1", 300), ("many", 300), ("50", 50)])
+def test_the_deal_threshold_is_read_safely(monkeypatch, given, expected):
+    from fi.alk.harness.scenario_tools import deal_above
+
+    monkeypatch.setenv("ALK_HARNESS_DEAL_ABOVE", given)
+    assert deal_above() == expected
+
+
+def test_progress_reports_the_proof_counts_on_record(tmp_path, monkeypatch):
+    from fi.alk.harness import proofs as proofs_module
+    from fi.alk.harness.proofs import proof_key
+
+    handlers, kept = _server(tmp_path, monkeypatch, 12, _grid(), can_grow=True)
+    for name, mood in (("first", "hurried"), ("second", "confused")):
+        asyncio.run(handlers["submit_scenario"](_case(name, ("t1", mood))))
+    first = proof_key(next(one for one in kept if one.name == "first"))
+    proofs_module._save(tmp_path, {first: {"proved": True}})
+
+    said = _text(asyncio.run(handlers["suite_progress"]({})))
+
+    assert "2 of 12 written. Proofs on record: 1 proved, 0 kept as written, 1 not proved." in said
