@@ -2178,6 +2178,9 @@ def accept_scenario(
     removes every folder not in the writer's own list, so persisting here would delete whatever
     the others have proved. Those writers keep their work in ``kept`` and the caller saves once.
     """
+    # Whether a case matching a removed one is meant as a new case: the submission's word, never a field of the case.
+    payload = dict(payload)
+    as_new = bool(payload.pop("as_new", False))
     try:
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
@@ -2321,6 +2324,14 @@ def accept_scenario(
     lost = "" if restored else _removed_case_matching(world_root, scenario, named, kept, keys)
     if previous is not None and lost == previous.scenario_key:
         lost = ""
+    if lost and previous is None and not as_new:
+        # Never a silent copy: a case the environment had comes back only as itself, or as new when asked.
+        return _err(
+            f"Not kept. It matches the removed case {lost}. To restore that case with its history, read it with "
+            f"find_scenarios(removed: true) and submit it with scenario_key {lost!r} and restored_from "
+            f'{{"key": "{lost}"}}. Only if the person asked for a copy or a new case, submit it again with as_new '
+            "true; it is then a new case with no history."
+        )
     # Restored and already back (an edit of the restored case) is an ordinary edit of it.
     if previous is not None:
         scenario.scenario_key = previous.scenario_key
@@ -2484,7 +2495,7 @@ def accept_scenario(
     if lost:
         done += (
             (f". EDITED {scenario.scenario_key}, a case of its own" if previous is not None
-             else f". ADDED AS A NEW CASE under {scenario.scenario_key}")
+             else f". ADDED AS A NEW CASE under {scenario.scenario_key}, as asked")
             + f", NOT restored: it matches the removed case {lost}, and its history stays with that one. To restore "
             "that case with its history, drop this one, "
             f"read it with find_scenarios(removed: true) and submit it with scenario_key {lost!r} and restored_from "
@@ -3128,6 +3139,12 @@ def scenario_tools(
         "long it takes), so the agent has to hold the thread past its first reply.",
         schema(
             {
+                "as_new": {
+                    "type": "boolean",
+                    "description": "Only when the person asked for a copy or a new case of one the environment had "
+                    "and removed: keep it as a new case with no history. Without it, a case matching a removed one "
+                    "is not kept, and the reply gives the restored_from call that brings that one back.",
+                },
                 "name": {
                     "type": "string",
                     "description": "Short identifier, lower case with hyphens or underscores. "

@@ -207,7 +207,9 @@ what the gates check. Then:
   - **"Make a copy of X" / "something like X"**: a new case under a new name, no `scenario_key`, no
     `restored_from`. No question.
   Only a case carrying `restored_from` takes a key the environment gave before; anything else gets a
-  new one, so a copy never inherits another case's history.
+  new one, so a copy never inherits another case's history. A submission that matches a removed case
+  is not kept unless it carries `as_new: true`, which you set only when the person asked for a copy or
+  a new case.
   Say a case was restored only when the submit reply says "Restored". A reply that says "ADDED AS A NEW
   CASE ... NOT restored" means it came back as a new case with no history: follow what it says, or tell the
   person it is new.

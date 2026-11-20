@@ -25,6 +25,30 @@ def load_proofs(destination: Path) -> dict[str, ProofEntry]:
     return value if isinstance(value, dict) else {}
 
 
+# The suite's proofs as the validation wrote them (the live runtime's gates applied), which the platform records.
+VALIDATED_PROOFS = "scenario-proofs.json"
+
+
+def load_shown_proofs(destination: Path) -> dict[str, ProofEntry]:
+    """Each case's proof as the platform shows it: the validation's record (`VALIDATED_PROOFS`), unless a later proof
+    of the case was made here since (a case written or edited after it), compared by `proved_at`."""
+    mine = load_proofs(destination)
+    try:
+        validated = json.loads((Path(destination) / VALIDATED_PROOFS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return mine
+    if not isinstance(validated, dict):
+        return mine
+    shown = dict(mine)
+    for key, entry in validated.items():
+        here = mine.get(key)
+        if not isinstance(entry, dict):
+            continue
+        if here is None or str(entry.get("proved_at") or "") >= str(here.get("proved_at") or ""):
+            shown[key] = entry
+    return shown
+
+
 def _save(destination: Path, proofs: Mapping[str, ProofEntry]) -> None:
     write_json_atomic(Path(destination) / PROOFS, proofs)
 

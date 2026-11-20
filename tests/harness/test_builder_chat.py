@@ -103,7 +103,7 @@ class EditingConversation(BuilderConversation):
         on_event(RuntimeEvent(kind="text", text="Added it.", detail={"stage": "builder"}))
 
 
-def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch) -> HostedChatRuntime:
+def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch, *, closing: bool = False) -> HostedChatRuntime:
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
     monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     (tmp_path / "scenarios" / "one").mkdir(parents=True, exist_ok=True)
@@ -119,6 +119,9 @@ def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch) -> HostedChatRu
         source=tmp_path,
         job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
     )
+    if not closing:
+        # The closing status line has its own tests; these read the reply the model wrote.
+        runtime._closing_status = lambda: ""  # type: ignore[method-assign]
     return runtime
 
 
@@ -197,7 +200,7 @@ def test_a_change_to_the_cast_alone_is_saved(tmp_path, monkeypatch):
 
 def test_the_closing_status_line_says_what_is_saved_and_never_guesses(tmp_path, monkeypatch):
     client = BuilderClient()
-    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
     runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root, skip=None: None)
     assert runtime._saved_state() == "saved"
@@ -219,10 +222,14 @@ def test_the_closing_status_line_says_what_is_saved_and_never_guesses(tmp_path, 
 def test_a_suite_with_every_scenario_dropped_still_closes_with_its_status(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch, closing=True)
     runtime._mint_published()
     runtime.conversation = SimpleNamespace(stage=SimpleNamespace(kept=[]))
     assert runtime._closing_status().startswith("Status: 0 scenarios")
+    # With no suite on disk either, there is nothing to report yet.
+    import shutil
+
+    shutil.rmtree(tmp_path / "scenarios")
     runtime.conversation = SimpleNamespace(stage=SimpleNamespace())
     assert runtime._closing_status() == ""
 
@@ -233,6 +240,59 @@ def _publish_with_failed(client):
         return {"applied": True, "scenario_count": 1, "added": [], "removed": [], "changed": []}
 
     return publish
+
+
+def test_the_reply_the_platform_stores_ends_with_the_status_line_even_after_only_tool_calls(tmp_path, monkeypatch):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import write_scenarios
+    from fi.alk.harness.catalogue import Catalogue
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
+    import shutil
+
+    shutil.rmtree(tmp_path / "scenarios")
+    write_scenarios([Scenario(name="refund_ok"), Scenario(name="refund_late")], tmp_path, Catalogue(sub_goals=[]))
+    (tmp_path / ".futureagi-published.json").unlink()
+    runtime._mint_published()
+
+    class ToolsOnly(EditingConversation):
+        async def say(self, message, on_event=None):
+            on_event(RuntimeEvent(kind="tool", tool="mcp__x__find_scenarios", detail={"call_id": "f"}))
+
+    # The builder's session has not opened a stage that lists the suite: the line is read from the files.
+    runtime.conversation = ToolsOnly(tmp_path, writes=False)
+    _turn(runtime, {"content": "is everything saved?"})
+
+    assert _reply(client) == (
+        "Status: 2 scenarios (0 proved, 0 kept as written, 2 not proved); every change is saved to the environment."
+    )
+
+
+def test_a_status_line_that_cannot_be_read_never_costs_the_reply(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
+    runtime._mint_published()
+
+    def unreadable():
+        raise OSError("a file vanished mid-read")
+
+    runtime._closing_status = unreadable  # type: ignore[method-assign]
+    runtime.conversation = EditingConversation(tmp_path, writes=False)
+    _turn(runtime, {"content": "anything"})
+    assert _reply(client) == "Added it."
+
+
+def test_a_working_copy_carried_on_from_earlier_turns_is_never_minted_as_saved(tmp_path, monkeypatch):
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch, closing=True)
+    (tmp_path / ".futureagi-published.json").unlink()
+    (tmp_path / ".futureagi-conversation.json").write_text("{}", encoding="utf-8")
+    runtime._mint_published()
+    assert runtime._saved_state() == "unknown"
+    # A fresh open from the environment, with no turn run here yet, is what the environment holds.
+    (tmp_path / ".futureagi-conversation.json").unlink()
+    runtime._mint_published()
+    assert runtime._saved_state() == "saved"
 
 
 def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
@@ -5271,6 +5331,33 @@ def test_a_rule_source_is_a_file_and_its_line_together(tmp_path):
         source_quote="Gift cards are never sold.",
     )
     assert done and contract.rule_source("Never sell gift cards.").quote == "Gift cards are never sold."
+
+
+def test_a_rule_source_quote_longer_than_a_line_is_refused_before_anything_changes(tmp_path):
+    from fi.alk.harness.amend import add_rule
+
+    root, contract = _cited_suite(tmp_path)
+    before = list(contract.hard_constraints)
+    done, said = add_rule(
+        contract, root, rule="Never sell gift cards.", why="asked", source_file="knowledge/p.md", source_quote="x" * 501
+    )
+    assert not done and "at most 500 characters" in said and contract.hard_constraints == before
+
+
+def test_a_case_cites_a_rule_s_line_only_by_quoting_enough_of_it():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.amend import _cites_line
+    from fi.alk.harness.contract import RuleSource
+
+    written = RuleSource(rule="r", file="knowledge/refund-policy.md", quote="Refunds are accepted within 30 days.")
+
+    def case(quote):
+        return SimpleNamespace(sources=[SimpleNamespace(kind="file", ref="file:knowledge/refund-policy.md", quote=quote)])
+
+    assert not _cites_line(case("days"), written)
+    assert _cites_line(case("accepted within 30 days"), written)
+    assert _cites_line(case("Policy: Refunds are accepted within 30 days. Exchanges any time."), written)
 
 
 def test_a_contract_with_no_rule_sources_saves_as_before():

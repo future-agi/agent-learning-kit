@@ -33,7 +33,7 @@ from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, wor
 from .scenarios import writer_worker
 from .session import Stage
 from .tools import schema
-from .proofs import load_proofs, proof_key, record_proof, status_lines
+from .proofs import load_shown_proofs, proof_key, record_proof, status_lines
 
 BUILDER = "builder"
 KNOWLEDGE_SERVER = "knowledge"
@@ -228,7 +228,8 @@ def suite_server(
 
     @tool(
         "scenario_status",
-        "Each scenario's state as its latest proof records it, with the reason in the proof's own words, and the "
+        "Each scenario's state as its latest proof records it (the validation's, as the Scenarios tab shows it, or "
+        "one made here since), with the reason in the proof's own words, and the "
         "suite's counts first: proved, kept as written, not proved. Call it before you say anything about how many "
         "scenarios are proved, held or passing, or why one is in the state it is, and quote what it returns. The "
         "Scenarios tab shows a not-proved case as Draft and a kept-as-written one as Kept as written; it can also "
@@ -245,7 +246,7 @@ def suite_server(
     )
     async def scenario_status(args: dict[str, Any]) -> dict[str, Any]:
         lines = status_lines(
-            load_proofs(out),
+            load_shown_proofs(out),
             kept,
             names=[str(one) for one in args.get("names") or []],
             state=str(args.get("state") or ""),
