@@ -1840,8 +1840,36 @@ _NOT_AN_INPUT = frozenset(
         "sub_goals.json",
     }
 )
-# Of the harness's own working files, the ones a case is proved on.
-_HARNESS_INPUTS = frozenset({"generic-harness/source-model.json", "generic-harness/world-ir.json"})
+# The harness's own run records under generic-harness/: what a validation wrote, never what a case is proved on. Any
+# other file there counts as an input the cases share, so a file nobody listed here makes every case proved again.
+_RUN_RECORDS = (
+    "process-logs/",
+    "phase-observations/",
+    "compose-logs/",
+    "chat-readiness/",
+    "certified-bundle/",
+    "runtime-readiness.json",
+    "readiness-repair-history.json",
+    "repair-history.json",
+    "runtime-evidence.json",
+    "certification.json",
+    "tool-certification.json",
+    "action-certification.json",
+    "tool-requests.json",
+    "tool-routing-observations.json",
+    "setup-checks-passed.json",
+    "live-proof-lanes.json",
+    "live-replay.json",
+    YIELD_FILE,
+    "source-data-review-",
+    "runtime-plan-repair-",
+)
+
+
+def _run_record(relative: str) -> bool:
+    """Whether a file under the authoring tree is one of the harness's run records under generic-harness/."""
+    inside = relative.removeprefix("generic-harness/")
+    return inside != relative and inside.startswith(_RUN_RECORDS)
 
 
 def _digest_files(paths: list[Path], root: Path) -> str:
@@ -1883,7 +1911,7 @@ def proof_inputs(authoring: Path) -> dict[str, Any]:
         and (relative := path.relative_to(authoring).as_posix()) not in _NOT_AN_INPUT
         and not relative.startswith(("scenarios/", "environment-bundle/"))
         and not path.name.startswith(".futureagi-")
-        and (not relative.startswith("generic-harness/") or relative in _HARNESS_INPUTS)
+        and not _run_record(relative)
     ]
     return {"cases": cases, "uses": uses, "goals": goals, "shared": _digest_files(shared, authoring)}
 
