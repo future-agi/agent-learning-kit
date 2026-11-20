@@ -1407,6 +1407,7 @@ def _one_record(value: str) -> str:
 FAULT_LEVEL_GATE = "ALK_FAULT_LEVEL_GATE"
 CHECKED_LEVEL_GATE = "ALK_CHECKED_LEVEL_GATE"
 RECORD_SHARE_GATE = "ALK_RECORD_SHARE_GATE"
+SOMEONE_ELSES_WRITE_GATE = "ALK_SOMEONE_ELSES_WRITE_GATE"
 
 
 def gate_on(switch: str) -> bool:
@@ -1463,7 +1464,20 @@ def _fault_level_unmet(
     candidate: Scenario, fault_levels: dict[str, dict[str, list[str]]] | None, faults_on: bool
 ) -> str:
     """Why this case sits on a level the plan declares a fault (`aim_for` `fault_levels`) and carries none, or "" when
-    it is not on one or carries it: a fault of its own, or a record named in its reference whose data holds it."""
+    it is not on one or carries it: a fault of its own, or a record named in its reference whose data holds it. The
+    other way too: a case that injects a fault sits on one of the plan's fault levels, so the report counts it."""
+    if faults_on and candidate.faults and fault_levels:
+        placed = {
+            level_name((candidate.coverage or {}).get(level_name(axis), ""))
+            in {level_name(name) for name in (levels or {})}
+            for axis, levels in fault_levels.items()
+        }
+        if True not in placed:
+            axes = ", ".join(f"{axis} ({', '.join(levels or {})})" for axis, levels in fault_levels.items())
+            return (
+                "this case injects a fault but sits on no level the plan declares a fault, so the coverage report "
+                f"would not count the failure it tests. Place it on one of: {axes}; or drop the fault."
+            )
     for axis, levels in (fault_levels or {}).items():
         level = level_name((candidate.coverage or {}).get(level_name(axis), ""))
         records = {level_name(name): list(held) for name, held in (levels or {}).items()}.get(level)
@@ -3671,6 +3685,11 @@ def scenario_tools(
                     if gate_on(RECORD_SHARE_GATE)
                     else ""
                 )
+                or (
+                    _writes_for_someone_else(candidate, world_root, _read_tools(contract))
+                    if moved and gate_on(SOMEONE_ELSES_WRITE_GATE)
+                    else ""
+                )
             )
             if unmet:
                 return _refuse(unmet)
@@ -5072,6 +5091,43 @@ def persona_off_the_record(scenarios: list[Scenario], world_root: Path) -> list[
 _AN_ID_ARGUMENT = re.compile(r"(^|_)(id|number|ref|reference|account)$", re.IGNORECASE)
 # A field that says whose record it is.
 _A_HOLDER_FIELD = re.compile(r"^(customer|owner|holder|account_holder)(_name)?$|^(full|first|last)_name$", re.IGNORECASE)
+
+
+def _holders_of(values: set[str], rows: Any) -> set[str]:
+    """Who holds the records any of `values` names, read from the holder fields of the rows that carry them."""
+    wanted = {one.casefold() for one in values if one}
+    return {
+        str(value).strip()
+        for table in (rows or {}).values()
+        for row in (table if isinstance(table, list) else [])
+        if isinstance(row, dict) and {str(v).strip().casefold() for v in row.values()} & wanted
+        for key, value in row.items()
+        if _A_HOLDER_FIELD.search(str(key)) and str(value).strip()
+    }
+
+
+def _writes_for_someone_else(scenario: Scenario, world_root: Path, read_tools: set[str]) -> str:
+    """Why this case's reference commits a change on a record the world says belongs to someone other than the caller,
+    or "" when it does not: such a case expects the agent to act for a person it does not serve. A case about another
+    person's record expects the refusal, whose reference makes no such change."""
+    mine = _words(scenario.persona.name or "") if scenario.persona is not None else set()
+    writes = [step for step in scenario.solution if str(step.tool) not in read_tools]
+    if not mine or not writes or native_runtime(world_root):
+        return ""
+    try:
+        rows = restore(world_root).state()
+    except Exception:  # noqa: BLE001 - a world that cannot be read refuses nothing
+        return ""
+    for step in writes:
+        holders = _holders_of(_held_values(step.arguments), rows)
+        if holders and not set().union(*(_words(one) for one in holders)) & mine:
+            return (
+                f"the reference's {step.tool} changes a record that belongs to {', '.join(sorted(holders))}, not to the "
+                f"caller {scenario.persona.name}, so it expects the agent to act for someone it does not serve. Make "
+                "the caller that record's holder, or, if the case is about someone asking for another person's "
+                "record, expect the refusal: a reference that verifies and declines, with no change made."
+            )
+    return ""
 
 
 def records_of_someone_else(scenario: Scenario, world_root: Path) -> str:
