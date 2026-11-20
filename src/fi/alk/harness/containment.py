@@ -325,7 +325,9 @@ class _Cleanup:
         if group_pending and process is not None:
             try:
                 if process.returncode is None and hasattr(os, "waitid"):
-                    # SIGCHLD may have auto-reaped the leader without updating Popen.
+                    # Reject leaders auto-reaped during backoff. With SIGCHLD ignored,
+                    # a live leader can still exit between probe and signal; this residual
+                    # numeric-ID window is accepted, not an atomic group-ownership proof.
                     os.waitid(
                         os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT
                     )
@@ -388,6 +390,9 @@ def _abort_child(
     try:
         if owns_group:  # communicate() may reap the leader before decoding fails.
             try:
+                # Preserve the earlier synchronous fallback for surviving descendants.
+                # If the group emptied after reap, numeric-ID reuse remains possible;
+                # that existing window is accepted rather than never signalling survivors.
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
