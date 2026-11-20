@@ -2157,7 +2157,8 @@ def provision(
     if (
         getattr(runtime, "execution", "auto") != "auto"
         or getattr(runtime, "service", "")
-        or getattr(runtime, "required_environment", {})
+        # A process named with an empty list needs nothing: only a listed name is an obligation.
+        or any((getattr(runtime, "required_environment", None) or {}).values())
     ):
         raise ProvisionError(
             "runtime_selection_unsupported: explicit selection and process admission require the certified process lane"

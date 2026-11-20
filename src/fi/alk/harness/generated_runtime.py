@@ -110,7 +110,8 @@ def detect_generated_runtime(
         getattr(runtime, "execution", "auto") == "compose"
         or getattr(runtime, "compose_file", "")
         or getattr(runtime, "service", "")
-        or getattr(runtime, "required_environment", {})
+        # A process named with an empty list needs nothing: only a listed name is an obligation.
+        or any((getattr(runtime, "required_environment", None) or {}).values())
     ):
         raise GeneratedRuntimeError(
             "runtime_selection_unsupported: generated runtime cannot enforce selected Compose services or process obligations"

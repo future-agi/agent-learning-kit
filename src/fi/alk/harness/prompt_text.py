@@ -16,6 +16,7 @@ import io
 import re
 import tokenize
 import unicodedata
+from typing import NamedTuple
 
 from .python_source import LARGEST_PARSED_MODULE, parsed, utf8_size
 
@@ -52,18 +53,38 @@ def python_tree(lines: list[str]) -> ast.Module | None:
     return parsed(text)
 
 
-def prompt_text(lines: list[str], start: int, end: int, tree: ast.Module) -> str | None:
+class PlainStrings(NamedTuple):
+    """A file's strings made only of plain literals, walked once, and the strings each line
+    holds part of."""
+
+    found: list[tuple[ast.expr, str]]
+    by_line: dict[int, list[int]]
+
+
+def plain_strings(tree: ast.Module) -> PlainStrings:
+    """Each plain string in ``tree`` once, for every part of the prompt the file holds."""
+    found = _plain_strings(tree)
+    by_line: dict[int, list[int]] = {}
+    for index, (node, _) in enumerate(found):
+        # The outermost strings don't overlap, so the lines they cover add up to about the
+        # file's own.
+        for line in range(node.lineno, (node.end_lineno or node.lineno) + 1):
+            by_line.setdefault(line, []).append(index)
+    return PlainStrings(found, by_line)
+
+
+def prompt_text(lines: list[str], start: int, end: int, strings: PlainStrings) -> str | None:
     """The text on lines ``start``-``end`` (counted from 1) when they hold one string made only
     of plain literals, or lie wholly inside one plain multi-line string; None to keep them as
     written."""
-    overlapping = [
-        (node, value)
-        for node, value in _plain_strings(tree)
-        if node.lineno <= end and node.end_lineno >= start
-    ]
+    overlapping: set[int] = set()
+    for line in range(start, end + 1):
+        overlapping.update(strings.by_line.get(line, ()))
+        if len(overlapping) > 1:
+            return None
     if len(overlapping) != 1:
         return None
-    node, value = overlapping[0]
+    node, value = strings.found[overlapping.pop()]
     if start <= node.lineno and node.end_lineno <= end:
         text = value if _only_around(lines, start, end, node) else None
     elif node.lineno < start and end < node.end_lineno and _one_triple_quoted(lines, node):

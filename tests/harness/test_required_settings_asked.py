@@ -198,3 +198,15 @@ def test_the_field_and_the_reading_ask_for_the_answer_outright(tmp_path):
     assert '{"agent": []}' in description
     skill = SKILL.read_text(encoding="utf-8")
     assert "**The settings it can't run without.** Always say" in skill
+    # Only a default that works makes a variable not required; the usual ways a key is read
+    # with a default that can't work are named.
+    for text in (description, " ".join(skill.split())):
+        assert "only when the code falls back to a value that works" in text
+        for form in (
+            'os.getenv("OPENAI_API_KEY", "")',
+            'os.environ.get("TOKEN", None)',
+            "BaseSettings",
+            "env_prefix",
+            "load_dotenv",
+        ):
+            assert form in text, form

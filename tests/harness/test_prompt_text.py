@@ -151,6 +151,10 @@ def test_one_plain_string_is_saved_as_its_text(tmp_path, source, start, end, tex
         pytest.param('import os\nDB = "x"\n', 1, 2, id="a-statement-before-it"),
         pytest.param('PROMPT = "Be brief."\ndef broken(:\n', 1, 1, id="a-file-that-doesnt-parse"),
         pytest.param('X = 1\rPROMPT = "Be brief."\n', 1, 1, id="a-lone-carriage-return"),
+        # Python counts the lone carriage return as a line end and the copy does not: read from
+        # the parse, line 2 would be the other string.
+        pytest.param('# note\rPROMPT = "Wrong."\nPROMPT = "Right."\n', 2, 2,
+                     id="a-lone-carriage-return-shifts-the-lines"),
     ],
 )
 def test_anything_else_stays_as_written(tmp_path, source, start, end) -> None:
@@ -244,7 +248,7 @@ def test_a_long_chain_elsewhere_in_the_file_is_read_past(tmp_path, term) -> None
     assert _saved_prompt(destination) == "Answer briefly and never guess an order's status."
 
 
-@pytest.mark.parametrize("failing", ["python_tree", "prompt_text"])
+@pytest.mark.parametrize("failing", ["python_tree", "plain_strings", "prompt_text"])
 def test_a_file_the_text_cant_be_read_from_keeps_the_lines_as_written(
     tmp_path, monkeypatch, failing
 ) -> None:
@@ -339,3 +343,28 @@ def test_a_tab_and_a_line_break_are_text(tmp_path) -> None:
     source = 'PROMPT = "Be brief.\\tBe kind.\\nBe quick."\n'
 
     assert copied(tmp_path, source, 1, 1)[1] == ["Be brief.\tBe kind.\nBe quick."]
+
+
+def test_a_file_is_walked_once_for_all_the_parts_it_holds(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness import prompt_text
+
+    walks: list[object] = []
+    real = prompt_text._plain_strings
+    monkeypatch.setattr(
+        prompt_text, "_plain_strings", lambda tree: walks.append(tree) or real(tree)
+    )
+    (tmp_path / "persona.py").write_text(
+        "".join(f'P{number} = "Part {number}."\n' for number in range(50)), encoding="utf-8"
+    )
+    contract = AgentContract(
+        agent="a",
+        system_prompt_excerpt="quoted",
+        system_prompt_from=[
+            PromptSource(path="persona.py", start_line=line, end_line=line) for line in range(1, 51)
+        ],
+    )
+    as_text: list[str] = []
+
+    assert _copy_prompt(contract, tmp_path, as_text=as_text) == []
+    assert as_text == ["\n\n".join(f"Part {number}." for number in range(50))]
+    assert len(walks) == 1
