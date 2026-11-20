@@ -5,7 +5,8 @@ name it is given to, the brackets around it. When the lines hold one string made
 literals, the prompt is that string's text instead. Nothing is run: the text is read from the
 parsed file. Anything whose text is only known when the agent runs (a name, a call, a ``{}``
 in an f-string) stays as written, and so does a text holding a control character other than a
-line break or a tab: the escape as written is safer to store and show than the character.
+line break or a tab, or one that shows as nothing: the escape as written is safer to store and
+show than the character.
 """
 
 from __future__ import annotations
@@ -25,10 +26,18 @@ _AROUND = re.compile(
     r"\s*(?:[A-Za-z_]\w*\s*(?::\s*[A-Za-z_][\w.\[\], ]*)?=\s*)?(?:\(\s*)*(?:\)\s*)*,?\s*"
 )
 _COMMENT = re.compile(r"#[^\n]*")
-# Characters that reorder how text is shown, so what a reader sees isn't what the model reads.
-_BIDI = frozenset(
+# Characters that reorder how text is shown, or that show as nothing, so what a reader sees
+# isn't what the model reads: the bidi controls, the zero-width space, the word joiner and the
+# invisible operators, the byte order mark, the line and paragraph separators, the Mongolian vowel
+# separator, the deprecated format controls and the interlinear annotation marks. The tag block
+# (U+E0000 to U+E007F) is checked by range. The zero-width joiner and non-joiner are kept: emoji
+# and many scripts need them.
+_UNSEEN = frozenset(
     "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+    "\u200b\u2060\u2061\u2062\u2063\u2064\ufeff\u2028\u2029\u180e"
+    "\u206a\u206b\u206c\u206d\u206e\u206f\ufff9\ufffa\ufffb"
 )
+_TAGS = range(0xE0000, 0xE0080)
 
 
 def python_tree(lines: list[str]) -> ast.Module | None:
@@ -68,9 +77,10 @@ def prompt_text(lines: list[str], start: int, end: int, tree: ast.Module) -> str
 def _holds_a_control(text: str) -> bool:
     """Whether ``text`` holds a character a store or a page can't be trusted with: a control
     character other than a line break or a tab (NUL among them), half of a surrogate pair, or one
-    that reorders how text is shown."""
+    that reorders how text is shown or shows as nothing."""
     return any(
-        character in _BIDI
+        character in _UNSEEN
+        or ord(character) in _TAGS
         or (unicodedata.category(character) in ("Cc", "Cs") and character not in "\n\t")
         for character in text
     )

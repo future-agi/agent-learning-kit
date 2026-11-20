@@ -282,6 +282,59 @@ def test_a_control_character_keeps_the_lines_as_written(tmp_path, escape) -> Non
     assert excerpt == as_written(source, 1, 1)
 
 
+@pytest.mark.parametrize(
+    "escape",
+    [
+        "\\U000e0041",
+        "\\U000e0000",
+        "\\U000e007f",
+        "\\u200b",
+        "\\u2060",
+        "\\u2063",
+        "\\ufeff",
+        "\\u2028",
+        "\\u2029",
+        "\\u180e",
+        "\\u206a",
+        "\\ufff9",
+    ],
+    ids=["tag-letter", "tag-block-first", "tag-block-last", "zero-width-space", "word-joiner",
+         "invisible-separator", "byte-order-mark", "line-separator", "paragraph-separator",
+         "mongolian-vowel-separator", "deprecated-format-control", "interlinear-annotation"],
+)
+def test_a_character_that_shows_as_nothing_keeps_the_lines_as_written(tmp_path, escape) -> None:
+    source = f'PROMPT = "Be brief.{escape}Be kind."\n'
+
+    excerpt, as_text = copied(tmp_path, source, 1, 1)
+
+    assert as_text == []
+    assert excerpt == as_written(source, 1, 1)
+
+
+@pytest.mark.parametrize(
+    ("written", "text"),
+    [
+        ('"Be brief. Be kind."', "Be brief. Be kind."),
+        # An emoji sequence joined with a zero-width joiner, and one with a variation selector.
+        ('"Hi \\U0001f469\\u200d\\U0001f4bb and \\u2764\\ufe0f"',
+         "Hi \U0001f469\u200d\U0001f4bb and \u2764\ufe0f"),
+        # Hindi with a joiner and a non-joiner after a virama.
+        ('"\\u0915\\u094d\\u200d\\u0937 \\u0915\\u094d\\u200c\\u0937"',
+         "\u0915\u094d\u200d\u0937 \u0915\u094d\u200c\u0937"),
+        # Persian, where a non-joiner is part of ordinary spelling.
+        ('"\\u0645\\u06cc\\u200c\\u062e\\u0648\\u0627\\u0647\\u0645"',
+         "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645"),
+        ('"\u0645\u0631\u062d\u0628\u0627 \u4f60\u597d \u3053\u3093\u306b\u3061\u306f"',
+         "\u0645\u0631\u062d\u0628\u0627 \u4f60\u597d \u3053\u3093\u306b\u3061\u306f"),
+        ('"co\\u00adoperate"', "co\u00adoperate"),
+    ],
+    ids=["ordinary", "emoji-joined", "hindi-joiners", "persian-non-joiner",
+         "arabic-chinese-japanese", "soft-hyphen"],
+)
+def test_text_that_needs_its_joiners_is_still_text(tmp_path, written, text) -> None:
+    assert copied(tmp_path, f"PROMPT = {written}\n", 1, 1)[1] == [text]
+
+
 def test_a_tab_and_a_line_break_are_text(tmp_path) -> None:
     source = 'PROMPT = "Be brief.\\tBe kind.\\nBe quick."\n'
 
