@@ -374,3 +374,14 @@ def test_every_builder_reply_closes_with_the_state_read_from_the_files(tmp_path)
         "environment."
     )
     assert _status_line(tmp_path, kept, "saved").endswith("every change is saved to the environment.")
+
+
+def test_the_status_line_reads_zero_scenarios_and_says_nothing_about_saving_when_unknown(tmp_path):
+    from fi.alk.harness.hosted_chat_entrypoint import _status_line
+
+    assert _status_line(tmp_path, [], "unsaved") == (
+        "Status: 0 scenarios (0 proved, 0 kept as written, 0 not proved); changes in this chat are NOT saved to the "
+        "environment."
+    )
+    assert _status_line(tmp_path, [], "unknown") == "Status: 0 scenarios (0 proved, 0 kept as written, 0 not proved)."
+    assert _status_line(tmp_path, [], "saved_except", 2).endswith("except 2 scenarios that could not be applied.")

@@ -997,6 +997,18 @@ def contract_tools(
                     "description": "Rules it must obey, in the source's own words. The agent "
                     "under test is told these and graded against them.",
                 },
+                "rule_sources": {
+                    "type": "array",
+                    "description": "For each rule read from a file of the agent's material (a policy or knowledge "
+                    "document, a prompt file): the rule exactly as written in hard_constraints, the file relative "
+                    "to the source root, and the line it comes from quoted exactly. Leave a rule out when no one "
+                    "line states it.",
+                    "items": {
+                        "type": "object",
+                        "properties": {"rule": {"type": "string"}, "file": {"type": "string"}, "quote": {"type": "string"}},
+                        "required": ["rule", "file", "quote"],
+                    },
+                },
                 "tools": {
                     "type": "array",
                     "description": "Every tool the agent really has. Everything downstream is "
