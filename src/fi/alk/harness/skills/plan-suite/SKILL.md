@@ -923,7 +923,9 @@ deal word for word, that summary, and what its cells mean; never the cases alrea
 submits under its deal, is refused outside its cells and is stopped when its count is written, so no one
 writer carries the suite. Dealing again closes the round before it. Whenever more is left to write than one
 writer's share, `suite_progress` deals the next round by itself, and a new case submitted without a deal is
-refused until one is dealt: fanning out is how a large suite is written, never an option. Before writing,
+refused until one is dealt. Then brief one writer per deal in one message, or write a deal yourself by
+passing its name as `deal` on each `submit_scenario`; `suite_progress` with `deal: false` writes the suite in
+this session without rounds. Before writing,
 a writer checks the names it means to give with `names_taken`.
 
 When the plan's cells cannot hold the count, `aim_for` says so. Widen the plan first: add the levels this
