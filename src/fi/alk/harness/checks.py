@@ -358,6 +358,7 @@ def exactly_once(calls: Sequence[Any], name: str, **arguments: Any) -> bool:
         if call.name == name
         and getattr(call, "error", "") == "response_lost"
         and getattr(call, "ok", False) is not True
+        and not getattr(call, "refused", False)
         and _with(call, arguments)
     ]
     return len(succeeded(calls, name, **arguments)) + len(lost) == 1

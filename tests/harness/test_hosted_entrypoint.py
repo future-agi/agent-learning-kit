@@ -5946,6 +5946,35 @@ def test_a_receipt_retries_only_within_the_best_effort_window_and_skips_an_uploa
     # No wait past the window: dropped from this receipt, still queued for the final flush.
     assert body["call"]["transcript_artifact"] is None and still_queued == 1
 
+    # Mid-run, before any flush window, a receipt waits at most one backoff step, never the whole ladder.
+    async def mid_run() -> tuple[dict[str, Any], int]:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        down_now = Down()
+        adapter._artifacts = down_now
+        adapter._upload_retry_backoff = (0.05, 600.0)
+        assert adapter.best_effort_deadline() is None
+        transcript = await adapter.upload_artifact(b"{}", kind=ob.ArtifactKind.TRANSCRIPT, scenario_key="s1")
+
+        class Call:
+            started_at = "2026-01-01T00:00:00.000Z"
+            ended_at = "2026-01-01T00:00:01.000Z"
+            duration_ms = 1000
+            turns = 1
+            transcript_artifact = transcript
+            recording_artifacts = ()
+
+        receipt = ResultReceipt(
+            scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0, status="passed",
+            sub_goals=(), evaluations=(), call=Call(), failure=None,
+        )
+        await asyncio.wait_for(adapter.receipt(receipt), timeout=5)
+        return transport.receipts[("job-1", "s1")], down_now.calls
+
+    body, tries = asyncio.run(mid_run())
+    # The first upload, a try at once and one after the first step: never the 600 s one.
+    assert body["call"]["transcript_artifact"] is None and tries == 3
+
     async def taken_meanwhile() -> set[str]:
         adapter = _build_adapter(FakeTransport())
         adapter._upload_retry_backoff = ()
