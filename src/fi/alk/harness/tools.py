@@ -1082,8 +1082,8 @@ def contract_tools(
                                 "description": "Each refusal in `refuses` that turns on a field of a record the "
                                 "call names, as structure, when the tool's code or the service behind it shows it: "
                                 "the HTTP `status` it answers, the `table` and the `column` the call's `argument` is "
-                                "matched on, the record's `field` and the `values` that refuse (empty: any non-empty "
-                                "value), and the `message` the code gives. A record carrying a fault in the agent's "
+                                "matched on, the record's `field` and the `values` that refuse (at least one), and "
+                                "the `message` the code gives. A record carrying a fault in the agent's "
                                 "own data (a payment that times out) is one. The world scenarios are proved on "
                                 "answers each the same way.",
                                 "items": {
@@ -1097,7 +1097,7 @@ def contract_tools(
                                         "values": {"type": "array"},
                                         "message": {"type": "string"},
                                     },
-                                    "required": ["status", "table", "column", "argument", "field"],
+                                    "required": ["status", "table", "column", "argument", "field", "values"],
                                 },
                             },
                             "effects": {

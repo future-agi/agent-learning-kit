@@ -1332,11 +1332,11 @@ class HostedChatRuntime:
         async def find_scenarios(args: dict[str, Any]) -> dict[str, Any]:
             query = {key: value for key, value in args.items() if value not in (None, "", [], {})}
             if not query.get("removed"):
-                try:
-                    answer = await self.client.scenarios(query)
-                except ConversationTransportError as exc:
-                    return text(str(exc), error=True)
-                return text(_with_removed_hint(answer, query))
+
+                async def hinted() -> Any:
+                    return _with_removed_hint(await self.client.scenarios(query), query)
+
+                return await call(hinted())
             try:
                 answer = await self.client.scenarios(query)
             except ConversationTransportError as exc:

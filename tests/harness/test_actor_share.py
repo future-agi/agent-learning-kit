@@ -171,14 +171,26 @@ def _with_an_approver(root: Path) -> None:
 def test_a_fault_or_a_world_actor_counts_toward_the_share_as_a_speaking_actor_does():
     from fi.alk.harness.scenario_tools import _call_actors_short
 
-    offered = ["an actor who speaks (second)"]
+    offered, ids = ["an actor who speaks (second)"], {"second", "lead"}
     alone = [Scenario(name=f"s{n}") for n in range(9)]
-    assert "include an actor or a fault" in _call_actors_short({"name": "s9"}, alone, 10, 0.2, offered)
+    assert "include an actor or a fault" in _call_actors_short({"name": "s9"}, alone, 10, 0.2, offered, ids)
     faulted = [Scenario(name="f0", faults=FAULT), Scenario(name="f1", faults=FAULT)] + alone[:7]
-    assert _call_actors_short({"name": "s9"}, faulted, 10, 0.2, offered) == ""
+    assert _call_actors_short({"name": "s9"}, faulted, 10, 0.2, offered, ids) == ""
     approved = [Scenario(name="a0", actors=[{"id": "lead"}]), Scenario(name="a1", actors=[{"id": "lead"}])]
-    assert _call_actors_short({"name": "s9"}, approved + alone[:7], 10, 0.2, offered) == ""
-    assert _call_actors_short({"name": "s9", "faults": FAULT}, alone, 10, 0.2, offered) == ""
+    assert _call_actors_short({"name": "s9"}, approved + alone[:7], 10, 0.2, offered, ids) == ""
+    assert _call_actors_short({"name": "s9", "faults": FAULT}, alone, 10, 0.2, offered, ids) == ""
+
+
+def test_neither_a_pre_run_alone_nor_an_actor_no_longer_listed_counts_toward_the_share():
+    from fi.alk.harness.scenario_tools import _call_actors_short
+
+    offered, ids = ["an actor who speaks (second)"], {"second"}
+    alone = [Scenario(name=f"s{n}") for n in range(7)]
+    pre_run = [{"actors": ["second"], "where": {"action": "notes.put", "arguments": {}}, "about": "a note"}]
+    briefed = [Scenario(name=f"p{n}", pre_run=pre_run) for n in range(2)]
+    assert "include an actor or a fault" in _call_actors_short({"name": "s9"}, briefed + alone, 10, 0.2, offered, ids)
+    gone = [Scenario(name=f"g{n}", actors=[{"id": "lead"}]) for n in range(2)]
+    assert "include an actor or a fault" in _call_actors_short({"name": "s9"}, gone + alone, 10, 0.2, offered, ids)
 
 
 def test_the_plan_spreads_actor_scenarios_across_every_kind_the_environment_supports(tmp_path):
@@ -196,7 +208,15 @@ def test_the_plan_spreads_actor_scenarios_across_every_kind_the_environment_supp
     assert "act through the world and no level is named for them yet: lead" in said
 
 
-def test_one_kind_of_actor_scenario_cannot_take_the_whole_share(tmp_path):
+def test_the_kind_refusal_is_off_unless_switched_on(tmp_path, monkeypatch):
+    monkeypatch.delenv("ALK_ACTOR_KIND_GATE", raising=False)
+    tools = _stage(tmp_path, [Scenario(name=f"h{n}", actors=ACTOR) for n in range(10)], wanted=40,
+                   actor_share={"min": 0.5, "max": 0.5})
+    assert KIND_REFUSAL not in _submit(tools, "h10", with_actor=True)
+
+
+def test_one_kind_of_actor_scenario_cannot_take_the_whole_share(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_ACTOR_KIND_GATE", "1")
     spouse_like = [Scenario(name=f"h{n}", actors=ACTOR) for n in range(10)]
     tools = _stage(tmp_path, spouse_like, wanted=40, actor_share={"min": 0.5, "max": 0.5})
     refused = _submit(tools, "h10", with_actor=True)
@@ -208,6 +228,7 @@ def test_one_kind_of_actor_scenario_cannot_take_the_whole_share(tmp_path):
 
 
 def test_the_most_one_kind_may_take_is_a_setting(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_ACTOR_KIND_GATE", "1")
     monkeypatch.setenv("ALK_ACTOR_KIND_MOST_SHARE", "1")
     tools = _stage(tmp_path, [Scenario(name=f"h{n}", actors=ACTOR) for n in range(10)], wanted=40,
                    actor_share={"min": 0.5, "max": 0.5})
