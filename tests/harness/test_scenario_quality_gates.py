@@ -292,6 +292,10 @@ def test_a_case_on_the_agent_s_service_tools_is_said_to_be_proved_live_not_unpro
         )["content"][0]["text"]
 
     live = submitted("on_the_service", {"issue_refund"})
-    assert "it will be proved live" in live and "NOT PROVED" not in live and "remains unverified" not in live
+    assert (
+        "it is proved live when the environment's live proof runs" in live
+        and "NOT PROVED" not in live
+        and "remains unverified" not in live
+    )
     elsewhere = submitted("no_endpoint", set())
-    assert "NOT PROVED" in elsewhere and "it will be proved live" not in elsewhere
+    assert "NOT PROVED" in elsewhere and "it is proved live when the environment's live proof runs" not in elsewhere

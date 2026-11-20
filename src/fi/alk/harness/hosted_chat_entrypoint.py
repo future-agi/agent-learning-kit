@@ -13,7 +13,7 @@ import time
 import traceback
 import uuid
 from collections import Counter
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
@@ -226,9 +226,13 @@ def _shown(value: Any) -> str:
     return f"{said[:_SHOWN_PER_ARGUMENT].rstrip()}... ({len(said) - _SHOWN_PER_ARGUMENT} more characters)"
 
 
-def _adds_a_case(tool: str, arguments: Mapping[str, Any]) -> bool:
-    """Whether a planned call adds a scenario rather than changing one: a submission that names no case's key."""
-    return tool == "submit_scenario" and not str(arguments.get("scenario_key") or "").strip()
+def _adds_a_case(tool: str, arguments: Mapping[str, Any], kept: Sequence[Any] = ()) -> bool:
+    """Whether a planned call adds a scenario rather than changing one: a submission matching no kept case by key or
+    by name, as `accept_scenario` replaces one."""
+    if tool != "submit_scenario":
+        return False
+    key, name = str(arguments.get("scenario_key") or "").strip(), str(arguments.get("name") or "").strip()
+    return not any((key and one.scenario_key == key) or (name and one.name == name) for one in kept)
 
 
 def _call_line(tool: str, arguments: Mapping[str, Any]) -> str:
@@ -1170,8 +1174,9 @@ class HostedChatRuntime:
             return {"content": [{"type": "text", "text": "List each change as its tool and the exact arguments you "
                                  "will call it with."}], "is_error": True}
         yes = f"Yes, apply these {len(listed)} changes" if len(listed) > 1 else "Yes, apply this change"
-        # A submission naming no kept case's key adds one, which the person sees said outright, not inferred.
-        added = [_adds_a_case(tool, arguments) for tool, arguments in listed]
+        # A submission matching no kept case adds one, which the person sees said outright, not inferred.
+        kept = getattr(getattr(self.conversation, "stage", None), "kept", None) or []
+        added = [_adds_a_case(tool, arguments, kept) for tool, arguments in listed]
         async with self._confirming:
             answer = await self._ask(
                 "confirm_plan",

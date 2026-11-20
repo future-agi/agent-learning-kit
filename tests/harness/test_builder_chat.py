@@ -5330,14 +5330,21 @@ def test_a_plan_says_outright_which_calls_add_a_new_scenario(tmp_path, monkeypat
 
     runtime._ask = ask
     runtime._turn_message_id = "m1"
+    from types import SimpleNamespace
+
+    runtime.conversation.stage = SimpleNamespace(
+        kept=[SimpleNamespace(scenario_key="late-refund", name="late_refund"), SimpleNamespace(scenario_key="k2", name="by_name")]
+    )
     edit = {"tool": "submit_scenario", "arguments": {"name": "late_refund", "scenario_key": "late-refund"}}
+    by_name = {"tool": "submit_scenario", "arguments": {"name": "by_name"}}
     add = {"tool": "submit_scenario", "arguments": {"name": "late_refund_21_days"}}
-    asyncio.run(runtime._confirm_plan([{"tool": "add_rule", "arguments": _add_20()}, edit, add]))
+    asyncio.run(runtime._confirm_plan([{"tool": "add_rule", "arguments": _add_20()}, edit, by_name, add]))
 
     [question] = questions
-    assert question["question"].startswith("Apply these 3 changes? 1 of them adds a new scenario.")
-    assert "\n3. NEW SCENARIO: submit_scenario (name: late_refund_21_days)" in question["question"]
-    assert "\n2. submit_scenario" in question["question"]
+    assert question["question"].startswith("Apply these 4 changes? 1 of them adds a new scenario.")
+    assert "\n4. NEW SCENARIO: submit_scenario (name: late_refund_21_days)" in question["question"]
+    # A submission matching a kept case by key, or by name with no key, changes that case.
+    assert "\n2. submit_scenario" in question["question"] and "\n3. submit_scenario (name: by_name)" in question["question"]
 
 
 def test_a_plan_shows_a_long_argument_cut_short_and_still_approves_the_whole_call():
