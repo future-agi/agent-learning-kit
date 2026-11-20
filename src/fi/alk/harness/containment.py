@@ -29,6 +29,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -249,19 +250,31 @@ def _close(*streams: BinaryIO) -> None:
 # One retry worker, not one blocked thread per child. The registry owns the
 # handles independently of caller tracebacks and subsequent launches.
 _cleanup_lock = threading.Lock()
-_pending: dict[object, tuple[subprocess.Popen | None, Leaf | None]] = {}
+# deque.append/popleft are thread-safe endpoint operations. Producers publish
+# before attempting the election lock; only the elected consumer removes work.
+_pending: deque[tuple[subprocess.Popen | None, Leaf | None, bool]] = deque()
 _worker: threading.Thread | None = None
 
 
 def _finish_pending() -> None:
     global _worker
+    with _cleanup_lock:
+        if _worker is not None:
+            return  # Concurrent (or interrupted but successful) starts are harmless.
+        _worker = threading.current_thread()
     delay = 0.05
     while True:
-        with _cleanup_lock:
-            if _worker is not threading.current_thread():
-                return  # A start interrupted before acknowledgement was retried.
-            batch = list(_pending.items())
-        for key, (process, leaf) in batch:
+        for _ in range(len(_pending)):
+            process, leaf, group_pending = _pending.popleft()
+            if group_pending and process is not None:
+                try:
+                    if process.returncode is None:
+                        os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except (OSError, KeyboardInterrupt):
+                    _pending.append((process, leaf, True))
+                    continue  # Keep the leader unreaped until the group attempt resolves.
             if leaf is not None:
                 try:
                     leaf.kill()
@@ -279,11 +292,8 @@ def _finish_pending() -> None:
                 reaped = process is None or process.poll() is not None
             except OSError:
                 reaped = False
-            with _cleanup_lock:
-                if reaped and leaf is None:
-                    del _pending[key]
-                else:
-                    _pending[key] = process, leaf
+            if not reaped or leaf is not None:
+                _pending.append((process, leaf, False))
         with _cleanup_lock:
             if not _pending:
                 _worker = None
@@ -293,27 +303,25 @@ def _finish_pending() -> None:
 
 
 def retry_pending_cleanup() -> None:
-    """Resume outstanding work after thread capacity returns, even without a launch.
-
-    Without a schedulable worker, handles stay registered until this hook, a
-    later launch, or another handoff can start one; idle progress is not assured.
-    """
-    global _worker
-    with _cleanup_lock:
-        if not _pending or (_worker is not None and _worker.is_alive()):
-            return
+    """Make two attempts now; sustained thread unavailability leaves the handles queued."""
+    for _ in range(2):
         try:
-            _worker = threading.Thread(
+            with _cleanup_lock:
+                if not _pending or _worker is not None:
+                    return
+            worker = threading.Thread(
                 target=_finish_pending, name="alk-reaper", daemon=True
             )
-            _worker.start()
+            worker.start()
+            return
         except (RuntimeError, OSError, KeyboardInterrupt) as exc:
             logger.warning("containment: cleanup worker start interrupted (%s)", exc)
 
 
-def _defer_cleanup(process: subprocess.Popen | None, leaf: Leaf | None) -> None:
-    with _cleanup_lock:
-        _pending[object()] = process, leaf
+def _defer_cleanup(
+    process: subprocess.Popen | None, leaf: Leaf | None, group_pending: bool = False
+) -> None:
+    _pending.append((process, leaf, group_pending))
     retry_pending_cleanup()
 
 
@@ -321,19 +329,22 @@ def _abort_child(
     process: subprocess.Popen, leaf: Leaf | None, owns_group: bool
 ) -> None:
     reaped = False
+    group_pending = False
     try:
-        if owns_group:
+        if owns_group and process.returncode is None:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             except (OSError, KeyboardInterrupt) as kill_error:
+                group_pending = True
                 logger.warning(
                     "containment: could not kill group %s (%s)", process.pid, kill_error
                 )
         # A failed leaf kill must not leave the direct child alive or its parent blocked in wait.
         try:
-            process.kill()
+            if not group_pending:  # Popen.kill() may poll and reap first.
+                process.kill()
         except (OSError, KeyboardInterrupt) as exc:
             logger.warning(
                 "containment: could not kill child %s (%s)", process.pid, exc
@@ -349,8 +360,9 @@ def _abort_child(
                     exc,
                 )
         try:
-            process.wait(timeout=_EMPTY_WAIT_SECONDS)
-            reaped = True
+            if not group_pending:
+                process.wait(timeout=_EMPTY_WAIT_SECONDS)
+                reaped = True
         except (OSError, subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
             logger.warning(
                 "containment: could not reap child %s (%s)", process.pid, exc
@@ -365,7 +377,9 @@ def _abort_child(
                     logger.warning(
                         "containment: could not close child stream (%s)", exc
                     )
-        if not reaped or leaf is not None:
+        if group_pending:
+            _defer_cleanup(process, leaf, True)
+        elif not reaped or leaf is not None:
             _defer_cleanup(process, leaf)
 
 

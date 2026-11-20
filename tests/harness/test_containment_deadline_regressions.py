@@ -115,7 +115,7 @@ def test_signal_interrupt_preserves_startup_timeout(
 ):
     subtree = _FailingSubtree(tmp_path / "missing-leaf")
     monkeypatch.setattr(containment, "_containment", subtree)
-    process = Mock(pid=123)
+    process = Mock(pid=123, returncode=None)
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: process)
     group_kill = Mock()
     monkeypatch.setattr(os, "killpg", group_kill)
@@ -132,12 +132,17 @@ def test_signal_interrupt_preserves_startup_timeout(
         containment.popen(["true"], start_new_session=True)
     assert caught.value is timeout
     group_kill.assert_called_once_with(process.pid, signal.SIGKILL)
-    process.kill.assert_called_once_with()
+    if interrupted_signal == "group":
+        process.kill.assert_not_called()  # Popen.kill can reap the leader.
+        process.wait.assert_not_called()
+        handoff.assert_called_once_with(process, subtree.current, True)
+    else:
+        process.kill.assert_called_once_with()
+        process.wait.assert_called_once()
+        handoff.assert_called_once_with(process, subtree.current)
     assert subtree.current.closed == 1
-    process.wait.assert_called_once()
     for stream in (process.stdin, process.stdout, process.stderr):
         stream.close.assert_called_once_with()
-    handoff.assert_called_once_with(process, subtree.current)
 
 
 @pytest.mark.parametrize("failure", ["false", "error"])
@@ -266,7 +271,8 @@ def test_pipe_close_interrupt_retains_ownership(
 
 
 @pytest.mark.parametrize(
-    "fault", ["wait-timeout", "thread-start", "leaf-interrupt", "wait-interrupt"]
+    "fault",
+    ["wait-timeout", "thread-start", "transient-start", "leaf-interrupt", "wait-interrupt"],
 )
 def test_late_exit_reaped_and_leaf_removed_with_traceback_held(
     monkeypatch, tmp_path, fault
@@ -296,6 +302,8 @@ def test_late_exit_reaped_and_leaf_removed_with_traceback_held(
 
     def refuse_start(thread):
         if thread.name == "alk-reaper":
+            if fault == "transient-start" and starts_refused:
+                return start(thread)
             starts_refused.append(thread)
             raise RuntimeError("simulated thread capacity limit")
         return start(thread)
@@ -306,7 +314,7 @@ def test_late_exit_reaped_and_leaf_removed_with_traceback_held(
         previous.join(timeout=5)
         assert not previous.is_alive()
     monkeypatch.setattr(subtree.current, "kill", retry_kill)
-    if fault == "thread-start":
+    if fault in ("thread-start", "transient-start"):
         monkeypatch.setattr(threading.Thread, "start", refuse_start)
     elif fault == "leaf-interrupt":
         monkeypatch.setattr(subtree.current, "close", interrupted)
@@ -349,6 +357,8 @@ def test_late_exit_reaped_and_leaf_removed_with_traceback_held(
             assert starts_refused
             monkeypatch.setattr(threading.Thread, "start", start)
             containment.retry_pending_cleanup()  # No later launch or GC.
+        if fault == "transient-start":
+            assert len(starts_refused) == 1
         assert retry_attempted.wait(4)
         permitted.set()  # Only the deferred kill can now remove the population blocker.
         os.write(writer, b"x")
@@ -462,3 +472,112 @@ def test_startup_timeout_stops_ready_descendant_when_leaf_fails(monkeypatch, tmp
                     os.waitpid(subtree.current.pid, 0)
                 except ChildProcessError:
                     pass
+
+
+def test_timeout_handoff_during_interrupted_worker_start(monkeypatch, tmp_path):
+    previous = containment._worker
+    if previous is not None:
+        previous.join(5)
+        assert not previous.is_alive()
+    starting, release = threading.Event(), threading.Event()
+    interrupted = []
+    lock = threading.Lock()
+    start = threading.Thread.start
+
+    class InterruptibleLock:
+        def __enter__(self):
+            if lock.acquire(blocking=False):
+                return
+            if (
+                starting.is_set()
+                and threading.current_thread() is threading.main_thread()
+            ):
+                interrupted.append("contended registration")
+                raise KeyboardInterrupt()
+            lock.acquire()
+
+        def __exit__(self, *_):
+            lock.release()
+
+    def staged_start(thread):
+        if thread.name == "alk-reaper":
+            if threading.current_thread() is first:
+                starting.set()
+                assert release.wait(5)
+            elif not interrupted:
+                interrupted.append("worker start")
+                raise KeyboardInterrupt()
+        start(thread)
+
+    first_leaf = _FailingLeaf(tmp_path / "first")
+    subtree = _FailingSubtree(tmp_path / "second")
+    first_leaf.path.mkdir()
+    subtree.current.path.mkdir()
+    first = threading.Thread(target=containment._defer_cleanup, args=(None, first_leaf))
+    timeout = subprocess.TimeoutExpired(["true"], 1)
+
+    def refuse_ack(fd):
+        first.start()
+        assert starting.wait(3)
+        raise timeout
+
+    process = Mock(pid=123, returncode=None)
+    monkeypatch.setattr(subprocess, "Popen", Mock(return_value=process))
+    monkeypatch.setattr(containment, "_containment", subtree)
+    monkeypatch.setattr(containment, "_write_all", Mock())
+    monkeypatch.setattr(containment, "_read_all", refuse_ack)
+    monkeypatch.setattr(containment, "_cleanup_lock", InterruptibleLock())
+    monkeypatch.setattr(threading.Thread, "start", staged_start)
+    try:
+        try:
+            with pytest.raises(subprocess.TimeoutExpired) as caught:
+                containment.popen(["true"])
+        except KeyboardInterrupt:
+            pytest.fail("secondary interrupt replaced the startup timeout")
+        assert caught.value is timeout
+        assert interrupted == ["worker start"]
+    finally:
+        release.set()
+        if first.ident is not None:
+            first.join(5)
+    deadline = time.monotonic() + 3
+    while (
+        first_leaf.path.exists() or subtree.current.path.exists() or not process.poll.called
+    ) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not first_leaf.path.exists() and not subtree.current.path.exists()
+    process.poll.assert_called_once_with()
+
+
+def test_group_retry_precedes_leader_reap(monkeypatch, tmp_path):
+    # Model only the lifecycle ordering; never signal a host PID.
+    subtree = _FailingSubtree(tmp_path / "leaf")
+    subtree.current.path.mkdir()
+    process = Mock(pid=123, returncode=None)
+    calls = []
+    reaped = threading.Event()
+
+    def signal_group(pid, sig):
+        calls.append((pid, sig, process.returncode))
+        if len(calls) == 1:
+            raise KeyboardInterrupt()
+
+    def poll():
+        process.returncode = -signal.SIGKILL
+        reaped.set()
+        return process.returncode
+
+    timeout = subprocess.TimeoutExpired(["true"], 1)
+    process.poll.side_effect = poll
+    monkeypatch.setattr(os, "killpg", signal_group)
+    monkeypatch.setattr(subprocess, "Popen", Mock(return_value=process))
+    monkeypatch.setattr(containment, "_containment", subtree)
+    monkeypatch.setattr(containment, "_write_all", Mock())
+    monkeypatch.setattr(containment, "_read_all", Mock(side_effect=timeout))
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        containment.popen(["true"], start_new_session=True)
+    assert caught.value is timeout and reaped.wait(3)
+    assert calls == [(process.pid, signal.SIGKILL, None)] * 2
+    process.kill.assert_not_called()
+    process.wait.assert_not_called()
+    assert not subtree.current.path.exists()
