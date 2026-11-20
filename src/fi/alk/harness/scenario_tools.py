@@ -969,6 +969,12 @@ def cases_per_cell() -> int:
     return _count_setting("ALK_HARNESS_CASES_PER_CELL", 4, 1000)
 
 
+def deal_above() -> int:
+    """How many cases must be left to write before a round of writers is dealt without being asked: below it one
+    session writes the suite, unless the builder deals one itself."""
+    return _count_setting("ALK_HARNESS_DEAL_ABOVE", 300, 100_000)
+
+
 def cases_per_writer() -> int:
     """How many cases one writer is dealt: worth reading the world once for, and few enough that no one writer's
     session carries the suite."""
@@ -3150,7 +3156,7 @@ def scenario_tools(
         return (
             bool(target.get("axes"))
             and not target.get("no_rounds")
-            and cap() - len(kept) > cases_per_writer()
+            and cap() - len(kept) > max(cases_per_writer(), deal_above())
             and not _round_out()
         )
 
@@ -3231,7 +3237,7 @@ def scenario_tools(
         deal = str(args.get("deal") or "").strip()
         held = next((one for one in kept if one.name == same), None)
         unrounded = (
-            f"{cap() - len(kept)} cases are left to write, more than one writer's share ({cases_per_writer()}), so "
+            f"{cap() - len(kept)} cases are left to write, more than {max(cases_per_writer(), deal_above())}, so "
             "this suite is written in deals: call suite_progress to deal the round, then either brief one "
             "scenario_writer per deal in one message, or write a deal yourself by passing deal=<its name> on each "
             "submit_scenario. To write the whole suite in this session instead, call suite_progress with "
@@ -3763,8 +3769,9 @@ def scenario_tools(
         "comes with them, never the cases already written. A writer submits under its deal and is stopped when "
         "the deal is written; dealing again closes the round before it. While a round is out, a case is changed or "
         "removed only under the deal that wrote it; `end_round` closes the round once every writer has reported, "
-        "so you can change the suite yourself. When more is left to write than one writer's share and no round "
-        "is out, this deals the next round, and a new case submitted without a deal is refused until one is dealt. "
+        "so you can change the suite yourself. When more is left to write than a large suite's threshold "
+        f"({deal_above()}) and no round is out, this deals the next round, and a new case submitted without a deal "
+        "is refused until one is dealt; below it one session may write the suite, or deal a round with `deal`. "
         "Then either brief one scenario_writer per deal in one message, or write a deal yourself by passing "
         "deal=<its name> on each submit_scenario. `deal: false` writes the suite without rounds from then on: no "
         "round is dealt and no case is refused for lacking one, until `deal: true` deals again.",
@@ -3772,7 +3779,13 @@ def scenario_tools(
     )
     async def suite_progress(args: dict[str, Any]) -> dict[str, Any]:
         design = {"axes": target.get("axes") or {}}
-        lines = [f"{len(kept)} of {cap()} written."]
+        from .proofs import proof_counts
+
+        counts = proof_counts(load_proofs(destination), [proof_key(one) for one in kept])
+        lines = [
+            f"{len(kept)} of {cap()} written. Proofs on record: {counts['proved']} proved, "
+            f"{counts['kept_as_written']} kept as written, {counts['not_proved']} not proved."
+        ]
         if target.get("supports"):
             lines.append(capacity_line(int(target["supports"]), len(kept), asked_count()) + ".")
         if args.get("deal") is not None:

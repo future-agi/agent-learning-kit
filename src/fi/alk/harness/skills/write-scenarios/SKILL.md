@@ -752,7 +752,8 @@ The order for one scenario:
 2. Read the agent's prompt and hard rules. Each rule is a branch waiting to be written, and decides
    what the solution of every scenario it applies to does.
 3. Work out the solution with `try_calls`, passing your `setup_code` so you see the world the agent
-   will actually face. Confirm the sub-goals you intend to name respond to it.
+   will actually face. Confirm the sub-goals you intend to name respond to it: run each check on the
+   solution with `try_check` before you submit, since a reference that fails its own checks is refused.
 4. `submit_scenario`. Read what comes back: a refusal names exactly what is wrong.
 5. `save_scenarios` once you have what was asked for.
 
