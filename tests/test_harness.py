@@ -2767,6 +2767,20 @@ def _delta(**overrides):
     return payload
 
 
+def test_a_case_whose_control_only_a_judge_could_fail_is_not_kept(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals.append(SubGoal(name="declines-extra", what="declines a second one", judged="Pass when: it declines."))
+    control = {**_delta()["negative_controls"][0], "must_fail": ["declines-extra"]}
+    said = accept_scenario(
+        _delta(sub_goals=["item-added", "right-item", "declines-extra"], negative_controls=[control]),
+        world_root=root, catalogue=catalogue, kept=[],
+    )
+    assert said.get("is_error") and "must_fail names only declines-extra, which has no check" in said["content"][0]["text"]
+
+
 def test_a_check_that_fails_a_corrected_try_is_named_when_the_case_is_kept(tmp_path, monkeypatch):
     from fi.alk.harness import scenario_tools
     from fi.alk.harness.scenario_tools import accept_scenario
