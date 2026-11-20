@@ -1368,6 +1368,127 @@ def _over_its_share(
     return ""
 
 
+def _record_ids(scenario: Scenario, *, fixed_only: bool = False) -> set[str]:
+    """The records the reference names: each step's id arguments (`_AN_ID_ARGUMENT`), as written. `fixed_only` keeps
+    only the arguments the step says the caller, their record or a rule fixes."""
+    return {
+        str(value).strip()
+        for step in scenario.solution
+        for key, value in step.arguments.items()
+        if _AN_ID_ARGUMENT.search(str(key))
+        and (not fixed_only or key in (step.fixed or {}))
+        and isinstance(value, (str, int))
+        and not isinstance(value, bool)
+        and str(value).strip()
+        and not str(value).startswith("$call")
+    }
+
+
+def _one_record(value: str) -> str:
+    return " ".join(str(value).split()).casefold()
+
+
+def _record_over_its_share(
+    candidate: Scenario,
+    kept: list[Scenario],
+    wanted: int,
+    grid: dict[str, list[str]] | None,
+    readable: Callable[[], set[str]] | None = None,
+) -> str:
+    """Why this case would put more of its task's cases on one record than the suite's share allows, or "" when it
+    would not. The share is `MOST_OF_A_SUITE` of the cases the plan deals each task; `readable` answers the records
+    the agent can read, asked only for a refusal to offer them. A record with no other to move to is never refused."""
+    mine = {_one_record(one): one for one in _record_ids(candidate)}
+    if wanted < FEWEST_FOR_A_SHARE or not mine:
+        return ""
+    task = level_name((candidate.coverage or {}).get("task", ""))
+    tasks = next((len(levels) for axis, levels in (grid or {}).items() if level_name(axis) == "task"), 0)
+    share = -(-wanted // tasks) if task and tasks else wanted
+    ceiling = max(2, int(share * MOST_OF_A_SUITE))
+    peers = [
+        one
+        for one in kept
+        if one.name != candidate.name and (not task or level_name((one.coverage or {}).get("task", "")) == task)
+    ]
+    held: Counter[str] = Counter()
+    written: dict[str, str] = {}
+    for one in peers:
+        for value in _record_ids(one):
+            held[_one_record(value)] += 1
+            written.setdefault(_one_record(value), value)
+    crowded = next((key for key in sorted(mine) if held[key] >= ceiling), "")
+    if not crowded:
+        return ""
+    others = {_one_record(one): one for one in (readable() if readable else set())} | written
+    alternatives = sorted(value for key, value in others.items() if key not in mine and held[key] < ceiling)
+    # With no other record to move to (an agent serving one account), there is nothing to spread across.
+    if not alternatives:
+        return ""
+    where = f"{task} cases" if task else "cases"
+    return (
+        f"{held[crowded]} of the {len(peers)} {where} written so far already act on {mine[crowded]!r}, and a suite of "
+        f"{wanted} may not put more than {ceiling} of a task's cases on one record: a task tested on one record tests "
+        "that record, and the agent's handling of every other record goes untested. Move this case onto another "
+        f"record the agent can read: {', '.join(alternatives[:12])}. Where no other record fits this situation, seed "
+        "one in setup_code that fits it, or place this case on another task."
+    )
+
+
+def _fault_level_unmet(
+    candidate: Scenario, fault_levels: dict[str, dict[str, list[str]]] | None, faults_on: bool
+) -> str:
+    """Why this case sits on a level the plan declares a fault (`aim_for` `fault_levels`) and carries none, or "" when
+    it is not on one or carries it: a fault of its own, or a record named in its reference whose data holds it."""
+    for axis, levels in (fault_levels or {}).items():
+        level = level_name((candidate.coverage or {}).get(level_name(axis), ""))
+        records = {level_name(name): list(held) for name, held in (levels or {}).items()}.get(level)
+        if not level or records is None:
+            continue
+        if faults_on and candidate.faults:
+            return ""
+        named = {held for step in candidate.solution for held in _held_values(step.arguments)}
+        if any(same_id(record, value) for record in records for value in named):
+            return ""
+        ways = (["inject the failure with `faults` on the call that meets it"] if faults_on else []) + (
+            [f"act on a record whose data carries it ({', '.join(records)})"] if records else []
+        )
+        return (
+            f"coverage puts {axis} at {level!r}, which the plan declares a fault, and this case "
+            + ("injects no fault and " if faults_on else "")
+            + "acts on no record whose data carries one, so the coverage report would count the failure as tested "
+            "when the agent never meets it. "
+            + (
+                f"Give the agent the failure: {' or '.join(ways)}. "
+                if ways
+                else "Nothing here can give the agent this failure: faults are off and no record carries it. "
+            )
+            + f"Otherwise place the case on the {axis} level it really tests."
+        )
+    return ""
+
+
+def _level_unchecked(
+    candidate: Scenario, checked_levels: dict[str, list[str]] | None, catalogue: Catalogue
+) -> str:
+    """Why this case sits on a level the plan says must be checked (`aim_for` `checked_levels`) and names no sub-goal
+    claimed for it, or "" when it does."""
+    for axis, levels in (checked_levels or {}).items():
+        level = level_name((candidate.coverage or {}).get(level_name(axis), ""))
+        if not level or level not in {level_name(one) for one in levels}:
+            continue
+        if any(
+            (goal := catalogue.named(name)) is not None and goal.claims(level) for name in candidate.sub_goals
+        ):
+            continue
+        return (
+            f"coverage puts {axis} at {level!r}, which the plan says changes what the agent must do, and no sub-goal "
+            "of this case checks it, so the level is only narrative and the coverage report would count it as "
+            f"tested. Add the claim with add_sub_goal, passing overlay={level!r}, for what the agent must do because "
+            "of it, name it here, and make the instruction bring it about in the conversation itself."
+        )
+    return ""
+
+
 def _full_levels(grid: dict[str, list[str]] | None, kept: list[Scenario], wanted: int) -> list[str]:
     """Coverage levels that already hold their share, as `axis level`, for the writer to avoid."""
     if not grid or wanted < 12:
@@ -2281,6 +2402,8 @@ def accept_scenario(
             "reference does: " + "; ".join(proof.retried) + ". A refused try the agent corrects is not a mistake: "
             "match the reference to any successful call."
         )
+    if proof is not None and proof.conflicts:
+        unproved += f"\nPOSSIBLE RULE CONFLICT: {proof.why()}"
     if proof is not None and proof.outcome == "no_change" and proof.proved:
         unproved += "\nA refusal case: nothing should change, and each negative control's forbidden change fails its checks."
     if proof is None:
@@ -2845,7 +2968,9 @@ def scenario_tools(
         + "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an overlay "
         "is refused until it names a sub-goal that fails when that overlay is mishandled, so this "
-        "is what makes one available. Leave it empty for an ordinary task sub-goal. "
+        "is what makes one available. The same goes for a level the plan lists in `aim_for`'s `checked_levels` "
+        "(a conversation resumed after a pause): set `overlay` to that level for the sub-goal that checks it. Leave it "
+        "empty for an ordinary task sub-goal. "
         "`subject` is `task` (the default) or `worker:<id>` for one of the contract's workers: that check is "
         "given only that worker's calls, and is inconclusive when the worker made none."
         + worker_subjects_note(contract)
@@ -3379,6 +3504,24 @@ def scenario_tools(
         )
         if crowded_level:
             return _refuse(crowded_level)
+        try:
+            candidate = Scenario.model_validate({**args, "name": same})
+        except Exception:  # noqa: BLE001 - a malformed scenario is the validator's to report
+            candidate = None
+        if candidate is not None:
+            unmet = (
+                _fault_level_unmet(candidate, target.get("fault_levels"), with_actors)
+                or _level_unchecked(candidate, target.get("checked_levels"), catalogue)
+                or _record_over_its_share(
+                    candidate,
+                    kept,
+                    cap(),
+                    target.get("axes"),
+                    lambda: readable_records(world_root, candidate),
+                )
+            )
+            if unmet:
+                return _refuse(unmet)
         if not can_grow:
             short = _red_team_short(args, target.get("axes"), kept, cap())
             if short:
@@ -3724,6 +3867,26 @@ def scenario_tools(
                         "it proves anything, which costs a writer a label and never proved work."
                     ),
                 },
+                "fault_levels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "description": "The levels of the grid that mean the agent meets a failure (a payment that times "
+                    "out, a service that is down, a card the processor declines), by axis, each with the ids of the "
+                    "records whose starting data already carries that failure, [] when none does: "
+                    '{"disposition": {"payment_timeout": ["<order id>"]}}. A case placed on one of these levels is '
+                    "refused unless it injects the failure with `faults` or its reference acts on one of those records.",
+                },
+                "checked_levels": {
+                    "type": "object",
+                    "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                    "description": "The levels of the grid, overlays aside, that change what the agent must do and so "
+                    "need their own check, by axis: a conversation resumed after a pause, a correction after the agent "
+                    'has committed. {"interaction": ["resumed_after_pause"]}. A case placed on one is refused until '
+                    "it names a sub-goal added with `overlay` set to that level.",
+                },
             },
             ["count"],
         ),
@@ -3802,6 +3965,66 @@ def scenario_tools(
                     + ("" if len(already_off) <= 12 else f", and {len(already_off) - 12} more")
                     + ". Relabel them onto the grid now. The environment validation applies the "
                     "same vocabulary at the end of the run and one stray level fails the whole job"
+                )
+        faulted = {
+            str(axis).strip(): {
+                str(level).strip(): [str(one).strip() for one in records if str(one).strip()]
+                for level, records in levels.items()
+                if str(level).strip() and isinstance(records, list)
+            }
+            for axis, levels in (args.get("fault_levels") or {}).items()
+            if str(axis).strip() and isinstance(levels, dict)
+        }
+        checked = {
+            str(axis).strip(): [str(one).strip() for one in levels if str(one).strip()]
+            for axis, levels in (args.get("checked_levels") or {}).items()
+            if str(axis).strip() and isinstance(levels, list)
+        }
+        declared = {
+            level_name(axis): {level_name(one) for one in levels} for axis, levels in (target.get("axes") or {}).items()
+        }
+        stray = [
+            f"{axis} {level}"
+            for axis, levels in [*faulted.items(), *checked.items()]
+            for level in levels
+            if level_name(level) not in declared.get(level_name(axis), set())
+        ]
+        if stray:
+            return _err(
+                "these are not levels of the grid, so no case can sit on them: " + ", ".join(stray) + ". Declare "
+                "them in `axes` first, in this call or an earlier one."
+            )
+        if faulted:
+            target["fault_levels"] = {**(target.get("fault_levels") or {}), **faulted}
+            unreachable = [
+                f"{axis} {level}"
+                for axis, levels in faulted.items()
+                for level, records in levels.items()
+                if not records and not with_actors
+            ]
+            said += ". Fault levels: " + "; ".join(
+                f"{axis} {level} ({', '.join(records) or 'injected only'})"
+                for axis, levels in faulted.items()
+                for level, records in levels.items()
+            )
+            if unreachable:
+                said += (
+                    f". Faults are off and no record carries {', '.join(unreachable)}, so no case can be placed there: "
+                    "name the records whose data carries it, or take the level off the grid"
+                )
+        if checked:
+            target["checked_levels"] = {**(target.get("checked_levels") or {}), **checked}
+            unclaimed = [
+                level
+                for levels in checked.values()
+                for level in levels
+                if not any(one.claims(level_name(level)) for one in catalogue.sub_goals)
+            ]
+            said += ". Checked levels: " + ", ".join(level for levels in checked.values() for level in levels)
+            if unclaimed:
+                said += (
+                    f". Nothing in the catalogue is claimed for {', '.join(unclaimed)}: add a sub-goal for each with "
+                    "add_sub_goal, `overlay` set to the level, before you hand any of them out"
                 )
         if grid:
             held = " ".join(one.name for one in catalogue.sub_goals).lower()
@@ -4638,14 +4861,7 @@ _A_HOLDER_FIELD = re.compile(r"^(customer|owner|holder|account_holder)(_name)?$|
 def records_of_someone_else(scenario: Scenario, world_root: Path) -> str:
     """A note when the records this scenario's solution acts on carry another person's name than the caller's."""
     mine = _words(scenario.persona.name or "") if scenario.persona is not None else set()
-    ids = sorted(
-        {
-            str(value).strip()
-            for step in scenario.solution
-            for key, value in step.arguments.items()
-            if key in step.fixed and _AN_ID_ARGUMENT.search(str(key)) and str(value).strip()
-        }
-    )
+    ids = sorted(_record_ids(scenario, fixed_only=True))
     if not mine or not ids:
         return ""
     try:
@@ -4669,6 +4885,26 @@ def records_of_someone_else(scenario: Scenario, world_root: Path) -> str:
         "caller that person; if the scenario is about someone asking for another person's record, its sub-goals "
         "should expect the refusal."
     )
+
+
+def readable_records(world_root: Path, scenario: Scenario) -> set[str]:
+    """What the world's starting data holds under the columns this case's reference names as ids (`same_id`), so a
+    refusal can offer the other records; empty where the world cannot be read."""
+    names = {str(key) for step in scenario.solution for key in step.arguments if _AN_ID_ARGUMENT.search(str(key))}
+    if not names or native_runtime(world_root):
+        return set()
+    try:
+        rows = restore(world_root).state()
+    except Exception:  # noqa: BLE001 - the refusal still names the records the suite already uses
+        return set()
+    return {
+        str(value).strip()
+        for table in (rows or {}).values()
+        for row in (table if isinstance(table, list) else [])
+        if isinstance(row, dict)
+        for column, value in row.items()
+        if any(same_id(column, name) for name in names) and str(value).strip()
+    }
 
 
 def world_summary_tables(world_root: Path) -> list[str]:
