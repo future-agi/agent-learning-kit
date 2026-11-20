@@ -402,6 +402,17 @@ def as_gone_through(calls: Sequence[Call], tools: Collection[str]) -> list[Call]
     ]
 
 
+def as_refused(calls: Sequence[Call], tools: Collection[str]) -> list[Call]:
+    """`calls` with each one of `tools` made without running read as refused by the tool (`WORLD_RULE`): what a check
+    would say if those steps had been turned down, the other reading of an unknown result."""
+    return [
+        replace(call, ok=False, refused=True, refusal_code=WORLD_RULE, error="refused")
+        if call.ok is None and call.name in tools
+        else call
+        for call in calls
+    ]
+
+
 def record_refusal(world: Any, name: str, arguments: Mapping[str, Any]) -> Call | None:
     """The refusal the contract records for `name` that this call's record meets (`ToolSpec.refusals`), answered as
     the tool's service answers it: refused with that HTTP status, before the tool changes anything. None when no
