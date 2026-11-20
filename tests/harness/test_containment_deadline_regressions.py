@@ -957,7 +957,9 @@ def test_leaf_recovers_while_owned_group_retry_pending(monkeypatch, tmp_path):
         busy.unlink()
         state._finish(state.pending.get_nowait())
         assert not path.exists()
-        assert leaf.path.rmdir.call_count == leaf.kill.call_count == killpg.call_count == 2
+        assert (
+            leaf.path.rmdir.call_count == leaf.kill.call_count == killpg.call_count == 2
+        )
         assert state.pending.get_nowait() == (process, None, True)
         leader = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
         assert leader.si_pid == process.pid
