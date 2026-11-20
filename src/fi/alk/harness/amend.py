@@ -551,6 +551,24 @@ def _case_texts(scenario: Any) -> str:
     return head + "".join(f"\n      {label}: {' '.join(str(text).split())}" for label, text in texts if text)
 
 
+def _sub_goals_quoting(destination: Path, rule: str) -> list[str]:
+    """The sub-goals whose `reference`, `what` or criteria quote this rule in full, as a source's quote is matched
+    (`leaks.normalise`)."""
+    from .catalogue import load_catalogue
+    from .leaks import normalise
+
+    wanted = normalise(rule)
+    try:
+        catalogue = load_catalogue(destination)
+    except Exception:  # noqa: BLE001 - the change is made; this only says what to review next
+        return []
+    return [
+        one.name
+        for one in catalogue.sub_goals
+        if wanted and any(wanted in normalise(text) for text in (one.reference, one.what, one.judged) if text)
+    ]
+
+
 def cases_citing(destination: Path, *, rule: str = "", tool: str = "") -> str:
     """The cases that rest on a rule or tool that just changed, as the rest of the reply: those whose `rule` source
     cites it (resolved as the case's sources are, `grounding.resolve_sources`, against the rule as it read), or whose
@@ -583,10 +601,18 @@ def cases_citing(destination: Path, *, rule: str = "", tool: str = "") -> str:
             )
         )
     ]
+    goals = _sub_goals_quoting(destination, rule) if rule else []
+    said = (
+        f"\n{len(goals)} sub-goal(s) quote the rule that changed in their contract or text: "
+        + ", ".join(goals)
+        + ". Reword each with add_sub_goal so it names the rule's value as the current rule sets it, or not at all."
+        if goals
+        else ""
+    )
     if not citing:
-        return ""
+        return said
     lines = [_case_texts(one) for one in citing]
-    return (
+    return said + (
         f"\n{len(citing)} case(s) rest on what changed. Review each against the current rules and rewrite every "
         "text below that states what changed, with edit_scenario; one left as it is shows Source changed until it is "
         "reviewed. Other cases may restate the old wording without citing it: search the suite for it too.\n  - "
