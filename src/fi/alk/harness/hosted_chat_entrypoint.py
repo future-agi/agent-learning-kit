@@ -982,6 +982,7 @@ class HostedChatRuntime:
             if world
             else self._cast_servers(contract),
             catalogue=catalogue,
+            removed_lookup=self._removed_with_key,
         )
         if self._nudge is not None:
             self._nudge_tools(stage, catalogue)
@@ -1647,6 +1648,12 @@ class HostedChatRuntime:
             + ("; and more" if len(still) > 20 else "")
             + "."
         )
+
+    async def _removed_with_key(self, key: str) -> list[dict[str, Any]]:
+        """The removed cases with this exact key, as find_scenarios(removed: true) reads them."""
+        answer = await self.client.scenarios({"removed": True})
+        rows = answer.get("removed") if isinstance(answer, dict) else None
+        return [row for row in rows or [] if isinstance(row, dict) and row.get("scenario_key") == key]
 
     def _closing_status(self) -> str:
         """The code-written status line for the end of this reply, or "" before the environment has a suite."""

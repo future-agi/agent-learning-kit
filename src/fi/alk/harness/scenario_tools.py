@@ -20,7 +20,7 @@ import re
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Awaitable, Callable, Sequence
 
 from fi.simulate.simulation.call_actors import (
     EVALUATED_BY,
@@ -2706,8 +2706,13 @@ def scenario_tools(
     can_grow: bool = False,
     scenario_problem: Callable[[dict[str, Any]], str] | None = None,
     catalogue: Catalogue | None = None,
+    removed_lookup: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
+
+    ``removed_lookup`` reads the cases this environment had and removed with the given key, as
+    `find_scenarios(removed: true)` lists them, where the platform can be asked; a submission whose key the
+    environment gave a case it no longer holds is checked against it before it is kept.
 
     ``can_save`` is what makes several writers safe at once. Saving rewrites the index and
     removes any folder not in the saver's own list, so two writers saving concurrently delete
@@ -2780,6 +2785,26 @@ def scenario_tools(
             for one in load_call_actors(destination).call_actors
             if one.channel in channels
         ]
+
+    async def read_removed_case(args: dict[str, Any]) -> None:
+        """For a new case whose key the environment gave a case it no longer holds, read that removed case from the
+        platform, exactly by key, and keep it beside the suite, so the case is restored rather than copied."""
+        if removed_lookup is None or (args.get("restored_from") or {}).get("key"):
+            return
+        key = str(args.get("scenario_key") or "").strip() or scenario_slug(str(args.get("name") or ""))
+        if not key or key not in used or any(one.scenario_key == key for one in kept):
+            return
+        try:
+            remembered = json.loads((Path(world_root) / REMOVED_CASES).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            remembered = {}
+        if isinstance(remembered, dict) and key in remembered:
+            return
+        try:
+            rows = await removed_lookup(key)
+        except Exception:  # noqa: BLE001 - not read, the case is kept as new with the note, as before
+            return
+        remember_removed(world_root, [row for row in rows or [] if isinstance(row, dict) and row.get("scenario_key") == key])
 
     def offered_parties() -> tuple[list[str], int, set[str]]:
         """What the environment supports bringing into a scenario besides the person, one line per kind, and how
@@ -3398,6 +3423,7 @@ def scenario_tools(
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
         if not with_actors and (sent := actors_off_fields(args)):
             return _err(actors_off_refusal(sent))
+        await read_removed_case(args)
         if external_runtime_target and args.get("solution"):
             # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}

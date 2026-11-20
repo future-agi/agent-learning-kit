@@ -295,6 +295,19 @@ def test_a_working_copy_carried_on_from_earlier_turns_is_never_minted_as_saved(t
     assert runtime._saved_state() == "saved"
 
 
+def test_the_chat_reads_a_removed_case_from_the_platform_by_its_exact_key(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+
+    async def scenarios(query):
+        client.queries.append(query)
+        return {"removed": [{"scenario_key": "lookup_order"}, {"scenario_key": "lookup_order_2"}]}
+
+    client.scenarios = scenarios
+    assert asyncio.run(runtime._removed_with_key("lookup_order")) == [{"scenario_key": "lookup_order"}]
+    assert client.queries == [{"removed": True}]
+
+
 def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     client = BuilderClient(applied=False)
     runtime = _runtime(tmp_path, client, monkeypatch)

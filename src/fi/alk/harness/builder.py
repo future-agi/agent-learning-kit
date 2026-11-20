@@ -10,7 +10,7 @@ changes the environment only through the tools that prove each change.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -769,6 +769,7 @@ def open_builder(
     sealed: bool = True,
     more_servers: dict[str, ToolServer] | None = None,
     catalogue: Catalogue | None = None,
+    removed_lookup: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
 ) -> Stage:
     """The one session that owns an environment once it has a world: every tool, every skill.
     ``sealed`` is False while the environment is still being built and has no sealed bundle yet.
@@ -783,6 +784,7 @@ def open_builder(
         can_grow=True,
         scenario_problem=scenario_problem,
         catalogue=catalogue,
+        removed_lookup=removed_lookup,
     )
     servers: dict[str, ToolServer] = {
         SCENARIO_SERVER: server,

@@ -2894,6 +2894,63 @@ def test_a_used_key_whose_case_was_never_read_back_gets_a_new_key_and_a_note(tmp
     assert kept[0].scenario_key != key and f"NOT restored: it matches the removed case {key}" in said["content"][0]["text"]
 
 
+def test_restore_exactly_without_searching_is_refused_with_the_restore_call_then_restores(tmp_path):
+    """Delete a case; in a new chat the builder submits it again without reading removed cases."""
+    import asyncio
+
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario_tools import REMOVED_CASES, scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    first, kept = scenario_tools(contract, root, root, wanted=4)
+    tools = {one.name: one.handler for one in first.tools}
+    assert not asyncio.run(tools["submit_scenario"](_delta())).get("is_error")
+    assert not asyncio.run(tools["submit_scenario"](_delta(name="adds-two-big-macs"))).get("is_error")
+    key, content = kept[0].scenario_key, document_for(kept[0])
+    assert not asyncio.run(tools["drop_scenario"]({"name": "adds-a-big-mac"})).get("is_error")
+    assert not (root / REMOVED_CASES).exists()
+
+    asked: list[str] = []
+
+    async def platform(wanted):
+        asked.append(wanted)
+        return [{"scenario_key": key, "name": "adds-a-big-mac", "suite_version": "v7", "content": content}]
+
+    chat, kept = scenario_tools(contract, root, root, wanted=4, can_grow=True, removed_lookup=platform)
+    tools = {one.name: one.handler for one in chat.tools}
+    said = asyncio.run(tools["submit_scenario"](_delta()))
+    assert said.get("is_error") and asked == [key] and [one.name for one in kept] == ["adds-two-big-macs"]
+    assert f'scenario_key {key!r} and restored_from {{"key": "{key}"}}' in said["content"][0]["text"]
+    restored = asyncio.run(
+        tools["submit_scenario"](_delta(scenario_key=key, restored_from={"key": key, "suite_version": "v7"}))
+    )
+    assert not restored.get("is_error"), restored
+    assert "Restored exactly as it was" in restored["content"][0]["text"]
+    assert key in [one.scenario_key for one in kept]
+
+
+def test_a_removed_case_the_platform_cannot_read_falls_back_to_a_new_key_and_a_note(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    first, kept = scenario_tools(contract, root, root, wanted=4)
+    tools = {one.name: one.handler for one in first.tools}
+    asyncio.run(tools["submit_scenario"](_delta()))
+    asyncio.run(tools["submit_scenario"](_delta(name="adds-two-big-macs")))
+    key = kept[0].scenario_key
+    assert not asyncio.run(tools["drop_scenario"]({"name": "adds-a-big-mac"})).get("is_error")
+
+    async def unreachable(wanted):
+        raise ConnectionError("platform down")
+
+    chat, kept = scenario_tools(contract, root, root, wanted=4, can_grow=True, removed_lookup=unreachable)
+    said = asyncio.run({one.name: one.handler for one in chat.tools}["submit_scenario"](_delta()))
+    assert not said.get("is_error"), said
+    assert key not in [one.scenario_key for one in kept] and "NOT restored" in said["content"][0]["text"]
+
+
 def test_a_repeated_restore_refusal_is_counted_like_any_other(tmp_path):
     import asyncio
 
