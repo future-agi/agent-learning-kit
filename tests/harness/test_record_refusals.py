@@ -341,3 +341,21 @@ def test_the_live_proof_reads_an_assumed_step_as_inconclusive_and_never_as_refus
     assert live["inconclusive"] == ["refunds_1042"]
     # The control's assumed step reads as gone through, so a check it cannot break holds under it.
     assert live["controls"][0]["held"] == ["refunds_1042"]
+
+
+def test_a_reference_that_fails_its_own_checks_live_records_the_calls_they_were_handed() -> None:
+    """The evidence for telling a wrong check from a call recorded wrong: each call with ok, refused and its code."""
+    import asyncio
+
+    from fi.alk.harness.live_proof import _prove_case
+
+    async def fresh() -> GeneratedWorld:
+        return _world(handler=True)
+
+    goals = Catalogue(sub_goals=[SubGoal(name="refunds_1042", what="Order 1042 is refunded.", check=SUCCEEDED)])
+    failing = asyncio.run(_prove_case(_refund_case("1045"), goals, fresh))
+    [seen] = failing["calls_checked"]
+    assert (seen["name"], seen["ok"], seen["refused"]) == ("issue_refund", False, True)
+    assert '"1045"' in seen["arguments"] and "refusal_code" in seen
+    passing = asyncio.run(_prove_case(_refund_case("1042"), goals, fresh))
+    assert "calls_checked" not in passing

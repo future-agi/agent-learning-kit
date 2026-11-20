@@ -106,6 +106,21 @@ def _address(endpoint: RuntimeEndpoint | str) -> str:
     return str(getattr(endpoint, "address", endpoint) or "")
 
 
+# The most calls a failing reference's evidence lists.
+MOST_CALLS_SHOWN = 40
+
+
+def _as_checked(call: Call) -> dict[str, Any]:
+    """One call as a check reads it: its tool, arguments and outcome flags."""
+    return {
+        "name": call.name,
+        "arguments": redact_outbound_text(json.dumps(call.arguments, default=str))[:300],
+        "ok": call.ok,
+        "refused": call.refused,
+        "refusal_code": getattr(call, "refusal_code", ""),
+    }
+
+
 def _outcomes(scenario: Scenario, catalogue: Catalogue, world: Any, calls: list[Call]) -> list[Outcome]:
     reference = reference_of(scenario.solution)
     return [run_check(source, world, calls, name=name, reference=reference) for name, source in checks_for(scenario, catalogue)]
@@ -467,6 +482,13 @@ async def _prove_case(
         "assumed": assumed,
         "refused": refused,
         **({"inconclusive": inconclusive} if inconclusive else {}),
+        # Where the reference fails its own checks, the calls those checks were handed, as they read them: the
+        # evidence for telling a check that is wrong from a call recorded wrong.
+        **(
+            {"calls_checked": [_as_checked(call) for call in calls[:MOST_CALLS_SHOWN]]}
+            if any(not one.held and not one.broken for one in with_solution)
+            else {}
+        ),
         "with_solution": [{"name": one.name, "held": one.held, "said": one.said, "broken": one.broken} for one in with_solution],
         "with_nothing": [{"name": one.name, "held": one.held, "said": one.said, "broken": one.broken} for one in with_nothing],
         "outcome": "no_change" if not assumed and right is not None and right == untouched else "change",
