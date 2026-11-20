@@ -217,10 +217,16 @@ def test_the_closing_status_line_says_what_is_saved_and_never_guesses(tmp_path, 
     client.publish = _publish_with_failed(client)
     assert asyncio.run(runtime._save_changes())["applied"] is True
     assert runtime._saved_state() == "published"
+    # Where the page's own state is not read, it is said as what this chat did, with no instruction.
     assert runtime._closing_status().endswith(
+        "This chat put its changes under Unsaved changes, except 1 scenarios that could not be applied."
+    )
+    # The page still holds them: the instruction. The page holds none (saved or discarded there): nothing said.
+    assert runtime._closing_status({"drafts": {"scenarios": {"summary": "1 removed"}}}).endswith(
         "Changes from this chat are under Unsaved changes; Validate, then Save to keep them as a new version, except "
         "1 scenarios that could not be applied."
     )
+    assert runtime._closing_status({"drafts": {"scenarios": None, "world": None}}) == "Status: 0 scenarios."
 
 
 def test_a_suite_with_every_scenario_dropped_still_closes_with_its_status(tmp_path, monkeypatch):
@@ -327,6 +333,40 @@ def test_the_closing_line_carries_the_scenarios_tab_s_own_counts(tmp_path, monke
     assert _reply(client).endswith(
         "On the Scenarios tab: 4 proved, 0 kept as written, 2 not proved. No changes in this chat."
     )
+
+
+def test_a_marker_written_by_an_older_publish_still_reads_as_published(tmp_path, monkeypatch):
+    import json
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch, closing=True)
+    (tmp_path / ".futureagi-published.json").write_text(
+        json.dumps({"fingerprint": runtime._environment_fingerprint(), "unapplied": 0}), encoding="utf-8"
+    )
+    assert runtime._saved_state() == "published"
+
+
+def test_a_build_finishing_turn_shows_the_tab_s_counts_alone_when_the_platform_sends_them(tmp_path, monkeypatch):
+    import json
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
+    runtime._mint_published()
+
+    async def overview():
+        return {"lifecycle_counts": {"proved": 5, "kept_as_written": 0, "not_proved": 2}}
+
+    client.overview = overview
+
+    class Finishing(EditingConversation):
+        async def say(self, message, on_event=None):
+            counts = {"proved": 0, "kept_as_written": 7, "not_proved": 0}
+            (self.workspace / ".futureagi-build-finished.json").write_text(json.dumps({"proofs": counts}))
+            on_event(RuntimeEvent(kind="text", text="Finished.", detail={"stage": "builder"}))
+
+    runtime.conversation = Finishing(tmp_path, writes=False)
+    _turn(runtime, {"content": "finish"})
+    reply = _reply(client)
+    assert "Proof counts:" not in reply and "On the Scenarios tab: 5 proved, 0 kept as written, 2 not proved." in reply
 
 
 def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):

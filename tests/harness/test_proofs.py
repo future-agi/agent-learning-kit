@@ -321,8 +321,8 @@ def test_the_builder_s_status_never_counts_states_and_shows_only_this_chat_s_pro
     (tmp_path / "proofs.json").write_text(json.dumps(older), encoding="utf-8")
 
     note = _status_note(tmp_path, kept, "published")
-    assert "proved" not in note.split("never give")[0] and "3 scenarios" in note
-    assert "under Unsaved changes; Validate, then Save" in note
+    assert "proved" not in note and "3 scenarios" in note
+    assert "This chat put its changes under Unsaved changes." in note
     assert "No changes in this chat." in _status_note(tmp_path, kept, "none")
     status = next(one.handler for one in suite_server(tmp_path, kept).tools if one.name == "scenario_status")
     said = asyncio.run(status({}))["content"][0]["text"]
@@ -375,10 +375,14 @@ def test_every_builder_reply_closes_with_the_state_read_from_the_files(tmp_path)
     assert _status_line(tmp_path, kept, "unsaved") == (
         "Status: 2 scenarios. Changes in this chat are not yet under Unsaved changes."
     )
-    assert _status_line(tmp_path, kept, "published") == (
+    assert _status_line(tmp_path, kept, "pending") == (
         "Status: 2 scenarios. Changes from this chat are under Unsaved changes; Validate, then Save to keep them as "
         "a new version."
     )
+    assert _status_line(tmp_path, kept, "published") == (
+        "Status: 2 scenarios. This chat put its changes under Unsaved changes."
+    )
+    assert _status_line(tmp_path, kept, "clear") == "Status: 2 scenarios."
     assert _status_line(tmp_path, kept, "none") == "Status: 2 scenarios. No changes in this chat."
 
 def test_the_status_line_reads_zero_scenarios_and_says_nothing_about_saving_when_unknown(tmp_path):
@@ -388,7 +392,7 @@ def test_the_status_line_reads_zero_scenarios_and_says_nothing_about_saving_when
         "Status: 0 scenarios. Changes in this chat are not yet under Unsaved changes."
     )
     assert _status_line(tmp_path, [], "unknown") == "Status: 0 scenarios."
-    assert _status_line(tmp_path, [], "published", 2).endswith("except 2 scenarios that could not be applied.")
+    assert _status_line(tmp_path, [], "pending", 2).endswith("except 2 scenarios that could not be applied.")
 
 def test_the_builder_reads_the_proofs_the_platform_shows_not_the_offline_ones(tmp_path):
     """The validation proved the cases on the live runtime; the chat's own offline proofs had them kept as written."""

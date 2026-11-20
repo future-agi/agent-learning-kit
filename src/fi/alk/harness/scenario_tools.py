@@ -3437,27 +3437,6 @@ def scenario_tools(
         ),
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
-        unread = ""
-        if args.get("as_it_was"):
-            # Restored exactly as last saved: the content is the removed record's, never a copy the model wrote.
-            key = str((args.get("restored_from") or {}).get("key") or args.get("scenario_key") or "").strip()
-            record = await removed_record(key) if key else None
-            if record is None:
-                unread = (
-                    f"Not kept. No removed case {key!r} could be read. Read it with find_scenarios(removed: true) "
-                    "and restore it from that row, with its scenario_key and restored_from."
-                )
-            else:
-                args = {**record, "scenario_key": key, "restored_from": {"key": key}}
-        else:
-            await read_removed_case(args)
-        # Checked on what would be kept, a restored record included.
-        if not with_actors and (sent := actors_off_fields(args)):
-            return _err(actors_off_refusal(sent))
-        if external_runtime_target and args.get("solution"):
-            # Nothing local can replay reference calls against a connect-only agent.
-            args = {**args, "solution": []}
-
         def _refuse(said: str, as_given: dict[str, Any] | None = None, gate: str = "") -> dict[str, Any]:
             # A gate held over the whole suite counts its refusals per stage, so a rename never resets it.
             seen = (
@@ -3475,8 +3454,25 @@ def scenario_tools(
                 )
             return as_given or _err(said)
 
-        if unread:
-            return _refuse(unread)
+        if args.get("as_it_was"):
+            # Restored exactly as last saved: the content is the removed record's, never a copy the model wrote.
+            key = str((args.get("restored_from") or {}).get("key") or args.get("scenario_key") or "").strip()
+            record = await removed_record(key) if key else None
+            if record is None:
+                return _refuse(
+                    f"Not kept. No removed case {key!r} could be read. Read it with find_scenarios(removed: true) "
+                    "and restore it from that row, with its scenario_key and restored_from."
+                )
+            args = {**record, "scenario_key": key, "restored_from": {"key": key}}
+        else:
+            await read_removed_case(args)
+        # Checked on what would be kept, a restored record included.
+        if not with_actors and (sent := actors_off_fields(args)):
+            return _err(actors_off_refusal(sent))
+        if external_runtime_target and args.get("solution"):
+            # Nothing local can replay reference calls against a connect-only agent.
+            args = {**args, "solution": []}
+
         if scenario_problem:
             problem = scenario_problem(args)
             if problem:
@@ -4312,9 +4308,16 @@ def scenario_tools(
         from .proofs import proof_counts
 
         counts = proof_counts(load_proofs(destination), [proof_key(one) for one in kept])
+        # Where the platform holds the Scenarios tab's own states (`removed_lookup` reaches it), these proofs are this
+        # copy's and may differ from them.
         lines = [
-            f"{len(kept)} of {cap()} written. Proofs on record: {counts['proved']} proved, "
-            f"{counts['kept_as_written']} kept as written, {counts['not_proved']} not proved."
+            f"{len(kept)} of {cap()} written. "
+            + (
+                "Proofs made here (the tab's states may differ: scenario_status reads them): "
+                if removed_lookup is not None
+                else "Proofs on record: "
+            )
+            + f"{counts['proved']} proved, {counts['kept_as_written']} kept as written, {counts['not_proved']} not proved."
         ]
         if target.get("supports"):
             lines.append(capacity_line(int(target["supports"]), len(kept), asked_count()) + ".")

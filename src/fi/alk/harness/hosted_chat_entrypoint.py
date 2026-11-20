@@ -122,12 +122,17 @@ UNDER_UNSAVED = "Changes from this chat are under Unsaved changes; Validate, the
 
 def _changes_said(saved: str, unapplied: int = 0) -> str:
     """Where this chat's changes stand, in the words the environment's page uses, or "" when that is not known.
-    `saved` is `published` (under Unsaved changes, `unapplied` of them left out), `none` (nothing changed in this
-    chat), `unsaved` (changed here and not yet under Unsaved changes), `building` or `unknown`."""
+    `saved` is `pending` or `clear` (the page's own Unsaved changes, held or not), `published` (this chat put
+    changes there, `unapplied` of them left out, the page not read), `none` (nothing changed in this chat), `unsaved`
+    (changed here and not yet under Unsaved changes), `building` or `unknown`."""
+    except_ = f", except {unapplied} scenarios that could not be applied" if unapplied else ""
     return {
-        "published": UNDER_UNSAVED
-        + (f", except {unapplied} scenarios that could not be applied" if unapplied else "")
-        + ".",
+        # The page says it holds unsaved changes.
+        "pending": UNDER_UNSAVED + except_ + ".",
+        # The page holds none: saved or discarded there, so nothing is said about them.
+        "clear": "",
+        # What this chat did, where the page's own state was not read.
+        "published": f"This chat put its changes under Unsaved changes{except_}.",
         "none": "No changes in this chat.",
         "unsaved": "Changes in this chat are not yet under Unsaved changes.",
         "building": "The environment is still being built.",
@@ -1480,7 +1485,7 @@ class HostedChatRuntime:
             "run_scenarios",
             "Start a run of the numbered scenarios against the agent, each played `repeats` times "
             "(1 to 20). Every call costs time and money: confirm the numbers and repeats with the "
-            "person first unless they said exactly what to run. Unsaved changes are saved first.",
+            "person first unless they said exactly what to run. Changes in this chat are put under Unsaved changes first.",
             schema({"numbers": _NUMBERS, "ranges": _RANGES, "repeats": int}, []),
         )
         async def run_scenarios(args: dict[str, Any]) -> dict[str, Any]:
@@ -1659,13 +1664,17 @@ class HostedChatRuntime:
             + "."
         )
 
-    async def _tab_status_counts(self) -> dict[str, Any]:
-        """The Scenarios tab's counts from the overview, or {} when it sends none."""
+    async def _overview(self) -> dict[str, Any]:
+        """The platform's overview of the environment, or {} when it does not answer."""
         try:
             overview = await self.client.overview()
-        except Exception:  # noqa: BLE001 - no counts is said as none, never guessed
+        except Exception:  # noqa: BLE001 - what is not read is said as unknown, never guessed
             return {}
-        counts = overview.get("lifecycle_counts") if isinstance(overview, dict) else None
+        return overview if isinstance(overview, dict) else {}
+
+    async def _tab_status_counts(self) -> dict[str, Any]:
+        """The Scenarios tab's counts from the overview, or {} when it sends none."""
+        counts = (await self._overview()).get("lifecycle_counts")
         return counts if isinstance(counts, dict) else {}
 
     async def _tab_status(self, names: list[str]) -> dict[str, Any]:
@@ -1687,13 +1696,19 @@ class HostedChatRuntime:
         rows = answer.get("removed") if isinstance(answer, dict) else None
         return [row for row in rows or [] if isinstance(row, dict) and row.get("scenario_key") == key]
 
-    def _closing_status(self, counts: Mapping[str, Any] | None = None) -> str:
-        """The code-written status line for the end of this reply, or "" before the environment has a suite."""
+    def _closing_status(self, overview: Mapping[str, Any] | None = None) -> str:
+        """The code-written status line for the end of this reply, or "" before the environment has a suite. With the
+        platform's `overview`, the counts and whether the page holds Unsaved changes are its own."""
         kept = self._suite_here()
         if kept is None:
             return ""
+        overview = overview or {}
+        counts = overview.get("lifecycle_counts") if isinstance(overview.get("lifecycle_counts"), Mapping) else None
         state = self._saved_state()
-        unapplied = int(self._published().get("unapplied") or 0) if state == "published" else 0
+        drafts = overview.get("drafts")
+        if state in ("published", "none") and isinstance(drafts, Mapping):
+            state = "pending" if any(drafts.values()) else "clear"
+        unapplied = int(self._published().get("unapplied") or 0) if state in ("published", "pending") else 0
         return _status_line(self.workspace, kept, state, unapplied, counts)
 
     def _turn_status_note(self) -> str:
@@ -1786,7 +1801,8 @@ class HostedChatRuntime:
             return "unknown"
         if self._environment_fingerprint() != published["fingerprint"]:
             return "unsaved"
-        return "published" if published.get("published") else "none"
+        # A marker written by a publish carries `unapplied`, an older one too; one minted at the start does not.
+        return "published" if published.get("published") or "unapplied" in published else "none"
 
     def _write_dotfile(self, name: str, body: dict[str, Any]) -> None:
         path = self.workspace / name
@@ -2619,10 +2635,13 @@ class HostedChatRuntime:
         if open_review := self._review_line():
             final_text = f"{final_text}\n\n{open_review}".strip()
         self._report_again_if_written()
-        final_text = self._close_with_proof_counts(final_text, finished_before)
+        overview = await self._overview()
+        if not isinstance(overview.get("lifecycle_counts"), dict):
+            # One source of counts: the tab's when the platform sends them, else the finished build's.
+            final_text = self._close_with_proof_counts(final_text, finished_before)
         # Every reply ends with it, one that was only tool calls included: the person always sees the real state.
         try:
-            truth = self._closing_status((await self._tab_status_counts()) or None)
+            truth = self._closing_status(overview)
         except Exception:  # noqa: BLE001 - the line is read from files; one that cannot be read never costs the reply
             truth = ""
         if truth:
