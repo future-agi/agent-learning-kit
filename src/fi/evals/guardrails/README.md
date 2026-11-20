@@ -480,8 +480,8 @@ def moderate_post(post_content: str) -> dict:
 ## Dependencies
 
 ```bash
-# Core (always required)
-pip install fi-ai-evaluation
+# Core (in a fresh virtual environment)
+python -m pip install agent-learning-kit
 
 # OpenAI backend
 pip install openai

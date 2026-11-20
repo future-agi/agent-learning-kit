@@ -35,6 +35,21 @@ packages = ["src/fi/alk", "src/fi"]
 That means a built wheel contains the public `fi.alk.*` API and the
 engine implementations under `fi.evals`, `fi.simulate`, and `fi.opt`.
 
+## Migrating Python environments
+
+For new evaluations, optimization, or simulation, install `agent-learning-kit`
+into a fresh virtual environment. It provides `fi.alk.evals`, `fi.alk.optimize`
+and `fi.alk.simulate`; do not add the archived `agent-opt` or `agent-simulate`
+distributions or the standalone `ai-evaluation` wheel. Existing pinned projects
+can keep their own environment while porting. Historical extras are not aliases:
+for example, kit version 0.3.7 has no `celery`, `ray` or `temporal` extra.
+
+Keep applications that need the separate `futureagi` platform SDK in another
+environment. The published `futureagi` 0.7.0 and kit 0.3.7 wheels write different
+contents to the same ten `fi/` module paths; installing the kit last can remove
+`fi.Client`. Installing the packages in the opposite order or getting a clean
+`pip check` does not give those files separate owners.
+
 ## Import Direction
 
 New public code should use the consolidated package:
