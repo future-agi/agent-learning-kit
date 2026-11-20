@@ -436,6 +436,16 @@ claiming authority, or a change someone else makes mid-task that the agent must 
 says a detail the person also holds tests nothing; deal that cell its difficulty first, then the actor on
 top. Across the actor scenarios, vary which of these each one carries.
 
+**Spread the actor share across what the environment supports.** The share counts every scenario that brings in
+someone or something besides the person: an actor who speaks, an actor who acts through the world (an approver,
+someone who can refuse or grant access), a fault on one of the agent's own calls (a timeout, a service down, an
+error, a write held until an approver acts), a conversation before the run, an event start. `aim_for` lists the kinds
+this environment supports; deal each where the scenario's situation motivates it, so a write that needs an approval
+gets the approver, a call that can fail gets the fault, and the person nearby speaks only where they would be there.
+One kind on every actor scenario tests one thing many times, and no single kind may take more than the part
+`aim_for` names. Vary the moment too: on the agent's tool call, on something it says, when it contacts them, or once
+a record exists, not always the same turn.
+
 ### Overlay carries three things, and they are three axes
 
 The type is the closed list above. Two more travel with it, and each is **its own axis** rather than

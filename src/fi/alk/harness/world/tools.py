@@ -691,7 +691,8 @@ def world_actor_tools(
         "words, and what they bring that the agent has to handle: a fact that can differ from the person's, a "
         "request of their own, a decision only they make. \"Chimes in with the pickup details\" gives the agent "
         "nothing to handle; \"Sometimes remembers the pickup differently from the caller\" does. An actor is the "
-        "same in every scenario, so `role` names people by their part (the caller, the caller's spouse), never by "
+        "same in every scenario, so `role` names people by their part (someone with the caller, the manager who "
+        "approves), never by "
         "one scenario's names."
         + (f" The world's actions: {', '.join(listed)}." if listed else "")
         + (f" Record changes: {', '.join(records)}." if records else ""),

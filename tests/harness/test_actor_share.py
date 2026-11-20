@@ -18,7 +18,7 @@ from fi.alk.harness.world import GeneratedWorld
 from fi.alk.harness.world.snapshot import save
 from fi.simulate.simulation.call_actors import SHARE_RANGE, at_least, default_share
 
-SHARE_REFUSAL = "include an actor who speaks"
+SHARE_REFUSAL = "include an actor or a fault"
 ACTOR = [{"id": "second", "instruction": "Take over when asked."}]
 PLACED = {axis: "plain" for axis in CANONICAL_AXES}
 
@@ -154,3 +154,61 @@ def test_renaming_an_actor_free_scenario_does_not_reset_the_loop_breaker(tmp_pat
     assert all(SHARE_REFUSAL in one for one in said)
     assert "submitting it again will not work" not in said[1]
     assert "refusal 3 across the scenarios written here" in said[2]
+
+
+KIND_REFUSAL = "one kind takes at most"
+FAULT = [{"action": "put", "mode": "timeout_after_commit"}]
+
+
+def _with_an_approver(root: Path) -> None:
+    from fi.alk.harness.actors import Actor
+
+    listing = load_actors(root)
+    approver = Actor(id="lead", name="Morgan Hale", role="the lead who approves", permitted_actions=["approval.put"])
+    save_actors(root, listing.model_copy(update={"actors": [*listing.actors, approver]}))
+
+
+def test_a_fault_or_a_world_actor_counts_toward_the_share_as_a_speaking_actor_does():
+    from fi.alk.harness.scenario_tools import _call_actors_short
+
+    offered = ["an actor who speaks (second)"]
+    alone = [Scenario(name=f"s{n}") for n in range(9)]
+    assert "include an actor or a fault" in _call_actors_short({"name": "s9"}, alone, 10, 0.2, offered)
+    faulted = [Scenario(name="f0", faults=FAULT), Scenario(name="f1", faults=FAULT)] + alone[:7]
+    assert _call_actors_short({"name": "s9"}, faulted, 10, 0.2, offered) == ""
+    approved = [Scenario(name="a0", actors=[{"id": "lead"}]), Scenario(name="a1", actors=[{"id": "lead"}])]
+    assert _call_actors_short({"name": "s9"}, approved + alone[:7], 10, 0.2, offered) == ""
+    assert _call_actors_short({"name": "s9", "faults": FAULT}, alone, 10, 0.2, offered) == ""
+
+
+def test_the_plan_spreads_actor_scenarios_across_every_kind_the_environment_supports(tmp_path):
+    contract = _environment(tmp_path)
+    _with_an_approver(tmp_path)
+    server, _ = scenario_tools(contract, tmp_path, tmp_path, wanted=40, can_save=False)
+    tools = {one.name: one.handler for one in server.tools}
+    aim = {"count": 40, "axes": {axis: ["plain"] for axis in CANONICAL_AXES}, "actor_share": {"min": 0.5, "max": 0.5}}
+    said = asyncio.run(tools["aim_for"](aim))["content"][0]["text"]
+    assert "At least 20 of the 40 scenarios include an actor or a fault" in said
+    assert "no one kind on more than 50% of them" in said
+    assert "an actor who speaks (second)" in said
+    assert "an actor who acts through the world (lead: approval.put)" in said
+    assert "approval_required held until lead approves" in said
+    assert "act through the world and no level is named for them yet: lead" in said
+
+
+def test_one_kind_of_actor_scenario_cannot_take_the_whole_share(tmp_path):
+    spouse_like = [Scenario(name=f"h{n}", actors=ACTOR) for n in range(10)]
+    tools = _stage(tmp_path, spouse_like, wanted=40, actor_share={"min": 0.5, "max": 0.5})
+    refused = _submit(tools, "h10", with_actor=True)
+    assert KIND_REFUSAL in refused and "already carry second" in refused and "a fault on one of the agent's" in refused
+    faulted = {"name": "f0", "instruction": "Keep a note.", "coverage": PLACED, "faults": FAULT}
+    assert KIND_REFUSAL not in asyncio.run(tools["submit_scenario"](faulted))["content"][0]["text"]
+    # Editing one already in the suite never changes what it tests, so it is never refused for its kind.
+    assert KIND_REFUSAL not in _submit(tools, "h3", with_actor=True)
+
+
+def test_the_most_one_kind_may_take_is_a_setting(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_ACTOR_KIND_MOST_SHARE", "1")
+    tools = _stage(tmp_path, [Scenario(name=f"h{n}", actors=ACTOR) for n in range(10)], wanted=40,
+                   actor_share={"min": 0.5, "max": 0.5})
+    assert KIND_REFUSAL not in _submit(tools, "h10", with_actor=True)
