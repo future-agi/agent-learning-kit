@@ -160,15 +160,19 @@ def expected_outcome(scenario: Scenario, catalogue: Catalogue, workers: Sequence
             lines.append(f"- {what}")
     if not lines or not workers:
         return "\n".join(lines)
-    holder = {
-        tool: str(getattr(one, "name", "") or getattr(one, "id", ""))
-        for one in workers
-        for tool in getattr(one, "tools", None) or ()
-    }
-    path = [
-        f"{step.tool} (done by the worker {holder[str(step.tool)]})" if str(step.tool) in holder else str(step.tool)
-        for step in getattr(scenario, "solution", None) or ()
-    ]
+    holders: dict[str, list[str]] = {}
+    for one in workers:
+        for name in getattr(one, "tools", None) or ():
+            holders.setdefault(str(name), []).append(str(getattr(one, "name", "") or getattr(one, "id", "")))
+
+    def shown(name: str) -> str:
+        # A tool is put down to a worker only when that worker alone holds it.
+        held = holders.get(name) or []
+        if len(held) == 1:
+            return f"{name} (done by the worker {held[0]})"
+        return f"{name} (a tool {', '.join(held)} all hold)" if held else name
+
+    path = [shown(str(step.tool)) for step in getattr(scenario, "solution", None) or ()]
     lines.append(
         "\nThe app's workers, the agents it hands work to, and the tools each holds: "
         + "; ".join(
@@ -188,7 +192,10 @@ _CONFLICT_PROMPT = (
     "covers part of the rule, or adds details the rule does not mention, does not contradict it. Where the app "
     "hands work to workers, a rule that sends a kind of request to a worker is how that work gets done: an "
     "outcome the case reaches through that worker follows the rule; only an outcome reached some other way, "
-    "or one the rule's worker is not to produce, contradicts it.\n\n"
+    "or one the rule's worker is not to produce, contradicts it. The path lists tool calls only: a worker that "
+    "uses no tools leaves no step, a worker may hand work on to further workers, and a tool several workers hold "
+    "does not say which one called it, so a path that does not name the rule's worker is no sign the work went "
+    "around it.\n\n"
     "Expected outcome:\n{expected}\n\nRule:\n{rule}\n\nCall decide."
 )
 

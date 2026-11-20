@@ -98,6 +98,9 @@ LANE_CODES = frozenset(
         BlockedReason.JUDGED_ONLY,
     }
 )
+# A model's judgment, never proof: a case it alone holds back is kept as written with the judgment as its warning, and
+# handed back to its writer in a repair round first.
+JUDGED_CODES = frozenset({BlockedReason.POLICY_CONFLICT})
 # A case with no negative control at all: refused at submit, kept not proved through a rebuild.
 NO_NEGATIVE_CONTROL = BlockedReason.NO_NEGATIVE_CONTROL
 # Refused at submit, where a case is written or edited. A case proved again as it was written (a Validate, a rebuild
@@ -266,7 +269,9 @@ class Proof:
         """Not proved only because this lane could not execute something, or, proved again as it was written, only for
         a rule its case predates; nothing that ran failed."""
         blocked = self.blocked_reason()
-        return not self.proved and (blocked in LANE_CODES or (self.as_written and blocked in KEPT_THROUGH_REBUILD))
+        return not self.proved and (
+            blocked in LANE_CODES or blocked in JUDGED_CODES or (self.as_written and blocked in KEPT_THROUGH_REBUILD)
+        )
 
     def blocked_reason(self) -> BlockedReason | None:
         """The first reason this proof is not proved, faults before the lane's own limits."""
@@ -329,8 +334,15 @@ class Proof:
         """What the case's own text and sources got wrong, checked before any gate: a contradicted rule, a leaked
         answer, a source that does not resolve; "" when none."""
         if self.conflicts:
-            return "its expected outcome contradicts a cited rule:\n  - " + "\n  - ".join(
-                f"{one['ref'] or 'rule'} \"{one['rule']}\": {one['why'] or 'contradicted'}" for one in self.conflicts
+            return (
+                "a model judged that its expected outcome may contradict a cited rule (a judgment, not a proof):\n  - "
+                + "\n  - ".join(
+                    f"possible conflict with {one['ref'] or 'rule'} \"{one['rule']}\": {one['why'] or 'contradicted'}"
+                    for one in self.conflicts
+                )
+                + "\n\nRead the rule against the case. If the case does what the rule says (the rule's worker does the "
+                "work, or the rule does not apply here), make that plain in the case or cite the rule it follows; if "
+                "not, change the case. Left as it is, the case is kept as written with this warning."
             )
         if self.leaks:
             return "what the simulated person or the agent sees gives the answer away:\n  - " + "\n  - ".join(
