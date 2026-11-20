@@ -207,7 +207,9 @@ def test_the_uncited_rules_are_read_with_the_situation_as_advice_in_bundles_only
 
     cited, *bundles = found
     # The cited rule is judged as before: on the expected outcome alone, so its cache key is unchanged.
-    assert cited["ref"] == "rule:0" and not cited.get("advisory") and asked[0][0] == "- The agent issues the full refund."
+    assert (
+        cited["ref"] == "rule:0" and not cited.get("advisory") and asked[0][0] == "- The agent issues the full refund."
+    )
     assert [one["ref"] for one in bundles] == ["rules", "rules"] and all(one["advisory"] for one in bundles)
     assert [len(one["rule"].splitlines()) for one in bundles] == [20, 4]
     assert "representing Ravi Patel" in asked[1][0]
@@ -255,3 +257,41 @@ def test_aim_for_says_a_case_is_refused_only_when_that_gate_is_on(tmp_path, monk
     assert "refuses one that does neither" in described({FAULT_LEVEL_GATE})
     assert "refuses one that does not" in described({CHECKED_LEVEL_GATE})
     assert "refuses one that does neither" not in described({CHECKED_LEVEL_GATE})
+
+
+def test_a_case_on_the_agent_s_service_tools_is_said_to_be_proved_live_not_unproved(tmp_path, monkeypatch):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    monkeypatch.setattr(tools_module, "native_runtime", lambda _root: True)
+    monkeypatch.setattr(tools_module, "validate_scenario", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        tools_module,
+        "prove",
+        lambda *_args, **_kwargs: Proof(
+            ready=True,
+            solvable=True,
+            vacuous=False,
+            assumed=["issue_refund"],
+            controls=[{"name": "twice", "assumed": ["issue_refund"]}],
+        ),
+    )
+
+    def submitted(name: str, service: set[str]) -> str:
+        return accept_scenario(
+            {
+                "name": name,
+                "instruction": "i",
+                "solution": [{"tool": "lookup_order", "arguments": {}}, {"tool": "issue_refund", "arguments": {}}],
+            },
+            world_root=tmp_path,
+            catalogue=Catalogue(),
+            kept=[],
+            allow_empty_solution=True,
+            persist=False,
+            service_tools=service,
+        )["content"][0]["text"]
+
+    live = submitted("on_the_service", {"issue_refund"})
+    assert "it will be proved live" in live and "NOT PROVED" not in live and "remains unverified" not in live
+    elsewhere = submitted("no_endpoint", set())
+    assert "NOT PROVED" in elsewhere and "it will be proved live" not in elsewhere

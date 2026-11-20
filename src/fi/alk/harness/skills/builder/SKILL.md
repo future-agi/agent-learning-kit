@@ -217,8 +217,13 @@ what the gates check. Then:
   rule nothing replaces and your new rule rewords it, call `add_rule` again with the same rule and
   `replaces` set to that id; it links the two and changes nothing else. The reply lists every case that cites the old rule, and a `fix_tool` reply every case
   that calls the tool. Read each listed case against the current rule, with its sub-goals, and in the
-  same turn edit what no longer holds: its name, use case, tests, instruction and controls' `why`, and
-  each sub-goal's description, criteria and reference. Many cases: hand them to sub-agents in batches,
+  same turn edit every text that still states the old rule: its name, use case (the heading its group
+  is shown under), branch, tests, instruction and controls' `why`, and each sub-goal's description,
+  criteria and reference. Then search the whole suite (Grep over the scenario folders) for the old
+  wording or value: a case that restates it without citing the rule is not listed, and is fixed the
+  same way. A rule change edits the cases that rest on it and adds none: add a scenario only when the
+  person asked for one, and if you think one is missing, propose it; in `confirm_plan` a submission
+  without a `scenario_key` is shown as a NEW SCENARIO. Many cases: hand them to sub-agents in batches,
   each with the current rule and its share of the list, and say how many of the total are reviewed as
   they come back. Ask before saving whether to review the rest now or leave them marked Source changed.
 - **Duplicate or vary**: read the original, then submit a copy under a new name with only the asked

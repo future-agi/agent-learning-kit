@@ -226,6 +226,11 @@ def _shown(value: Any) -> str:
     return f"{said[:_SHOWN_PER_ARGUMENT].rstrip()}... ({len(said) - _SHOWN_PER_ARGUMENT} more characters)"
 
 
+def _adds_a_case(tool: str, arguments: Mapping[str, Any]) -> bool:
+    """Whether a planned call adds a scenario rather than changing one: a submission that names no case's key."""
+    return tool == "submit_scenario" and not str(arguments.get("scenario_key") or "").strip()
+
+
 def _call_line(tool: str, arguments: Mapping[str, Any]) -> str:
     """A call as the person reads it in a plan: the tool and each argument it is called with, a long one cut short."""
     shown = "; ".join(f"{name}: {_shown(value)}" for name, value in sorted(arguments.items()))
@@ -1165,13 +1170,23 @@ class HostedChatRuntime:
             return {"content": [{"type": "text", "text": "List each change as its tool and the exact arguments you "
                                  "will call it with."}], "is_error": True}
         yes = f"Yes, apply these {len(listed)} changes" if len(listed) > 1 else "Yes, apply this change"
+        # A submission naming no kept case's key adds one, which the person sees said outright, not inferred.
+        added = [_adds_a_case(tool, arguments) for tool, arguments in listed]
         async with self._confirming:
             answer = await self._ask(
                 "confirm_plan",
                 {
                     "question": (f"Apply these {len(listed)} changes?" if len(listed) > 1 else "Apply this change?")
+                    + (
+                        f" {sum(added)} of them {'adds a new scenario' if sum(added) == 1 else 'add new scenarios'}."
+                        if any(added)
+                        else ""
+                    )
                     + "\n"
-                    + "\n".join(f"{at}. {_call_line(tool, arguments)}" for at, (tool, arguments) in enumerate(listed, 1)),
+                    + "\n".join(
+                        f"{at}. {'NEW SCENARIO: ' if new else ''}{_call_line(tool, arguments)}"
+                        for at, ((tool, arguments), new) in enumerate(zip(listed, added), 1)
+                    ),
                     "options": [yes, "No"],
                     "options_only": True,
                 },

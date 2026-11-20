@@ -2386,17 +2386,21 @@ def accept_scenario(
     # Say what the proof did not cover. On a lane where the target's tools have no endpoints, every
     # solution step is recorded without running, so "all three gates pass" is true and misleading:
     # the checks were exercised, the solution was not.
+    # Tools the agent's own service runs are proved by the live proof against that service, not here.
+    live = proof is not None and bool(proof.assumed) and set(proof.assumed) <= (service_tools or set())
     unproved = (
         ""
-        if proof is None
+        if proof is None or not proof.assumed
+        else "\nNot proved here (these tools run on the agent's service: "
+        + ", ".join(proof.assumed)
+        + "); it will be proved live."
+        if live
         else "\nNOT PROVED: "
         + f"{len(proof.assumed)} of {len(scenario.solution)} solution steps were recorded without "
         "running, because these tools have no endpoint in this environment: "
         + ", ".join(proof.assumed)
         + ". The checks ran, the solution did not, so this scenario is kept as written rather than "
         "as demonstrated."
-        if proof.assumed
-        else ""
     ) + (
         "\nNOT PROVED: these world actor actions run on a clock or a chance, which a proof does not "
         "have, so they were not played: " + ", ".join(proof.unplayed) + "."
@@ -2411,9 +2415,13 @@ def accept_scenario(
             "agent's reply."
         )
     if proof is not None and proof.blocked_reason() == BlockedReason.CONTROL_NOT_RUN:
+        unrun = sorted({tool for one in proof.controls for tool in one.get("assumed") or []})
         unproved += (
-            "\nNOT PROVED: no negative control could run here, because these tools have no endpoint: "
-            + ", ".join(sorted({tool for one in proof.controls for tool in one.get("assumed") or []}))
+            f"\nIts negative controls are not played here either (these tools run on the agent's service: "
+            f"{', '.join(unrun)}); they will be played live."
+            if unrun and set(unrun) <= (service_tools or set())
+            else "\nNOT PROVED: no negative control could run here, because these tools have no endpoint: "
+            + ", ".join(unrun)
             + ". It is kept as written; the checks were never shown to fail a wrong behaviour."
         )
     if proof is not None and proof.blocked_reason() == BlockedReason.JUDGED_ONLY:
@@ -2439,8 +2447,10 @@ def accept_scenario(
         proof_summary = proof.why()
     elif proof.assumed:
         proof_summary = (
-            "Local checks passed with assumed tool results; the reference solution remains "
-            "unverified."
+            "Local checks passed with assumed tool results; the reference solution is proved live, against the "
+            "agent's service."
+            if live
+            else "Local checks passed with assumed tool results; the reference solution remains unverified."
         )
     elif proof.judged_only:
         proof_summary = (
