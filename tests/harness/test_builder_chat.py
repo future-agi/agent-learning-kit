@@ -269,6 +269,32 @@ def test_the_reply_the_platform_stores_ends_with_the_status_line_even_after_only
     )
 
 
+def test_a_status_line_that_cannot_be_read_never_costs_the_reply(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
+    runtime._mint_published()
+
+    def unreadable():
+        raise OSError("a file vanished mid-read")
+
+    runtime._closing_status = unreadable  # type: ignore[method-assign]
+    runtime.conversation = EditingConversation(tmp_path, writes=False)
+    _turn(runtime, {"content": "anything"})
+    assert _reply(client) == "Added it."
+
+
+def test_a_working_copy_carried_on_from_earlier_turns_is_never_minted_as_saved(tmp_path, monkeypatch):
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch, closing=True)
+    (tmp_path / ".futureagi-published.json").unlink()
+    (tmp_path / ".futureagi-conversation.json").write_text("{}", encoding="utf-8")
+    runtime._mint_published()
+    assert runtime._saved_state() == "unknown"
+    # A fresh open from the environment, with no turn run here yet, is what the environment holds.
+    (tmp_path / ".futureagi-conversation.json").unlink()
+    runtime._mint_published()
+    assert runtime._saved_state() == "saved"
+
+
 def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     client = BuilderClient(applied=False)
     runtime = _runtime(tmp_path, client, monkeypatch)
@@ -5305,6 +5331,33 @@ def test_a_rule_source_is_a_file_and_its_line_together(tmp_path):
         source_quote="Gift cards are never sold.",
     )
     assert done and contract.rule_source("Never sell gift cards.").quote == "Gift cards are never sold."
+
+
+def test_a_rule_source_quote_longer_than_a_line_is_refused_before_anything_changes(tmp_path):
+    from fi.alk.harness.amend import add_rule
+
+    root, contract = _cited_suite(tmp_path)
+    before = list(contract.hard_constraints)
+    done, said = add_rule(
+        contract, root, rule="Never sell gift cards.", why="asked", source_file="knowledge/p.md", source_quote="x" * 501
+    )
+    assert not done and "at most 500 characters" in said and contract.hard_constraints == before
+
+
+def test_a_case_cites_a_rule_s_line_only_by_quoting_enough_of_it():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.amend import _cites_line
+    from fi.alk.harness.contract import RuleSource
+
+    written = RuleSource(rule="r", file="knowledge/refund-policy.md", quote="Refunds are accepted within 30 days.")
+
+    def case(quote):
+        return SimpleNamespace(sources=[SimpleNamespace(kind="file", ref="file:knowledge/refund-policy.md", quote=quote)])
+
+    assert not _cites_line(case("days"), written)
+    assert _cites_line(case("accepted within 30 days"), written)
+    assert _cites_line(case("Policy: Refunds are accepted within 30 days. Exchanges any time."), written)
 
 
 def test_a_contract_with_no_rule_sources_saves_as_before():

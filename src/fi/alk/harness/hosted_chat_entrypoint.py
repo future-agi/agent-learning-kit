@@ -1710,9 +1710,10 @@ class HostedChatRuntime:
         return str(self._published().get("fingerprint") or "")
 
     def _mint_published(self) -> None:
-        """At the sandbox's start, what it opened from is what the environment holds, unless an earlier sandbox of
-        this conversation already recorded what was saved."""
-        if not self._published_fingerprint():
+        """At a fresh open from the environment (no turn of this conversation has run here yet), what the sandbox
+        opened is what the environment holds. A working copy carried on from earlier turns with no marker stays
+        unknown: it may hold changes that were never saved."""
+        if not self._published_fingerprint() and not (self.workspace / _JOURNAL).is_file():
             self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
 
     def _saved_state(self) -> str:
@@ -2555,7 +2556,11 @@ class HostedChatRuntime:
         self._report_again_if_written()
         final_text = self._close_with_proof_counts(final_text, finished_before)
         # Every reply ends with it, one that was only tool calls included: the person always sees the real state.
-        if truth := self._closing_status():
+        try:
+            truth = self._closing_status()
+        except Exception:  # noqa: BLE001 - the line is read from files; one that cannot be read never costs the reply
+            truth = ""
+        if truth:
             final_text = f"{final_text}\n\n{truth}".strip()
         if final_text:
             await self.client.emit(

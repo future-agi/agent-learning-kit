@@ -159,6 +159,8 @@ def add_rule(
         return False, "no rule given"
     if bool(source_file.strip()) != bool(source_quote.strip()):
         return False, "a rule's source is a file and the line quoted from it: give both, or neither"
+    if len(source_quote.strip()) > 500:
+        return False, "source_quote is the one line the rule is written on, quoted in at most 500 characters"
     if not why.strip():
         return False, "say why: an unexplained rule is indistinguishable from a guess"
     # Whether two rules are one rule reworded is the builder's judgment: the rules dropped in this message are only
@@ -576,6 +578,10 @@ def _case_texts(scenario: Any) -> str:
     return head + "".join(f"\n      {label}: {' '.join(str(text).split())}" for label, text in texts if text)
 
 
+# The fewest characters of a rule's line a case's quote holds to cite that line, not a word in it.
+_LEAST_QUOTED = 20
+
+
 def _cites_line(scenario: Any, written: RuleSource | None) -> bool:
     """Whether a case cites the line of the agent's material a rule is written on: a `file` source naming that file
     whose quote and the rule's quoted line hold one another."""
@@ -587,7 +593,8 @@ def _cites_line(scenario: Any, written: RuleSource | None) -> bool:
         if source.kind != "file" or source.ref.strip().removeprefix("file:").strip("/") != named:
             continue
         quote = " ".join(source.quote.split()).lower()
-        if quote and line and (quote in line or line in quote):
+        # The case quotes the whole line, or enough of it to be that line and not a word it shares.
+        if line and quote and (line in quote or (len(quote) >= _LEAST_QUOTED and quote in line)):
             return True
     return False
 
