@@ -3589,7 +3589,9 @@ def scenario_tools(
         "is built from these, so a wrong argument name produces a world that refuses everything. `arg_units` "
         "records the unit or format of a field (a currency's minor or major unit, seconds or milliseconds); "
         "`returns` the fields "
-        "the tool hands back, each with its type and unit.",
+        "the tool hands back, each with its type and unit. "
+        "`refusals` replaces the refusals that turn on a record's field (each: `status`, `table`, `column`, "
+        "`argument`, `field`, `values`, `message`); the world answers each the way the tool does.",
         schema(
             {
                 "tool_name": str,
@@ -3599,6 +3601,7 @@ def scenario_tools(
                 "returns": dict,
                 "description": str,
                 "refuses": str,
+                "refusals": list,
                 "effects": str,
                 "inputs_from": dict,
                 "remove": bool,
@@ -3624,6 +3627,7 @@ def scenario_tools(
             effects=str(args.get("effects") or ""),
             inputs_from={str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()},
             remove=bool(args.get("remove")),
+            refusals=list(args["refusals"]) if isinstance(args.get("refusals"), list) else None,
         )
         return _ok(said) if done else _err(said)
 

@@ -1652,7 +1652,9 @@ def world_tools(
         "replaces its argument names in order; `arg_types`, `arg_units` (the unit or format of a field, a "
         "currency's minor or major unit, seconds or milliseconds) and `description` update those. Set "
         "`remove` to take the tool away entirely. Everything downstream is built from these, so "
-        "a wrong argument name produces a world that refuses everything. Say why.",
+        "a wrong argument name produces a world that refuses everything. "
+        "`refusals` replaces the refusals that turn on a record's field (each: `status`, `table`, `column`, "
+        "`argument`, `field`, `values`, `message`); the world answers each the way the tool does. Say why.",
         schema(
             {
                 "tool_name": str,
@@ -1661,6 +1663,7 @@ def world_tools(
                 "arg_units": dict,
                 "description": str,
                 "refuses": str,
+                "refusals": list,
                 "effects": str,
                 "inputs_from": dict,
                 "remove": bool,
@@ -1687,6 +1690,7 @@ def world_tools(
                 str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()
             },
             remove=bool(args.get("remove")),
+            refusals=list(args["refusals"]) if isinstance(args.get("refusals"), list) else None,
         )
         return _ok(said) if done else _err(said)
 
