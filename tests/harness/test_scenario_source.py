@@ -3576,3 +3576,21 @@ def test_a_cell_holds_its_share_of_a_large_suite_before_a_like_case_is_refused()
     assert _already_in_the_suite(ask, kept, wanted=12, grid=grid) == ""
     # Without a plan or a size, one alike case is enough, as before.
     assert "already occupies this cell" in _already_in_the_suite(ask, kept[:1])
+
+
+def test_the_build_s_authoring_stage_never_suggests_dealing_rounds(tmp_path: Path) -> None:
+    from fi.alk.harness import scenarios as stage
+    from fi.alk.harness.contract import AgentContract
+
+    with mock.patch.object(stage, "world_summary", lambda _: "w"), mock.patch.object(
+        stage, "load_skill", lambda *a, **k: "s"
+    ), mock.patch.object(stage, "discovered_skills", lambda **k: ""):
+        planner, _ = stage.open_stage(AgentContract(agent="a"), out=tmp_path / "suite", wanted=200)
+    said = planner._spec.system_prompt
+    writer = planner._spec.workers[stage.WRITER]
+
+    assert "Do not deal rounds with suite_progress `deal`" in said and "Deal each round" not in said
+    assert "deal from suite_progress" not in writer.description
+    assert "Your brief carries a deal" not in writer.instructions
+    # The stage still hands the suite out to writers, as on the proven build.
+    assert planner._spec.workers
