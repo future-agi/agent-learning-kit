@@ -3450,3 +3450,29 @@ def test_a_program_a_safe_launcher_runs_needs_its_own_evidence(tmp_path, command
     # uv vouches for itself, not for the program it runs: script and flock hand a shell its -c.
     with pytest.raises(ValueError, match="runtime_repair_launcher_not_source_evidenced"):
         _validate_native(tmp_path, command)
+
+
+@pytest.mark.parametrize(("config", "refused"), [("pyproject.toml", True), ("langgraph.json", False)])
+def test_a_repair_that_points_langgraph_dev_at_a_file_other_than_its_config_is_refused(tmp_path, config, refused):
+    """As a live repair tried it on the deep agents repository: `--config pyproject.toml`."""
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (service / "app.py").write_text("graph = object()\n")
+    (service / "langgraph.json").write_text(json.dumps({"graphs": {"agent": "./app.py:graph"}}))
+    contract = AgentContract(agent="agent", modality="chat")
+    patch = _patch(contract)
+    patch = patch.model_copy(update={"runtime": patch.runtime.model_copy(update={
+        "command": ["python", "-m", "langgraph", "dev", "--config", config],
+    })})
+
+    def validate():
+        return validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+        )
+
+    if refused:
+        with pytest.raises(ValueError, match="runtime_repair_langgraph_config_invalid: --config pyproject.toml is not"):
+            validate()
+    else:
+        assert validate().runtime.command[-1] == "langgraph.json"

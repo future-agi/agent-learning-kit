@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import array
 import asyncio
+import contextvars
 import json
 import math
 import logging
@@ -1969,7 +1970,7 @@ class LiveKitEngine(BaseEngine):
             if not _cleanup_started:
                 _cleanup_started.append(time.monotonic())
             spent = time.monotonic() - _cleanup_started[0]
-            remaining = max(0.1, cleanup_timeout - spent)
+            remaining = max(0.1, _cleanup_limit(cleanup_timeout) - spent)
             return min(cap, remaining)
 
         api_key = os.environ.get(runtime.api_key_env)
@@ -2958,7 +2959,10 @@ class LiveKitEngine(BaseEngine):
                         extra={"run_id": run_id, "test_case_id": test_case_id},
                     )
             _loop = asyncio.get_running_loop()
-            _commit_deadline = _loop.time() + _FINAL_TURN_COMMIT_WAIT_SECONDS
+            # A person's Stop cuts the call where it is: no wait for the turn in flight or the target's last words.
+            _commit_deadline = _loop.time() + (
+                0.0 if stop_reason == "user_canceled" else _FINAL_TURN_COMMIT_WAIT_SECONDS
+            )
             while _loop.time() < _commit_deadline:
                 try:
                     if session.current_speech is None:
@@ -2967,7 +2971,7 @@ class LiveKitEngine(BaseEngine):
                     break
                 await asyncio.sleep(0.2)
             session_messages = _session_messages(session)
-            waited = await _await_target_last_words(
+            waited = 0.0 if stop_reason == "user_canceled" else await _await_target_last_words(
                 speaking=lambda: bool(target_transcription_tasks)
                 or getattr(session, "user_state", None) == "speaking",
                 present=lambda: any(
@@ -4036,6 +4040,61 @@ async def _await_target_last_words(
     return loop.time() - started
 
 
+# The hosting harness's Stop, read while a conversation runs: set by the voice environment for one run, so a person's
+# Stop ends the call at once and the call is sealed with what was said up to it.
+STOP_CHECK: contextvars.ContextVar[Callable[[], bool] | None] = contextvars.ContextVar(
+    "livekit_stop_check", default=None
+)
+_STOP_POLL_SECONDS = 0.25
+
+
+# After a person's Stop the call is sealed with what it has: teardown gets this much in all, so the transcript and the
+# recording reach the harness inside its seal bound (15 s from the stop) however long LiveKit takes to let go.
+_STOPPED_CLEANUP_SECONDS = 8.0
+
+
+# Until when the target is known to be working with nobody speaking (a tool call the harness's world is holding for
+# its timeout), as an epoch second; read while a conversation runs. Unset, the silence backstop is as it always was.
+TARGET_BUSY_UNTIL: contextvars.ContextVar[Callable[[], float | None] | None] = contextvars.ContextVar(
+    "livekit_target_busy_until", default=None
+)
+
+
+def _target_held() -> bool:
+    """Whether the hosting harness says the target is still working on a held tool call."""
+    check = TARGET_BUSY_UNTIL.get()
+    if check is None:
+        return False
+    try:
+        until = check()
+    except Exception:  # noqa: BLE001 - a failing check is no hold
+        return False
+    return until is not None and time.time() < until
+
+
+def _stop_requested() -> bool:
+    check = STOP_CHECK.get()
+    try:
+        return bool(check is not None and check())
+    except Exception:  # noqa: BLE001 - a failing check is no stop
+        return False
+
+
+def _cleanup_limit(cleanup_timeout: float) -> float:
+    """The whole teardown's budget: the run's own, cut short once the person stopped the call."""
+    return min(cleanup_timeout, _STOPPED_CLEANUP_SECONDS) if _stop_requested() else cleanup_timeout
+
+
+async def _wait_for_stop(check: Callable[[], bool]) -> None:
+    while True:
+        try:
+            if check():
+                return
+        except Exception:  # noqa: BLE001 - a failing check never ends the call
+            pass
+        await asyncio.sleep(_STOP_POLL_SECONDS)
+
+
 async def _wait_for_conversation_end(
     room: rtc.Room,
     session: AgentSession,
@@ -4107,6 +4166,9 @@ async def _wait_for_conversation_end(
         )
     if provider_task is not None:
         tasks["provider_disconnected"] = provider_task
+    stop_check = STOP_CHECK.get()
+    if stop_check is not None:
+        tasks["user_canceled"] = asyncio.create_task(_wait_for_stop(stop_check))
     try:
         done, pending = await asyncio.wait(
             set(tasks.values()),
@@ -4154,6 +4216,8 @@ async def _wait_for_conversation_end(
         if "provider_disconnected" in monitor_failures:
             completed.add("provider_disconnected")
         for reason in (
+            # The person's Stop outranks every other ending.
+            "user_canceled",
             "simulator_end_call",
             "target_disconnected",
             "room_disconnected",
@@ -4320,7 +4384,8 @@ async def _wait_for_conversation_silence(
             await asyncio.sleep(0.1)
             continue
         now = loop.time()
-        participant_busy = _either_side_busy(session)
+        # A tool call the world holds keeps the target working in silence: the wait starts again once it is answered.
+        participant_busy = _either_side_busy(session) or _target_held()
         floor, _ = _turn_requirements(min_turn_messages)
         # Far enough in for the measured window to beat the fixed one. A third of the floor is a
         # threshold, not a derived figure: enough turns to have timed a reply, well short of done.
@@ -5205,6 +5270,14 @@ def _conversation_outcome(
     transcript = "\n".join(
         f"{message['role']}: {message['content']}" for message in messages
     )
+    if stop_reason == "user_canceled":
+        # Stopped by the person: the call is kept as said up to the stop; the harness reports it as cancelled.
+        return _CaseOutcome(
+            status=TestCaseStatus.COMPLETED,
+            transcript=transcript,
+            messages=messages,
+            metadata={"stop_reason": stop_reason},
+        )
     if (
         stop_reason in {"target_disconnected", "room_disconnected"}
         and _has_role_alternation(messages)
