@@ -54,6 +54,7 @@ from ..catalogue import (
     load_catalogue,
     save_catalogue,
     compares_to_a_value,
+    settled_by,
     validate_sub_goal,
     judged_wording_advisory,
     weak_check_advisory,
@@ -1773,6 +1774,7 @@ def world_tools(
             )
         except ValueError as invalid:
             return _err(f"Not added: {invalid}")
+        sub_goal.verifier = settled_by(sub_goal)
         problems = validate_sub_goal(sub_goal)
         if sub_goal.worker and sub_goal.worker not in {one.id for one in contract.workers}:
             problems.append(f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers")

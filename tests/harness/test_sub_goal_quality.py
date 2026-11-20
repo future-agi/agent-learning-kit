@@ -33,26 +33,39 @@ def test_a_write_expected_once_fails_twice_and_never_counts_a_refused_try():
     assert exactly_once([LOOKUP, REFUSED, REFUND], "issue_refund", order_id="1043")
     assert not exactly_once([REFUND, REFUND], "issue_refund", order_id="1043")
     assert not exactly_once([LOOKUP], "issue_refund")
+    # A first call committed with its answer lost, then retried: committed twice.
+    lost = Call("issue_refund", {"order_id": "1043", "amount": 89}, ok=False, error="response_lost")
+    assert not exactly_once([lost, REFUND], "issue_refund", order_id="1043")
+    assert exactly_once([lost], "issue_refund", order_id="1043")
     assert {"came_before", "exactly_once"} <= set(check_namespace())
 
 
-def test_a_sub_goal_is_labelled_by_what_runs_never_by_the_label_given(tmp_path, monkeypatch):
+def test_a_sub_goal_left_unlabelled_is_labelled_by_what_runs_and_a_given_label_is_kept(tmp_path, monkeypatch):
     from test_scenario_quality_gates import _server
 
     check = "def check(world, calls):\n    return None if any(c.arguments for c in calls) else 'not done'\n"
     assert settled_by(SubGoal(name="a", check=check)) == "code"
-    assert settled_by(SubGoal(name="a", judged="x")) == "llm"
-    assert settled_by(SubGoal(name="a", check=check, judged="x")) == "both"
+    assert settled_by(SubGoal(name="a", check=check, judged="x")) == "code"
+    assert settled_by(SubGoal(name="a", judged="x", observed="the refund record")) == "llm"
+    # Criteria alone stay unlabelled, so a conversation-only goal on an empty capture still reads as missing evidence.
+    assert settled_by(SubGoal(name="a", judged="x")) == ""
+    assert settled_by(SubGoal(name="a", check=check, judged="x", verifier="both")) == "both"
 
     handlers, _ = _server(tmp_path, monkeypatch)
     said = asyncio.run(
-        handlers["add_sub_goal"](
-            {"name": "refuses_twice", "what": "Refuses a second refund", "check": check, "verifier": "llm"}
-        )
+        handlers["add_sub_goal"]({"name": "refuses_twice", "what": "Refuses a second refund", "check": check})
     )
     assert not said.get("is_error"), said
-    saved = json.loads((tmp_path / "sub_goals.json").read_text(encoding="utf-8"))
-    assert next(one for one in saved["sub_goals"] if one["name"] == "refuses_twice")["verifier"] == "code"
+    saved = {one["name"]: one["verifier"] for one in json.loads((tmp_path / "sub_goals.json").read_text())["sub_goals"]}
+    assert saved["refuses_twice"] == "code"
+
+
+def test_every_add_path_labels_an_unlabelled_sub_goal():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "src" / "fi" / "alk" / "harness"
+    for path in ("scenario_tools.py", "world/tools.py", "world/provision.py"):
+        assert "settled_by(" in (root / path).read_text(encoding="utf-8"), path
 
 
 def test_a_rule_change_lists_the_sub_goals_that_quote_the_rule(tmp_path):
@@ -76,8 +89,9 @@ def test_a_control_that_passes_names_the_judge_only_sub_goals_not_the_nearest_ch
     held = Proof(ready=True, solvable=True, vacuous=False, controls=[{**control, "held": ["looks_up"]}])
 
     named = Proof(**{**held.__dict__, "judged_goals": ["privacy_pii_protected"]})
-    assert "privacy_pii_protected" in named.why() and "Tighten the named checks" not in named.why()
-    assert "Tighten the named checks" in held.why()
+    # A mixed case keeps the advice on its checks and adds the judge-only goals.
+    assert "privacy_pii_protected" in named.why() and "Tighten the named checks" in named.why()
+    assert "Tighten the named checks" in held.why() and "graded by the judge alone" not in held.why()
 
 
 def test_the_proof_records_which_of_the_case_s_sub_goals_only_a_judge_grades(monkeypatch, tmp_path):
