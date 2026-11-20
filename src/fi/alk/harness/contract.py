@@ -315,6 +315,16 @@ class PromptSource(BaseModel):
     end_line: int
 
 
+class RuleSource(BaseModel):
+    """Where one of the agent's rules is written in its material: the rule as `hard_constraints` holds it, the file
+    (relative to the source root, or an attached file's path) and the line quoted exactly. A case citing that line
+    rests on the rule as much as one citing the rule."""
+
+    rule: str
+    file: str
+    quote: str = Field(max_length=500)
+
+
 class ModelSource(BaseModel):
     """The model the agent talks to the person with, and the line its name is written on."""
 
@@ -1321,6 +1331,8 @@ class AgentContract(BaseModel):
     # None is unknown. Kept only when its name was found on the line cited in the source.
     model: ModelSource | None = None
     hard_constraints: list[str] = Field(default_factory=list)
+    # For a rule read from a file of the agent's material, where it is written. Kept for a rule's earlier wordings too.
+    rule_sources: list[RuleSource] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
     # Empty for an agent that hands no work to other agents.
     workers: list[DeclaredWorker] = Field(default_factory=list)
@@ -1370,7 +1382,13 @@ class AgentContract(BaseModel):
             data.pop("unconfirmed_prompt_from", None)
         if not data.get("amendment_records"):
             data.pop("amendment_records", None)
+        if not data.get("rule_sources"):
+            data.pop("rule_sources", None)
         return data
+
+    def rule_source(self, rule: str) -> RuleSource | None:
+        """Where `rule` is written in the agent's material, when that was recorded."""
+        return next((one for one in reversed(self.rule_sources) if one.rule == rule), None)
 
     @model_validator(mode="after")
     def _resolvable_workers(self) -> AgentContract:
@@ -1641,6 +1659,11 @@ KEPT_AS_WRITTEN = (
     "AgentContract.conversational",
     "AgentContract.system_prompt_from",
     "AgentContract.unconfirmed_prompt_from",
+    # Where a rule is written: the rule, the file and its line as quoted, matched against the cases' citations.
+    "AgentContract.rule_sources",
+    "RuleSource.rule",
+    "RuleSource.file",
+    "RuleSource.quote",
     # The model name the code cites, with its file and line: read as written, like the prompt lines.
     "AgentContract.model",
     "AgentContract.tools",

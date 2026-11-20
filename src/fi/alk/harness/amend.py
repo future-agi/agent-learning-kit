@@ -28,6 +28,7 @@ from .contract import (
     AgentContract,
     AmendmentRecord,
     RecordRefusal,
+    RuleSource,
     rule_id,
     known_modalities,
     validate_contract,
@@ -112,7 +113,7 @@ def widen(
 
 
 # Rules dropped since the person's current message began, by environment: an add in the same message with no
-# `replaces` and exactly one of them still unreplaced is that rule reworded.
+# `replaces` names them, so the builder links the one it rewords.
 _DROPPED_THIS_TURN: dict[str, list[str]] = {}
 
 
@@ -136,7 +137,14 @@ def _dropped_this_turn(contract: AgentContract, destination: Path) -> list[str]:
 
 
 def add_rule(
-    contract: AgentContract, destination: Path, *, rule: str, why: str, replaces: str = ""
+    contract: AgentContract,
+    destination: Path,
+    *,
+    rule: str,
+    why: str,
+    replaces: str = "",
+    source_file: str = "",
+    source_quote: str = "",
 ) -> tuple[bool, str]:
     """Give the agent a rule its source did not state, or (`replaces`) reword one it has.
 
@@ -149,12 +157,13 @@ def add_rule(
     rule = rule.strip()
     if not rule:
         return False, "no rule given"
+    if bool(source_file.strip()) != bool(source_quote.strip()):
+        return False, "a rule's source is a file and the line quoted from it: give both, or neither"
     if not why.strip():
         return False, "say why: an unexplained rule is indistinguishable from a guess"
-    linked = ""
-    if not replaces.strip() and len(dropped := _dropped_this_turn(contract, destination)) == 1:
-        # Dropped and added in one message: the new rule rewords the dropped one, so the two are linked.
-        replaces = linked = dropped[0]
+    # Whether two rules are one rule reworded is the builder's judgment: the rules dropped in this message are only
+    # named in the reply, never linked here.
+    dropped = [] if replaces.strip() else _dropped_this_turn(contract, destination)
     # Both sides are compared as they are saved: a contract held from an older save can still
     # hold its rules raw. One call, so a refused URL is logged once. The reply names the rule as
     # saved too, since the chat sends it on to the platform.
@@ -186,6 +195,14 @@ def add_rule(
 
     old = current if current is not None else (removed.text if removed is not None else "")
     new_id = rule_id(contract.hard_constraints[-1])
+    was_written = contract.rule_source(old) if old else None
+    if source_file.strip():
+        contract.rule_sources.append(
+            RuleSource(rule=contract.hard_constraints[-1], file=source_file.strip(), quote=source_quote.strip())
+        )
+    elif was_written is not None:
+        # A reworded rule still comes from where the old one was written; that line is what its cases cite.
+        contract.rule_sources.append(was_written.model_copy(update={"rule": contract.hard_constraints[-1]}))
     if current is not None:
         contract.amendment_records.append(
             AmendmentRecord(kind="rule", key=rule_id(current), action="removed", replaced_by=new_id, text=current)
@@ -205,12 +222,14 @@ def add_rule(
     return True, (
         f"added. The agent now has {len(contract.hard_constraints)} rules, and this one is "
         "graded from here on."
-        + (
-            f" It replaces {linked}, dropped earlier in this message, so the two are linked as one rule reworded."
-            if linked
-            else ""
+        + "".join(
+            f" You dropped {one} earlier in this message. If this rule rewords it, link them: add_rule with this "
+            f"rule and replaces {one}."
+            for one in dropped
         )
-    ) + (cases_citing(destination, rule=old) if old else _unlinked_removals(contract, new_id))
+    ) + (
+        cases_citing(destination, rule=old, written=was_written) if old else _unlinked_removals(contract, new_id)
+    )
 
 
 def _link(contract: AgentContract, destination: Path, removed: AmendmentRecord, rule: str) -> tuple[bool, str]:
@@ -227,7 +246,13 @@ def _link(contract: AgentContract, destination: Path, removed: AmendmentRecord, 
             AmendmentRecord(kind="rule", key=new_id, action="added", previous=removed.key, text=rule)
         )
     _persist(contract, destination)
-    return True, f"linked: {new_id} replaces {removed.key}." + cases_citing(destination, rule=removed.text)
+    written = contract.rule_source(removed.text)
+    if written is not None and contract.rule_source(rule) is None:
+        contract.rule_sources.append(written.model_copy(update={"rule": rule}))
+        _persist(contract, destination)
+    return True, f"linked: {new_id} replaces {removed.key}." + cases_citing(
+        destination, rule=removed.text, written=written
+    )
 
 
 def _unlinked_removals(contract: AgentContract, new_id: str) -> str:
@@ -351,7 +376,7 @@ def drop_rule(
     _DROPPED_THIS_TURN.setdefault(_turn_key(destination), []).append(rule_id(match))
     return True, (
         f"removed ({rule_id(match)}). {len(contract.hard_constraints)} rules left. To reword it instead, add the new "
-        "rule with replaces naming this id." + cases_citing(destination, rule=match)
+        "rule with replaces naming this id." + cases_citing(destination, rule=match, written=contract.rule_source(match))
     )
 
 
@@ -551,9 +576,28 @@ def _case_texts(scenario: Any) -> str:
     return head + "".join(f"\n      {label}: {' '.join(str(text).split())}" for label, text in texts if text)
 
 
-def cases_citing(destination: Path, *, rule: str = "", tool: str = "") -> str:
+def _cites_line(scenario: Any, written: RuleSource | None) -> bool:
+    """Whether a case cites the line of the agent's material a rule is written on: a `file` source naming that file
+    whose quote and the rule's quoted line hold one another."""
+    if written is None:
+        return False
+    line = " ".join(written.quote.split()).lower()
+    named = written.file.strip().removeprefix("file:").strip("/")
+    for source in getattr(scenario, "sources", None) or []:
+        if source.kind != "file" or source.ref.strip().removeprefix("file:").strip("/") != named:
+            continue
+        quote = " ".join(source.quote.split()).lower()
+        if quote and line and (quote in line or line in quote):
+            return True
+    return False
+
+
+def cases_citing(
+    destination: Path, *, rule: str = "", tool: str = "", written: RuleSource | None = None
+) -> str:
     """The cases that rest on a rule or tool that just changed, as the rest of the reply: those whose `rule` source
-    cites it (resolved as the case's sources are, `grounding.resolve_sources`, against the rule as it read), or whose
+    cites it (resolved as the case's sources are, `grounding.resolve_sources`, against the rule as it read), those
+    citing the line of the agent's material the rule is written on (`written`), or whose
     solution or negative controls call the tool. Nothing in their text is read for values: the builder re-reads each
     against the current rules."""
     from .grounding import Rules, agent_source_root, resolve_sources
@@ -566,7 +610,8 @@ def cases_citing(destination: Path, *, rule: str = "", tool: str = "") -> str:
     citing = [
         one
         for one in scenarios
-        if (
+        if _cites_line(one, written)
+        or (
             rule
             and any(
                 entry["kind"] == "rule" and entry["resolved"]

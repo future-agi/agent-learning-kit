@@ -1541,8 +1541,8 @@ def world_tools(
         "add_rule",
         "Give the agent a hard rule its source did not state, when the operator asks for one. "
         "The agent under test is told every rule and the judge grades against them, so this "
-        "changes what is being tested. To reword a rule, add the new one with `replaces` naming the old one by its id or exact words: the two are linked and the cases citing the old one are listed. Say why in one line; it is recorded on the contract.",
-        {"rule": str, "why": str, "replaces": str},
+        "changes what is being tested. To reword a rule, add the new one with `replaces` naming the old one by its id or exact words: the two are linked and the cases citing the old one are listed. A rule written on a line of the agent's material (a policy or knowledge file) takes `source_file` and `source_quote`, that line quoted exactly; a reworded rule keeps the old one's line unless you give another. When the person changes a value that file states, change the file's line too. Say why in one line; it is recorded on the contract.",
+        {"rule": str, "why": str, "replaces": str, "source_file": str, "source_quote": str},
     )
     async def add_rule_tool(args: dict[str, Any]) -> dict[str, Any]:
         done, said = add_rule(
@@ -1551,6 +1551,8 @@ def world_tools(
             rule=str(args.get("rule") or ""),
             why=str(args.get("why") or ""),
             replaces=str(args.get("replaces") or ""),
+            source_file=str(args.get("source_file") or ""),
+            source_quote=str(args.get("source_quote") or ""),
         )
         return _ok(said) if done else _err(said)
 
