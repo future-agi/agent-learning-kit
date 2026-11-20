@@ -357,18 +357,15 @@ the caller does not know the tool is about to fail, and writing it there tells t
 **Declare every such level to `aim_for` as a fault level, with the records that carry it.** `aim_for`
 takes `fault_levels`: by axis, each level that means the agent meets a failure, with the ids of the
 records whose starting data already holds it (`[]` when none does and the failure is injected with
-`faults`). A case on one of those levels should carry the failure; where the build enforces fault levels, one
-that does not is refused. Measured on a
-two-hundred without this: 28 cases were labelled with the payment fault, none had a fault, and 18 were
-not even on the order whose data carried the timeout, so the report counted a failure path the agent
-never met. With faults off, a level no record carries cannot be written at all; take it off the grid.
+`faults`). A case on one of those levels should carry the failure: a case labelled with a fault it does not
+carry makes the report count a failure path the agent never met. With faults off, a level no record carries cannot be written at all; take it off the grid.
 
 **Who is asking is a counterparty level, and the agent's rules decide what that person gets.** For
 each level where the person is not the holder of the record (acting for someone, a gift recipient, a
 buyer for a company), read the agent's rules on who may ask and write down, in the brief, the outcome
 they give: verified the way the rules say, refused, or asked for the holder's authorisation. A brief
-that deals `on_behalf_of_another` with `issue_refund` and says nothing more gets the holder's refund
-written 38 times out of 50, against a rule that refunds only when the customer asks.
+that deals such a level and says nothing more gets the holder's outcome written for someone the rules
+do not give it to.
 
 The same applies to who is calling. `counterparty` is the axis; `first_time`, `suspended`, `guest`,
 `on_behalf_of_another` are its levels.
@@ -481,8 +478,7 @@ the rows still add up to the suite.
 an otherwise ordinary request, is where agents actually fall over. Nine overt attacks report a safety
 the agent has not been tested for. Say in each brief that deals `subtle` what it means: the payload reads
 as an ordinary part of the request, with nothing bracketed, capitalised or addressed to the system. A
-bracketed override command is overt whatever the cell says; one two-hundred labelled six of its twenty
-subtle injections that way.
+bracketed override command is overt whatever the cell says.
 
 ## 3. Size each cell
 
@@ -830,14 +826,11 @@ conversation resumed after a pause, a correction after the agent has committed: 
 it, the level is a sentence in the instruction and the report counts it as tested. Pass such levels to
 `aim_for` as `checked_levels`, add a sub-goal for each with `add_sub_goal` and `overlay` set to the level
 (for a resumed conversation: the agent keeps the context, asks nothing again, repeats no action, and
-finishes), and deal it in the brief. A case on a checked level should name that sub-goal; where the build
-enforces checked levels, one that does not is refused.
+finishes), and deal it in the brief. A case on a checked level should name that sub-goal.
 
 **Deal the records as well as the cells.** In each brief, name the records the agent can read that fit
 the brief's cells, and spread them: a task's cases should sit on one record only up to the suite's share
-of that task; where the build enforces the share, `submit_scenario` refuses one past it. Measured on a
-two-hundred briefed without
-records: 34 of 50 refunds were on one order.
+of that task. A task whose cases all sit on one record tests that record, not the task.
 
 When the person asked for a level of an axis, in the build's instructions or in the conversation (no
 background noise on any call, only first-time callers), pass it in `aim_for`'s `asked_for` so it is not

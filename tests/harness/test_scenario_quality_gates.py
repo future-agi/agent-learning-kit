@@ -236,3 +236,22 @@ def test_an_advisory_conflict_never_unproves_a_case_and_is_said_at_submit_and_in
 
     assert not said.get("is_error"), said
     assert "POSSIBLE RULE CONFLICT" in said["content"][0]["text"] and "not the customer" in said["content"][0]["text"]
+
+
+def test_aim_for_says_a_case_is_refused_only_when_that_gate_is_on(tmp_path, monkeypatch):
+    import json
+
+    def described(on: set[str]) -> str:
+        for gate in (FAULT_LEVEL_GATE, CHECKED_LEVEL_GATE):
+            if gate in on:
+                monkeypatch.setenv(gate, "1")
+            else:
+                monkeypatch.delenv(gate, raising=False)
+        server, _ = scenario_tools(_environment(tmp_path), tmp_path, tmp_path, wanted=4)
+        aim = next(one for one in server.tools if one.name == "aim_for")
+        return json.dumps(aim.input_schema)
+
+    assert "refuses" not in described(set())
+    assert "refuses one that does neither" in described({FAULT_LEVEL_GATE})
+    assert "refuses one that does not" in described({CHECKED_LEVEL_GATE})
+    assert "refuses one that does neither" not in described({CHECKED_LEVEL_GATE})
