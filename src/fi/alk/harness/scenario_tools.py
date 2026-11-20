@@ -969,10 +969,15 @@ def cases_per_cell() -> int:
     return _count_setting("ALK_HARNESS_CASES_PER_CELL", 4, 1000)
 
 
+# Higher than any suite a build writes, so no round is dealt unasked by default.
+DEAL_ABOVE_DEFAULT = 100_000
+
+
 def deal_above() -> int:
     """How many cases must be left to write before a round of writers is dealt without being asked: below it one
     session writes the suite, unless the builder deals one itself."""
-    return _count_setting("ALK_HARNESS_DEAL_ABOVE", 300, 100_000)
+    # Off unless set: a deal's brief does not yet carry the records the agent's tools can read, so dealt writers invent ids.
+    return _count_setting("ALK_HARNESS_DEAL_ABOVE", DEAL_ABOVE_DEFAULT, DEAL_ABOVE_DEFAULT)
 
 
 def cases_per_writer() -> int:

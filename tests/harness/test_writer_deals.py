@@ -489,7 +489,9 @@ def test_below_the_deal_threshold_one_session_writes_unless_a_round_is_asked_for
     assert "Deal d" in _text(asyncio.run(handlers["suite_progress"]({"deal": True})))
 
 
-@pytest.mark.parametrize("given,expected", [("", 300), ("0", 300), ("-1", 300), ("many", 300), ("50", 50)])
+@pytest.mark.parametrize(
+    "given,expected", [("", 100_000), ("0", 100_000), ("-1", 100_000), ("many", 100_000), ("50", 50)]
+)
 def test_the_deal_threshold_is_read_safely(monkeypatch, given, expected):
     from fi.alk.harness.scenario_tools import deal_above
 
@@ -510,3 +512,13 @@ def test_progress_reports_the_proof_counts_on_record(tmp_path, monkeypatch):
     said = _text(asyncio.run(handlers["suite_progress"]({})))
 
     assert "2 of 12 written. Proofs on record: 1 proved, 0 kept as written, 1 not proved." in said
+
+
+def test_by_default_no_round_is_dealt_unasked_even_for_a_large_suite(tmp_path, monkeypatch):
+    monkeypatch.delenv("ALK_HARNESS_DEAL_ABOVE", raising=False)
+    handlers, kept = _server(tmp_path, monkeypatch, 500, _grid(tasks=TASKS * 1), can_grow=True)
+
+    assert "Deal d" not in _text(asyncio.run(handlers["suite_progress"]({})))
+    assert "kept" in _text(asyncio.run(handlers["submit_scenario"](_case("alone", ("t1", "hurried")))))
+    # An explicit deal still works.
+    assert "Deal d" in _text(asyncio.run(handlers["suite_progress"]({"deal": True})))
