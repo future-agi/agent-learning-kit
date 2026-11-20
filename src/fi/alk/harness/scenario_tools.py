@@ -1377,11 +1377,11 @@ def _over_its_share(
     return ""
 
 
-def _record_ids(scenario: Scenario, *, fixed_only: bool = False) -> set[str]:
-    """The records the reference names: each step's id arguments (`_AN_ID_ARGUMENT`), as written. `fixed_only` keeps
-    only the arguments the step says the caller, their record or a rule fixes."""
-    return {
-        str(value).strip()
+def _record_args(scenario: Scenario, *, fixed_only: bool = False) -> list[tuple[str, str]]:
+    """Each id argument the reference passes (`_AN_ID_ARGUMENT`) with its value, as written. `fixed_only` keeps only
+    the arguments the step says the caller, their record or a rule fixes: the record the case acts on."""
+    return [
+        (str(key), str(value).strip())
         for step in scenario.solution
         for key, value in step.arguments.items()
         if _AN_ID_ARGUMENT.search(str(key))
@@ -1390,11 +1390,27 @@ def _record_ids(scenario: Scenario, *, fixed_only: bool = False) -> set[str]:
         and not isinstance(value, bool)
         and str(value).strip()
         and not str(value).startswith("$call")
-    }
+    ]
+
+
+def _record_ids(scenario: Scenario, *, fixed_only: bool = False) -> set[str]:
+    """The records the reference names (`_record_args`), by value."""
+    return {value for _, value in _record_args(scenario, fixed_only=fixed_only)}
 
 
 def _one_record(value: str) -> str:
     return " ".join(str(value).split()).casefold()
+
+
+# Each opt-in submit gate's switch; every one is off unless its variable is 1.
+FAULT_LEVEL_GATE = "ALK_FAULT_LEVEL_GATE"
+CHECKED_LEVEL_GATE = "ALK_CHECKED_LEVEL_GATE"
+RECORD_SHARE_GATE = "ALK_RECORD_SHARE_GATE"
+
+
+def gate_on(switch: str) -> bool:
+    """Whether the submit gate behind this switch refuses: off unless the variable is 1."""
+    return str(os.environ.get(switch) or "").strip() == "1"
 
 
 def _record_over_its_share(
@@ -1402,12 +1418,13 @@ def _record_over_its_share(
     kept: list[Scenario],
     wanted: int,
     grid: dict[str, list[str]] | None,
-    readable: Callable[[], set[str]] | None = None,
+    readable: Callable[[str, str], set[str]] | None = None,
 ) -> str:
     """Why this case would put more of its task's cases on one record than the suite's share allows, or "" when it
-    would not. The share is `MOST_OF_A_SUITE` of the cases the plan deals each task; `readable` answers the records
-    the agent can read, asked only for a refusal to offer them. A record with no other to move to is never refused."""
-    mine = {_one_record(one): one for one in _record_ids(candidate)}
+    would not. Only the records the case acts on count (`_record_args` fixed by the caller, their record or a rule).
+    The share is `MOST_OF_A_SUITE` of the cases the plan deals each task. `readable(argument, value)` answers the other
+    records in the table and column that hold `value`; a record with none to move to is never refused."""
+    mine = {_one_record(value): (argument, value) for argument, value in _record_args(candidate, fixed_only=True)}
     if wanted < FEWEST_FOR_A_SHARE or not mine:
         return ""
     task = level_name((candidate.coverage or {}).get("task", ""))
@@ -1419,27 +1436,25 @@ def _record_over_its_share(
         for one in kept
         if one.name != candidate.name and (not task or level_name((one.coverage or {}).get("task", "")) == task)
     ]
-    held: Counter[str] = Counter()
-    written: dict[str, str] = {}
-    for one in peers:
-        for value in _record_ids(one):
-            held[_one_record(value)] += 1
-            written.setdefault(_one_record(value), value)
+    held: Counter[str] = Counter(_one_record(value) for one in peers for value in _record_ids(one, fixed_only=True))
     crowded = next((key for key in sorted(mine) if held[key] >= ceiling), "")
     if not crowded:
         return ""
-    others = {_one_record(one): one for one in (readable() if readable else set())} | written
-    alternatives = sorted(value for key, value in others.items() if key not in mine and held[key] < ceiling)
-    # With no other record to move to (an agent serving one account), there is nothing to spread across.
+    argument, value = mine[crowded]
+    alternatives = sorted(
+        {one for one in (readable(argument, value) if readable else set()) if held[_one_record(one)] < ceiling}
+        - {value}
+    )
+    # With no other record in its table to move to (an agent serving one account), there is nothing to spread across.
     if not alternatives:
         return ""
     where = f"{task} cases" if task else "cases"
     return (
-        f"{held[crowded]} of the {len(peers)} {where} written so far already act on {mine[crowded]!r}, and a suite of "
+        f"{held[crowded]} of the {len(peers)} {where} written so far already act on {value!r}, and a suite of "
         f"{wanted} may not put more than {ceiling} of a task's cases on one record: a task tested on one record tests "
         "that record, and the agent's handling of every other record goes untested. Move this case onto another "
-        f"record the agent can read: {', '.join(alternatives[:12])}. Where no other record fits this situation, seed "
-        "one in setup_code that fits it, or place this case on another task."
+        f"record of the same kind: {', '.join(alternatives[:12])}. Where none fits this situation, seed one in "
+        "setup_code that fits it, or place this case on another task."
     )
 
 
@@ -1480,13 +1495,14 @@ def _level_unchecked(
     candidate: Scenario, checked_levels: dict[str, list[str]] | None, catalogue: Catalogue
 ) -> str:
     """Why this case sits on a level the plan says must be checked (`aim_for` `checked_levels`) and names no sub-goal
-    claimed for it, or "" when it does."""
+    whose `overlay` is that level, or "" when it does."""
     for axis, levels in (checked_levels or {}).items():
         level = level_name((candidate.coverage or {}).get(level_name(axis), ""))
         if not level or level not in {level_name(one) for one in levels}:
             continue
         if any(
-            (goal := catalogue.named(name)) is not None and goal.claims(level) for name in candidate.sub_goals
+            (goal := catalogue.named(name)) is not None and level_name(goal.overlay) == level
+            for name in candidate.sub_goals
         ):
             continue
         return (
@@ -2413,6 +2429,8 @@ def accept_scenario(
         )
     if proof is not None and proof.conflicts:
         unproved += f"\nPOSSIBLE RULE CONFLICT: {proof.why()}"
+    if proof is not None and proof.advisories:
+        unproved += f"\nPOSSIBLE RULE CONFLICT: {proof.advice()}"
     if proof is not None and proof.outcome == "no_change" and proof.proved:
         unproved += "\nA refusal case: nothing should change, and each negative control's forbidden change fails its checks."
     if proof is None:
@@ -3518,15 +3536,30 @@ def scenario_tools(
         except Exception:  # noqa: BLE001 - a malformed scenario is the validator's to report
             candidate = None
         if candidate is not None:
+            # An edit that keeps a case where it sits is never refused for the cell it was kept on.
+            replaced = next((one for one in kept if one.name == same), None)
+            moved = replaced is None or replaced.coverage != candidate.coverage
             unmet = (
-                _fault_level_unmet(candidate, target.get("fault_levels"), with_actors)
-                or _level_unchecked(candidate, target.get("checked_levels"), catalogue)
-                or _record_over_its_share(
-                    candidate,
-                    kept,
-                    cap(),
-                    target.get("axes"),
-                    lambda: readable_records(world_root, candidate),
+                (
+                    _fault_level_unmet(candidate, target.get("fault_levels"), with_actors)
+                    if moved and gate_on(FAULT_LEVEL_GATE)
+                    else ""
+                )
+                or (
+                    _level_unchecked(candidate, target.get("checked_levels"), catalogue)
+                    if moved and gate_on(CHECKED_LEVEL_GATE)
+                    else ""
+                )
+                or (
+                    _record_over_its_share(
+                        candidate,
+                        kept,
+                        cap(),
+                        target.get("axes"),
+                        lambda argument, value: readable_records(world_root, argument, value),
+                    )
+                    if gate_on(RECORD_SHARE_GATE)
+                    else ""
                 )
             )
             if unmet:
@@ -4028,7 +4061,7 @@ def scenario_tools(
                 level
                 for levels in checked.values()
                 for level in levels
-                if not any(one.claims(level_name(level)) for one in catalogue.sub_goals)
+                if not any(level_name(one.overlay) == level_name(level) for one in catalogue.sub_goals)
             ]
             said += ". Checked levels: " + ", ".join(level for levels in checked.values() for level in levels)
             if unclaimed:
@@ -4897,24 +4930,23 @@ def records_of_someone_else(scenario: Scenario, world_root: Path) -> str:
     )
 
 
-def readable_records(world_root: Path, scenario: Scenario) -> set[str]:
-    """What the world's starting data holds under the columns this case's reference names as ids (`same_id`), so a
-    refusal can offer the other records; empty where the world cannot be read."""
-    names = {str(key) for step in scenario.solution for key in step.arguments if _AN_ID_ARGUMENT.search(str(key))}
-    if not names or native_runtime(world_root):
+def readable_records(world_root: Path, argument: str, value: str) -> set[str]:
+    """The other records in the table and column that hold `value`, the column named as `argument` is (`same_id`), read
+    from the world's starting data; empty where the world cannot be read."""
+    if native_runtime(world_root):
         return set()
     try:
         rows = restore(world_root).state()
-    except Exception:  # noqa: BLE001 - the refusal still names the records the suite already uses
+    except Exception:  # noqa: BLE001 - with nothing to offer, the record is not refused
         return set()
-    return {
-        str(value).strip()
-        for table in (rows or {}).values()
-        for row in (table if isinstance(table, list) else [])
-        if isinstance(row, dict)
-        for column, value in row.items()
-        if any(same_id(column, name) for name in names) and str(value).strip()
-    }
+    found: set[str] = set()
+    for table in (rows or {}).values():
+        listed = [row for row in (table if isinstance(table, list) else []) if isinstance(row, dict)]
+        for column in {str(key) for row in listed for key in row if same_id(key, argument)}:
+            held = {str(row.get(column)).strip() for row in listed if row.get(column) is not None}
+            if any(same_id(one, value) for one in held):
+                found |= {one for one in held if one}
+    return found
 
 
 def world_summary_tables(world_root: Path) -> list[str]:

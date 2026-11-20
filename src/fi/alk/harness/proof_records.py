@@ -3,7 +3,7 @@ and rule, each leak, and the proof record saved per case. Files on disk are read
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 
 class JudgeVerdict(TypedDict):
@@ -66,6 +66,8 @@ class PolicyCheck(TypedDict):
     ref: str
     conflict: bool | None
     why: str
+    # Judged against rules the case does not cite (`all_rules_check_on`): advice, never a conflict that holds it.
+    advisory: NotRequired[bool]
 
 
 class LeakRecord(TypedDict):

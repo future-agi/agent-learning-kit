@@ -185,7 +185,22 @@ class Proof:
     @property
     def conflicts(self) -> list[PolicyCheck]:
         """Cited rules the judge found the expected outcome contradicts."""
-        return [one for one in self.policy_checks if one.get("conflict") is True]
+        return [one for one in self.policy_checks if one.get("conflict") is True and not one.get("advisory")]
+
+    @property
+    def advisories(self) -> list[PolicyCheck]:
+        """Rules the case does not cite that the judge found its expected outcome may contradict: advice only."""
+        return [one for one in self.policy_checks if one.get("conflict") is True and one.get("advisory")]
+
+    def advice(self) -> str:
+        """The advisory conflicts in words, "" when none."""
+        if not self.advisories:
+            return ""
+        return (
+            "a model judged that this case may contradict a rule it does not cite (advice, not a hold): "
+            + "; ".join(one["why"] or "contradicted" for one in self.advisories)
+            + ". Read the agent's rules against the case: change the case, or cite the rule that allows it."
+        )
 
     @property
     def ran_controls(self) -> list[ControlResult]:

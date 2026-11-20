@@ -41,7 +41,7 @@ def proof_key(scenario: Scenario) -> str:
 
 def proof_entry(proof: Proof, solution_steps: int) -> ProofEntry:
     blocked = proof.blocked_reason()
-    why = "" if proof.proved else proof.why()
+    why = " ".join(one for one in ("" if proof.proved else proof.why(), proof.advice()) if one)
     return {
         "format": 2,
         "holds": proof.holds,
