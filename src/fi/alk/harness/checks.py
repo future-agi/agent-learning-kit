@@ -349,13 +349,17 @@ def came_before(calls: Sequence[Any], earlier: str, later: str, **arguments: Any
 
 def exactly_once(calls: Sequence[Any], name: str, **arguments: Any) -> bool:
     """Whether exactly one call of tool `name` with these `arguments` took effect: each that went through
-    (`succeeded`), and each the world committed although its answer was lost (`response_lost`), so a retry after a
-    lost answer counts twice. A try the world refused is not counted. Where the world keeps an action log,
+    (`succeeded`), and each other one the world committed although its answer was lost (`response_lost`), each call
+    counted once, so a retry after a lost answer counts twice. A try the world refused is not counted. Where the world keeps an action log,
     `repeated_commits(world, reference)` reads the commits themselves."""
     lost = [
         call
         for call in calls
-        if call.name == name and getattr(call, "error", "") == "response_lost" and _with(call, arguments)
+        if call.name == name
+        and getattr(call, "error", "") == "response_lost"
+        and getattr(call, "ok", False) is not True
+        and not getattr(call, "refused", False)
+        and _with(call, arguments)
     ]
     return len(succeeded(calls, name, **arguments)) + len(lost) == 1
 
