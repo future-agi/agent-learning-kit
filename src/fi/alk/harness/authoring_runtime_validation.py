@@ -705,9 +705,10 @@ def keep_rejected_certification(process_logs: Path, contract: AgentContract, rej
             ),
         }
         text = outbound.redact_outbound_text(json.dumps(record, indent=1, default=str))
-        body = text.encode("utf-8")[: _KEPT_LOG_BYTES - 128]
+        # Cut to what is kept, never through a character: the log reads as text.
+        body = text.encode("utf-8")[: _KEPT_LOG_BYTES - 128].decode("utf-8", errors="ignore")
         process_logs.mkdir(parents=True, exist_ok=True)
-        (process_logs / "tool-certification-rejected.log").write_bytes(body)
+        (process_logs / "tool-certification-rejected.log").write_text(body, encoding="utf-8")
     except Exception as exc:  # noqa: BLE001 - the error message still names each tool and its reason
         print(f"runtime validation: rejected certification not kept: {type(exc).__name__}", flush=True)
 

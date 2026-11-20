@@ -1880,6 +1880,46 @@ def test_tools_the_agent_serves_by_calling_the_fronted_tools_api_are_the_proxy_s
     assert fault_notices([fault], log, calls, contract=sealed) == []
 
 
+def test_an_unreachable_tool_is_the_service_s_only_when_it_calls_a_route_of_the_fronted_tool_service() -> None:
+    from fi.alk.harness.bundle_author_v2 import EnvironmentPlanV2, _tool_proxy_process, _tools_behind_the_proxy
+
+    def entry(tool, endpoint):
+        return {"tool": tool, "mode": "unreachable", "module": "agent", "callable": tool, "endpoint": endpoint,
+                "method": "POST"}
+
+    contract = {
+        "agent": "returns",
+        "runtime": {"tool_service": {"command": ["python", "ledger.py"], "port": 8090,
+                                     "url_environment": "RETURNS_API_URL"}},
+        "dependencies": [
+            {"name": "ledger", "reached": {"dsn_env": "RETURNS_API_URL"}, "used_by": ["get_order"]},
+            # Another API the app calls with a bare path of its own: never the tool service's.
+            {"name": "payments", "reached": {"dsn_env": "PAYMENTS_API_URL"}, "used_by": ["charge_card"]},
+        ],
+        "tool_entrypoints": [
+            entry("get_order", "orders/get"),
+            entry("summarise", ""),
+            entry("lookup_rates", "https://external-host/v1/rates"),
+            entry("charge_card", "charges/create"),
+        ],
+    }
+    agent = _tool_proxy_process().model_copy(update={"name": "agent", "environment": {}, "depends_on": []})
+    plan = EnvironmentPlanV2(
+        packaging="compose",
+        control_service="agent",
+        processes=(agent, _tool_proxy_process().model_copy(update={"depends_on": []})),
+        capabilities={},
+        readiness=(),
+    )
+    sealed = {one["tool"]: one["mode"] for one in _tools_behind_the_proxy(plan, contract)["tool_entrypoints"]}
+    assert sealed == {
+        "get_order": "service",
+        "summarise": "unreachable",
+        "lookup_rates": "unreachable",
+        "charge_card": "unreachable",
+    }
+
+
 @pytest.mark.parametrize("mode", ["import", "unreachable"])
 def test_the_returns_app_seals_behind_the_tool_proxy_with_a_channel_per_worker(tmp_path: Path, mode: str) -> None:
     """As a live build authored it: the ledger listed under `dependencies` only, the tools as the agent module's

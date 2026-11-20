@@ -1804,3 +1804,18 @@ def test_matching_folder_passes(tmp_path, monkeypatch) -> None:
     assert code == 0
     assert reached == ["validate"]
     assert not (authoring / "failure.json").exists()
+
+
+def test_a_kept_rejected_certification_is_cut_to_the_kept_size_without_splitting_a_character(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness import outbound
+    from fi.alk.harness.authoring_runtime_validation import _KEPT_LOG_BYTES, keep_rejected_certification
+    from fi.alk.harness.contract import AgentContract
+
+    # Text whose byte cap falls in the middle of a two-byte character.
+    monkeypatch.setattr(outbound, "redact_outbound_text", lambda text: "a" + "é" * _KEPT_LOG_BYTES)
+    keep_rejected_certification(tmp_path, AgentContract(agent="returns"), {"get_order": "no seam"})
+    kept = (tmp_path / "tool-certification-rejected.log").read_bytes()
+    assert 0 < len(kept) <= _KEPT_LOG_BYTES
+    kept.decode("utf-8")
