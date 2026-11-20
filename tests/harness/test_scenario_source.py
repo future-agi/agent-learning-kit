@@ -2628,7 +2628,7 @@ def test_only_a_value_the_agent_looks_up_is_a_missing_credential() -> None:
         assert grounding_problems([looked_up], _P(tmp)) == []
 
 
-def test_a_suite_is_written_in_one_session_while_handing_out_is_held(tmp_path, monkeypatch) -> None:
+def test_a_suite_is_always_handed_out(tmp_path, monkeypatch) -> None:
     from fi.alk.harness import scenarios as stage
     from fi.alk.harness.contract import AgentContract
 
@@ -2657,20 +2657,12 @@ def test_a_suite_is_written_in_one_session_while_handing_out_is_held(tmp_path, m
         ),
     )
     contract = AgentContract(agent="a")
+
+    big, _ = stage.open_stage(contract, out=tmp_path / "big", wanted=50)
+    small, _ = stage.open_stage(contract, out=tmp_path / "small", wanted=8)
     offered = lambda spec: {
         t.name for t in spec.servers[stage.SCENARIO_SERVER].tools
     }
-
-    # By default the session writes the suite itself and has no writers to brief.
-    alone, _ = stage.open_stage(contract, out=tmp_path / "alone", wanted=500)
-    assert set(stage.WRITES_A_SCENARIO) <= offered(alone.spec)
-    assert not alone.spec.workers and "Delegate" not in alone.spec.builtins
-    assert "Write the suite in this session" in alone.spec.system_prompt
-
-    # Handing out, when it is turned on, works as before.
-    monkeypatch.setattr(stage, "HANDS_OUT_ABOVE", 0)
-    big, _ = stage.open_stage(contract, out=tmp_path / "big", wanted=50)
-    small, _ = stage.open_stage(contract, out=tmp_path / "small", wanted=8)
 
     assert not (set(stage.WRITES_A_SCENARIO) & offered(big.spec)), (
         "a loop that can write, writes"
@@ -3208,7 +3200,7 @@ def test_the_run_specific_policy_reaches_writers_and_planner_before_their_checkl
     said = planner._spec.system_prompt
 
     assert writer.index(policy) < writer.index("a scenario coherent in itself")
-    assert said.index(policy) < said.index("Before you write or brief anything")
+    assert said.index(policy) < said.index("Before you brief anyone")
 
 
 
