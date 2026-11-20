@@ -120,6 +120,22 @@ _ALIASES = {
 }
 
 
+class RecordRefusal(BaseModel):
+    """One refusal a tool makes because of what a record holds, read from the tool's code or the service behind it:
+    the tool answers HTTP `status` when the record of `table` whose `column` equals the call's `argument` has `field`
+    set to one of `values` (to any non-empty value when `values` is empty). The world a scenario is proved on gives
+    the same answer, so a reference that expects such a record to go through is refused there as it is live."""
+
+    status: int
+    table: str
+    column: str
+    argument: str
+    field: str
+    values: list[Any] = Field(default_factory=list)
+    # What the tool says when it refuses, as its code words it.
+    message: str = ""
+
+
 class ToolSpec(BaseModel):
     """One tool the agent really has.
 
@@ -193,16 +209,19 @@ class ToolSpec(BaseModel):
     # What a scenario writer cannot see from the signature: refusals by value or by something outside
     # the agent's control, what a call changes or clears, and arguments taken from an earlier output.
     refuses: str = ""
+    # The refusals in `refuses` that turn on a record's own field, each as structure the world answers by.
+    refusals: list[RecordRefusal] = Field(default_factory=list)
     effects: str = ""
     inputs_from: dict[str, str] = Field(default_factory=dict)
 
     @model_serializer(mode="wrap")
     def _omit_unset_world_free(self, handler: Any) -> dict[str, Any]:
-        # A tool not declared world-free writes the same bytes as before the field existed, so no contract's
-        # fingerprint changes for it.
+        # A tool not declared world-free, or with no record refusal, writes the same bytes as before those fields
+        # existed, so no contract's fingerprint changes for it.
         data = handler(self)
-        if not data.get("world_free"):
-            data.pop("world_free", None)
+        for field in ("world_free", "refusals"):
+            if not data.get(field):
+                data.pop(field, None)
         return data
 
 
@@ -1400,6 +1419,14 @@ class AgentContract(BaseModel):
                     f"\n      {label}: {text}"
                     for label, text in (
                         ("refuses", tool.refuses),
+                        (
+                            "refused by its record",
+                            "; ".join(
+                                f"{one.status} when the {one.table} record whose {one.column} is {one.argument} has "
+                                f"{one.field} " + (f"in {json.dumps(one.values)}" if one.values else "set")
+                                for one in tool.refusals
+                            ),
+                        ),
                         ("effects", tool.effects),
                         ("arguments from", ", ".join(f"{arg} <- {source}" for arg, source in tool.inputs_from.items())),
                         ("units", ", ".join(f"{arg} in {unit}" for arg, unit in sorted(tool.arg_units.items()))),
@@ -1656,6 +1683,16 @@ KEPT_AS_WRITTEN = (
     "ToolSpec.tables_changed",
     # A flag a proof reads to record, not assume, a step it cannot run (`prove.recordable_tools`).
     "ToolSpec.world_free",
+    # The world answers a call by these as written: a status, a record's table, columns and values, and the message
+    # the tool's code gives.
+    "ToolSpec.refusals",
+    "RecordRefusal.status",
+    "RecordRefusal.table",
+    "RecordRefusal.column",
+    "RecordRefusal.argument",
+    "RecordRefusal.field",
+    "RecordRefusal.values",
+    "RecordRefusal.message",
     "ToolEntry.tool",
     "ToolEntry.mode",
     "ToolEntry.module",
@@ -2007,6 +2044,13 @@ def validate_contract(contract: AgentContract) -> list[str]:
             problems.append(
                 f"tool[{tool.name}]:units-for-unknown-args:{','.join(unknown_units)}"
             )
+        for refusal in tool.refusals:
+            if refusal.argument not in tool.args:
+                problems.append(f"tool[{tool.name}]:refusal-on-unknown-arg:{refusal.argument}")
+            if not (refusal.table.strip() and refusal.column.strip() and refusal.field.strip()):
+                problems.append(f"tool[{tool.name}]:refusal-needs-table-column-and-field")
+            if not 400 <= refusal.status < 600:
+                problems.append(f"tool[{tool.name}]:refusal-status-not-an-http-error:{refusal.status}")
     # Conversational agents may expose no tools. Zero-argument tools are also legitimate;
     # cardinality alone is not evidence that authoring omitted something.
     if not contract.real_use_cases:

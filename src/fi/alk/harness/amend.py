@@ -27,6 +27,7 @@ from .contract import (
     CONTRACT_FILE,
     AgentContract,
     AmendmentRecord,
+    RecordRefusal,
     rule_id,
     known_modalities,
     validate_contract,
@@ -335,6 +336,7 @@ def fix_tool(
     effects: str = "",
     inputs_from: dict[str, str] | None = None,
     remove: bool = False,
+    refusals: list[dict[str, Any]] | None = None,
 ) -> tuple[bool, str]:
     """Correct a tool that was read wrong, or take away one the agent does not have.
 
@@ -407,10 +409,16 @@ def fix_tool(
         if value:
             setattr(spec, field, value)
             changed.append(f"{field} updated")
+    if refusals is not None:
+        try:
+            spec.refusals = [RecordRefusal.model_validate(one) for one in refusals]
+        except ValueError as exc:
+            return False, f"refusals not understood: {exc}"
+        changed.append("record refusals updated")
     if not changed:
         return False, (
-            "nothing to change: give args, arg_types, arg_units, returns, description, refuses, effects, inputs_from, "
-            "or remove"
+            "nothing to change: give args, arg_types, arg_units, returns, description, refuses, refusals, effects, "
+            "inputs_from, or remove"
         )
 
     contract.amendments.append(f"tool corrected — {tool_name}: {why.strip()}")

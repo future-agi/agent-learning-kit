@@ -54,7 +54,7 @@ from .leaks import leaks
 from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
 from .scenario import Scenario
 from .understand import load
-from .world.runtime import REQUEST_NOT_ACCEPTED, Call, GeneratedWorld
+from .world.runtime import REQUEST_NOT_ACCEPTED, Call, GeneratedWorld, record_refusal
 from .world.snapshot import read_manifest, restore, source_state
 from .world_door import fault_numbered, fault_slot, faults_named, route_action, routed_faults
 
@@ -787,6 +787,12 @@ def play_reference_step(world: GeneratedWorld, step: object) -> Call:
             refused=effect.refused,
             at=effect.at,
         )
+    elif (refused := record_refusal(world, name, arguments)) is not None:
+        # Nothing here runs the tool, but the contract records that its service refuses this record (a fault the
+        # record carries in the agent's own data): answered as the service answers it live, never assumed to succeed.
+        # The step was decided here, so it is not counted among the assumed ones.
+        world.answered_by_record = [*getattr(world, "answered_by_record", ()), step]
+        semantic = refused
     else:
         # Reaching here means the tool is a declared runtime tool with nothing bound to call.
         # Two very different situations arrive at the same place: a local orchestration action
@@ -911,9 +917,11 @@ def run_steps(
             if not call.ok and not unrun:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
             acting.act_on(step)
+        answered = getattr(world, "answered_by_record", ())
+        played = scenario.solution if steps is None else steps
         assumed = [
             tool
-            for tool in assumed_tools(world, scenario.solution if steps is None else steps)
+            for tool in assumed_tools(world, [one for one in played if not any(one is it for it in answered)])
             if tool not in world.recorded
         ]
         if assumed:

@@ -368,6 +368,55 @@ def trace_row(call: Call, workers: Mapping[str, str] | None = None) -> dict[str,
     }
 
 
+def _records(held: Any) -> list[Mapping[str, Any]]:
+    """The records of one table or collection, whether kept as a list of rows or as a mapping by key."""
+    if isinstance(held, Mapping):
+        return [value for value in held.values() if isinstance(value, Mapping)]
+    if isinstance(held, list):
+        return [row for row in held if isinstance(row, Mapping)]
+    return []
+
+
+def _same(one: Any, other: Any) -> bool:
+    """Equal as values, or as the text they are written as: an id held as 1045 is the "1045" a call sends."""
+    return one == other or str(one) == str(other)
+
+
+def record_refusal(world: Any, name: str, arguments: Mapping[str, Any]) -> Call | None:
+    """The refusal the contract records for `name` that this call's record meets (`ToolSpec.refusals`), answered as
+    the tool's service answers it: refused with that HTTP status, before the tool changes anything. None when no
+    recorded refusal applies, or when the world cannot be read."""
+    refusals = (getattr(world, "refusals", None) or {}).get(name) or ()
+    if not refusals:
+        return None
+    try:
+        state = world.state()
+    except Exception:  # noqa: BLE001 - an unreadable world answers by its handlers as before
+        return None
+    for refusal in refusals:
+        sent = arguments.get(refusal.get("argument"))
+        if sent is None:
+            continue
+        values = refusal.get("values") or []
+        for record in _records(state.get(refusal.get("table"))):
+            if not _same(record.get(refusal.get("column")), sent):
+                continue
+            held = record.get(refusal.get("field"))
+            if (any(_same(held, value) for value in values) if values else held not in (None, "")):
+                status = int(refusal.get("status") or 400)
+                message = str(refusal.get("message") or "") or f"{name} refused with HTTP {status}"
+                return Call(
+                    name=name,
+                    arguments=dict(arguments),
+                    result={"detail": message},
+                    ok=False,
+                    refused=True,
+                    refusal_code=refusal_code_for(status),
+                    error=json.dumps({"detail": message}),
+                )
+    return None
+
+
 class GeneratedWorld(EnvironmentAdapter):
     """A database-backed world whose tools are generated per agent.
 
@@ -392,6 +441,8 @@ class GeneratedWorld(EnvironmentAdapter):
     # How this agent says no in a returned value. A tool that answers "Error: no such order" is
     # refusing, and recording that as a success would hide the very behaviour worth testing.
     refusal_signature: str = ""
+    # The contract's record refusals by tool (`ToolSpec.refusals`, as dicts), answered before a handler runs.
+    refusals: dict[str, list[dict[str, Any]]] = {}
 
     def __init__(
         self, database: str | Path = ":memory:", *, store: Any = None, kind: str = ""
@@ -403,6 +454,7 @@ class GeneratedWorld(EnvironmentAdapter):
         # agent's tools leak into a later agent authored by the same worker process.
         self.tools = copy.deepcopy(type(self).tools)
         self.handlers = dict(type(self).handlers)
+        self.refusals = copy.deepcopy(type(self).refusals)
         self.state_object = copy.deepcopy(type(self).state_object)
         self.source_subfolder = ""
         self.database = str(database)
@@ -544,6 +596,9 @@ class GeneratedWorld(EnvironmentAdapter):
                 )
             )
 
+        refused = record_refusal(self, name, args)
+        if refused is not None:
+            return self._record(refused)
         namespace: dict[str, Any] = {"ToolError": ToolError, "json": json}
         try:
             exec(compile(self.handlers[name], f"<handler:{name}>", "exec"), namespace)

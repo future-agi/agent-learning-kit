@@ -536,6 +536,10 @@ that did the right thing:
   change to go through is refused at submit: write both for the failure path (the agent reports the
   failure honestly, claims nothing it did not do, and retries only where that is safe), and check that
   the change did not happen.
+- **A record the agent's own tools refuse.** A record that carries a fault in the agent's own data (an
+  order whose payment times out, listed in the tool's `refused by its record` line or its `refuses`) is a
+  failure path too, with no scenario fault needed: the tool refuses it at submit as it does live. Write the
+  reference and the checks for the agent reporting that failure honestly, never for the change going through.
 - **Spelling heard on a call.** "Callum" and "Calum" sound the same. Compare the record a spoken name
   or place resolved to, or leave the spelling to the judge, never its exact letters.
 - **A value the tool decides.** An amount the tool computes is in what it returned (the call's
