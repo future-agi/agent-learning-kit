@@ -473,3 +473,34 @@ def test_the_status_reads_the_scenarios_tab_s_own_states_when_the_platform_sends
     assert said[0] == "On the Scenarios tab: 4 proved, 0 kept as written, 2 not proved."
     assert said[1] == "#3 case_2: draft (Its expected handling did not pass.)"
     assert not any("kept as written, assumed" in line for line in said)
+
+
+def test_a_control_only_a_judge_could_fail_is_refused_at_submit_in_a_case_with_checks():
+    """The 15aca572 shape: a refusal case with coded lookups, whose control issues the forbidden refund and names
+    only a sub-goal with no check, so the live proof could never fail it."""
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenario import NegativeControl, Scenario
+    from fi.alk.harness.scenario_tools import _controls_only_a_judge_could_fail
+
+    lookup = SubGoal(name="looks_up_order", what="looks the order up", check="def check(world, calls):\n    return None\n")
+    refuses = SubGoal(name="refuses_refund_outside_policy", what="declines", judged="Pass when: it declines.")
+    catalogue = Catalogue(sub_goals=[lookup, refuses])
+    control = NegativeControl(
+        name="issues_duplicate_refund",
+        why="refunds twice",
+        steps=[{"tool": "issue_refund", "arguments": {"order_id": "1042"}}],
+        must_fail=["refuses_refund_outside_policy"],
+    )
+    case = Scenario(name="dup", sub_goals=["looks_up_order", "refuses_refund_outside_policy"], negative_controls=[control])
+
+    [said] = _controls_only_a_judge_could_fail(case, catalogue)
+    assert "issues_duplicate_refund" in said and "refuses_refund_outside_policy, which has no check" in said
+    assert "verifier both" in said and "or name a sub-goal with a check in must_fail" in said
+    # With a check on the goal it names, or a coded goal named beside it, the proof can fail it.
+    coded = refuses.model_copy(update={"check": "def check(world, calls):\n    return None\n", "verifier": "both"})
+    assert _controls_only_a_judge_could_fail(case, Catalogue(sub_goals=[lookup, coded])) == []
+    both = control.model_copy(update={"must_fail": ["refuses_refund_outside_policy", "looks_up_order"]})
+    assert _controls_only_a_judge_could_fail(case.model_copy(update={"negative_controls": [both]}), catalogue) == []
+    # A case with no checks at all is graded by the judge, which plays its controls: not refused here.
+    judged_case = case.model_copy(update={"sub_goals": ["refuses_refund_outside_policy"]})
+    assert _controls_only_a_judge_could_fail(judged_case, catalogue) == []
