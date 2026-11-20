@@ -68,7 +68,7 @@ from .bundle_v2 import (
 )
 from .diagnostics import DiagnosticLocation, HarnessDiagnostic
 from .egress_proxy import EgressProxy
-from .world_door import PostgresLog
+from .world_door import HARNESS_TABLES_DDL, PostgresLog
 from .job import FailureCause, FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
@@ -5454,6 +5454,8 @@ def _grant_world_role_group(
     """Before the baseline is sealed: the group every world's role belongs to may read and
     change the rows of every customer schema and create nothing, and nobody but the harness
     connects to the cluster's own databases. Template copies carry these grants into every world.
+    The harness's own tables are made first, so the grant covers them: a world role could not
+    create them, nor alter one it does not own.
     """
 
     def run(dbname: str, statement: str) -> None:
@@ -5469,6 +5471,8 @@ def _grant_world_role_group(
             statement=statement,
         )
 
+    for statement in HARNESS_TABLES_DDL:
+        run(baseline_db, statement)
     group = f'"{WORLD_ROLE_GROUP}"'
     run(
         "postgres",
