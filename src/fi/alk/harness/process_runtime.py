@@ -79,7 +79,7 @@ from .world_roles import (
     world_role_name,
 )
 from .egress_proxy import EgressProxy
-from .world_door import PostgresLog
+from .world_door import HARNESS_TABLES_DDL, PostgresLog
 from .job import FailureCause, FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
@@ -5246,6 +5246,14 @@ def _freeze_one_store(
         baseline_reference = ""
         result_handle: SpawnedWorldProcess | None = None
         if strategy is BaselineStrategy.TEMPLATE_DATABASE:
+            if process.engine is ManagedEngine.POSTGRES and context.require_declared_user:
+                _make_harness_tables(
+                    port=port,
+                    credentials=credentials,
+                    baseline_db=baseline_dbname,
+                    sql_runner=context.sql_runner,
+                    process_name=process.name,
+                )
             if process.engine is ManagedEngine.POSTGRES:
                 row_counts = _measure_postgres_row_counts(
                     host="localhost",
@@ -5651,6 +5659,27 @@ def _refuse_seed_escalation(
             seed_escalation_reason(process_name, found),
             process=process_name,
             domain=FailureDomain.ENVIRONMENT,
+        )
+
+
+def _make_harness_tables(
+    *, port: int, credentials: EngineCredentials, baseline_db: str, sql_runner: SqlRunner, process_name: str
+) -> None:
+    """Each trial's tables, made in the baseline as the harness when its seed did not make them (a bundle sealed
+    before the seed did), before the baseline's tables are measured and its roles granted: no world's role can make
+    a table, and one the runner makes after the grants is unreadable to the world's door, which then refuses every
+    write and every worker's call."""
+    for statement in HARNESS_TABLES_DDL:
+        _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=baseline_db,
+            statement=statement,
         )
 
 

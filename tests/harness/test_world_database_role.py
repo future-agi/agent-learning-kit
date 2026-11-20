@@ -197,6 +197,10 @@ def test_the_baseline_grants_its_rows_to_the_group_before_it_is_sealed(tmp_path:
     assert "REVOKE CREATE ON SCHEMA public FROM PUBLIC" in statements[:sealed]
     assert "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC" in statements[:sealed]
     assert not [s for s in statements if "GRANT CREATE" in s or "GRANT ALL" in s]
+    # Each trial's tables are made before the baseline's tables are measured, so a world counts them like its own.
+    made = [i for i, s in enumerate(statements) if s.startswith("CREATE TABLE IF NOT EXISTS _alk_trial_faults")]
+    measured = next(i for i, s in enumerate(statements) if s.startswith("SELECT tablename FROM pg_tables"))
+    assert made and made[0] < measured < granted
 
 
 def test_isolation_refuses_a_postgres_engine_its_worlds_cannot_be_scoped_on():
@@ -522,7 +526,7 @@ def door_worlds(monkeypatch):
     host, port = parts.hostname or "localhost", parts.port or 5432
     made: list[str] = []
 
-    def make(door: bool):
+    def make(door: bool, trial_tables_in_seed: bool = True):
         superuser = pr.EngineCredentials(parts.username, parts.password or "", world_secret=uuid.uuid4().hex)
         baseline = f"alk_baseline_{uuid.uuid4().hex[:8]}"
         made.append(baseline)
@@ -534,13 +538,23 @@ def door_worlds(monkeypatch):
             )
 
         run("postgres", f'CREATE DATABASE "{baseline}"')
+        seed = author._TOOL_TRACE_DDL
+        if not trial_tables_in_seed:
+            # As a bundle sealed before its seed made each trial's tables.
+            made_by_seed = "".join(f"{statement};\n" for statement in world_door.HARNESS_TABLES_DDL)
+            assert made_by_seed in seed
+            seed = seed.replace(made_by_seed, "")
         run(
             baseline,
             "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
-            + author._TOOL_TRACE_DDL
+            + seed
             + "CREATE TABLE IF NOT EXISTS _alk_actors (id text PRIMARY KEY, kind text, side text, role text, "
             "permitted_actions jsonb, identities jsonb, on_behalf_of text);\n"
             "CREATE TABLE riders (id serial PRIMARY KEY, name text);",
+        )
+        pr._make_harness_tables(
+            port=port, credentials=superuser, baseline_db=baseline, sql_runner=pr.default_sql_runner,
+            process_name="db",
         )
         pr._grant_world_role_group(
             port=port, credentials=superuser, baseline_db=baseline, sql_runner=pr.default_sql_runner,
@@ -688,6 +702,31 @@ def test_the_door_reads_this_trial_s_faults_so_a_faulted_and_a_fault_free_trial_
     assert logged == [("committed", None), ("duplicate", None), ("faulted", None)]
     assert keys == [("k1",)]
     assert gate.unwritten == 0
+
+
+@real_postgres
+def test_a_bundle_sealed_before_its_seed_made_the_trial_tables_still_reads_faults_and_limits(door_worlds, monkeypatch):
+    """G3 for a bundle without a door: its trial tables were made after the grants, so the world's role could read
+    neither the faults nor a worker's limits, and every write and worker call was refused."""
+    superuser, world, _door, _reset = door_worlds(False, trial_tables_in_seed=False)
+    monkeypatch.setattr(proxy, "DATABASE_URL", world)
+    monkeypatch.setattr(proxy, "_FAULTS_CONNECTION", None)
+
+    class _World:
+        def run(self, call):
+            return world_door.Executed(200, {"ok": True})
+
+    gate = world_door.WorldDoor(_World(), world_door.PostgresLog(world), world_door.DictRoster({}), faults=proxy._trial_faults)
+
+    def write(key: str, action: str = "orders.cancel") -> world_door.Outcome:
+        return gate.enter(world_door.ToolCall(action=action, name=action.rsplit(".", 1)[-1], effect="write", key=key))
+
+    _trial_state(monkeypatch, superuser, [], worker_deadline_at=4102444800.0)
+    assert proxy._worker_deadline() == 4102444800.0
+    assert write("k1").outcome == "committed"
+    _trial_state(monkeypatch, superuser, [{"action": "orders.refund", "mode": "unavailable"}])
+    faulted = write("k2", "orders.refund")
+    assert (faulted.outcome, faulted.status, faulted.refusal_code) == ("faulted", 503, None)
 
 
 @real_postgres
