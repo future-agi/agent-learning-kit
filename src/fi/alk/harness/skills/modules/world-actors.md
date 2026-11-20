@@ -17,8 +17,7 @@ agent must read; someone nearby on a call. Actors are one axis of the generated 
 that include actors, vary the cast (one background voice, two, a stranger who knows nothing about the call, a relative
 who knows the details, someone who takes the phone, a phone menu, a manager acting through the world). The share also
 counts faults on the agent's own calls (`faults`: a timeout, a service down, an error, or `approval_required`, which
-holds every write of an action until an actor permitted to approve has acted), a pre-run conversation and an event
-start; spread it across the kinds `aim_for` lists, each where the scenario motivates it, and never put one kind on
+holds every write of an action until an actor permitted to approve has acted); spread it across the kinds `aim_for` lists, each where the scenario motivates it, and never put one kind on
 every actor scenario. Something
 already decided before the run starts is a record in the seed, not an actor.
 

@@ -1232,17 +1232,23 @@ def _red_team_short(
     )
 
 
-def _parties(fields: Any) -> list[str]:
-    """What a scenario brings in besides the person, one entry per kind: each actor by id, each fault by its mode, a
-    conversation before the run, an event start. Read alike from a submission and from a kept scenario."""
+def _parties(fields: Any, offered: set[str]) -> list[str]:
+    """The actors and faults a scenario brings in besides the person, one entry per kind: each actor the environment
+    offers by its id (`offered`; one no longer listed is not counted), each fault by its mode. Read alike from a
+    submission and from a kept scenario."""
 
     def field(one: Any, name: str) -> Any:
         return one.get(name) if isinstance(one, dict) else getattr(one, name, None)
 
-    kinds = {str(field(one, "id") or "") for one in field(fields, "actors") or []}
+    kinds = {str(field(one, "id") or "") for one in field(fields, "actors") or []} & offered
     kinds |= {f"fault:{field(one, 'mode')}" for one in field(fields, "faults") or []}
-    kinds |= {name for name in ("pre_run", "starts_with") if field(fields, name)}
     return sorted(kind for kind in kinds if kind)
+
+
+def actor_kind_gate_on() -> bool:
+    """Whether a scenario is refused for adding to a kind the suite's actor scenarios already hold enough of. Off
+    unless `ALK_ACTOR_KIND_GATE` is 1: until then the plan's guidance alone spreads the kinds."""
+    return str(os.environ.get("ALK_ACTOR_KIND_GATE") or "").strip() == "1"
 
 
 def actor_kind_most_share() -> float:
@@ -1261,15 +1267,17 @@ def _call_actors_short(
     wanted: int,
     share: float,
     offered: list[str],
+    actor_ids: set[str],
 ) -> str:
     """Why this scenario without an actor or a fault would leave the suite short of its share of scenarios that
-    include one, or "" when it would not. `offered` says what the environment supports, one line per kind."""
-    if not offered or wanted < 4 or _parties(args):
+    include one, or "" when it would not. `offered` says what the environment supports, one line per kind, and
+    `actor_ids` are the actors it offers."""
+    if not offered or wanted < 4 or _parties(args, actor_ids):
         return ""
     name = str(args.get("name") or "")
     others = [one for one in kept if one.name != name]
     needed = at_least(share, wanted)
-    including = sum(1 for one in others if _parties(one))
+    including = sum(1 for one in others if _parties(one, actor_ids))
     if including >= needed or len(others) - including < wanted - needed:
         return ""
     return (
@@ -1291,20 +1299,21 @@ def _one_kind_crowds(
     share: float,
     offered: list[str],
     kinds_offered: int,
+    actor_ids: set[str],
 ) -> str:
     """Why this scenario's actors and faults are a kind the suite's actor scenarios already hold enough of while the
-    environment offers others, or "" when they are not."""
-    mine = _parties(args)
-    if not mine or kinds_offered < 2:
+    environment offers others, or "" when they are not or the gate is off (`actor_kind_gate_on`)."""
+    mine = _parties(args, actor_ids)
+    if not actor_kind_gate_on() or not mine or kinds_offered < 2:
         return ""
     name = str(args.get("name") or "")
     others = [one for one in kept if one.name != name]
-    including = sum(1 for one in others if _parties(one))
+    including = sum(1 for one in others if _parties(one, actor_ids))
     room = max(at_least(share, wanted), including + 1)
     if room < 4:
         return ""
     most = max(2, math.ceil(room * actor_kind_most_share()))
-    same = sum(1 for one in others if _parties(one) == mine)
+    same = sum(1 for one in others if _parties(one, actor_ids) == mine)
     if same < most:
         return ""
     return (
@@ -2731,7 +2740,7 @@ def scenario_tools(
             if one.channel in channels
         ]
 
-    def offered_parties() -> tuple[list[str], int]:
+    def offered_parties() -> tuple[list[str], int, set[str]]:
         """What the environment supports bringing into a scenario besides the person, one line per kind, and how
         many kinds that is: each actor who speaks, each who acts through the world, and faults on the agent's
         own calls once there is a cast."""
@@ -2754,7 +2763,7 @@ def scenario_tools(
                 + (f", or approval_required held until {', '.join(one.id for one in acting)} approves" if acting else "")
                 + ")"
             )
-        return lines, len(speaking) + len(acting) + (1 if faults else 0)
+        return lines, len(speaking) + len(acting) + (1 if faults else 0), {*speaking, *(one.id for one in acting)}
 
     exploration = {"since_submit": 0}
     # Identical-refusal counts per scenario, so an unsatisfiable gate ends the stage.
@@ -3529,7 +3538,7 @@ def scenario_tools(
         # The default share is a minimum held for new scenarios; a share the person set is never
         # refused for. A scenario already in the suite is never refused for it either, so editing one
         # never changes what it tests.
-        offered, kinds_offered = offered_parties() if with_actors else ([], 0)
+        offered, kinds_offered, actor_ids = offered_parties() if with_actors else ([], 0, set())
         short = (
             ""
             if target.get("actor_share") or any(one.name == same for one in kept)
@@ -3539,6 +3548,7 @@ def scenario_tools(
                 cap(),
                 call_actor_share(),
                 offered,
+                actor_ids,
             )
         )
         if short:
@@ -3548,7 +3558,7 @@ def scenario_tools(
             ""
             if any(one.name == same for one in kept)
             else _one_kind_crowds(
-                {**args, "name": same}, kept, cap(), call_actor_share(), offered, kinds_offered
+                {**args, "name": same}, kept, cap(), call_actor_share(), offered, kinds_offered, actor_ids
             )
         )
         if crowded_kind:
@@ -4083,7 +4093,7 @@ def scenario_tools(
                 "because a writer that never sees the list cannot stay inside it"
             )
         usable = usable_call_actors() if with_actors else []
-        offered, kinds_offered = offered_parties() if with_actors else ([], 0)
+        offered, kinds_offered, _actor_ids = offered_parties() if with_actors else ([], 0, set())
         share = call_actor_share()
         if offered:
             said += (
