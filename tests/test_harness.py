@@ -3033,6 +3033,23 @@ def test_a_removed_case_the_platform_cannot_read_falls_back_to_a_new_key_and_a_n
     assert key not in [one.scenario_key for one in kept] and "NOT restored" in said["content"][0]["text"]
 
 
+def test_suite_progress_in_a_chat_calls_its_counts_the_proofs_made_here(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    async def platform(key):
+        return []
+
+    chat, _kept = scenario_tools(contract, root, root, wanted=4, can_grow=True, removed_lookup=platform)
+    said = asyncio.run({one.name: one.handler for one in chat.tools}["suite_progress"]({}))["content"][0]["text"]
+    assert "Proofs made here (the tab's states may differ" in said and "Proofs on record" not in said
+    build, _kept = scenario_tools(contract, root, root, wanted=4)
+    said = asyncio.run({one.name: one.handler for one in build.tools}["suite_progress"]({}))["content"][0]["text"]
+    assert "Proofs on record" in said
+
+
 def test_a_repeated_restore_refusal_is_counted_like_any_other(tmp_path):
     import asyncio
 
