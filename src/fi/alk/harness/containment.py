@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import atexit
 import errno
+import io
 import itertools
 import logging
 import os
@@ -248,38 +249,66 @@ def _close(*streams: BinaryIO) -> None:
 # One retry worker, not one blocked thread per child. The registry owns the
 # handles independently of caller tracebacks and subsequent launches.
 _cleanup_lock = threading.Lock()
-_pending: dict[subprocess.Popen, Path | None] = {}
+_pending: dict[subprocess.Popen, Leaf | None] = {}
+_worker: threading.Thread | None = None
 
 
 def _finish_pending() -> None:
+    global _worker
+    delay = 0.05
     while True:
         with _cleanup_lock:
+            if _worker is not threading.current_thread():
+                return  # A start interrupted before acknowledgement was retried.
             batch = list(_pending.items())
-        for process, path in batch:
+        for process, leaf in batch:
+            if leaf is not None:
+                try:
+                    leaf.kill()
+                except OSError:
+                    pass  # Still try removal: the leaf may already be empty.
+                try:
+                    leaf.path.rmdir()
+                except FileNotFoundError:
+                    leaf = None
+                except OSError:
+                    pass  # Retry kill and removal together.
+                else:
+                    leaf = None
             try:
-                if process.poll() is None:
-                    continue
-                if path is not None:
-                    path.rmdir()
-            except FileNotFoundError:
-                pass
+                reaped = process.poll() is not None
             except OSError:
-                continue  # e.g. a still-populated cgroup
+                reaped = False
             with _cleanup_lock:
-                del _pending[process]
-                if not _pending:
-                    return
-        time.sleep(0.25)
+                if reaped and leaf is None:
+                    del _pending[process]
+                else:
+                    _pending[process] = leaf
+        with _cleanup_lock:
+            if not _pending:
+                _worker = None
+                return
+        time.sleep(delay)
+        delay = min(2.0, delay * 2)
 
 
-def _defer_cleanup(process: subprocess.Popen, path: Path | None) -> None:
+def retry_pending_cleanup() -> None:
+    """Resume outstanding work after thread capacity returns, even without a launch.
+
+    Without a schedulable worker, handles stay registered until this hook, a
+    later launch, or another handoff can start one; idle progress is not assured.
+    """
+    global _worker
     with _cleanup_lock:
-        idle = not _pending
-        _pending[process] = path
-        if idle:
-            threading.Thread(
+        if not _pending or (_worker is not None and _worker.is_alive()):
+            return
+        try:
+            _worker = threading.Thread(
                 target=_finish_pending, name="alk-reaper", daemon=True
-            ).start()
+            )
+            _worker.start()
+        except (RuntimeError, OSError, KeyboardInterrupt) as exc:
+            logger.warning("containment: cleanup worker start interrupted (%s)", exc)
 
 
 def _abort_child(
@@ -299,31 +328,70 @@ def _abort_child(
         process.kill()
     except OSError as exc:
         logger.warning("containment: could not kill child %s (%s)", process.pid, exc)
-    retry_path = None
-    if leaf is not None:
-        try:
-            if leaf.close() is False:
-                retry_path = leaf.path
-        except OSError as exc:
-            retry_path = leaf.path
-            logger.warning(
-                "containment: could not close leaf for child %s (%s)", process.pid, exc
-            )
+    # Until both operations succeed, this frame owns the unfinished work and
+    # must hand it off on unwind, including a second interrupt during wait.
+    reaped = False
     try:
-        process.wait(timeout=_EMPTY_WAIT_SECONDS)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        logger.warning("containment: could not reap child %s (%s)", process.pid, exc)
-        _defer_cleanup(process, retry_path)
-    else:
-        if retry_path is not None:
-            _defer_cleanup(process, retry_path)
-    # These attributes are populated for PIPE only, never for caller-owned file objects.
-    for stream in (process.stdin, process.stdout, process.stderr):
-        if stream is not None:
+        if leaf is not None:
             try:
-                stream.close()
-            except OSError as exc:
-                logger.warning("containment: could not close child stream (%s)", exc)
+                if leaf.close() is not False:
+                    leaf = None
+            except (OSError, KeyboardInterrupt) as exc:
+                logger.warning(
+                    "containment: could not close leaf for child %s (%s)", process.pid, exc
+                )
+        try:
+            process.wait(timeout=_EMPTY_WAIT_SECONDS)
+            reaped = True
+        except (OSError, subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
+            logger.warning("containment: could not reap child %s (%s)", process.pid, exc)
+    finally:
+        # These attributes are populated for PIPE only, never for caller-owned file objects.
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except (OSError, KeyboardInterrupt) as exc:
+                    logger.warning("containment: could not close child stream (%s)", exc)
+        if not reaped or leaf is not None:
+            with _cleanup_lock:
+                _pending[process] = leaf
+            retry_pending_cleanup()
+
+
+class _GateEnd(io.FileIO):
+    def __init__(self) -> None:
+        # Allocate the closed FileIO before os.pipe(). Unlike an fdopen return
+        # value, it remains reachable even if interrupted *during* adoption.
+        pass
+
+    def adopt(self, fd: int, mode: str) -> None:
+        super().__init__(fd, mode)
+
+
+class _GatePipe:
+    def __init__(self) -> None:
+        self.reader, self.writer = _GateEnd(), _GateEnd()
+        self.ends: tuple[int, ...] = ()
+        self.transferred = False
+
+    def open(self) -> tuple[BinaryIO, BinaryIO]:
+        self.ends = os.pipe()
+        self.reader.adopt(self.ends[0], "rb")
+        self.writer.adopt(self.ends[1], "wb")
+        self.transferred = True
+        return self.reader, self.writer
+
+    def close(self) -> None:
+        ends, self.ends = self.ends, ()
+        for fd, stream in zip(ends, (self.reader, self.writer)):
+            try:
+                if self.transferred or not stream.closed:
+                    stream.close()  # Idempotent after an early handshake close.
+                else:
+                    os.close(fd)  # Interrupted before this FileIO took ownership.
+            except (OSError, KeyboardInterrupt):
+                logger.warning("containment: secondary gate close failure", exc_info=True)
 
 
 def popen(
@@ -335,26 +403,19 @@ def popen(
     a fresh leaf, and only then runs ``args`` with ``env``; any process it starts is born inside
     the leaf. A command that cannot be executed raises here, as ``subprocess.Popen`` does.
     """
+    retry_pending_cleanup()
     containment = _containment
     if containment is None:
         return subprocess.Popen(list(args), **kwargs), None
     argv = [str(arg) for arg in args]
     message = _go_message(kwargs.pop("env", None))
     pass_fds = tuple(kwargs.pop("pass_fds", ()))
-    leaf = containment.leaf()
-    streams: list[BinaryIO] = []
+    go, done = _GatePipe(), _GatePipe()
     process = None
-
-    def pipe() -> tuple[BinaryIO, BinaryIO]:
-        read, write = os.pipe()
-        reader = os.fdopen(read, "rb", buffering=0)
-        writer = os.fdopen(write, "wb", buffering=0)
-        streams.extend((reader, writer))
-        return reader, writer
-
+    leaf = containment.leaf()
     try:
-        go_read, go_write = pipe()
-        done_read, done_write = pipe()
+        go_read, go_write = go.open()
+        done_read, done_write = done.open()
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -387,19 +448,15 @@ def popen(
     except BaseException:
         try:
             if process is None:
-                leaf.close()
+                try:
+                    leaf.close()
+                except (OSError, KeyboardInterrupt) as exc:
+                    logger.warning("containment: could not close unused leaf (%s)", exc)
             else:
                 _abort_child(process, leaf, bool(kwargs.get("start_new_session")))
         finally:
-            # File objects close idempotently even after an asynchronous interrupt;
-            # retrying a raw fd could close another thread's descriptor instead.
-            for stream in streams:
-                try:
-                    stream.close()
-                except (OSError, KeyboardInterrupt):
-                    logger.warning(
-                        "containment: secondary gate close failure", exc_info=True
-                    )
+            go.close()
+            done.close()
         raise
     return process, leaf
 

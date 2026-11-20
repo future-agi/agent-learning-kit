@@ -6,6 +6,7 @@ import select
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from unittest.mock import Mock
@@ -108,7 +109,10 @@ def test_startup_abort_signals_only_owned_group(monkeypatch, tmp_path, owns_grou
 
 
 @pytest.mark.parametrize("close_index", [1, 3], ids=["initial", "final"])
-def test_pipe_close_interrupt_retains_ownership(monkeypatch, tmp_path, close_index):
+@pytest.mark.parametrize("after", [False, True], ids=["before-close", "after-reuse"])
+def test_pipe_close_interrupt_retains_ownership(
+    monkeypatch, tmp_path, close_index, after
+):
     # An inert Popen stand-in: exercise real descriptors without ever stranding a gate.
     subtree = _FailingSubtree(tmp_path / "missing-leaf")
     monkeypatch.setattr(containment, "_containment", subtree)
@@ -119,21 +123,25 @@ def test_pipe_close_interrupt_retains_ownership(monkeypatch, tmp_path, close_ind
     close = containment._close
     calls = 0
     interrupt = KeyboardInterrupt()
+    replacement = None
 
     def interrupted(*streams):
-        nonlocal calls
+        nonlocal calls, replacement
         calls += 1
         if calls == close_index:
+            if after:
+                close(*streams)
+                replacement = open(os.devnull, "rb", buffering=0)
             raise interrupt
         close(*streams)
 
     monkeypatch.setattr(containment, "_close", interrupted)
     pipe = os.pipe
-    descriptors = []
+    descriptors = {}
 
     def record_pipe():
         pair = pipe()
-        descriptors.extend(pair)
+        descriptors.update((fd, os.fstat(fd)) for fd in pair)
         return pair
 
     monkeypatch.setattr(os, "pipe", record_pipe)
@@ -141,21 +149,34 @@ def test_pipe_close_interrupt_retains_ownership(monkeypatch, tmp_path, close_ind
         with pytest.raises(KeyboardInterrupt) as caught:
             containment.popen(["true"])
         assert caught.value is interrupt
+        if replacement is not None:
+            assert replacement.fileno() in descriptors
+            assert replacement.read(1) == b""  # A reused number was not closed again.
         for fd in descriptors:
+            if replacement is not None and fd == replacement.fileno():
+                continue
             with pytest.raises(OSError) as closed:
                 os.fstat(fd)
             assert closed.value.errno == errno.EBADF
         process.kill.assert_called_once_with()
         process.wait.assert_called_once()
     finally:
-        for fd in descriptors:
+        if replacement is not None:
+            replacement.close()
+        for fd, original in descriptors.items():
             try:
-                os.close(fd)
+                if os.path.samestat(os.fstat(fd), original):
+                    os.close(fd)
             except OSError:
                 pass
 
 
-def test_late_exit_reaped_and_leaf_removed_with_traceback_held(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "fault", ["wait-timeout", "thread-start", "leaf-interrupt", "wait-interrupt"]
+)
+def test_late_exit_reaped_and_leaf_removed_with_traceback_held(
+    monkeypatch, tmp_path, fault
+):
     path = tmp_path / "leaf"
     path.mkdir()
     blocker = path / "populated"
@@ -165,13 +186,44 @@ def test_late_exit_reaped_and_leaf_removed_with_traceback_held(monkeypatch, tmp_
     monkeypatch.setattr(containment, "_EMPTY_WAIT_SECONDS", 0.05)
     processes = []
     spawn = subprocess.Popen
-    release, writer = os.pipe()
+    permitted = threading.Event()
+    retry_attempted = threading.Event()
+    start = threading.Thread.start
+    starts_refused = []
+
+    def retry_kill():
+        if not permitted.is_set():
+            retry_attempted.set()
+            raise OSError("leaf temporarily busy")
+        blocker.unlink(missing_ok=True)
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt("second interrupt")
+
+    def refuse_start(thread):
+        if thread.name == "alk-reaper":
+            starts_refused.append(thread)
+            raise RuntimeError("simulated thread capacity limit")
+        return start(thread)
+
+    # No pending work from an earlier test may service this one's handoff.
+    previous = getattr(containment, "_worker", None)
+    if previous is not None and previous.is_alive():
+        previous.join(timeout=5)
+        assert not previous.is_alive()
+    monkeypatch.setattr(subtree.current, "kill", retry_kill)
+    if fault == "thread-start":
+        monkeypatch.setattr(threading.Thread, "start", refuse_start)
+    elif fault == "leaf-interrupt":
+        monkeypatch.setattr(subtree.current, "close", interrupted)
 
     def controlled(*args, **kwargs):
         process = spawn(*args, **kwargs)
         processes.append(process)
         # Stand in for a pending signal that takes effect only after I/O completes.
         monkeypatch.setattr(process, "kill", lambda: None)
+        if fault == "wait-interrupt":
+            monkeypatch.setattr(process, "wait", interrupted)
         return process
 
     monkeypatch.setattr(subprocess, "Popen", controlled)
@@ -183,17 +235,29 @@ def test_late_exit_reaped_and_leaf_removed_with_traceback_held(monkeypatch, tmp_
         raise error
 
     monkeypatch.setattr(containment, "_read_all", after_exec)
+    release, writer = os.pipe()
     try:
         with pytest.raises(RuntimeError) as caught:
             containment.popen(
                 [sys.executable, "-c", f"import os; os.read({release}, 1)"],
                 pass_fds=(release,),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
         process = processes[0]
         assert caught.value is error and caught.value.__traceback__ is not None
         assert process.returncode is None and path.is_dir()
+        assert all(
+            stream.closed for stream in (process.stdin, process.stdout, process.stderr)
+        )
+        if fault == "thread-start":
+            assert starts_refused
+            monkeypatch.setattr(threading.Thread, "start", start)
+            containment.retry_pending_cleanup()  # No later launch or GC.
+        assert retry_attempted.wait(4)
+        permitted.set()  # Only the deferred kill can now remove the population blocker.
         os.write(writer, b"x")
-        blocker.unlink()
         deadline = time.monotonic() + 4
         while (
             process.returncode is None or path.exists()
@@ -203,33 +267,104 @@ def test_late_exit_reaped_and_leaf_removed_with_traceback_held(monkeypatch, tmp_
         with pytest.raises(ChildProcessError):
             os.waitpid(process.pid, os.WNOHANG)
     finally:
+        permitted.set()
         os.close(release)
         os.close(writer)
-        if processes:
-            processes[0].wait(timeout=3)
+        for process in processes:
+            spawn.kill(process)
+            spawn.wait(process, timeout=3)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
+        if fault == "thread-start":
+            monkeypatch.setattr(threading.Thread, "start", start)
+            containment.retry_pending_cleanup()
+        worker = getattr(containment, "_worker", None)
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=5)
+            assert not worker.is_alive()
 
 
-def test_abort_stops_both_members_of_a_test_owned_group(tmp_path):
-    # Check OS signal delivery separately from gate timing. Both members hold
-    # the output pipe. EOF proves neither still holds it after the abort.
-    worker = "import sys,time; print('ready',flush=True); time.sleep(10)"
-    leader = "import subprocess,sys; subprocess.run([sys.executable,'-c',sys.argv[1]])"
-    with subprocess.Popen(
-        [sys.executable, "-c", leader, worker],
-        stdout=subprocess.PIPE,
-        start_new_session=True,
-    ) as process:
-        # Keep a test-owned reader; the abort closes Popen's streams.
-        with os.fdopen(os.dup(process.stdout.fileno()), "rb", buffering=0) as output:
-            try:
-                assert select.select([output], [], [], 3)[0]
-                assert output.readline() == b"ready\n"
-                containment._abort_child(
-                    process, _FailingLeaf(tmp_path / "absent"), True
-                )
-                assert select.select([output], [], [], 3)[0]
-                assert output.read(1) == b""
-                assert process.returncode == -signal.SIGKILL
-            finally:
-                if process.poll() is None:
-                    os.killpg(process.pid, signal.SIGKILL)
+@pytest.mark.parametrize("wrap_index", range(1, 5))
+@pytest.mark.parametrize("after", [False, True], ids=["before-adopt", "after-adopt"])
+def test_interrupt_wrapping_each_gate_end_closes_raw_and_wrapped_fds(
+    monkeypatch, tmp_path, wrap_index, after
+):
+    subtree = _FailingSubtree(tmp_path / "absent")
+    monkeypatch.setattr(containment, "_containment", subtree)
+    adopt = containment._GateEnd.adopt
+    wraps = 0
+    error = KeyboardInterrupt()
+
+    def wrap(stream, fd, mode):
+        nonlocal wraps
+        wraps += 1
+        if wraps == wrap_index and not after:
+            raise error
+        adopt(stream, fd, mode)
+        if wraps == wrap_index:
+            raise error
+
+    monkeypatch.setattr(containment._GateEnd, "adopt", wrap)
+    before = set(os.listdir("/dev/fd"))
+    with pytest.raises(KeyboardInterrupt) as caught:
+        containment.popen(["true"])
+    assert caught.value is error and subtree.current.pid is None
+    assert set(os.listdir("/dev/fd")) == before
+
+
+def test_startup_timeout_stops_ready_descendant_when_leaf_fails(monkeypatch, tmp_path):
+    subtree = _FailingSubtree(tmp_path / "absent")
+    monkeypatch.setattr(containment, "_containment", subtree)
+    read_ack = containment._read_all
+    read_fd, write_fd = os.pipe()
+    # Both processes retain the write end for their lifetime. Only the child
+    # reports readiness, after fork. EOF checks both, even if init hasn't reaped it.
+    command = [
+        sys.executable,
+        "-c",
+        "import os,sys,time\n"
+        "if os.fork() == 0: os.write(int(sys.argv[1]), b'R')\n"
+        "time.sleep(30)",
+        str(write_fd),
+    ]
+    with (
+        os.fdopen(read_fd, "rb", buffering=0) as output,
+        os.fdopen(write_fd, "wb") as parent_writer,
+    ):
+        startup_errors = []
+        stopped = False
+
+        def delayed_parent(fd, deadline):
+            parent_writer.close()
+            assert select.select([output], [], [], 5)[0] and output.read(1) == b"R"
+            assert select.select([fd], [], [], 0)[0]  # Exec acknowledgement is ready.
+            # Advance only the deadline clock at the parent's observation point.
+            with monkeypatch.context() as m:
+                m.setattr(containment.time, "monotonic", lambda: deadline.end + 1)
+                try:
+                    return read_ack(fd, deadline)
+                except subprocess.TimeoutExpired as exc:
+                    startup_errors.append(exc)
+                    raise
+
+        monkeypatch.setattr(containment, "_read_all", delayed_parent)
+        try:
+            with pytest.raises(subprocess.TimeoutExpired) as caught:
+                containment.run(command, pass_fds=(write_fd,), timeout=10)
+            assert startup_errors == [caught.value]  # run never got the handle.
+            assert (caught.value.cmd, caught.value.timeout) == (command, 10)
+            assert subtree.current.closed and subtree.current.pid is not None
+            assert select.select([output], [], [], 3)[0] and output.read(1) == b""
+            stopped = True
+            with pytest.raises(ChildProcessError):
+                os.waitpid(subtree.current.pid, os.WNOHANG)
+        finally:
+            if not stopped and subtree.current.pid is not None:
+                try:
+                    os.killpg(subtree.current.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    os.waitpid(subtree.current.pid, 0)
+                except ChildProcessError:
+                    pass
