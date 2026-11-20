@@ -249,7 +249,7 @@ def _close(*streams: BinaryIO) -> None:
 # One retry worker, not one blocked thread per child. The registry owns the
 # handles independently of caller tracebacks and subsequent launches.
 _cleanup_lock = threading.Lock()
-_pending: dict[subprocess.Popen, Leaf | None] = {}
+_pending: dict[object, tuple[subprocess.Popen | None, Leaf | None]] = {}
 _worker: threading.Thread | None = None
 
 
@@ -261,7 +261,7 @@ def _finish_pending() -> None:
             if _worker is not threading.current_thread():
                 return  # A start interrupted before acknowledgement was retried.
             batch = list(_pending.items())
-        for process, leaf in batch:
+        for key, (process, leaf) in batch:
             if leaf is not None:
                 try:
                     leaf.kill()
@@ -276,14 +276,14 @@ def _finish_pending() -> None:
                 else:
                     leaf = None
             try:
-                reaped = process.poll() is not None
+                reaped = process is None or process.poll() is not None
             except OSError:
                 reaped = False
             with _cleanup_lock:
                 if reaped and leaf is None:
-                    del _pending[process]
+                    del _pending[key]
                 else:
-                    _pending[process] = leaf
+                    _pending[key] = process, leaf
         with _cleanup_lock:
             if not _pending:
                 _worker = None
@@ -311,27 +311,31 @@ def retry_pending_cleanup() -> None:
             logger.warning("containment: cleanup worker start interrupted (%s)", exc)
 
 
+def _defer_cleanup(process: subprocess.Popen | None, leaf: Leaf | None) -> None:
+    with _cleanup_lock:
+        _pending[object()] = process, leaf
+    retry_pending_cleanup()
+
+
 def _abort_child(
     process: subprocess.Popen, leaf: Leaf | None, owns_group: bool
 ) -> None:
-    if owns_group:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except OSError as kill_error:
-            logger.warning(
-                "containment: could not kill group %s (%s)", process.pid, kill_error
-            )
-    # A failed leaf kill must not leave the direct child alive or its parent blocked in wait.
-    try:
-        process.kill()
-    except OSError as exc:
-        logger.warning("containment: could not kill child %s (%s)", process.pid, exc)
-    # Until both operations succeed, this frame owns the unfinished work and
-    # must hand it off on unwind, including a second interrupt during wait.
     reaped = False
     try:
+        if owns_group:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except (OSError, KeyboardInterrupt) as kill_error:
+                logger.warning(
+                    "containment: could not kill group %s (%s)", process.pid, kill_error
+                )
+        # A failed leaf kill must not leave the direct child alive or its parent blocked in wait.
+        try:
+            process.kill()
+        except (OSError, KeyboardInterrupt) as exc:
+            logger.warning("containment: could not kill child %s (%s)", process.pid, exc)
         if leaf is not None:
             try:
                 if leaf.close() is not False:
@@ -354,9 +358,7 @@ def _abort_child(
                 except (OSError, KeyboardInterrupt) as exc:
                     logger.warning("containment: could not close child stream (%s)", exc)
         if not reaped or leaf is not None:
-            with _cleanup_lock:
-                _pending[process] = leaf
-            retry_pending_cleanup()
+            _defer_cleanup(process, leaf)
 
 
 class _GateEnd(io.FileIO):
@@ -447,16 +449,20 @@ def popen(
         _close(done_read)
     except BaseException:
         try:
-            if process is None:
-                try:
-                    leaf.close()
-                except (OSError, KeyboardInterrupt) as exc:
-                    logger.warning("containment: could not close unused leaf (%s)", exc)
-            else:
+            if process is not None:
                 _abort_child(process, leaf, bool(kwargs.get("start_new_session")))
         finally:
             go.close()
             done.close()
+        if process is None:
+            # Closing a leaf opens cgroup files. Release scarce gate fds first.
+            try:
+                removed = leaf.close() is not False
+            except (OSError, KeyboardInterrupt) as exc:
+                logger.warning("containment: could not close unused leaf (%s)", exc)
+                removed = False
+            if not removed:
+                _defer_cleanup(None, leaf)
         raise
     return process, leaf
 

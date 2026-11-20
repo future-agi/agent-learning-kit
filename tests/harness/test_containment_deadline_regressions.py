@@ -1,6 +1,7 @@
 """A contained command has one timeout for startup and execution together."""
 
 import errno
+import fcntl
 import os
 import select
 import signal
@@ -108,6 +109,83 @@ def test_startup_abort_signals_only_owned_group(monkeypatch, tmp_path, owns_grou
     assert signals == ([(subtree.current.pid, signal.SIGKILL)] if owns_group else [])
 
 
+@pytest.mark.parametrize("interrupted_signal", ["group", "child"])
+def test_signal_interrupt_preserves_startup_timeout(monkeypatch, tmp_path, interrupted_signal):
+    subtree = _FailingSubtree(tmp_path / "missing-leaf")
+    monkeypatch.setattr(containment, "_containment", subtree)
+    process = Mock(pid=123)
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: process)
+    group_kill = Mock()
+    monkeypatch.setattr(os, "killpg", group_kill)
+    (group_kill if interrupted_signal == "group" else process.kill).side_effect = KeyboardInterrupt()
+    timeout = subprocess.TimeoutExpired(["true"], 1)
+    monkeypatch.setattr(containment, "_write_all", Mock())
+    monkeypatch.setattr(containment, "_read_all", Mock(side_effect=timeout))
+    handoff = Mock()
+    monkeypatch.setattr(containment, "_defer_cleanup", handoff)
+
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        containment.popen(["true"], start_new_session=True)
+    assert caught.value is timeout
+    group_kill.assert_called_once_with(process.pid, signal.SIGKILL)
+    process.kill.assert_called_once_with()
+    assert subtree.current.closed == 1
+    process.wait.assert_called_once()
+    for stream in (process.stdin, process.stdout, process.stderr):
+        stream.close.assert_called_once_with()
+    handoff.assert_called_once_with(process, subtree.current)
+
+
+@pytest.mark.parametrize("failure", ["false", "error"])
+def test_second_pipe_emfile_releases_fds_before_unused_leaf_retry(monkeypatch, tmp_path, failure):
+    path = tmp_path / "unused"
+    path.mkdir()
+    blocker = path / "busy"
+    blocker.touch()
+    subtree = _FailingSubtree(path)
+    monkeypatch.setattr(containment, "_containment", subtree)
+    pair = []
+    pipe = os.pipe
+    emfile = OSError(errno.EMFILE, "controlled pipe limit")
+
+    def limited_pipe():
+        if pair:
+            raise emfile
+        pair.extend(pipe())
+        return tuple(pair)
+
+    closed_before_removal = []
+
+    def close_unused():
+        for fd in pair:
+            try:
+                os.fstat(fd)
+            except OSError as exc:
+                closed_before_removal.append(exc.errno == errno.EBADF)
+            else:
+                closed_before_removal.append(False)
+        if failure == "error" or not all(closed_before_removal):
+            raise emfile
+        return False
+
+    retry_attempted = threading.Event()
+    monkeypatch.setattr(subtree.current, "kill", retry_attempted.set)
+    monkeypatch.setattr(subtree.current, "close", close_unused)
+    monkeypatch.setattr(os, "pipe", limited_pipe)
+    try:
+        with pytest.raises(OSError) as caught:
+            containment.popen(["true"])
+        assert caught.value is emfile and subtree.current.pid is None
+        assert closed_before_removal == [True, True]
+        assert retry_attempted.wait(4) and path.is_dir()
+    finally:
+        blocker.unlink()
+        worker = containment._worker
+        if worker is not None:
+            worker.join(timeout=5)
+    assert not path.exists()
+
+
 @pytest.mark.parametrize("close_index", [1, 3], ids=["initial", "final"])
 @pytest.mark.parametrize("after", [False, True], ids=["before-close", "after-reuse"])
 def test_pipe_close_interrupt_retains_ownership(
@@ -124,23 +202,32 @@ def test_pipe_close_interrupt_retains_ownership(
     calls = 0
     interrupt = KeyboardInterrupt()
     replacement = None
+    target = None
+    source = open(os.devnull, "rb", buffering=0)
 
     def interrupted(*streams):
-        nonlocal calls, replacement
+        nonlocal calls, replacement, target
         calls += 1
         if calls == close_index:
             if after:
+                target = streams[0].fileno()
+                assert target == gate_pairs[0 if close_index == 1 else 1][0]
                 close(*streams)
-                replacement = open(os.devnull, "rb", buffering=0)
+                # Reserve exactly the former reader without overwriting any live fd.
+                reserved = fcntl.fcntl(source, fcntl.F_DUPFD, target)
+                replacement = os.fdopen(reserved, "rb", buffering=0)
+                assert replacement.fileno() == target
             raise interrupt
         close(*streams)
 
     monkeypatch.setattr(containment, "_close", interrupted)
     pipe = os.pipe
     descriptors = {}
+    gate_pairs = []
 
     def record_pipe():
         pair = pipe()
+        gate_pairs.append(pair)
         descriptors.update((fd, os.fstat(fd)) for fd in pair)
         return pair
 
@@ -150,7 +237,7 @@ def test_pipe_close_interrupt_retains_ownership(
             containment.popen(["true"])
         assert caught.value is interrupt
         if replacement is not None:
-            assert replacement.fileno() in descriptors
+            assert replacement.fileno() == target
             assert replacement.read(1) == b""  # A reused number was not closed again.
         for fd in descriptors:
             if replacement is not None and fd == replacement.fileno():
@@ -161,6 +248,7 @@ def test_pipe_close_interrupt_retains_ownership(
         process.kill.assert_called_once_with()
         process.wait.assert_called_once()
     finally:
+        source.close()
         if replacement is not None:
             replacement.close()
         for fd, original in descriptors.items():
