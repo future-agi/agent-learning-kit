@@ -120,6 +120,18 @@ def played_control(
     unrun, no call made) it did not run as written: a check failing then shows nothing about the wrong behaviour, so
     neither reads failed."""
     named = set(control.must_fail) or {one.name for one in outcomes}
+    if outcomes and control.must_fail and not named & {one.name for one in outcomes}:
+        # Every sub-goal it must fail has no check: a judge grades it, in real runs, never in a proof. Not played as
+        # a code control, so it neither passes nor fails here.
+        return {
+            "name": control.name,
+            "why": control.why,
+            "ran": False,
+            "failed": None,
+            "held": [],
+            "assumed": assumed,
+            "judged": True,
+        }
     ran = bool(outcomes) and not assumed
     return {
         "name": control.name,
@@ -140,6 +152,10 @@ def played_control(
 
 JUDGED_ONLY_TEXT = (
     "Kept as written: only a judge grades this case, and nothing has shown the judge fails a wrong behaviour."
+)
+JUDGED_CONTROL_TEXT = (
+    "Kept as written: its wrong-way examples ({controls}) are graded only by a judge, which runs in real runs, not in "
+    "proofs."
 )
 
 

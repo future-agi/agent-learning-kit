@@ -42,6 +42,7 @@ from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
 from .controls import (
+    JUDGED_CONTROL_TEXT,
     JUDGED_ONLY_TEXT,
     ControlJudge,
     control_broken,
@@ -342,6 +343,9 @@ class Proof:
         if self.assumed:
             return BlockedReason.SOLUTION_ASSUMED
         if self.controls and not self.ran_controls and not self.judged_only:
+            # Controls only a judge grades read as a judged case: kept as written, never held, no judge in the proof.
+            if all(one.get("judged") for one in self.controls):
+                return BlockedReason.JUDGED_ONLY
             return BlockedReason.CONTROL_NOT_RUN
         if self.judged_only and not self.controls_failed:
             return BlockedReason.JUDGED_ONLY
@@ -561,6 +565,8 @@ class Proof:
                 self.assumed
             )
         if self.controls and not self.ran_controls and not self.judged_only:
+            if all(one.get("judged") for one in self.controls):
+                return JUDGED_CONTROL_TEXT.format(controls=", ".join(one["name"] for one in self.controls))
             return "no negative control could run here: " + ", ".join(
                 f"{one['name']} ({', '.join(one.get('assumed') or [])})" for one in self.controls
             )

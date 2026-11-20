@@ -475,37 +475,6 @@ def test_the_status_reads_the_scenarios_tab_s_own_states_when_the_platform_sends
     assert not any("kept as written, assumed" in line for line in said)
 
 
-def test_a_control_only_a_judge_could_fail_is_refused_at_submit_in_a_case_with_checks():
-    """The 15aca572 shape: a refusal case with coded lookups, whose control issues the forbidden refund and names
-    only a sub-goal with no check, so the live proof could never fail it."""
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenario import NegativeControl, Scenario
-    from fi.alk.harness.scenario_tools import _controls_only_a_judge_could_fail
-
-    lookup = SubGoal(name="looks_up_order", what="looks the order up", check="def check(world, calls):\n    return None\n")
-    refuses = SubGoal(name="refuses_refund_outside_policy", what="declines", judged="Pass when: it declines.")
-    catalogue = Catalogue(sub_goals=[lookup, refuses])
-    control = NegativeControl(
-        name="issues_duplicate_refund",
-        why="refunds twice",
-        steps=[{"tool": "issue_refund", "arguments": {"order_id": "1042"}}],
-        must_fail=["refuses_refund_outside_policy"],
-    )
-    case = Scenario(name="dup", sub_goals=["looks_up_order", "refuses_refund_outside_policy"], negative_controls=[control])
-
-    [said] = _controls_only_a_judge_could_fail(case, catalogue)
-    assert "issues_duplicate_refund" in said and "refuses_refund_outside_policy, which has no check" in said
-    assert "verifier both" in said and "or name a sub-goal with a check in must_fail" in said
-    # With a check on the goal it names, or a coded goal named beside it, the proof can fail it.
-    coded = refuses.model_copy(update={"check": "def check(world, calls):\n    return None\n", "verifier": "both"})
-    assert _controls_only_a_judge_could_fail(case, Catalogue(sub_goals=[lookup, coded])) == []
-    both = control.model_copy(update={"must_fail": ["refuses_refund_outside_policy", "looks_up_order"]})
-    assert _controls_only_a_judge_could_fail(case.model_copy(update={"negative_controls": [both]}), catalogue) == []
-    # A case with no checks at all is graded by the judge, which plays its controls: not refused here.
-    judged_case = case.model_copy(update={"sub_goals": ["refuses_refund_outside_policy"]})
-    assert _controls_only_a_judge_could_fail(judged_case, catalogue) == []
-
-
 def test_a_lookup_the_service_answers_not_found_counts_as_made_and_a_fault_does_not():
     """The 9943 shape: the reference looks up an order that does not exist and the agent's service answers 404 "no
     order 9943". The semantic call keeps the service's refusal, so both kinds of lookup check see the call as made;
@@ -569,3 +538,28 @@ def test_a_reference_that_changes_someone_else_s_record_is_named_from_the_world_
     # The caller's own order, or a case that only looks the other person's order up and declines: nothing said.
     assert _writes_for_someone_else(case("1044"), tmp_path, {"get_order"}) == ""
     assert _writes_for_someone_else(case("1043", steps=("get_order",)), tmp_path, {"get_order"}) == ""
+
+
+def test_a_control_only_a_judge_grades_keeps_a_mixed_case_as_written_and_never_holds_it():
+    """The 15aca572 shape: a refusal case with coded lookups whose control names only a judged sub-goal. Judges run in
+    real runs, never in proofs: the case is kept as written with that reason, not held as negative_control_passed."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.checks import Outcome
+    from fi.alk.harness.controls import played_control
+    from fi.alk.harness.prove import BlockedReason
+
+    control = SimpleNamespace(name="issues_duplicate_refund", why="refunds twice", must_fail=["refuses_refund_outside_policy"])
+    coded = [Outcome("looks_up_order", True), Outcome("checks_existing_refunds", True)]
+    judged = played_control(control, coded, [])
+    assert judged["judged"] is True and judged["failed"] is None
+
+    proof = Proof(ready=True, solvable=True, vacuous=False, controls=[judged])
+    assert proof.blocked_reason() == BlockedReason.JUDGED_ONLY and proof.kept_as_written and not proof.proved
+    assert "wrong-way examples (issues_duplicate_refund) are graded only by a judge, which runs in real runs" in proof.why()
+
+    # Beside a control code fails, the judged one is not counted against the case.
+    wrong_lookup = SimpleNamespace(name="skips_lookup", why="never looks up", must_fail=["looks_up_order"])
+    failed = played_control(wrong_lookup, [Outcome("looks_up_order", False, "not done"), Outcome("checks_existing_refunds", True)], [])
+    mixed = Proof(ready=True, solvable=True, vacuous=False, controls=[judged, failed])
+    assert mixed.controls_failed and mixed.blocked_reason() is None and mixed.proved
