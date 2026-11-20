@@ -775,6 +775,11 @@ def authored_agent_document(
                 for entry in contract.get("tool_entrypoints") or []
                 if isinstance(entry, dict) and isinstance(entry.get("module"), str)
             ],
+            [
+                part["path"]
+                for part in contract.get("system_prompt_from") or []
+                if isinstance(part, dict) and isinstance(part.get("path"), str)
+            ],
         )
     return {
         "sdk_version": _sdk_version,
