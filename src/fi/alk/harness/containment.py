@@ -29,10 +29,10 @@ import subprocess
 import sys
 import threading
 import time
-from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Any, BinaryIO
 
 logger = logging.getLogger(__name__)
@@ -247,82 +247,109 @@ def _close(*streams: BinaryIO) -> None:
         stream.close()
 
 
-# One retry worker, not one blocked thread per child. The registry owns the
-# handles independently of caller tracebacks and subsequent launches.
-_cleanup_lock = threading.Lock()
-# deque.append/popleft are thread-safe endpoint operations. Producers publish
-# before attempting the election lock; only the elected consumer removes work.
-_pending: deque[tuple[subprocess.Popen | None, Leaf | None, bool]] = deque()
-_worker: threading.Thread | None = None
+_CleanupRecord = tuple[subprocess.Popen | None, Leaf | None, bool]
 
 
-def _finish_pending() -> None:
-    global _worker
-    with _cleanup_lock:
-        if _worker is not None:
-            return  # Concurrent (or interrupted but successful) starts are harmless.
-        _worker = threading.current_thread()
-    delay = 0.05
-    while True:
-        for _ in range(len(_pending)):
-            process, leaf, group_pending = _pending.popleft()
-            if group_pending and process is not None:
-                try:
-                    if process.returncode is None:
-                        os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                except (OSError, KeyboardInterrupt):
-                    _pending.append((process, leaf, True))
-                    continue  # Keep the leader unreaped until the group attempt resolves.
-            if leaf is not None:
-                try:
-                    leaf.kill()
-                except OSError:
-                    pass  # Still try removal: the leaf may already be empty.
-                try:
-                    leaf.path.rmdir()
-                except FileNotFoundError:
-                    leaf = None
-                except OSError:
-                    pass  # Retry kill and removal together.
-                else:
-                    leaf = None
-            try:
-                reaped = process is None or process.poll() is not None
-            except OSError:
-                reaped = False
-            if not reaped or leaf is not None:
-                _pending.append((process, leaf, False))
-        with _cleanup_lock:
-            if not _pending:
-                _worker = None
-                return
-        time.sleep(delay)
-        delay = min(2.0, delay * 2)
+class _Cleanup:
+    def __init__(self) -> None:
+        self.pending: SimpleQueue[_CleanupRecord] = SimpleQueue()
+        self.election = threading.Condition()
+        self.worker: threading.Thread | None = None
+        self.starting: threading.Thread | None = None
 
-
-def retry_pending_cleanup() -> None:
-    """Make two attempts now; sustained thread unavailability leaves the handles queued."""
-    for _ in range(2):
+    def ensure_worker(self) -> None:
+        """Refuse the launch if we cannot provide an idle reaper before acquiring handles."""
+        candidate = None
+        started = False
         try:
-            with _cleanup_lock:
-                if not _pending or _worker is not None:
+            with self.election:
+                self.election.wait_for(lambda: self.starting is None)
+                if self.worker is not None and self.worker.is_alive():
                     return
-            worker = threading.Thread(
-                target=_finish_pending, name="alk-reaper", daemon=True
-            )
-            worker.start()
-            return
-        except (RuntimeError, OSError, KeyboardInterrupt) as exc:
-            logger.warning("containment: cleanup worker start interrupted (%s)", exc)
+                candidate = threading.Thread(
+                    target=self._entry, name="alk-reaper", daemon=True
+                )
+                self.starting = candidate
+            candidate.start()  # Never hold the election lock here.
+            started = True
+        finally:
+            if candidate is not None:
+                with self.election:
+                    if self.starting is candidate:
+                        # An interrupted start may still enter _entry later. Only a
+                        # successfully started candidate receives the consumer ticket.
+                        self.worker = candidate if started else None
+                        self.starting = None
+                        self.election.notify_all()
+
+    def _entry(self) -> None:
+        with self.election:
+            self.election.wait_for(lambda: self.starting is None)
+            if self.worker is not threading.current_thread():
+                return
+        self._consume()
+
+    def _consume(self) -> None:
+        while True:
+            first = self.pending.get()  # Block indefinitely while idle; put() never waits.
+            others = self.pending.qsize()  # Bound the pass even if records need retry.
+            self._finish(first)
+            del first
+            for _ in range(others):
+                self._finish(self.pending.get())
+            if not self.pending.empty():
+                time.sleep(0.2)
+
+    def _finish(self, record: _CleanupRecord) -> None:
+        process, leaf, group_pending = record
+        if group_pending and process is not None:
+            try:
+                if process.returncode is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except (OSError, KeyboardInterrupt):
+                self.pending.put((process, leaf, True))
+                return  # Keep the leader unreaped until the group attempt resolves.
+        if leaf is not None:
+            try:
+                leaf.kill()
+            except OSError:
+                pass  # Still try removal: the leaf may already be empty.
+            try:
+                leaf.path.rmdir()
+            except FileNotFoundError:
+                leaf = None
+            except OSError:
+                pass  # Retry kill and removal together.
+            else:
+                leaf = None
+        try:
+            reaped = process is None or process.poll() is not None
+        except OSError:
+            reaped = False
+        if not reaped or leaf is not None:
+            self.pending.put((process, leaf, False))
+
+
+_cleanup = _Cleanup()
+
+
+def _reset_cleanup_after_fork() -> None:
+    # Neither the parent's worker/lock nor ownership of its children survives fork.
+    global _cleanup
+    _cleanup = _Cleanup()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_cleanup_after_fork)
 
 
 def _defer_cleanup(
     process: subprocess.Popen | None, leaf: Leaf | None, group_pending: bool = False
 ) -> None:
-    _pending.append((process, leaf, group_pending))
-    retry_pending_cleanup()
+    # Nonblocking publication only: no election, thread creation or contended wait.
+    _cleanup.pending.put((process, leaf, group_pending))
 
 
 def _abort_child(
@@ -427,12 +454,13 @@ def popen(
 
     Without containment this is a plain Popen. With it, the process starts as the gate, joins
     a fresh leaf, and only then runs ``args`` with ``env``; any process it starts is born inside
-    the leaf. A command that cannot be executed raises here, as ``subprocess.Popen`` does.
+    the leaf. If no cleanup worker can start, launch fails before allocating the leaf or pipes.
+    A command that cannot be executed raises here, as ``subprocess.Popen`` does.
     """
-    retry_pending_cleanup()
     containment = _containment
     if containment is None:
         return subprocess.Popen(list(args), **kwargs), None
+    _cleanup.ensure_worker()
     argv = [str(arg) for arg in args]
     message = _go_message(kwargs.pop("env", None))
     pass_fds = tuple(kwargs.pop("pass_fds", ()))
@@ -502,7 +530,8 @@ def run(
 ) -> subprocess.CompletedProcess:
     """``subprocess.run`` for a customer execution, in a session of its own: what it started never
     outlives it. On a timeout or any error its process group is killed, and its leaf with
-    containment; with containment the leaf is also closed when it exits."""
+    containment; with containment the leaf is also closed when it exits. A cleanup worker
+    must be available before launch, including when containment is disabled."""
     if capture_output:
         kwargs["stdout"] = subprocess.PIPE
         kwargs["stderr"] = subprocess.PIPE
@@ -513,6 +542,8 @@ def run(
         if timeout is not None and active() is not None
         else None
     )
+    if active() is None:
+        _cleanup.ensure_worker()  # run owns abort cleanup even without a leaf.
     process, leaf = popen(args, _deadline=deadline, start_new_session=True, **kwargs)
     try:
         stdout, stderr = process.communicate(
