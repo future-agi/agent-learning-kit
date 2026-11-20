@@ -1869,7 +1869,8 @@ def test_tools_the_agent_serves_by_calling_the_fronted_tools_api_are_the_proxy_s
     assert fault_notices([fault], log, calls, contract=sealed) == []
 
 
-def test_the_returns_app_seals_behind_the_tool_proxy_with_a_channel_per_worker(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["import", "unreachable"])
+def test_the_returns_app_seals_behind_the_tool_proxy_with_a_channel_per_worker(tmp_path: Path, mode: str) -> None:
     """As a live build authored it: the ledger listed under `dependencies` only, the tools as the agent module's
     functions calling its routes. Sealed in process, its workers had no ledger and the door saw none of their calls;
     the shipped tools-api runs behind the tool proxy, and each worker reaches it on its own channel."""
@@ -1887,7 +1888,8 @@ def test_the_returns_app_seals_behind_the_tool_proxy_with_a_channel_per_worker(t
         },
         "tools": [{"name": name, "args": ["order_id"], "description": name} for name, _ in routes],
         "tool_entrypoints": [
-            {"tool": name, "mode": "import", "module": "agent", "callable": name, "endpoint": endpoint,
+            # `unreachable`: the OpenAI Agents SDK's `@function_tool` defs, recorded as the reading guidance says.
+            {"tool": name, "mode": mode, "module": "agent", "callable": name, "endpoint": endpoint,
              "method": "POST"}
             for name, endpoint in routes
         ],
@@ -1939,6 +1941,14 @@ def test_the_returns_app_seals_behind_the_tool_proxy_with_a_channel_per_worker(t
     assert {channels[url.rsplit("/", 1)[1]] for url in rendered.values()} == {"order_lookup", "refund"}
     sealed = json.loads((output / "contract.json").read_text())
     assert {(one["mode"], one["service"]) for one in sealed["tool_entrypoints"]} == {("service", "tools-api")}
+    # The sealed contract is what certification reads: every tool has its service seam.
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.tool_certification import ToolAvailability, certify_tool_inventory
+
+    report = certify_tool_inventory(AgentContract.model_validate(sealed), output, external_provider=False, source=source)
+    assert {row.tool: row.availability for row in report.tools} == {
+        name: ToolAvailability.RUNTIME_ONLY for name, _ in routes
+    }
 
 
 def test_an_app_authored_as_compose_is_observed_for_its_hand_offs_behind_the_tool_proxy(tmp_path: Path) -> None:
