@@ -57,6 +57,7 @@ from .catalogue import (
     SubGoal,
     load_catalogue,
     save_catalogue,
+    settled_by,
     judged_wording_advisory,
     validate_sub_goal,
     without_delivery_overlay,
@@ -3046,6 +3047,8 @@ def scenario_tools(
             )
         except ValueError as invalid:
             return _err(f"Not added: {invalid}")
+        # Labelled by what runs: a check makes it code, criteria a judge, both makes it both.
+        sub_goal.verifier = settled_by(sub_goal)
         problems = validate_sub_goal(sub_goal)
         if sub_goal.actor and sub_goal.actor not in load_actors(world_root).by_id():
             problems.append(f"actor: {sub_goal.actor!r} is not an actor of this environment; add it with add_actor first")

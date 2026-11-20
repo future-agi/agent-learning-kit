@@ -248,6 +248,9 @@ class Proof:
     # Tools the reference solution calls that the agent under test does not have, read from its agent version's
     # tools when they are known: the world's service may still answer them, but no agent could pass the case.
     missing_tools: list[str] = field(default_factory=list)
+    # The case's sub-goals a judge alone grades (no check in code): a control that only gets one of them wrong cannot be
+    # failed by code, so the advice names these rather than a check the control does not touch.
+    judged_goals: list[str] = field(default_factory=list)
 
     @property
     def holds(self) -> bool:
@@ -525,7 +528,18 @@ class Proof:
                     "call for this caller's record (read `calls`, whether or not it went through)."
                     if attempted
                     else ""
-                ) + ("" if unmatched or attempted else "\n\nTighten the named checks so this wrong behaviour fails them.")
+                ) + (
+                    ""
+                    if unmatched or attempted
+                    else "\n\nThese sub-goals of this case are graded by the judge alone, so no check in code can fail "
+                    "a control that only gets them wrong: " + ", ".join(self.judged_goals) + ". If this control's "
+                    "mistake is one of them, give that sub-goal a check where the run shows it (no tool that reveals "
+                    "another person's record was called; no write was made for a request out of scope), or give the "
+                    "control a `transcript` the judge plays. Tightening a check the control does not get wrong cannot "
+                    "fail it."
+                    if self.judged_goals
+                    else "\n\nTighten the named checks so this wrong behaviour fails them."
+                )
         if self.misses_case_goal and not self.deferred:
             return (
                 "the negative controls only make checks fail that every scenario in this suite shares, so they show "
@@ -1572,6 +1586,9 @@ def prove(
         else []
     )
     checks = checks_for(scenario, catalogue)
+    proof.judged_goals = [
+        name for name in scenario.sub_goals if (goal := catalogue.named(name)) is not None and not goal.check.strip()
+    ]
     # A step whose tool touches no world and that nothing here can run is recorded, not run (`recordable_tools`).
     run = partial(run_steps, recordable=recordable_tools(scenario, contract, checks))
     proof.evidence = {name: check_evidence(source) for name, source in checks}
