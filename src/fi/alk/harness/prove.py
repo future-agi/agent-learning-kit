@@ -863,6 +863,8 @@ def play_reference_step(world: GeneratedWorld, step: object) -> Call:
             ok=effect.ok,
             error=effect.error,
             refused=effect.refused,
+            # Why the service said no: what `answered` reads, so a lookup it answered "not found" counts as made.
+            refusal_code=effect.refusal_code,
             at=effect.at,
         )
     elif (refused := record_refusal(world, name, arguments)) is not None:

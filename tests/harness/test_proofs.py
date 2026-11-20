@@ -504,3 +504,35 @@ def test_a_control_only_a_judge_could_fail_is_refused_at_submit_in_a_case_with_c
     # A case with no checks at all is graded by the judge, which plays its controls: not refused here.
     judged_case = case.model_copy(update={"sub_goals": ["refuses_refund_outside_policy"]})
     assert _controls_only_a_judge_could_fail(judged_case, catalogue) == []
+
+
+def test_a_lookup_the_service_answers_not_found_counts_as_made_and_a_fault_does_not():
+    """The 9943 shape: the reference looks up an order that does not exist and the agent's service answers 404 "no
+    order 9943". The semantic call keeps the service's refusal, so both kinds of lookup check see the call as made;
+    a server fault (5xx) or a transport failure is never read as answered."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.checks import answered
+    from fi.alk.harness.prove import play_reference_step
+    from fi.alk.harness.world.runtime import Call, refusal_code_for
+
+    def world_answering(status):
+        world = SimpleNamespace(calls=[], runtime_tools={"get_order"}, endpoint_for={"get_order": "orders/get"})
+
+        def forward(endpoint, arguments, record=True):
+            refused = status >= 400
+            return Call(name=endpoint, arguments=dict(arguments), result={"error": "no order 9943"}, ok=not refused,
+                        refused=refused, refusal_code=refusal_code_for(status), error='{"error": "no order 9943"}')
+
+        world.forward = forward
+        return world
+
+    step = SimpleNamespace(tool="get_order", arguments={"order_id": "9943"}, environment_arguments={})
+    world = world_answering(404)
+    call = play_reference_step(world, step)
+    assert call.refused is True and call.refusal_code == "world_rule"
+    assert answered(world.calls, "get_order", order_id="9943") == [call]
+    # A server fault is no answer: never read as a lookup made.
+    faulted = world_answering(500)
+    play_reference_step(faulted, step)
+    assert answered(faulted.calls, "get_order", order_id="9943") == []
