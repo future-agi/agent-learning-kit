@@ -10,7 +10,11 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 import json
+import logging
+import os
 import re
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import (
@@ -348,6 +352,28 @@ def parse_execution_manifest(
     ).entries
 
 
+class ActorsSwitch(BaseModel):
+    """`metadata.actors`: whether scenarios include actors and faults, and the default share of scenarios with one."""
+
+    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
+
+    enabled: bool
+    share: list[float]
+
+    @model_validator(mode="after")
+    def _share_is_a_range(self) -> "ActorsSwitch":
+        if len(self.share) != 2 or not 0.0 <= self.share[0] <= self.share[1] <= 1.0:
+            raise ValueError("share is [min, max] with 0 <= min <= max <= 1")
+        return self
+
+
+ACTORS_OFF = ActorsSwitch(enabled=False, share=[0.0, 0.0])
+# Where a hosted entrypoint publishes its job's switch for the rest of its process.
+ACTORS_SWITCH_ENV = "ALK_ACTORS_SWITCH"
+# Present only in a hosted sandbox: there, a process with no published switch reads actors off.
+HOSTED_JOB_PATH = Path("/work/job.json")
+
+
 class HarnessJobMetadata(BaseModel):
     """The entries of `HarnessJob.metadata` the SDK reads by name, typed.
 
@@ -363,6 +389,49 @@ class HarnessJobMetadata(BaseModel):
     customer_code_environment: dict[str, str] = Field(default_factory=dict)
     # The hosts a controlled run lets the agent reach; absent when the platform does not control its egress.
     egress_allowed_hosts: list[str] | None = None
+    actors: ActorsSwitch | None = None
+
+
+def actors_switch(metadata: Mapping[str, Any] | None, *, hosted: bool) -> ActorsSwitch | None:
+    """The job's switch. Absent: off for a hosted job, None (the kit's default, on) for a local one. Malformed: off."""
+    if not isinstance(metadata, Mapping) or "actors" not in metadata:
+        return ACTORS_OFF if hosted else None
+    try:
+        switch = HarnessJobMetadata.model_validate({"actors": metadata["actors"]}).actors
+    except ValueError:
+        switch = None
+    if switch is None:
+        logging.getLogger(__name__).warning("actors switch in the job is malformed, so actors are off")
+        return ACTORS_OFF
+    return switch
+
+
+def publish_actors_switch(metadata: Mapping[str, Any] | None, *, hosted: bool) -> None:
+    """Publish the job's switch to this process and the ones it starts (`current_actors_switch`)."""
+    switch = actors_switch(metadata, hosted=hosted)
+    if switch is None:
+        os.environ.pop(ACTORS_SWITCH_ENV, None)
+    else:
+        os.environ[ACTORS_SWITCH_ENV] = switch.model_dump_json()
+
+
+def current_actors_switch() -> ActorsSwitch | None:
+    """The published switch; with none, off in a hosted sandbox and None (the kit's default) elsewhere."""
+    raw = os.environ.get(ACTORS_SWITCH_ENV)
+    if raw is None:
+        return ACTORS_OFF if HOSTED_JOB_PATH.is_file() else None
+    try:
+        return ActorsSwitch.model_validate_json(raw)
+    except ValueError:
+        return ACTORS_OFF
+
+
+def job_actors_switch(job: Any) -> ActorsSwitch | None:
+    return actors_switch(getattr(job, "metadata", None), hosted=getattr(job, "execution", None) is ExecutionMode.HOSTED)
+
+
+def actors_on(switch: ActorsSwitch | None) -> bool:
+    return switch is None or switch.enabled
 
 
 def routed_through_gateway(target_model: object) -> bool:

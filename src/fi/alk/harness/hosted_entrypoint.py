@@ -71,6 +71,7 @@ from .job import (
     HarnessFailure,
     HarnessJob,
     HarnessStage,
+    publish_actors_switch,
 )
 from .privilege import IsolationMode, IsolationUnavailable, establish_isolation, isolation_mode
 from .process_preflight import PreflightError, preflight_bundle
@@ -256,6 +257,7 @@ def load_job(job_path: Path) -> HarnessJob:
     job = HarnessJob.model_validate_json(job_path.read_text(encoding="utf-8"))
     if job.execution is not ExecutionMode.HOSTED:
         raise ValueError("hosted_entrypoint_requires_hosted_job")
+    publish_actors_switch(job.metadata, hosted=True)
     return job
 
 
