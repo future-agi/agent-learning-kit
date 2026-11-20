@@ -544,6 +544,16 @@ def test_interrupted_start_revokes_candidate(monkeypatch):
     consumers = []
     stop = threading.Event()
 
+    # Hold the native thread before it can claim the ticket that start() revokes.
+    entry = state._entry
+    release = threading.Event()
+
+    def delayed_entry():
+        if release.wait(5):
+            entry()
+
+    monkeypatch.setattr(state, "_entry", delayed_entry)
+
     def interrupted(thread):
         candidates.append(thread)
         start(thread)
@@ -559,15 +569,68 @@ def test_interrupted_start_revokes_candidate(monkeypatch):
             m.setattr(threading.Thread, "start", interrupted)
             with pytest.raises(KeyboardInterrupt):
                 state.ensure_worker()
+        release.set()
         assert state.worker is None
         state.ensure_worker()
     finally:
+        release.set()
         stop.set()
         for thread in candidates:
             thread.join(3)
         if state.worker is not None:
             state.worker.join(3)
     assert consumers == [state.worker] and state.worker not in candidates
+
+
+def test_interrupt_on_creator_reacquire_after_successful_start(monkeypatch):
+    state = containment._Cleanup()
+    monkeypatch.setattr(containment, "_cleanup", state)
+    monkeypatch.setattr(containment, "_containment", None)
+    creator = threading.current_thread()
+    started, release, consuming, stop = (threading.Event() for _ in range(4))
+    consumers = []
+    candidates = []
+    entry = state._entry
+    start = threading.Thread.start
+
+    class InterruptReacquire(threading.Condition):
+        def __enter__(self):
+            if threading.current_thread() is creator and started.is_set():
+                started.clear()
+                raise KeyboardInterrupt()
+            return super().__enter__()
+
+    def delayed_entry():
+        if release.wait(5):
+            entry()
+
+    def consume():
+        consumers.append(threading.current_thread())
+        consuming.set()
+        stop.wait(10)
+
+    def successful_start(thread):
+        start(thread)
+        candidates.append(thread)
+        started.set()  # Return normally; the next creator lock acquisition fails.
+
+    state.election = InterruptReacquire()
+    monkeypatch.setattr(state, "_entry", delayed_entry)
+    monkeypatch.setattr(state, "_consume", consume)
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(threading.Thread, "start", successful_start)
+            with pytest.raises(KeyboardInterrupt):
+                containment.run(["true"])
+        release.set()
+        assert consuming.wait(3)
+        assert containment.run(["true"]).returncode == 0
+        assert consumers == candidates == [state.worker]
+    finally:
+        release.set()
+        stop.set()
+        for thread in candidates:
+            thread.join(3)
 
 
 def test_concurrent_admission_shares_one_worker(monkeypatch):
@@ -617,6 +680,65 @@ def test_concurrent_admission_shares_one_worker(monkeypatch):
         for worker in starts:
             if worker.ident is not None:
                 worker.join(3)
+
+
+@pytest.mark.parametrize("phase", ["waiting-for-starter", "after-admission"])
+def test_admission_timeout_precedes_launch_resources(monkeypatch, phase):
+    state = containment._Cleanup()
+    subtree = Mock()
+    monkeypatch.setattr(containment, "_containment", subtree)
+    monkeypatch.setattr(containment, "_cleanup", state)
+    starting, release, stop = threading.Event(), threading.Event(), threading.Event()
+    starter_released = threading.Event()
+    start = threading.Thread.start
+
+    def delayed_start(thread):
+        if thread.name == "alk-reaper":
+            starting.set()
+            release.wait(5)
+            starter_released.set()
+        start(thread)
+
+    monkeypatch.setattr(state, "_consume", lambda: stop.wait(10))
+    command = ["true"]
+    timeout = 0.1
+    first = threading.Thread(target=state.ensure_worker)
+    pipe = Mock(side_effect=AssertionError("opened a pipe after expiry"))
+    spawn = Mock(side_effect=AssertionError("spawned after expiry"))
+    monkeypatch.setattr(os, "pipe", pipe)
+    monkeypatch.setattr(subprocess, "Popen", spawn)
+    try:
+        if phase == "waiting-for-starter":
+            monkeypatch.setattr(threading.Thread, "start", delayed_start)
+            first.start()
+            assert starting.wait(3)
+        else:
+            # Advance only containment's clock between admission and leaf creation.
+            clock = Mock()
+            clock.monotonic.return_value = 0.0
+            monkeypatch.setattr(containment, "time", clock)
+            message = containment._go_message
+
+            def advance(env):
+                clock.monotonic.return_value = timeout
+                return message(env)
+
+            monkeypatch.setattr(containment, "_go_message", advance)
+        with pytest.raises(subprocess.TimeoutExpired) as caught:
+            containment.run(command, timeout=timeout)
+        assert caught.value.cmd is command and caught.value.timeout == timeout
+        if phase == "waiting-for-starter":
+            assert not starter_released.is_set()
+        subtree.leaf.assert_not_called()
+        pipe.assert_not_called()
+        spawn.assert_not_called()
+    finally:
+        release.set()
+        if first.ident is not None:
+            first.join(3)
+        stop.set()
+        if state.worker is not None:
+            state.worker.join(3)
 
 
 def test_handoff_ignores_contended_election(monkeypatch, tmp_path):

@@ -213,6 +213,12 @@ class _Deadline:
     def remaining(self) -> float:
         return max(0.0, self.end - time.monotonic())
 
+    def require_remaining(self) -> float:
+        left = self.remaining()
+        if not left:
+            raise subprocess.TimeoutExpired(self.args, self.timeout)
+        return left
+
     def wait(self, fd: int, event: int) -> None:
         with selectors.DefaultSelector() as selector:
             selector.register(fd, event)
@@ -257,36 +263,40 @@ class _Cleanup:
         self.worker: threading.Thread | None = None
         self.starting: threading.Thread | None = None
 
-    def ensure_worker(self) -> None:
+    def ensure_worker(self, deadline: _Deadline | None = None) -> None:
         """Refuse the launch if we cannot provide an idle reaper before acquiring handles."""
-        candidate = None
-        started = False
-        try:
-            with self.election:
-                self.election.wait_for(lambda: self.starting is None)
-                if self.worker is not None and self.worker.is_alive():
-                    return
-                candidate = threading.Thread(
-                    target=self._entry, name="alk-reaper", daemon=True
-                )
-                self.starting = candidate
-            candidate.start()  # Never hold the election lock here.
-            started = True
-        finally:
-            if candidate is not None:
+        while True:
+            candidate = None
+            try:
                 with self.election:
-                    if self.starting is candidate:
-                        # An interrupted start may still enter _entry later. Only a
-                        # successfully started candidate receives the consumer ticket.
-                        self.worker = candidate if started else None
-                        self.starting = None
-                        self.election.notify_all()
+                    left = deadline.require_remaining() if deadline is not None else None
+                    if self.starting is not None:
+                        self.election.wait(left)
+                        continue
+                    if self.worker is not None and self.worker.is_alive():
+                        return
+                    candidate = threading.Thread(
+                        target=self._entry, name="alk-reaper", daemon=True
+                    )
+                    self.starting = candidate
+                candidate.start()  # Never hold the election lock here.
+            except BaseException:
+                if candidate is not None:
+                    with self.election:
+                        if self.starting is candidate:
+                            self.starting = None  # Revoke a not-yet-entered candidate.
+                            self.election.notify_all()
+                raise
 
     def _entry(self) -> None:
+        # The worker completes its own election even if its creator never returns.
         with self.election:
-            self.election.wait_for(lambda: self.starting is None)
-            if self.worker is not threading.current_thread():
+            candidate = threading.current_thread()
+            if self.starting is not candidate:
                 return
+            self.worker = candidate
+            self.starting = None
+            self.election.notify_all()
         self._consume()
 
     def _consume(self) -> None:
@@ -460,12 +470,14 @@ def popen(
     containment = _containment
     if containment is None:
         return subprocess.Popen(list(args), **kwargs), None
-    _cleanup.ensure_worker()
+    _cleanup.ensure_worker(_deadline)
     argv = [str(arg) for arg in args]
     message = _go_message(kwargs.pop("env", None))
     pass_fds = tuple(kwargs.pop("pass_fds", ()))
     go, done = _GatePipe(), _GatePipe()
     process = None
+    if _deadline is not None:
+        _deadline.require_remaining()
     leaf = containment.leaf()
     try:
         go_read, go_write = go.open()
