@@ -116,19 +116,22 @@ def _with_proof_counts(text: str, counts: dict[str, int]) -> str:
     return "\n\n".join(part for part in (text, line) if part)
 
 
-def _status_line(workspace: Path, kept: list[Any] | None, saved: str) -> str:
+def _status_line(workspace: Path, kept: list[Any] | None, saved: str, unapplied: int = 0) -> str:
     """The line that closes every builder reply, written by code from the files, never by the model: how many
     scenarios there are and what their proofs say, and whether this working copy's changes are in the environment.
-    `saved` is `saved`, `unsaved` or `building`."""
+    `saved` is `saved`, `saved_except` (with `unapplied` scenarios left out), `unsaved`, `building` or `unknown`,
+    which says nothing about saving rather than guess."""
     counts = proof_counts(load_proofs(workspace), [proof_key(one) for one in kept or []])
     changes = {
-        "saved": "every change is saved to the environment",
-        "unsaved": "changes in this chat are NOT saved to the environment",
-        "building": "the environment is still being built, so nothing is saved to it yet",
+        "saved": "; every change is saved to the environment",
+        "saved_except": f"; saved to the environment except {unapplied} scenarios that could not be applied",
+        "unsaved": "; changes in this chat are NOT saved to the environment",
+        "building": "; the environment is still being built, so nothing is saved to it yet",
+        "unknown": "",
     }[saved]
     return (
         f"Status: {len(kept or [])} scenarios ({counts['proved']} proved, {counts['kept_as_written']} kept as "
-        f"written, {counts['not_proved']} not proved); {changes}."
+        f"written, {counts['not_proved']} not proved){changes}."
     )
 
 
@@ -874,7 +877,7 @@ class HostedChatRuntime:
         if isinstance(self.conversation, BuilderConversation):
             # What the sandbox started from is what the environment holds, unless an earlier
             # sandbox of this conversation already recorded otherwise.
-            self._published_fingerprint()
+            self._mint_published()
 
     def _conversation(self) -> BuilderConversation | CoordinatorConversation:
         if self._side_chat():
@@ -1610,24 +1613,20 @@ class HostedChatRuntime:
         return body if isinstance(body, dict) else {}
 
     def _closing_status(self) -> str:
-        """The code-written status line for the end of this reply, or "" before the environment has scenarios."""
+        """The code-written status line for the end of this reply, or "" before the environment has a suite."""
         kept = getattr(self.conversation.stage, "kept", None)
-        if not kept:
+        if kept is None:
             return ""
-        saved = (
-            "building"
-            if self._control_only()
-            else "unsaved"
-            if self._environment_fingerprint() != self._published_fingerprint()
-            else "saved"
-        )
-        return _status_line(self.workspace, kept, saved)
+        state = self._saved_state()
+        unapplied = int(self._published().get("unapplied") or 0) if state == "saved_except" else 0
+        return _status_line(self.workspace, kept, state, unapplied)
 
     def _turn_status_note(self) -> str:
         kept = getattr(self.conversation.stage, "kept", None)
         if not kept:
             return ""
-        unsaved = None if self._control_only() else self._environment_fingerprint() != self._published_fingerprint()
+        state = self._saved_state()
+        unsaved = None if state in ("building", "unknown") else state == "unsaved"
         return _status_note(self.workspace, kept, unsaved)
 
     def _ledger_note(self) -> str:
@@ -1681,14 +1680,35 @@ class HostedChatRuntime:
                     digest.update(path.read_bytes())
         return digest.hexdigest()
 
-    def _published_fingerprint(self) -> str:
-        path = self.workspace / _PUBLISHED
+    def _published(self) -> dict[str, Any]:
+        """The marker of what was last saved: its `fingerprint` and how many scenarios it left `unapplied`; {} when
+        there is none or it cannot be read."""
         try:
-            return str(json.loads(path.read_text(encoding="utf-8")).get("fingerprint") or "")
+            body = json.loads((self.workspace / _PUBLISHED).read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            fingerprint = self._environment_fingerprint()
-            self._write_dotfile(_PUBLISHED, {"fingerprint": fingerprint})
-            return fingerprint
+            return {}
+        return body if isinstance(body, dict) else {}
+
+    def _published_fingerprint(self) -> str:
+        """The fingerprint last saved, or "" when that is not known: never taken to be what is here now."""
+        return str(self._published().get("fingerprint") or "")
+
+    def _mint_published(self) -> None:
+        """At the sandbox's start, what it opened from is what the environment holds, unless an earlier sandbox of
+        this conversation already recorded what was saved."""
+        if not self._published_fingerprint():
+            self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+
+    def _saved_state(self) -> str:
+        """`building`, `unknown`, `unsaved`, `saved_except` (saved, with scenarios left unapplied) or `saved`."""
+        if self._control_only():
+            return "building"
+        published = self._published()
+        if not published.get("fingerprint"):
+            return "unknown"
+        if self._environment_fingerprint() != published["fingerprint"]:
+            return "unsaved"
+        return "saved_except" if int(published.get("unapplied") or 0) else "saved"
 
     def _write_dotfile(self, name: str, body: dict[str, Any]) -> None:
         path = self.workspace / name
@@ -1754,7 +1774,10 @@ class HostedChatRuntime:
             await self._record_touched(result)
             if result.get("revision"):
                 self._write_dotfile(_AUTHORING_BASIS, {"authoring_revision": result["revision"]})
-            self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+            # Saved, but a scenario left unapplied is not in the environment: the marker says how many.
+            self._write_dotfile(
+                _PUBLISHED, {"fingerprint": self._environment_fingerprint(), "unapplied": len(failed)}
+            )
         return result
 
     async def _publish_if_changed(self) -> tuple[str, bool]:

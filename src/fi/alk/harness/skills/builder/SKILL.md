@@ -215,7 +215,11 @@ what the gates check. Then:
   whose `replaces` names the old rule (its id or exact words). Never `drop_rule` and then `add_rule`
   without `replaces`: the versions would show the old rule as never there. If a reply lists a removed
   rule nothing replaces and your new rule rewords it, call `add_rule` again with the same rule and
-  `replaces` set to that id; it links the two and changes nothing else. The reply lists every case that cites the old rule, and a `fix_tool` reply every case
+  `replaces` set to that id; it links the two and changes nothing else. Where the value is written in a file of
+  the agent's material (a policy or knowledge file the rule or the cases cite), change that line of the file too,
+  with the file tools, so the file says what the rule now says and the cases citing it show Source changed; give
+  `add_rule` that line as `source_file` and `source_quote`. The reply lists every case that cites the old rule or
+  the line it is written on, and a `fix_tool` reply every case
   that calls the tool. Read each listed case against the current rule, with its sub-goals, and in the
   same turn edit every text that still states the old rule: its name, use case (the heading its group
   is shown under), branch, tests, instruction and controls' `why`, and each sub-goal's description,

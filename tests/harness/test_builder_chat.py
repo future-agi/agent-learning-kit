@@ -136,7 +136,7 @@ def test_selected_rows_reach_the_builder_by_tab_number(tmp_path, monkeypatch):
     runtime = _runtime(tmp_path, client, monkeypatch)
     conversation = EditingConversation(tmp_path, writes=False)
     runtime.conversation = conversation
-    runtime._published_fingerprint()
+    runtime._mint_published()
 
     _turn(runtime, {"content": "make these harder", "scenario_ids": ["a", "b"]})
 
@@ -151,7 +151,7 @@ def test_unsaved_changes_are_published_and_reported_by_number(tmp_path, monkeypa
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     runtime.conversation = EditingConversation(tmp_path, writes=True)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
 
     _turn(runtime, {"content": "add one"})
@@ -168,7 +168,7 @@ def test_a_change_to_the_world_data_alone_is_saved(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     (tmp_path / "world.sqlite").write_bytes(b"before")
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
 
     (tmp_path / "world.sqlite").write_bytes(b"after")
@@ -181,7 +181,7 @@ def test_a_change_to_the_world_data_alone_is_saved(tmp_path, monkeypatch):
 def test_a_change_to_the_cast_alone_is_saved(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr(
         "fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None
     )
@@ -195,11 +195,51 @@ def test_a_change_to_the_cast_alone_is_saved(tmp_path, monkeypatch):
     assert len(client.published) == 1
 
 
+def test_the_closing_status_line_says_what_is_saved_and_never_guesses(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._mint_published()
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root, skip=None: None)
+    assert runtime._saved_state() == "saved"
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text('{"changed": 1}')
+    assert runtime._saved_state() == "unsaved"
+    # A lost marker is not knowledge that everything is saved, and nothing writes one in its place.
+    (tmp_path / ".futureagi-published.json").unlink()
+    assert runtime._saved_state() == "unknown" and runtime._published_fingerprint() == ""
+    assert not (tmp_path / ".futureagi-published.json").exists()
+    # A save that leaves a scenario unapplied says so, rather than saved.
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.scenario_seal_problems", lambda root: {"one": "its seed does not load"}
+    )
+    client.publish = _publish_with_failed(client)
+    assert asyncio.run(runtime._save_changes())["applied"] is True
+    assert runtime._saved_state() == "saved_except"
+
+
+def test_a_suite_with_every_scenario_dropped_still_closes_with_its_status(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    runtime._mint_published()
+    runtime.conversation = SimpleNamespace(stage=SimpleNamespace(kept=[]))
+    assert runtime._closing_status().startswith("Status: 0 scenarios")
+    runtime.conversation = SimpleNamespace(stage=SimpleNamespace())
+    assert runtime._closing_status() == ""
+
+
+def _publish_with_failed(client):
+    async def publish(digest, failed_scenarios=None):
+        client.published.append(digest)
+        return {"applied": True, "scenario_count": 1, "added": [], "removed": [], "changed": []}
+
+    return publish
+
+
 def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     client = BuilderClient(applied=False)
     runtime = _runtime(tmp_path, client, monkeypatch)
     runtime.conversation = EditingConversation(tmp_path, writes=True)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
 
     _turn(runtime, {"content": "add one"})
@@ -212,7 +252,7 @@ def test_a_failed_reseal_keeps_the_change_as_a_draft(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     runtime.conversation = EditingConversation(tmp_path, writes=True)
-    runtime._published_fingerprint()
+    runtime._mint_published()
 
     def fails(root):
         raise RuntimeError("seed import failed")
@@ -235,7 +275,7 @@ def test_a_failed_reseal_keeps_the_change_as_a_draft(tmp_path, monkeypatch):
 def test_read_only_tools_skip_the_workspace_checkpoint(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
 
     class ReadingConversation(EditingConversation):
         async def say(self, message, on_event=None):
@@ -300,7 +340,7 @@ def test_a_turn_whose_pump_failed_still_sends_its_reply_and_completes(tmp_path, 
     # The turn's opening checkpoint is the first; the write's, packed by the pump, fails.
     client = PackFailingClient(failing={2})
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
 
     class WritingConversation(EditingConversation):
         async def say(self, message, on_event=None):
@@ -746,7 +786,7 @@ def test_one_yes_to_every_change_runs_the_rest_of_its_message_and_the_next_messa
             on_event(RuntimeEvent(kind="text", text="Done.", detail={"stage": "builder"}))
 
     runtime.conversation = Changing()
-    runtime._published_fingerprint()
+    runtime._mint_published()
     for sequence in (1, 2):
         command = {
             "sequence": sequence,
@@ -2632,7 +2672,7 @@ def test_one_broken_scenario_does_not_block_the_save(tmp_path, monkeypatch):
     client = FailedAwareClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     runtime.conversation = EditingConversation(tmp_path, writes=True)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     sealed: list = []
     monkeypatch.setattr(
         "fi.alk.harness.bundle_author_v2.scenario_seal_problems",
@@ -2915,7 +2955,7 @@ class _Saying(EditingConversation):
 def test_the_turns_assistant_message_loses_url_credentials(tmp_path, monkeypatch, ending):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     events = [
         RuntimeEvent(kind="text", text="Saved https://bot:hun", detail={"stage": "builder"}),
         RuntimeEvent(kind="text", text="ter2@hooks.example/v1?key=sk-1#frag for you.", detail={}),
@@ -3292,7 +3332,7 @@ def test_the_reply_is_cleaned_before_the_save_note_and_the_health_lines_are_adde
     """Change review r3, A-M1 shape 1: notes added first made a one-URL reply prose."""
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
     runtime.conversation = _SayingAndWriting(tmp_path, _texts(_BROKEN_URL_PIECES))
     runtime._last_health = f"The hook check failed for {_SECRET_URL}"
@@ -3316,7 +3356,7 @@ def test_the_save_note_is_cleaned_on_its_own(tmp_path, monkeypatch):
 
     client = NamingClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
     runtime.conversation = _SayingAndWriting(tmp_path, _texts(["Added it."]))
 
@@ -3332,7 +3372,7 @@ def test_the_save_note_is_cleaned_on_its_own(tmp_path, monkeypatch):
 def test_a_failed_reseal_sends_the_reply_cleaned_before_its_note(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
 
     def fails(root):
         raise RuntimeError("seed import failed")
@@ -3370,7 +3410,7 @@ def test_a_failed_stage_cleans_its_detail_whole_before_cutting_it(
     """Change review r3, A-M1 and round 2's L2: the detail is cleaned before the prefix and cut."""
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     events = [RuntimeEvent(kind="done", detail={"outcome": "failed", "error": error})]
     runtime.conversation = _Saying(tmp_path, events)
 
@@ -3389,7 +3429,7 @@ def test_whitespace_around_a_one_url_reply_leaves_the_stream_as_clean_as_the_rep
     Fix check B-M4: the interrupted ending strips its reply too."""
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     pieces = ["\n\nhttps://bot:hun", "\nter2@hooks.example/v1", "\n?key=sk-1", " \n"]
     if ending == "interrupted":
 
@@ -3781,7 +3821,7 @@ def test_the_turns_assistant_message_masks_a_key_split_between_its_pieces(
 ):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     runtime.conversation = _Saying(
         tmp_path, _texts(["Saved password: ", "Zq8wYv3Lp9 ", "for you."])
     )
@@ -5062,7 +5102,7 @@ def test_stale_pre_run_sessions_are_written_again_before_a_save_seals_the_scenar
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     (tmp_path / "world.sqlite").write_bytes(b"before")
-    runtime._published_fingerprint()
+    runtime._mint_published()
     order = []
 
     async def refresh(root, write=None):
@@ -5170,32 +5210,73 @@ def test_a_rule_dropped_first_is_linked_when_its_rewrite_names_it(tmp_path):
     assert (added.action, added.previous) == ("added", rule_id(old))
 
 
-def test_a_rule_dropped_and_added_in_one_message_is_linked_as_a_rewrite_and_its_cases_listed(tmp_path):
+def test_a_rule_dropped_and_added_in_one_message_is_never_linked_but_the_reply_names_the_drop(tmp_path):
     from fi.alk.harness.amend import add_rule, begin_turn, drop_rule
     from fi.alk.harness.contract import rule_id
 
     root, contract = _cited_suite(tmp_path)
     begin_turn(root)
-    old, new = "Refund only within 30 days of delivery.", "Refund only within 20 days of delivery."
-    drop_rule(contract, root, rule=old, why="being changed")
-    done, said = add_rule(contract, root, rule=new, why="the window is 20 days now")
+    old = "Refund only within 30 days of delivery."
+    drop_rule(contract, root, rule=old, why="gone")
+    # An unrelated rule added in the same message: whether it rewords the dropped one is the builder's call.
+    done, said = add_rule(contract, root, rule="Never take a card payment over the phone.", why="new")
 
-    assert done, said
-    removed, added = contract.amendment_records
-    assert (removed.replaced_by, added.previous) == (rule_id(new), rule_id(old))
-    assert f"It replaces {rule_id(old)}, dropped earlier in this message" in said
-    assert "rest on what changed" in said and "adds-a-big-mac" in said and "adds-one-big-mac" not in said
+    assert done and all(not one.replaced_by and not one.previous for one in contract.amendment_records)
+    assert f"You dropped {rule_id(old)} earlier in this message" in said
+    assert f"replaces {rule_id(old)}" in said and "rest on what changed" not in said
+    # A later message does not name it as this message's drop.
+    begin_turn(root)
+    done, said = add_rule(contract, root, rule="Never sell gift cards.", why="new")
+    assert "earlier in this message" not in said
 
 
-def test_two_rules_dropped_in_one_message_are_never_guessed_between(tmp_path):
+def test_a_rule_written_in_a_policy_file_reviews_the_cases_citing_that_line_when_it_changes(tmp_path):
+    from test_nudge_turn import _edit_scenario
+
     from fi.alk.harness.amend import add_rule, begin_turn, drop_rule
+    from fi.alk.harness.contract import RuleSource, write_contract
+    from fi.alk.harness.understand import load as load_contract
 
     root, contract = _cited_suite(tmp_path)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 25 days of delivery."
+    line = "Refunds are accepted within 30 days of delivery."
+    contract.rule_sources = [RuleSource(rule=old, file="knowledge/refund-policy.md", quote=line)]
+    write_contract(contract, root)
+    # The cases cite the policy file's line, not the rule: as a build over an attached policy writes them.
+    for name in ("adds-a-big-mac", "adds-one-big-mac"):
+        _edit_scenario(root, name, sources=[])
+    _edit_scenario(
+        root,
+        "adds-one-big-mac",
+        sources=[{"kind": "file", "ref": "file:knowledge/refund-policy.md", "quote": "accepted within 30 days"}],
+    )
     begin_turn(root)
-    drop_rule(contract, root, rule="Refund only within 30 days of delivery.", why="gone")
-    drop_rule(contract, root, rule="Never sell more than 130 items.", why="gone")
-    done, said = add_rule(contract, root, rule="Refund only within 20 days of delivery.", why="new")
-    assert done and all(not one.replaced_by and not one.previous for one in contract.amendment_records)
+    done, said = drop_rule(contract, root, rule=old, why="the window changes")
+    assert done and "adds-one-big-mac" in said and "adds-a-big-mac" not in said
+    done, said = add_rule(contract, root, rule=new, why="the window is 25 days now", replaces=old)
+    assert done and "rest on what changed" in said and "adds-one-big-mac" in said
+    # The reworded rule keeps the line it is written on, saved with the contract.
+    saved = load_contract(root)
+    assert saved.rule_source(new) == RuleSource(rule=new, file="knowledge/refund-policy.md", quote=line)
+
+
+def test_a_rule_source_is_a_file_and_its_line_together(tmp_path):
+    from fi.alk.harness.amend import add_rule
+
+    root, contract = _cited_suite(tmp_path)
+    done, said = add_rule(contract, root, rule="Never sell gift cards.", why="asked", source_file="knowledge/p.md")
+    assert not done and "give both, or neither" in said
+    done, said = add_rule(
+        contract, root, rule="Never sell gift cards.", why="asked", source_file="knowledge/p.md",
+        source_quote="Gift cards are never sold.",
+    )
+    assert done and contract.rule_source("Never sell gift cards.").quote == "Gift cards are never sold."
+
+
+def test_a_contract_with_no_rule_sources_saves_as_before():
+    from fi.alk.harness.contract import AgentContract
+
+    assert "rule_sources" not in AgentContract(agent="shop").model_dump()
 
 
 def test_a_rule_added_with_no_replaces_is_never_linked_to_one_that_reads_alike(tmp_path):

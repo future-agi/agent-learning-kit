@@ -107,3 +107,19 @@ def test_the_proof_records_which_of_the_case_s_sub_goals_only_a_judge_grades(mon
     proof = module.prove(case, goals, tmp_path, contract=None, actors=[])
 
     assert proof.judged_goals == ["privacy_pii_protected"]
+
+
+def test_the_judge_reads_the_calls_and_the_turns_on_one_clock():
+    from fi.alk.harness.judge import _transcript, describe_call
+
+    refund = Call("issue_refund", {"order_id": "1045"}, ok=False, error="timeout", at=1700000010.0)
+    said = describe_call("", None, [refund], None)
+    assert '"at": 1700000010.0' in said and "before that tool was called is not supported" in said
+    turns = [
+        {"role": "assistant", "content": "The payment service timed out.", "at": 1700000005.0},
+        {"role": "user", "content": "Oh no."},
+    ]
+    assert _transcript(turns).startswith("[at 1700000005.0] Agent: The payment service timed out.")
+    assert "\nCustomer: Oh no." in _transcript(turns)
+    # Calls with no time say nothing of a clock.
+    assert "same clock" not in describe_call("", None, [LOOKUP], None)
