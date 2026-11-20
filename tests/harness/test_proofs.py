@@ -299,3 +299,46 @@ def test_each_saved_proof_says_whether_a_submit_refuses_it(tmp_path):
     saved = load_proofs(tmp_path)
 
     assert {key: one["refused"] for key, one in saved.items()} == {"uncontrolled": True, "assumed": False, "crashed": True}
+
+
+def test_the_builder_s_status_reads_the_proofs_now_not_what_the_conversation_said(tmp_path):
+    """The conversation said every case passed; the record now says two are not proved, and both the turn's opening
+    line and scenario_status say so, with the reason in the proof's words."""
+    import asyncio
+
+    from fi.alk.harness.builder import suite_server
+    from fi.alk.harness.hosted_chat_entrypoint import _status_note
+    from fi.alk.harness.scenario import Scenario
+
+    kept = [Scenario(name=name) for name in ("refund_ok", "refund_late", "refund_twice")]
+    proved = Proof(ready=True, solvable=True, vacuous=False, controls=RAN)
+    for one in kept:
+        record_proof(tmp_path, one.scenario_key or one.name, proved, solution_steps=1)
+    stale = _status_note(tmp_path, kept)
+    assert "3 proved, 0 kept as written, 0 not proved" in stale
+    record_unprovable(tmp_path, kept[1].scenario_key or kept[1].name, "its check reads a table the world lacks")
+    assumed = Proof(ready=True, solvable=True, vacuous=False, assumed=["place_order"], controls=NOT_RUN)
+    record_proof(tmp_path, kept[2].scenario_key or kept[2].name, assumed, solution_steps=1)
+
+    assert "1 proved, 1 kept as written, 1 not proved" in _status_note(tmp_path, kept)
+    assert "NOT yet saved to the environment" in _status_note(tmp_path, kept, unsaved=True)
+    assert "Nothing in this working copy is waiting to be saved" in _status_note(tmp_path, kept, unsaved=False)
+    status = next(one.handler for one in suite_server(tmp_path, kept).tools if one.name == "scenario_status")
+    said = asyncio.run(status({}))["content"][0]["text"]
+    assert said.splitlines()[0] == "3 scenarios. Proofs on record: 1 proved, 1 kept as written, 1 not proved."
+    assert "refund_ok: proved" in said
+    assert "refund_late: not proved, broken_check: its check reads a table the world lacks" in said
+    assert "refund_twice: kept as written, assumed place_order" in said
+    one = asyncio.run(status({"names": ["refund_late", "gone"]}))["content"][0]["text"]
+    assert "refund_ok" not in one and "refund_late: not proved" in one and "not in the suite: gone" in one
+    held = asyncio.run(status({"state": "not proved"}))["content"][0]["text"]
+    assert held.splitlines()[1:] == ["refund_late: not proved, broken_check: its check reads a table the world lacks"]
+
+
+def test_a_search_that_finds_nothing_in_the_suite_points_at_the_removed_cases():
+    from fi.alk.harness.hosted_chat_entrypoint import _with_removed_hint
+
+    empty = {"total_scenarios": 7, "matching": 0, "rows": []}
+    assert "find_scenarios(removed: true)" in _with_removed_hint(empty, {"names": ["lookup_order"]})["note"]
+    assert "note" not in _with_removed_hint({**empty, "matching": 1}, {"names": ["lookup_order"]})
+    assert "note" not in _with_removed_hint(empty, {"numbers": [40]})

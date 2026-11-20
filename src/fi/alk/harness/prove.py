@@ -753,8 +753,15 @@ def _takes_from(step: object) -> set[str]:
 def recordable_tools(scenario: Scenario, contract: Any, checks: Sequence[tuple[str, str]]) -> frozenset[str]:
     """The tools whose steps a proof records, not runs, where nothing here can run them: each one the contract
     declares `world_free` (it touches no table of the world and no service), when no step of the case takes a value
-    from its result and no check of the case reads any call's result. Anything else stays assumed."""
-    free = {tool.name for tool in getattr(contract, "tools", None) or () if getattr(tool, "world_free", False)}
+    from its result and no check of the case reads any call's result. Anything else stays assumed. A tool the contract
+    also maps to tables it reads or changes touches the world, whatever `world_free` says, so it is never recorded."""
+    free = {
+        tool.name
+        for tool in getattr(contract, "tools", None) or ()
+        if getattr(tool, "world_free", False)
+        and not getattr(tool, "tables_read", None)
+        and not getattr(tool, "tables_changed", None)
+    }
     if not free or any(_reads_results(source) for _, source in checks):
         return frozenset()
     steps = [

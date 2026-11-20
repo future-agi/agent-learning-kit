@@ -659,7 +659,8 @@ def cast_read_back(scenario: Scenario, world_root: Path, caller_names: set[str] 
         )
         + (
             " " + "; ".join(written_for_one) + ". An actor is the same in every scenario, so its role names people "
-            "by their part (the caller, the caller's spouse), never by one scenario's names: change it with `add_actor`."
+            "by their part (someone with the caller, the manager who approves), never by one scenario's names: change it with "
+            "`add_actor`."
             if written_for_one
             else ""
         )
@@ -1231,37 +1232,95 @@ def _red_team_short(
     )
 
 
+def _parties(fields: Any, offered: set[str]) -> list[str]:
+    """The actors and faults a scenario brings in besides the person, one entry per kind: each actor the environment
+    offers by its id (`offered`; one no longer listed is not counted), each fault by its mode. Read alike from a
+    submission and from a kept scenario."""
+
+    def field(one: Any, name: str) -> Any:
+        return one.get(name) if isinstance(one, dict) else getattr(one, name, None)
+
+    kinds = {str(field(one, "id") or "") for one in field(fields, "actors") or []} & offered
+    kinds |= {f"fault:{field(one, 'mode')}" for one in field(fields, "faults") or []}
+    return sorted(kind for kind in kinds if kind)
+
+
+def actor_kind_gate_on() -> bool:
+    """Whether a scenario is refused for adding to a kind the suite's actor scenarios already hold enough of. Off
+    unless `ALK_ACTOR_KIND_GATE` is 1: until then the plan's guidance alone spreads the kinds."""
+    return str(os.environ.get("ALK_ACTOR_KIND_GATE") or "").strip() == "1"
+
+
+def actor_kind_most_share() -> float:
+    """The most of a suite's actor scenarios one kind (the same actors and faults together) may take, while the
+    environment offers others. Generous: half by default, read from `ALK_ACTOR_KIND_MOST_SHARE`."""
+    try:
+        value = float(str(os.environ.get("ALK_ACTOR_KIND_MOST_SHARE") or "").strip())
+    except ValueError:
+        return 0.5
+    return value if 0 < value <= 1 else 0.5
+
+
 def _call_actors_short(
     args: dict[str, Any],
     kept: list[Scenario],
     wanted: int,
     share: float,
-    usable: list[str],
+    offered: list[str],
+    actor_ids: set[str],
 ) -> str:
-    """Why this scenario without an actor would leave the suite short of its share of scenarios that
-    include one, or "" when it would not."""
-    if not usable or wanted < 4 or any(
-        (one or {}).get("id") in usable for one in args.get("actors") or []
-    ):
+    """Why this scenario without an actor or a fault would leave the suite short of its share of scenarios that
+    include one, or "" when it would not. `offered` says what the environment supports, one line per kind, and
+    `actor_ids` are the actors it offers."""
+    if not offered or wanted < 4 or _parties(args, actor_ids):
         return ""
     name = str(args.get("name") or "")
     others = [one for one in kept if one.name != name]
     needed = at_least(share, wanted)
-    including = sum(
-        1 for one in others if any(entry.id in usable for entry in one.actors)
-    )
+    including = sum(1 for one in others if _parties(one, actor_ids))
     if including >= needed or len(others) - including < wanted - needed:
         return ""
     return (
-        f"{including} of the {wanted} scenarios you are writing include an actor who speaks on the call and at "
+        f"{including} of the {wanted} scenarios you are writing include an actor or a fault and at "
         f"least {needed} must, and the scenarios still to come can no longer make up the difference. Where "
-        f"someone else fits this person's situation, write this same task with one of the environment's "
-        f"speaking actors ({', '.join(usable)}) in `actors` with its instruction and trigger. Where nobody "
-        "fits, keep this one actor-free and give the actor to a scenario already written whose situation has "
-        "someone else around: resubmit that one with its `scenario_key` and the actor added, then submit this "
-        "one again. If the person asked for another share, call aim_for with `actor_share` set to it: "
-        '{"min": 1, "max": 1} for every scenario, {"min": 0, "max": 0} for none, or their range; no submission '
-        "is refused for the share after that."
+        f"someone or something else fits this person's situation, write this same task with one of what the "
+        f"environment supports: {'; '.join(offered)}. Where nothing fits, keep this one without and give one to a "
+        "scenario already written whose situation has room for it: resubmit that one with its `scenario_key` and "
+        "it added, then submit this one again. If the person asked for another share, call aim_for with "
+        '`actor_share` set to it: {"min": 1, "max": 1} for every scenario, {"min": 0, "max": 0} for none, or their '
+        "range; no submission is refused for the share after that."
+    )
+
+
+def _one_kind_crowds(
+    args: dict[str, Any],
+    kept: list[Scenario],
+    wanted: int,
+    share: float,
+    offered: list[str],
+    kinds_offered: int,
+    actor_ids: set[str],
+) -> str:
+    """Why this scenario's actors and faults are a kind the suite's actor scenarios already hold enough of while the
+    environment offers others, or "" when they are not or the gate is off (`actor_kind_gate_on`)."""
+    mine = _parties(args, actor_ids)
+    if not actor_kind_gate_on() or not mine or kinds_offered < 2:
+        return ""
+    name = str(args.get("name") or "")
+    others = [one for one in kept if one.name != name]
+    including = sum(1 for one in others if _parties(one, actor_ids))
+    room = max(at_least(share, wanted), including + 1)
+    if room < 4:
+        return ""
+    most = max(2, math.ceil(room * actor_kind_most_share()))
+    same = sum(1 for one in others if _parties(one, actor_ids) == mine)
+    if same < most:
+        return ""
+    return (
+        f"{same} of the suite's scenarios with an actor or a fault already carry {' + '.join(mine)}, and one kind "
+        f"takes at most {most} of the {room} while the environment supports others. A person around the caller "
+        "is one of the things that make real life hard, not the only one. Give this scenario what its situation "
+        f"motivates from the rest: {'; '.join(offered)}. Or write it with no actor or fault at all."
     )
 
 
@@ -1314,6 +1373,127 @@ def _over_its_share(
             + ", ".join(sorted(thin)[:8])
             + f". If the person asked for {mine!r}, call aim_for with it in asked_for under "
             f"{axis!r} and submit again."
+        )
+    return ""
+
+
+def _record_ids(scenario: Scenario, *, fixed_only: bool = False) -> set[str]:
+    """The records the reference names: each step's id arguments (`_AN_ID_ARGUMENT`), as written. `fixed_only` keeps
+    only the arguments the step says the caller, their record or a rule fixes."""
+    return {
+        str(value).strip()
+        for step in scenario.solution
+        for key, value in step.arguments.items()
+        if _AN_ID_ARGUMENT.search(str(key))
+        and (not fixed_only or key in (step.fixed or {}))
+        and isinstance(value, (str, int))
+        and not isinstance(value, bool)
+        and str(value).strip()
+        and not str(value).startswith("$call")
+    }
+
+
+def _one_record(value: str) -> str:
+    return " ".join(str(value).split()).casefold()
+
+
+def _record_over_its_share(
+    candidate: Scenario,
+    kept: list[Scenario],
+    wanted: int,
+    grid: dict[str, list[str]] | None,
+    readable: Callable[[], set[str]] | None = None,
+) -> str:
+    """Why this case would put more of its task's cases on one record than the suite's share allows, or "" when it
+    would not. The share is `MOST_OF_A_SUITE` of the cases the plan deals each task; `readable` answers the records
+    the agent can read, asked only for a refusal to offer them. A record with no other to move to is never refused."""
+    mine = {_one_record(one): one for one in _record_ids(candidate)}
+    if wanted < FEWEST_FOR_A_SHARE or not mine:
+        return ""
+    task = level_name((candidate.coverage or {}).get("task", ""))
+    tasks = next((len(levels) for axis, levels in (grid or {}).items() if level_name(axis) == "task"), 0)
+    share = -(-wanted // tasks) if task and tasks else wanted
+    ceiling = max(2, int(share * MOST_OF_A_SUITE))
+    peers = [
+        one
+        for one in kept
+        if one.name != candidate.name and (not task or level_name((one.coverage or {}).get("task", "")) == task)
+    ]
+    held: Counter[str] = Counter()
+    written: dict[str, str] = {}
+    for one in peers:
+        for value in _record_ids(one):
+            held[_one_record(value)] += 1
+            written.setdefault(_one_record(value), value)
+    crowded = next((key for key in sorted(mine) if held[key] >= ceiling), "")
+    if not crowded:
+        return ""
+    others = {_one_record(one): one for one in (readable() if readable else set())} | written
+    alternatives = sorted(value for key, value in others.items() if key not in mine and held[key] < ceiling)
+    # With no other record to move to (an agent serving one account), there is nothing to spread across.
+    if not alternatives:
+        return ""
+    where = f"{task} cases" if task else "cases"
+    return (
+        f"{held[crowded]} of the {len(peers)} {where} written so far already act on {mine[crowded]!r}, and a suite of "
+        f"{wanted} may not put more than {ceiling} of a task's cases on one record: a task tested on one record tests "
+        "that record, and the agent's handling of every other record goes untested. Move this case onto another "
+        f"record the agent can read: {', '.join(alternatives[:12])}. Where no other record fits this situation, seed "
+        "one in setup_code that fits it, or place this case on another task."
+    )
+
+
+def _fault_level_unmet(
+    candidate: Scenario, fault_levels: dict[str, dict[str, list[str]]] | None, faults_on: bool
+) -> str:
+    """Why this case sits on a level the plan declares a fault (`aim_for` `fault_levels`) and carries none, or "" when
+    it is not on one or carries it: a fault of its own, or a record named in its reference whose data holds it."""
+    for axis, levels in (fault_levels or {}).items():
+        level = level_name((candidate.coverage or {}).get(level_name(axis), ""))
+        records = {level_name(name): list(held) for name, held in (levels or {}).items()}.get(level)
+        if not level or records is None:
+            continue
+        if faults_on and candidate.faults:
+            return ""
+        named = {held for step in candidate.solution for held in _held_values(step.arguments)}
+        if any(same_id(record, value) for record in records for value in named):
+            return ""
+        ways = (["inject the failure with `faults` on the call that meets it"] if faults_on else []) + (
+            [f"act on a record whose data carries it ({', '.join(records)})"] if records else []
+        )
+        return (
+            f"coverage puts {axis} at {level!r}, which the plan declares a fault, and this case "
+            + ("injects no fault and " if faults_on else "")
+            + "acts on no record whose data carries one, so the coverage report would count the failure as tested "
+            "when the agent never meets it. "
+            + (
+                f"Give the agent the failure: {' or '.join(ways)}. "
+                if ways
+                else "Nothing here can give the agent this failure: faults are off and no record carries it. "
+            )
+            + f"Otherwise place the case on the {axis} level it really tests."
+        )
+    return ""
+
+
+def _level_unchecked(
+    candidate: Scenario, checked_levels: dict[str, list[str]] | None, catalogue: Catalogue
+) -> str:
+    """Why this case sits on a level the plan says must be checked (`aim_for` `checked_levels`) and names no sub-goal
+    claimed for it, or "" when it does."""
+    for axis, levels in (checked_levels or {}).items():
+        level = level_name((candidate.coverage or {}).get(level_name(axis), ""))
+        if not level or level not in {level_name(one) for one in levels}:
+            continue
+        if any(
+            (goal := catalogue.named(name)) is not None and goal.claims(level) for name in candidate.sub_goals
+        ):
+            continue
+        return (
+            f"coverage puts {axis} at {level!r}, which the plan says changes what the agent must do, and no sub-goal "
+            "of this case checks it, so the level is only narrative and the coverage report would count it as "
+            f"tested. Add the claim with add_sub_goal, passing overlay={level!r}, for what the agent must do because "
+            "of it, name it here, and make the instruction bring it about in the conversation itself."
         )
     return ""
 
@@ -2120,6 +2300,10 @@ def accept_scenario(
             f"Not kept. restored_from names {restored!r}, but the case is submitted under another key: give it "
             f"scenario_key {restored!r} to restore it, or drop restored_from to add it as a new case."
         )
+    # A new case whose key or name is one the environment gave a case it no longer holds: added as new, and said so.
+    lost = "" if restored else _removed_case_matching(world_root, scenario, named, kept, keys)
+    if previous is not None and lost == previous.scenario_key:
+        lost = ""
     # Restored and already back (an edit of the restored case) is an ordinary edit of it.
     if previous is not None:
         scenario.scenario_key = previous.scenario_key
@@ -2227,6 +2411,8 @@ def accept_scenario(
             "reference does: " + "; ".join(proof.retried) + ". A refused try the agent corrects is not a mistake: "
             "match the reference to any successful call."
         )
+    if proof is not None and proof.conflicts:
+        unproved += f"\nPOSSIBLE RULE CONFLICT: {proof.why()}"
     if proof is not None and proof.outcome == "no_change" and proof.proved:
         unproved += "\nA refusal case: nothing should change, and each negative control's forbidden change fails its checks."
     if proof is None:
@@ -2266,6 +2452,15 @@ def accept_scenario(
         if renamed_from
         else f"{scenario.name} {'replaced' if replaced else 'kept'}"
     )
+    if lost:
+        done += (
+            (f". EDITED {scenario.scenario_key}, a case of its own" if previous is not None
+             else f". ADDED AS A NEW CASE under {scenario.scenario_key}")
+            + f", NOT restored: it matches the removed case {lost}, and its history stays with that one. To restore "
+            "that case with its history, drop this one, "
+            f"read it with find_scenarios(removed: true) and submit it with scenario_key {lost!r} and restored_from "
+            f'{{"key": "{lost}"}}. If the person wants a new case, keep this one and tell them it is new'
+        )
     if restored:
         changes = restored_changes(world_root, scenario)
         done += (
@@ -2301,6 +2496,29 @@ def remember_removed(destination: Path, rows: Any) -> None:
     except (OSError, ValueError):
         kept = {}
     write_json_atomic(path, {**(kept if isinstance(kept, dict) else {}), **found})
+
+
+def _removed_case_matching(
+    destination: Path, scenario: Scenario, named: str, kept: list[Scenario], keys: set[str]
+) -> str:
+    """The key of a case this environment had and no longer holds that a new submission matches, by the key it
+    names, the key its name gives, or the name of a removed case read with find_scenarios, or ""."""
+    held = {one.scenario_key for one in kept}
+    for key in (named, scenario_slug(scenario.name)):
+        if key and key in keys and key not in held:
+            return key
+    try:
+        removed = json.loads((Path(destination) / REMOVED_CASES).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return next(
+        (
+            str(key)
+            for key, content in (removed.items() if isinstance(removed, dict) else [])
+            if isinstance(content, dict) and content.get("name") == scenario.name and key not in held
+        ),
+        "",
+    )
 
 
 def restored_changes(destination: Path, scenario: Scenario) -> list[str] | None:
@@ -2522,6 +2740,31 @@ def scenario_tools(
             if one.channel in channels
         ]
 
+    def offered_parties() -> tuple[list[str], int, set[str]]:
+        """What the environment supports bringing into a scenario besides the person, one line per kind, and how
+        many kinds that is: each actor who speaks, each who acts through the world, and faults on the agent's
+        own calls once there is a cast."""
+        speaking = usable_call_actors()
+        listed = load_actors(destination).actors
+        acting = [one for one in listed if one.permitted_actions and one.id not in speaking]
+        lines = [f"an actor who speaks ({', '.join(speaking)})"] if speaking else []
+        if acting:
+            lines.append(
+                "an actor who acts through the world ("
+                + ", ".join(f"{one.id}: {', '.join(one.permitted_actions[:4])}" for one in acting)
+                + "), brought in by what the agent does, deciding in the run: approves, refuses, answers late or "
+                "never"
+            )
+        faults = bool(speaking or acting) and bool(contract.tools)
+        if faults:
+            lines.append(
+                "a fault on one of the agent's own calls (timeout_before_commit, timeout_after_commit, unavailable, "
+                "error"
+                + (f", or approval_required held until {', '.join(one.id for one in acting)} approves" if acting else "")
+                + ")"
+            )
+        return lines, len(speaking) + len(acting) + (1 if faults else 0), {*speaking, *(one.id for one in acting)}
+
     exploration = {"since_submit": 0}
     # Identical-refusal counts per scenario, so an unsatisfiable gate ends the stage.
     refused: dict[tuple[str, int], int] = {}
@@ -2734,7 +2977,9 @@ def scenario_tools(
         + "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an overlay "
         "is refused until it names a sub-goal that fails when that overlay is mishandled, so this "
-        "is what makes one available. Leave it empty for an ordinary task sub-goal. "
+        "is what makes one available. The same goes for a level the plan lists in `aim_for`'s `checked_levels` "
+        "(a conversation resumed after a pause): set `overlay` to that level for the sub-goal that checks it. Leave it "
+        "empty for an ordinary task sub-goal. "
         "`subject` is `task` (the default) or `worker:<id>` for one of the contract's workers: that check is "
         "given only that worker's calls, and is inconclusive when the worker made none."
         + worker_subjects_note(contract)
@@ -3268,6 +3513,24 @@ def scenario_tools(
         )
         if crowded_level:
             return _refuse(crowded_level)
+        try:
+            candidate = Scenario.model_validate({**args, "name": same})
+        except Exception:  # noqa: BLE001 - a malformed scenario is the validator's to report
+            candidate = None
+        if candidate is not None:
+            unmet = (
+                _fault_level_unmet(candidate, target.get("fault_levels"), with_actors)
+                or _level_unchecked(candidate, target.get("checked_levels"), catalogue)
+                or _record_over_its_share(
+                    candidate,
+                    kept,
+                    cap(),
+                    target.get("axes"),
+                    lambda: readable_records(world_root, candidate),
+                )
+            )
+            if unmet:
+                return _refuse(unmet)
         if not can_grow:
             short = _red_team_short(args, target.get("axes"), kept, cap())
             if short:
@@ -3275,6 +3538,7 @@ def scenario_tools(
         # The default share is a minimum held for new scenarios; a share the person set is never
         # refused for. A scenario already in the suite is never refused for it either, so editing one
         # never changes what it tests.
+        offered, kinds_offered, actor_ids = offered_parties() if with_actors else ([], 0, set())
         short = (
             ""
             if target.get("actor_share") or any(one.name == same for one in kept)
@@ -3283,11 +3547,22 @@ def scenario_tools(
                 kept,
                 cap(),
                 call_actor_share(),
-                usable_call_actors(),
+                offered,
+                actor_ids,
             )
         )
         if short:
             return _refuse(short, gate="actor_share")
+        # Editing a scenario already in the suite never changes what it tests, so it is never refused for its kind.
+        crowded_kind = (
+            ""
+            if any(one.name == same for one in kept)
+            else _one_kind_crowds(
+                {**args, "name": same}, kept, cap(), call_actor_share(), offered, kinds_offered, actor_ids
+            )
+        )
+        if crowded_kind:
+            return _refuse(crowded_kind, gate="actor_kind")
         twin = _already_in_the_suite(
             {**args, "name": same},
             kept,
@@ -3602,6 +3877,26 @@ def scenario_tools(
                         "it proves anything, which costs a writer a label and never proved work."
                     ),
                 },
+                "fault_levels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "description": "The levels of the grid that mean the agent meets a failure (a payment that times "
+                    "out, a service that is down, a card the processor declines), by axis, each with the ids of the "
+                    "records whose starting data already carries that failure, [] when none does: "
+                    '{"disposition": {"payment_timeout": ["<order id>"]}}. A case placed on one of these levels is '
+                    "refused unless it injects the failure with `faults` or its reference acts on one of those records.",
+                },
+                "checked_levels": {
+                    "type": "object",
+                    "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                    "description": "The levels of the grid, overlays aside, that change what the agent must do and so "
+                    "need their own check, by axis: a conversation resumed after a pause, a correction after the agent "
+                    'has committed. {"interaction": ["resumed_after_pause"]}. A case placed on one is refused until '
+                    "it names a sub-goal added with `overlay` set to that level.",
+                },
             },
             ["count"],
         ),
@@ -3681,6 +3976,66 @@ def scenario_tools(
                     + ". Relabel them onto the grid now. The environment validation applies the "
                     "same vocabulary at the end of the run and one stray level fails the whole job"
                 )
+        faulted = {
+            str(axis).strip(): {
+                str(level).strip(): [str(one).strip() for one in records if str(one).strip()]
+                for level, records in levels.items()
+                if str(level).strip() and isinstance(records, list)
+            }
+            for axis, levels in (args.get("fault_levels") or {}).items()
+            if str(axis).strip() and isinstance(levels, dict)
+        }
+        checked = {
+            str(axis).strip(): [str(one).strip() for one in levels if str(one).strip()]
+            for axis, levels in (args.get("checked_levels") or {}).items()
+            if str(axis).strip() and isinstance(levels, list)
+        }
+        declared = {
+            level_name(axis): {level_name(one) for one in levels} for axis, levels in (target.get("axes") or {}).items()
+        }
+        stray = [
+            f"{axis} {level}"
+            for axis, levels in [*faulted.items(), *checked.items()]
+            for level in levels
+            if level_name(level) not in declared.get(level_name(axis), set())
+        ]
+        if stray:
+            return _err(
+                "these are not levels of the grid, so no case can sit on them: " + ", ".join(stray) + ". Declare "
+                "them in `axes` first, in this call or an earlier one."
+            )
+        if faulted:
+            target["fault_levels"] = {**(target.get("fault_levels") or {}), **faulted}
+            unreachable = [
+                f"{axis} {level}"
+                for axis, levels in faulted.items()
+                for level, records in levels.items()
+                if not records and not with_actors
+            ]
+            said += ". Fault levels: " + "; ".join(
+                f"{axis} {level} ({', '.join(records) or 'injected only'})"
+                for axis, levels in faulted.items()
+                for level, records in levels.items()
+            )
+            if unreachable:
+                said += (
+                    f". Faults are off and no record carries {', '.join(unreachable)}, so no case can be placed there: "
+                    "name the records whose data carries it, or take the level off the grid"
+                )
+        if checked:
+            target["checked_levels"] = {**(target.get("checked_levels") or {}), **checked}
+            unclaimed = [
+                level
+                for levels in checked.values()
+                for level in levels
+                if not any(one.claims(level_name(level)) for one in catalogue.sub_goals)
+            ]
+            said += ". Checked levels: " + ", ".join(level for levels in checked.values() for level in levels)
+            if unclaimed:
+                said += (
+                    f". Nothing in the catalogue is claimed for {', '.join(unclaimed)}: add a sub-goal for each with "
+                    "add_sub_goal, `overlay` set to the level, before you hand any of them out"
+                )
         if grid:
             held = " ".join(one.name for one in catalogue.sub_goals).lower()
             for axis, levels in grid.items():
@@ -3738,12 +4093,19 @@ def scenario_tools(
                 "because a writer that never sees the list cannot stay inside it"
             )
         usable = usable_call_actors() if with_actors else []
+        offered, kinds_offered, _actor_ids = offered_parties() if with_actors else ([], 0, set())
         share = call_actor_share()
-        if usable:
+        if offered:
             said += (
-                f". At least {at_least(share, cap())} of the {cap()} scenarios include an actor"
+                f". At least {at_least(share, cap())} of the {cap()} scenarios include an actor or a fault"
                 if share > 0
                 else ". No scenario includes an actor, as the person asked"
+            )
+        if offered and share > 0 and kinds_offered > 1:
+            said += (
+                ". Spread them across what this environment supports, each where the scenario's situation motivates "
+                f"it, with no one kind on more than {round(actor_kind_most_share() * 100)}% of them: "
+                + "; ".join(offered)
             )
         listing = load_call_actors(destination) if usable and share > 0 else None
         named = {
@@ -3756,6 +4118,17 @@ def scenario_tools(
             for one in (listing.call_actors if listing else [])
             if one.id in usable and level_name(one.id) not in named
         ]
+        level_free = [
+            one.id
+            for one in (load_actors(destination).actors if offered and share > 0 else [])
+            if one.permitted_actions and one.id not in usable and level_name(one.id) not in named
+        ]
+        if level_free:
+            said += (
+                ". These actors act through the world and no level is named for them yet: "
+                + ", ".join(level_free)
+                + ". Give each a level, named for it, where a decision of theirs changes the right answer"
+            )
         if unplaced:
             said += (
                 ". The environment lists these actors and no level is named for them yet. Call aim_for "
@@ -4498,14 +4871,7 @@ _A_HOLDER_FIELD = re.compile(r"^(customer|owner|holder|account_holder)(_name)?$|
 def records_of_someone_else(scenario: Scenario, world_root: Path) -> str:
     """A note when the records this scenario's solution acts on carry another person's name than the caller's."""
     mine = _words(scenario.persona.name or "") if scenario.persona is not None else set()
-    ids = sorted(
-        {
-            str(value).strip()
-            for step in scenario.solution
-            for key, value in step.arguments.items()
-            if key in step.fixed and _AN_ID_ARGUMENT.search(str(key)) and str(value).strip()
-        }
-    )
+    ids = sorted(_record_ids(scenario, fixed_only=True))
     if not mine or not ids:
         return ""
     try:
@@ -4529,6 +4895,26 @@ def records_of_someone_else(scenario: Scenario, world_root: Path) -> str:
         "caller that person; if the scenario is about someone asking for another person's record, its sub-goals "
         "should expect the refusal."
     )
+
+
+def readable_records(world_root: Path, scenario: Scenario) -> set[str]:
+    """What the world's starting data holds under the columns this case's reference names as ids (`same_id`), so a
+    refusal can offer the other records; empty where the world cannot be read."""
+    names = {str(key) for step in scenario.solution for key in step.arguments if _AN_ID_ARGUMENT.search(str(key))}
+    if not names or native_runtime(world_root):
+        return set()
+    try:
+        rows = restore(world_root).state()
+    except Exception:  # noqa: BLE001 - the refusal still names the records the suite already uses
+        return set()
+    return {
+        str(value).strip()
+        for table in (rows or {}).values()
+        for row in (table if isinstance(table, list) else [])
+        if isinstance(row, dict)
+        for column, value in row.items()
+        if any(same_id(column, name) for name in names) and str(value).strip()
+    }
 
 
 def world_summary_tables(world_root: Path) -> list[str]:

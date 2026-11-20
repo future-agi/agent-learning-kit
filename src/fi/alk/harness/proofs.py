@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .json_file import write_json_atomic
 from .proof_records import ProofEntry
@@ -128,3 +129,49 @@ def proof_counts(proofs: Mapping[str, ProofEntry], keys: list[str]) -> dict[str,
         else:
             counts["not_proved"] += 1
     return counts
+
+
+def proof_status(entry: Mapping[str, Any] | None) -> tuple[str, str]:
+    """One scenario's proof as the builder reports it: `proved`, `kept as written` or `not proved`, and the reason
+    its proof gives in its own words (the tools assumed, the reason code, the first line of why)."""
+    entry = entry or {}
+    why = str(entry.get("why") or "").strip()
+    if entry.get("proved") is True:
+        return "proved", ""
+    if entry.get("kept_as_written") is True:
+        assumed = ", ".join(str(one) for one in entry.get("assumed") or [])
+        return "kept as written", "; ".join(part for part in (f"assumed {assumed}" if assumed else "", why) if part)
+    if not entry:
+        return "not proved", "no proof on record"
+    code = str(entry.get("blocked_reason") or "not_validated")
+    return "not proved", f"{code}: {why}" if why else code
+
+
+def status_lines(
+    proofs: Mapping[str, ProofEntry], kept: list[Scenario], *, names: list[str] | None = None, state: str = "",
+    most: int = 200,
+) -> list[str]:
+    """The suite's counts, then one line per scenario (`name: state, reason`), narrowed by `names` and `state`, at
+    most `most` lines: what the builder reads before it says anything about a scenario's state."""
+    counts = proof_counts(proofs, [proof_key(one) for one in kept])
+    lines = [
+        f"{len(kept)} scenarios. Proofs on record: {counts['proved']} proved, {counts['kept_as_written']} kept as "
+        f"written, {counts['not_proved']} not proved."
+    ]
+    wanted = {one.strip() for one in names or [] if one.strip()}
+    shown = 0
+    for scenario in kept:
+        if wanted and scenario.name not in wanted and proof_key(scenario) not in wanted:
+            continue
+        said, why = proof_status(proofs.get(proof_key(scenario)))
+        if state and said != state:
+            continue
+        if shown >= most:
+            lines.append(f"... more not shown; narrow with names or state (at most {most} lines)")
+            break
+        lines.append(f"{scenario.name}: {said}" + (f", {why.splitlines()[0][:400]}" if why else ""))
+        shown += 1
+    missing = sorted(wanted - {one.name for one in kept} - {proof_key(one) for one in kept})
+    if missing:
+        lines.append("not in the suite: " + ", ".join(missing))
+    return lines

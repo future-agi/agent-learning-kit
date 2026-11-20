@@ -116,6 +116,41 @@ def _with_proof_counts(text: str, counts: dict[str, int]) -> str:
     return "\n\n".join(part for part in (text, line) if part)
 
 
+def _with_removed_hint(answer: Any, query: Mapping[str, Any]) -> Any:
+    """A search by name or words that matches nothing in the suite, with where a removed case is read: a case the
+    suite no longer holds is never written again from memory, it is read with `removed` and restored."""
+    if not isinstance(answer, dict) or answer.get("matching") or not (query.get("names") or query.get("search")):
+        return answer
+    return {
+        **answer,
+        "note": "Nothing in the current suite matches. A case the environment had and removed is read with "
+        "find_scenarios(removed: true); restore it from that row with its scenario_key and restored_from, never by "
+        "writing it again.",
+    }
+
+
+def _status_note(workspace: Path, kept: list[Any] | None, unsaved: bool | None = None) -> str:
+    """The suite's proof counts as they stand now, and whether this working copy holds changes not saved to the
+    environment, put at the head of every message so a status the conversation stated earlier can never stand in
+    for them."""
+    if not kept:
+        return ""
+    counts = proof_counts(load_proofs(workspace), [proof_key(one) for one in kept])
+    saved = (
+        ""
+        if unsaved is None
+        else " Changes in this working copy are NOT yet saved to the environment."
+        if unsaved
+        else " Nothing in this working copy is waiting to be saved."
+    )
+    return (
+        f"[Suite now: {len(kept)} scenarios; proofs on record: {counts['proved']} proved, "
+        f"{counts['kept_as_written']} kept as written, {counts['not_proved']} not proved.{saved} Anything said earlier "
+        "about their state may be stale: call scenario_status before saying why a scenario is in its state, and say "
+        "saved only after save_changes reports it applied.]\n\n"
+    )
+
+
 _PROVIDER_PROFILE = "provider-import-profile.json"
 _JOURNAL = ".futureagi-conversation.json"
 # Each turn's ending as it was reported, usage included: kept before the turn's final
@@ -1297,7 +1332,11 @@ class HostedChatRuntime:
         async def find_scenarios(args: dict[str, Any]) -> dict[str, Any]:
             query = {key: value for key, value in args.items() if value not in (None, "", [], {})}
             if not query.get("removed"):
-                return await call(self.client.scenarios(query))
+
+                async def hinted() -> Any:
+                    return _with_removed_hint(await self.client.scenarios(query), query)
+
+                return await call(hinted())
             try:
                 answer = await self.client.scenarios(query)
             except ConversationTransportError as exc:
@@ -1495,6 +1534,13 @@ class HostedChatRuntime:
         except (OSError, ValueError):
             body = {}
         return body if isinstance(body, dict) else {}
+
+    def _turn_status_note(self) -> str:
+        kept = getattr(self.conversation.stage, "kept", None)
+        if not kept:
+            return ""
+        unsaved = None if self._control_only() else self._environment_fingerprint() != self._published_fingerprint()
+        return _status_note(self.workspace, kept, unsaved)
 
     def _ledger_note(self) -> str:
         """The conversation's kept references, put at the head of every message so a summary
@@ -2276,6 +2322,7 @@ class HostedChatRuntime:
                     if str(payload.get("content") or "").lstrip().startswith("/")
                     else retry_note
                     + self._ledger_note()
+                    + self._turn_status_note()
                     + await self._selection_note(payload)
                     + str(payload.get("content") or "")
                     + self._nudge_note(),

@@ -2039,6 +2039,11 @@ def validate_contract(contract: AgentContract) -> list[str]:
             problems.append(
                 f"tool[{tool.name}]:types-for-unknown-args:{','.join(unknown)}"
             )
+        if tool.world_free and (tool.tables_read or tool.tables_changed):
+            problems.append(
+                f"tool[{tool.name}]:world-free-but-touches-tables:{','.join([*tool.tables_read, *tool.tables_changed])}"
+                " - a tool that reads or changes a table of the world is not world_free"
+            )
         unknown_units = sorted(set(tool.arg_units) - set(tool.args))
         if unknown_units:
             problems.append(

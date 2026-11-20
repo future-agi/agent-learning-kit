@@ -33,7 +33,7 @@ from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, wor
 from .scenarios import writer_worker
 from .session import Stage
 from .tools import schema
-from .proofs import proof_key, record_proof
+from .proofs import load_proofs, proof_key, record_proof, status_lines
 
 BUILDER = "builder"
 KNOWLEDGE_SERVER = "knowledge"
@@ -227,6 +227,32 @@ def suite_server(
         return _ok("\n".join(lines) or "name at least one scenario")
 
     @tool(
+        "scenario_status",
+        "Each scenario's state as its latest proof records it, with the reason in the proof's own words, and the "
+        "suite's counts first: proved, kept as written, not proved. Call it before you say anything about how many "
+        "scenarios are proved, held or passing, or why one is in the state it is, and quote what it returns. The "
+        "Scenarios tab shows a not-proved case as Draft and a kept-as-written one as Kept as written; it can also "
+        "hold a proved case back as Draft for a reason found after the proof, which its row there names. Passing is "
+        "a run's result, never a proof's: read it with read_runs. `names` narrows to some scenarios, `state` to one "
+        "of proved, kept as written, not proved.",
+        schema(
+            {
+                "names": {"type": "array", "items": {"type": "string"}},
+                "state": {"type": "string", "enum": ["proved", "kept as written", "not proved"]},
+            },
+            [],
+        ),
+    )
+    async def scenario_status(args: dict[str, Any]) -> dict[str, Any]:
+        lines = status_lines(
+            load_proofs(out),
+            kept,
+            names=[str(one) for one in args.get("names") or []],
+            state=str(args.get("state") or ""),
+        )
+        return _ok("\n".join(lines))
+
+    @tool(
         "check_health",
         "Check the whole environment for anything broken: scenarios naming sub-goals the "
         "catalogue lacks, solutions calling tools the contract lacks, the index or the sealed "
@@ -369,7 +395,7 @@ def suite_server(
 
     return tool_server(
         name="suite",
-        tools=[drop_scenarios, prove_scenarios, check_health, impact_of, change_world, declare_tool],
+        tools=[drop_scenarios, prove_scenarios, scenario_status, check_health, impact_of, change_world, declare_tool],
     )
 
 
