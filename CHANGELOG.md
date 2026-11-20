@@ -4,6 +4,10 @@ All notable release changes for Agent Learning Kit are tracked here.
 
 ## Unreleased
 
+- `fi-instrumentation-otel` is capped below 1.5.1 for now. 1.5.1 changed which key an exporter
+  sends in a simulation, and the kit's exporter test fails with it; the cap goes once that is
+  decided (TH-10547).
+
 - `StepEfficiency` now measures repeated tool calls against total tool calls,
   rather than total steps, so several repeats within one step cannot produce a
   negative score with the default weights. Scores can shift for trajectories
