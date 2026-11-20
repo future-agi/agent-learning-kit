@@ -1523,7 +1523,8 @@ def test_certify_only_rejects_a_tool_the_runs_source_does_not_define(
         _hosted(tmp_path, monkeypatch, _argv(source, authoring, job_path, bundle)) == 78
     )
 
-    assert "Tool contract certification rejected: search_places" in (
+    # The tool and its reason, in the message the platform keeps.
+    assert "Tool contract certification rejected: search_places (the submitted source defines no search_places)" in (
         capsys.readouterr().err
     )
     assert not bundle.exists()
