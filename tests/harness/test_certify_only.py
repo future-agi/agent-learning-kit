@@ -1528,6 +1528,10 @@ def test_certify_only_rejects_a_tool_the_runs_source_does_not_define(
         capsys.readouterr().err
     )
     assert not bundle.exists()
+    # The contract it was certified from and each reason, kept with the process logs the platform stores.
+    kept = json.loads((authoring / "generic-harness" / "process-logs" / "tool-certification-rejected.log").read_text())
+    assert kept["rejected"] == {"search_places": "the submitted source defines no search_places"}
+    assert "search_places" in kept["tools"] and "tool_entrypoints" in kept and "workers" in kept
 
 
 def test_refresh_leaves_a_contract_whose_entrypoints_all_have_tools_untouched(
