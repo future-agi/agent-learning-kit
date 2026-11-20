@@ -357,7 +357,8 @@ the caller does not know the tool is about to fail, and writing it there tells t
 **Declare every such level to `aim_for` as a fault level, with the records that carry it.** `aim_for`
 takes `fault_levels`: by axis, each level that means the agent meets a failure, with the ids of the
 records whose starting data already holds it (`[]` when none does and the failure is injected with
-`faults`). A case on one of those levels is refused unless it carries the failure. Measured on a
+`faults`). A case on one of those levels should carry the failure; where the build enforces fault levels, one
+that does not is refused. Measured on a
 two-hundred without this: 28 cases were labelled with the payment fault, none had a fault, and 18 were
 not even on the order whose data carried the timeout, so the report counted a failure path the agent
 never met. With faults off, a level no record carries cannot be written at all; take it off the grid.
@@ -829,11 +830,13 @@ conversation resumed after a pause, a correction after the agent has committed: 
 it, the level is a sentence in the instruction and the report counts it as tested. Pass such levels to
 `aim_for` as `checked_levels`, add a sub-goal for each with `add_sub_goal` and `overlay` set to the level
 (for a resumed conversation: the agent keeps the context, asks nothing again, repeats no action, and
-finishes), and deal it in the brief. A case on a checked level that names no such sub-goal is refused.
+finishes), and deal it in the brief. A case on a checked level should name that sub-goal; where the build
+enforces checked levels, one that does not is refused.
 
 **Deal the records as well as the cells.** In each brief, name the records the agent can read that fit
-the brief's cells, and spread them: a task's cases may sit on one record only up to the suite's share
-of that task, and `submit_scenario` refuses one past it. Measured on a two-hundred briefed without
+the brief's cells, and spread them: a task's cases should sit on one record only up to the suite's share
+of that task; where the build enforces the share, `submit_scenario` refuses one past it. Measured on a
+two-hundred briefed without
 records: 34 of 50 refunds were on one order.
 
 When the person asked for a level of an axis, in the build's instructions or in the conversation (no
