@@ -149,19 +149,25 @@ def unresolved(entries: list[SourceResult]) -> list[SourceResult]:
     return [one for one in entries if one["kind"] in ALK_RESOLVED_KINDS and one.get("resolved") is False]
 
 
-def expected_outcome(scenario: Scenario, catalogue: Catalogue, workers: Sequence[Any] = ()) -> str:
-    """What the case expects, in words: each of its sub-goals' `what`, then the situation the person is told to play,
-    which says who is asking. Where the app hands work to `workers` (the contract's), also how the case reaches it:
-    each reference step's tool with the worker that holds it."""
+def expected_outcome(
+    scenario: Scenario, catalogue: Catalogue, workers: Sequence[Any] = (), *, situation: bool = False
+) -> str:
+    """What the case expects, in words: each of its sub-goals' `what`; with `situation`, also the situation the person
+    is told to play, which says who is asking. Where the app hands work to `workers` (the contract's), also how the
+    case reaches it: each reference step's tool with the worker that holds it."""
     lines = []
     for name in getattr(scenario, "sub_goals", None) or []:
         goal = catalogue.named(name) if catalogue is not None else None
         what = str(getattr(goal, "what", "") or "").strip()
         if what:
             lines.append(f"- {what}")
-    situation = str(getattr(scenario, "instruction", "") or "").strip()
-    if lines and situation:
-        lines.append(f"\nThe situation, as the person is told to play it:\n{situation[:_SITUATION_CHARS]}")
+    played = str(getattr(scenario, "instruction", "") or "").strip() if situation else ""
+    if lines and played:
+        lines.append(
+            "\nThe situation, as the person is told to play it. Who is asking is part of the outcome: where a rule "
+            "limits an action to a particular person, expecting it for someone else without what the rule asks for "
+            f"contradicts the rule:\n{played[:_SITUATION_CHARS]}"
+        )
     if not lines or not workers:
         return "\n".join(lines)
     holders: dict[str, list[str]] = {}
@@ -189,16 +195,23 @@ def expected_outcome(scenario: Scenario, catalogue: Catalogue, workers: Sequence
     return "\n".join(lines)
 
 
-# How much of the person's instruction the conflict judge reads: enough to say who is asking and for what.
+# How much of the person's instruction the all-rules check reads: enough to say who is asking and for what.
 _SITUATION_CHARS = 1500
+# The uncited rules handed to the judge in one call, at most.
+RULES_PER_CALL = 20
+ALL_RULES_SWITCH = "ALK_ALL_RULES_CHECK"
+
+
+def all_rules_check_on() -> bool:
+    """Whether a case that calls the agent's tools is also judged against the rules it does not cite, as advice that
+    never changes whether it is proved. Off unless `ALK_ALL_RULES_CHECK` is 1."""
+    return str(os.environ.get(ALL_RULES_SWITCH) or "").strip() == "1"
 
 _CONFLICT_PROMPT = (
-    "A test case for an agent expects the outcome below, and the agent's rule or rules below govern it. "
-    "Decide whether the expected outcome contradicts a rule: expecting the agent to do what a rule "
-    "forbids, or a number, limit, window or condition a rule states differently. Who is asking, as the situation "
-    "describes them, is part of the outcome: where a rule limits an action to a particular person, a case that "
-    "expects the action for someone else without what the rule asks for contradicts it. A case that only "
-    "covers part of a rule, or adds details the rule does not mention, does not contradict it. Where the app "
+    "A test case for an agent expects the outcome below, and cites the agent's rule below as its source. "
+    "Decide whether the expected outcome contradicts the rule: expecting the agent to do what the rule "
+    "forbids, or a number, limit, window or condition the rule states differently. A case that only "
+    "covers part of the rule, or adds details the rule does not mention, does not contradict it. Where the app "
     "hands work to workers, a rule that sends a kind of request to a worker is how that work gets done: an "
     "outcome the case reaches through that worker follows the rule; only an outcome reached some other way, "
     "or one the rule's worker is not to produce, contradicts it. The path lists tool calls only: a worker that "
@@ -263,9 +276,9 @@ def policy_conflicts(
     workers: Sequence[Any] = (),
 ) -> list[PolicyCheck]:
     """For each cited rule that resolves, whether the case's expected outcome contradicts it:
-    `{rule, ref, conflict, why}`. `conflict` None means no judge could decide it here. A case whose reference calls the
-    agent's tools is governed by every rule, cited or not, so the rules it does not cite are judged too, together, as
-    one entry with ref `rules`."""
+    `{rule, ref, conflict, why}`. `conflict` None means no judge could decide it here. With `all_rules_check_on`, a
+    case whose reference calls the agent's tools is also judged, with its situation, against the rules it does not
+    cite, `RULES_PER_CALL` at a time, each entry `advisory` under ref `rules`: advice, never a conflict that holds it."""
     expected = expected_outcome(scenario, catalogue, workers)
     if not expected:
         return []
@@ -273,34 +286,40 @@ def policy_conflicts(
     cache = _load_checks(world_root)
     changed = False
     found: list[PolicyCheck] = []
-    judged: list[tuple[str, str]] = []
+
+    def judged(outcome: str, rule: str) -> tuple[bool | None, str]:
+        nonlocal changed
+        key = hashlib.sha256(f"{outcome}\n---\n{rule}".encode()).hexdigest()
+        if key in cache:
+            return cache[key].get("conflict"), str(cache[key].get("why") or "")
+        try:
+            conflict, why = decide(outcome, rule)
+        except Exception as exc:  # noqa: BLE001 - a judge that could not run decides nothing
+            logger.warning("policy conflict judge could not run: %s", type(exc).__name__)
+            conflict, why = None, ""
+        if conflict is not None:
+            cache[key] = {"conflict": conflict, "why": why}
+            changed = True
+        return conflict, why
+
     cited: set[int] = set()
     for entry in resolve_sources(scenario, Rules(rules) if rules else None, world_root, source_root):
         if entry["kind"] != "rule" or entry.get("resolved") is not True:
             continue
         at = entry.get("rule_index", -1)
         rule = rules[at] if 0 <= at < len(rules) else ""
-        if rule and at not in cited:
-            cited.add(at)
-            judged.append((entry["ref"], rule))
+        if not rule:
+            continue
+        cited.add(at)
+        conflict, why = judged(expected, rule)
+        found.append({"rule": rule, "ref": entry["ref"], "conflict": conflict, "why": why})
     uncited = [rule for at, rule in enumerate(rules) if at not in cited and str(rule).strip()]
-    if uncited and getattr(scenario, "solution", None):
-        judged.append(("rules", "\n".join(f"- {rule}" for rule in uncited)))
-    for ref, rule in judged:
-        key = hashlib.sha256(f"{expected}\n---\n{rule}".encode()).hexdigest()
-        if key in cache:
-            conflict, why = cache[key].get("conflict"), str(cache[key].get("why") or "")
-        else:
-            try:
-                conflict, why = decide(expected, rule)
-            except Exception as exc:  # noqa: BLE001 - a judge that could not run decides nothing
-                logger.warning("policy conflict judge could not run: %s", type(exc).__name__)
-                conflict, why = None, ""
-            if conflict is not None:
-                cache[key] = {"conflict": conflict, "why": why}
-                changed = True
-        found.append({"rule": rule, "ref": ref, "conflict": conflict, "why": why})
+    if uncited and getattr(scenario, "solution", None) and all_rules_check_on():
+        situated = expected_outcome(scenario, catalogue, workers, situation=True)
+        for start in range(0, len(uncited), RULES_PER_CALL):
+            rule = "\n".join(f"- {one}" for one in uncited[start : start + RULES_PER_CALL])
+            conflict, why = judged(situated, rule)
+            found.append({"rule": rule, "ref": "rules", "conflict": conflict, "why": why, "advisory": True})
     if changed:
         _save_checks(world_root, cache)
     return found
-
