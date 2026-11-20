@@ -37,6 +37,10 @@ def test_a_write_expected_once_fails_twice_and_never_counts_a_refused_try():
     lost = Call("issue_refund", {"order_id": "1043", "amount": 89}, ok=False, error="response_lost")
     assert not exactly_once([lost, REFUND], "issue_refund", order_id="1043")
     assert exactly_once([lost], "issue_refund", order_id="1043")
+    # The chat world records the committed call as gone through and marks its lost answer on that same call: once.
+    through_but_lost = Call("issue_refund", {"order_id": "1043", "amount": 89}, error="response_lost")
+    assert exactly_once([through_but_lost], "issue_refund", order_id="1043")
+    assert not exactly_once([through_but_lost, REFUND], "issue_refund", order_id="1043")
     assert {"came_before", "exactly_once"} <= set(check_namespace())
 
 

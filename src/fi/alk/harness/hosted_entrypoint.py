@@ -1601,7 +1601,8 @@ class OutboundAdapter:
                 if one and one.split(":", 1)[-1] in self._failed_uploads
             }
             if queued:
-                await self.retry_failed_uploads(queued)
+                # Within the best-effort share of the flush window; what is still refused is left to the final flush.
+                await self.retry_failed_uploads(queued, deadline=self.best_effort_deadline())
             if transcript_artifact is not None:
                 bare = transcript_artifact.split(":", 1)[-1]
                 if bare not in self._uploaded_digests:
@@ -1816,7 +1817,11 @@ class OutboundAdapter:
         and never past `deadline` (`time.monotonic()`); one the platform takes is acked, one it still refuses stays
         queued."""
         for digest in [one for one in list(self._failed_uploads) if digests is None or one in digests]:
-            data, kind, scenario_key = self._failed_uploads[digest]
+            queued = self._failed_uploads.get(digest)
+            if queued is None:
+                # Another receipt's retry took it meanwhile.
+                continue
+            data, kind, scenario_key = queued
             for wait in (0.0, *self._upload_retry_backoff):
                 if self.is_fenced or (deadline is not None and time.monotonic() + wait >= deadline):
                     return

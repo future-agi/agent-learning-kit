@@ -5904,3 +5904,63 @@ def test_a_transcript_upload_the_platform_did_not_take_is_tried_again_before_the
         return said, len(adapter._failed_uploads)
 
     assert asyncio.run(refused_for_good()) == (None, 0)
+
+
+def test_a_receipt_retries_only_within_the_best_effort_window_and_skips_an_upload_another_retry_took() -> None:
+    from types import SimpleNamespace
+
+    down = ob.ChannelError(ob.ChannelOutcome.CHANNEL_FAILED, None, "channel_failed", "backend restarting")
+
+    class Down:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def upload(self, *_args: Any, **_kwargs: Any) -> Any:
+            self.calls += 1
+            return SimpleNamespace(error=down)
+
+    async def window_spent() -> tuple[dict[str, Any], int]:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        adapter._artifacts = Down()
+        adapter._upload_retry_backoff = (600.0,)
+        adapter.best_effort_deadline = lambda: time.monotonic() - 1
+        transcript = await adapter.upload_artifact(b"{}", kind=ob.ArtifactKind.TRANSCRIPT, scenario_key="s1")
+
+        class Call:
+            started_at = "2026-01-01T00:00:00.000Z"
+            ended_at = "2026-01-01T00:00:01.000Z"
+            duration_ms = 1000
+            turns = 1
+            transcript_artifact = transcript
+            recording_artifacts = ()
+
+        receipt = ResultReceipt(
+            scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0, status="passed",
+            sub_goals=(), evaluations=(), call=Call(), failure=None,
+        )
+        await asyncio.wait_for(adapter.receipt(receipt), timeout=5)
+        return transport.receipts[("job-1", "s1")], len(adapter._failed_uploads)
+
+    body, still_queued = asyncio.run(window_spent())
+    # No wait past the window: dropped from this receipt, still queued for the final flush.
+    assert body["call"]["transcript_artifact"] is None and still_queued == 1
+
+    async def taken_meanwhile() -> set[str]:
+        adapter = _build_adapter(FakeTransport())
+        adapter._upload_retry_backoff = ()
+        adapter._failed_uploads = {
+            "a": (b"a", ob.ArtifactKind.TRANSCRIPT, "s1"),
+            "b": (b"b", ob.ArtifactKind.TRANSCRIPT, "s1"),
+        }
+
+        class TakesTheOther:
+            def upload(self, digest: str, *_args: Any, **_kwargs: Any) -> Any:
+                adapter._failed_uploads.pop("b", None)
+                return SimpleNamespace(error=None)
+
+        adapter._artifacts = TakesTheOther()
+        await adapter.retry_failed_uploads()
+        return set(adapter._failed_uploads)
+
+    assert asyncio.run(taken_meanwhile()) == set()
