@@ -111,6 +111,30 @@ def widen(
     )
 
 
+# Rules dropped since the person's current message began, by environment: an add in the same message with no
+# `replaces` and exactly one of them still unreplaced is that rule reworded.
+_DROPPED_THIS_TURN: dict[str, list[str]] = {}
+
+
+def _turn_key(destination: Path) -> str:
+    return str(Path(destination).resolve())
+
+
+def begin_turn(destination: Path) -> None:
+    """A new message from the person: rules dropped before it are no longer this message's rewrite."""
+    _DROPPED_THIS_TURN.pop(_turn_key(destination), None)
+
+
+def _dropped_this_turn(contract: AgentContract, destination: Path) -> list[str]:
+    """The rules dropped during this message that no rule replaces yet."""
+    dropped = set(_DROPPED_THIS_TURN.get(_turn_key(destination), []))
+    return [
+        one.key
+        for one in contract.amendment_records
+        if one.kind == "rule" and one.action == "removed" and not one.replaced_by and one.key in dropped
+    ]
+
+
 def add_rule(
     contract: AgentContract, destination: Path, *, rule: str, why: str, replaces: str = ""
 ) -> tuple[bool, str]:
@@ -127,6 +151,10 @@ def add_rule(
         return False, "no rule given"
     if not why.strip():
         return False, "say why: an unexplained rule is indistinguishable from a guess"
+    linked = ""
+    if not replaces.strip() and len(dropped := _dropped_this_turn(contract, destination)) == 1:
+        # Dropped and added in one message: the new rule rewords the dropped one, so the two are linked.
+        replaces = linked = dropped[0]
     # Both sides are compared as they are saved: a contract held from an older save can still
     # hold its rules raw. One call, so a refused URL is logged once. The reply names the rule as
     # saved too, since the chat sends it on to the platform.
@@ -177,6 +205,11 @@ def add_rule(
     return True, (
         f"added. The agent now has {len(contract.hard_constraints)} rules, and this one is "
         "graded from here on."
+        + (
+            f" It replaces {linked}, dropped earlier in this message, so the two are linked as one rule reworded."
+            if linked
+            else ""
+        )
     ) + (cases_citing(destination, rule=old) if old else _unlinked_removals(contract, new_id))
 
 
@@ -315,6 +348,7 @@ def drop_rule(
     contract.amendments.append(f"rule removed — {match}: {why.strip()}")
     contract.amendment_records.append(AmendmentRecord(kind="rule", key=rule_id(match), action="removed", text=match))
     _persist(contract, destination)
+    _DROPPED_THIS_TURN.setdefault(_turn_key(destination), []).append(rule_id(match))
     return True, (
         f"removed ({rule_id(match)}). {len(contract.hard_constraints)} rules left. To reword it instead, add the new "
         "rule with replaces naming this id." + cases_citing(destination, rule=match)

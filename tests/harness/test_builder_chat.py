@@ -5170,13 +5170,43 @@ def test_a_rule_dropped_first_is_linked_when_its_rewrite_names_it(tmp_path):
     assert (added.action, added.previous) == ("added", rule_id(old))
 
 
+def test_a_rule_dropped_and_added_in_one_message_is_linked_as_a_rewrite_and_its_cases_listed(tmp_path):
+    from fi.alk.harness.amend import add_rule, begin_turn, drop_rule
+    from fi.alk.harness.contract import rule_id
+
+    root, contract = _cited_suite(tmp_path)
+    begin_turn(root)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 20 days of delivery."
+    drop_rule(contract, root, rule=old, why="being changed")
+    done, said = add_rule(contract, root, rule=new, why="the window is 20 days now")
+
+    assert done, said
+    removed, added = contract.amendment_records
+    assert (removed.replaced_by, added.previous) == (rule_id(new), rule_id(old))
+    assert f"It replaces {rule_id(old)}, dropped earlier in this message" in said
+    assert "rest on what changed" in said and "adds-a-big-mac" in said and "adds-one-big-mac" not in said
+
+
+def test_two_rules_dropped_in_one_message_are_never_guessed_between(tmp_path):
+    from fi.alk.harness.amend import add_rule, begin_turn, drop_rule
+
+    root, contract = _cited_suite(tmp_path)
+    begin_turn(root)
+    drop_rule(contract, root, rule="Refund only within 30 days of delivery.", why="gone")
+    drop_rule(contract, root, rule="Never sell more than 130 items.", why="gone")
+    done, said = add_rule(contract, root, rule="Refund only within 20 days of delivery.", why="new")
+    assert done and all(not one.replaced_by and not one.previous for one in contract.amendment_records)
+
+
 def test_a_rule_added_with_no_replaces_is_never_linked_to_one_that_reads_alike(tmp_path):
-    from fi.alk.harness.amend import add_rule, drop_rule
+    from fi.alk.harness.amend import add_rule, begin_turn, drop_rule
     from fi.alk.harness.contract import rule_id
 
     root, contract = _cited_suite(tmp_path)
     old, new = "Refund only within 30 days of delivery.", "Refund only within 20 days of delivery."
     drop_rule(contract, root, rule=old, why="gone")
+    # A later message: the drop is not this message's rewrite.
+    begin_turn(root)
     done, said = add_rule(contract, root, rule=new, why="new")
 
     assert done and [one.replaced_by for one in contract.amendment_records] == ["", ""]
