@@ -363,7 +363,8 @@ class ActorsSwitch(BaseModel):
     @model_validator(mode="after")
     def _share_is_a_range(self) -> "ActorsSwitch":
         if len(self.share) != 2 or not 0.0 <= self.share[0] <= self.share[1] <= 1.0:
-            raise ValueError("share is [min, max] with 0 <= min <= max <= 1")
+            # The share is [min, max] with 0 <= min <= max <= 1.
+            raise ValueError("actors_share_invalid")
         return self
 
 

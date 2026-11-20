@@ -58,6 +58,8 @@ SUBMISSION: frozenset[str] = frozenset(
         # Secrets the caller referenced.
         "hosted_secret_manager_unsupported",
         "hosted_secret_purpose_invalid",
+        # The actors switch the caller sent in metadata.
+        "actors_share_invalid",
         # The scenario plan the caller sent in metadata.
         "execution_manifest_invalid",
         "execution_manifest_duplicate_key",
