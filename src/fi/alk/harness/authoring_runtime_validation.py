@@ -1826,6 +1826,113 @@ def held_case_guidance(held: dict[str, str], replaceable: Collection[str] = ()) 
     )
 
 
+# Which cases the next live pass re-proves after a held-case round, decided from file digests (`mark_replay`).
+REPLAY_FILE = "generic-harness/live-replay.json"
+# Files that record what a run did or derive from the cases, never an input a case is proved on.
+_NOT_AN_INPUT = frozenset(
+    {
+        "proofs.json",
+        "scenario-proofs.json",
+        "runtime-validation.json",
+        "coverage.json",
+        "written.jsonl",
+        "scenarios.json",
+        "sub_goals.json",
+    }
+)
+# Of the harness's own working files, the ones a case is proved on.
+_HARNESS_INPUTS = frozenset({"generic-harness/source-model.json", "generic-harness/world-ir.json"})
+
+
+def _digest_files(paths: list[Path], root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(path.relative_to(root).as_posix().encode("utf-8") + b"\n")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def proof_inputs(authoring: Path) -> dict[str, Any]:
+    """What a live proof is made from, as digests: each case's own folder by its key, each sub-goal by name, the
+    sub-goals each case names, and one digest of everything the cases share (contract, world and seed files,
+    attached files, actors, the source model). The bundle is sealed from these files, and run records are left out."""
+    from .proofs import proof_key
+    from .scenario_tools import load_scenarios
+
+    authoring = Path(authoring)
+    cases: dict[str, str] = {}
+    uses: dict[str, list[str]] = {}
+    for one in load_scenarios(authoring):
+        folder = authoring / "scenarios" / one.name
+        files = sorted(path for path in folder.rglob("*") if path.is_file()) if folder.is_dir() else []
+        cases[proof_key(one)] = _digest_files(files, authoring)
+        uses[proof_key(one)] = sorted(str(name) for name in one.sub_goals or ())
+    try:
+        listed = json.loads((authoring / "sub_goals.json").read_text(encoding="utf-8")).get("sub_goals") or []
+    except (OSError, ValueError, AttributeError):
+        listed = []
+    goals = {
+        str(goal.get("name")): hashlib.sha256(json.dumps(goal, sort_keys=True).encode("utf-8")).hexdigest()
+        for goal in listed
+        if isinstance(goal, dict) and goal.get("name")
+    }
+    shared = [
+        path
+        for path in sorted(authoring.rglob("*"))
+        if path.is_file()
+        and (relative := path.relative_to(authoring).as_posix()) not in _NOT_AN_INPUT
+        and not relative.startswith(("scenarios/", "environment-bundle/"))
+        and not path.name.startswith(".futureagi-")
+        and (not relative.startswith("generic-harness/") or relative in _HARNESS_INPUTS)
+    ]
+    return {"cases": cases, "uses": uses, "goals": goals, "shared": _digest_files(shared, authoring)}
+
+
+def cases_to_replay(before: Mapping[str, Any], after: Mapping[str, Any]) -> set[str] | None:
+    """The cases a held-case round changed, added or replaced, which alone need proving again; None when an input the
+    cases share changed (a shared file, or a sub-goal a case the round left alone names), so every case does."""
+    if before.get("shared") != after.get("shared"):
+        return None
+    goals_before, goals_after = before.get("goals") or {}, after.get("goals") or {}
+    moved = {name for name in {*goals_before, *goals_after} if goals_before.get(name) != goals_after.get(name)}
+    cases_before, cases_after = before.get("cases") or {}, after.get("cases") or {}
+    changed = {key for key, digest in cases_after.items() if cases_before.get(key) != digest}
+    uses = after.get("uses") or {}
+    if any(set(uses.get(key) or ()) & moved for key in cases_after if key not in changed):
+        return None
+    return changed
+
+
+def mark_replay(authoring: Path, before: Mapping[str, Any]) -> None:
+    """After a held-case round, say which cases the next live pass proves again (`REPLAY_FILE`); with nothing to
+    narrow it to, every case is proved, as before."""
+    after = proof_inputs(authoring)
+    keys = cases_to_replay(before, after)
+    path = Path(authoring) / REPLAY_FILE
+    if keys is None:
+        path.unlink(missing_ok=True)
+        return
+    removed = sorted(set(before.get("cases") or {}) - set(after["cases"]))
+    from .json_file import write_json_atomic
+
+    write_json_atomic(path, {"keys": sorted(keys), "removed": removed, "shared": after["shared"]})
+
+
+def _replay_keys(authoring: Path) -> tuple[set[str] | None, set[str]]:
+    """The cases this live pass proves again and the ones it drops, from the round before it: (None, ∅) to prove every
+    case, as when no round narrowed it or an input the cases share has changed since."""
+    path = Path(authoring) / REPLAY_FILE
+    try:
+        marked = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, set()
+    finally:
+        path.unlink(missing_ok=True)
+    if not isinstance(marked, dict) or marked.get("shared") != proof_inputs(authoring)["shared"]:
+        return None, set()
+    return {str(key) for key in marked.get("keys") or ()}, {str(key) for key in marked.get("removed") or ()}
+
+
 async def play_this_attempt(
     *,
     runtimes: list | None = None,
@@ -1838,8 +1945,13 @@ async def play_this_attempt(
     seed: int,
 ) -> dict[str, live_proof.LiveResult]:
     """Play this validation attempt's cases on its live runtime. Only this attempt's plays count: an earlier attempt's
-    results are dropped first, since a repair between attempts may have changed the cases they were played on."""
-    live_proof.forget_live(authoring, None)
+    results are dropped first, since a repair between attempts may have changed the cases they were played on. After a
+    held-case round that changed only some cases and nothing they share (`mark_replay`), only those are played again
+    and the rest keep their results."""
+    keys, removed = _replay_keys(authoring)
+    live_proof.forget_live(authoring, None if keys is None else keys | removed)
+    if keys is not None:
+        print(f"runtime validation: proving again only the {len(keys)} cases the round changed", flush=True)
     live = await live_proof.prove_live(
         authoring=authoring,
         contract=contract,
@@ -1849,6 +1961,7 @@ async def play_this_attempt(
         factory=factory,
         work=work,
         seed=seed,
+        keys=keys,
     )
     if live:
         print(f"runtime validation: {live_proof.live_summary(live)}", flush=True)
@@ -2568,6 +2681,7 @@ async def _validate_and_repair(
                 keys_before = {one.scenario_key for one in load_scenarios(authoring)} if held else set()
                 codes = (tally or {}).get("held_cases") or {}
                 replaceable = {key for key in held if codes.get(key) in REPLACEABLE}
+                inputs_before = proof_inputs(authoring) if held else None
                 rewritten = bool(held) and await _rewrite_held_cases(
                     held,
                     authoring,
@@ -2601,6 +2715,8 @@ async def _validate_and_repair(
                         }
                     )
                     write_yield(authoring, asked, tally, yield_rounds)
+                if rewritten and inputs_before is not None:
+                    mark_replay(authoring, inputs_before)
                 if rewritten:
                     held_rounds += 1
                     candidate_hash = _generic_candidate_hash(source, authoring)
