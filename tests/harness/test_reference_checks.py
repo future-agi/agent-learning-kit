@@ -258,7 +258,11 @@ def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_
     # Setup runs on a world whose agent already started: a record it adds is one a start-time loader never sees.
     assert problems(once, adds) and "loads its data once, when it starts" in problems(once, adds)[0]
     assert problems(once, changes) and not problems(once, "")
+    # The same setup passes where the loader reads on every call, or where its timing is not recorded.
     assert not problems({**once, "loads": "each_call"}, adds)
+    assert not problems({**once, "loads": "each_call"}, changes)
+    assert not problems({**in_process, "loaded_by": "load_profile"}, adds)
+    assert not problems({**in_process, "loaded_by": "load_profile"}, changes)
     assert with_actor(once, later)
     assert not with_actor({**once, "loads": "each_call"}, later)
     unknown = {**in_process, "loaded_by": "load_profile"}
