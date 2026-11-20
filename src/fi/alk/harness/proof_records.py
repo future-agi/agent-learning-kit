@@ -100,6 +100,8 @@ class LiveResult(_LiveFields, total=False):
 
     # Tools whose reference steps were recorded, not run: they touch no world and nothing there runs them.
     recorded: list[str]
+    # Checks the reference failed only because an assumed step's outcome is unknown (`prove.inconclusive_on_assumed`).
+    inconclusive: list[str]
 
 
 class _ProofFields(TypedDict):

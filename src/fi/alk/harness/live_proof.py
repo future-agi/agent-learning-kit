@@ -39,6 +39,7 @@ from .prove import (
     checks_for,
     excused_by_assumed_steps,
     executes,
+    inconclusive_on_assumed,
     play_reference_step,
     recordable_tools,
     record_unrun_step,
@@ -46,7 +47,7 @@ from .prove import (
 from .scenario import Scenario, Step
 from .scenario_tools import load_scenarios
 from .world.handle import MCP_ROUTE, mcp_request
-from .world.runtime import Call
+from .world.runtime import Call, as_gone_through
 from .world.snapshot import world_state_digest
 
 if TYPE_CHECKING:
@@ -128,7 +129,7 @@ def _play(
         tool = str(step.tool)
         unrun = tool in recordable and not executes(world, tool)
         call = record_unrun_step(world, step) if unrun else play_reference_step(world, step)
-        if not call.ok and not unrun:
+        if call.ok is False and not unrun:
             refused.append(f"{call.name}({step.arguments}): {call.error}")
     assumed = [tool for tool in assumed_tools(world, steps) if tool not in world.recorded]
     return list(world.calls), assumed, refused
@@ -421,6 +422,15 @@ async def _prove_case(
     calls, assumed, refused = await asyncio.to_thread(_play, scenario, world, list(scenario.solution), recordable)
     recorded = list(getattr(world, "recorded", None) or [])
     with_solution = await asyncio.to_thread(_outcomes, scenario, catalogue, world, calls)
+    inconclusive = await asyncio.to_thread(
+        inconclusive_on_assumed,
+        checks_for(scenario, catalogue),
+        world,
+        calls,
+        reference_of(scenario.solution),
+        assumed,
+        {one.name for one in with_solution if not one.held and not one.broken},
+    )
     right = await asyncio.to_thread(_digest, world)
     world = await fresh()
     nothing_calls, _, _ = await asyncio.to_thread(_play, scenario, world, [])
@@ -433,6 +443,8 @@ async def _prove_case(
             control_calls, control_assumed, _ = await asyncio.to_thread(
                 _play, scenario, world, list(control.steps), recordable
             )
+            # A control's assumed step is read as gone through: an unknown result is no evidence that it fails.
+            control_calls = as_gone_through(control_calls, control_assumed)
             outcomes = await asyncio.to_thread(_outcomes, scenario, catalogue, world, control_calls)
             changed = await asyncio.to_thread(writes_beyond, world, reference_of(scenario.solution))
         except Exception as exc:  # noqa: BLE001 - a control that cannot be played is no evidence, the case still is
@@ -454,6 +466,7 @@ async def _prove_case(
     return {
         "assumed": assumed,
         "refused": refused,
+        **({"inconclusive": inconclusive} if inconclusive else {}),
         "with_solution": [{"name": one.name, "held": one.held, "said": one.said, "broken": one.broken} for one in with_solution],
         "with_nothing": [{"name": one.name, "held": one.held, "said": one.said, "broken": one.broken} for one in with_nothing],
         "outcome": "no_change" if not assumed and right is not None and right == untouched else "change",
@@ -514,7 +527,7 @@ def apply_live(proof: Proof, live: LiveResult) -> Proof:
     proof.recorded = list(live.get("recorded") or [])
     proof.refused = list(live.get("refused") or [])
     # What the offline pass said about a reference it could not run speaks for nothing the live run did.
-    proof.excused = excused_by_assumed_steps(proof)
+    proof.excused = sorted({*excused_by_assumed_steps(proof), *(live.get("inconclusive") or [])})
     proof.trial = {}
     proof.broken = [one.name for one in proof.with_solution if one.broken]
     proof.solvable = all(one.held or one.name in proof.excused for one in proof.with_solution) and not proof.broken

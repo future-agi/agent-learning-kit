@@ -19,9 +19,9 @@ import json
 import re
 import sqlite3
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Collection, Mapping, Sequence
 
 from ..environment import EnvironmentAdapter, EnvironmentSnapshot, ToolExecutionResult
 
@@ -368,26 +368,47 @@ def trace_row(call: Call, workers: Mapping[str, str] | None = None) -> dict[str,
     }
 
 
-def _records(held: Any) -> list[Mapping[str, Any]]:
-    """The records of one table or collection, whether kept as a list of rows or as a mapping by key."""
+def _records(held: Any, column: str) -> list[Mapping[str, Any]]:
+    """The records of one table or collection, whether kept as a list of rows or as a mapping by key. A record kept
+    under a key and lacking `column` is matched on that key."""
     if isinstance(held, Mapping):
-        return [value for value in held.values() if isinstance(value, Mapping)]
+        return [
+            value if column in value else {**value, column: key}
+            for key, value in held.items()
+            if isinstance(value, Mapping)
+        ]
     if isinstance(held, list):
         return [row for row in held if isinstance(row, Mapping)]
     return []
 
 
 def _same(one: Any, other: Any) -> bool:
-    """Equal as values, or as the text they are written as: an id held as 1045 is the "1045" a call sends."""
+    """Equal as values, or as the text they are written as: an id held as 1045 is the "1045" a call sends. A boolean
+    only ever equals a boolean, so True never matches a held 1."""
+    if isinstance(one, bool) or isinstance(other, bool):
+        return isinstance(one, bool) and isinstance(other, bool) and one is other
     return one == other or str(one) == str(other)
+
+
+def as_gone_through(calls: Sequence[Call], tools: Collection[str]) -> list[Call]:
+    """`calls` with each one of `tools` made without running (neither ok nor refused) read as gone through: what a
+    check would say if those steps had succeeded, for telling a check that failed only on an unknown result from one
+    that fails anyway."""
+    return [
+        replace(call, ok=True, refused=False, refusal_code="", error="")
+        if call.ok is None and call.name in tools
+        else call
+        for call in calls
+    ]
 
 
 def record_refusal(world: Any, name: str, arguments: Mapping[str, Any]) -> Call | None:
     """The refusal the contract records for `name` that this call's record meets (`ToolSpec.refusals`), answered as
     the tool's service answers it: refused with that HTTP status, before the tool changes anything. None when no
-    recorded refusal applies, or when the world cannot be read."""
+    recorded refusal applies, when the world runs the agent's own code natively (that code is the truth), or when
+    the world cannot be read."""
     refusals = (getattr(world, "refusals", None) or {}).get(name) or ()
-    if not refusals:
+    if not refusals or getattr(world, "native_runtime", False):
         return None
     try:
         state = world.state()
@@ -395,14 +416,15 @@ def record_refusal(world: Any, name: str, arguments: Mapping[str, Any]) -> Call 
         return None
     for refusal in refusals:
         sent = arguments.get(refusal.get("argument"))
+        values = refusal.get("values") or []
         if sent is None:
             continue
-        values = refusal.get("values") or []
-        for record in _records(state.get(refusal.get("table"))):
-            if not _same(record.get(refusal.get("column")), sent):
+        column = str(refusal.get("column") or "")
+        for record in _records(state.get(refusal.get("table")), column):
+            if not _same(record.get(column), sent):
                 continue
             held = record.get(refusal.get("field"))
-            if (any(_same(held, value) for value in values) if values else held not in (None, "")):
+            if any(_same(held, value) for value in values):
                 status = int(refusal.get("status") or 400)
                 message = str(refusal.get("message") or "") or f"{name} refused with HTTP {status}"
                 return Call(
@@ -443,6 +465,8 @@ class GeneratedWorld(EnvironmentAdapter):
     refusal_signature: str = ""
     # The contract's record refusals by tool (`ToolSpec.refusals`, as dicts), answered before a handler runs.
     refusals: dict[str, list[dict[str, Any]]] = {}
+    # The reference steps a record refusal answered in this proof, never counted as assumed (`prove.run_steps`).
+    answered_by_record: list[Any] = []
 
     def __init__(
         self, database: str | Path = ":memory:", *, store: Any = None, kind: str = ""
@@ -455,6 +479,7 @@ class GeneratedWorld(EnvironmentAdapter):
         self.tools = copy.deepcopy(type(self).tools)
         self.handlers = dict(type(self).handlers)
         self.refusals = copy.deepcopy(type(self).refusals)
+        self.answered_by_record = []
         self.state_object = copy.deepcopy(type(self).state_object)
         self.source_subfolder = ""
         self.database = str(database)
