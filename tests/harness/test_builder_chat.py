@@ -160,7 +160,7 @@ def test_unsaved_changes_are_published_and_reported_by_number(tmp_path, monkeypa
     _turn(runtime, {"content": "add one"})
 
     assert len(client.published) == 1
-    assert "Saved to the environment: added #41 late_driver" in _reply(client)
+    assert "Put under Unsaved changes: added #41 late_driver" in _reply(client)
     basis = json.loads((tmp_path / ".futureagi-authoring-basis.json").read_text())
     assert basis == {"authoring_revision": "sha256:new"}
     # Saved once; nothing is left for the next turn to publish again.
@@ -203,7 +203,7 @@ def test_the_closing_status_line_says_what_is_saved_and_never_guesses(tmp_path, 
     runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
     runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root, skip=None: None)
-    assert runtime._saved_state() == "saved"
+    assert runtime._saved_state() == "none"
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text('{"changed": 1}')
     assert runtime._saved_state() == "unsaved"
     # A lost marker is not knowledge that everything is saved, and nothing writes one in its place.
@@ -216,7 +216,11 @@ def test_the_closing_status_line_says_what_is_saved_and_never_guesses(tmp_path, 
     )
     client.publish = _publish_with_failed(client)
     assert asyncio.run(runtime._save_changes())["applied"] is True
-    assert runtime._saved_state() == "saved_except"
+    assert runtime._saved_state() == "published"
+    assert runtime._closing_status().endswith(
+        "Changes from this chat are under Unsaved changes; Validate, then Save to keep them as a new version, except "
+        "1 scenarios that could not be applied."
+    )
 
 
 def test_a_suite_with_every_scenario_dropped_still_closes_with_its_status(tmp_path, monkeypatch):
@@ -265,7 +269,7 @@ def test_the_reply_the_platform_stores_ends_with_the_status_line_even_after_only
     _turn(runtime, {"content": "is everything saved?"})
 
     assert _reply(client) == (
-        "Status: 2 scenarios (0 proved, 0 kept as written, 2 not proved); every change is saved to the environment."
+        "Status: 2 scenarios. No changes in this chat."
     )
 
 
@@ -292,7 +296,7 @@ def test_a_working_copy_carried_on_from_earlier_turns_is_never_minted_as_saved(t
     # A fresh open from the environment, with no turn run here yet, is what the environment holds.
     (tmp_path / ".futureagi-conversation.json").unlink()
     runtime._mint_published()
-    assert runtime._saved_state() == "saved"
+    assert runtime._saved_state() == "none"
 
 
 def test_the_chat_reads_a_removed_case_from_the_platform_by_its_exact_key(tmp_path, monkeypatch):
@@ -308,6 +312,23 @@ def test_the_chat_reads_a_removed_case_from_the_platform_by_its_exact_key(tmp_pa
     assert client.queries == [{"removed": True}]
 
 
+def test_the_closing_line_carries_the_scenarios_tab_s_own_counts(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
+    (tmp_path / ".futureagi-published.json").unlink()
+    runtime._mint_published()
+
+    async def overview():
+        return {"lifecycle_counts": {"proved": 4, "kept_as_written": 0, "not_proved": 2}}
+
+    client.overview = overview
+    runtime.conversation = EditingConversation(tmp_path, writes=False)
+    _turn(runtime, {"content": "how many are proved?"})
+    assert _reply(client).endswith(
+        "On the Scenarios tab: 4 proved, 0 kept as written, 2 not proved. No changes in this chat."
+    )
+
+
 def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     client = BuilderClient(applied=False)
     runtime = _runtime(tmp_path, client, monkeypatch)
@@ -317,7 +338,7 @@ def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
 
     _turn(runtime, {"content": "add one"})
 
-    assert "These changes were NOT saved to the environment: bad." in _reply(client)
+    assert "These changes are NOT under Unsaved changes: bad." in _reply(client)
     assert not (tmp_path / ".futureagi-authoring-basis.json").exists()
 
 
@@ -336,7 +357,7 @@ def test_a_failed_reseal_keeps_the_change_as_a_draft(tmp_path, monkeypatch):
 
     assert client.published == []
     reply = next(e for e in client.events if e["kind"] == "assistant_message")
-    assert "kept as an unsaved draft and were NOT saved" in reply["payload"]["text"]
+    assert "stay in this chat's working copy and are NOT under Unsaved changes" in reply["payload"]["text"]
     assert "seed import failed" in reply["payload"]["text"]
     kinds = [event["kind"] for event in client.events]
     # The turn completes and its checkpoint is promoted as the chat's draft.
@@ -2760,8 +2781,8 @@ def test_one_broken_scenario_does_not_block_the_save(tmp_path, monkeypatch):
     assert sealed == [{"broken_case"}]
     assert client.failed == [[{"scenario_key": "broken_case", "reason": "checks/refunded.py would not compile"}]]
     text = _reply(client)
-    assert "Saved to the environment: added #41 late_driver" in text
-    assert "Saved, except 1 scenarios that could not be applied: broken_case: checks/refunded.py would not compile." in text
+    assert "Put under Unsaved changes: added #41 late_driver" in text
+    assert "Except 1 scenarios that could not be applied: broken_case: checks/refunded.py would not compile." in text
 
 
 def test_a_folder_a_run_cannot_load_keeps_its_sealed_version(tmp_path):
@@ -3415,7 +3436,7 @@ def test_the_reply_is_cleaned_before_the_save_note_and_the_health_lines_are_adde
     assert _leaks(client.events) == []
     assert "".join(_deltas(client)) == _SEEN
     assert _reply(client) == (
-        f"{_SEEN}\n\nSaved to the environment: added #41 late_driver. It now has 41 scenarios."
+        f"{_SEEN}\n\nPut under Unsaved changes: added #41 late_driver. With them the suite has 41 scenarios. Validate, then Save to keep them as a new version."
         f"\n\nStill open from the last health check (1): The hook check failed for {_SEEN}"
     )
 
@@ -3438,7 +3459,8 @@ def test_the_save_note_is_cleaned_on_its_own(tmp_path, monkeypatch):
     assert _leaks(client.events) == []
     # The full stop after #frag is part of the fragment, so it goes too.
     assert _reply(client) == (
-        f"Added it.\n\nSaved to the environment: added #41 posts to {_SEEN} It now has 41 scenarios."
+        f"Added it.\n\nPut under Unsaved changes: added #41 posts to {_SEEN} With them the suite has 41 scenarios. "
+        "Validate, then Save to keep them as a new version."
     )
 
 
@@ -3459,7 +3481,7 @@ def test_a_failed_reseal_sends_the_reply_cleaned_before_its_note(tmp_path, monke
     assert _leaks(client.events) == []
     # The change stays in the chat's working copy as a draft and the turn completes.
     assert "error" not in reply["payload"]
-    assert reply["payload"]["text"].startswith(f"{_SEEN}\n\nThese changes are kept as an unsaved draft and were NOT saved")
+    assert reply["payload"]["text"].startswith(f"{_SEEN}\n\nThese changes stay in this chat's working copy and are NOT under")
 
 
 @pytest.mark.parametrize(

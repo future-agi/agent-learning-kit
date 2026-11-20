@@ -301,39 +301,43 @@ def test_each_saved_proof_says_whether_a_submit_refuses_it(tmp_path):
     assert {key: one["refused"] for key, one in saved.items()} == {"uncontrolled": True, "assumed": False, "crashed": True}
 
 
-def test_the_builder_s_status_reads_the_proofs_now_not_what_the_conversation_said(tmp_path):
-    """The conversation said every case passed; the record now says two are not proved, and both the turn's opening
-    line and scenario_status say so, with the reason in the proof's words."""
+def test_the_builder_s_status_never_counts_states_and_shows_only_this_chat_s_proofs(tmp_path):
+    """The build's proofs may not be what the Scenarios tab shows: the status gives no counts, and scenario_status
+    lists only the proofs made in this chat, with their reasons."""
     import asyncio
+    import json
 
     from fi.alk.harness.builder import suite_server
     from fi.alk.harness.hosted_chat_entrypoint import _status_note
+    from fi.alk.harness.proofs import proof_key
     from fi.alk.harness.scenario import Scenario
 
     kept = [Scenario(name=name) for name in ("refund_ok", "refund_late", "refund_twice")]
     proved = Proof(ready=True, solvable=True, vacuous=False, controls=RAN)
     for one in kept:
-        record_proof(tmp_path, one.scenario_key or one.name, proved, solution_steps=1)
-    stale = _status_note(tmp_path, kept)
-    assert "3 proved, 0 kept as written, 0 not proved" in stale
-    record_unprovable(tmp_path, kept[1].scenario_key or kept[1].name, "its check reads a table the world lacks")
-    assumed = Proof(ready=True, solvable=True, vacuous=False, assumed=["place_order"], controls=NOT_RUN)
-    record_proof(tmp_path, kept[2].scenario_key or kept[2].name, assumed, solution_steps=1)
+        record_proof(tmp_path, proof_key(one), proved, solution_steps=1)
+    # Made by the build, long before this chat.
+    older = {key: {**entry, "proved_at": "2000-01-01T00:00:00Z"} for key, entry in load_proofs(tmp_path).items()}
+    (tmp_path / "proofs.json").write_text(json.dumps(older), encoding="utf-8")
 
-    assert "1 proved, 1 kept as written, 1 not proved" in _status_note(tmp_path, kept)
-    assert "NOT yet saved to the environment" in _status_note(tmp_path, kept, unsaved=True)
-    assert "Nothing in this working copy is waiting to be saved" in _status_note(tmp_path, kept, unsaved=False)
+    note = _status_note(tmp_path, kept, "published")
+    assert "proved" not in note.split("never give")[0] and "3 scenarios" in note
+    assert "under Unsaved changes; Validate, then Save" in note
+    assert "No changes in this chat." in _status_note(tmp_path, kept, "none")
     status = next(one.handler for one in suite_server(tmp_path, kept).tools if one.name == "scenario_status")
     said = asyncio.run(status({}))["content"][0]["text"]
-    assert said.splitlines()[0] == "3 scenarios. Proofs on record: 1 proved, 1 kept as written, 1 not proved."
-    assert "refund_ok: proved" in said
+    assert said.splitlines()[0].startswith("3 scenarios. Each one's state is the one its row on the Scenarios tab")
+    assert said.splitlines()[1] == "No scenario was proved in this chat."
+    # Proved here, in this chat: shown with the proof's own reason.
+    record_unprovable(tmp_path, "refund-late", "its check reads a table the world lacks")
+    assumed = Proof(ready=True, solvable=True, vacuous=False, assumed=["place_order"], controls=NOT_RUN)
+    record_proof(tmp_path, "refund-twice", assumed, solution_steps=1)
+    said = asyncio.run(status({}))["content"][0]["text"]
+    assert "refund_ok" not in said
     assert "refund_late: not proved, broken_check: its check reads a table the world lacks" in said
     assert "refund_twice: kept as written, assumed place_order" in said
     one = asyncio.run(status({"names": ["refund_late", "gone"]}))["content"][0]["text"]
-    assert "refund_ok" not in one and "refund_late: not proved" in one and "not in the suite: gone" in one
-    held = asyncio.run(status({"state": "not proved"}))["content"][0]["text"]
-    assert held.splitlines()[1:] == ["refund_late: not proved, broken_check: its check reads a table the world lacks"]
-
+    assert "refund_twice" not in one and "refund_late: not proved" in one and "not in the suite: gone" in one
 
 def test_a_search_that_finds_nothing_in_the_suite_points_at_the_removed_cases():
     from fi.alk.harness.hosted_chat_entrypoint import _with_removed_hint
@@ -358,7 +362,7 @@ def test_find_scenarios_flags_a_removed_case_the_query_names_exactly():
     answer = _with_removed_hint({"matching": 1, "rows": [{"number": 8, "name": "lookup_order_1046"}]}, query, found)
     [flagged] = answer["removed_matches"]
     assert "it is not in the suite" in flagged["removed"]
-    assert 'restored_from {"key": "lookup_order_1046", "suite_version": "v6"}' in flagged["removed"]
+    assert 'restored_from {"key": "lookup_order_1046"} and as_it_was true' in flagged["removed"]
     assert _removed_matching(removed, {"search": "lookup"}) == []
 
 
@@ -368,32 +372,28 @@ def test_every_builder_reply_closes_with_the_state_read_from_the_files(tmp_path)
 
     kept = [Scenario(name="a"), Scenario(name="b")]
     record_proof(tmp_path, "a", Proof(ready=True, solvable=True, vacuous=False, controls=RAN), solution_steps=1)
-    line = _status_line(tmp_path, kept, "unsaved")
-    assert line == (
-        "Status: 2 scenarios (1 proved, 0 kept as written, 1 not proved); changes in this chat are NOT saved to the "
-        "environment."
+    assert _status_line(tmp_path, kept, "unsaved") == (
+        "Status: 2 scenarios. Changes in this chat are not yet under Unsaved changes."
     )
-    assert _status_line(tmp_path, kept, "saved").endswith("every change is saved to the environment.")
-
+    assert _status_line(tmp_path, kept, "published") == (
+        "Status: 2 scenarios. Changes from this chat are under Unsaved changes; Validate, then Save to keep them as "
+        "a new version."
+    )
+    assert _status_line(tmp_path, kept, "none") == "Status: 2 scenarios. No changes in this chat."
 
 def test_the_status_line_reads_zero_scenarios_and_says_nothing_about_saving_when_unknown(tmp_path):
     from fi.alk.harness.hosted_chat_entrypoint import _status_line
 
     assert _status_line(tmp_path, [], "unsaved") == (
-        "Status: 0 scenarios (0 proved, 0 kept as written, 0 not proved); changes in this chat are NOT saved to the "
-        "environment."
+        "Status: 0 scenarios. Changes in this chat are not yet under Unsaved changes."
     )
-    assert _status_line(tmp_path, [], "unknown") == "Status: 0 scenarios (0 proved, 0 kept as written, 0 not proved)."
-    assert _status_line(tmp_path, [], "saved_except", 2).endswith("except 2 scenarios that could not be applied.")
-
+    assert _status_line(tmp_path, [], "unknown") == "Status: 0 scenarios."
+    assert _status_line(tmp_path, [], "published", 2).endswith("except 2 scenarios that could not be applied.")
 
 def test_the_builder_reads_the_proofs_the_platform_shows_not_the_offline_ones(tmp_path):
     """The validation proved the cases on the live runtime; the chat's own offline proofs had them kept as written."""
-    import asyncio
     import json
 
-    from fi.alk.harness.builder import suite_server
-    from fi.alk.harness.hosted_chat_entrypoint import _status_line
     from fi.alk.harness.proofs import VALIDATED_PROOFS, load_shown_proofs, proof_entry
     from fi.alk.harness.scenario import Scenario
 
@@ -410,10 +410,8 @@ def test_the_builder_reads_the_proofs_the_platform_shows_not_the_offline_ones(tm
     (tmp_path / VALIDATED_PROOFS).write_text(json.dumps(live), encoding="utf-8")
 
     assert all(entry["kept_as_written"] for entry in offline.values())
-    status = next(one.handler for one in suite_server(tmp_path, kept).tools if one.name == "scenario_status")
-    said = asyncio.run(status({}))["content"][0]["text"]
-    assert said.splitlines()[0] == "2 scenarios. Proofs on record: 2 proved, 0 kept as written, 0 not proved."
-    assert _status_line(tmp_path, kept, "saved").startswith("Status: 2 scenarios (2 proved, 0 kept as written")
+    shown = load_shown_proofs(tmp_path)
+    assert all(shown[one.name]["proved"] for one in kept)
     # A case proved here after the validation (edited since) reads its own, newer proof.
     newer = {**offline["refund"], "proved_at": "3000-01-01T00:00:00Z"}
     (tmp_path / "proofs.json").write_text(json.dumps({**offline, "refund": newer}), encoding="utf-8")
@@ -421,11 +419,53 @@ def test_the_builder_reads_the_proofs_the_platform_shows_not_the_offline_ones(tm
     assert load_shown_proofs(tmp_path)["lookup"]["proved"] is True
 
 
-def test_a_validated_proof_with_no_time_is_the_platform_s_record(tmp_path):
+def test_a_validated_proof_with_no_time_wins_only_over_an_untimed_local_one(tmp_path):
     import json
 
     from fi.alk.harness.proofs import VALIDATED_PROOFS, load_shown_proofs
 
     record_proof(tmp_path, "a", Proof(ready=True, solvable=True, vacuous=False, assumed=["x"], controls=NOT_RUN), solution_steps=1)
-    (tmp_path / VALIDATED_PROOFS).write_text(json.dumps({"a": {"proved": True}}), encoding="utf-8")
+    (tmp_path / VALIDATED_PROOFS).write_text(json.dumps({"a": {"proved": True}, "b": {"proved": True}}), encoding="utf-8")
+    # The local proof has a time: the untimed validated one does not beat it.
+    assert load_shown_proofs(tmp_path)["a"]["kept_as_written"] is True
+    # No local proof at all: the validated one is what there is.
+    assert load_shown_proofs(tmp_path)["b"] == {"proved": True}
+    local = load_proofs(tmp_path)
+    (tmp_path / "proofs.json").write_text(json.dumps({"a": {**local["a"], "proved_at": ""}}), encoding="utf-8")
     assert load_shown_proofs(tmp_path)["a"] == {"proved": True}
+
+
+def test_the_status_reads_the_scenarios_tab_s_own_states_when_the_platform_sends_them(tmp_path):
+    """The tab says 4 proved, 2 not proved; the chat's own proofs say kept as written. The tab's are shown."""
+    import asyncio
+
+    from fi.alk.harness.builder import suite_server
+    from fi.alk.harness.hosted_chat_entrypoint import _status_line
+    from fi.alk.harness.scenario import Scenario
+
+    kept = [Scenario(name=f"case_{n}") for n in range(6)]
+    assumed = Proof(ready=True, solvable=True, vacuous=False, assumed=["get_order"], controls=NOT_RUN)
+    for one in kept:
+        record_proof(tmp_path, one.name, assumed, solution_steps=1)
+    counts = {"proved": 4, "kept_as_written": 0, "not_proved": 2, "draft": 2}
+    assert _status_line(tmp_path, kept, "none", counts=counts) == (
+        "Status: 6 scenarios. On the Scenarios tab: 4 proved, 0 kept as written, 2 not proved. No changes in this chat."
+    )
+    assert _status_line(tmp_path, kept, "none") == "Status: 6 scenarios. No changes in this chat."
+
+    asked = []
+
+    async def tab(names):
+        asked.append(names)
+        return {
+            "counts": counts,
+            "rows": [{"number": 3, "name": "case_2", "lifecycle": {"state": "draft", "reason": "not_solvable",
+                                                                "reason_text": "Its expected handling did not pass."}}],
+        }
+
+    status = next(one.handler for one in suite_server(tmp_path, kept, tab_status=tab).tools if one.name == "scenario_status")
+    said = asyncio.run(status({"names": ["case_2"]}))["content"][0]["text"].splitlines()
+    assert asked == [["case_2"]]
+    assert said[0] == "On the Scenarios tab: 4 proved, 0 kept as written, 2 not proved."
+    assert said[1] == "#3 case_2: draft (Its expected handling did not pass.)"
+    assert not any("kept as written, assumed" in line for line in said)
