@@ -136,6 +136,8 @@ def test_the_cells_the_suite_holds_least_of_are_dealt_first():
 
 
 def test_suite_progress_deals_at_most_the_worker_cap(tmp_path, monkeypatch):
+    # Dealing is on only above its threshold; these test a round once one is dealt.
+    monkeypatch.setenv("ALK_HARNESS_DEAL_ABOVE", "1")
     monkeypatch.setattr(tools_module, "MOST_WORKERS_AT_ONCE", 3)
     handlers, _ = _server(tmp_path, monkeypatch, 200, _grid(), can_grow=True)
 
@@ -147,6 +149,8 @@ def test_suite_progress_deals_at_most_the_worker_cap(tmp_path, monkeypatch):
 def test_writers_submitting_at_once_neither_lose_nor_duplicate_and_keep_to_their_deals(
     tmp_path, monkeypatch
 ):
+    # Dealing is on only above its threshold; these test a round once one is dealt.
+    monkeypatch.setenv("ALK_HARNESS_DEAL_ABOVE", "1")
     monkeypatch.setattr(tools_module, "MOST_WORKERS_AT_ONCE", 4)
     handlers, kept = _server(tmp_path, monkeypatch, 40, _grid(), can_grow=True)
     deals = _deals_in(_text(asyncio.run(handlers["suite_progress"]({"deal": True}))))
@@ -336,6 +340,8 @@ def _key(kept: list[Scenario], name: str) -> str:
 
 
 def test_a_deal_never_replaces_another_deal_s_case_by_name_or_key(tmp_path, monkeypatch):
+    # Dealing is on only above its threshold; these test a round once one is dealt.
+    monkeypatch.setenv("ALK_HARNESS_DEAL_ABOVE", "1")
     handlers, kept, deals = _one_round(tmp_path, monkeypatch)
     theirs = deals["d2"][0]
 
@@ -353,6 +359,8 @@ def test_a_deal_never_replaces_another_deal_s_case_by_name_or_key(tmp_path, monk
 
 
 def test_a_deal_moves_its_own_case_only_onto_its_own_cells(tmp_path, monkeypatch):
+    # Dealing is on only above its threshold; these test a round once one is dealt.
+    monkeypatch.setenv("ALK_HARNESS_DEAL_ABOVE", "1")
     handlers, kept, deals = _one_round(tmp_path, monkeypatch)
     off = next(cell for cell in deals["d2"] if cell not in deals["d1"])
 
@@ -368,6 +376,8 @@ def test_a_deal_moves_its_own_case_only_onto_its_own_cells(tmp_path, monkeypatch
 
 
 def test_while_a_round_is_out_edits_and_drops_go_only_through_the_deal_that_wrote_the_case(tmp_path, monkeypatch):
+    # Dealing is on only above its threshold; these test a round once one is dealt.
+    monkeypatch.setenv("ALK_HARNESS_DEAL_ABOVE", "1")
     handlers, kept, deals = _one_round(tmp_path, monkeypatch)
     theirs = _key(kept, "d2-0")
 
@@ -485,8 +495,9 @@ def test_below_the_deal_threshold_one_session_writes_unless_a_round_is_asked_for
 
     assert "Deal d" not in _text(asyncio.run(handlers["suite_progress"]({})))
     assert "kept" in _text(asyncio.run(handlers["submit_scenario"](_case("alone", ("t1", "hurried")))))
-    # The builder may still deal a round itself.
-    assert "Deal d" in _text(asyncio.run(handlers["suite_progress"]({"deal": True})))
+    # Below the threshold the builder cannot deal a round itself either.
+    said = _text(asyncio.run(handlers["suite_progress"]({"deal": True})))
+    assert "Deal d" not in said and "dealing is off for suites with 30 or fewer cases left to write" in said
 
 
 @pytest.mark.parametrize(
@@ -520,5 +531,11 @@ def test_by_default_no_round_is_dealt_unasked_even_for_a_large_suite(tmp_path, m
 
     assert "Deal d" not in _text(asyncio.run(handlers["suite_progress"]({})))
     assert "kept" in _text(asyncio.run(handlers["submit_scenario"](_case("alone", ("t1", "hurried")))))
-    # An explicit deal still works.
-    assert "Deal d" in _text(asyncio.run(handlers["suite_progress"]({"deal": True})))
+    # Dealing is off by default: an explicit deal is refused, and the description does not offer it.
+    said = _text(asyncio.run(handlers["suite_progress"]({"deal": True})))
+    assert "Deal d" not in said and "write the suite in this session" in said
+    from fi.alk.harness.scenario_tools import scenario_tools as _tools
+
+    server, _kept = _tools(_environment(tmp_path), tmp_path, tmp_path, wanted=500)
+    progress = next(one for one in server.tools if one.name == "suite_progress")
+    assert "`deal` divides" not in progress.description

@@ -4288,7 +4288,11 @@ def scenario_tools(
         "batch of writers reports back, to decide what the next batch covers. It never returns "
         "scenario bodies, so it costs the same whether ten are written or a thousand. Pass "
         "`names` only when you need to name a scenario, as `inspect_scenario` does: the list is "
-        "the one expensive part of this reply.\n\n"
+        "the one expensive part of this reply."
+        + (
+            ""
+            if deal_above() >= DEAL_ABOVE_DEFAULT
+            else "\n\n"
         "`deal` divides what is still to write across writers: each deal is one writer's own cells of the "
         f"plan, at most {cases_per_writer()} cases, and at most {MOST_WORKERS_AT_ONCE} deals a round. Brief one "
         "`scenario_writer` per deal, all in one message, each with its deal as given and the suite summary that "
@@ -4300,7 +4304,8 @@ def scenario_tools(
         "is refused until one is dealt; below it one session may write the suite, or deal a round with `deal`. "
         "Then either brief one scenario_writer per deal in one message, or write a deal yourself by passing "
         "deal=<its name> on each submit_scenario. `deal: false` writes the suite without rounds from then on: no "
-        "round is dealt and no case is refused for lacking one, until `deal: true` deals again.",
+        "round is dealt and no case is refused for lacking one, until `deal: true` deals again."
+        ),
         schema({"names": bool, "deal": bool, "end_round": bool}, []),
     )
     async def suite_progress(args: dict[str, Any]) -> dict[str, Any]:
@@ -4321,6 +4326,13 @@ def scenario_tools(
         ]
         if target.get("supports"):
             lines.append(capacity_line(int(target["supports"]), len(kept), asked_count()) + ".")
+        if args.get("deal") is True and cap() - len(kept) <= deal_above():
+            # Parallel writers are dealt only above the threshold; below it one session writes the suite.
+            return _err(
+                "\n".join(lines)
+                + f"\n\nNot dealt: dealing is off for suites with {deal_above()} or fewer cases left to write; write "
+                "the suite in this session."
+            )
         if args.get("deal") is not None:
             # An explicit choice for the build: false writes it without rounds, true deals again.
             target["no_rounds"] = not bool(args["deal"])
