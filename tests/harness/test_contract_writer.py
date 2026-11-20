@@ -1525,6 +1525,8 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, "proves the suite into a temporary file to read which cases are held; writes no contract"),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "write_yield"): (
         2, "writes generic-harness/yield.json, the build's runnable and held counts; writes no contract"),
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "mark_replay"): (
+        1, "writes generic-harness/live-replay.json, which cases the next live pass proves again; writes no contract"),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "validate"): (
         2, "calls its nested validate, which runs validate_once (listed above)"),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "write_scenarios"): (
