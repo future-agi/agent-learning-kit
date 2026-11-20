@@ -1049,10 +1049,11 @@ async def validate_once(
                         )
                         for name in sorted(rejected)
                     )
+                    # Each tool with its reason, in the message the platform keeps: the diagnostics alone are not stored.
                     raise RuntimeValidationError(
                         "environment",
                         "Tool contract certification rejected: "
-                        + ", ".join(sorted(rejected)),
+                        + "; ".join(f"{name} ({rejected[name][:200]})" for name in sorted(rejected))[:2000],
                         diagnostics=diagnostics,
                     )
                 source_model = GenericHarnessArtifactStore(
