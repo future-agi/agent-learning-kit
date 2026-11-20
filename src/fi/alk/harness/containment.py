@@ -31,7 +31,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 logger = logging.getLogger(__name__)
 
@@ -93,8 +93,8 @@ class Leaf:
         except FileNotFoundError:
             pass  # already removed
 
-    def close(self, timeout: float = _EMPTY_WAIT_SECONDS) -> None:
-        """Kill what is left, wait until the leaf is empty, and remove it. Never raises."""
+    def close(self, timeout: float = _EMPTY_WAIT_SECONDS) -> bool:
+        """Kill what is left, wait until the leaf is empty, and remove it. Return False if removal needs a retry."""
         try:
             self.kill()
             deadline = time.monotonic() + timeout
@@ -106,6 +106,8 @@ class Leaf:
         except OSError as exc:
             # A leaf that will not empty is a process the kernel cannot kill; say so.
             logger.warning("containment: %s did not empty (%s)", self.path, exc)
+            return False
+        return True
 
     def _empty(self) -> bool:
         try:
@@ -238,22 +240,72 @@ def _read_all(fd: int, deadline: _Deadline | None = None) -> bytes:
         chunks.append(chunk)
 
 
-def _close(*fds: int) -> None:
-    for fd in fds:
-        if fd >= 0:
-            os.close(fd)
+def _close(*streams: BinaryIO) -> None:
+    for stream in streams:
+        stream.close()
 
 
-def _abort_child(process: subprocess.Popen, leaf: Leaf | None) -> None:
+# One retry worker, not one blocked thread per child. The registry owns the
+# handles independently of caller tracebacks and subsequent launches.
+_cleanup_lock = threading.Lock()
+_pending: dict[subprocess.Popen, Path | None] = {}
+
+
+def _finish_pending() -> None:
+    while True:
+        with _cleanup_lock:
+            batch = list(_pending.items())
+        for process, path in batch:
+            try:
+                if process.poll() is None:
+                    continue
+                if path is not None:
+                    path.rmdir()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                continue  # e.g. a still-populated cgroup
+            with _cleanup_lock:
+                del _pending[process]
+                if not _pending:
+                    return
+        time.sleep(0.25)
+
+
+def _defer_cleanup(process: subprocess.Popen, path: Path | None) -> None:
+    with _cleanup_lock:
+        idle = not _pending
+        _pending[process] = path
+        if idle:
+            threading.Thread(
+                target=_finish_pending, name="alk-reaper", daemon=True
+            ).start()
+
+
+def _abort_child(
+    process: subprocess.Popen, leaf: Leaf | None, owns_group: bool
+) -> None:
+    if owns_group:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as kill_error:
+            logger.warning(
+                "containment: could not kill group %s (%s)", process.pid, kill_error
+            )
     # A failed leaf kill must not leave the direct child alive or its parent blocked in wait.
     try:
         process.kill()
     except OSError as exc:
         logger.warning("containment: could not kill child %s (%s)", process.pid, exc)
+    retry_path = None
     if leaf is not None:
         try:
-            leaf.close()  # Includes descendants; reports a leaf that could not be removed.
+            if leaf.close() is False:
+                retry_path = leaf.path
         except OSError as exc:
+            retry_path = leaf.path
             logger.warning(
                 "containment: could not close leaf for child %s (%s)", process.pid, exc
             )
@@ -261,6 +313,10 @@ def _abort_child(process: subprocess.Popen, leaf: Leaf | None) -> None:
         process.wait(timeout=_EMPTY_WAIT_SECONDS)
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.warning("containment: could not reap child %s (%s)", process.pid, exc)
+        _defer_cleanup(process, retry_path)
+    else:
+        if retry_path is not None:
+            _defer_cleanup(process, retry_path)
     # These attributes are populated for PIPE only, never for caller-owned file objects.
     for stream in (process.stdin, process.stdout, process.stderr):
         if stream is not None:
@@ -286,10 +342,19 @@ def popen(
     message = _go_message(kwargs.pop("env", None))
     pass_fds = tuple(kwargs.pop("pass_fds", ()))
     leaf = containment.leaf()
-    go_read = go_write = done_read = done_write = -1
+    streams: list[BinaryIO] = []
+    process = None
+
+    def pipe() -> tuple[BinaryIO, BinaryIO]:
+        read, write = os.pipe()
+        reader = os.fdopen(read, "rb", buffering=0)
+        writer = os.fdopen(write, "wb", buffering=0)
+        streams.extend((reader, writer))
+        return reader, writer
+
     try:
-        go_read, go_write = os.pipe()
-        done_read, done_write = os.pipe()
+        go_read, go_write = pipe()
+        done_read, done_write = pipe()
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -297,38 +362,45 @@ def popen(
                 "-S",
                 "-c",
                 _GATE,
-                str(go_read),
-                str(done_write),
+                str(go_read.fileno()),
+                str(done_write.fileno()),
                 *argv,
             ],
             env=_GATE_ENVIRONMENT,
-            pass_fds=(*pass_fds, go_read, done_write),
+            pass_fds=(*pass_fds, go_read.fileno(), done_write.fileno()),
             **kwargs,
         )
-    except BaseException:
-        _close(go_read, go_write, done_read, done_write)
-        leaf.close()
-        raise
-    _close(go_read, done_write)
-    try:
+        _close(go_read, done_write)
         leaf.add(process.pid)
-        _write_all(go_write, message, _deadline)
+        _write_all(go_write.fileno(), message, _deadline)
         _close(go_write)
-        go_write = -1
         # EOF once the command is executing.
         failure = (
-            _read_all(done_read)
+            _read_all(done_read.fileno())
             if _deadline is None
-            else _read_all(done_read, _deadline)
+            else _read_all(done_read.fileno(), _deadline)
         )
         if failure:
             code = int(failure) or errno.ENOEXEC
             raise OSError(code, os.strerror(code), argv[0])
+        _close(done_read)
     except BaseException:
-        _abort_child(process, leaf)
+        try:
+            if process is None:
+                leaf.close()
+            else:
+                _abort_child(process, leaf, bool(kwargs.get("start_new_session")))
+        finally:
+            # File objects close idempotently even after an asynchronous interrupt;
+            # retrying a raw fd could close another thread's descriptor instead.
+            for stream in streams:
+                try:
+                    stream.close()
+                except (OSError, KeyboardInterrupt):
+                    logger.warning(
+                        "containment: secondary gate close failure", exc_info=True
+                    )
         raise
-    finally:
-        _close(go_write, done_read)
     return process, leaf
 
 
@@ -360,15 +432,7 @@ def run(
             input=input, timeout=deadline.remaining() if deadline else timeout
         )
     except BaseException as exc:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except OSError as kill_error:
-            logger.warning(
-                "containment: could not kill group %s (%s)", process.pid, kill_error
-            )
-        _abort_child(process, leaf)
+        _abort_child(process, leaf, owns_group=True)
         if deadline is not None and isinstance(exc, subprocess.TimeoutExpired):
             raise subprocess.TimeoutExpired(
                 args, deadline.timeout, output=exc.output, stderr=exc.stderr
