@@ -11,12 +11,14 @@ starting point instead of drifting toward whichever scenario was written last.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
 from pathlib import Path
 from typing import Any, Mapping
 
+from ..source_model import is_harness_table
 from .runtime import GeneratedWorld
 
 DATABASE = "world.sqlite"
@@ -315,6 +317,7 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
     world.native_runtime = bool(manifest.get("native_runtime", False))
     world.tools = manifest.get("tool_specs", [])
     world.refusal_signature = str(manifest.get("refusal_signature") or "")
+    world.refusals = record_refusals(root)
     # A world whose handlers bind to the agent's own code cannot run them unless that code
     # is importable again, and the frozen state is what those tools act on.
     reached = str(manifest.get("source_root") or "")
@@ -324,6 +327,22 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
     if frozen_state.exists():
         world.state_object = json.loads(frozen_state.read_text(encoding="utf-8"))
     return world
+
+
+def record_refusals(root: Path) -> dict[str, list[dict[str, Any]]]:
+    """The record refusals the contract beside this world declares, by tool; none when it has no readable contract.
+    Read from the contract rather than frozen with the world, so a refusal corrected after the world was saved holds."""
+    from ..understand import load as load_contract
+
+    try:
+        contract = load_contract(root)
+    except (OSError, ValueError):
+        return {}
+    if contract is None:
+        return {}
+    return {
+        tool.name: [refusal.model_dump() for refusal in tool.refusals] for tool in contract.tools if tool.refusals
+    }
 
 
 def read_manifest(path: str | Path) -> dict[str, Any]:
@@ -360,3 +379,59 @@ def apply_overlay(world: GeneratedWorld, overlay: Mapping[str, Any] | None) -> i
             written += 1
     world.connection.commit()
     return written
+
+
+def source_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    """A world's state without the harness's own tables: the call log and the door's tables change on every call, a
+    read included, so they never show whether the world itself changed."""
+    return {table: rows for table, rows in state.items() if not is_harness_table(table)}
+
+
+def world_state_digest(world, *, source_only: bool = False) -> str:
+    """Return a value-level baseline fingerprint without persisting world contents. ``source_only`` leaves out the
+    harness's own tables (`source_state`), for asking whether something changed the world rather than whether it was
+    restored exactly."""
+
+    state = world.read_only().state()
+    if source_only:
+        state = source_state(state)
+    canonical = {
+        table: sorted(
+            rows,
+            key=lambda row: json.dumps(
+                row,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                default=str,
+            ),
+        )
+        for table, rows in sorted(state.items())
+    }
+    workspace_snapshot = getattr(world, "_workspace_snapshot", None)
+    if workspace_snapshot is not None:
+        workspaces = workspace_snapshot()
+        if workspaces:
+            canonical = {
+                "database": canonical,
+                "workspaces": {
+                    name: {
+                        path: {
+                            "mode": entry.mode,
+                            "digest": hashlib.sha256(entry.data).hexdigest()
+                            if entry.data is not None
+                            else None,
+                        }
+                        for path, entry in sorted(entries.items())
+                    }
+                    for name, entries in sorted(workspaces.items())
+                },
+            }
+    encoded = json.dumps(
+        canonical,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()

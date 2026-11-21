@@ -23,7 +23,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 from urllib.parse import urlsplit
 
 import yaml
@@ -34,6 +34,7 @@ from .actors import (
     ACTOR_RULES_FILE,
     ACTORS_FILE,
     actors_seed,
+    knowledge_roles,
     load_actors,
     write_actor_rules,
 )
@@ -66,7 +67,7 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .contract import _CHANNEL_WORKER_ID, AgentContract, DataStore, Runtime, ToolEntry, runtime_public_environment
+from .contract import _CHANNEL_WORKER_ID, AgentContract, DataStore, Runtime, RuntimeToolService, ToolEntry, runtime_public_environment
 from .framework_servers import (
     server_app,
     server_command,
@@ -115,6 +116,7 @@ from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manife
 from .provider_import import ProviderImportSpec
 from .world.tools import _binding
 from .world_door import DOOR_CAPABILITIES, DOOR_FILE, method_action, world_action
+from .scenario_source import declared_tool_names, deterministic_names, load_one
 
 
 class BundleAuthorError(RuntimeError):
@@ -2143,6 +2145,60 @@ def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
     )
 
 
+def _behind_tool_proxy(
+    processes: list[ManagedProcess | SourceProcess],
+    capabilities: dict[str, CapabilityV2],
+    readiness: list[ReadinessProbeV2],
+    control_name: str,
+    read_actions: list[str] | None = None,
+) -> list[ManagedProcess | SourceProcess]:
+    """Put the evidence proxy in front of the `tools-api` process, so the agent reaches its tools through it."""
+    processes = [*processes, _tool_proxy_process(read_actions)]
+    # The target must not become eligible to start until the evidence proxy is ready.
+    # Depending only on the upstream tools process leaves a race where the agent starts
+    # with TOOLS_API_URL pointing at a port that has not been bound yet.
+    rewritten: list[ManagedProcess | SourceProcess] = []
+    for process in processes:
+        if isinstance(process, SourceProcess) and process.name == control_name:
+            dependencies = [
+                "tool-proxy" if item == "tools-api" else item
+                for item in process.depends_on
+            ]
+            if "tool-proxy" not in dependencies:
+                dependencies.append("tool-proxy")
+            process = process.model_copy(update={"depends_on": dependencies})
+        rewritten.append(process)
+    capabilities["tool_proxy"] = CapabilityV2(
+        protocol=CapabilityProtocol.HTTP,
+        service="tool-proxy",
+        container_port=8080,
+        configuration_name="TOOLS_API_URL",
+    )
+    readiness.append(
+        ReadinessProbeV2(capability="tool_proxy", path="/health", timeout_seconds=180)
+    )
+    return rewritten
+
+
+def _tool_service_process(source: Path, service: RuntimeToolService) -> SourceProcess:
+    """The source's own tools server as the `tools-api` process, listening on its world's port where its command
+    names one."""
+    component = _runtime_component(source, service.workdir)
+    process = _plan_source_process(
+        source,
+        name="tools-api",
+        root=component,
+        entry=None,
+        control=False,
+        needs_secrets=False,
+        port=service.port,
+        environment={},
+        run_override=list(service.command),
+    )
+    process = _consumable_source_process(process, _FI_TOOLS_PORT, "{{PORT_tools-api}}")
+    return _python_component_command(source=source, component=component, process=process)
+
+
 def _tool_actions(contract_body: dict[str, Any] | None) -> dict[str, str]:
     """Each service-backed tool's world action, as the tool proxy names it (the route it calls, dotted), mapped to the
     tool's own name: a route is often named otherwise (`<tool>` -> `<resource>/get`)."""
@@ -2220,21 +2276,48 @@ def door_outcome(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) 
 
 def _tools_behind_the_proxy(plan: EnvironmentPlanV2, contract_body: dict[str, Any]) -> dict[str, Any]:
     """The contract as the trial reads it: a tool whose code calls a route of the shipped tool service runs, once that
-    service is fronted, through the proxy, so it is the service's tool; one calling any other host stays the agent's."""
+    service is fronted, through the proxy, so it is the service's tool; one calling any other host stays the agent's.
+    The same for a tool recorded `unreachable` (an object the kit cannot call, such as the OpenAI Agents SDK's
+    `@function_tool`): what it does is the service route it calls, which the proxy fronts."""
     if not any(process.name == "tool-proxy" for process in plan.processes):
         return contract_body
     entries = contract_body.get("tool_entrypoints") or []
+    elsewhere = _tools_on_another_service(contract_body)
     fronted = [
         # The proxy holds it: nothing the in-process door could not reach stays on it.
         {**{key: value for key, value in entry.items() if key != "door_unreached"}, "mode": "service",
          "service": "tools-api"}
         if isinstance(entry, dict)
-        and entry.get("mode") in ("import", "construct")
+        and entry.get("mode") in ("import", "construct", "unreachable")
         and _calls_the_tool_service(str(entry.get("endpoint") or ""))
+        and entry.get("tool") not in elsewhere
         else entry
         for entry in entries
     ]
     return contract_body if fronted == entries else {**contract_body, "tool_entrypoints": fronted}
+
+
+def _tools_on_another_service(contract_body: dict[str, Any]) -> set[str]:
+    """The tools the contract says call a service other than the shipped tool service: those a dependency lists in
+    `used_by` that is reached through another address than the tool service's own (`runtime.tool_service`'s
+    `url_environment`, or a worker's `address_env`). A bare route of theirs is that service's, never the proxy's."""
+    runtime = contract_body.get("runtime") if isinstance(contract_body.get("runtime"), dict) else {}
+    service = runtime.get("tool_service") if isinstance(runtime.get("tool_service"), dict) else None
+    if not service or not service.get("url_environment"):
+        return set()
+    own = {str(service["url_environment"])} | {
+        str(worker.get("address_env"))
+        for worker in contract_body.get("workers") or []
+        if isinstance(worker, dict) and worker.get("address_env")
+    }
+    return {
+        str(tool)
+        for listed in ("dependencies", "runtime_dependencies")
+        for dependency in contract_body.get(listed) or []
+        if isinstance(dependency, dict)
+        and str(((dependency.get("reached") or {}).get("dsn_env")) or "") not in own | {""}
+        for tool in dependency.get("used_by") or []
+    }
 
 
 def _calls_the_tool_service(endpoint: str) -> bool:
@@ -3228,32 +3311,8 @@ def resolve_environment_plan(
                     )
                 )
         if "tools-api" in source_services:
-            processes.append(_tool_proxy_process(declared_read_actions(tool_entrypoints)))
-            # The target must not become eligible to start until the evidence proxy is ready.
-            # Depending only on the upstream tools process leaves a race where the agent starts
-            # with TOOLS_API_URL pointing at a port that has not been bound yet.
-            rewritten: list[ManagedProcess | SourceProcess] = []
-            for process in processes:
-                if isinstance(process, SourceProcess) and process.name == control_name:
-                    dependencies = [
-                        "tool-proxy" if item == "tools-api" else item
-                        for item in process.depends_on
-                    ]
-                    if "tool-proxy" not in dependencies:
-                        dependencies.append("tool-proxy")
-                    process = process.model_copy(update={"depends_on": dependencies})
-                rewritten.append(process)
-            processes = rewritten
-            capabilities["tool_proxy"] = CapabilityV2(
-                protocol=CapabilityProtocol.HTTP,
-                service="tool-proxy",
-                container_port=8080,
-                configuration_name="TOOLS_API_URL",
-            )
-            readiness.append(
-                ReadinessProbeV2(
-                    capability="tool_proxy", path="/health", timeout_seconds=180
-                )
+            processes = _behind_tool_proxy(
+                processes, capabilities, readiness, control_name, declared_read_actions(tool_entrypoints)
             )
         packaging = "compose"
     else:
@@ -3553,6 +3612,31 @@ def resolve_environment_plan(
                     ),
                     timeout_seconds=server_start_seconds(runtime_command, 180),
                 )
+            )
+        if runtime_model.tool_service is not None:
+            # The source's own tools server, which only its developer starts beside the agent.
+            processes.append(_tool_service_process(root, runtime_model.tool_service))
+            capabilities["tools_api"] = CapabilityV2(
+                protocol=CapabilityProtocol.HTTP,
+                service="tools-api",
+                container_port=runtime_model.tool_service.port,
+                configuration_name="TOOLS_UPSTREAM_URL",
+            )
+            processes = [
+                candidate.model_copy(
+                    update={
+                        "environment": {
+                            **candidate.environment,
+                            runtime_model.tool_service.url_environment: "{{TOOLS_API_URL}}",
+                        }
+                    }
+                )
+                if isinstance(candidate, SourceProcess) and candidate.name == control_name
+                else candidate
+                for candidate in processes
+            ]
+            processes = _behind_tool_proxy(
+                processes, capabilities, readiness, control_name, declared_read_actions(tool_entrypoints)
             )
         packaging = (
             "dockerfile"
@@ -3904,7 +3988,24 @@ def _package_process_sources(
     return replace(plan, processes=tuple(processes))
 
 
-def _copy_scenarios(authoring: Path, staging: Path, *, count: int) -> None:
+def _folder_key(folder: Path) -> str:
+    try:
+        body = json.loads((folder / "scenario.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return folder.name
+    return str(body.get("scenario_key") or body.get("name") or folder.name) if isinstance(body, dict) else folder.name
+
+
+def _copy_scenarios(
+    authoring: Path,
+    staging: Path,
+    *,
+    count: int,
+    skip: frozenset[str] = frozenset(),
+    sealed: Path | None = None,
+) -> None:
+    """Copy the authoring scenarios into `staging`. A folder whose key is in `skip` keeps the copy
+    already sealed in `sealed` (its last good version), or is left out when it was never sealed."""
     source = authoring / "scenarios"
     if not source.is_dir():
         raise BundleAuthorError(f"scenario_artifacts_missing: {source}")
@@ -3915,7 +4016,19 @@ def _copy_scenarios(authoring: Path, staging: Path, *, count: int) -> None:
         raise BundleAuthorError(
             f"scenario_artifacts_insufficient: requested {count}, found {len(folders)}"
         )
+    held = (
+        {_folder_key(path): path for path in (sealed / "scenarios").iterdir() if path.is_dir()}
+        if skip and sealed is not None and (sealed / "scenarios").is_dir()
+        else {}
+    )
+    # A held copy never takes a folder name a case being written now uses; it is left out instead.
+    written = {path.name for path in folders[:count] if _folder_key(path) not in skip}
     for source_folder in folders[:count]:
+        key = _folder_key(source_folder)
+        if key in skip:
+            if key in held and held[key].name not in written:
+                shutil.copytree(held[key], target / held[key].name)
+            continue
         shutil.copytree(source_folder, target / source_folder.name)
     for folder in sorted(path for path in target.iterdir() if path.is_dir()):
         document = folder / "scenario.json"
@@ -3935,7 +4048,7 @@ def _copy_sub_goal_catalogue(authoring: Path, staging: Path) -> list[str]:
     """Put the sub-goal catalogue beside the scenarios that name its entries.
 
     Scenarios reference sub-goals by name only, so without the catalogue a description, a judged
-    sub-goal's claim and `_deterministic_names` all come back empty, each silently. A warning
+    sub-goal's claim and `deterministic_names` all come back empty, each silently. A warning
     rather than an error, since failing the run is worse than the degraded reporting.
     """
     catalogue = authoring / CATALOGUE
@@ -4402,9 +4515,13 @@ def author_bundle_v2(
             adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
             if (authoring_root / ACTORS_FILE).is_file():
                 shutil.copy2(authoring_root / ACTORS_FILE, temporary / ACTORS_FILE)
-                # Only with actors, so a bundle without them seals exactly as before.
-                write_actor_rules(temporary, config=job.agent.config)
-                adopted_catalogue += [ACTORS_FILE, ACTOR_RULES_FILE]
+                adopted_catalogue.append(ACTORS_FILE)
+            # Only with actors or attached files that carry a role, so a bundle with neither seals exactly as before.
+            # The rules name the evaluator-only files, which the platform keeps from the agent and every actor, and
+            # whether attached seed records can reach the agent's tools.
+            if (authoring_root / ACTORS_FILE).is_file() or knowledge_roles(authoring_root):
+                write_actor_rules(temporary, config=job.agent.config, roles_root=authoring_root)
+                adopted_catalogue.append(ACTOR_RULES_FILE)
         adopted_chat_files = _copy_chat_authoring(
             authoring_root, temporary, include_simulator=include_scenarios
         )
@@ -4687,7 +4804,25 @@ def author_bundle_v2(
         raise
 
 
-def reseal_scenarios(authoring: str | Path) -> str | None:
+def scenario_seal_problems(authoring: str | Path) -> dict[str, str]:
+    """Each scenario folder a run could not load, by key, with the first line of why. Loaded one
+    folder at a time, the way a run loads them, so one broken case does not hide the rest."""
+    root = Path(authoring)
+    folders = sorted(path for path in (root / "scenarios").iterdir() if path.is_dir()) if (root / "scenarios").is_dir() else []
+    if not folders:
+        return {}
+    settled_in_code = deterministic_names(root)
+    declared_tools = declared_tool_names(root)
+    problems: dict[str, str] = {}
+    for folder in folders:
+        try:
+            load_one(folder, settled_in_code=settled_in_code, declared_tools=declared_tools, defer_execution=False)
+        except Exception as exc:  # noqa: BLE001 - every reason a run would refuse this folder
+            problems[_folder_key(folder)] = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:300]
+    return problems
+
+
+def reseal_scenarios(authoring: str | Path, *, skip: Iterable[str] = ()) -> str | None:
     """Carry an edited scenario set into the sealed bundle and seal it again.
 
     Runs replay the bundle, never the authoring folders, so a scenario added or rewritten after
@@ -4695,8 +4830,10 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
     runtime, seed and processes stay exactly what was built and validated. A generic harness's
     certificate binds the bundle digest, so it is reissued for the new set with the edit recorded
     as a limitation: those scenarios were proved against the authoring world, not the runtime.
-    Returns the new digest, or None when there is no sealed bundle to update.
+    Returns the new digest, or None when there is no sealed bundle to update. A scenario whose key
+    is in `skip` keeps its last sealed version (or stays out if it was never sealed).
     """
+    skip = frozenset(skip)
     authoring_root = Path(authoring)
     bundle = authoring_root / "environment-bundle"
     if not (bundle / BUNDLE_V2_MANIFEST).is_file():
@@ -4709,7 +4846,7 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
         shutil.copytree(bundle, staging)
         (staging / BUNDLE_V2_MANIFEST).unlink()
         shutil.rmtree(staging / "scenarios", ignore_errors=True)
-        _copy_scenarios(authoring_root, staging, count=count)
+        _copy_scenarios(authoring_root, staging, count=count, skip=skip, sealed=bundle)
         if (authoring_root / CATALOGUE).is_file():
             shutil.copy2(authoring_root / CATALOGUE, staging / CATALOGUE)
         compiled, processes, metadata = _carry_contract(authoring_root, staging, manifest)
@@ -5113,6 +5250,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--authoring", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
+    from .grounding import publish_source_root
+
+    # A `file:` source may cite the agent's own source: every proof this process runs reads it from here.
+    publish_source_root(args.source)
     job = _load_job(args.job)
     if refuse_unusable_folder(
         args.source.resolve(),

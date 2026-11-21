@@ -1960,10 +1960,19 @@ def test_an_amendment_is_recorded_rather_than_blended_in(tmp_path):
     assert "mango_smoothie" in recorded[0] and "this morning" in recorded[0]
 
 
+def test_fixing_a_tool_the_contract_lacks_points_at_declare_tool(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+
+    contract = _written_contract(tmp_path)
+    done, said = fix_tool(contract, tmp_path, tool_name="apply_discount", why="the agent has it again")
+
+    assert not done and "is not in the contract" in said and "declare_tool" in said
+
+
 @pytest.mark.parametrize(
     "overrides,expected",
     [
-        ({"tool_name": "nope"}, "is not a tool this agent has"),
+        ({"tool_name": "nope"}, "is not in the contract"),
         ({"argument": "colour"}, "takes no argument"),
         ({"why": "  "}, "say why"),
         ({"values": ["big_mac"]}, "already accepts"),
@@ -2740,9 +2749,388 @@ def _delta(**overrides):
             {"tool": "add", "arguments": {"item_id": "big_mac"}},
         ],
         "sub_goals": ["item-added", "right-item"],
+        # The builder cites where each new case comes from; an assumption source when nothing does.
+        "sources": [{"kind": "assumption", "quote": "Customers order one item at a time.", "supports": "one Big Mac"}],
+        "negative_controls": [
+            {
+                "name": "adds_twice",
+                "why": "adds the item twice",
+                "steps": [
+                    {"tool": "lst", "arguments": {}},
+                    {"tool": "add", "arguments": {"item_id": "big_mac"}},
+                    {"tool": "add", "arguments": {"item_id": "big_mac"}},
+                ],
+            }
+        ],
     }
     payload.update(overrides)
     return payload
+
+
+def test_a_check_that_fails_a_corrected_try_is_named_when_the_case_is_kept(tmp_path, monkeypatch):
+    from fi.alk.harness import scenario_tools
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    proved = scenario_tools.prove
+
+    def named(*args, **kwargs):
+        proof = proved(*args, **kwargs)
+        proof.retried = ["right-item (a value the world refused, then corrected: add.item_id)"]
+        return proof
+
+    monkeypatch.setattr(scenario_tools, "prove", named)
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    text = said["content"][0]["text"]
+    assert not said.get("is_error"), said
+    assert "NOTE: these checks fail an agent whose first try the world refused" in text
+    assert "right-item (a value the world refused, then corrected: add.item_id)" in text
+    assert [one.name for one in kept] == ["adds-a-big-mac"]
+
+
+def _removed_case(tmp_path):
+    """An environment that had `adds-a-big-mac` and lost it: its key is used, no case holds it."""
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept, used = [], set()
+    first = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert not first.get("is_error"), first
+    key = kept[0].scenario_key
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario_tools import remember_removed
+
+    # What find_scenarios(removed) returned for it, kept for the restore to compare with. The platform's copy may
+    # carry fields left empty that the case does not write at all: never a change.
+    remember_removed(root, [{"scenario_key": key, "content": {**document_for(kept[0]), "archived_note": ""}}])
+    kept.clear()
+    return root, catalogue, kept, used, key
+
+
+def test_a_removed_case_restored_exactly_as_it_was_comes_back_under_its_own_key(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario, load_scenarios
+
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    restored_from = {"key": key, "suite_version": "v-12"}
+
+    said = accept_scenario(
+        _delta(scenario_key=key, restored_from=restored_from), world_root=root, catalogue=catalogue, kept=kept, used=used
+    )
+    assert not said.get("is_error"), said
+    assert "Restored exactly as it was" in said["content"][0]["text"]
+    assert [(one.scenario_key, one.restored_from) for one in kept] == [(key, restored_from)]
+    # Written with the case, so the platform's save reads it as a restore.
+    assert load_scenarios(root)[0].restored_from == restored_from
+
+
+def test_a_removed_case_restored_with_a_change_as_the_same_case_keeps_its_key(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    changed = _delta(
+        scenario_key=key,
+        restored_from={"key": key, "suite_version": "v-12"},
+        instruction="Order one Big Mac, no pickles.",
+    )
+    said = accept_scenario(changed, world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert not said.get("is_error"), said
+    assert "Restored with changes: instruction" in said["content"][0]["text"]
+    assert kept[0].scenario_key == key and kept[0].instruction == "Order one Big Mac, no pickles."
+    # Edited again later, still carrying the marker, it is an ordinary edit of itself.
+    again = accept_scenario({**changed, "tests": "whether it is one Big Mac"}, world_root=root, catalogue=catalogue,
+                            kept=kept, used=used)
+    assert not again.get("is_error"), again
+    assert [one.scenario_key for one in kept] == [key]
+
+
+def test_a_copy_or_a_new_case_never_takes_a_removed_case_s_key(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    # A copy under a new name.
+    accept_scenario(_delta(name="adds-a-big-mac-copy"), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    # The same content under the old key but no restored_from, asked for as new: a new case, a new key.
+    accept_scenario(_delta(scenario_key=key, as_new=True), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert key not in [one.scenario_key for one in kept] and len(kept) == 2
+    assert all(one.restored_from is None for one in kept)
+
+
+def test_a_new_case_that_matches_a_removed_one_is_not_kept_unless_asked_for_as_new(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    # The removed case's own name, submitted fresh with no restored_from, as a builder that skipped the restore did.
+    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    text = said["content"][0]["text"]
+    assert said.get("is_error") and kept == []
+    assert f"Not kept. It matches the removed case {key}" in text
+    assert f'restored_from {{"key": "{key}"}}' in text and "as_new" in text
+    # The person asked for a copy: kept as a new case, and the reply says so.
+    copied = accept_scenario(_delta(as_new=True), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert not copied.get("is_error"), copied
+    assert f"ADDED AS A NEW CASE under {kept[0].scenario_key} (as_new), NOT restored" in copied["content"][0]["text"]
+    assert kept[0].scenario_key != key
+    # Asked for the original with a change, editing that new case instead still says it is not the removed one.
+    edited = accept_scenario(
+        _delta(scenario_key=kept[0].scenario_key, instruction="Order one Big Mac, no pickles."),
+        world_root=root, catalogue=catalogue, kept=kept, used=used,
+    )
+    assert f"EDITED {kept[0].scenario_key}, a case of its own, NOT restored: it matches the removed case {key}" in (
+        edited["content"][0]["text"]
+    )
+    # A copy under a name of its own matches nothing removed and says nothing about it.
+    copy = accept_scenario(_delta(name="adds-two-big-macs"), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert not copy.get("is_error") and "NOT restored" not in copy["content"][0]["text"]
+
+
+def test_a_used_key_whose_case_was_never_read_back_gets_a_new_key_and_a_note(tmp_path):
+    from fi.alk.harness.scenario_tools import REMOVED_CASES, accept_scenario
+
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    (root / REMOVED_CASES).unlink()
+    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept, used=used)
+    assert not said.get("is_error"), said
+    assert kept[0].scenario_key != key and f"NOT restored: it matches the removed case {key}" in said["content"][0]["text"]
+
+
+def test_restore_exactly_without_searching_is_refused_with_the_restore_call_then_restores(tmp_path):
+    """Delete a case; in a new chat the builder submits it again without reading removed cases."""
+    import asyncio
+
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario_tools import REMOVED_CASES, scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    first, kept = scenario_tools(contract, root, root, wanted=4)
+    tools = {one.name: one.handler for one in first.tools}
+    assert not asyncio.run(tools["submit_scenario"](_delta())).get("is_error")
+    assert not asyncio.run(tools["submit_scenario"](_delta(name="adds-two-big-macs"))).get("is_error")
+    key, content = kept[0].scenario_key, document_for(kept[0])
+    assert not asyncio.run(tools["drop_scenario"]({"name": "adds-a-big-mac"})).get("is_error")
+    assert not (root / REMOVED_CASES).exists()
+
+    asked: list[str] = []
+
+    async def platform(wanted):
+        asked.append(wanted)
+        return [{"scenario_key": key, "name": "adds-a-big-mac", "suite_version": "v7", "content": content}]
+
+    chat, kept = scenario_tools(contract, root, root, wanted=4, can_grow=True, removed_lookup=platform)
+    tools = {one.name: one.handler for one in chat.tools}
+    said = asyncio.run(tools["submit_scenario"](_delta()))
+    assert said.get("is_error") and asked == [key] and [one.name for one in kept] == ["adds-two-big-macs"]
+    assert f'restored_from {{"key": "{key}"}} and as_it_was true' in said["content"][0]["text"]
+    restored = asyncio.run(
+        tools["submit_scenario"](_delta(scenario_key=key, restored_from={"key": key, "suite_version": "v7"}))
+    )
+    assert not restored.get("is_error"), restored
+    assert "Restored exactly as it was" in restored["content"][0]["text"]
+    assert key in [one.scenario_key for one in kept]
+
+
+def test_a_case_removed_in_another_session_is_still_read_from_the_platform_and_restored(tmp_path):
+    """The live shape: the chat that restores is not the one that removed the case, so the key is not among those
+    this session has seen; the removed case is still read by its key and the fresh submit refused."""
+    import asyncio
+
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario import used_keys
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    first, kept = scenario_tools(contract, root, root, wanted=4)
+    tools = {one.name: one.handler for one in first.tools}
+    asyncio.run(tools["submit_scenario"](_delta()))
+    asyncio.run(tools["submit_scenario"](_delta(name="adds-two-big-macs")))
+    key, content = kept[0].scenario_key, document_for(kept[0])
+    assert not asyncio.run(tools["drop_scenario"]({"name": "adds-a-big-mac"})).get("is_error")
+    # A new session: it has seen none of the keys the environment gave before.
+    used_keys(root).clear()
+
+    async def platform(wanted):
+        return [{"scenario_key": key, "name": "adds-a-big-mac", "suite_version": "v13", "content": content}] if wanted == key else []
+
+    chat, kept = scenario_tools(contract, root, root, wanted=4, can_grow=True, removed_lookup=platform)
+    said = asyncio.run({one.name: one.handler for one in chat.tools}["submit_scenario"](_delta()))
+    assert said.get("is_error") and f'restored_from {{"key": "{key}"}} and as_it_was true' in said["content"][0]["text"]
+
+
+def test_restore_as_it_was_brings_back_the_last_saved_revision_not_a_copy(tmp_path):
+    """A case saved twice (two revisions), then deleted: restored exactly, it comes back as its second revision,
+    whatever older content the builder sends."""
+    import asyncio
+
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    first, kept = scenario_tools(contract, root, root, wanted=4)
+    tools = {one.name: one.handler for one in first.tools}
+    asyncio.run(tools["submit_scenario"](_delta()))
+    asyncio.run(tools["submit_scenario"](_delta(name="adds-two-big-macs")))
+    key = kept[0].scenario_key
+    revision_one = document_for(kept[0])
+    assert not asyncio.run(
+        tools["edit_scenario"]({"scenario_key": key, "instruction": "Order one Big Mac, no pickles."})
+    ).get("is_error")
+    revision_two = document_for(next(one for one in kept if one.scenario_key == key))
+    assert revision_two["instruction"] != revision_one["instruction"]
+    assert not asyncio.run(tools["drop_scenario"]({"name": "adds-a-big-mac"})).get("is_error")
+
+    async def platform(wanted):
+        return [{"scenario_key": key, "name": "adds-a-big-mac", "suite_version": "v9", "content": revision_two}]
+
+    chat, kept = scenario_tools(contract, root, root, wanted=4, can_grow=True, removed_lookup=platform)
+    tools = {one.name: one.handler for one in chat.tools}
+    # The builder found revision one somewhere and sends it; as_it_was restores the record, not what was sent.
+    said = asyncio.run(
+        tools["submit_scenario"]({**revision_one, "restored_from": {"key": key}, "as_it_was": True})
+    )
+    assert not said.get("is_error"), said
+    assert "Restored exactly as it was" in said["content"][0]["text"]
+    restored = next(one for one in kept if one.scenario_key == key)
+    assert restored.instruction == "Order one Big Mac, no pickles." and restored.restored_from == {"key": key}
+
+    async def nothing(wanted):
+        return []
+
+    empty, _kept = scenario_tools(contract, tmp_path / "other", tmp_path / "other", wanted=4, removed_lookup=nothing)
+    refused = asyncio.run(
+        {one.name: one.handler for one in empty.tools}["submit_scenario"](
+            {**revision_one, "restored_from": {"key": "gone"}, "as_it_was": True}
+        )
+    )
+    assert refused.get("is_error") and "No removed case 'gone' could be read" in refused["content"][0]["text"]
+
+
+def test_restoring_as_it_was_never_brings_back_actors_while_actors_are_off(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import remember_removed, scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    record = {**document_for(Scenario.model_validate(_delta())), "faults": [{"action": "add", "mode": "unavailable"}]}
+    remember_removed(root, [{"scenario_key": "adds-a-big-mac", "content": record}])
+    monkeypatch.setenv("ALK_ACTORS_SWITCH", '{"enabled": false, "share": [0.0, 0.0]}')
+    server, kept = scenario_tools(contract, root, root, wanted=4)
+    said = asyncio.run({one.name: one.handler for one in server.tools}["submit_scenario"](
+        {**_delta(), "restored_from": {"key": "adds-a-big-mac"}, "as_it_was": True}
+    ))
+    assert said.get("is_error") and "Actors and faults are off" in said["content"][0]["text"] and kept == []
+
+
+def test_an_unreadable_as_it_was_restore_is_counted_like_any_refusal(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    server, _kept = scenario_tools(contract, root, root, wanted=4)
+    submit = {one.name: one.handler for one in server.tools}["submit_scenario"]
+    said = [
+        asyncio.run(submit({**_delta(), "restored_from": {"key": "gone"}, "as_it_was": True}))["content"][0]["text"]
+        for _ in range(3)
+    ]
+    assert all("No removed case 'gone' could be read" in one for one in said)
+    assert "never add it as new (as_new) unless they asked for a copy" in said[0]
+    assert "submitting it again will not work" in said[-1]
+
+
+def test_a_removed_case_the_platform_cannot_read_falls_back_to_a_new_key_and_a_note(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    first, kept = scenario_tools(contract, root, root, wanted=4)
+    tools = {one.name: one.handler for one in first.tools}
+    asyncio.run(tools["submit_scenario"](_delta()))
+    asyncio.run(tools["submit_scenario"](_delta(name="adds-two-big-macs")))
+    key = kept[0].scenario_key
+    assert not asyncio.run(tools["drop_scenario"]({"name": "adds-a-big-mac"})).get("is_error")
+
+    async def unreachable(wanted):
+        raise ConnectionError("platform down")
+
+    chat, kept = scenario_tools(contract, root, root, wanted=4, can_grow=True, removed_lookup=unreachable)
+    said = asyncio.run({one.name: one.handler for one in chat.tools}["submit_scenario"](_delta()))
+    assert not said.get("is_error"), said
+    assert key not in [one.scenario_key for one in kept] and "NOT restored" in said["content"][0]["text"]
+
+
+def test_suite_progress_in_a_chat_calls_its_counts_the_proofs_made_here(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    async def platform(key):
+        return []
+
+    chat, _kept = scenario_tools(contract, root, root, wanted=4, can_grow=True, removed_lookup=platform)
+    said = asyncio.run({one.name: one.handler for one in chat.tools}["suite_progress"]({}))["content"][0]["text"]
+    assert "Proofs made here (the tab's states may differ" in said and "Proofs on record" not in said
+    build, _kept = scenario_tools(contract, root, root, wanted=4)
+    said = asyncio.run({one.name: one.handler for one in build.tools}["suite_progress"]({}))["content"][0]["text"]
+    assert "Proofs on record" in said
+
+
+def test_the_someone_else_s_write_check_refuses_only_with_its_switch_on(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness import scenario_tools as module
+
+    monkeypatch.setattr(module, "_writes_for_someone_else", lambda *args: "changes a record that belongs to someone else")
+    _root, _catalogue, _kept, tools = _edit_tools(tmp_path)
+    monkeypatch.setenv("ALK_SOMEONE_ELSES_WRITE_GATE", "1")
+    said = asyncio.run(tools["submit_scenario"].handler(_delta()))
+    assert said.get("is_error") and "belongs to someone else" in said["content"][0]["text"]
+    monkeypatch.delenv("ALK_SOMEONE_ELSES_WRITE_GATE")
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+
+
+def test_a_repeated_restore_refusal_is_counted_like_any_other(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import remember_removed
+
+    _root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    key = kept[0].scenario_key
+    asyncio.run(tools["drop_scenario"].handler({"name": "adds-a-big-mac"}))
+    remember_removed(_root, [{"scenario_key": key, "content": {"name": "adds-a-big-mac"}}])
+    said = [asyncio.run(tools["submit_scenario"].handler(_delta()))["content"][0]["text"] for _ in range(3)]
+    assert all("It matches the removed case" in one for one in said)
+    assert "submitting it again will not work" in said[-1]
+
+
+def test_a_restore_naming_another_key_than_the_case_carries_is_refused(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, catalogue, kept, used, key = _removed_case(tmp_path)
+    said = accept_scenario(
+        _delta(scenario_key="something-else", restored_from={"key": key}),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+        used=used,
+    )
+    assert said.get("is_error") and "give it scenario_key" in said["content"][0]["text"]
+    assert kept == []
+
+
+def test_the_builder_asks_one_question_for_a_changed_restore_and_which_case_when_two_fit():
+    from fi.alk.harness.config import load_skill
+
+    skill = load_skill("builder")
+    # Which one, when the person's words fit more than one removed case.
+    assert "If more than one" in skill and "ask which one with\n  `AskUserQuestion`" in skill
+    # The one question for a changed restore, with its two outcomes.
+    assert "its past runs stay linked, and\n    results from before the change are marked 'test changed'" in skill
+    assert "Bring it back as a new case: a new\n    name, no history" in skill
 
 
 def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
@@ -2918,7 +3306,8 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
     finally:
         world.close()
 
-    assert call.ok is True
+    # Never run, so neither ok nor refused: a check of success cannot pass on it.
+    assert call.ok is None and call.refused is None
     assert call.result is None
     assert "assumed rather than executed" in caplog.text
     assert "lookup_rider_by_phone" in caplog.text
@@ -3004,7 +3393,7 @@ def test_source_reference_step_records_a_purely_local_agent_tool():
             world,
             Step(tool="confirm_address", arguments={"confirmed": True}),
         )
-        assert call.ok
+        assert call.ok is None
         assert world.calls == [call]
         assert call.arguments == {"confirmed": True}
     finally:
@@ -4038,6 +4427,7 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
     # whoever submits the contract.
     ours = {
         "amendments",
+        "amendment_records",
         "instrumentation",
         "source_subfolder",
         "unconfirmed_prompt_from",
@@ -4054,6 +4444,9 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
         found: list[str] = []
         for name, field in model.model_fields.items():
             found.append(name)
+            if name in ours:
+                # Ours to fill, shape and all: nothing under it is the submitter's.
+                continue
             for inner in _models_within(field.annotation):
                 found.extend(named(inner))
         return found
@@ -5047,7 +5440,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         _BUILTIN_BY_ENVIRONMENT,
         _SILENT_ENVIRONMENTS,
     )
-    from fi.alk.harness.scenario import _AXIS_LABELS, _LEVEL_LABELS
+    from fi.alk.harness.scenario import _AXIS_LABELS, _LEVEL_LABELS, ScenarioSource
 
     ignore = (
         offered
@@ -5059,6 +5452,8 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         | set(_LEVEL_LABELS)
         | set(_BUILTIN_BY_ENVIRONMENT)
         | set(_SILENT_ENVIRONMENTS)
+        # The kinds of source a scenario cites, as `ScenarioSource.kind` declares them.
+        | set(typing.get_args(ScenarioSource.model_fields["kind"].annotation))
         # A fixture key, and one tool argument the skills name while explaining a tool.
         | {"origin", "matching"}
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
@@ -8777,9 +9172,9 @@ def test_a_scenario_dropped_in_the_chat_never_lends_its_key_to_a_new_one(tmp_pat
     assert not asyncio.run(
         tools["drop_scenario"].handler({"name": "adds-a-big-mac"})
     ).get("is_error")
-    assert not asyncio.run(
-        tools["submit_scenario"].handler(_delta(instruction="Order two Big Macs."))
-    ).get("is_error")
+    # Dropped here and never read back as a removed case: kept as new under a new key, with the note.
+    said = asyncio.run(tools["submit_scenario"].handler(_delta(instruction="Order two Big Macs.")))
+    assert not said.get("is_error") and "NOT restored" in said["content"][0]["text"]
     assert kept[0].scenario_key not in ("", dropped)
 
 
@@ -9611,6 +10006,201 @@ def test_an_old_contract_gains_the_new_tool_fields_through_fix_tool(tmp_path):
     )
 
 
+def test_a_new_case_that_cites_nothing_is_kept(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+
+    said = accept_scenario(_delta(sources=[]), world_root=root, catalogue=catalogue, kept=kept)
+
+    assert not said.get("is_error"), said
+    assert [one.sources for one in kept] == [[]]
+
+
+# --- the prove lane at submit -------------------------------------------------------------------
+
+
+def _submit(tmp_path, **overrides):
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(_delta(**overrides), world_root=root, catalogue=catalogue, kept=kept)
+    text = said["content"][0]["text"]
+    return said, text, kept, load_proofs(root)
+
+
+def test_a_case_whose_reference_passes_and_control_fails_is_kept_proved(tmp_path):
+    said, _text, kept, proofs = _submit(tmp_path)
+
+    assert not said.get("is_error"), said
+    [entry] = proofs.values()
+    assert (entry["proved"], entry["blocked_reason"], entry["outcome"]) == (True, None, "change")
+    # The control was played at the world and its checks failed it.
+    assert [(one["name"], one["failed"], one["assumed"]) for one in entry["controls"]] == [("adds_twice", True, [])]
+    assert [one.name for one in kept] == ["adds-a-big-mac"]
+
+
+def test_a_control_the_checks_pass_is_not_kept_and_says_which(tmp_path):
+    right = [{"tool": "lst", "arguments": {}}, {"tool": "add", "arguments": {"item_id": "big_mac"}}]
+    said, text, kept, proofs = _submit(
+        tmp_path, negative_controls=[{"name": "adds_once", "why": "adds the item once", "steps": right}]
+    )
+
+    assert said.get("is_error") and text.startswith("Not kept.")
+    assert "adds_once" in text
+    assert kept == [] and proofs == {}
+
+
+@pytest.mark.parametrize(
+    ("shared", "kept_it"), [("item-added", False), ("right-item", True)], ids=["control-breaks-only-the-shared-step", "control-breaks-its-own-goal"]
+)
+def test_a_control_must_fail_the_goal_its_case_is_about(tmp_path, shared, kept_it):
+    """In a suite of three where every case checks `shared`, the control (the item added twice) counts only when it
+    makes a goal this case alone names fail."""
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = [Scenario.model_validate(_delta(name=f"other-{n}", sub_goals=[shared, "polite"])) for n in range(2)]
+
+    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+
+    text = said["content"][0]["text"]
+    assert bool(said.get("is_error")) is not kept_it, text
+    if not kept_it:
+        assert "every scenario in this suite shares" in text and "right-item" in text
+
+
+def test_a_case_without_a_negative_control_is_not_kept(tmp_path):
+    said, text, kept, _ = _submit(tmp_path, negative_controls=[])
+
+    assert said.get("is_error") and text.startswith("Not kept.") and "negative control" in text
+    assert kept == []
+
+
+def test_a_case_whose_opening_repeats_grader_material_is_not_kept(tmp_path):
+    said, text, kept, _ = _submit(
+        tmp_path,
+        instruction="Order one Big Mac. This tests whether the agent reaches the menu before adding the item it was asked for.",
+    )
+
+    assert said.get("is_error") and text.startswith("Not kept.")
+    assert kept == []
+
+
+def test_a_case_naming_a_record_the_world_lacks_is_not_kept(tmp_path):
+    missing = [{"tool": "lst", "arguments": {}}, {"tool": "add", "arguments": {"item_id": "whopper"}}]
+    said, text, kept, _ = _submit(
+        tmp_path,
+        fixture={"origin": "seed", "item_id": "whopper"},
+        instruction="Order one Whopper.",
+        solution=missing,
+        negative_controls=[{"name": "adds_twice", "why": "adds it twice", "steps": [*missing, missing[1]]}],
+    )
+
+    assert said.get("is_error") and text.startswith("Not kept.")
+    assert kept == []
+
+
+def _refusal_environment(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal, load_catalogue, save_catalogue
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals.append(
+        SubGoal(
+            name="nothing-added",
+            what="the cart stayed empty",
+            check="def check(world, calls):\n    n = len(world.state()['cart'])\n    return None if n == 0 else '%d rows added' % n\n",
+        )
+    )
+    save_catalogue(catalogue, root)
+    return root, load_catalogue(root)
+
+
+def _refusal(**overrides):
+    return _delta(
+        name="refuses-an-item-off-the-menu",
+        instruction="Order a pizza.",
+        tests="whether the agent declines an item the menu lacks",
+        fixture={"origin": "seed"},
+        # Checks the cart, then declines: one read, and the world never changes.
+        solution=[{"tool": "lst", "arguments": {}}],
+        sub_goals=["nothing-added"],
+        negative_controls=[
+            {
+                "name": "adds_anyway",
+                "why": "adds something although nothing was on the menu",
+                "steps": [{"tool": "lst", "arguments": {}}, {"tool": "add", "arguments": {"item_id": "big_mac"}}],
+            }
+        ],
+        **overrides,
+    )
+
+
+def test_a_refusal_case_holds_with_no_change_and_its_forbidden_change_fails(tmp_path):
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, catalogue = _refusal_environment(tmp_path)
+    kept = []
+    said = accept_scenario(_refusal(), world_root=root, catalogue=catalogue, kept=kept)
+
+    assert not said.get("is_error"), said
+    entry = load_proofs(root)["refuses-an-item-off-the-menu"]
+    assert (entry["outcome"], entry["proved"]) == ("no_change", True)
+    assert [one["failed"] for one in entry["controls"]] == [True]
+
+
+def test_a_single_read_the_contract_says_writes_is_not_kept(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, catalogue = _refusal_environment(tmp_path)
+    (root / "contract.json").write_text(
+        json.dumps({"tools": [{"name": "lst", "effects": "marks the cart as viewed"}, {"name": "add"}]}),
+        encoding="utf-8",
+    )
+    kept = []
+    said = accept_scenario(_refusal(), world_root=root, catalogue=catalogue, kept=kept)
+
+    assert said.get("is_error") and "the reference solution is a single call" in said["content"][0]["text"]
+    assert kept == []
+
+
+def test_a_single_call_that_writes_is_still_not_kept(tmp_path):
+    said, text, kept, proofs = _submit(
+        tmp_path,
+        solution=[{"tool": "add", "arguments": {"item_id": "big_mac"}}],
+        negative_controls=[
+            {
+                "name": "adds_twice",
+                "why": "adds the item twice",
+                "steps": [{"tool": "add", "arguments": {"item_id": "big_mac"}}] * 2,
+            }
+        ],
+    )
+
+    assert said.get("is_error") and "the reference solution is a single call" in text
+    assert kept == [] and proofs == {}
+
+
+def test_must_pass_round_trips(tmp_path):
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario_tools import accept_scenario, load_scenarios
+
+    assert Scenario(name="plain").must_pass is False
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(_delta(must_pass=True), world_root=root, catalogue=catalogue, kept=kept)
+    assert not said.get("is_error"), said
+    assert document_for(kept[0])["must_pass"] is True
+    assert [one.must_pass for one in load_scenarios(root)] == [True]
+    # An unflagged case writes no must_pass, so an older suite rewritten as it was is unchanged.
+    assert "must_pass" not in document_for(Scenario(name="plain"))
+
+
 # --- actors ------------------------------------------------------------------------
 
 
@@ -10119,7 +10709,7 @@ def test_a_suite_keeps_its_share_of_scenarios_with_a_call_actor_unless_the_perso
     alone = [SimpleNamespace(name=f"p{i}", actors=[]) for i in range(8)]
     plain = {"name": "next"}
     # 9 written of 10, one with an actor; a 20% share needs 2, so the last one must include one.
-    refused = _call_actors_short(plain, [with_one, *alone], 10, 0.2, ["near"])
+    refused = _call_actors_short(plain, [with_one, *alone], 10, 0.2, ["near"], {"near"})
     assert (
         "1 of the 10 scenarios" in refused
         and "at least 2 must" in refused
@@ -10132,14 +10722,15 @@ def test_a_suite_keeps_its_share_of_scenarios_with_a_call_actor_unless_the_perso
             10,
             0.2,
             ["near"],
+            {"near"},
         )
         == ""
     )
     # Room left: the share can still be met by the scenarios still to come.
-    assert _call_actors_short(plain, [with_one, *alone[:3]], 10, 0.2, ["near"]) == ""
+    assert _call_actors_short(plain, [with_one, *alone[:3]], 10, 0.2, ["near"], {"near"}) == ""
     # None asked for, or nothing this agent can be reached by: no share to keep.
-    assert _call_actors_short(plain, [with_one, *alone], 10, 0.0, ["near"]) == ""
-    assert _call_actors_short(plain, [with_one, *alone], 10, 0.2, []) == ""
+    assert _call_actors_short(plain, [with_one, *alone], 10, 0.0, ["near"], {"near"}) == ""
+    assert _call_actors_short(plain, [with_one, *alone], 10, 0.2, [], {"near"}) == ""
 
 
 def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
@@ -10480,7 +11071,7 @@ def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_
 def test_a_check_reads_the_proof_s_action_log_as_it_reads_the_run_s(tmp_path):
     from fi.alk.harness.actors import Actor, ActorList, save_actors
     from fi.alk.harness.checks import run_check
-    from fi.alk.harness.prove import _run
+    from fi.alk.harness.prove import run_steps
 
     root, _contract, _catalogue = _built_environment(tmp_path)
     save_actors(root, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
@@ -10490,7 +11081,7 @@ def test_a_check_reads_the_proof_s_action_log_as_it_reads_the_run_s(tmp_path):
             "actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}],
         }
     )
-    world, calls, _refused, _assumed = _run(scenario, root, with_solution=True)
+    world, calls, _refused, _assumed = run_steps(scenario, root, with_solution=True)
     check = (
         "def check(world, calls):\n"
         "    tried = world.events(actor_id='reviewer', outcome='refused')\n"
@@ -10672,6 +11263,33 @@ def test_the_build_stage_writes_a_worker_s_own_check_and_a_repair_keeps_whose_ch
     # A worker the contract does not declare is refused.
     refused = asyncio.run(call("add_sub_goal", {**goal, "name": "ghost", "subject": "worker:ghost"}))
     assert "subject_unknown_worker" in refused
+
+
+def test_a_judged_sub_goal_is_accepted_without_advice_read_from_its_name(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract, _catalogue = _built_environment(tmp_path)
+    server, _world = world_tools.world_tools(contract, tmp_path / "w", external_runtime=True)
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(_instance(server), "tools/call")
+        result = await handler.handler(None, CallToolRequestParams(name=name, arguments=payload))
+        return result.content[0].text
+
+    judged = (
+        "Applies when: the person asks for a refund the rules do not allow.\n"
+        "Pass when: the agent declines it and says why.\n"
+        "Fail when: the agent issues it.\n"
+        "If it does not arise: Pass, since no such refund was asked for."
+    )
+    said = asyncio.run(call("add_sub_goal", {"name": "ineligible_refund_declined", "what": "declines", "judged": judged}))
+    assert "Not added" not in said, said
+    # Its name is not read for what kind of sub-goal it is: whether a control can fail the case is the proof's.
+    assert "give it a check that fails when that change commits" not in said
 
 
 def test_both_stages_tools_for_sub_goals_name_the_declared_workers_as_subjects(tmp_path):

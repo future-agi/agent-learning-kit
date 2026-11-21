@@ -1869,7 +1869,48 @@ def test_tools_the_agent_serves_by_calling_the_fronted_tools_api_are_the_proxy_s
     assert fault_notices([fault], log, calls, contract=sealed) == []
 
 
-def test_the_returns_app_seals_behind_the_tool_proxy_with_a_channel_per_worker(tmp_path: Path) -> None:
+def test_an_unreachable_tool_is_the_service_s_only_when_it_calls_a_route_of_the_fronted_tool_service() -> None:
+    from fi.alk.harness.bundle_author_v2 import EnvironmentPlanV2, _tool_proxy_process, _tools_behind_the_proxy
+
+    def entry(tool, endpoint):
+        return {"tool": tool, "mode": "unreachable", "module": "agent", "callable": tool, "endpoint": endpoint,
+                "method": "POST"}
+
+    contract = {
+        "agent": "returns",
+        "runtime": {"tool_service": {"command": ["python", "ledger.py"], "port": 8090,
+                                     "url_environment": "RETURNS_API_URL"}},
+        "dependencies": [
+            {"name": "ledger", "reached": {"dsn_env": "RETURNS_API_URL"}, "used_by": ["get_order"]},
+            # Another API the app calls with a bare path of its own: never the tool service's.
+            {"name": "payments", "reached": {"dsn_env": "PAYMENTS_API_URL"}, "used_by": ["charge_card"]},
+        ],
+        "tool_entrypoints": [
+            entry("get_order", "orders/get"),
+            entry("summarise", ""),
+            entry("lookup_rates", "https://external-host/v1/rates"),
+            entry("charge_card", "charges/create"),
+        ],
+    }
+    agent = _tool_proxy_process().model_copy(update={"name": "agent", "environment": {}, "depends_on": []})
+    plan = EnvironmentPlanV2(
+        packaging="compose",
+        control_service="agent",
+        processes=(agent, _tool_proxy_process().model_copy(update={"depends_on": []})),
+        capabilities={},
+        readiness=(),
+    )
+    sealed = {one["tool"]: one["mode"] for one in _tools_behind_the_proxy(plan, contract)["tool_entrypoints"]}
+    assert sealed == {
+        "get_order": "service",
+        "summarise": "unreachable",
+        "lookup_rates": "unreachable",
+        "charge_card": "unreachable",
+    }
+
+
+@pytest.mark.parametrize("mode", ["import", "unreachable"])
+def test_the_returns_app_seals_behind_the_tool_proxy_with_a_channel_per_worker(tmp_path: Path, mode: str) -> None:
     """As a live build authored it: the ledger listed under `dependencies` only, the tools as the agent module's
     functions calling its routes. Sealed in process, its workers had no ledger and the door saw none of their calls;
     the shipped tools-api runs behind the tool proxy, and each worker reaches it on its own channel."""
@@ -1887,7 +1928,8 @@ def test_the_returns_app_seals_behind_the_tool_proxy_with_a_channel_per_worker(t
         },
         "tools": [{"name": name, "args": ["order_id"], "description": name} for name, _ in routes],
         "tool_entrypoints": [
-            {"tool": name, "mode": "import", "module": "agent", "callable": name, "endpoint": endpoint,
+            # `unreachable`: the OpenAI Agents SDK's `@function_tool` defs, recorded as the reading guidance says.
+            {"tool": name, "mode": mode, "module": "agent", "callable": name, "endpoint": endpoint,
              "method": "POST"}
             for name, endpoint in routes
         ],
@@ -1939,6 +1981,14 @@ def test_the_returns_app_seals_behind_the_tool_proxy_with_a_channel_per_worker(t
     assert {channels[url.rsplit("/", 1)[1]] for url in rendered.values()} == {"order_lookup", "refund"}
     sealed = json.loads((output / "contract.json").read_text())
     assert {(one["mode"], one["service"]) for one in sealed["tool_entrypoints"]} == {("service", "tools-api")}
+    # The sealed contract is what certification reads: every tool has its service seam.
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.tool_certification import ToolAvailability, certify_tool_inventory
+
+    report = certify_tool_inventory(AgentContract.model_validate(sealed), output, external_provider=False, source=source)
+    assert {row.tool: row.availability for row in report.tools} == {
+        name: ToolAvailability.RUNTIME_ONLY for name, _ in routes
+    }
 
 
 def test_an_app_authored_as_compose_is_observed_for_its_hand_offs_behind_the_tool_proxy(tmp_path: Path) -> None:
@@ -6127,6 +6177,46 @@ def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
     assert set(rules["records"]) == {"actors.json"}
 
 
+@pytest.mark.parametrize("roles", [None, {"knowledge/answers.md": "evaluator_only"}], ids=["no-roles", "evaluator-only"])
+def test_a_bundle_seals_its_evaluator_only_attached_files_and_never_ships_them(tmp_path: Path, roles) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "knowledge").mkdir()
+    (authoring / "knowledge" / "answers.md").write_text("Refund 18.00\n", encoding="utf-8")
+    if roles is not None:
+        (authoring / "knowledge" / "roles.json").write_text(json.dumps(roles), encoding="utf-8")
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(source=source, job=_job(connector="http", scenario_count=1), authoring=authoring, output=output)
+
+    sealed = {one["path"] for one in json.loads((output / "manifest.json").read_text(encoding="utf-8"))["files"]}
+    # The attached files themselves are never in the bundle the agent's runtime is built from.
+    assert not any(path.startswith("knowledge/") for path in sealed)
+    if roles is None:
+        # Neither actors nor evaluator-only files: sealed exactly as before.
+        assert "actor_rules.json" not in sealed
+    else:
+        rules = json.loads((output / "actor_rules.json").read_text(encoding="utf-8"))
+        assert "answers.md" in rules["evaluator_only"]["files"] and "actors.json" not in sealed
+
+
+def test_a_bundle_whose_attached_file_has_an_unknown_role_seals_it_as_evaluator_only(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "knowledge").mkdir()
+    (authoring / "knowledge" / "roles.json").write_text(json.dumps({"knowledge/answers.md": "private"}), encoding="utf-8")
+
+    output = tmp_path / "b"
+    author_bundle_v2(source=source, job=_job(connector="http", scenario_count=1), authoring=authoring, output=output)
+
+    rules = json.loads((output / "actor_rules.json").read_text(encoding="utf-8"))
+    assert "answers.md" in rules["evaluator_only"]["files"]
+
+
 def test_a_world_without_actors_gets_the_full_action_log(tmp_path: Path) -> None:
     from fi.alk.harness.bundle_author_v2 import _action_log_seed
 
@@ -6827,6 +6917,101 @@ def test_python_selection_preserves_uv_alternatives_and_target_only_constraints(
         f"environments={json.dumps(environments)}\n"
     )
     assert _python_language_version(tmp_path, "3.11", interpreter_selector=True) == "==3.11.*,>=3.11"
+
+
+_NATIVE_HTTP_RUNTIME = {
+    "language": "python",
+    "execution": "native",
+    "command": ["python", "agent.py"],
+    "interface": {
+        "kind": "http", "protocol": "openai_chat", "port": 8080,
+        "path": "/v1/chat/completions", "health_path": "/health",
+    },
+}
+
+
+def _tools_server_source(root: Path) -> Path:
+    """An agent whose tools are answered by a separate HTTP server in the same source, with no Compose file."""
+    root.mkdir()
+    (root / "requirements.txt").write_text("", encoding="utf-8")
+    (root / "agent.py").write_text("import os\nTOOLS = os.environ.get('LEDGER_URL')\n", encoding="utf-8")
+    (root / "tools_server.py").write_text("print('tools')\n", encoding="utf-8")
+    return root
+
+
+def test_native_runtime_starts_the_tools_server_the_source_ships_behind_the_tool_proxy(tmp_path: Path) -> None:
+    source = _tools_server_source(tmp_path / "source")
+    runtime = {
+        **_NATIVE_HTTP_RUNTIME,
+        "tool_service": {
+            "command": ["python", "tools_server.py", "--port", "8090"],
+            "port": 8090,
+            "url_environment": "LEDGER_URL",
+        },
+    }
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+    )
+
+    by_name = {process.name: process for process in plan.processes}
+    assert {"world-db", "agent", "tools-api", "tool-proxy"} == set(by_name)
+    # The agent reaches the server through the proxy, which records each call and is what a live proof plays.
+    assert by_name["agent"].environment["LEDGER_URL"] == "{{TOOLS_API_URL}}"
+    assert "tool-proxy" in by_name["agent"].depends_on
+    assert plan.capabilities["tool_proxy"].configuration_name == "TOOLS_API_URL"
+    assert plan.capabilities["tools_api"].configuration_name == "TOOLS_UPSTREAM_URL"
+    assert plan.capabilities["tools_api"].container_port == 8090
+    tools = by_name["tools-api"]
+    assert "tools_server.py" in " ".join(tools.run_command)
+    # Each world's server listens on its own port.
+    assert tools.fixed_port_consumable is True
+    assert tools.environment["FI_TOOLS_PORT"] == "{{PORT_tools-api}}"
+
+
+def test_native_runtime_without_a_tools_server_plans_only_the_agent(tmp_path: Path) -> None:
+    source = _tools_server_source(tmp_path / "source")
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=_NATIVE_HTTP_RUNTIME,
+    )
+
+    assert {process.name for process in plan.processes} == {"world-db", "agent"}
+    assert "tool_proxy" not in plan.capabilities
+
+
+def test_a_tools_server_is_refused_on_a_compose_selection() -> None:
+    from fi.alk.harness.contract import Runtime
+
+    service = {"command": ["python", "tools_server.py"], "port": 8090, "url_environment": "LEDGER_URL"}
+    with pytest.raises(ValueError, match="runtime_tool_service_requires_native"):
+        Runtime.model_validate({"execution": "compose", "compose_file": "compose.yml", "service": "agent", "tool_service": service})
+    with pytest.raises(ValueError, match="runtime_selection_path_invalid"):
+        Runtime.model_validate({"tool_service": {**service, "workdir": "../elsewhere"}})
+
+
+def test_a_bundle_with_the_sources_tools_server_seals_and_passes_preflight(tmp_path: Path) -> None:
+    source = _tools_server_source(tmp_path / "source")
+    authoring = _authoring(tmp_path)
+    runtime = {
+        **_NATIVE_HTTP_RUNTIME,
+        "tool_service": {"command": ["python", "tools_server.py", "--port", "8090"], "port": 8090, "url_environment": "LEDGER_URL"},
+    }
+    (authoring / "contract.json").write_text(json.dumps({"modality": "chat", "runtime": runtime}), encoding="utf-8")
+
+    bundle = author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=tmp_path / "bundle")
+
+    assert {process.name for process in bundle.processes} >= {"agent", "tools-api", "tool-proxy"}
+    assert (tmp_path / "bundle" / "generated" / "tool-proxy" / "proxy.py").is_file()
+    preflight_bundle(tmp_path / "bundle", bundle, parallelism=2, secret_refs={})
 
 
 def test_each_declared_worker_is_sealed_with_the_world_actions_its_tools_call():
