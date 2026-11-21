@@ -9286,7 +9286,11 @@ def test_runtime_tools_without_record_store_do_not_require_synthetic_tables(
         "hard_constraints": ["report actual tool results"],
         "system_prompt_excerpt": "Use the provided workspace tools.",
         "data_store": {"kind": store},
-        "runtime": {"execution": "native", "command": ["agent", "chat"]},
+        "runtime": {
+            "execution": "native",
+            "command": ["agent", "chat"],
+            "required_environment": {"agent": []},
+        },
     }
 
     async def submit():

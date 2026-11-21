@@ -484,6 +484,31 @@ def test_a_build_names_an_unparsed_file_inside_the_documents_hash(tmp_path: Path
     assert reading == payload["agent"]
 
 
+def test_a_reading_names_an_unparsed_prompt_file_outside_the_agents_folder(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "one").mkdir(parents=True)
+    (source / "one" / "agent.py").write_text("x = 1\n", encoding="utf-8")
+    (source / "prompts").mkdir()
+    (source / "prompts" / "persona.py").write_text(
+        "label = t'{x}'\nPROMPT = \"You book visits.\"\n", encoding="utf-8"
+    )
+    contract = {
+        "agent": "booker",
+        "system_prompt_excerpt": 'PROMPT = "You book visits."',
+        "system_prompt_from": [{"path": "prompts/persona.py", "start_line": 2, "end_line": 2}],
+        "runtime": {"language": "python", "workdir": "one", "source_subfolder": "one"},
+    }
+
+    reading = ss.authored_agent_document(
+        json.dumps(contract), subfolder="one", framework=None, source=source
+    )
+
+    unparsed = reading["agent"]["extension"]["source"]["unparsed"]
+    assert [one["path"] for one in unparsed] == ["prompts/persona.py"]
+
+
 # -- TH-9500: the persona record is cleaned before it leaves (plan v1.1 section 5, test P1) ------
 
 _FAKE_KEY = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
