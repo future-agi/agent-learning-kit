@@ -31,6 +31,7 @@ from . import bundle_author_v2
 from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
 from .backends import (
     ASK_TOOL,
+    DELEGATE_TOOL,
     ConversationSession,
     SessionSpec,
     resolve,
@@ -715,6 +716,41 @@ observable artifact proves that the requested change has taken effect.
 """
 
 
+def _offered_labels(payload: dict[str, Any], asked: list[dict[str, Any]]) -> list[str]:
+    """The options a question offered, by label, and as the person was shown them."""
+    offered = list(payload.get("options") or [])
+    for one in asked:
+        offered.extend(one.get("options") or [])
+    labels: list[str] = []
+    for option in offered:
+        if isinstance(option, dict):
+            label = str(option.get("label") or "")
+            labels.append(label)
+            if option.get("description"):
+                labels.append(f"{label}: {option.get('description')}")
+        else:
+            labels.append(str(option))
+    return [one.strip().casefold() for one in labels if one.strip()]
+
+
+def _framed_answer(answer: str, payload: dict[str, Any], asked: list[dict[str, Any]]) -> str:
+    """The reply to a question as the model reads it. The chat sends whatever the person types while a question is
+    open as its answer, so a reply that is none of the options offered is said to be typed text, which may be a
+    new request rather than an answer."""
+    labels = _offered_labels(payload, asked)
+    if not answer or not labels:
+        return answer
+    picked = answer.strip().casefold()
+    # A pick of several options arrives as their labels joined.
+    if picked in labels or all(part.strip() in labels for part in picked.split(", ")):
+        return answer
+    return (
+        "The person typed this instead of picking one of the options, so it may not answer the question: "
+        f"{answer}\nIf it answers the question, go on from it. If it is a different request, the question is "
+        "closed: say so in one line and act on this request."
+    )
+
+
 async def _enter(stage: Stage) -> None:
     """Open the stage; a stored session the provider refuses to resume opens fresh instead."""
     servers = stage.spec.servers
@@ -857,6 +893,8 @@ class HostedChatRuntime:
         self._from_platform = False
         self._turn_acknowledged_through = 0
         self._tool_names: dict[str, str] = {}
+        # Calls to a tool the session was never offered (a name the model made up): logged, never shown as a card.
+        self._unoffered_calls: set[str] = set()
         self._checkpoint_lock = asyncio.Lock()
         # The message whose turn is running, and the one whose every change the person approved.
         self._turn_message_id = ""
@@ -2852,6 +2890,12 @@ class HostedChatRuntime:
                         )
                 elif event.kind == TOOL:
                     call_id = str(event.detail.get("call_id") or "")
+                    offered = self._offered_tools()
+                    if offered is not None and event.tool.rsplit("__", 1)[-1] not in offered:
+                        # The provider refuses it and the model carries on; the person has nothing to act on.
+                        self._unoffered_calls.add(call_id)
+                        print(f"builder_called_unoffered_tool tool={event.tool!r}", file=sys.stderr)
+                        continue
                     tool = event.tool.rsplit("__", 1)[-1]
                     self._tool_names[call_id] = tool
                     if self._nudge is not None:
@@ -2880,6 +2924,10 @@ class HostedChatRuntime:
                         )
                 elif event.kind == RESULT:
                     call_id = str(event.detail.get("call_id") or "")
+                    if call_id in self._unoffered_calls:
+                        self._unoffered_calls.discard(call_id)
+                        print(f"builder_unoffered_tool_result text={_redact(event.text)!r}", file=sys.stderr)
+                        continue
                     tool = self._tool_names.get(call_id, "")
                     if tool == "check_health":
                         self._last_health = str(event.text or "")
@@ -2933,6 +2981,17 @@ class HostedChatRuntime:
                 }
             ]
         }
+
+    def _offered_tools(self) -> set[str] | None:
+        """Every tool the open session or its workers may call, by its own name (without its server); None when
+        unknown."""
+        spec = getattr(getattr(self.conversation, "stage", None), "spec", None)
+        if spec is None:
+            return None
+        try:
+            return {one.rsplit("__", 1)[-1] for one in (*spec.granted_anywhere(), DELEGATE_TOOL)}
+        except Exception:  # noqa: BLE001 - unknown means every card is shown, as before
+            return None
 
     def _ask_reply(self, text: str, *, is_error: bool | None, from_the_cli: bool) -> Any:
         """A reply to a question in the form its caller takes.
@@ -3029,7 +3088,7 @@ class HostedChatRuntime:
                         pass
                     await self._checkpoint()
                     answer_sequence = int(command["sequence"])
-                    answered = answer
+                    answered = _framed_answer(answer, payload, asked)
                     if not any(
                         self._turn_acknowledged_through
                         < int(queued["sequence"])
@@ -3051,7 +3110,7 @@ class HostedChatRuntime:
                                 },
                             }
                         )
-                    return self._ask_reply(answer, is_error=not bool(answer), from_the_cli=False)
+                    return self._ask_reply(answered, is_error=not bool(answer), from_the_cli=False)
                 await asyncio.sleep(0.5)
         return self._ask_reply(
             "The conversation was stopped.", is_error=True, from_the_cli=bool(asked)

@@ -297,7 +297,9 @@ and never ask one question per change. A No leaves everything undone; follow wha
 you did not list is asked about on its own. A change of how
 someone speaks or where they call from needs no confirmation. Never delete or rewrite in bulk without a
 yes. If a request could mean two different things and the difference changes what you would do, ask
-one short question with the options you see, and continue from the answer.
+one short question with the options you see, and continue from the answer. A reply that is typed text
+rather than one of your options may be a new request, not an answer: when it does not answer the question,
+leave the question, say so in one line, and act on the new request.
 
 ## You own the suite's integrity
 
