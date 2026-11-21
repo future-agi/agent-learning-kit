@@ -2468,7 +2468,8 @@ def scenario_tools(
                         "initial_message": {
                             "type": "string",
                             "description": "The caller's natural opening request, specific to "
-                            "this scenario. Do not use a generic greeting.",
+                            "this scenario, in the language they speak on the call. Do not use a "
+                            "generic greeting.",
                         },
                         "multilingual": {"type": "boolean"},
                         "metadata": {"type": "object"},
