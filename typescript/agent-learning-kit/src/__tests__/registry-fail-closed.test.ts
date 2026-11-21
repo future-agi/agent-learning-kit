@@ -26,9 +26,49 @@ describe('W04 registry fail-closed', () => {
         await expect(mapInputsToBackend('fixture', { output: 'x' }, opts)).rejects.toThrow('REGISTRY_UNAVAILABLE');
         expect(JSON.stringify(log.mock.calls)).not.toContain('PRIVATE_SENTINEL');
     });
-    test.each([null, {}, { result: {} }, { result: [] }, { result: [{ name: 'fixture' }] }])('FO-06 malformed registry %p rejects', async data => {
+    test.each([
+        null, {}, { result: {} }, { result: [] }, { status: false, result: registry },
+        { result: [{ name: '' }] }, { result: [{ config: { required_keys: ['output'] } }] },
+        { result: [...registry, ...registry] },
+    ])('FO-06 malformed registry %p rejects', async data => {
         get.mockResolvedValue({ data });
         await expect(loadRegistry(opts)).rejects.toThrow('REGISTRY_INVALID');
+    });
+    // The backend returns some templates (deterministic_evals,
+    // custom_code_evaluation) without config.required_keys. Those templates
+    // fail on use; every other template stays usable.
+    const unusable = [
+        { name: 'no_config' },
+        { name: 'no_required_keys', config: {} },
+        { name: 'null_required_keys', config: { required_keys: null } },
+        { name: 'empty_required_keys', config: { required_keys: [] } },
+        { name: 'non_string_key', config: { required_keys: ['output', 3] } },
+        { name: 'blank_key', config: { required_keys: [' '] } },
+    ];
+    test('R5-R01 a template without usable required_keys does not invalidate the registry', async () => {
+        get.mockResolvedValue({ data: { result: [...unusable, ...registry] } });
+        const loaded = await loadRegistry(opts);
+        expect(Object.keys(loaded).sort()).toEqual([...unusable.map(t => t.name), 'fixture'].sort());
+        await expect(mapInputsToBackend('fixture', { response: 'x' }, opts)).resolves.toEqual({ output: 'x' });
+        expect(get).toHaveBeenCalledTimes(1);
+    });
+    test.each(unusable.map(t => t.name))('R5-R02 using template %s rejects without a request', async name => {
+        get.mockResolvedValue({ data: { result: [...unusable, ...registry] } });
+        await expect(mapInputsToBackend(name, { output: 'x' }, opts)).rejects.toThrow('REGISTRY_INVALID');
+        const publicOpts = { baseUrl: opts.baseUrl, apiKey: 'public-fixture' };
+        await loadRegistry(publicOpts);
+        expect(() => mapInputsToBackendSync(name, { output: 'x' }, publicOpts.baseUrl, publicOpts.apiKey)).toThrow('REGISTRY_INVALID');
+        expect(() => mapInputsToBackendSync('fixture', { response: 'x' }, publicOpts.baseUrl, publicOpts.apiKey)).not.toThrow();
+    });
+    test('R5-R03 evaluator runs a valid template and refuses an unusable one beside it', async () => {
+        get.mockResolvedValue({ data: { result: [...unusable, ...registry] } });
+        const evaluator = new Evaluator({ fiApiKey: 'fixture', fiSecretKey: 'fixture', fiBaseUrl: opts.baseUrl });
+        const request = jest.spyOn(evaluator, 'request').mockResolvedValue({ eval_results: [{ output: 1 }] });
+        await expect(evaluator.evaluate('no_required_keys', { output: 'x' })).rejects.toThrow('REGISTRY_INVALID');
+        expect(request).not.toHaveBeenCalled();
+        expect((await evaluator.evaluate('fixture', { response: 'x' })).eval_results[0]?.output).toBe(1);
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(request.mock.calls[0])).toContain('"inputs":{"output":["x"]}');
     });
     test('FO-06 unknown name rejects', async () => {
         await expect(mapInputsToBackend('unknown', { output: 'x' }, opts)).rejects.toThrow('TEMPLATE_UNKNOWN');

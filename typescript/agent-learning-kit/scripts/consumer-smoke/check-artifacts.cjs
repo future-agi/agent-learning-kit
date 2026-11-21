@@ -98,7 +98,7 @@ function checkFiles(files) {
   for (const name of ROOT_FILES) assert(files.has(name), `missing ${name}`);
   const manifest = JSON.parse(files.get('package.json').toString('utf8'));
   assert.equal(manifest.name, '@future-agi/agent-learning-kit');
-  assert.equal(manifest.version, '0.4.0');
+  assert.equal(manifest.version, '0.4.1');
   assert.equal(manifest.type, 'module');
   assert(!Object.hasOwn(manifest, 'scripts'), 'candidate must have NO scripts field');
   assert(!Object.hasOwn(manifest, 'devDependencies'), 'candidate must have no devDependencies');

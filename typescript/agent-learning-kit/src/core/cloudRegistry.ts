@@ -63,8 +63,14 @@ function assertEnabled(): void {
     if (process.env.AGENT_LEARNING_DISABLE_CLOUD_REGISTRY === '1') throw new Error('REGISTRY_DISABLED');
 }
 
+// Templates whose required_keys were missing or malformed when the registry
+// loaded. They stay in the registry so the rest of it remains usable, but
+// any use of one of them fails closed.
+const INVALID_ENTRIES = new WeakSet<RegistryEntry>();
+
 function requiredKeys(info: RegistryEntry | undefined): string[] {
     if (!info) throw new Error('TEMPLATE_UNKNOWN');
+    if (INVALID_ENTRIES.has(info)) throw new Error('REGISTRY_INVALID');
     try {
         const value = info.config?.required_keys;
         if (value === null || typeof value !== 'object' || typeof value[Symbol.iterator] !== 'function') throw new Error();
@@ -130,7 +136,17 @@ export async function loadRegistry(
     const byName: Record<string, RegistryEntry> = Object.create(null);
     for (const item of items) {
         if (!item || typeof item.name !== 'string' || !item.name.trim() || byName[item.name]) throw new Error('REGISTRY_INVALID');
-        const keys = requiredKeys(item);
+        let keys: string[];
+        try {
+            keys = requiredKeys(item);
+        } catch {
+            // One template without usable required_keys must not make every
+            // other template unusable. Keep it, but reject any use of it.
+            const entry: RegistryEntry = Object.freeze({ ...item });
+            INVALID_ENTRIES.add(entry);
+            byName[item.name] = entry;
+            continue;
+        }
         byName[item.name] = Object.freeze({ ...item, config: Object.freeze({ ...item.config, required_keys: Object.freeze(keys) }) });
     }
     Object.freeze(byName);
