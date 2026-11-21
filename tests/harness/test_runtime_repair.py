@@ -3450,3 +3450,75 @@ def test_a_program_a_safe_launcher_runs_needs_its_own_evidence(tmp_path, command
     # uv vouches for itself, not for the program it runs: script and flock hand a shell its -c.
     with pytest.raises(ValueError, match="runtime_repair_launcher_not_source_evidenced"):
         _validate_native(tmp_path, command)
+
+
+def test_a_submitted_patch_holding_a_credential_is_rejected_by_the_tool_naming_the_field(
+    tmp_path, monkeypatch
+):
+    # The model hears "patch rejected" with the field, so it can resubmit with a placeholder,
+    # rather than "accepted" and a refusal only when the patch is applied.
+    import asyncio
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (service / "app.py").write_text("# entrypoint\n")
+    contract = AgentContract(agent="support-agent", runtime=Runtime(language="python"))
+    password = "s3cretPass"
+    answers = []
+
+    class SubmittingStage:
+        def __init__(self, spec, **kwargs):
+            self.spec = spec
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def say(self, briefing, **kwargs):
+            if "runtime_repair" not in self.spec.servers:
+                return
+            (submit,) = [
+                t for t in self.spec.servers["runtime_repair"].tools
+                if t.name == "submit_runtime_plan_patch"
+            ]
+            answers.append(
+                await submit.handler(
+                    {
+                        "runtime": {
+                            "language": "python",
+                            "workdir": "service",
+                            "install": f"pip install --index-url https://deploy:{password}"
+                            "@pypi.internal.example.com/simple -e .",
+                            "command": ["python", "app.py"],
+                            "interface": {"kind": "http", "port": 8080, "path": "/chat"},
+                        },
+                        "evidence_paths": ["service/pyproject.toml", "service/app.py"],
+                        "summary": "Run the HTTP service declared by the submitted component.",
+                    }
+                )
+            )
+
+    monkeypatch.setattr(runtime_repair, "Stage", SubmittingStage)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="runtime",
+        code="generated_runtime_plan_invalid",
+        message="no runtime plan",
+    )
+
+    # Nothing was accepted, so the repair ends with no patch.
+    with pytest.raises(RuntimeError, match="typed_runtime_plan_patch_not_submitted"):
+        asyncio.run(runtime_repair.request_runtime_plan_patch(tmp_path, contract, (diagnostic,)))
+    assert answers, "the tool was never called"
+    answer = answers[0]
+    text = answer["content"][0]["text"]
+    assert answer.get("is_error") is True
+    assert text.startswith("patch rejected: ContractCredentialRefused")
+    assert "runtime.install" in text
+    assert password not in text

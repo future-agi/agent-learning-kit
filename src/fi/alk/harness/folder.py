@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..providers.agent import redact_strings
 from .catalogue import Catalogue, SubGoal
 from .python_source import KIT_PYTHON
 from .scenario import Scenario
@@ -153,12 +154,111 @@ def document_for(scenario: Scenario) -> dict:
     return body
 
 
+# Kept exactly as written: the world replays these and the caller reads them as facts, so a masked
+# value fails a correct agent. A credential in one is refused at submission instead
+# (`scenario.validate_scenario`). Every string field not listed here is prose and is cleaned.
+KEPT_SCENARIO_FIELDS = ("solution", "alternatives", "fixed", "variables", "fixture")
+KEPT_PERSONA_FIELDS = ("metadata", "scripted_caller")
+
+
+def _clean_except(document: dict[str, Any], kept: tuple[str, ...]) -> dict[str, Any]:
+    prose = redact_strings({key: value for key, value in document.items() if key not in kept})
+    return {key: document[key] if key in kept else prose[key] for key in document}
+
+
+# Structured fields inside the scenario's lists are kept exactly too, for the same reason: the world
+# replays an actor's scheduled arguments and a pre-run thread's arguments as written, and a fault
+# holds a call until its arguments include `approved_when`.
+def _clean_entries(entries: Any, kept: tuple[str, ...]) -> Any:
+    if not isinstance(entries, list):
+        return redact_strings(entries)
+    return [
+        _clean_except(entry, kept) if isinstance(entry, dict) else redact_strings(entry)
+        for entry in entries
+    ]
+
+
+def _clean_trigger(trigger: Any) -> Any:
+    # `where` is matched against the world's records, so it is kept exactly (and refused when it
+    # holds a credential, in scenario._credentials_in_kept_fields).
+    if not isinstance(trigger, dict):
+        return redact_strings(trigger)
+    return _clean_except(trigger, ("where",))
+
+
+def _clean_scheduled(entry: Any) -> Any:
+    if not isinstance(entry, dict):
+        return redact_strings(entry)
+    cleaned = _clean_except(entry, ("arguments", "trigger"))
+    if "trigger" in entry:
+        cleaned["trigger"] = _clean_trigger(entry["trigger"])
+    return cleaned
+
+
+def _clean_actor(entry: Any) -> Any:
+    if not isinstance(entry, dict):
+        return redact_strings(entry)
+    cleaned = _clean_except(entry, ("actions", "trigger"))
+    if "trigger" in entry:
+        cleaned["trigger"] = _clean_trigger(entry["trigger"])
+    if "actions" in entry:
+        actions = entry["actions"]
+        cleaned["actions"] = (
+            [_clean_scheduled(one) for one in actions]
+            if isinstance(actions, list)
+            else redact_strings(actions)
+        )
+    return cleaned
+
+
+def _clean_pre_run(entry: Any) -> Any:
+    if not isinstance(entry, dict):
+        return redact_strings(entry)
+    cleaned = _clean_except(entry, ("thread",))
+    if "thread" in entry:
+        cleaned["thread"] = _clean_entries(entry["thread"], ("arguments",))
+    return cleaned
+
+
+def clean_scenario_document(document: dict[str, Any]) -> dict[str, Any]:
+    """A scenario document with its prose cleaned and its kept-exactly fields untouched.
+
+    Works on a whole document or on part of one, and cleaning twice changes nothing more."""
+    nested = {"actors", "pre_run", "faults"}
+    cleaned = _clean_except(
+        {
+            k: v
+            for k, v in document.items()
+            if (k != "persona" or not isinstance(v, dict)) and k not in nested
+        },
+        KEPT_SCENARIO_FIELDS,
+    )
+    if "actors" in document:
+        actors = document["actors"]
+        cleaned["actors"] = (
+            [_clean_actor(one) for one in actors] if isinstance(actors, list) else redact_strings(actors)
+        )
+    if "pre_run" in document:
+        sessions = document["pre_run"]
+        cleaned["pre_run"] = (
+            [_clean_pre_run(one) for one in sessions]
+            if isinstance(sessions, list)
+            else redact_strings(sessions)
+        )
+    if "faults" in document:
+        cleaned["faults"] = _clean_entries(document["faults"], ("approved_when",))
+    persona = document.get("persona")
+    if isinstance(persona, dict):
+        cleaned["persona"] = _clean_except(persona, KEPT_PERSONA_FIELDS)
+    return {key: cleaned[key] for key in document}
+
+
 def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) -> Path:
     """Write one scenario out as its own folder of files."""
     root = folder_for(destination, scenario.name)
     (root / "checks").mkdir(parents=True, exist_ok=True)
 
-    body = document_for(scenario)
+    body = clean_scenario_document(document_for(scenario))
     (root / "scenario.json").write_text(
         json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -246,7 +346,7 @@ def write_index(scenarios: list[Scenario], destination: Path) -> Path:
         json.dumps(
             [
                 {
-                    **document_for(one),
+                    **clean_scenario_document(document_for(one)),
                     "steps": len(one.solution),
                     "folder": f"{SCENARIOS}/{one.name}",
                 }

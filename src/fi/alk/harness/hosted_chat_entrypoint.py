@@ -35,7 +35,9 @@ from .hosted_conversation import (
     _UNAVAILABLE_BUDGET_SECONDS,
     ConversationClient,
     ConversationTransportError,
+    PENDING_QUESTION,
     PlatformSessionStore,
+    cleaned_pending_question,
     load_conversation_capabilities,
 )
 from .tools import schema
@@ -58,6 +60,7 @@ from ..providers.agent import (
     _START,
     _URL_BREAKS,
     _redact,
+    redact_strings,
 )
 
 _NUMBERS = {"type": "array", "items": {"type": "integer"}}
@@ -71,7 +74,7 @@ _RANGES = {
 }
 # Commands that steer the conversation rather than say something to it.
 _NOT_MESSAGES = {"interrupt", "cancel_operation", "user_response", "approval"}
-_PENDING_QUESTION = ".futureagi-pending-question.json"
+_PENDING_QUESTION = PENDING_QUESTION
 _BUILD_FINISHED = ".futureagi-build-finished.json"
 _PROVIDER_PROFILE = "provider-import-profile.json"
 _JOURNAL = ".futureagi-conversation.json"
@@ -674,10 +677,14 @@ class HostedChatRuntime:
         backend = resolve()
         self.backend_name = backend.name
         self.event_store: Any = None
+        # Whether the checkpoint brought the session database back, read before ADK opens it. A
+        # checkpoint that left the database out cannot resume a cut-off invocation.
+        self._event_store_restored = False
         if backend.name == "vertex-gemini":
             from google.adk.sessions import DatabaseSessionService
 
             session_db = (workspace / ".futureagi-adk.db").resolve()
+            self._event_store_restored = session_db.is_file()
             self.event_store = DatabaseSessionService(
                 db_url=f"sqlite+aiosqlite:///{session_db.as_posix()}"
             )
@@ -1109,8 +1116,11 @@ class HostedChatRuntime:
             held = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return False
+        from .folder import clean_scenario_document
         from .scenario import Scenario
 
+        # The saved file was cleaned when it was written, so the submission is cleaned the same
+        # way before the two are compared; an unchanged scenario would otherwise read as changed.
         try:
             saved_now = Scenario.model_validate(held).model_dump()
             submitted = Scenario.model_validate(
@@ -1118,12 +1128,14 @@ class HostedChatRuntime:
             ).model_dump()
         except ValueError:
             saved_now, submitted = held, {**held, **change}
+        saved_now, submitted = clean_scenario_document(saved_now), clean_scenario_document(submitted)
         if any(
             field in named and submitted.get(field) != saved_now.get(field)
             for field in fields
         ):
             return True
-        persona, before = change.get("persona") or {}, held.get("persona") or {}
+        persona = clean_scenario_document({"persona": change.get("persona") or {}})["persona"]
+        before = clean_scenario_document({"persona": held.get("persona") or {}})["persona"]
         if whole_persona:
             from .scenario import Persona
 
@@ -1267,7 +1279,13 @@ class HostedChatRuntime:
                     return text(f"there is no note {args['resolve']}", error=True)
                 notes.pop(index)
             if str(args.get("note") or "").strip():
-                notes.append({"kind": str(args.get("kind") or "fact"), "note": str(args["note"]).strip()})
+                # The model writes the note from what it has read, and the ledger goes to the platform.
+                notes.append(
+                    {
+                        "kind": str(args.get("kind") or "fact"),
+                        "note": redact_strings(str(args["note"]).strip()),
+                    }
+                )
                 del notes[:-_LEDGER_NOTES]
             await self._keep_ledger(ledger)
             return text(self._ledger_note() or "no notes kept")
@@ -1312,7 +1330,14 @@ class HostedChatRuntime:
             # The bundle is sealed from the world as it is now, after every change made during the build.
             await asyncio.to_thread(self._after_saved, world_changed=True)
             (self.workspace / _BUILD_FINISHED).write_text(
-                json.dumps({"scenarios": len(kept), "asked": asked, "note": str(args.get("note") or "")}),
+                json.dumps(
+                    {
+                        "scenarios": len(kept),
+                        "asked": asked,
+                        # Packed with the workspace, so it is cleaned where it is written.
+                        "note": redact_strings(str(args.get("note") or "")),
+                    }
+                ),
                 encoding="utf-8",
             )
             return text(
@@ -1574,7 +1599,7 @@ class HostedChatRuntime:
                     "content": [{"type": "text", "text": "instruction is required"}],
                     "is_error": True,
                 }
-            result = await self.client.adjust(instruction)
+            result = await self.client.adjust(redact_strings(instruction))
             return {
                 "content": [
                     {
@@ -1978,7 +2003,7 @@ class HostedChatRuntime:
             resume_invocation_id = (
                 str(self.client.turn_context.get("active_invocation_id") or "") or None
             )
-            if self.backend_name != "vertex-gemini":
+            if self.backend_name != "vertex-gemini" or not self._event_store_restored:
                 resume_invocation_id = None
             if resume_invocation_id is None:
                 # Answer once more; the cut-off attempt may already have changed things.
@@ -2480,9 +2505,11 @@ class HostedChatRuntime:
             pending = json.loads(pending_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             pending = {}
+        # A restored question was cleaned on its way to the platform, so both sides are cleaned
+        # before they are compared; otherwise a resumed turn would ask the same question twice.
         if (
-            pending.get("question") == question
-            and pending.get("options") == options
+            redact_strings(pending.get("question")) == redact_strings(question)
+            and redact_strings(pending.get("options")) == redact_strings(options)
             and pending.get("message_id")
         ):
             message_id = str(pending["message_id"])
@@ -2500,10 +2527,9 @@ class HostedChatRuntime:
             )
             temporary.replace(pending_path)
         await self._checkpoint()
-        # The model wrote the question and its options. The file above keeps them raw, as asked, so
-        # a resumed turn still matches them; only the event below is cleaned. The raw file still
-        # reaches the platform: the workspace checkpoint archives it (TH-9521), or, in
-        # control-only mode, _checkpoint sends it as coordinator_state instead (TH-9532).
+        # The model wrote the question and its options. The workspace file keeps them as asked;
+        # what leaves the sandbox is cleaned: the event below, the workspace checkpoint's copy of
+        # the file, and, in control-only mode, the coordinator_state _checkpoint sends instead.
         shown_question, *shown_options = _redact([question, *options])
         await self.client.emit(
             "question_requested",
@@ -2610,6 +2636,8 @@ class HostedChatRuntime:
                 path = self.workspace / name
                 if path.is_file():
                     files[name] = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(files.get(_PENDING_QUESTION), dict):
+                files[_PENDING_QUESTION] = cleaned_pending_question(files[_PENDING_QUESTION])
             new_endings = {
                 key: value
                 for key, value in self._read_turn_endings().items()

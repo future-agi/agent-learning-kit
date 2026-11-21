@@ -108,6 +108,7 @@ from .scenario import (
     tidy_keywords,
     uncovered_cells,
     vocabulary_from,
+    _fields_the_cleaner_would_change,
     validate_scenario,
     voicemail_enabled,
 )
@@ -1759,6 +1760,12 @@ def accept_scenario(
                 finally:
                     world.close()
             return _err(said)
+    elif problems := _fields_the_cleaner_would_change(scenario):
+        # A rename skips the proof, but not the check that the saved name and its folder match
+        # what was submitted.
+        return _err(
+            "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
+        )
 
     # The scenario this one replaces: the one whose key it carries, else the one with its name. It
     # keeps that key, so a rename is the same scenario under a new name, not a new one.

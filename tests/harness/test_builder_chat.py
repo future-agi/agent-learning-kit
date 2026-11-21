@@ -1256,6 +1256,8 @@ def _rebuild(
     client = RebuildClient(workspace)
     if resumed:
         client.turn_context = {**client.turn_context, "active_invocation_id": "inv-1"}
+        # The checkpoint brought the session database back, so the cut-off invocation can resume.
+        (workspace / ".futureagi-adk.db").write_bytes(b"")
     runtime = HostedChatRuntime(
         client=client,  # type: ignore[arg-type]
         policy=load_chat_policy(policy),
@@ -4649,6 +4651,166 @@ def test_a_scheme_line_then_a_lone_colon_line_past_n_streams_as_stored(size) -> 
         + "\npostgres\n:\n//admin:S3cretPw9x/a://b\n@\ndb.example.com/app\nhttps://c.example/z"
     )
     _assert_swept([("scheme, :, //", text, "s3cretpw9x")], size, at_least=1)
+
+
+# -- What the builder and coordinator write down leaves cleaned ----------------------------------
+
+_PW_URL = "postgres://svc:Zq9fakePw41@db.internal/app"
+_NAMED = "DB_PASSWORD=hunter2"
+_PLANTED = ("Zq9fakePw41", "hunter2")
+
+
+def _planted_in(value) -> list[str]:
+    body = json.dumps(value, ensure_ascii=False)
+    return [one for one in _PLANTED if one in body]
+
+
+class KeepingClient(BuilderClient):
+    """A client that remembers what it was asked to send, and answers loads from it."""
+
+    def __init__(self):
+        super().__init__()
+        self.turn_context = {**self.capabilities.turn_context, "capabilities": {"control_only": True}}
+        self.sessions: list[tuple[dict, list]] = []
+        self.adjusted: list[str] = []
+
+    async def append_session(self, key, entries):
+        self.sessions.append((key, entries))
+
+    async def load_session(self, key):
+        for kept_key, entries in reversed(self.sessions):
+            if kept_key == key:
+                return {"entries": entries}
+        return {"entries": []}
+
+    async def adjust(self, instruction, target_stage="", scenario_delta=0):
+        self.adjusted.append(instruction)
+        return {"queued": True}
+
+
+def _server_tool(server, name):
+    return next(one for one in server.tools if one.name == name)
+
+
+def test_a_remembered_note_loses_credentials_before_the_ledger_keeps_it(tmp_path, monkeypatch):
+    client = KeepingClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    remember = _server_tool(runtime._builder_platform_server(), "remember")
+
+    reply = asyncio.run(
+        remember.handler({"kind": "fact", "note": f"the db is {_PW_URL}; {_NAMED}; the agent is called demo"})
+    )
+
+    ledger = json.loads((tmp_path / ".futureagi-ledger.json").read_text())
+    assert _planted_in(ledger) == []
+    assert _planted_in([entries for _, entries in client.sessions]) == []
+    assert _planted_in(reply) == []
+    assert "the agent is called demo" in ledger["notes"][0]["note"]
+
+
+def test_the_note_that_finishes_a_build_loses_credentials_where_it_is_written(tmp_path, monkeypatch):
+    from fi.alk.harness import builder, scenario_tools
+
+    client = KeepingClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    monkeypatch.setattr(runtime, "_what_exists", lambda: (True, True))
+    monkeypatch.setattr(runtime, "_after_saved", lambda **kwargs: None)
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: ["one"])
+    monkeypatch.setattr(builder, "suite_health", lambda *args, **kwargs: [])
+    finish = _server_tool(runtime._builder_platform_server(), "finish_build")
+
+    done = asyncio.run(finish.handler({"note": f"seeded from {_PW_URL}, {_NAMED}. Ready."}))
+
+    assert not done.get("is_error"), done
+    written = json.loads((tmp_path / ".futureagi-build-finished.json").read_text())
+    assert _planted_in(written) == []
+    assert "Ready." in written["note"]
+    assert written["scenarios"] == 1
+
+
+def test_an_adjustment_request_loses_credentials_before_it_is_sent(tmp_path, monkeypatch):
+    client = KeepingClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    adjust = _server_tool(runtime._control_server(), "request_adjustment")
+
+    asyncio.run(adjust.handler({"instruction": f"Point the fixtures at {_PW_URL} and use {_NAMED}"}))
+
+    assert len(client.adjusted) == 1
+    assert _planted_in(client.adjusted) == []
+    assert "Point the fixtures at" in client.adjusted[0]
+
+
+def _ask_once(runtime, question, options):
+    runtime.stopping.set()
+    asyncio.run(runtime._ask("AskUserQuestion", {"question": question, "options": options}, None))
+
+
+def test_the_coordinators_saved_state_carries_the_pending_question_cleaned(tmp_path, monkeypatch):
+    client = KeepingClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    question = f"Should I keep using {_PW_URL}?"
+    options = [f"keep it ({_NAMED})", "drop it"]
+
+    _ask_once(runtime, question, options)
+
+    state = [
+        entries[-1]
+        for key, entries in client.sessions
+        if key["project_key"] == "futureagi-coordinator-state"
+    ][-1]
+    sent = state["files"][".futureagi-pending-question.json"]
+    assert _planted_in(state) == []
+    assert sent["question"].startswith("Should I keep using ")
+    assert sent["options"][1] == "drop it"
+    # The workspace keeps what was asked, as written.
+    local = json.loads((tmp_path / ".futureagi-pending-question.json").read_text())
+    assert local["question"] == question and local["options"] == options
+
+
+def test_a_restored_pending_question_still_matches_the_question_asked_again(tmp_path, monkeypatch):
+    client = KeepingClient()
+    (tmp_path / "one").mkdir()
+    runtime = _runtime(tmp_path / "one", client, monkeypatch)
+    question = f"Should I keep using {_PW_URL}?"
+    options = [f"keep it ({_NAMED})", "drop it"]
+    _ask_once(runtime, question, options)
+    asked = next(one for one in client.events if one["kind"] == "question_requested")["message_id"]
+
+    (tmp_path / "two").mkdir()
+    resumed = _runtime(tmp_path / "two", client, monkeypatch)
+    asyncio.run(resumed._restore_coordinator_state())
+    restored = json.loads((tmp_path / "two" / ".futureagi-pending-question.json").read_text())
+    assert _planted_in(restored) == []
+    _ask_once(resumed, question, options)
+
+    again = [one for one in client.events if one["kind"] == "question_requested"][-1]["message_id"]
+    assert restored["message_id"] == asked
+    assert again == asked
+
+
+def test_a_resubmitted_scenario_is_not_a_change_because_the_saved_copy_was_cleaned(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.catalogue import Catalogue
+    from fi.alk.harness.folder import write_folder
+    from fi.alk.harness.scenario import Scenario
+
+    key = "ghp_" + "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5"
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    raw = {
+        "name": "one",
+        "scenario_key": "one",
+        "instruction": f"ask for a refund, quoting {key}",
+        "use_case": "refunds",
+        "persona": {"name": "Ana", "personality": f"calm, mentions {key}", "accent": "American"},
+    }
+    write_folder(Scenario.model_validate(raw), Catalogue(), tmp_path)
+    assert key not in (tmp_path / "scenarios" / "one" / "scenario.json").read_text()
+
+    assert not runtime._changes_situation(raw)
+    assert not runtime._changes_meaning(raw)
+    assert runtime._changes_situation({**raw, "instruction": "ask for a cancellation"})
+    assert runtime._changes_meaning({**raw, "instruction": "ask for a cancellation"})
 
 
 _R5_STREAM_SHAPES = {

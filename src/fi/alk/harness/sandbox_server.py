@@ -2016,97 +2016,6 @@ def _json_artifact(path: Path, *, max_bytes: int = 1_000_000) -> Any | None:
         return None
 
 
-def _stage_outputs(root: Path) -> list[dict[str, Any]]:
-    outputs: list[dict[str, Any]] = []
-    contract = _json_artifact(root / "contract.json")
-    if isinstance(contract, dict):
-        outputs.append(
-            {
-                "id": "contract",
-                "stage": HarnessStage.UNDERSTANDING_AGENT.value,
-                "title": "Agent contract",
-                "summary": (
-                    f"{len(contract.get('tools') or [])} tools, "
-                    f"{len(contract.get('hard_constraints') or [])} constraints and "
-                    f"{len(contract.get('real_use_cases') or [])} use cases"
-                ),
-                "kind": "contract",
-                "data": _presentation_value(contract),
-                "updated_at": datetime.fromtimestamp(
-                    (root / "contract.json").stat().st_mtime, timezone.utc
-                ).isoformat(),
-            }
-        )
-    environment = _json_artifact(root / "environment.json")
-    if isinstance(environment, dict):
-        visible = _presentation_value(
-            {
-                key: value
-                for key, value in environment.items()
-                if key
-                not in {
-                    "source",
-                    "compose_file",
-                    "compose_override_file",
-                    "internal_overrides",
-                    "runtime_trace_path",
-                    "source_fingerprint",
-                }
-            }
-        )
-        outputs.append(
-            {
-                "id": "environment",
-                "stage": HarnessStage.GENERATING_ENVIRONMENT.value,
-                "title": "Execution environment",
-                "summary": (
-                    f"{len(environment.get('services') or [])} services ready"
-                    + (
-                        f" in {environment.get('provision_seconds')}s"
-                        if environment.get("provision_seconds") is not None
-                        else ""
-                    )
-                ),
-                "kind": "environment",
-                "data": visible,
-                "updated_at": datetime.fromtimestamp(
-                    (root / "environment.json").stat().st_mtime, timezone.utc
-                ).isoformat(),
-            }
-        )
-    scenarios = _json_artifact(root / "scenarios.json")
-    if isinstance(scenarios, list):
-        outputs.append(
-            {
-                "id": "scenarios",
-                "stage": HarnessStage.GENERATING_SCENARIOS.value,
-                "title": "Generated scenarios",
-                "summary": f"{len(scenarios)} grounded scenarios",
-                "kind": "scenarios",
-                "data": scenarios,
-                "updated_at": datetime.fromtimestamp(
-                    (root / "scenarios.json").stat().st_mtime, timezone.utc
-                ).isoformat(),
-            }
-        )
-    results = _json_artifact(root / "results.json")
-    if isinstance(results, dict):
-        outputs.append(
-            {
-                "id": "results",
-                "stage": HarnessStage.GRADING.value,
-                "title": "Run results",
-                "summary": "Scenario execution and grading evidence",
-                "kind": "results",
-                "data": results,
-                "updated_at": datetime.fromtimestamp(
-                    (root / "results.json").stat().st_mtime, timezone.utc
-                ).isoformat(),
-            }
-        )
-    return outputs
-
-
 def _presentation_value(value: Any, key: str = "") -> Any:
     lowered = key.lower()
     if any(marker in lowered for marker in ("password", "secret", "token", "api_key")):
@@ -2232,7 +2141,7 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
         data = {
             "one_liner": one_liner,
             "modality": str(contract.get("modality") or "unknown"),
-            "runtime": contract.get("runtime") or {},
+            "runtime": _redact(contract.get("runtime") or {}, key="runtime"),
             "tools": tools,
             "hard_constraints": rules,
         }
@@ -2249,10 +2158,10 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
     environment = _read_json_value(run_root / "environment.json")
     if isinstance(environment, dict):
         services = [str(item) for item in environment.get("services", [])]
-        # Endpoint values are useful operational feedback, but credentials embedded in a URI
-        # must never reach the platform response.
+        # Endpoint values are useful operational feedback, but a credential under its name
+        # or inside a URI must never reach the platform response.
         overrides = {
-            str(name): re.sub(r"(://)[^/@]+@", r"\1***@", str(value))
+            str(name): _redact(str(value), key=str(name))
             for name, value in dict(environment.get("overrides") or {}).items()
         }
         # Names only: the job's settings the kit skipped because Compose

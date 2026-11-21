@@ -99,6 +99,40 @@ def test_redaction_runs_before_addressing(ledger_env, monkeypatch):
     assert row["run_id"] == hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def test_row_text_is_cleaned_before_addressing_and_still_verifies(ledger_env):
+    token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    payload = _payload(
+        trace_ids=[token, "t-plain"],
+        asset_refs=[
+            {"kind": "api_key=hunter2hunter2", "content_address": "c" * 64},
+        ],
+    )
+    row = telemetry.build_ledger_row(payload)
+    blob = telemetry.canonical_row_bytes(row).decode("utf-8")
+    assert token not in blob
+    assert "hunter2hunter2" not in blob
+    assert row["trace_ids"] == ["[redacted]", "t-plain"]
+    # Cleaned before the address is computed, so the stored row still verifies.
+    assert row["run_id"] == hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    telemetry.RunLedger().append(row)
+    assert telemetry.RunLedger().verify()["chain_intact"]
+
+
+def test_row_keeps_content_addresses_and_env_markers(ledger_env, monkeypatch):
+    monkeypatch.setenv("SENTINEL_TOKEN", "sk-sentinel-row-test")
+    address = hashlib.sha256(b"asset").hexdigest()
+    payload = _payload(
+        trace_ids=["t-sk-sentinel-row-test"],
+        required_env=["SENTINEL_TOKEN"],
+        asset_refs=[{"kind": "transcript", "content_address": address}],
+    )
+    row = telemetry.build_ledger_row(
+        payload, required_env=telemetry.declared_required_env(payload)
+    )
+    assert row["trace_ids"] == ["t-[redacted:SENTINEL_TOKEN]"]
+    assert row["asset_refs"] == [{"kind": "transcript", "content_address": address}]
+
+
 def test_scores_fixed_precision_rounding(ledger_env):
     row = telemetry.build_ledger_row(
         _payload(summary={"verdict": "pass", "score": 0.1 + 0.2})
@@ -650,3 +684,120 @@ def test_sdk_account_sync_example_dry_run(tmp_path, monkeypatch):
     assert payload["identity"]["local_run_id"] == (
         payload["identity"]["encoded_run_id"]
     )
+
+
+def test_keys_that_differ_only_in_a_url_query_stay_distinct(ledger_env):
+    from fi.alk.telemetry import _row
+
+    cleaned = _row._redact_value(
+        {"https://h.example.com/a?page=1": 1, "https://h.example.com/a?page=2": 2}, ()
+    )
+    assert cleaned == {
+        "https://h.example.com/a?page=1": 1,
+        "https://h.example.com/a?page=2": 2,
+    }
+
+
+def test_a_declared_env_value_is_still_removed_from_a_key(ledger_env, monkeypatch):
+    from fi.alk.telemetry import _row
+
+    monkeypatch.setenv("SENTINEL_TOKEN", "sk-sentinel-key-test")
+    cleaned = _row._redact_value({"k-sk-sentinel-key-test": 1}, ["SENTINEL_TOKEN"])
+    assert cleaned == {"k-[redacted:SENTINEL_TOKEN]": 1}
+
+
+def test_a_key_holding_a_key_shape_is_still_cleaned(ledger_env):
+    from fi.alk.telemetry import _row
+
+    cleaned = _row._redact_value({"run ghp_" + "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5": 1}, ())
+    assert not any("ghp_aB3" in key for key in cleaned)
+
+
+def test_sync_run_refuses_a_row_written_before_cleaning_and_leaves_the_cursor(
+    ledger_env, monkeypatch, stub_collector
+):
+    from fi.alk.telemetry import _emit
+    from fi.alk.telemetry._row import canonical_row_address
+
+    monkeypatch.setenv("AGENT_LEARNING_API_KEY", "key-x")
+    monkeypatch.setenv("AGENT_LEARNING_SECRET_KEY", "secret-x")
+    monkeypatch.setenv("FI_BASE_URL", stub_collector)
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        _emit, "keyed_emit", lambda **kwargs: sent.append(kwargs) or {"status": "synced"}
+    )
+    ledger = telemetry.RunLedger()
+    # A row an older kit wrote: only the declared env values were removed from it.
+    legacy = dict(telemetry.build_ledger_row(_payload()))
+    legacy["note"] = "key sk-proj-" + "Ab12Cd34Ef56Gh78Ij90Kl12Mn34Op56Qr78St90UvWx"
+    legacy["run_id"] = canonical_row_address(legacy)
+
+    result = _sync.sync_run(legacy, ledger=ledger)
+
+    assert result == {"status": "refused", "reason": "row_not_cleaned", "sent": False}
+    assert sent == []
+    assert ledger.read_cursor()["synced"] == {}
+
+    # A row built now is already clean, so the check never refuses it.
+    clean = telemetry.build_ledger_row(_payload())
+    assert _sync.sync_run(clean, ledger=ledger)["status"] == "synced"
+    assert len(sent) == 1
+
+
+def test_cli_runs_sync_says_why_a_row_not_cleaned_was_refused(ledger_env, capsys, monkeypatch):
+    # A row an older kit left a credential in is refused before anything is sent. The CLI
+    # says that, not the content-contract text, which is about transcripts and promises the
+    # metadata went out.
+    rows = _seed_two_runs()
+    monkeypatch.setenv("AGENT_LEARNING_API_KEY", "key-x")
+    monkeypatch.setenv("AGENT_LEARNING_SECRET_KEY", "secret-x")
+    monkeypatch.setattr(
+        _sync,
+        "sync_run",
+        lambda row, **kwargs: {"status": "refused", "reason": "row_not_cleaned", "sent": False},
+    )
+
+    assert main(["runs", "sync", rows[0]["run_id"][:8]]) == 0
+    out = capsys.readouterr().out
+
+    assert "holds a credential an older kit did not remove" in out
+    assert "nothing was sent" in out
+    assert "redaction contract" not in out
+    assert "metadata sync are unaffected" not in out
+    # How to stop the refusal repeating, for this one row.
+    assert f"agent-learn runs forget {rows[0]['run_id'][:8]} --run" in out
+
+
+def test_a_row_not_cleaned_is_refused_by_the_cli_and_once_forgotten_is_not_queued(
+    ledger_env, capsys, monkeypatch, stub_collector
+):
+    # The real refusal, end to end: a row an older kit left a credential in, the advice the
+    # CLI gives, and that following it stops the row from being queued.
+    from fi.alk.telemetry import _emit
+    from fi.alk.telemetry._row import canonical_row_address
+
+    monkeypatch.setenv("AGENT_LEARNING_API_KEY", "key-x")
+    monkeypatch.setenv("AGENT_LEARNING_SECRET_KEY", "secret-x")
+    monkeypatch.setenv("FI_BASE_URL", stub_collector)
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        _emit, "keyed_emit", lambda **kwargs: sent.append(kwargs) or {"status": "synced"}
+    )
+    ledger = telemetry.RunLedger()
+    legacy = dict(telemetry.build_ledger_row(_payload()))
+    legacy["note"] = "key sk-proj-" + "Ab12Cd34Ef56Gh78Ij90Kl12Mn34Op56Qr78St90UvWx"
+    legacy["run_id"] = canonical_row_address(legacy)
+    ledger.append(legacy)
+    short = legacy["run_id"][:8]
+
+    assert main(["runs", "sync", short]) == 0
+    out = capsys.readouterr().out
+    assert "holds a credential an older kit did not remove" in out
+    assert f"agent-learn runs forget {short} --run" in out
+    assert "Ab12Cd34" not in out
+
+    assert main(["runs", "forget", short, "--run", "--yes"]) == 0
+    capsys.readouterr()
+    assert main(["runs", "sync", "--queued"]) == 0
+    assert "nothing queued" in capsys.readouterr().out
+    assert sent == []

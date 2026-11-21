@@ -18,6 +18,8 @@ from typing import Any, Mapping, Sequence
 
 from ..live._contract import AGENT_LEARNING_RUN_KIND, EVIDENCE_CLASSES, VERDICTS
 from ..live._transcript import redact_env_values  # the ONE redaction seam
+from ..providers.agent import redact_strings
+from ..providers.secret_shapes import find
 from ._contract import (
     LEDGER_ROW_SCHEMA,
     NON_CANONICAL_FIELDS,
@@ -50,20 +52,32 @@ def canonical_row_address(row: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_row_bytes(row)).hexdigest()
 
 
+def _redact_key(key: str, required_env: Sequence[str]) -> str:
+    key = redact_env_values(key, required_env)
+    return redact_strings(key) if find(key) else key
+
+
 def _redact_value(value: Any, required_env: Sequence[str]) -> Any:
     """Walk a row value: redact env VALUES out of every string leaf and round
     floats to fixed precision so the addressed core has no platform-variant
     repr (ARCH §2a determinism rules)."""
 
     if isinstance(value, str):
-        return redact_env_values(value, required_env)
+        # Declared env values first, then the text rule for secrets nobody declared.
+        # Cleaning here, before run_id is computed, keeps RunLedger.verify true.
+        return redact_strings(redact_env_values(value, required_env))
     if isinstance(value, bool):
         return value
     if isinstance(value, float):
         return round(value, _FLOAT_PRECISION)
     if isinstance(value, Mapping):
+        # A key gets the declared env values, and the text rule only when it holds a secret
+        # shape: the text rule drops a URL's query, so two honest keys that differ only there
+        # would merge and one value would be lost.
         return {
-            _redact_value(key, required_env): _redact_value(item, required_env)
+            (_redact_key(key, required_env) if isinstance(key, str) else key): (
+                _redact_value(item, required_env)
+            )
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):

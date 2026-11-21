@@ -6,12 +6,14 @@ copied as data (W2), so a planted bug in a rule fails a named case.
 
 from __future__ import annotations
 
+import ast
 import itertools
 import json
 import logging
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -644,7 +646,7 @@ _MASKED = {
         "see https://h/x?a=1&\n    key=sk-1 more",
         "see https://h/x\n    key= more",
     ),
-    # A named value: up to 16 spaces or tabs of alignment, or up to 4 whitespace with a break.
+    # A named value: any run of spaces or tabs of alignment, or up to 4 whitespace with a break.
     "named json": ('{"password": "Zq8wYv3Lp9"}', '{"password": "[redacted]"}'),
     "named env": ("DB_PASSWORD=Zq8wYv3Lp9", "DB_PASSWORD=[redacted]"),
     "named django": (
@@ -654,6 +656,14 @@ _MASKED = {
     "named 16 spaces": (
         "password" + " " * 16 + "= " + _PW,
         "password" + " " * 16 + "= [redacted]",
+    ),
+    "named 17 spaces": (
+        "password" + " " * 17 + "= " + _PW,
+        "password" + " " * 17 + "= [redacted]",
+    ),
+    "named 300 spaces and tabs": (
+        "password" + " \t" * 150 + "= " + _PW,
+        "password" + " \t" * 150 + "= [redacted]",
     ),
     "named break after :": ("password:\n   " + _PW, "password:\n   [redacted]"),
     "named space break after :": ("password: \n  " + _PW, "password: \n  [redacted]"),
@@ -761,7 +771,6 @@ _KEPT = [
     "password: $uperSecret1",
     "<password>Zq8wYv3Lp9</password>",
     "the password is Zq8wYv3Lp9",
-    "password" + " " * 17 + "= " + _PW,
     # A quoted value for each reference form (r1 M5).
     'token: "{{ secrets.TOKEN_1 }}"',
     'token: "$TOKEN_1"',
@@ -1115,6 +1124,8 @@ def test_the_page_outcomes_hold() -> None:
 # The reviewer's second pass on PR 308 (round 5). Secrets must lose their parts; honest text must
 # come out as TH-9491 alone leaves it.
 R5_SECRETS = {
+    # A named value inside escaped JSON, as kubectl's last-applied annotation holds it.
+    "escaped json: named value in an annotation": r'{\"name\":\"svc\",\"password\":\"Zq8wYv3Lp9\"}',
     # A password whose first half reads like a port is still a password: a port is digits, a
     # reference, or a name that ends in PORT.
     "port-like pw: base64 slash": "postgres://app:A5GQ/lWrLxSR8NQLkQfyAyXM@db.example.com:5432/app",
@@ -1487,8 +1498,6 @@ HONEST_CHANGED = {
     "r3: H ident digit": "an identifier with a digit isn't code",
     "r3: H pem prose": "the bare header is masked; the instruction after it is kept",
     "r4 honest: pem prose": "the bare header is masked; the instruction after it is kept",
-    "r4 honest: pagination next_page_token": "a best-effort form (TH-9555)",
-    "r4 honest: pagination nextForwardToken": "a best-effort form (TH-9555)",
 }
 
 
@@ -1870,6 +1879,37 @@ _PORT_LIKE = {
 @pytest.mark.parametrize("text", list(_PORT_LIKE))
 def test_a_password_that_reads_like_a_port_is_masked(text: str) -> None:
     assert _redact(text) == _PORT_LIKE[text]
+
+
+# A scheme such as jdbc: before the real one is not a user, so the URL is cleaned as a URL and its
+# scheme stays.
+_SCHEME_BEFORE_THE_URL = {
+    "jdbc:mysql://root:Xk9Qp2@db.example.com:3306/app": "jdbc:mysql://db.example.com:3306/app",
+    "jdbc:postgresql://app:Xk9Qp2@db.example.com:5432/app": "jdbc:postgresql://db.example.com:5432/app",
+    "spring.datasource.url=jdbc:mysql://root:Xk9Qp2@db:3306/app": "spring.datasource.url=jdbc:mysql://db:3306/app",
+}
+
+
+@pytest.mark.parametrize("text", list(_SCHEME_BEFORE_THE_URL))
+def test_a_url_after_a_scheme_is_cleaned_as_a_url_and_keeps_both_schemes(text: str) -> None:
+    assert _redact(text) == _SCHEME_BEFORE_THE_URL[text]
+
+
+# A port must end the authority: a password that starts like one and then holds + or = or a name
+# is still a password. Loosening the port's lookahead to "anything but a name character or @"
+# reads the start as a port and leaks the rest.
+_NOT_A_PORT = {
+    "digits then +": "postgres://app:7+Qp/Zr8x@db.example.com:5432/app",
+    "digits then =": "postgres://app:12=ab/cdef@db.example.com:5432/app",
+    "a template then +": "postgres://app:${X}+y/zzz@db.example.com:5432/app",
+    "a port name then +": "postgres://app:DB_PORT+q/zzz@db.example.com:5432/app",
+}
+
+
+@pytest.mark.parametrize("name", list(_NOT_A_PORT))
+def test_a_password_that_starts_like_a_port_but_does_not_end_one_is_masked(name: str) -> None:
+    out = _redact(_NOT_A_PORT[name])
+    assert out == "postgres://db.example.com:5432/app", out
 
 
 # -- Round 5, fix 4: more key shapes ------------------------------------------------------------
@@ -2340,3 +2380,23 @@ def test_the_bare_host_with_no_port_is_a_named_limit() -> None:
     """`host: user:pw@db.example.com` has no port: it reads as `mailto:a@b` or `12:30@room`."""
     text = "host: admin:Xk9Qp2Zr8@db.example.com"
     assert _redact(text) == text
+
+
+# A form Python 3.11 added: a possessive quantifier (`*+`, `++`, `?+`, `}+`) or an atomic group.
+_NEWER_THAN_3_10 = re.compile(r"(?<![\\\[])(?:[*+?}]\+|\(\?>)")
+
+
+def test_no_pattern_uses_a_form_python_3_10_cannot_read() -> None:
+    # The package runs on Python 3.10, and the telemetry modules import this one, so a
+    # possessive quantifier there would stop `import fi.alk.telemetry` with "multiple repeat".
+    tree = ast.parse(Path(secret_shapes.__file__).read_text(encoding="utf-8"))
+    found = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and _NEWER_THAN_3_10.search(node.value)
+    ]
+    assert not found
+    assert _NEWER_THAN_3_10.search(r"[ \t]*+") and _NEWER_THAN_3_10.search(r"(?>a)")
+    assert not _NEWER_THAN_3_10.search(r"[ \t]*(?![ \t])") and not _NEWER_THAN_3_10.search(r"\++")

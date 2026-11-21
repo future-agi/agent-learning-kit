@@ -808,6 +808,46 @@ def test_exported_bundle_survives_source_as_an_internal_artifact(
     assert plan.runtime.document == "services/source/docker-compose.yml"
 
 
+@pytest.mark.parametrize("artifact", ["actors.json", "simulator_prompt.md"])
+def test_a_bundle_refuses_an_actor_file_or_prompt_that_holds_a_credential(
+    tmp_path: Path, artifact: str
+) -> None:
+    from fi.alk.harness.bundle import BundleError
+
+    key = "AKIA" + "IOSFODNN7EXAMPLE"
+    source = tmp_path / "agent"
+    session = tmp_path / "session"
+    source.mkdir()
+    session.mkdir()
+    (source / "docker-compose.yml").write_text("services: {tools-api: {image: busybox}}\n")
+    (session / "contract.json").write_text('{"agent":"ride"}\n')
+    (session / artifact).write_text(f"The caller reads out {key}")
+
+    with pytest.raises(BundleError) as raised:
+        export_session_bundle(source, session, name="ride-environment")
+
+    assert artifact in str(raised.value) and "placeholder" in str(raised.value)
+    assert key not in str(raised.value)
+    assert not (session / "environment-bundle").exists()
+
+
+def test_a_bundle_with_honest_actor_and_prompt_files_still_builds_with_both(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "agent"
+    session = tmp_path / "session"
+    source.mkdir()
+    session.mkdir()
+    (source / "docker-compose.yml").write_text("services: {tools-api: {image: busybox}}\n")
+    (session / "contract.json").write_text('{"agent":"ride"}\n')
+    (session / "actors.json").write_text('{"actors": [{"id": "it_desk", "prompt": "You hold $AWS_KEY_ID"}]}')
+    (session / "simulator_prompt.md").write_text("You are a caller. Follow {{ instruction }}.")
+
+    root, _bundle = export_session_bundle(source, session, name="ride-environment")
+
+    assert (root / "actors.json").is_file() and (root / "simulator_prompt.md").is_file()
+
+
 def test_environment_plan_is_reproducible_and_bound_to_its_bundle(
     tmp_path: Path,
 ) -> None:

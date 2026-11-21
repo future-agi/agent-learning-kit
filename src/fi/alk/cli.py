@@ -6183,10 +6183,17 @@ def _runs_sync(telemetry: Any, ledger: Any, parsed: Any) -> int:
     targets: List[Dict[str, Any]] = []
     if parsed.queued:
         synced_map = ledger.read_cursor()["synced"]
+        # A run forgotten whole (`runs forget --run`) is never sent.
+        forgotten = {
+            run_id
+            for run_id, tomb in _runs_tombstoned(telemetry, ledger).items()
+            if "*" in (tomb.get("redacted_fields") or [])
+        }
         targets = [
             row
             for row in _runs_rows(telemetry, ledger)
             if str(row.get("run_id")) not in synced_map
+            and str(row.get("run_id")) not in forgotten
         ]
         if not targets:
             print("nothing queued — every row is already synced (no-op).")
@@ -6209,6 +6216,22 @@ def _runs_sync(telemetry: Any, ledger: Any, parsed: Any) -> int:
             print(
                 f"= already synced  run {run_id}  ({result['channel']}) — "
                 "re-sync is a no-op (idempotent by content address)"
+            )
+        elif result["status"] == "refused" and result.get("reason") == "row_not_cleaned":
+            # The metadata row itself is held back: it was written by an older kit and still
+            # holds a credential today's cleaner removes. It stays queued, refused each time.
+            print(f"✗ sync REFUSED  run {run_id}")
+            print(
+                "  this row holds a credential an older kit did not remove, so "
+                "nothing was sent."
+            )
+            print(
+                "  it stays in your ledger and is refused again on every "
+                "`runs sync --queued`; your run is unaffected."
+            )
+            print(
+                "  to stop that, forget this run (a tombstone is appended; the row is not "
+                f"sent again): agent-learn runs forget {run_id[:8]} --run"
             )
         elif result["status"] == "refused":
             print(f"✗ content sync REFUSED  run {run_id}")

@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..providers.secret_shapes import credential_in
+
 SIMULATOR = "simulator_prompt.md"
 
 
@@ -61,6 +63,14 @@ def validate_simulator_prompt(
     instruction, since a prompt with no variables is the same prompt for every scenario.
     """
     problems: list[str] = []
+    # Refused rather than cleaned: the simulated caller plays from this file as written, so a
+    # masked value would change what it says, and a scenario's caller facts live in the fixture.
+    if credential_in(prompt):
+        problems.append(
+            "the prompt holds a credential. It is read by the platform as written, so give the "
+            "agent the secret through its settings and put what the caller must say in the "
+            "scenario's fixture; use a placeholder here"
+        )
     if len(prompt.strip()) < 80:
         problems.append("too short to be a simulator prompt")
     if not variables_in(prompt):

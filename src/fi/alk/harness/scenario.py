@@ -26,6 +26,12 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .actors import Fault, Limits, PreRunSession, ScenarioActor, StartsWith
+from ..providers.agent import redact_strings
+from ..providers.secret_shapes import (
+    credential_in,
+    credential_in_check_code,
+    credential_named_arg_values_refusal,
+)
 from .catalogue import Catalogue
 from .simulator import variables_in
 
@@ -506,6 +512,118 @@ def scenario_edit_problems(scenario: Scenario) -> list[str]:
     return problems
 
 
+def _credentials_in_kept_fields(scenario: Scenario) -> list[str]:
+    """The fields a scenario keeps exactly as written that hold a credential.
+
+    They are never cleaned, since the world replays them and the caller reads them as facts, so a
+    credential in one would be saved and sent on as it is. Refused here instead; the value is
+    never echoed back."""
+    persona = scenario.persona
+    kept = {
+        "solution": [step.model_dump() for step in scenario.solution],
+        "alternatives": [[step.model_dump() for step in way] for way in scenario.alternatives],
+        "variables": scenario.variables,
+        "fixture": scenario.fixture,
+        "persona.metadata": persona.metadata if persona else None,
+        "persona.scripted_caller": persona.scripted_caller if persona else None,
+    }
+    for index, actor in enumerate(scenario.actors):
+        # Matched against the world's records to decide whether the actor comes in.
+        if actor.trigger is not None:
+            kept[f"actors[{index}].trigger.where"] = actor.trigger.where
+        for step, action in enumerate(actor.actions):
+            kept[f"actors[{index}].actions[{step}].arguments"] = action.arguments
+            if action.trigger is not None:
+                kept[f"actors[{index}].actions[{step}].trigger.where"] = action.trigger.where
+    for index, session in enumerate(scenario.pre_run):
+        for step, message in enumerate(session.thread):
+            kept[f"pre_run[{index}].thread[{step}].arguments"] = message.arguments
+    for index, fault in enumerate(scenario.faults):
+        kept[f"faults[{index}].approved_when"] = fault.approved_when
+    return [
+        f"{field} holds a credential. A scenario's {field.split('.')[-1]} is kept as written, so "
+        "give the agent the secret through its settings and use a placeholder here"
+        for field, value in kept.items()
+        if _holds_a_credential(field, value)
+    ]
+
+
+def _holds_a_credential(field: str, value: Any) -> bool:
+    if credential_in(value):
+        return True
+    # A where's key names the record field it matches, so a shapeless value under a credential's
+    # name (`password: hunter2`) is one too.
+    return field.endswith(".where") and isinstance(value, dict) and any(
+        credential_named_arg_values_refusal(str(key), one) for key, one in value.items()
+    )
+
+
+def _credentials_in_copied_files(scenario: Scenario, catalogue: Catalogue) -> list[str]:
+    """The code files a scenario's folder is written with, each copied as written: setup.py,
+    ready.py and the check of each sub-goal it names. Named by file, never echoed."""
+    files = {"setup.py": scenario.setup_code, "ready.py": scenario.ready_code}
+    for name in scenario.sub_goals:
+        sub_goal = catalogue.named(name)
+        if sub_goal is not None and sub_goal.deterministic():
+            files[f"checks/{name}.py"] = sub_goal.check
+    return [
+        f"{file} holds a credential. It is copied into the scenario as written, so give the agent "
+        "the secret through its settings and use a placeholder here"
+        for file, code in files.items()
+        if code and credential_in_check_code(code)
+    ]
+
+
+def _fields_the_cleaner_would_change(scenario: Scenario) -> list[str]:
+    """Fields the saved file would hold differently from the document submitted.
+
+    The run replays `instruction`, the persona's prose, `starts_with.text`, each fault's
+    `message` and each actor's instruction and knowledge from the saved copy, and names the folder and the checks from `name`, `scenario_key` and the sub-goal
+    ids, so each must come back from cleaning exactly as it went in. Refused instead of masked, so
+    the proof never changes after submission. The value is never echoed back."""
+    persona = scenario.persona
+    replayed: dict[str, Any] = {"instruction": scenario.instruction}
+    if persona is not None:
+        # Everything the simulated caller is told about itself is read from the saved copy.
+        # `metadata` and `scripted_caller` are kept exactly and checked for credentials instead.
+        replayed.update(
+            {
+                f"persona.{name}": value
+                for name, value in persona.model_dump().items()
+                if name not in {"metadata", "scripted_caller", "multilingual"}
+            }
+        )
+    if scenario.starts_with is not None:
+        replayed["starts_with.text"] = scenario.starts_with.text
+    for index, fault in enumerate(scenario.faults):
+        # The error the world returns to the agent, which the call runner matches on.
+        replayed[f"faults[{index}].message"] = fault.message
+    for index, actor in enumerate(scenario.actors):
+        replayed[f"actors[{index}].instruction"] = actor.instruction
+        replayed[f"actors[{index}].knowledge"] = actor.knowledge
+    named = {
+        "name": scenario.name,
+        "scenario_key": scenario.scenario_key,
+        "sub_goals": list(scenario.sub_goals),
+    }
+    problems = [
+        f"{field} is changed when the scenario is cleaned for saving, and the caller is given the "
+        "saved copy, so a value it must say would arrive masked. Put a value the caller replays in "
+        "`fixture` (and in `persona.scripted_caller` if the caller must say it)"
+        for field, text in replayed.items()
+        # Only text the cleaner would change by removing a credential: an honest URL query is
+        # no loss to the caller, and refusing it would refuse ordinary instructions.
+        if text and redact_strings(text) != text and credential_in(text)
+    ]
+    problems.extend(
+        f"{field} is changed when the scenario is cleaned for saving, so the saved file and its "
+        "folder would no longer match what was submitted. Keep a name free of credentials"
+        for field, value in named.items()
+        if value and redact_strings(value) != value
+    )
+    return problems
+
+
 def validate_scenario(
     scenario: Scenario,
     catalogue: Catalogue,
@@ -520,7 +638,9 @@ def validate_scenario(
     Whether it can actually be passed is a different question, and no amount of reading settles
     it. That is what the gates are for.
     """
-    problems: list[str] = []
+    problems: list[str] = _credentials_in_kept_fields(scenario)
+    problems.extend(_credentials_in_copied_files(scenario, catalogue))
+    problems.extend(_fields_the_cleaner_would_change(scenario))
     if not scenario.name.strip():
         problems.append("no name")
     if not scenario.instruction.strip():

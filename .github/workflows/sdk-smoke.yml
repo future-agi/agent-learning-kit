@@ -279,6 +279,9 @@ jobs:
         # test_the_system_prompt_stays_within_budget is out until its budget is decided (the
         # scenario writer's prompt is 170k characters against a 90k budget set on 23 Sep). (The
         # run is one folded line, so they are named here rather than beside each --deselect.)
+        env:
+          # The transcript-resume test runs a real CLI against a local stub: here it must run, not skip.
+          ALK_RESUME_CLI_REQUIRED: "1"
         run: >-
           python -m pytest -q
           tests/runtime/test_livekit_engine.py
@@ -325,6 +328,12 @@ jobs:
           tests/harness/test_contract_tools_subfolder.py
           tests/harness/test_contract_model.py
           tests/harness/test_secret_paths.py
+          tests/harness/test_secret_cleaning_files.py
+          tests/telemetry/test_telemetry_ledger.py
+          tests/test_dashboard_telemetry.py
+          tests/harness/test_contract.py
+          tests/harness/test_actor_runtime.py
+          tests/harness/test_native_authoring.py
           tests/harness/test_import_roots.py
           tests/harness/test_source_data_invariants_folder.py
           tests/harness/test_hosted_authoring_entrypoint.py
@@ -381,3 +390,47 @@ jobs:
           tests/test_e2b_template_build_id.py
           tests/test_release_pr_step.py
           tests/episode
+
+  # The hosted image installs the SDK that uv.lock pins, with the CLI that wheel bundles, which is
+  # the CLI that resumes a stored transcript there. The job above installs the newest SDK instead.
+  locked-sdk-resume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ALK_RESUME_CLI_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.9"
+      - name: Install what uv.lock pins
+        run: >-
+          uv export --frozen --no-dev --no-emit-project
+          --extra livekit --extra harness-ui --extra harness-stores --extra hosted-tracing
+          --output-file "$RUNNER_TEMP/alk-requirements.txt"
+          && python -m pip install -r "$RUNNER_TEMP/alk-requirements.txt"
+          && python -m pip install --no-deps .
+          && python -m pip install pytest pytest-asyncio
+      - name: Check the SDK is the locked one, and find its CLI
+        run: |
+          python - <<'PY'
+          import os, pathlib, tomllib
+          import claude_agent_sdk
+          locked = next(
+              one["version"]
+              for one in tomllib.loads(pathlib.Path("uv.lock").read_text())["package"]
+              if one["name"] == "claude-agent-sdk"
+          )
+          assert claude_agent_sdk.__version__ == locked, (claude_agent_sdk.__version__, locked)
+          cli = pathlib.Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude"
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"ALK_RESUME_CLI_PATH={cli}\n")
+          PY
+      - name: Resume a mirrored transcript with the locked SDK's CLI
+        run: >-
+          python -m pytest -q
+          tests/harness/test_hosted_conversation.py
+          -k "mirrored or real_cli or empty_store or nothing_left_to_mirror"

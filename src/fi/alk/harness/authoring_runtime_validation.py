@@ -1684,9 +1684,19 @@ async def _validate_and_repair(
                         )
                         if status != 0:
                             return 1
-                        return _promote_data_store(
-                            contract, authoring, Path(candidate_dir)
-                        )
+                        from .contract import ContractCredentialRefused
+
+                        try:
+                            return _promote_data_store(
+                                contract, authoring, Path(candidate_dir)
+                            )
+                        except ContractCredentialRefused as refused:
+                            # Names the field, never the value; the contract stays as it was.
+                            print(
+                                f"runtime validation: data store not promoted: {refused}",
+                                flush=True,
+                            )
+                            return 1
                 if generic and _needs_runtime_plan_repair(_active_repair_diagnostics):
                     from .contract import AgentContract
                     from .runtime_repair import request_runtime_plan_patch
@@ -1972,26 +1982,38 @@ async def _validate_and_repair(
                                 )
                             status = 0
                     elif isinstance(repair_result, RuntimePlanPatch):
-                        apply_runtime_plan_patch(
-                            source,
-                            authoring / "contract.json",
-                            repair_result,
-                            allowed_diagnostic_codes={
-                                item.code for item in diagnostics
-                            },
-                            available_secret_aliases=available_secret_aliases,
-                            allow_ingress_repair=readiness_only,
-                        )
-                        patch_path = (
-                            authoring
-                            / "generic-harness"
-                            / f"runtime-plan-repair-{decision.sequence}.json"
-                        )
-                        patch_path.write_text(
-                            repair_result.model_dump_json(indent=2) + "\n",
-                            encoding="utf-8",
-                        )
-                        status = 0
+                        from .contract import ContractCredentialRefused
+
+                        try:
+                            apply_runtime_plan_patch(
+                                source,
+                                authoring / "contract.json",
+                                repair_result,
+                                allowed_diagnostic_codes={
+                                    item.code for item in diagnostics
+                                },
+                                available_secret_aliases=available_secret_aliases,
+                                allow_ingress_repair=readiness_only,
+                            )
+                        except ContractCredentialRefused as refused:
+                            # A failed repair, as a rejected world patch is: the field is
+                            # named, never the value, and the contract stays as it was.
+                            print(
+                                f"runtime validation: repair rejected: {refused}",
+                                flush=True,
+                            )
+                            status = 1
+                        else:
+                            patch_path = (
+                                authoring
+                                / "generic-harness"
+                                / f"runtime-plan-repair-{decision.sequence}.json"
+                            )
+                            patch_path.write_text(
+                                repair_result.model_dump_json(indent=2) + "\n",
+                                encoding="utf-8",
+                            )
+                            status = 0
                     else:
                         status = repair_result
                 else:

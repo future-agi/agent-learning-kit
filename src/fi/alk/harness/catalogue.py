@@ -21,6 +21,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from ..providers.agent import redact_strings
+from ..providers.secret_shapes import credential_in_check_code
+
 CATALOGUE = "sub_goals.json"
 
 class SubGoal(BaseModel):
@@ -387,6 +390,11 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         )
     if sub_goal.output != "pass_fail":
         problems.append(f"{sub_goal.name}: output {sub_goal.output!r}; only pass_fail is judged today")
+    if sub_goal.check.strip() and credential_in_check_code(sub_goal.check):
+        problems.append(
+            f"{sub_goal.name}: check holds a credential. A check runs and is stored as written, so "
+            "read the value from the world or the call instead of writing it into the code"
+        )
     if sub_goal.check.strip() and "def check(" not in sub_goal.check:
         problems.append(
             f"{sub_goal.name}: a check must define check(world, calls) and return a problem as "
@@ -607,12 +615,30 @@ def catalogue_problems(
     return []
 
 
+def clean_catalogue(document: dict[str, Any]) -> dict[str, Any]:
+    """A catalogue document with its prose cleaned, for the files that leave the sandbox.
+
+    A sub-goal's `check` is code that runs as written, so it is kept exactly and a credential in
+    it is refused at submission instead (`validate_sub_goal`). Every other string is prose the
+    judge or a reader gets, and is cleaned by what it says."""
+    cleaned = redact_strings(
+        {key: value for key, value in document.items() if key != "sub_goals"}
+    )
+    cleaned["sub_goals"] = [_clean_sub_goal(goal) for goal in document.get("sub_goals") or []]
+    return {key: cleaned[key] for key in document}
+
+
+def _clean_sub_goal(goal: dict[str, Any]) -> dict[str, Any]:
+    prose = redact_strings({key: value for key, value in goal.items() if key != "check"})
+    return {key: goal[key] if key == "check" else prose[key] for key in goal}
+
+
 def save_catalogue(catalogue: Catalogue, destination: Path) -> Path:
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / CATALOGUE
     path.write_text(
-        json.dumps(catalogue.model_dump(), indent=2, ensure_ascii=False),
+        json.dumps(clean_catalogue(catalogue.model_dump()), indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
     return path

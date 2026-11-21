@@ -725,6 +725,10 @@ def world_actor_tools(
             actor = Actor.model_validate({**base, **merged})
         except ValueError as exc:
             return _err(f"Not added: {exc}")
+        from ..call_actor import credential_problem, fields_holding_a_credential
+
+        if leaked := fields_holding_a_credential(actor):
+            return _err("Not added: " + "; ".join(credential_problem(one) for one in leaked) + ".")
         from ..actors import actor_models
 
         models = actor_models()

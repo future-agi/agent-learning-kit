@@ -669,7 +669,7 @@ def test_local_sandbox_exposes_secret_safe_live_stage_outputs(tmp_path, monkeypa
         "simulation",
     ]
     assert "book_ride" in serialized
-    assert "postgresql://***@postgres:5432/app" in serialized
+    assert "postgresql://postgres:5432/app" in serialized
     assert "password" not in serialized
     assert "must-not-be-returned" not in serialized
     assert (
@@ -1398,6 +1398,71 @@ def test_live_contract_output_loses_url_credentials_from_a_raw_contract(tmp_path
         "Confirm before booking",
     ]
     assert "hunter2" not in json.dumps(contract) and "sk-1" not in json.dumps(contract)
+
+
+def test_live_environment_overrides_are_masked_by_name_and_by_content(tmp_path):
+    from fi.alk.harness.sandbox_server import _stage_outputs
+
+    (tmp_path / "environment.json").write_text(
+        json.dumps(
+            {
+                "services": ["postgres"],
+                "overrides": {
+                    "STRIPE_API_KEY": "plain-looking-value-123",
+                    "DB_PASSWORD": 12345678,
+                    "DATABASE_URL": "postgresql://user:hunter2@postgres:5432/app",
+                    "LOG_LEVEL": "debug",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [environment] = [item for item in _stage_outputs(tmp_path) if item["kind"] == "environment"]
+    overrides = environment["data"]["overrides"]
+
+    assert overrides["STRIPE_API_KEY"] == "[redacted]"
+    assert overrides["DB_PASSWORD"] == "[redacted]"
+    assert "hunter2" not in overrides["DATABASE_URL"]
+    assert overrides["DATABASE_URL"] == "postgresql://postgres:5432/app"
+    assert overrides["LOG_LEVEL"] == "debug"
+
+
+def test_live_contract_runtime_is_masked_by_key(tmp_path):
+    from fi.alk.harness.sandbox_server import _stage_outputs
+
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "one_liner": "Books rides",
+                "modality": "chat",
+                "runtime": {
+                    "kind": "http",
+                    "local_auth": {"password": "p4ss-w0rd-value", "name": "login"},
+                    "url": "https://bot:hunter2@hooks.example/v1",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [contract] = [item for item in _stage_outputs(tmp_path) if item["kind"] == "contract"]
+    runtime = contract["data"]["runtime"]
+
+    assert runtime["local_auth"] == {"password": "[redacted]", "name": "login"}
+    assert "hunter2" not in json.dumps(runtime)
+    assert runtime["kind"] == "http"
+
+
+def test_sandbox_server_defines_one_stage_outputs():
+    import ast
+    import inspect
+
+    from fi.alk.harness import sandbox_server
+
+    tree = ast.parse(inspect.getsource(sandbox_server))
+    defs = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_stage_outputs"]
+    assert len(defs) == 1
 
 
 @pytest.mark.parametrize("flag", [None, "0", "false", "", "true", "yes", " 1", "1 "])

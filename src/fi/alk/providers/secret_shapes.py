@@ -11,6 +11,7 @@ package, so only the drift test reads it, to tie the prefix patterns here to it.
 """
 
 import re
+from urllib.parse import unquote, unquote_plus
 from bisect import bisect_left
 from collections.abc import Callable
 
@@ -277,6 +278,8 @@ _KEY_LINE = re.compile(r"[ \t]*(?:\d+\t)?[A-Za-z0-9+/=]+")
 #            (SecretKey, AccountKey); the second word's capital is at the index given
 #   upper: "pass" only ending an upper-case identifier, after "_" or "-" (DB_PASS, r4 L2)
 #   exact: the whole identifier, or its end after "_" or "-"
+#   lower_camel: only a capitalised ending after a lower-case letter (dbPwd). A bare "pwd" is
+#            the shell's working directory, and "bypass" or "compass" are words.
 _FORMS = {
     "password": ("base", 0),
     "passwd": ("base", 0),
@@ -300,21 +303,32 @@ _FORMS = {
     "account-key": ("base", 0),
     "aws-secret-access-key": ("base", 0),
     "apikey": ("flat", 0),
-    "secretkey": ("compact", 6),
+    # Written in lower case too (secretkey=): a compact form would need its capital K.
+    "secretkey": ("base", 0),
     "privatekey": ("compact", 7),
     "accesskey": ("compact", 6),
     "signingkey": ("compact", 7),
     "storagekey": ("compact", 7),
     "accountkey": ("compact", 7),
+    # Upper-case after "_" or "-" (DB_PASS), or a capitalised ending after a lower-case letter
+    # (smtpPass); never bypass, compass or passport.
     "pass": ("upper", 0),
+    "pwd": ("lower_camel", 0),
     "pgpassword": ("exact", 0),
     "mysql_pwd": ("exact", 0),
 }
-# Pagination and idempotency names (r4 L2): honest values, never secrets.
+# Pagination and idempotency names: honest values, never secrets. An exact list, not a suffix
+# rule: FB_PAGE_TOKEN, page_token and fb_page_token hold real page access tokens.
 _PAGINATION = frozenset(
     {
         "pageToken",
         "nextPageToken",
+        "prevPageToken",
+        "next_page_token",
+        "prev_page_token",
+        "nextForwardToken",
+        "nextBackwardToken",
+        "next_forward_token",
         "NextToken",
         "nextToken",
         "continuationToken",
@@ -325,10 +339,12 @@ _PAGINATION = frozenset(
 _LONGEST_NAME = max(map(len, _FORMS))
 # Longest first, so secret_key is tried before secret at the same start.
 _NAME_ALTERNATION = "|".join(map(re.escape, sorted(_FORMS, key=len, reverse=True)))
-# Around the "=" or ":": up to 16 spaces or tabs of alignment, or up to 4 whitespace characters
+# Around the "=" or ":": any run of spaces or tabs of alignment, or up to 4 whitespace characters
 # with a line break. The break branch is tried first, and only when text follows within 4
-# characters: tried second, the alignment branch would match empty before the break (r1 M2).
-_AROUND = r"(?:(?=\s{0,4}\S)\s{0,4}|[ \t]{0,16})"
+# characters: tried second, the alignment branch would match empty before the break. The run is
+# possessive, so a long one is read once and never given back and retried: nothing that follows
+# it can start with a space or tab.
+_AROUND = r"(?:(?=\s{0,4}\S)\s{0,4}|[ \t]*(?![ \t]))"
 # A quote may close a quoted name; Markdown emphasis or a backtick may sit around the ":".
 # A quote may be escaped for JSON text inside JSON text: one backslash per level, 2^level - 1 of
 # them, so up to 15 backslashes covers four levels. The count is bounded, so each name is
@@ -393,7 +409,7 @@ _NAMED["pass"] = _per_form(lambda name: rf"(?<=[_\-]{name})")["pass"]
 _NAMED_CAMEL = {
     form: pattern
     for form, pattern in _per_form(lambda name: rf"(?<=[^\W_]{name})").items()
-    if _FORMS[form][0] in ("base", "flat", "compact")
+    if _FORMS[form][0] in ("base", "flat", "compact", "upper", "lower_camel")
 }
 # At the start of a line or after a tab, for a value TH-9491 joins into one URL.
 _NAMED_AT_LINE = _per_form(
@@ -521,9 +537,10 @@ _RULE1_BARE = re.compile(
 )
 # A userinfo with no // at all, `host: admin:pw@db:5432`, after whitespace, = , a quote or a
 # bracket: only when a port follows the host, which an e-mail address, a time (10:30@venue) or
-# `a:b@c` never has. Anchored on the token's start, so no position is tried twice.
+# `a:b@c` never has. Anchored on the token's start, so no position is tried twice. What follows the
+# user's ":" is not a scheme (jdbc:mysql://root:pw@db): rule 1 cleans that as a URL and keeps it.
 _RULE1_HOSTPORT = re.compile(
-    r"(?<![^\s=\"'`(,\[{|])([A-Za-z_][A-Za-z0-9_.\-]{0,63}:(?!/)\S{1,64}@)"
+    r"(?<![^\s=\"'`(,\[{|])([A-Za-z_][A-Za-z0-9_.\-]{0,63}:(?![A-Za-z0-9+.\-]*://)(?!/)\S{1,64}@)"
     r"(?=[A-Za-z0-9_.\-]+:\d{1,5}(?![A-Za-z0-9_])|\[[0-9A-Fa-f:.%]+\]:\d{1,5}(?!\d)"
     r"|(?:tcp|udp|unix)\()"
 )
@@ -1172,7 +1189,11 @@ def _name_sits(text: str, start: int, form: str) -> bool:
     escaped = _escaped_before(text, start)
     whole = escaped or not before or not (before.isalnum() or joined)
     if kind == "upper":
+        if text.startswith("Pass", start) and "a" <= before <= "z":
+            return True
         return joined and text.startswith("PASS", start) and _upper_before(text, start)
+    if kind == "lower_camel":
+        return text.startswith("Pwd", start) and "a" <= before <= "z"
     if kind == "exact":
         return whole or joined
     camel = (
@@ -1228,6 +1249,298 @@ def _secret_value(value: str, quoted: bool) -> bool:
     return quoted or _CODE.match(value) is None
 
 
+# ------------------------------------------------------------------------- credential_in
+# Names that mark a value as a credential: the cleaner's key mask (agent._REDACTION_MARKERS is
+# this tuple) and the argument-name rule below.
+REDACTION_MARKERS = (
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "credential",
+    "authorization",
+    "password",
+    "passphrase",
+    "cookie",
+    "api-key",
+    "private_key",
+)
+# Query names that are credentials without holding a marker.
+_CREDENTIAL_QUERY_NAMES = frozenset({"key", "sig", "signature", "pwd", "pass", "auth"})
+# Query names whose value is a model id: long and key-like by length alone. A key shape under
+# them is still caught by find().
+_MODEL_QUERY_NAMES = frozenset({"model", "model_id", "modelid", "model_name", "modelname"})
+# A query or fragment parameter of any URL or path: after ? # & or ;.
+_QUERY_PARAM = re.compile(r"[?#&;]([^=&#?;\s]*)=([^&#;\s]*)")
+_KEY_VALUE = re.compile(r"[A-Za-z0-9+/=_%\-]{16,}")
+# scheme://user:password@ : a username alone (ssh://git@host) is fine, and so is a port.
+# The scheme must start a run, so one long run of scheme characters is scanned once.
+# A scheme run may begin with a digit, dot, dash or plus: the cleaner takes the scheme from the
+# run's first letter, so the leading characters are skipped, not required to be letters.
+_USERINFO_PASSWORD = re.compile(
+    r"(?<![A-Za-z0-9+.\-])[0-9+.\-]*[A-Za-z][A-Za-z0-9+.\-]*://[^/?#\s@:]*:(?P<password>[^/?#\s]+)@"
+)
+# user:password@host with no scheme, at the start of a value or after //. A password stops at
+# a slash here, so a start scans only to the next slash. mailto: is an address, not userinfo.
+_SCHEMELESS_USERINFO = re.compile(
+    r"(?:\A|(?<=//))(?!mailto:)[^\s/:@]+:(?P<password>[^\s/@]+)@[A-Za-z0-9.\-]+(?::\d+)?(?:/|\Z)"
+)
+# One URL broken by a tab or a line break is joined before it is cleaned, as the cleaner does
+# (its own copies of these are in agent.py, which imports this module and so can't be imported
+# here).
+_LEADING_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://")
+_URL_BREAKS = str.maketrans("", "", "\t\r\n")
+_WHITESPACE = re.compile(r"\s")
+# What a URL password may be made of and still be only references: ${NAME}, $NAME in capitals,
+# ${NAME:-default} when the default is empty or itself a reference, ${NAME:?message}, <...> and
+# {{...}}, one after another. A lower-case $name is a literal that starts with a $, and a
+# single-brace {x} is a plain password; neither counts.
+_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
+_SIMPLE_REFERENCE = (
+    rf"\$\{{{_NAME}\}}|\$[A-Z_][A-Z0-9_]*|<[^<>]*>|\{{\{{[^{{}}]*\}}\}}"
+)
+_PASSWORD_REFERENCE = (
+    rf"\$\{{{_NAME}(?::?-(?:{_SIMPLE_REFERENCE})?|:?\?[^{{}}]*)\}}|{_SIMPLE_REFERENCE}"
+)
+_REFERENCES_ONLY = re.compile(rf"(?:{_PASSWORD_REFERENCE})+")
+# A password-like run before a / or a space that the cleaner reads as a port: digits, or a
+# template naming one ($PORT, ${PORT}, <port>, {{PORT}}). Anything else there is a password.
+_PORT_NAME = r"(?:[A-Z_][A-Z0-9_]*|[Pp][Oo][Rr][Tt])"
+_PORT_TEMPLATE = re.compile(
+    rf"\d+|\$\{{?{_PORT_NAME}\}}?|<{_PORT_NAME}>|\{{\{{?{_PORT_NAME}\}}\}}?"
+)
+_PORTISH_PASSWORD = re.compile(
+    _SCHEME + r"[^\s/?#@:]*:(?P<password>(?P<run>[^\s/?#@:]+)[/ ][^\s@]{1,64})@"
+)
+# A password of digits followed by one unencoded / or space, more text and then the @ of a
+# host (https://bot:8812/x@db.example.com): the cleaner reads the digits as a port and masks
+# nothing. No ? or # may come before the @, which keeps an address in a query and an @handle in
+# a path (localhost:8080/users/@me) out, and the host must be a dotted name, an IPv4 address, a
+# :port host or localhost.
+_NUMERIC_PASSWORD = re.compile(
+    _SCHEME
+    + r"[^\s/?#@:]*:\d+[/ ][^\s?#@]{1,64}@"
+    # A dotted name that starts with a letter, an IPv4 address (a version, 1.2, is neither), a
+    # host with a port, or localhost.
+    + r"(?:[A-Za-z][A-Za-z0-9_\-]*\.[A-Za-z0-9]|\d{1,3}(?:\.\d{1,3}){3}(?![\d.])"
+    + r"|[A-Za-z0-9_\-]+:\d|localhost(?![A-Za-z0-9_\-]))"
+)
+# A value that is only a reference: ${API_KEY}, $API_KEY, <API_KEY>, {{api_key}}, {API_KEY}.
+_REF = re.compile(r"\$\{?[A-Z_][A-Z0-9_]*\}?|<[^>]*>|\{\{?[^{}]*\}\}?")
+# A query value that reads as words (q=red+running+shoes) or as a path (next=%2Faccount%2Fbilling)
+# once decoded. At least two words or segments of lowercase letters, so one long lowercase run,
+# which a key can be, is not read as prose.
+_WORDS = re.compile(r"[a-z]{2,}(?: [a-z]{2,})+")
+_PATH = re.compile(r"/?[a-z]{2,}(?:/[a-z]{2,})+")
+_UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+# A credential-named assignment with a quoted literal: password = "x", {"api_key": 'x'},
+# creds["password"] = "x". "==" is a comparison and is not read.
+_LITERAL_ASSIGNMENT = re.compile(
+    r"""(?<![A-Za-z0-9_\-])([A-Za-z_][A-Za-z0-9_\-]*)["']?\]?\s*(?::|=(?!=))\s*[rbfRBF]{0,2}(["'])([^"'\n]+)\2"""
+)
+
+
+def _password_is_reference(password: str) -> bool:
+    """Whether a URL password is made only of references, so it holds no secret."""
+    if _REFERENCES_ONLY.fullmatch(password):
+        return True
+    if "%" in password:
+        decoded = unquote(password)
+        return decoded != password and bool(_REFERENCES_ONLY.fullmatch(decoded))
+    return False
+
+
+def _is_reference(value: object) -> bool:
+    return isinstance(value, str) and value.startswith(_REFERENCE_STARTS)
+
+
+def _names_a_credential(name: str) -> bool:
+    # `name` in its own case: the pagination list is exact. A count (max_tokens) is no secret.
+    low = name.lower()
+    if name in _PAGINATION or low.endswith("tokens"):
+        return False
+    return any(marker in low for marker in REDACTION_MARKERS)
+
+
+def _reads_as_prose(text: str) -> bool:
+    decoded = unquote_plus(text)
+    return bool(_WORDS.fullmatch(decoded) or _PATH.fullmatch(decoded))
+
+
+# Letter segments joined by / _ or - in any case (America/Los_Angeles, created_at_desc_order), and a
+# dashed id made of letter runs and digit runs (ABC-DEF-123456789). A key mixes letters and digits
+# inside one run, so neither shape reads a key; a mixed-case alphanumeric run keeps the length rule.
+_NAME_SEGMENTS = re.compile(r"[A-Za-z]+(?:[/_\-][A-Za-z]+)+")
+_DASHED_ID = re.compile(r"(?:[A-Za-z]+|\d+)(?:-(?:[A-Za-z]+|\d+))+")
+
+
+def _reads_as_names_or_an_id(text: str) -> bool:
+    decoded = unquote_plus(text)
+    if _NAME_SEGMENTS.fullmatch(decoded):
+        return True
+    if not _DASHED_ID.fullmatch(decoded):
+        return False
+    # Mostly digits and dashes: a hex digest cut into letter-only and digit-only runs is not one.
+    return 2 * sum(char.isdigit() or char == "-" for char in decoded) > len(decoded)
+
+
+def query_param_holds_credential(name: str, text: str) -> bool:
+    """Whether one query or fragment parameter is a credential: its name holds a marker or is one
+    of key, sig, signature, pwd, pass or auth, or its value is 16 or more key characters that are
+    not a UUID, a number, a model id or words."""
+    # An empty value or a reference holds nothing; the refusal message itself says to use one.
+    if not text or _REF.fullmatch(text):
+        return False
+    if _names_a_credential(name) or name.lower() in _CREDENTIAL_QUERY_NAMES:
+        return True
+    if name.lower() in _MODEL_QUERY_NAMES:
+        return False
+    return bool(
+        _KEY_VALUE.fullmatch(text)
+        and not (
+            _UUID.fullmatch(text)
+            or text.isdigit()
+            or _reads_as_prose(text)
+            or _reads_as_names_or_an_id(text)
+        )
+    )
+
+
+def credential_in(value: object) -> bool:
+    """Whether `value` (a string, or lists and dicts holding strings) holds a credential.
+
+    For fields kept exactly as written, which are refused instead of cleaned: a tool's
+    `arg_values` and `endpoint`, and a scenario's kept fields. True when a string
+
+    - has a query or fragment parameter (`[?#&;]name=value`, in any URL or path) whose name
+      holds a credential marker or is key, sig, signature, pwd, pass or auth, or whose value is
+      16 or more key characters;
+    - has a URL with a literal password in its userinfo (`scheme://user:password@host`; a
+      reference there is not one);
+    - or has anything `find()` masks: a key shape, a named value, a path token.
+
+    It never refuses a query for being there (`?id=77`, `?api-version=...`), a fragment, a host
+    in capitals, a `{HOST}:{PORT}` or `${API_HOST}` template or a username with no password:
+    the cleaner changes those, and they are honest text. Numbers, booleans and None are not
+    read. A dict's keys are read as text, but a key's name is not judged: a shapeless value under
+    a credential name is `credential_named_arg_values_refusal`'s case, or kept in scenario
+    fields.
+    """
+    if isinstance(value, dict):
+        return any(
+            credential_in(str(key)) or credential_in(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(credential_in(item) for item in value)
+    if not isinstance(value, str):
+        return False
+    # A value that is one URL broken by a tab or a line break is read as the cleaner joins it.
+    if _LEADING_SCHEME.match(value):
+        joined = value.translate(_URL_BREAKS)
+        if joined != value and not _WHITESPACE.search(joined) and credential_in(joined):
+            return True
+    # A URL password the cleaner removes whole: one broken by /, ?, # or a space. A password
+    # that is only a reference (<db password>) is no secret.
+    if _NUMERIC_PASSWORD.search(value):
+        return True
+    # A password that starts like a port ($ecret) and holds a / or a space is not read as one by
+    # the cleaner's rule 1, so it is looked for here.
+    if any(
+        not _PORT_TEMPLATE.fullmatch(match.group("run"))
+        and not _password_is_reference(match.group("password"))
+        for match in _PORTISH_PASSWORD.finditer(value)
+    ):
+        return True
+    if any(
+        not _password_is_reference(value[start : end - 1].split(":", 1)[-1])
+        for start, end in rule1(value)
+    ):
+        return True
+    # A password made only of references is no secret ($PASS, ${DB_PASSWORD}, <...>, {{...}}),
+    # but only the whole password being one is: $ecretP4ss starts like one and is a password.
+    if any(
+        not _password_is_reference(match.group("password"))
+        for match in _USERINFO_PASSWORD.finditer(value)
+    ):
+        return True
+    if any(
+        not _password_is_reference(match.group("password"))
+        for match in _SCHEMELESS_USERINFO.finditer(value)
+    ):
+        return True
+    if any(
+        query_param_holds_credential(match.group(1), match.group(2))
+        for match in _QUERY_PARAM.finditer(value)
+    ):
+        return True
+    return bool(find(value))
+
+
+# What a credential's kind is called, and the words an auth header names its kind with:
+# token_type = "Bearer" says how to send a token, not what it is. A bare credential name
+# (password = "Bearer") is not exempt: the word is then its value.
+_KIND_SUFFIXES = ("type", "scheme", "kind", "prefix", "style")
+_AUTH_SCHEMES = frozenset({"bearer", "basic", "token", "digest"})
+
+
+def _names_a_kind_of(name: str, literal: str) -> bool:
+    return name.lower().endswith(_KIND_SUFFIXES) and literal.strip().lower() in _AUTH_SCHEMES
+
+
+def credential_in_check_code(code: str) -> bool:
+    """`credential_in` for a sub-goal's check code, which also refuses a credential-named
+    assignment with a literal value (`password = "x"`). A reference (`$...`, `<...>`,
+    `{{...}}`), an empty string and a comparison (`==`) are not one. Prose and URLs never
+    hold this form, so `credential_in` alone does not read it."""
+    if credential_in(code):
+        return True
+    return any(
+        _names_a_credential(match.group(1))
+        and not _is_reference(match.group(3))
+        and not _names_a_kind_of(match.group(1), match.group(3))
+        for match in _LITERAL_ASSIGNMENT.finditer(code)
+    )
+
+
+# An argument name is judged by the named-value rule's forms, as the whole name or its last word
+# (reset_token, clientSecret, db_password, session_cookie, aws_credentials), and `authorization`
+# only alone: authorization_status, credential_type, secretary_name, cookie_flavor, token_count
+# and tokenizer name honest enums, the marker word first. Pass and pwd are not argument names: as
+# bare words they are not secrets (a shell's pwd, a boarding pass). A leading acronym is its own
+# word (XCookie, APIKey).
+_ARGUMENT_FORMS = frozenset(
+    form.replace("-", "_") for form in _FORMS if form not in {"pass", "pwd"}
+) | {"passphrase", "cookie", "cookies", "credential", "credentials"}
+_ARGUMENT_WHOLE_NAMES = frozenset({"authorization"})
+_CAMEL_JOIN = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def _names_a_credential_argument(name: str) -> bool:
+    if name in _PAGINATION:
+        return False
+    words = _CAMEL_JOIN.sub("_", name).lower().replace("-", "_")
+    return words in _ARGUMENT_WHOLE_NAMES or any(
+        words == form or words.endswith("_" + form) for form in _ARGUMENT_FORMS
+    )
+
+
+def credential_named_arg_values_refusal(arg_name: str, values: object) -> bool:
+    """Whether a tool argument named `arg_name` may not list `values`: its name is a credential's
+    (see `_names_a_credential_argument`) and some value is not a reference (`$...`, `<...>`, `{{...}}`). The agent's settings
+    carry such a secret, and a shapeless one (hunter2) can't be told from honest text."""
+    if not _names_a_credential_argument(arg_name) or values is None:
+        return False
+    listed = values if isinstance(values, (list, tuple)) else [values]
+    # A yes/no or an empty value can't hold a secret (`with_credentials: [true, false]`); a
+    # number can (a PIN), so it is still refused.
+    return any(
+        not _is_reference(value)
+        for value in listed
+        if value is not None and not isinstance(value, bool)
+    )
+
+
 # ---------------------------------------------------------------------------------- chat
 # A key is held whole up to this many characters, the cleaner's _HOLD_HARD; past it the
 # cleaner's own long-URL rule applies. A key block has no such bound (r4 L7).
@@ -1238,7 +1551,7 @@ _SEAM_GUARD = re.compile("|".join(_GUARD_NAMES))
 _TAIL_PATTERN = re.compile(_TAIL)
 # Every beginning of a tail: while what follows a name is one, its match is still open.
 _TAIL_OPEN = re.compile(
-    r"\\{0,15}[\"'`]?[*_`]{0,4}(?:[ \t]{0,16}|\s{0,4})(?:[=:][*_`]{0,4}(?:[ \t]{0,16}|\s{0,4}))?"
+    r"\\{0,15}[\"'`]?[*_`]{0,4}(?:[ \t]*(?![ \t])|\s{0,4})(?:[=:][*_`]{0,4}(?:[ \t]*(?![ \t])|\s{0,4}))?"
 )
 _GUARD_TAIL = re.compile(r"[\s:=]+['\"]?")
 _GUARD_TAIL_OPEN = re.compile(r"[\s:=]*")

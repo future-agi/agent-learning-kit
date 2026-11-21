@@ -91,7 +91,13 @@ def _prune_suite_to_catalogue(output: Path) -> tuple[list[str], dict[str, object
     """
     from .authoring_runtime_validation import RuntimeValidationError
     from .catalogue import CATALOGUE, load_catalogue
-    from .folder import SCENARIOS, read_folder, refresh_check, write_index
+    from .folder import (
+        SCENARIOS,
+        clean_scenario_document,
+        read_folder,
+        refresh_check,
+        write_index,
+    )
 
     if not (output / CATALOGUE).is_file():
         raise RuntimeValidationError(
@@ -182,7 +188,8 @@ def _prune_suite_to_catalogue(output: Path) -> tuple[list[str], dict[str, object
             shutil.rmtree(folder)
     for folder, body in kept:
         (folder / "scenario.json").write_text(
-            json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
+            json.dumps(clean_scenario_document(body), indent=2, ensure_ascii=False),
+            encoding="utf-8",
         )
         (folder / "checks").mkdir(exist_ok=True)
         for stale in (folder / "checks").glob("*.py"):

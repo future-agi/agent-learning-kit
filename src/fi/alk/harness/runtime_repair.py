@@ -1839,6 +1839,12 @@ def validate_runtime_plan_patch(
     if candidate.modality == "chat":
         if problem := generated_chat_interface_problem(candidate.runtime):
             raise ValueError(problem)
+    # Here, so the submit tool answers "patch rejected" naming the field and the model can send
+    # a placeholder; write_contract refuses the same contract when it is applied.
+    from .contract import ContractCredentialRefused, _credential_problems
+
+    if problems := _credential_problems(candidate):
+        raise ContractCredentialRefused(" ".join(problems))
     return candidate
 
 

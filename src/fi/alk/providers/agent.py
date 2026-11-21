@@ -16,19 +16,7 @@ logger = logging.getLogger(__name__)
 AGENT_SCHEMA_VERSION = "1.0"
 MAIN_UNIT_ID = "main"
 
-_REDACTION_MARKERS = (
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "credential",
-    "authorization",
-    "password",
-    "passphrase",
-    "cookie",
-    "api-key",
-    "private_key",
-)
+_REDACTION_MARKERS = secret_shapes.REDACTION_MARKERS
 _REDACTED = "[redacted]"
 _DIRECTION_ORDER = ("inbound", "outbound")
 _AUTHORED_TYPES = ("voice", "chat", "browser")
@@ -250,13 +238,23 @@ def _authored_model(value: Any) -> dict[str, Any] | None:
     return {"provider": provider, "name": name, "temperature": None, "max_tokens": None}
 
 
-def _redact(value: Any, key: str = "", hits: list[str] | None = None) -> Any:
+def _redact(
+    value: Any,
+    key: str = "",
+    hits: list[str] | None = None,
+    *,
+    keep_scalars: bool = False,
+) -> Any:
     """`value` cleaned, with one log line when anything was masked. `hits` are kinds the caller
     already masked in `value` before handing it here (chat's line-start mask, `_line_starts_joined`),
-    so they go on the same line."""
+    so they go on the same line.
+
+    With `keep_scalars`, a number is kept under a key ending in "tokens" (any case) and anywhere
+    inside a "usage" or "modelUsage" dict, so token counts survive the key mask. Any other number
+    under a credential name (password, a numeric api_key, a 2FA token) is still masked."""
     refused: list[str] = []
     found = list(hits or ())
-    redacted = _redact_in(value, key, refused, found)
+    redacted = _redact_in(value, key, refused, found, keep_scalars)
     if (refused or found) and (redacted != value or hits):
         # Once per call, not per string: a crafted contract can hold half a million of them.
         _log_redacted(refused, found)
@@ -272,21 +270,75 @@ def _log_redacted(refused: list[str], hits: list[str]) -> None:
     logger.warning("secrets redacted: %s", "; ".join(parts))
 
 
-def _redact_in(value: Any, key: str, refused: list[str], hits: list[str]) -> Any:
+def redact_strings(value: Any) -> Any:
+    """`value` with every string leaf cleaned by the text rule, and no key ever masking a value.
+
+    For prose (messages, notes, instructions) under keys the caller doesn't choose. A dict under
+    a "password" key keeps its key and has its strings cleaned by what they say. Numbers,
+    booleans and None pass through. Logs the cleaner's one line, once, like `_redact`."""
+    refused: list[str] = []
+    found: list[str] = []
+    redacted = _redact_strings_in(value, refused, found)
+    if (refused or found) and redacted != value:
+        _log_redacted(refused, found)
+    return redacted
+
+
+def _redact_strings_in(value: Any, refused: list[str], hits: list[str]) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            item_key: _redact_strings_in(item, refused, hits)
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_strings_in(item, refused, hits) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_strings_in(item, refused, hits) for item in value)
+    if isinstance(value, str):
+        return _redact_text(value, refused, hits)
+    return value
+
+
+_USAGE_KEYS = ("usage", "modelusage")
+
+
+def _is_count(value: Any, lowered: str, in_usage: bool) -> bool:
+    """A number the key mask may keep: a token count, by its key or by sitting in usage."""
+    number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    return number and (in_usage or lowered.endswith("tokens"))
+
+
+def _redact_in(
+    value: Any,
+    key: str,
+    refused: list[str],
+    hits: list[str],
+    keep_scalars: bool = False,
+    in_usage: bool = False,
+) -> Any:
     lowered = key.lower()
     if any(marker in lowered for marker in _REDACTION_MARKERS):
+        if keep_scalars and _is_count(value, lowered, in_usage):
+            return value
         return _REDACTED
     if lowered == "headers":
         if isinstance(value, Mapping):
             return {str(item_key): _REDACTED for item_key in value}
         return _REDACTED
+    # A usage dict's descendants are all counts.
+    in_usage = in_usage or (keep_scalars and lowered in _USAGE_KEYS)
     if isinstance(value, Mapping):
         return {
-            str(item_key): _redact_in(item, str(item_key), refused, hits)
+            str(item_key): _redact_in(
+                item, str(item_key), refused, hits, keep_scalars, in_usage
+            )
             for item_key, item in value.items()
         }
     if isinstance(value, list):
-        return [_redact_in(item, key, refused, hits) for item in value]
+        return [
+            _redact_in(item, key, refused, hits, keep_scalars, in_usage)
+            for item in value
+        ]
     if isinstance(value, str):
         return _redact_text(value, refused, hits)
     return value

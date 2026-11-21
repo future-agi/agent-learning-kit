@@ -3773,8 +3773,11 @@ def _copy_scenarios(authoring: Path, staging: Path, *, count: int) -> None:
             body.get("scenario_key") or body.get("name") or folder.name
         )
         body["scenario_id"] = str(body.get("scenario_id") or "")
+        from .folder import clean_scenario_document
+
         document.write_text(
-            json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            json.dumps(clean_scenario_document(body), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
         )
 
 

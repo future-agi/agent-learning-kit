@@ -12,6 +12,8 @@ swallows a 401, so the old path reported success while nothing landed.
 
 from __future__ import annotations
 
+import json
+
 from opentelemetry.sdk.trace.export import SpanExportResult
 
 from fi.alk import tasks
@@ -269,3 +271,131 @@ def test_run_benchmark_result_carries_telemetry(monkeypatch, tmp_path) -> None:
     assert out["telemetry"]["kind"] == "benchmark"
     assert out["telemetry"]["status"] == "local"
     assert out["telemetry"]["dashboard_url"] is None
+
+
+# --- keyed_emit cleans string attributes, but not the already-addressed ledger row ---
+class _RecordingSpan(_FakeSpan):
+    def __init__(self, sink):
+        self._sink = sink
+
+    def set_attribute(self, key, value):
+        self._sink[key] = value
+
+
+def _recording_provider(monkeypatch, sink):
+    class _Tracer:
+        def start_as_current_span(self, name):
+            return _RecordingSpan(sink)
+
+    class _Provider(_FakeProvider):
+        def get_tracer(self, name):
+            return _Tracer()
+
+    class _Rec:
+        ok = True
+        last_reason = "ok"
+
+    monkeypatch.setattr(_emit, "_build_provider", lambda pn, hd: (_Provider(), _Rec()))
+
+
+def test_keyed_emit_cleans_secrets_in_string_attributes(monkeypatch) -> None:
+    sink: dict = {}
+    _recording_provider(monkeypatch, sink)
+    token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    out = _emit.keyed_emit(
+        span_name="t",
+        root_attrs={"note": f"deploy with {token}", "count": 3, "ok": True, "name": "plain"},
+        children=[("child", {"detail": "api_key=hunter2hunter2"})],
+        project_name="p",
+        headers={"X-Api-Key": "k", "X-Secret-Key": "s"},
+    )
+    assert out["status"] == "synced"
+    assert token not in sink["note"] and "hunter2hunter2" not in sink["detail"]
+    assert sink["count"] == 3 and sink["ok"] is True and sink["name"] == "plain"
+
+
+def test_keyed_emit_sends_the_ledger_row_attribute_byte_for_byte(monkeypatch) -> None:
+    import json
+
+    from fi.alk.telemetry import _sync
+    from fi.alk.telemetry._row import build_ledger_row, canonical_row_address
+
+    sink: dict = {}
+    _recording_provider(monkeypatch, sink)
+    row = build_ledger_row(
+        {
+            "kind": "agent-learning.run.v1",
+            "summary": {"verdict": "pass"},
+            "capture": {"redaction": {"OPENAI_API_KEY": "redact_env_values"}, "reviewed": True},
+        }
+    )
+    sent = json.dumps(row, sort_keys=True, separators=(",", ":"), default=str)
+    _emit.keyed_emit(
+        span_name="t",
+        root_attrs={_sync.LEDGER_ROW_ATTR: sent},
+        addressed=frozenset({_sync.LEDGER_ROW_ATTR}),
+        project_name="p",
+        headers={"X-Api-Key": "k", "X-Secret-Key": "s"},
+    )
+    assert sink[_sync.LEDGER_ROW_ATTR] == sent
+    assert canonical_row_address(json.loads(sink[_sync.LEDGER_ROW_ATTR])) == row["run_id"]
+
+
+def test_a_key_shape_across_the_1024_cut_of_a_coerced_attribute_does_not_leak(
+    monkeypatch,
+) -> None:
+    sink: dict = {}
+    _recording_provider(monkeypatch, sink)
+    token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    # The compact JSON is cut at 1024 characters, 35 of the key's 40 in.
+    value = {"a": "x" * 973, "b": token}
+    assert len(json.dumps(value, sort_keys=True, separators=(",", ":"))) > 1024
+    _emit.keyed_emit(
+        span_name="t",
+        root_attrs={"cfg": value},
+        project_name="p",
+        headers={"X-Api-Key": "k", "X-Secret-Key": "s"},
+    )
+    assert "ghp_" not in sink["cfg"]
+    assert len(sink["cfg"]) <= 1024
+
+
+def test_a_customer_metric_named_like_the_ledger_row_is_still_cleaned(
+    monkeypatch,
+) -> None:
+    from fi.alk.telemetry import _sync
+
+    sink: dict = {}
+    _recording_provider(monkeypatch, sink)
+    token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    _emit.keyed_emit(
+        span_name="t",
+        root_attrs={_sync.LEDGER_ROW_ATTR: f"t {token}"},
+        project_name="p",
+        headers={"X-Api-Key": "k", "X-Secret-Key": "s"},
+    )
+    assert token not in sink[_sync.LEDGER_ROW_ATTR]
+
+
+def test_sync_run_names_the_ledger_row_as_its_own_addressed_attribute(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("AGENT_LEARNING_LEDGER_PATH", str(tmp_path))
+    monkeypatch.setenv("FI_API_KEY", "k")
+    monkeypatch.setenv("FI_SECRET_KEY", "s")
+    monkeypatch.delenv("AGENT_LEARNING_TELEMETRY", raising=False)
+    monkeypatch.setattr(_sync, "_collector_reachable", lambda base, timeout=3.0: (True, "ok"))
+    seen: dict = {}
+
+    def _emit_once(**kw):
+        seen.update(kw)
+        return {"status": "synced", "trace_id": "a" * 32, "reason": None}
+
+    monkeypatch.setattr(_emit, "keyed_emit", _emit_once)
+    from fi.alk.telemetry import build_ledger_row
+
+    _sync.sync_run(
+        build_ledger_row({"status": "passed", "summary": {"verdict": "pass"},
+                          "manifest": {"name": "addressed"}})
+    )
+    assert seen["addressed"] == frozenset({_sync.LEDGER_ROW_ATTR})

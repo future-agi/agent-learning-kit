@@ -22,7 +22,7 @@ from typing import Any, Mapping
 from ..config import DEFAULT_API_URL, AgentLearningConfig
 from ._contract import kill_switch_on
 from ._ledger import RunLedger
-from ._row import canonical_row_address
+from ._row import _redact_value, canonical_row_address, canonical_row_bytes
 
 SYNC_PATH = "/tracer/v1/traces"
 LEDGER_ROW_ATTR = "fi.kit.ledger_row"
@@ -145,6 +145,10 @@ def sync_run(
             "channel": already,
             "sent": False,
         }
+    # A row an older kit wrote was cleaned of declared env values only, and this sends it as it is
+    # in the ledger. One the cleaner would still change is not sent.
+    if canonical_row_bytes(_redact_value(row, ())) != canonical_row_bytes(row):
+        return {"status": "refused", "reason": "row_not_cleaned", "sent": False}
     payload = encode_metadata_row(row)
     destination = sync_destination()
     reachable, reason = _collector_reachable(destination["base_url"])
@@ -166,6 +170,7 @@ def sync_run(
                 payload, sort_keys=True, separators=(",", ":"), default=str
             )
         },
+        addressed=frozenset({LEDGER_ROW_ATTR}),
         project_name=SYNC_PROJECT_NAME,
         headers={
             "X-Api-Key": config.api_key,

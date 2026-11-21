@@ -191,22 +191,22 @@ KEPT_WITH_A_URL = (
     "chosen_evals",
     "data_schema",
     "base_environment",
-    "tools[].arg_values",
-    "tool_entrypoints[].endpoint",
     "tool_entrypoints[].module",
     "dependencies[].name",
     "dependencies[].engine",
     "runtime_dependencies[].name",
-    "data_store.host",
-    "data_store.configured_by",
     "workers[].id",
     "workers[].name",
 )
+# The kept fields replayed or called exactly as written refuse a credential outright
+# (`_credential_problems`, now run by write_contract itself): the fixture gives them a URL
+# with none, and the refusal tests at the end of this file cover them.
+CLEAN_URL = "https://hooks.example/v1/post"
 
 
 def _full_contract() -> AgentContract:
     """A contract with a URL holding a password and a key in every free-text field, and in each
-    kept field that takes a free string."""
+    kept field that takes a free string, except those that refuse a credential (CLEAN_URL)."""
     body: dict[str, Any] = {
         "agent": URL,
         "modality": "chat",
@@ -217,15 +217,15 @@ def _full_contract() -> AgentContract:
         "data_schema": {"hook": URL},
         "base_environment": {"hook": [URL]},
         "tools": [
-            {"name": "post", "args": ["kind"], "arg_values": {"kind": [URL]}},
+            {"name": "post", "args": ["kind"], "arg_values": {"kind": [CLEAN_URL]}},
             {"name": "book", "args": []},
         ],
         "tool_entrypoints": [
-            {"tool": "post", "mode": "service", "endpoint": URL, "module": URL},
+            {"tool": "post", "mode": "service", "endpoint": CLEAN_URL, "module": URL},
         ],
         "dependencies": [{"name": URL, "engine": URL}],
         "runtime_dependencies": [{"name": URL}],
-        "data_store": {"kind": "database", "host": URL, "configured_by": URL},
+        "data_store": {"kind": "database", "host": "db.internal", "configured_by": CLEAN_URL},
         "workers": [{"id": URL, "name": URL, "tools": ["post"]}],
     }
     for name in FREE_TEXT:
@@ -2024,3 +2024,99 @@ def test_no_file_the_amend_chain_writes_holds_the_password(tmp_path: Path) -> No
     for path in written:
         text = path.read_text(encoding="utf-8")
         assert PASSWORD not in text and KEY not in text, path
+
+
+# ---------------------------------------------- the writer refuses a kept-exactly credential
+# A runtime repair and the data-store promotion save without validate_contract, so the check
+# runs in write_contract itself.
+_URL_PASSWORD = "https://deploy:s3cretPass@pypi.internal.example.com/simple"
+
+
+def test_write_contract_refuses_a_credential_in_a_kept_field_and_names_only_the_field(
+    tmp_path: Path,
+) -> None:
+    saved = AgentContract(agent="support", real_use_cases=["log in"])
+    write_contract(saved, tmp_path)
+    before = (tmp_path / "contract.json").read_text(encoding="utf-8")
+    contract = AgentContract(
+        agent="support",
+        real_use_cases=["log in"],
+        runtime=Runtime(
+            language="python",
+            install=f"pip install --index-url {_URL_PASSWORD} -r requirements.txt",
+        ),
+    )
+
+    with pytest.raises(contract_module.ContractCredentialRefused) as refused:
+        write_contract(contract, tmp_path)
+
+    assert "runtime.install" in str(refused.value)
+    assert "s3cretPass" not in str(refused.value)
+    assert (tmp_path / "contract.json").read_text(encoding="utf-8") == before
+
+
+def test_a_runtime_repair_whose_install_holds_a_url_password_is_refused_and_saves_nothing(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    service = source / "service"
+    service.mkdir(parents=True)
+    (service / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (service / "app.py").write_text("# entrypoint\n")
+    contract = AgentContract(agent="support-agent", runtime=Runtime(language="python"))
+    contract_path = tmp_path / "contract.json"
+    contract_path.write_text(contract.model_dump_json(indent=2) + "\n")
+    before = contract_path.read_text(encoding="utf-8")
+
+    with pytest.raises(contract_module.ContractCredentialRefused) as refused:
+        runtime_repair.apply_runtime_plan_patch(
+            source,
+            contract_path,
+            runtime_repair.RuntimePlanPatch(
+                base_contract_hash=runtime_repair._contract_hash(contract),
+                runtime=Runtime(
+                    language="python",
+                    workdir="service",
+                    install=f"pip install --index-url {_URL_PASSWORD} -e .",
+                    command=["python", "app.py"],
+                    interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+                ),
+                evidence_paths=("service/pyproject.toml", "service/app.py"),
+                diagnostic_codes=("generated_runtime_plan_invalid",),
+                summary="Run the HTTP service declared by the submitted component.",
+            ),
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+
+    assert "runtime.install" in str(refused.value)
+    assert "s3cretPass" not in str(refused.value)
+    assert contract_path.read_text(encoding="utf-8") == before
+
+
+def test_a_data_store_promotion_holding_a_credential_is_refused_and_saves_nothing(
+    tmp_path: Path,
+) -> None:
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    contract = AgentContract(agent="desk", real_use_cases=["book"])
+    (authoring / "contract.json").write_text(contract.model_dump_json(), encoding="utf-8")
+    before = (authoring / "contract.json").read_text(encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    (candidate / "contract.json").write_text(
+        AgentContract(
+            agent="desk",
+            data_store={
+                "kind": "postgres",
+                "configured_by": "postgres://app:s3cretPass@db.internal/app",
+            },
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(contract_module.ContractCredentialRefused) as refused:
+        authoring_runtime_validation._promote_data_store(contract, authoring, candidate)
+
+    assert "data_store" in str(refused.value)
+    assert "s3cretPass" not in str(refused.value)
+    assert (authoring / "contract.json").read_text(encoding="utf-8") == before
