@@ -3951,6 +3951,40 @@ def test_every_event_the_pump_sends_masks_a_secret_split_across_its_whitespace(
     assert result["text"] == ".env:1: GITHUB_TOKEN=[redacted]"
 
 
+def test_a_call_to_a_tool_the_session_was_never_offered_is_logged_not_shown(tmp_path, monkeypatch, capsys):
+    """The live shape: the builder called `default_api:Read`, a name it made up for Read, and the chat showed the
+    provider's refusal as an error card."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.backends import SessionSpec
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation.stage = SimpleNamespace(spec=SessionSpec(system_prompt="", builtins=("Read",)))
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait(RuntimeEvent(kind="tool", tool="default_api:Read", detail={"call_id": "made-up"}))
+    queue.put_nowait(
+        RuntimeEvent(
+            kind="result",
+            text="Error: No such tool available: default_api:Read",
+            detail={"call_id": "made-up", "is_error": True},
+        )
+    )
+    queue.put_nowait(RuntimeEvent(kind="tool", tool="Read", detail={"call_id": "real"}))
+    queue.put_nowait(RuntimeEvent(kind="result", text="agent.py", detail={"call_id": "real"}))
+    queue.put_nowait(None)
+
+    asyncio.run(
+        runtime._pump_events(
+            queue, assistant_message_id="a-1", fallback_invocation_id="turn-1", emitted_text=[], turn_failures=[]
+        )
+    )
+
+    cards = [one["payload"] for one in client.events if one["kind"] in ("tool_started", "tool_result")]
+    assert [one["tool"] for one in cards] == ["Read", "Read"] and cards[1]["text"] == "agent.py"
+    assert "default_api:Read" in capsys.readouterr().err
+
+
 def test_the_turns_assistant_message_masks_a_key_split_between_its_pieces(
     tmp_path, monkeypatch
 ):
