@@ -750,11 +750,21 @@ def _cases_resting_on(
 
 
 def rules_gone(contract: AgentContract) -> list[str]:
-    """The rules the agent had and no longer has, as they were removed."""
+    """The rules the agent had and no longer has, as they were removed with nothing replacing them: a reworded rule's
+    cases stand on its replacement (`grounding.resolve_sources`) and are reviewed against it instead."""
     held = set(contract.hard_constraints)
+    succeeded = {one.previous for one in contract.amendment_records if one.kind == "rule" and one.previous}
     gone: list[str] = []
     for one in contract.amendment_records:
-        if one.kind == "rule" and one.action == "removed" and one.text and one.text not in held and one.text not in gone:
+        if (
+            one.kind == "rule"
+            and one.action == "removed"
+            and not one.replaced_by
+            and one.key not in succeeded
+            and one.text
+            and one.text not in held
+            and one.text not in gone
+        ):
             gone.append(one.text)
     return gone
 
