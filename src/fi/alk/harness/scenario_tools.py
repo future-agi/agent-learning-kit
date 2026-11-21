@@ -112,6 +112,7 @@ from .scenario import (
     CALLER_AWARENESS,
     VOICEMAIL_STYLES,
     Scenario,
+    ScenarioSource,
     Step,
     contract_sequence_problems,
     coverage_report,
@@ -2222,6 +2223,15 @@ def accept_scenario(
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
+    try:
+        contract = load_contract(world_root)
+    except (OSError, ValueError):
+        contract = None
+    # A rule source quoting a reworded rule is kept citing the rule that replaced it, whichever path wrote the case.
+    from .grounding import recited_sources
+
+    if (recited := recited_sources(scenario, contract)) is not None:
+        scenario = scenario.model_copy(update={"sources": [ScenarioSource.model_validate(one) for one in recited]})
     if unlisted := _unlisted_actors(scenario, world_root):
         return _err("Not kept. " + " ".join(unlisted))
     if unknown := _budgets_for_unknown_workers(scenario, world_root):
@@ -4768,16 +4778,31 @@ def scenario_tools(
                 f"Not changed: no scenario in this suite has the scenario_key {key!r}."
             )
         reviewed = [str(one) for one in args.pop("reviewed", None) or []]
+        kept_note = ""
         if reviewed:
             from .amend import keep_reviewed
 
             marked = keep_reviewed(world_root, key, reviewed)
-            if not set(args) - {"scenario_key"}:
-                return _ok(
-                    f"Kept as reviewed: {', '.join(marked) or 'nothing'} of {held.name}"
-                    + ("" if len(marked) == len(reviewed) else "; the others were not open for review")
-                    + "."
-                )
+            kept_note = (
+                f"Kept as reviewed: {', '.join(marked) or 'nothing'} of {held.name}"
+                + ("" if len(marked) == len(reviewed) else "; the others were not open for review")
+                + "."
+            )
+        if "sources" not in args:
+            from .grounding import recited_sources
+
+            # Reviewed or edited without its sources: a rule source still quoting a reworded rule cites its
+            # replacement, so the case never goes on quoting words the agent no longer has.
+            recited = recited_sources(held, contract)
+            if recited is not None:
+                args["sources"] = recited
+        if kept_note and not set(args) - {"scenario_key"}:
+            return _ok(kept_note)
+        if kept_note:
+            result = await submit_scenario.handler(edited(held, args))
+            said = str((result.get("content") or [{}])[0].get("text") or "")
+            note = f"{kept_note} Its rule source now cites the rule that replaced it."
+            return {**result, "content": [{"type": "text", "text": f"{note}\n{said}"}]}
         change = {
             field: value for field, value in args.items() if field != "scenario_key"
         }
