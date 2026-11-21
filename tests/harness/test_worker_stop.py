@@ -270,6 +270,7 @@ def test_a_trial_s_start_changes_no_schema_after_the_world_s_first(monkeypatch) 
 
         def execute(self, sql, *_args):
             statements.append(sql)
+            return SimpleNamespace(fetchall=lambda: [])
 
     psycopg = pytest.importorskip("psycopg")
     monkeypatch.setattr(psycopg, "connect", lambda *_args, **_kwargs: _Connection())

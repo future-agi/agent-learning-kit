@@ -67,8 +67,19 @@ from .bundle_v2 import (
     StoreEntry,
 )
 from .diagnostics import DiagnosticLocation, HarnessDiagnostic
+from .world_roles import (
+    DOOR_ROLE_GROUP,
+    DOOR_TABLE_RIGHTS,
+    HARNESS_ONLY_TABLES,
+    WORLD_DOOR_DATABASE_URL,
+    door_role_name,
+    has_world_door,
+    seed_escalation_queries,
+    seed_escalation_reason,
+    world_role_name,
+)
 from .egress_proxy import EgressProxy
-from .world_door import PostgresLog
+from .world_door import HARNESS_TABLES_DDL, PostgresLog
 from .job import FailureCause, FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
@@ -187,6 +198,8 @@ class RuntimeEndpoint(BaseModel):
     # Under per-user isolation, a postgres capability's address as the world's own role: what
     # customer processes and the handler child get. `address` stays the harness's superuser.
     tool_address: str | None = None
+    # Under per-user isolation, the address as the world's door's own role, for the door's processes only.
+    door_address: str | None = None
 
 
 class EnvironmentRuntime(BaseModel):
@@ -739,22 +752,32 @@ class EngineCredentials:
 # own, never as the `harness` superuser: one group carries the table grants, sealed into the
 # baseline, and each world's login role is a member that may connect to its world's database only.
 WORLD_ROLE_GROUP = "alk_world_tools"
+# The capability whose door address `WORLD_DOOR_DATABASE_URL` is.
+_WORLD_DATABASE_URL = "WORLD_DATABASE_URL"
 
 
-def world_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
-    """World N's own database role. Its password is derived from the job's secret, so each
-    world's differs and nothing stores it."""
+def _derived_role(credentials: EngineCredentials, name: str) -> EngineCredentials:
     if not credentials.world_secret:
         raise ProcessRuntimeError(
             "render",
             "internal_missing_credentials",
             "a world role needs the job's world secret, and the credentials carry none",
         )
-    name = f"alk_w{world_index}"
     password = hmac.new(
         credentials.world_secret.encode(), name.encode(), hashlib.sha256
     ).hexdigest()
     return EngineCredentials(username=name, password=password)
+
+
+def world_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
+    """World N's own database role. Its password is derived from the job's secret, so each
+    world's differs and nothing stores it."""
+    return _derived_role(credentials, world_role_name(world_index))
+
+
+def door_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
+    """World N's door's own database role, derived the same way as the world's."""
+    return _derived_role(credentials, door_role_name(world_index))
 
 
 def _engine_diagnostic_secrets(
@@ -766,8 +789,8 @@ def _engine_diagnostic_secrets(
     for name, value in credentials.items():
         if value.world_secret:
             for world_index in range(instances):
-                role = world_role(value, world_index)
-                secrets_by_name[f"{name}:{role.username}"] = role.password
+                for role in (world_role(value, world_index), door_role(value, world_index)):
+                    secrets_by_name[f"{name}:{role.username}"] = role.password
     return secrets_by_name
 
 
@@ -860,6 +883,7 @@ def build_endpoints(
     With `world_roles` (per-user isolation), each postgres capability also carries the world's
     own role's address, for customer processes and the handler child."""
     endpoints: dict[str, RuntimeEndpoint] = {}
+    door = world_roles and has_world_door(manifest)
     for slug, capability in manifest.capabilities.items():
         port = port_plan.port_for(capability.service, world_index)
         engine_credentials = credentials.get(capability.service)
@@ -881,12 +905,21 @@ def build_endpoints(
                 world_index=world_index,
                 credentials=world_role(engine_credentials, world_index),
             )
+        door_address = None
+        if door and tool_address is not None:
+            door_address = render_capability_address(
+                capability,
+                port=port,
+                world_index=world_index,
+                credentials=door_role(engine_credentials, world_index),
+            )
         endpoints[slug] = RuntimeEndpoint(
             capability=slug,
             protocol=capability.protocol.value,
             address=address,
             configuration_name=capability.configuration_name,
             tool_address=tool_address,
+            door_address=door_address,
         )
     return endpoints
 
@@ -894,12 +927,19 @@ def build_endpoints(
 def configuration_addresses_from_endpoints(
     endpoints: dict[str, RuntimeEndpoint],
 ) -> dict[str, str]:
-    # Customer processes get the world's own role where there is one, never the superuser.
-    return {
+    # Customer processes get the world's own role where there is one, never the superuser. The door's address goes
+    # only to the door's processes (`render_environment`).
+    addresses = {
         endpoint.configuration_name: endpoint.tool_address or endpoint.address
         for endpoint in endpoints.values()
         if endpoint.configuration_name
     }
+    for endpoint in endpoints.values():
+        if endpoint.configuration_name == _WORLD_DATABASE_URL:
+            addresses[WORLD_DOOR_DATABASE_URL] = (
+                endpoint.door_address or endpoint.tool_address or endpoint.address
+            )
+    return addresses
 
 
 # --- §2b placeholder renderer ------------------------------------------------------------------
@@ -1006,6 +1046,12 @@ def render_environment(
 ) -> dict[str, str]:
     """`build_environment` is deliberately excluded — §2b: it "takes NO placeholders at all," so
     it is merged raw by the env builders below, never passed through this renderer."""
+    if process.user is not ProcessUser.SVC_DOOR:
+        configuration_addresses = {
+            name: address
+            for name, address in configuration_addresses.items()
+            if name != WORLD_DOOR_DATABASE_URL
+        }
     return {
         key: render_template(
             value,
@@ -4239,25 +4285,29 @@ def apply_store_seed(
     rabbitmq_import: RabbitmqDefinitionsImporter = default_rabbitmq_definitions_importer,
     source_digest: str | None = None,
     generic_artifact_root: Path | None = None,
+    after_migrations: Callable[[], None] | None = None,
 ) -> None:
     """§2c: "migrations then seed_files... applied in listed order" — migrations always precede
     seed_files, regardless of how many files either list holds, and each list keeps its own
-    authored order (never sorted)."""
-    for relative_path in (*store.migrations, *store.seed_files):
-        apply_seed_file(
-            engine,
-            bundle_dir / relative_path,
-            port=port,
-            dbname=dbname,
-            credentials=credentials,
-            process_name=process_name,
-            sync_run=sync_run,
-            user=user,
-            group=group,
-            rabbitmq_import=rabbitmq_import,
-            source_digest=source_digest,
-            generic_artifact_root=generic_artifact_root,
-        )
+    authored order (never sorted). ``after_migrations`` runs between the two lists."""
+    for files in (store.migrations, store.seed_files):
+        for relative_path in files:
+            apply_seed_file(
+                engine,
+                bundle_dir / relative_path,
+                port=port,
+                dbname=dbname,
+                credentials=credentials,
+                process_name=process_name,
+                sync_run=sync_run,
+                user=user,
+                group=group,
+                rabbitmq_import=rabbitmq_import,
+                source_digest=source_digest,
+                generic_artifact_root=generic_artifact_root,
+            )
+        if files is store.migrations and after_migrations is not None:
+            after_migrations()
 
 
 # --- §2c sentinel checking ---------------------------------------------------------------------
@@ -5121,6 +5171,21 @@ def _freeze_one_store(
                 dbname="postgres",
                 statement=f'CREATE DATABASE "{baseline_dbname}"',
             )
+        before_seed: set[SeedEscalation] = set()
+
+        def _snapshot_before_seed() -> None:
+            # What the source's own migrations made: the seed check below refuses only what the seed adds or changes.
+            if process.engine is ManagedEngine.POSTGRES and credentials is not None:
+                before_seed.update(
+                    seed_escalation_snapshot(
+                        port=port,
+                        credentials=credentials,
+                        baseline_db=baseline_dbname,
+                        sql_runner=context.sql_runner,
+                        process_name=process.name,
+                    )
+                )
+
         apply_store_seed(
             store,
             engine=process.engine,
@@ -5135,6 +5200,7 @@ def _freeze_one_store(
             rabbitmq_import=context.rabbitmq_import,
             source_digest=manifest.provenance.source_digest,
             generic_artifact_root=context.generic_artifact_root,
+            after_migrations=_snapshot_before_seed,
         )
         # m3, p6-review-r1: §2c defines the sentinel as a check "against the freshly seeded
         # baseline" — checked here, before sealing, so a seed that silently produced the wrong
@@ -5165,12 +5231,29 @@ def _freeze_one_store(
                 process=process.name,
                 domain=FailureDomain.ENVIRONMENT,
             )
+        if process.engine is ManagedEngine.POSTGRES:
+            _refuse_seed_escalation(
+                port=port,
+                credentials=credentials,
+                baseline_db=baseline_dbname,
+                sql_runner=context.sql_runner,
+                process_name=process.name,
+                before_seed=before_seed,
+            )
 
         row_counts: dict[str, int] = {}
         seed_digest: dict[str, str] = {}
         baseline_reference = ""
         result_handle: SpawnedWorldProcess | None = None
         if strategy is BaselineStrategy.TEMPLATE_DATABASE:
+            if process.engine is ManagedEngine.POSTGRES and context.require_declared_user:
+                _make_harness_tables(
+                    port=port,
+                    credentials=credentials,
+                    baseline_db=baseline_dbname,
+                    sql_runner=context.sql_runner,
+                    process_name=process.name,
+                )
             if process.engine is ManagedEngine.POSTGRES:
                 row_counts = _measure_postgres_row_counts(
                     host="localhost",
@@ -5194,6 +5277,7 @@ def _freeze_one_store(
                     baseline_db=baseline_dbname,
                     sql_runner=context.sql_runner,
                     process_name=process.name,
+                    door=has_world_door(manifest),
                 )
             # Sealed: marked a TEMPLATE and closed to new connections, so nothing can write into
             # it after this — "the sealed post-migrate+seed datastore state" (glossary, "Baseline").
@@ -5344,6 +5428,9 @@ def _seal_world_store(
             isolate=context.require_declared_user,
             role=world_role(credentials, world_index)
             if context.require_declared_user
+            else None,
+            door=door_role(credentials, world_index)
+            if context.require_declared_user and has_world_door(manifest)
             else None,
         )
         return None
@@ -5497,6 +5584,105 @@ def _seal_world_store(
     return handle
 
 
+# A found way to more rights: (database, what was found, its fingerprint).
+SeedEscalation = tuple[str, str, str]
+
+
+def _seed_escalations(
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+) -> tuple[set[SeedEscalation], set[SeedEscalation]]:
+    """What the databases hold now that could give more rights than a world's role has: (on the harness's own roles,
+    everything else)."""
+    queries = seed_escalation_queries(WORLD_ROLE_GROUP)
+
+    def found(dbname: str, statement: str) -> set[SeedEscalation]:
+        rows = _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=dbname,
+            statement=statement,
+            read_only=True,
+        )
+        return {(dbname, str(row[0]), str(row[1]) if len(row) > 1 else "") for row in rows or [] if row}
+
+    ours = found("postgres", queries.our_roles)
+    others = found("postgres", queries.other_roles) | found("postgres", queries.code) | found(baseline_db, queries.code)
+    return ours, others
+
+
+def seed_escalation_snapshot(
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+) -> set[SeedEscalation]:
+    """What the source's own migrations left, taken before the seed runs: the seed check refuses only what the seed
+    adds or changes on top of it."""
+    return _seed_escalations(
+        port=port, credentials=credentials, baseline_db=baseline_db, sql_runner=sql_runner, process_name=process_name
+    )[1]
+
+
+def _refuse_seed_escalation(
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+    before_seed: set[SeedEscalation] | None = None,
+) -> None:
+    """After the seed, which runs as the superuser: the build fails when the seed left a way to act with more rights
+    than a world's role has, before any world is made from it. What the source's migrations already made
+    (``before_seed``) is the source's own and passes unless the seed changed it; anything on the harness's roles is
+    planted, whoever made it, since the harness makes them only after the seed."""
+    ours, others = _seed_escalations(
+        port=port, credentials=credentials, baseline_db=baseline_db, sql_runner=sql_runner, process_name=process_name
+    )
+    found = [what for _db, what, _print in ours | (others - (before_seed or set()))]
+    if found:
+        raise ProcessRuntimeError(
+            "baseline",
+            "seed_failed",
+            seed_escalation_reason(process_name, found),
+            process=process_name,
+            domain=FailureDomain.ENVIRONMENT,
+        )
+
+
+def _make_harness_tables(
+    *, port: int, credentials: EngineCredentials, baseline_db: str, sql_runner: SqlRunner, process_name: str
+) -> None:
+    """Each trial's tables, made in the baseline as the harness when its seed did not make them (a bundle sealed
+    before the seed did), before the baseline's tables are measured and its roles granted: no world's role can make
+    a table, and one the runner makes after the grants is unreadable to the world's door, which then refuses every
+    write and every worker's call."""
+    for statement in HARNESS_TABLES_DDL:
+        _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=baseline_db,
+            statement=statement,
+        )
+
+
 def _grant_world_role_group(
     *,
     port: int,
@@ -5504,10 +5690,14 @@ def _grant_world_role_group(
     baseline_db: str,
     sql_runner: SqlRunner,
     process_name: str,
+    door: bool = False,
 ) -> None:
     """Before the baseline is sealed: the group every world's role belongs to may read and
     change the rows of every customer schema and create nothing, and nobody but the harness
     connects to the cluster's own databases. Template copies carry these grants into every world.
+
+    With a `door` (a bundle that runs its world's door as `svc-door`), the harness's tables are
+    taken from the world group and given to the door's group, with only the rights the door uses.
     """
 
     def run(dbname: str, statement: str) -> None:
@@ -5546,6 +5736,40 @@ def _grant_world_role_group(
         f"TO {group}', s); "
         "END LOOP; END $$",
     )
+    if not door:
+        return
+    door_group = f'"{DOOR_ROLE_GROUP}"'
+    run(
+        "postgres",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
+        f"'{DOOR_ROLE_GROUP}') THEN CREATE ROLE {door_group} NOLOGIN IN ROLE {group}; "
+        "END IF; END $$",
+    )
+    tables = [*DOOR_TABLE_RIGHTS, *HARNESS_ONLY_TABLES]
+    names = ", ".join(f"'{table}'" for table in tables)
+    # The tables and the sequences behind their columns (the log's id): nobody but the harness and the door.
+    run(
+        baseline_db,
+        "DO $$ DECLARE r regclass; BEGIN FOR r IN SELECT c.oid::regclass FROM pg_class c "
+        f"WHERE c.oid IN (SELECT to_regclass(t) FROM unnest(ARRAY[{names}]) AS t) "
+        "OR c.oid IN (SELECT d.objid FROM pg_depend d WHERE d.classid = 'pg_class'::regclass "
+        f"AND d.refobjid IN (SELECT to_regclass(t) FROM unnest(ARRAY[{names}]) AS t) "
+        "AND d.deptype IN ('a', 'i')) LOOP "
+        f"EXECUTE format('REVOKE ALL ON %s FROM PUBLIC, {group}', r); "
+        "END LOOP; END $$",
+    )
+    for table, rights in DOOR_TABLE_RIGHTS.items():
+        run(
+            baseline_db,
+            f"DO $$ BEGIN IF to_regclass('{table}') IS NOT NULL THEN "
+            f"GRANT {rights} ON {table} TO {door_group}; END IF; END $$",
+        )
+    run(
+        baseline_db,
+        "DO $$ DECLARE q text := pg_get_serial_sequence('_alk_tool_trace', 'id'); BEGIN "
+        f"IF q IS NOT NULL THEN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO {door_group}', q); "
+        "END IF; END $$",
+    )
 
 
 def _reset_template_database(
@@ -5559,6 +5783,7 @@ def _reset_template_database(
     process_name: str,
     isolate: bool = False,
     role: EngineCredentials | None = None,
+    door: EngineCredentials | None = None,
 ) -> None:
     """§4.2 `template_database`: "drop + recreate the world's logical DB from the template." The
     admin connection targets `postgres` (never `world_db` itself or the template — postgres
@@ -5568,7 +5793,8 @@ def _reset_template_database(
 
     Under per-user isolation (`isolate`) the copy is created closed to connections, and opens only
     after PUBLIC has lost CONNECT on it and `role` (the world's own; an authoring lane has none)
-    has gained it, so no other world's role is ever able to connect to it.
+    has gained it, so no other world's role is ever able to connect to it. The world's `door` role
+    (a bundle that runs its door as `svc-door`) is let in the same way.
     """
     admin = dict(
         host=host,
@@ -5615,6 +5841,15 @@ def _reset_template_database(
             f'ALTER ROLE "{role.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
             f"PASSWORD '{role.password}'",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{role.username}"',
+        ]
+    if role is not None and door is not None:
+        statements += [
+            "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
+            f"'{door.username}') THEN CREATE ROLE \"{door.username}\" LOGIN IN ROLE "
+            f'"{DOOR_ROLE_GROUP}"; END IF; END $$',
+            f'ALTER ROLE "{door.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
+            f"PASSWORD '{door.password}'",
+            f'GRANT CONNECT ON DATABASE "{world_db}" TO "{door.username}"',
         ]
     statements.append(f'ALTER DATABASE "{world_db}" ALLOW_CONNECTIONS true')
     for statement in statements:
@@ -7917,7 +8152,7 @@ class ProcessRuntimeProvider:
                     # The world role's address would still name the world's database: a handler
                     # child on a lane has none, and fails closed.
                     key: endpoint.model_copy(
-                        update={"address": address, "tool_address": None}
+                        update={"address": address, "tool_address": None, "door_address": None}
                     ),
                 }
             }

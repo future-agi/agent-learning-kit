@@ -334,12 +334,22 @@ def _base_checks(catalog: dict[str, Any], *, compose_profile: bool = False) -> l
             ),
         ),
         (
+            # The harness's own source, the grader among it, is root-owned with no write bit: the tested agent shares
+            # this user under fixed_user and must not be able to rewrite it.
+            "harness-source-read-only",
+            (
+                "python -c 'import sys; from fi.alk.harness.privilege import writable_harness_source as w; "
+                "found = w(); print(*found[:20], sep=chr(10)); sys.exit(1 if found else 0)'"
+            ),
+        ),
+        (
             "service-users",
             (
                 'test "$(id -u svc-control)" = 2000 && '
                 'test "$(id -u svc-agent)" = 2001 && '
                 'test "$(id -u svc-tools)" = 2002 && '
-                'test "$(id -u svc-data)" = 2003'
+                'test "$(id -u svc-data)" = 2003 && '
+                'test "$(id -u svc-door)" = 2004'
             ),
         ),
         (

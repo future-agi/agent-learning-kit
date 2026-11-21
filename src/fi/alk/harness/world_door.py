@@ -110,6 +110,17 @@ class Executed:
     error: str = ""
 
 
+# What the agent hears when the door answers for the world: a plain word by status. Why stays in the log row, which
+# only the door writes and grading reads; the reply never says how the call is being watched.
+_PLAIN_DETAIL = {401: "forbidden", 403: "forbidden", 404: "not found", 408: "timeout", 409: "conflict", 504: "timeout"}
+
+
+def plain_detail(status: int) -> str:
+    if status in _PLAIN_DETAIL:
+        return _PLAIN_DETAIL[status]
+    return "invalid request" if 400 <= status < 500 else "unavailable"
+
+
 @dataclass
 class Outcome:
     """What the door made of one call. `fault` is the scenario's timeout when one applied: the surface holds the
@@ -139,13 +150,21 @@ class Outcome:
         except (TypeError, ValueError):
             return MAX_FAULT_SECONDS
 
+    @property
+    def detail(self) -> str:
+        """The reply's detail when the world gave none: the outcome of a call that went through, else a plain word.
+        A write the scenario holds for an approval says so, since asking for one is what the agent should do."""
+        if self.refusal_code == APPROVAL_MISSING:
+            return "approval required"
+        return self.outcome if 0 < self.status < 400 else plain_detail(self.status)
+
     def answer(self) -> bytes:
-        """The answer's bytes for a surface that speaks HTTP: the executor's own, else the result or the reason."""
+        """The answer's bytes for a surface that speaks HTTP: the executor's own, else the result or a plain word."""
         if self.body is not None:
             return self.body
         if self.outcome in ("committed", "duplicate") and self.result is not None:
             return json.dumps(self.result).encode()
-        return json.dumps({"detail": self.reason or self.outcome}).encode()
+        return json.dumps({"detail": self.detail}).encode()
 
 
 class Executor(Protocol):
@@ -460,6 +479,54 @@ WORKER_STOPS_DDL = (
 # only the run shows how the framework runs a worker. Cleared at each trial's start.
 WORKER_RUNS_DDL = "CREATE TABLE IF NOT EXISTS _alk_worker_runs (worker TEXT PRIMARY KEY, at DOUBLE PRECISION NOT NULL)"
 
+# This trial's tables in the order they are made, and the columns they then have.
+TRIAL_TABLES_DDL = (
+    TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, TRIAL_STARTED_DDL,
+    WORKER_STOPS_DDL, WORKER_RUNS_DDL,
+)
+
+
+def ddl_columns(*statements: str) -> dict[str, tuple[str, ...]]:
+    """The columns each table has once ``statements`` (`CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`, as
+    this module writes them) have run, read from the statements themselves so no list is kept beside them."""
+    columns: dict[str, list[str]] = {}
+    for statement in (one.strip() for text in statements for one in text.split(";") if one.strip()):
+        created = re.match(r"CREATE TABLE IF NOT EXISTS (\w+)\s*\((.*)\)\s*$", statement, re.S)
+        if created:
+            depth, part, parts = 0, "", []
+            for char in created.group(2):
+                depth += {"(": 1, ")": -1}.get(char, 0)
+                if char == "," and depth == 0:
+                    parts.append(part)
+                    part = ""
+                else:
+                    part += char
+            parts.append(part)
+            names = [one.split()[0] for one in parts if one.split() and one.split()[0].upper() not in _TABLE_CONSTRAINTS]
+            columns.setdefault(created.group(1), []).extend(names)
+            continue
+        for table, column in re.findall(r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+)", statement):
+            columns.setdefault(table, []).append(column)
+    return {table: tuple(names) for table, names in columns.items()}
+
+
+_TABLE_CONSTRAINTS = frozenset({"PRIMARY", "UNIQUE", "CONSTRAINT", "FOREIGN", "CHECK", "EXCLUDE"})
+_TRIAL_TABLE_COLUMNS = ddl_columns(*TRIAL_TABLES_DDL)
+
+
+def _tables_made(connection: Any, tables: Mapping[str, Sequence[str]]) -> bool:
+    """Whether each table already exists with its columns. Read from the catalog, which any role may read: Postgres
+    refuses even `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS` to a role that does not own the table."""
+    rows = connection.execute(
+        "SELECT c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+        "WHERE c.oid IN (SELECT to_regclass(t) FROM unnest(%s::text[]) AS t) AND a.attnum > 0 AND NOT a.attisdropped",
+        (list(tables),),
+    ).fetchall()
+    found: dict[str, set[str]] = {}
+    for table, column in rows:
+        found.setdefault(table, set()).add(column)
+    return all(set(columns) <= found.get(table, set()) for table, columns in tables.items())
+
 
 # The world databases whose trial tables this process has made, so the schema is changed once per world, never at
 # each trial: an ALTER takes the table's lock, which a stop under way holds.
@@ -475,11 +542,10 @@ def _trial_schema(address: str) -> None:
         import psycopg
 
         with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
-            for statement in (
-                TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, TRIAL_STARTED_DDL,
-                WORKER_STOPS_DDL, WORKER_RUNS_DDL,
-            ):
-                connection.execute(statement)
+            # Made in the world's template: a door's own role, which owns none of them, uses them as they are.
+            if not _tables_made(connection, _TRIAL_TABLE_COLUMNS):
+                for statement in TRIAL_TABLES_DDL:
+                    connection.execute(statement)
         _TRIAL_SCHEMA_MADE.add(address)
 
 
@@ -1408,6 +1474,9 @@ _KEYS_DDL = (
     "(actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (actor_id, idempotency_key));"
     "ALTER TABLE _alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
 )
+_KEYS_COLUMNS = ddl_columns(_KEYS_DDL)
+# Every per-trial table, made with the world's seed so it is in the sealed template before any role is granted rights.
+HARNESS_TABLES_DDL = (*TRIAL_TABLES_DDL, _KEYS_DDL)
 
 
 class PostgresLog:
@@ -1514,6 +1583,9 @@ class PostgresLog:
         """The keys table, made once per log; two first claims at once can race on creating it, and the loser finds it
         made."""
         if self._keys_made:
+            return
+        if _tables_made(connection, _KEYS_COLUMNS):
+            self._keys_made = True
             return
         try:
             connection.execute(_KEYS_DDL)

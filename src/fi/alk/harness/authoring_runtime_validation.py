@@ -121,14 +121,10 @@ def _world_isolation_status(build_output: dict):
     return CheckStatus.NOT_RUN
 
 
-# The processes that make up the world's door: the tool proxy in front of a tools service, or the in-process door.
-_DOOR_PROCESSES = ("tool-proxy", "world-door")
-
-
 def _door_user(manifest) -> str | None:
     """The OS user the bundle's door processes are declared to run as; None when the bundle has no door or its door
     processes do not agree on one user."""
-    users = {process.user.value for process in getattr(manifest, "processes", ()) if process.name in _DOOR_PROCESSES}
+    users = {process.user.value for process in getattr(manifest, "processes", ()) if process.name in bundle_v2.DOOR_PROCESSES}
     return users.pop() if len(users) == 1 else None
 
 
