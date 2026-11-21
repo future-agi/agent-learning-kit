@@ -17,7 +17,7 @@ import re
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from fi.simulate.simulation.call_actors import (
     EVALUATED_BY,
@@ -2002,7 +2002,6 @@ def scenario_tools(
     start_from: list[Scenario] | None = None,
     rename_on_collision: bool | None = None,
     can_grow: bool = False,
-    scenario_problem: Callable[[dict[str, Any]], str] | None = None,
     catalogue: Catalogue | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
@@ -2616,10 +2615,6 @@ def scenario_tools(
                 )
             return as_given or _err(said)
 
-        if scenario_problem:
-            problem = scenario_problem(args)
-            if problem:
-                return _refuse(problem)
         if args.get("pre_run"):
             # Checked first, so a session that cannot be written is refused with its fix before any model is asked.
             from .pre_run import session_problems, written

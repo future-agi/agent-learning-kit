@@ -703,7 +703,6 @@ def open_builder(
     source_root: Path | None,
     platform: ToolServer | None = None,
     ask: Callable[..., Any] | None = None,
-    scenario_problem: Callable[[dict[str, Any]], str] | None = None,
     hosted_prompt: str = "",
     brief: str = "",
     sealed: bool = True,
@@ -721,7 +720,6 @@ def open_builder(
         out,
         wanted=max(len(existing), 1),
         can_grow=True,
-        scenario_problem=scenario_problem,
         catalogue=catalogue,
     )
     servers: dict[str, ToolServer] = {

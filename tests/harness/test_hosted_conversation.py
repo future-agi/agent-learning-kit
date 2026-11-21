@@ -16,7 +16,6 @@ from fi.alk.harness.chat_policy import (
     load_chat_policy,
 )
 from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
-from fi.alk.harness.poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
 from fi.alk.harness.hosted_conversation import (
     ConversationCapabilities,
     ConversationClient,
@@ -80,22 +79,6 @@ def test_conversation_turn_does_not_require_undeclared_history():
     asyncio.run(conversation.say("what is happening?"))
     asyncio.run(conversation.close())
     assert conversation.spent_usd == 0.25
-
-
-def test_hosted_chat_leaves_unrelated_invalid_jobs_on_generic_path(monkeypatch):
-    from fi.alk.harness.poc_guest_booking import guest_booking_policy_job
-
-    monkeypatch.setenv(TARGET_PHONE_ENV, "+15551234567")
-    monkeypatch.setenv(PIN_ENV, "7682")
-    job = {
-        "metadata": {"agent_name": "ordinary phone agent"},
-        "scenario_count": 10,
-        "agent": {"connector": "phone", "config": {"phone_number": "+15557654321"}},
-        # Deliberately not a complete SDK HarnessJob: generic chat accepted this before the POC.
-        "runtime": {"parallelism": 20, "cpu_units": 1},
-    }
-
-    assert guest_booking_policy_job(job) is None
 
 
 def test_conversation_client_starts_from_durable_command_watermark():

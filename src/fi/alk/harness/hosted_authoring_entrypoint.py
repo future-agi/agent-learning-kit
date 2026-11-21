@@ -16,7 +16,6 @@ from pathlib import Path
 from . import observability
 from .authoring_entrypoint import main as authoring_main
 from .backends import GOOGLE_ADK_APPROVAL_ENV
-from .poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
 from .privilege import IsolationUnavailable, establish_isolation
 from .secrets import mark_controller_process
 
@@ -35,10 +34,6 @@ _PASSTHROUGH = {
     "ALK_VOICEMAIL_SCENARIOS",
     "ALK_BACKGROUND_NOISE",
     "ALK_BACKGROUND_NOISE_CATALOG",
-    # Temporary, private guest-booking scenario policy. The exact
-    # target comes from platform deployment configuration, never from customer environment input.
-    TARGET_PHONE_ENV,
-    PIN_ENV,
     "ALK_CLAUDE_GATEWAY_URL",
     "ALK_CLAUDE_GATEWAY_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -216,8 +211,6 @@ def main(argv: list[str] | None = None) -> int:
                 GOOGLE_ADK_APPROVAL_ENV,
                 "ALK_BACKGROUND_NOISE",
                 "ALK_BACKGROUND_NOISE_CATALOG",
-                TARGET_PHONE_ENV,
-                PIN_ENV,
             )
             if gateway_values.get(name)
         }
