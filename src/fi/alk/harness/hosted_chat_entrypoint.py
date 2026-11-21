@@ -1653,7 +1653,7 @@ class HostedChatRuntime:
             kept = self._suite_here() or []
             still = review_still_open(self.workspace, kept)
             contract = load_contract(self.workspace)
-            gone = cases_citing_rules_gone(self.workspace, kept, contract.hard_constraints) if contract else []
+            gone = cases_citing_rules_gone(self.workspace, kept, contract) if contract else []
         except Exception:  # noqa: BLE001 - a review file that cannot be read never costs the reply
             return ""
         names = {one.scenario_key: one.name for one in kept}

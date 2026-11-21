@@ -232,7 +232,9 @@ def add_rule(
             for one in dropped
         )
     ) + (
-        cases_citing(destination, rule=old, written=was_written) if old else _unlinked_removals(contract, new_id)
+        cases_citing(destination, rule=old, written=was_written, rules=contract.hard_constraints)
+        if old
+        else _unlinked_removals(contract, new_id)
     )
 
 
@@ -255,7 +257,7 @@ def _link(contract: AgentContract, destination: Path, removed: AmendmentRecord, 
         contract.rule_sources.append(written.model_copy(update={"rule": rule}))
         _persist(contract, destination)
     return True, f"linked: {new_id} replaces {removed.key}." + cases_citing(
-        destination, rule=removed.text, written=written
+        destination, rule=removed.text, written=written, rules=contract.hard_constraints
     )
 
 
@@ -382,7 +384,9 @@ def drop_rule(
     if replaced_by.strip():
         # The rule reworded: added with `replaces`, so the two are linked and the cases citing it are reviewed.
         return add_rule(contract, destination, rule=replaced_by, why=why, replaces=rule_id(match))
-    resting = _cases_resting_on(destination, rule=match, written=contract.rule_source(match))
+    resting = _cases_resting_on(
+        destination, rule=match, written=contract.rule_source(match), rules=contract.hard_constraints
+    )
     if resting and not orphan:
         # Cases still rest on it: whether it is reworded or really goes is the builder's to say, in this call.
         return False, (
@@ -398,7 +402,10 @@ def drop_rule(
     _DROPPED_THIS_TURN.setdefault(_turn_key(destination), []).append(rule_id(match))
     return True, (
         f"removed ({rule_id(match)}). {len(contract.hard_constraints)} rules left. To reword it instead, add the new "
-        "rule with replaces naming this id." + cases_citing(destination, rule=match, written=contract.rule_source(match))
+        "rule with replaces naming this id."
+        + cases_citing(
+            destination, rule=match, written=contract.rule_source(match), rules=contract.hard_constraints
+        )
     )
 
 
@@ -662,23 +669,33 @@ def keep_reviewed(destination: Path, key: str, fields: list[str]) -> list[str]:
     return kept
 
 
-# The fewest characters of a rule's line a case's quote holds to cite that line, not a word in it.
-_LEAST_QUOTED = 20
+def _rests_on(
+    scenario: Any, destination: Path, *, rule: str, written: RuleSource | None, rules: list[str]
+) -> bool:
+    """Whether a case loses its ground with `rule` gone, the agent keeping `rules`: a `rule` source that resolves to
+    `rule` (`grounding.resolve_sources`) and to none of `rules`, or a `file` source citing exactly the line `rule` was
+    recorded from (`written`) when that line is no longer in the file."""
+    from .grounding import Rules, agent_source_root, resolve_sources
+    from .leaks import normalise
 
-
-def _cites_line(scenario: Any, written: RuleSource | None) -> bool:
-    """Whether a case cites the line of the agent's material a rule is written on: a `file` source naming that file
-    whose quote and the rule's quoted line hold one another."""
-    if written is None:
+    sources = list(getattr(scenario, "sources", None) or [])
+    if not sources:
         return False
-    line = " ".join(written.quote.split()).lower()
-    named = written.file.strip().removeprefix("file:").strip("/")
-    for source in getattr(scenario, "sources", None) or []:
-        if source.kind != "file" or source.ref.strip().removeprefix("file:").strip("/") != named:
-            continue
-        quote = " ".join(source.quote.split()).lower()
-        # The case quotes the whole line, or enough of it to be that line and not a word it shares.
-        if line and quote and (line in quote or (len(quote) >= _LEAST_QUOTED and quote in line)):
+    root = agent_source_root(destination)
+    now = resolve_sources(scenario, Rules(hard_constraints=list(rules)), destination, root)
+    held = resolve_sources(scenario, Rules(hard_constraints=[*rules, rule]), destination, root) if rule else now
+    named = written.file.strip().removeprefix("file:").strip("/") if written is not None else ""
+    for source, after, before in zip(sources, now, held):
+        if source.kind == "rule" and rule and before["resolved"] and not after["resolved"]:
+            return True
+        if (
+            source.kind == "file"
+            and written is not None
+            and normalise(written.quote)
+            and source.ref.strip().removeprefix("file:").strip("/") == named
+            and normalise(source.quote) == normalise(written.quote)
+            and after["resolved"] is False
+        ):
             return True
     return False
 
@@ -702,30 +719,26 @@ def _sub_goals_quoting(destination: Path, rule: str) -> list[str]:
 
 
 def _cases_resting_on(
-    destination: Path, *, rule: str = "", tool: str = "", written: RuleSource | None = None
+    destination: Path,
+    *,
+    rule: str = "",
+    tool: str = "",
+    written: RuleSource | None = None,
+    rules: list[str] | None = None,
 ) -> list[Any]:
-    """The cases whose `rule` source cites `rule`, that cite the line it is written on (`written`), or whose solution
+    """The cases that lose their ground with `rule` gone and the agent keeping `rules` (`_rests_on`), or whose solution
     or controls call `tool`; [] when the suite cannot be read."""
-    from .grounding import Rules, agent_source_root, resolve_sources
     from .scenario_tools import load_scenarios
 
     try:
         scenarios = load_scenarios(destination)
     except Exception:  # noqa: BLE001 - the change is made; this only says what to review next
         return []
+    kept = [one for one in (rules or []) if one != rule]
     return [
         one
         for one in scenarios
-        if _cites_line(one, written)
-        or (
-            rule
-            and any(
-                entry["kind"] == "rule" and entry["resolved"]
-                for entry in resolve_sources(
-                    one, Rules(hard_constraints=[rule]), destination, agent_source_root(destination)
-                )
-            )
-        )
+        if ((rule or written is not None) and _rests_on(one, destination, rule=rule, written=written, rules=kept))
         or (
             tool
             and any(
@@ -736,31 +749,49 @@ def _cases_resting_on(
     ]
 
 
-def cases_citing_rules_gone(destination: Path, scenarios: list[Any], rules: list[str]) -> list[str]:
-    """The cases whose `rule` source cites no rule the agent still has (`rules`), by key: a rule dropped while they
-    still rest on it. Read as their sources are, `grounding.resolve_sources`."""
-    from .grounding import Rules, agent_source_root, resolve_sources
-
-    gone = []
-    for one in scenarios:
-        try:
-            entries = resolve_sources(one, Rules(hard_constraints=list(rules)), destination, agent_source_root(destination))
-        except Exception:  # noqa: BLE001 - a case whose sources cannot be read is not listed
-            continue
-        if any(entry["kind"] == "rule" and entry["resolved"] is False for entry in entries):
-            gone.append(one.scenario_key or one.name)
+def rules_gone(contract: AgentContract) -> list[str]:
+    """The rules the agent had and no longer has, as they were removed."""
+    held = set(contract.hard_constraints)
+    gone: list[str] = []
+    for one in contract.amendment_records:
+        if one.kind == "rule" and one.action == "removed" and one.text and one.text not in held and one.text not in gone:
+            gone.append(one.text)
     return gone
 
 
+def cases_citing_rules_gone(destination: Path, scenarios: list[Any], contract: AgentContract) -> list[str]:
+    """The cases, by key, that rest on a rule the agent had and no longer has, judged as a drop judges them
+    (`_rests_on`): a source quoting nothing, or a rule that never existed, is not one."""
+    rules = list(contract.hard_constraints)
+    gone = rules_gone(contract)
+    listed = []
+    for one in scenarios:
+        try:
+            resting = any(
+                _rests_on(one, destination, rule=rule, written=contract.rule_source(rule), rules=rules) for rule in gone
+            )
+        except Exception:  # noqa: BLE001 - a case whose sources cannot be read is not listed
+            continue
+        if resting:
+            listed.append(one.scenario_key or one.name)
+    return listed
+
+
 def cases_citing(
-    destination: Path, *, rule: str = "", tool: str = "", written: RuleSource | None = None
+    destination: Path,
+    *,
+    rule: str = "",
+    tool: str = "",
+    written: RuleSource | None = None,
+    rules: list[str] | None = None,
 ) -> str:
     """The cases that rest on a rule or tool that just changed, as the rest of the reply: those whose `rule` source
     cites it (resolved as the case's sources are, `grounding.resolve_sources`, against the rule as it read), those
-    citing the line of the agent's material the rule is written on (`written`), or whose
+    citing exactly the line of the agent's material the rule was written on when that line is gone (`written`), judged
+    against the rules the agent keeps (`rules`), or whose
     solution or negative controls call the tool. Nothing in their text is read for values: the builder re-reads each
     against the current rules."""
-    citing = _cases_resting_on(destination, rule=rule, tool=tool, written=written)
+    citing = _cases_resting_on(destination, rule=rule, tool=tool, written=written, rules=rules)
     goals = _sub_goals_quoting(destination, rule) if rule else []
     said = (
         f"\n{len(goals)} sub-goal(s) quote the rule that changed in their contract or text: "

@@ -921,6 +921,8 @@ def world_tools(
     ``catalogue`` shares one catalogue object with the session's other servers; without it the
     catalogue is read from disk.
     """
+    # drop_rule refusals, counted as the scenario stage counts its own.
+    drops_refused: dict[tuple[str, int], int] = {}
     # An existing world is picked up rather than replaced. Amending one is the ordinary case
     # once it has been built once, and starting empty every time would mean rebuilding a
     # catalogue from scratch to add a single item to it.
@@ -1638,9 +1640,11 @@ def world_tools(
         "Take away a hard rule the agent does not really have. A rule nobody has is worse than "
         "a missing one: the agent is told to obey it and graded for not doing something it was "
         "never supposed to do. Say why. When scenarios still cite it, say in this call what becomes of it: `replaced_by` with the new rule's text when it is reworded (linked like add_rule with replaces), or `orphan: true` when the agent really no longer has it.",
-        {"rule": str, "why": str, "replaced_by": str, "orphan": bool},
+        schema({"rule": str, "why": str, "replaced_by": str, "orphan": bool}, ["rule", "why"]),
     )
     async def drop_rule_tool(args: dict[str, Any]) -> dict[str, Any]:
+        from ..scenario_tools import refused_drop
+
         done, said = drop_rule(
             contract,
             destination,
@@ -1649,7 +1653,7 @@ def world_tools(
             replaced_by=str(args.get("replaced_by") or ""),
             orphan=args.get("orphan") is True,
         )
-        return _ok(said) if done else _err(said)
+        return _ok(said) if done else _err(refused_drop(drops_refused, str(args.get("rule") or ""), said))
 
     @tool(
         "fix_tool",
