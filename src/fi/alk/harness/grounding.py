@@ -109,6 +109,7 @@ def _replacement(wanted: str, rules: list[str], records: Sequence[Any]) -> int |
     held = {rule_id(rule): at for at, rule in enumerate(rules)}
 
     def after(key: str) -> str:
+        # A rule key has at most one successor: `replaces` names one rule by id, so the chain never forks.
         return next(
             (_field(one, "replaced_by") for one in ruled if _field(one, "key") == key and _field(one, "replaced_by")),
             "",
@@ -125,6 +126,29 @@ def _replacement(wanted: str, rules: list[str], records: Sequence[Any]) -> int |
             if key in held:
                 return held[key]
     return None
+
+
+# The longest quote a source keeps (`ScenarioSource.quote`).
+_LONGEST_QUOTE = 500
+
+
+def recited_sources(scenario: Scenario, contract: RuleSource | None) -> list[dict[str, Any]] | None:
+    """The case's sources with every rule source that stands only on a replacement (`_replacement`) citing the rule
+    now held, in its words and at its place; None when none does. A case reviewed against a reworded rule then quotes
+    a rule the agent has, not the words it no longer has."""
+    rules = list(getattr(contract, "hard_constraints", None) or []) if contract is not None else []
+    records = getattr(contract, "amendment_records", None) or []
+    out, changed = [], False
+    for source in getattr(scenario, "sources", None) or []:
+        entry = source.model_dump() if hasattr(source, "model_dump") else dict(source)
+        wanted = normalise(entry.get("quote") or "")
+        if entry.get("kind") == "rule" and wanted and not any(wanted in normalise(rule) for rule in rules):
+            at = _replacement(wanted, rules, records)
+            if at is not None:
+                entry = {**entry, "ref": f"rule:{at}", "quote": rules[at][:_LONGEST_QUOTE]}
+                changed = True
+        out.append(entry)
+    return out if changed else None
 
 
 def resolve_sources(

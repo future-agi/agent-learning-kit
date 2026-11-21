@@ -5394,6 +5394,37 @@ def test_a_case_citing_a_reworded_rule_stands_on_its_replacement_and_an_orphaned
     assert cases_citing_rules_gone(root, load_scenarios(root), contract) == [_key(root, "adds-one-big-mac")]
 
 
+def test_a_case_kept_after_its_rule_was_reworded_cites_the_rule_now_held(tmp_path):
+    """Reviewed and kept as it reads, a case went on quoting the old rule's words, so it read Source changed for
+    good. Kept, it now cites the rule that replaced it."""
+    import asyncio
+
+    from fi.alk.harness.amend import add_rule, review_still_open
+    from fi.alk.harness.scenario_tools import load_scenarios, scenario_tools
+
+    root, contract = _cited_suite(tmp_path)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 10 days of delivery."
+    done, said = add_rule(contract, root, rule=new, why="the window is 10 days now", replaces=old)
+    assert done, said
+    key = _key(root, "adds-a-big-mac")
+    server, _kept = scenario_tools(contract, root, root, wanted=2)
+    edit = {one.name: one.handler for one in server.tools}["edit_scenario"]
+    still = review_still_open(root, load_scenarios(root))[key]
+
+    said = asyncio.run(edit({"scenario_key": key, "reviewed": list(still)}))["content"][0]["text"]
+
+    [source] = next(one for one in load_scenarios(root) if one.scenario_key == key).sources
+    assert "Kept as reviewed" in said and "now cites the rule that replaced it" in said, said
+    assert (source.ref, source.quote) == (f"rule:{contract.hard_constraints.index(new)}", new)
+    assert review_still_open(root, load_scenarios(root)).get(key) is None
+
+    # Written again quoting the old words, by any path: kept citing the rule now held.
+    stale = [{"kind": "rule", "ref": "rule:0", "quote": "within 30 days of delivery"}]
+    said = asyncio.run(edit({"scenario_key": key, "sources": stale, "tests": "the refund window"}))["content"][0]["text"]
+    [source] = next(one for one in load_scenarios(root) if one.scenario_key == key).sources
+    assert source.quote == new, said
+
+
 def test_a_rule_dropped_first_is_linked_when_its_rewrite_names_it(tmp_path):
     from fi.alk.harness.amend import add_rule, drop_rule
     from fi.alk.harness.contract import rule_id
