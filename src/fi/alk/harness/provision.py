@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import posixpath
 import re
 import secrets
 import shutil
@@ -25,6 +26,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -526,6 +528,7 @@ def _run(
     timeout: int = 900,
     process_overrides: dict[str, str] | None = None,
     teardown: bool = False,
+    config_text: str | None = None,
     extra_files: tuple[str, ...] = (),
 ) -> str:
     """Run one ``docker compose`` call.
@@ -533,7 +536,9 @@ def _run(
     Runtime credentials are inherited by Compose from the job env file and selected with
     ``--env NAME``. They must never be serialized into argv, where error messages and host
     process listings expose them. ``teardown`` tears the project down by name with no file at all:
-    nothing is parsed, so nothing is interpolated and no job value is needed.
+    nothing is parsed, so nothing is interpolated and no job value is needed. ``config_text``
+    is a render already checked by ``_validate_compose_security``; Compose reads it from stdin
+    instead of reading the project's files again.
     """
     if teardown:
         values: dict[str, str] = {}
@@ -567,6 +572,7 @@ def _run(
             text=True,
             check=False,
             timeout=timeout,
+            input=config_text,
         )
 
     try:
@@ -586,9 +592,15 @@ def _run(
             )
             descriptor, job_file = tempfile.mkstemp(dir=job_directory)
             _write_env_file(descriptor, values)
-            files = ["--file", environment.compose_file]
-            if environment.compose_override_file:
-                files.extend(("--file", environment.compose_override_file))
+            if config_text is not None:
+                # Run exactly the rendering that was validated. Reading the files again would let
+                # a change made after the check, by the job itself, reach Compose unchecked.
+                files = ["--project-directory", environment.source, "--file", "-"]
+            else:
+                files = ["--file", environment.compose_file]
+                if environment.compose_override_file:
+                    files.extend(("--file", environment.compose_override_file))
+            # Files the kit wrote itself, never the job, so they are not part of the check.
             for path in extra_files:
                 files.extend(("--file", path))
             # Giving Compose an explicit --env-file stops it reading the repository's ``.env`` by
@@ -646,7 +658,10 @@ def _run(
             raise ProvisionError(
                 f"{' '.join(command)} failed ({completed.returncode}): {shown}"
             )
-        return output
+        # Callers parse what Compose prints (JSON, a port, container ids). A warning on stderr
+        # (an obsolete ``version`` key) follows the data and would break that parse, so stderr is
+        # kept for the error messages above only.
+        return (completed.stdout or "").strip()
     finally:
         for directory in (job_directory, teardown_directory):
             if directory is not None:
@@ -743,9 +758,18 @@ def _command_failure_output(output: str, *, limit: int = 16_000) -> str:
     return f"{head}\n... {omitted} characters omitted ...\n{tail}"
 
 
-def _config(environment: ProvisionedEnvironment) -> dict[str, Any]:
+# Added by ``_config`` to the render it returns: the ``env_file`` paths of each service, read
+# from a render that does not resolve them. Not a Compose key; it never reaches ``compose run``.
+_ENV_FILES_KEY = "x-alk-env-files"
+
+
+def _config(
+    environment: ProvisionedEnvironment,
+    process_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
     # Include opt-in profiles while inspecting. They are not started as infrastructure, but the
-    # harness must still discover which service is the submitted agent runtime.
+    # harness must still discover which service is the submitted agent runtime. Pass the same
+    # ``process_overrides`` a later ``compose run`` will use to render the file as it will run.
     rendered = _run(
         environment,
         "--profile",
@@ -754,6 +778,7 @@ def _config(environment: ProvisionedEnvironment) -> dict[str, Any]:
         "--format",
         "json",
         timeout=60,
+        process_overrides=process_overrides,
     )
     try:
         value = json.loads(rendered)
@@ -763,7 +788,53 @@ def _config(environment: ProvisionedEnvironment) -> dict[str, Any]:
         ) from exc
     if not isinstance(value, dict) or not isinstance(value.get("services"), dict):
         raise ProvisionError("Docker Compose configuration has no services")
+    # The render above reads every ``env_file`` into ``environment`` and drops the key, so the
+    # check could not see which file was read. Render once more with the files left as paths and
+    # keep only those. ``--no-env-resolution`` alone does not do this on Compose v2.40 (the files
+    # are still read), but together with ``--no-interpolate`` the key survives, merged across
+    # ``include`` and ``extends`` and made absolute. Without interpolation a path with a variable
+    # stays literal, so the check refuses it. The resolved render stays the one that runs, so
+    # the job's own files still reach its container; this key is replaced here, never taken from
+    # the submitted file.
+    unresolved = _run(
+        environment,
+        "--profile",
+        "*",
+        "config",
+        "--no-env-resolution",
+        "--no-interpolate",
+        "--format",
+        "json",
+        timeout=60,
+        process_overrides=process_overrides,
+    )
+    try:
+        paths = json.loads(unresolved)
+    except json.JSONDecodeError as exc:
+        raise ProvisionError(
+            f"Docker Compose returned invalid configuration: {exc}"
+        ) from exc
+    if not isinstance(paths, dict) or not isinstance(paths.get("services"), dict):
+        raise ProvisionError("Docker Compose configuration has no services")
+    value[_ENV_FILES_KEY] = {
+        str(name): listed
+        for name, service in paths["services"].items()
+        if isinstance(service, dict)
+        and (listed := _env_file_paths(service.get("env_file")))
+    }
     return value
+
+
+def _env_file_paths(entries: Any) -> list[str]:
+    """The paths of an ``env_file`` value: a string, or a list of strings and ``path`` entries."""
+    if not entries:
+        return []
+    if not isinstance(entries, list):
+        entries = [entries]
+    return [
+        str(entry.get("path") if isinstance(entry, dict) else entry)
+        for entry in entries
+    ]
 
 
 def _started_services(
@@ -853,31 +924,433 @@ def _runtime_services(config: dict[str, Any], contract: Any | None = None) -> li
     return candidates
 
 
-def _validate_compose_security(config: dict[str, Any]) -> None:
-    """Reject host-escape primitives before any submitted container is created."""
+_NETWORK_HINT = (
+    "; declare networks in this file without external or name, and use network_mode only "
+    "as none or service:<a service in this file>"
+)
+
+
+# The Docker socket, the containerd socket and every directory that holds one: a bind of any of
+# them hands the container a daemon, which undoes every rule below. A rootless daemon's socket
+# is ``/run/user/<uid>/docker.sock`` and Docker Desktop's is under ``~/.docker/run``.
+_DOCKER_SOCKET_AND_PARENTS = frozenset(
+    {
+        "/",
+        "/run",
+        "/var",
+        "/var/run",
+        "/var/run/docker.sock",
+        "/run/docker.sock",
+        "/run/user",
+        "/run/containerd",
+        "/run/containerd/containerd.sock",
+    }
+)
+_ROOTLESS_SOCKET = re.compile(r"^/run/user(/[^/]+(/docker\.sock)?)?$")
+
+
+def _docker_socket_paths() -> frozenset[str]:
+    """The literal set, the user's Desktop socket folder, and what each resolves to on this host
+    (``/var/run`` is a link)."""
+    home = os.path.expanduser("~")
+    named = _DOCKER_SOCKET_AND_PARENTS | {
+        posixpath.join(home, ".docker/run"),
+        posixpath.join(home, ".docker/run/docker.sock"),
+    }
+    return named | {os.path.realpath(path) for path in named}
+
+
+def _is_daemon_socket_path(path: str) -> bool:
+    # ``/var/run`` is ``/run`` on a Linux host, so read both spellings of the same place.
+    lexical = re.sub(r"^/var/run(?=/|$)", "/run", path)
+    return (
+        path in _docker_socket_paths()
+        or lexical in _docker_socket_paths()
+        or bool(_ROOTLESS_SOCKET.match(lexical))
+    )
+
+
+def _mounts_docker_socket(volume: Any, root: str | None = None) -> bool:
+    """True for a bind (long or short form) whose source, once resolved, is the socket or a parent.
+
+    The runner resolves the source on the host before Docker mounts it, so a link in the job's
+    own folder that points at the socket mounts the socket: compare the real path as well.
+    ``root`` is the job's source; a relative source is read from there.
+    """
+    if isinstance(volume, dict):
+        if str(volume.get("type") or "bind") != "bind":
+            return False
+        source = str(volume.get("source") or "")
+    else:
+        text = str(volume)
+        if "docker.sock:" in text:
+            return True
+        source = text.split(":", 1)[0]
+    if not source.startswith("/"):
+        if root is None or not source:
+            return False
+        source = posixpath.join(root, source)
+    return any(
+        _is_daemon_socket_path(posixpath.normpath(re.sub(r"/{2,}", "/", path)))
+        for path in (source, os.path.realpath(source))
+    )
+
+
+# Deny by default: a service field this list does not name is refused, so a field added to
+# Compose later cannot reach the host unnoticed. Keys the function value-checks below
+# (network_mode, pid, ipc, uts, userns_mode, cgroup, volumes_from, security_opt, build, deploy,
+# logging, volumes, env_file, post_start, pre_stop) are listed; privileged and devices are refused
+# outright and are not.
+_ALLOWED_SERVICE_FIELDS = frozenset(
+    {
+        "image", "platform", "build", "command", "entrypoint", "environment", "env_file",
+        "working_dir", "user", "group_add", "depends_on", "healthcheck", "volumes", "ports",
+        "expose", "restart", "init", "stop_grace_period", "stop_signal", "read_only", "tmpfs",
+        "shm_size", "ulimits", "mem_limit", "mem_reservation", "memswap_limit",
+        "mem_swappiness", "cpus", "cpu_shares", "cpu_quota", "cpu_period", "cpuset",
+        "pids_limit", "networks", "hostname", "domainname", "mac_address", "dns", "dns_opt",
+        "dns_search", "labels", "annotations", "logging", "extra_hosts", "container_name",
+        "deploy", "cap_drop", "profiles", "links", "scale", "pull_policy", "tty",
+        "stdin_open", "post_start", "pre_stop", "attach", "develop", "network_mode", "pid", "ipc",
+        "uts", "userns_mode", "cgroup", "volumes_from", "security_opt",
+        "blkio_config", "cpu_count", "cpu_percent", "cpu_rt_runtime", "cpu_rt_period",
+    }
+)  # fmt: skip
+
+
+# Compose's ``build`` fields. A name not here is refused; the ones that read the host or the
+# network are value-checked in ``_build_violations``.
+_ALLOWED_BUILD_FIELDS = frozenset(
+    {
+        "context", "dockerfile", "dockerfile_inline", "target", "args", "network", "labels",
+        "platforms", "tags", "pull", "no_cache", "shm_size", "ulimits", "extra_hosts",
+        "additional_contexts", "cache_from", "cache_to", "secrets", "ssh", "privileged",
+        "entitlements", "provenance", "sbom",
+    }
+)  # fmt: skip
+
+
+def _inside_source(path: Any, roots: tuple[str, ...], base: str | None = None) -> bool:
+    """True when ``path`` resolves inside one of the job's folders (its source, then the folder of
+    its compose file). A relative path is read from ``base``, a folder of the first root. A URL is
+    never inside, and with no folder given nothing absolute is."""
+    text = str(path)
+    if not text or "://" in text or text.startswith("git@"):
+        return False
+    anchor = roots[0] if roots else "/.alk-no-source"
+    candidate = os.path.realpath(
+        posixpath.normpath(posixpath.join(anchor, base or "", text))
+    )
+    for top in map(os.path.realpath, roots or (anchor,)):
+        if candidate == top or candidate.startswith(top.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def _cache_path_is_outside(entry: Any, key: str, roots: tuple[str, ...]) -> bool:
+    """A ``type=local`` cache entry reads (``src``) or writes (``dest``) a path on the host."""
+    if isinstance(entry, dict):
+        fields = {str(name): str(value) for name, value in entry.items()}
+    else:
+        fields = dict(
+            part.split("=", 1) for part in str(entry).split(",") if "=" in part
+        )
+    if fields.get("type") != "local":
+        return False
+    return not _inside_source(fields.get(key, ""), roots)
+
+
+def _build_violations(
+    name: str, build: Any, config: dict[str, Any], roots: tuple[str, ...]
+) -> list[str]:
+    """Refuse a ``build`` that reads the host into the image or hands the image the host."""
+    if isinstance(build, str):
+        build = {"context": build}
+    if not isinstance(build, dict):
+        return []
+    found = [
+        f"{name}: build field {field} is not allowed"
+        for field in sorted(str(key) for key in build)
+        if field not in _ALLOWED_BUILD_FIELDS and not field.startswith("x-")
+    ]
+    context = str(build.get("context") or ".")
+    if not _inside_source(context, roots):
+        found.append(f"{name}: build.context")
+    elif build.get("dockerfile") and not _inside_source(
+        build["dockerfile"], roots, base=context
+    ):
+        found.append(f"{name}: build.dockerfile")
+    contexts = build.get("additional_contexts") or {}
+    if isinstance(contexts, list):
+        contexts = dict(
+            str(item).split("=", 1) for item in contexts if "=" in str(item)
+        )
+    for value in contexts.values() if isinstance(contexts, dict) else [""]:
+        # Another service's image or a registry image is not the host.
+        if str(value).startswith(("service:", "docker-image://")):
+            continue
+        if not _inside_source(value, roots):
+            found.append(f"{name}: build.additional_contexts")
+            break
+    if build.get("ssh"):
+        found.append(f"{name}: build.ssh")
+    defined = config.get("secrets") or {}
+    for entry in build.get("secrets") or []:
+        reference = entry.get("source") if isinstance(entry, dict) else entry
+        spec = defined.get(str(reference)) if isinstance(defined, dict) else None
+        # A secret from the harness's environment or from a host file outside the source would
+        # be readable from a RUN step.
+        if (
+            not isinstance(spec, dict)
+            or spec.get("environment")
+            or not spec.get("file")
+            or not _inside_source(spec["file"], roots)
+        ):
+            found.append(f"{name}: build.secrets")
+            break
+    for key, path_key in (("cache_from", "src"), ("cache_to", "dest")):
+        entries = build.get(key) or []
+        if isinstance(entries, (str, dict)):
+            entries = [entries]
+        if any(_cache_path_is_outside(entry, path_key, roots) for entry in entries):
+            found.append(f"{name}: build.{key}")
+    return found
+
+
+_HARDENING_SECURITY_OPTIONS = frozenset(
+    {"no-new-privileges:true", "no-new-privileges=true"}
+)
+_ALLOWED_DEPLOY_FIELDS = frozenset(
+    {
+        "mode", "replicas", "labels", "update_config", "rollback_config", "restart_policy",
+        "placement", "endpoint_mode", "resources",
+    }
+)  # fmt: skip
+_LOCAL_LOGGING_DRIVERS = frozenset({"", "json-file", "local", "none"})
+
+
+def _deploy_violations(name: str, deploy: Any) -> list[str]:
+    """Check ``deploy`` as nested keys. ``resources.reservations.devices`` is how a service asks
+    for a GPU (a host device), so it is refused as ``devices`` is."""
+    if not isinstance(deploy, dict):
+        return []
+    found = [
+        f"{name}: deploy field {field} is not allowed"
+        for field in sorted(str(key) for key in deploy)
+        if field not in _ALLOWED_DEPLOY_FIELDS and not field.startswith("x-")
+    ]
+    resources = deploy.get("resources") or {}
+    if not isinstance(resources, dict):
+        return found
+    allowed = {"limits": {"cpus", "memory", "pids"}, "reservations": {"cpus", "memory"}}
+    for key in sorted(str(key) for key in resources):
+        if key not in allowed:
+            found.append(f"{name}: deploy.resources field {key} is not allowed")
+            continue
+        section = resources[key] or {}
+        if not isinstance(section, dict):
+            continue
+        if key == "reservations" and section.get("devices"):
+            found.append(f"{name}: host devices")
+        found.extend(
+            f"{name}: deploy.resources.{key} field {field} is not allowed"
+            for field in sorted(str(item) for item in section)
+            if field not in allowed[key] | {"devices"} and not field.startswith("x-")
+        )
+    return found
+
+
+_ALLOWED_HOOK_FIELDS = frozenset(
+    {"command", "user", "working_dir", "environment", "privileged"}
+)
+
+
+def _volume_options_are_private(options: Any) -> bool:
+    """True for no options, or a tmpfs volume: the only ``local`` options that stay in memory."""
+    if not options:
+        return True
+    if not isinstance(options, dict) or set(options) - {"type", "device", "o"}:
+        return False
+    mount_options = {part.strip() for part in str(options.get("o") or "").split(",")}
+    return (
+        str(options.get("type") or "") == "tmpfs"
+        and str(options.get("device") or "tmpfs") == "tmpfs"
+        and not mount_options & {"bind", "rbind"}
+    )
+
+
+def _source_roots(environment: ProvisionedEnvironment) -> tuple[str, str]:
+    """The folders a job's own paths may point into: its source and the folder of the Compose
+    file it runs (a generated runtime keeps its build context beside that file, not in the source)."""
+    return (environment.source, str(Path(environment.compose_file).parent))
+
+
+def _validate_compose_security(
+    config: dict[str, Any],
+    source: str | os.PathLike[str] | Sequence[str | os.PathLike[str]] | None = None,
+) -> None:
+    """Reject host-escape primitives before any submitted container is created.
+
+    Messages carry a category and the file's own service/network keys, never a rendered value:
+    the config is interpolated with the environment and uploaded runtime values.
+    """
     violations: list[str] = []
-    for name, service in config["services"].items():
+    network_rule_failed = False
+    services = config["services"]
+    # The job's own folders, for the rules that compare a path with them. Without any, only an
+    # absolute path can be judged, and a rule that needs a folder treats that as outside.
+    if source is None:
+        roots: tuple[str, ...] = ()
+    elif isinstance(source, (str, os.PathLike)):
+        roots = (os.fspath(source),)
+    else:
+        roots = tuple(os.fspath(item) for item in source)
+    root = roots[0] if roots else None
+    for name, service in services.items():
         if service.get("privileged"):
             violations.append(f"{name}: privileged")
-        for key in ("network_mode", "pid", "ipc"):
-            if str(service.get(key) or "").lower() == "host":
-                violations.append(f"{name}: {key}=host")
+        mode = str(service.get("network_mode") or "")
+        # Docker reads any other string, in any case, as the name of a network to join.
+        if mode and mode != "none":
+            if not (
+                mode.startswith("service:") and mode[len("service:") :] in services
+            ):
+                violations.append(
+                    f"{name}: network_mode=host"
+                    if mode.lower() == "host"
+                    else f"{name}: network_mode outside the project"
+                )
+                network_rule_failed = True
+        for key, extra in (("pid", ()), ("ipc", ("none", "private", "shareable"))):
+            value = str(service.get(key) or "")
+            if not value or value in extra:
+                continue
+            if value.startswith("service:") and value[len("service:") :] in services:
+                continue
+            violations.append(
+                f"{name}: {key}=host"
+                if value.lower() == "host"
+                else f"{name}: {key} outside the project"
+            )
+        # Host namespaces: Compose's only other value is "host" (any case); a name is not read.
+        for key in ("uts", "userns_mode", "cgroup"):
+            value = str(service.get(key) or "")
+            if value and value != "private":
+                violations.append(f"{name}: {key} outside the project")
+        for entry in service.get("volumes_from") or []:
+            source = str(entry)
+            if source.startswith("container:"):
+                violations.append(f"{name}: volumes_from outside the project")
+                continue
+            for suffix in (":ro", ":rw"):
+                if source.endswith(suffix):
+                    source = source[: -len(suffix)]
+                    break
+            if source not in services:
+                violations.append(f"{name}: volumes_from outside the project")
+        build = service.get("build")
+        if isinstance(build, dict):
+            if str(build.get("network") or "") not in {"", "default", "none"}:
+                violations.append(f"{name}: build.network")
+                network_rule_failed = True
+            if build.get("privileged"):
+                violations.append(f"{name}: build.privileged")
+            if build.get("entitlements"):
+                violations.append(f"{name}: build.entitlements")
+        violations.extend(_build_violations(name, build, config, roots))
         if service.get("devices"):
             violations.append(f"{name}: host devices")
+        # Hardening only: ``seccomp=unconfined``, ``apparmor=unconfined`` or ``label=disable``
+        # would switch the container's confinement off.
+        security = service.get("security_opt") or []
+        if not isinstance(security, list) or any(
+            str(value) not in _HARDENING_SECURITY_OPTIONS for value in security
+        ):
+            violations.append(f"{name}: security_opt")
+        violations.extend(_deploy_violations(name, service.get("deploy")))
+        # Any other logging driver makes the daemon dial out from the host's network namespace
+        # (syslog, fluentd, gelf) or send with the daemon's own credentials (awslogs).
+        logging = service.get("logging")
+        if isinstance(logging, dict) and str(logging.get("driver") or "") not in (
+            _LOCAL_LOGGING_DRIVERS
+        ):
+            violations.append(f"{name}: logging driver")
+        # A dotenv file is read into the container's environment: only the job's own are its to read.
+        env_files = _env_file_paths(service.get("env_file")) + _env_file_paths(
+            (config.get(_ENV_FILES_KEY) or {}).get(name)
+        )
+        if any("$" in path for path in env_files):
+            violations.append(f"{name}: env_file path with a variable")
+        elif any(not _inside_source(path, roots) for path in env_files):
+            violations.append(f"{name}: env_file outside the project")
+        # A lifecycle hook is an exec in the service's container. ``privileged`` gives it every
+        # capability with no seccomp or AppArmor profile, which the service's own flag refuses.
+        # ``user`` and ``environment`` stay inside the container and are accepted as on the service.
+        for hook_key in ("post_start", "pre_stop"):
+            for hook in service.get(hook_key) or []:
+                if not isinstance(hook, dict):
+                    continue
+                if hook.get("privileged"):
+                    violations.append(f"{name}: {hook_key} privileged")
+                violations.extend(
+                    f"{name}: {hook_key} field {field} is not allowed"
+                    for field in sorted(str(key) for key in hook)
+                    if field not in _ALLOWED_HOOK_FIELDS and not field.startswith("x-")
+                )
+        for key in sorted(str(key) for key in service):
+            if key in _ALLOWED_SERVICE_FIELDS or key.startswith("x-"):
+                continue
+            if key in ("privileged", "devices") and service.get(key):
+                continue  # already reported above
+            violations.append(f"{name}: field {key} is not allowed")
         for volume in service.get("volumes") or []:
-            source = (
-                str(volume.get("source") or "")
-                if isinstance(volume, dict)
-                else str(volume)
-            )
-            if (
-                source in {"/var/run/docker.sock", "/run/docker.sock"}
-                or "docker.sock:" in source
-            ):
+            if _mounts_docker_socket(volume, root):
                 violations.append(f"{name}: Docker socket mount")
+            # ``image`` mounts another image's root filesystem; ``npipe`` and ``cluster`` are
+            # not Linux mounts. Compose's own default for a long entry is ``volume`` or ``bind``.
+            if isinstance(volume, dict) and str(volume.get("type") or "bind") not in {
+                "bind",
+                "volume",
+                "tmpfs",
+            }:
+                violations.append(f"{name}: volume type")
+    project = str(config.get("name") or "")
+    for key, spec in (config.get("volumes") or {}).items():
+        if not isinstance(spec, dict):
+            continue
+        # A named volume is only the job's own while it is created under the job's project and
+        # driven by ``local`` without options: ``o=bind`` with a ``device`` is a host bind, and
+        # a ``subpath`` of it reaches anything below that device.
+        if spec.get("external"):
+            violations.append(f"volume {key}: external")
+        declared = spec.get("name")
+        if declared and declared != f"{project}_{key}":
+            violations.append(f"volume {key}: named outside the project")
+        if str(spec.get("driver") or "") not in {"", "local"}:
+            violations.append(f"volume {key}: driver")
+        if not _volume_options_are_private(spec.get("driver_opts")):
+            violations.append(f"volume {key}: driver_opts")
+    for key, spec in (config.get("networks") or {}).items():
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("external"):
+            violations.append(f"network {key}: external")
+            network_rule_failed = True
+        declared = spec.get("name")
+        if declared and declared != f"{project}_{key}":
+            violations.append(f"network {key}: named outside the project")
+            network_rule_failed = True
+        if str(spec.get("driver") or "") not in {"", "bridge"}:
+            violations.append(f"network {key}: driver")
+            network_rule_failed = True
+        if spec.get("driver_opts"):
+            violations.append(f"network {key}: driver_opts")
+            network_rule_failed = True
     if violations:
         raise ProvisionError(
-            "submitted Compose requests forbidden host access: " + ", ".join(violations)
+            "submitted Compose requests forbidden host access: "
+            + ", ".join(violations)
+            + (_NETWORK_HINT if network_rule_failed else "")
         )
 
 
@@ -928,10 +1401,14 @@ def _write_port_override(
     if not services and not reset_env_files:
         return
     lines = ["services:"]
-    for name in reset_env_files:
-        lines.extend((f"  {json.dumps(name)}:", "    env_file: !reset []"))
-    for name, ports, fixed_container_name in services:
+    # One entry per service: a service with both a missing env file and published ports would
+    # otherwise appear twice, which is not a valid mapping.
+    by_name = {name: (ports, fixed) for name, ports, fixed in services}
+    for name in sorted({*reset_env_files, *by_name}):
+        ports, fixed_container_name = by_name.get(name, ([], False))
         lines.append(f"  {json.dumps(name)}:")
+        if name in reset_env_files:
+            lines.append("    env_file: !reset []")
         if fixed_container_name:
             # A submitted container_name bypasses Compose project scoping and collides across
             # concurrent jobs. Compose's reset tag restores its normal project-owned name.
@@ -1008,11 +1485,11 @@ def _refresh_compose_ports(
     environment.compose_override_file = None
     _write_initial_env_file_override(destination, environment)
     config = _config(environment)
-    _validate_compose_security(config)
+    _validate_compose_security(config, source=_source_roots(environment))
     _write_port_override(destination, environment, config)
     if environment.compose_override_file:
         config = _config(environment)
-        _validate_compose_security(config)
+        _validate_compose_security(config, source=_source_roots(environment))
     return config
 
 
@@ -2312,7 +2789,7 @@ def provision(
             existing, "ps", "--status", "running", "--quiet", check=False, timeout=30
         ):
             config = _config(existing)
-            _validate_compose_security(config)
+            _validate_compose_security(config, source=_source_roots(existing))
             existing.runtime_services = _runtime_services(config, contract)
             existing.services = _started_services(config, existing.runtime_services)
             existing.service_endpoints = _service_endpoints(existing, config)
@@ -2359,11 +2836,11 @@ def provision(
     # half-built stack down. The reuse and replace checks only act on a running environment.
     environment.save(destination)
     config = _config(environment)
-    _validate_compose_security(config)
+    _validate_compose_security(config, source=_source_roots(environment))
     _write_port_override(destination, environment, config)
     if environment.compose_override_file:
         config = _config(environment)
-        _validate_compose_security(config)
+        _validate_compose_security(config, source=_source_roots(environment))
     environment.runtime_services = _runtime_services(config, contract)
     environment.services = _started_services(config, environment.runtime_services)
     if not environment.services and len(environment.runtime_services) != 1:
@@ -2480,10 +2957,12 @@ def reset(destination: str | Path) -> ProvisionedEnvironment:
         timeout=120,
     )
     started = time.monotonic()
+    # After ``down`` no job container is alive, so nothing can change the files between this
+    # check and the ``up`` below. Validate before starting anything.
+    config = _config(environment)
+    _validate_compose_security(config, source=_source_roots(environment))
     if environment.services:
         _start_managed_services(environment, environment.services, build=False)
-    config = _config(environment)
-    _validate_compose_security(config)
     recorded_runtime = [
         name for name in environment.runtime_services if name in config["services"]
     ]
@@ -2918,6 +3397,14 @@ def start_runtime(
         for name, value in injected.items()
         if runtime_only.get(name) != value
     }
+    # ``injected`` is applied only here, so the file validated at provision time was rendered
+    # without it. A value such as ``${HARNESS_MODE:+container:x}`` could pass that check and
+    # change meaning now; validate the file as ``compose run`` will render it, then run that
+    # same rendering instead of letting Compose read the files a second time.
+    validated = _config(environment, process_overrides=process_overrides)
+    _validate_compose_security(validated, source=_source_roots(environment))
+    # The kit's own settings override is added after the check: it only gives the agent's
+    # service an ``env_file``, and ``config`` would print the values it holds.
     agent_settings = _agent_settings_override(environment, service)
     try:
         _run(
@@ -2925,6 +3412,10 @@ def start_runtime(
             *arguments,
             timeout=900,
             process_overrides=process_overrides,
+            # The env_file paths were for the check only; the job runs the resolved render as it was.
+            config_text=json.dumps(
+                {key: item for key, item in validated.items() if key != _ENV_FILES_KEY}
+            ),
             extra_files=(str(agent_settings),) if agent_settings else (),
         )
     finally:

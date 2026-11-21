@@ -19,6 +19,7 @@ from fi.alk.harness.contract import (
     Runtime,
     ToolSpec,
 )
+from fi.alk.harness import provision as provisioning
 from fi.alk.harness.bundle import export_session_bundle
 from fi.alk.harness.environment_plan import load_environment_plan
 from fi.alk.harness.provision import (
@@ -672,6 +673,310 @@ def test_authenticated_redis_response_counts_as_protocol_ready(monkeypatch):
 def test_host_escape_compose_features_are_rejected(service):
     with pytest.raises(ProvisionError, match="forbidden host access"):
         _validate_compose_security({"services": {"agent": service}})
+
+
+_DOCKER_SOCKET_AND_PARENTS = [
+    "/",
+    "/run",
+    "/var",
+    "/var/run",
+    "/var/run/docker.sock",
+    "/run/docker.sock",
+    "/var/run/",
+    "/var/run/.",
+    "/var/./run",
+    "/var//run/docker.sock",
+    "/run/./docker.sock/",
+    "/var/run/../run",
+    "//",
+]
+
+
+@pytest.mark.parametrize("source", _DOCKER_SOCKET_AND_PARENTS)
+@pytest.mark.parametrize("form", ["long", "short"])
+def test_a_bind_of_the_docker_socket_or_a_parent_is_rejected(source, form):
+    volume = (
+        {"type": "bind", "source": source, "target": "/h"}
+        if form == "long"
+        else f"{source}:/h:ro"
+    )
+    with pytest.raises(ProvisionError, match="agent: Docker socket mount"):
+        _validate_compose_security({"services": {"agent": {"volumes": [volume]}}})
+
+
+@pytest.mark.parametrize(
+    "volume",
+    [
+        {"type": "bind", "source": "/var/run/other", "target": "/h"},
+        {"type": "bind", "source": "/srv/data", "target": "/h"},
+        {"type": "bind", "source": "./data", "target": "/h"},
+        {"type": "volume", "source": "data", "target": "/h"},
+        {"type": "bind", "source": "/run/userdata", "target": "/h"},
+        "/srv/data:/h",
+        "./data:/h",
+        "data:/h",
+    ],
+)
+def test_a_bind_elsewhere_is_not_a_docker_socket_mount(volume):
+    _validate_compose_security({"services": {"agent": {"volumes": [volume]}}})
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "cap_add",
+        "use_api_socket",
+        "secrets",
+        "configs",
+        "sysctls",
+        "runtime",
+        "isolation",
+        "cgroup_parent",
+        "device_cgroup_rules",
+        "oom_kill_disable",
+        "gpus",
+        "external_links",
+        "some_future_field",
+    ],
+)
+def test_a_service_field_not_on_the_allowlist_is_rejected(field):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(_svc(**{field: ["CANARY-7f3a"]}))
+    assert f"agent: field {field} is not allowed" in str(error.value)
+    assert "CANARY" not in str(error.value)
+    assert "db: field" not in str(error.value)
+
+
+def test_a_privileged_service_is_reported_once():
+    with pytest.raises(ProvisionError) as error:
+        _validate_compose_security(_svc(privileged=True, devices=["/dev/kvm"]))
+    assert "agent: privileged" in str(error.value)
+    assert "agent: host devices" in str(error.value)
+    assert "field privileged" not in str(error.value)
+    assert "field devices" not in str(error.value)
+
+
+def test_service_fields_on_the_allowlist_are_accepted():
+    _validate_compose_security(
+        _svc(
+            image="x",
+            build={"context": "."},
+            command=["run"],
+            entrypoint=["run"],
+            environment={"A": "b"},
+            env_file=["a.env"],
+            working_dir="/app",
+            user="1000",
+            depends_on={"db": {"condition": "service_started"}},
+            healthcheck={"test": ["CMD", "true"]},
+            volumes=[{"type": "volume", "source": "data", "target": "/d"}],
+            ports=[{"target": 80}],
+            expose=["80"],
+            restart="no",
+            profiles=["harness-runtime"],
+            networks={"default": None},
+            labels={"a": "b"},
+            deploy={"resources": {"limits": {"cpus": "1"}}},
+            cap_drop=["ALL"],
+            tmpfs=["/tmp"],
+            mem_limit="1g",
+            develop={"watch": [{"path": "./src", "action": "sync", "target": "/app"}]},
+            # The fields real jobs use, written out one by one (not looped over the allowlist),
+            # so dropping any of them from the allowlist turns this red.
+            container_name="job-agent",
+            cpus=1.5,
+            extra_hosts=["a:1.2.3.4"],
+            hostname="agent",
+            init=True,
+            pids_limit=200,
+            pull_policy="missing",
+            read_only=True,
+            shm_size="1g",
+            stdin_open=True,
+            stop_grace_period="10s",
+            stop_signal="SIGINT",
+            tty=True,
+            ulimits={"nofile": {"soft": 1024, "hard": 2048}},
+            # Resource limits only; Compose renders them and nothing here reaches the host.
+            blkio_config={"weight": 300},
+            cpu_count=2,
+            cpu_percent=50,
+            cpu_rt_runtime="400ms",
+            cpu_rt_period="1400us",
+            **{"x-anything": {"a": 1}},
+        )
+    )
+
+
+def _svc(**fields):
+    return {"services": {"agent": fields, "db": {}}}
+
+
+def _net(spec, name="job"):
+    return {"name": name, "services": {"agent": {}}, "networks": {"back": spec}}
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        # network_mode
+        (
+            _svc(network_mode="container:other"),
+            "agent: network_mode outside the project",
+        ),
+        (_svc(network_mode="container:db"), "agent: network_mode outside the project"),
+        (
+            _svc(network_mode="platform_default"),
+            "agent: network_mode outside the project",
+        ),
+        (_svc(network_mode="bridge"), "agent: network_mode outside the project"),
+        (_svc(network_mode="host"), "agent: network_mode=host"),
+        (
+            _svc(network_mode="service:missing"),
+            "agent: network_mode outside the project",
+        ),
+        (_svc(network_mode="NONE"), "agent: network_mode outside the project"),
+        (_svc(network_mode="NoNe"), "agent: network_mode outside the project"),
+        # pid and ipc
+        (_svc(pid="host"), "agent: pid=host"),
+        (_svc(pid="container:db"), "agent: pid outside the project"),
+        (_svc(pid="service:missing"), "agent: pid outside the project"),
+        (_svc(pid="private"), "agent: pid outside the project"),
+        (_svc(ipc="host"), "agent: ipc=host"),
+        (_svc(ipc="container:db"), "agent: ipc outside the project"),
+        (_svc(ipc="service:missing"), "agent: ipc outside the project"),
+        # uts, userns_mode and cgroup
+        (_svc(uts="host"), "agent: uts outside the project"),
+        (_svc(uts="HOST"), "agent: uts outside the project"),
+        (_svc(userns_mode="host"), "agent: userns_mode outside the project"),
+        (_svc(userns_mode="HOST"), "agent: userns_mode outside the project"),
+        (_svc(cgroup="host"), "agent: cgroup outside the project"),
+        (_svc(cgroup="HOST"), "agent: cgroup outside the project"),
+        # volumes_from
+        (
+            _svc(volumes_from=["container:db"]),
+            "agent: volumes_from outside the project",
+        ),
+        (
+            _svc(volumes_from=["container:db:ro"]),
+            "agent: volumes_from outside the project",
+        ),
+        (_svc(volumes_from=["missing"]), "agent: volumes_from outside the project"),
+        (
+            _svc(volumes_from=["db", "missing:ro"]),
+            "agent: volumes_from outside the project",
+        ),
+        (_svc(volumes_from=["service:db"]), "agent: volumes_from outside the project"),
+        # build
+        (_svc(build={"context": ".", "network": "host"}), "agent: build.network"),
+        (
+            _svc(build={"context": ".", "network": "platform_default"}),
+            "agent: build.network",
+        ),
+        (_svc(build={"context": ".", "privileged": True}), "agent: build.privileged"),
+        (
+            _svc(build={"context": ".", "entitlements": ["network.host"]}),
+            "agent: build.entitlements",
+        ),
+        # top-level networks
+        (_net({"name": "shared", "external": True}), "network back: external"),
+        (
+            _net({"name": "otherproject_back"}),
+            "network back: named outside the project",
+        ),
+        (_net({"name": "job_default"}), "network back: named outside the project"),
+        (_net({"name": "job_back", "driver": "macvlan"}), "network back: driver"),
+        (_net({"name": "job_back", "driver": "host"}), "network back: driver"),
+        (
+            _net({"name": "job_back", "driver_opts": {"parent": "eth0"}}),
+            "network back: driver_opts",
+        ),
+    ],
+)
+def test_compose_reach_outside_the_project_is_rejected(config, expected):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(config)
+    assert expected in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        # network_mode
+        _svc(network_mode="service:db"),
+        _svc(network_mode="none"),
+        _svc(network_mode=""),
+        _svc(),
+        # pid and ipc
+        _svc(pid="service:db"),
+        _svc(pid=""),
+        _svc(ipc="service:db"),
+        _svc(ipc="none"),
+        _svc(ipc="private"),
+        _svc(ipc="shareable"),
+        _svc(ipc=""),
+        # uts, userns_mode and cgroup
+        _svc(uts="private"),
+        _svc(uts=""),
+        _svc(userns_mode="private"),
+        _svc(userns_mode=""),
+        _svc(cgroup="private"),
+        _svc(cgroup=""),
+        # volumes_from
+        _svc(volumes_from=["db"]),
+        _svc(volumes_from=["db:ro"]),
+        _svc(volumes_from=["db:rw"]),
+        # build
+        _svc(build={"context": "."}),
+        _svc(build={"context": ".", "network": "default"}),
+        _svc(build={"context": ".", "network": "none"}),
+        _svc(build={"context": ".", "privileged": False, "entitlements": []}),
+        # top-level networks
+        _net({"name": "job_back"}),
+        _net({"name": "job_back", "driver": "bridge", "driver_opts": {}}),
+        _net({"driver": "bridge", "internal": True}),
+        {"name": "job", "services": {"agent": {}}, "networks": {"default": None}},
+        {"name": "job", "services": {"agent": {}}},
+    ],
+)
+def test_compose_settings_inside_the_project_are_accepted(config):
+    _validate_compose_security(config)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        _svc(network_mode="CANARY-7f3a"),
+        _svc(pid="CANARY-7f3a"),
+        _svc(ipc="CANARY-7f3a"),
+        _svc(uts="CANARY-7f3a"),
+        _svc(userns_mode="CANARY-7f3a"),
+        _svc(cgroup="CANARY-7f3a"),
+        _svc(security_opt=["CANARY-7f3a"]),
+        _svc(volumes_from=["CANARY-7f3a"]),
+        _svc(build={"network": "CANARY-7f3a"}),
+        _net({"name": "CANARY-7f3a"}),
+        _net({"name": "job_back", "driver": "CANARY-7f3a"}),
+        _net({"name": "job_back", "driver_opts": {"parent": "CANARY-7f3a"}}),
+    ],
+)
+def test_compose_refusal_text_never_contains_a_value(config):
+    with pytest.raises(ProvisionError) as error:
+        _validate_compose_security(config)
+    assert "CANARY" not in str(error.value)
+    assert "7f3a" not in str(error.value)
+
+
+def test_network_refusal_ends_with_the_hint_and_other_refusals_do_not():
+    with pytest.raises(ProvisionError) as network:
+        _validate_compose_security(_svc(network_mode="container:db"))
+    assert str(network.value).endswith(
+        "; declare networks in this file without external or name, and use network_mode "
+        "only as none or service:<a service in this file>"
+    )
+    with pytest.raises(ProvisionError) as other:
+        _validate_compose_security(_svc(privileged=True))
+    assert "declare networks" not in str(other.value)
 
 
 def test_clickhouse_is_generated_when_contract_declares_it_without_compose(tmp_path):
@@ -1962,3 +2267,868 @@ HTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
     finally:
         world.close()
         stop(session)
+
+
+def _vol(spec, key="data", **service):
+    return {
+        "name": "job",
+        "services": {"agent": service},
+        "volumes": {key: spec},
+    }
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        (
+            _vol(
+                {
+                    "name": "job_data",
+                    "driver": "local",
+                    "driver_opts": {"type": "none", "o": "bind", "device": "/var/run"},
+                }
+            ),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol(
+                {
+                    "name": "job_data",
+                    "driver_opts": {"type": "none", "o": "bind", "device": "/"},
+                },
+                volumes=[
+                    {
+                        "type": "volume",
+                        "source": "data",
+                        "target": "/h",
+                        "volume": {"subpath": "var/run"},
+                    }
+                ],
+            ),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol({"name": "job_data", "driver_opts": {"device": "/var/run"}}),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol({"name": "job_data", "driver_opts": {"o": "bind"}}),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol({"name": "job_data", "driver_opts": {"type": "bind"}}),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol({"name": "job_data", "driver_opts": {"type": "nfs", "device": ":/x"}}),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol(
+                {
+                    "name": "job_data",
+                    "driver_opts": {"type": "tmpfs", "device": "/", "o": "bind"},
+                }
+            ),
+            "volume data: driver_opts",
+        ),
+        (
+            _vol({"name": "otherjob_data", "external": True}),
+            "volume data: external",
+        ),
+        (_vol({"name": "job_data", "external": True}), "volume data: external"),
+        (_vol({"name": "otherjob_data"}), "volume data: named outside the project"),
+        (_vol({"name": "job_other"}), "volume data: named outside the project"),
+        (_vol({"name": "job_data", "driver": "nfs"}), "volume data: driver"),
+        (_vol({"name": "job_data", "driver": "rexray/s3fs"}), "volume data: driver"),
+        (
+            _vol(
+                {"name": "job_data"},
+                volumes=[{"type": "image", "source": "alpine", "target": "/h"}],
+            ),
+            "agent: volume type",
+        ),
+        (
+            _vol(
+                {"name": "job_data"},
+                volumes=[{"type": "npipe", "source": "x", "target": "/h"}],
+            ),
+            "agent: volume type",
+        ),
+    ],
+)
+def test_a_named_volume_that_reaches_outside_the_project_is_rejected(config, expected):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(config)
+    assert expected in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        _vol({}),
+        _vol({"name": "job_data"}),
+        _vol({"name": "job_data", "driver": "local"}),
+        _vol({"name": "job_data", "driver": ""}),
+        _vol({"name": "job_data", "driver_opts": {}}),
+        _vol({"name": "job_data", "labels": {"a": "b"}}),
+        _vol(
+            {
+                "name": "job_data",
+                "driver_opts": {"type": "tmpfs", "device": "tmpfs", "o": "size=64m"},
+            }
+        ),
+        _vol(None),
+        _vol(
+            {"name": "job_data"},
+            volumes=[
+                {"type": "volume", "source": "data", "target": "/h"},
+                {"type": "tmpfs", "target": "/t"},
+                {"type": "bind", "source": "/srv/data", "target": "/b"},
+                {
+                    "type": "volume",
+                    "source": "data",
+                    "target": "/s",
+                    "volume": {"subpath": "sub"},
+                },
+            ],
+        ),
+    ],
+)
+def test_a_named_volume_inside_the_project_is_accepted(config):
+    _validate_compose_security(config)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        _vol({"name": "CANARY-7f3a"}),
+        _vol({"name": "job_data", "driver": "CANARY-7f3a"}),
+        _vol({"name": "job_data", "driver_opts": {"device": "CANARY-7f3a"}}),
+        _vol({"name": "job_data"}, volumes=[{"type": "CANARY-7f3a", "target": "/h"}]),
+    ],
+)
+def test_a_volume_refusal_never_contains_a_value(config):
+    with pytest.raises(ProvisionError) as error:
+        _validate_compose_security(config)
+    assert "CANARY" not in str(error.value)
+    assert "7f3a" not in str(error.value)
+
+
+@pytest.mark.parametrize("hook", ["post_start", "pre_stop"])
+def test_a_privileged_lifecycle_hook_is_rejected(hook):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(
+            _svc(**{hook: [{"command": ["id"], "privileged": True, "user": "root"}]})
+        )
+    assert f"agent: {hook} privileged" in str(error.value)
+    assert "db:" not in str(error.value)
+
+
+@pytest.mark.parametrize("hook", ["post_start", "pre_stop"])
+def test_a_lifecycle_hook_field_outside_the_allowlist_is_rejected(hook):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(
+            _svc(**{hook: [{"command": ["id"], "bogus": "CANARY-7f3a"}]})
+        )
+    assert f"agent: {hook} field bogus is not allowed" in str(error.value)
+    assert "CANARY" not in str(error.value)
+
+
+@pytest.mark.parametrize("hook", ["post_start", "pre_stop"])
+def test_a_lifecycle_hook_without_privilege_is_accepted(hook):
+    _validate_compose_security(
+        _svc(
+            **{
+                hook: [
+                    {"command": ["id"]},
+                    {
+                        "command": ["id"],
+                        "user": "1000",
+                        "working_dir": "/app",
+                        "environment": {"A": "b"},
+                        "privileged": False,
+                    },
+                ]
+            }
+        )
+    )
+
+
+def _link(tmp_path, target, name="sock"):
+    link = tmp_path / name
+    link.symlink_to(target)
+    return str(link)
+
+
+@pytest.mark.parametrize("target", ["/var/run", "/var/run/docker.sock", "/", "/run"])
+@pytest.mark.parametrize("form", ["long", "short"])
+def test_a_symlink_to_the_docker_socket_or_a_parent_is_rejected(tmp_path, target, form):
+    source = _link(tmp_path, target)
+    volume = (
+        {"type": "bind", "source": source, "target": "/h"}
+        if form == "long"
+        else f"{source}:/h:ro"
+    )
+    with pytest.raises(ProvisionError, match="agent: Docker socket mount"):
+        _validate_compose_security(
+            {"services": {"agent": {"volumes": [volume]}}}, source=tmp_path
+        )
+
+
+def test_a_relative_symlink_and_a_chain_of_links_are_resolved(tmp_path):
+    _link(tmp_path, "/var/run", name="first")
+    _link(tmp_path, tmp_path / "first", name="second")
+    for source in ("./first", "./second", str(tmp_path / "second")):
+        with pytest.raises(ProvisionError, match="agent: Docker socket mount"):
+            _validate_compose_security(
+                {
+                    "services": {
+                        "agent": {
+                            "volumes": [
+                                {"type": "bind", "source": source, "target": "/h"}
+                            ]
+                        }
+                    }
+                },
+                source=tmp_path,
+            )
+
+
+def test_a_symlink_to_a_folder_of_the_job_is_not_a_docker_socket_mount(tmp_path):
+    (tmp_path / "data").mkdir()
+    link = _link(tmp_path, tmp_path / "data", name="link")
+    _validate_compose_security(
+        {
+            "services": {
+                "agent": {
+                    "volumes": [
+                        {"type": "bind", "source": link, "target": "/h"},
+                        f"{link}:/g",
+                    ]
+                }
+            }
+        },
+        source=tmp_path,
+    )
+
+
+def _build(tmp_path, build, secrets=None):
+    config = _svc(build=build)
+    if secrets is not None:
+        config["secrets"] = secrets
+    return config
+
+
+@pytest.mark.parametrize(
+    ("build", "secrets", "expected"),
+    [
+        ({"context": "/"}, None, "agent: build.context"),
+        ({"context": "/etc"}, None, "agent: build.context"),
+        ({"context": ".."}, None, "agent: build.context"),
+        ({"context": "../other"}, None, "agent: build.context"),
+        ({"context": "{tmp}/../other"}, None, "agent: build.context"),
+        ({"context": "{tmp}-sibling"}, None, "agent: build.context"),
+        ({"context": "{tmp}/escape"}, None, "agent: build.context"),
+        ({"context": "https://example.com/x.git"}, None, "agent: build.context"),
+        ({"context": "git@example.com:x/y.git"}, None, "agent: build.context"),
+        ({"context": "."}, None, None),
+        (
+            {"context": ".", "additional_contexts": {"h": "/"}},
+            None,
+            "agent: build.additional_contexts",
+        ),
+        (
+            {"context": ".", "additional_contexts": {"h": "../x"}},
+            None,
+            "agent: build.additional_contexts",
+        ),
+        (
+            {"context": ".", "additional_contexts": ["h=/etc"]},
+            None,
+            "agent: build.additional_contexts",
+        ),
+        (
+            {"context": ".", "additional_contexts": {"h": "https://example.com/x"}},
+            None,
+            "agent: build.additional_contexts",
+        ),
+        (
+            {"context": ".", "secrets": ["s"]},
+            {"s": {"file": "/etc/hosts"}},
+            "agent: build.secrets",
+        ),
+        (
+            {"context": ".", "secrets": [{"source": "s", "target": "t"}]},
+            {"s": {"file": "/etc/hosts"}},
+            "agent: build.secrets",
+        ),
+        (
+            {"context": ".", "secrets": ["s"]},
+            {"s": {"file": "../hosts"}},
+            "agent: build.secrets",
+        ),
+        (
+            {"context": ".", "secrets": ["s"]},
+            {"s": {"environment": "HOME"}},
+            "agent: build.secrets",
+        ),
+        (
+            {"context": ".", "secrets": ["missing"]},
+            {},
+            "agent: build.secrets",
+        ),
+        ({"context": ".", "ssh": ["default"]}, None, "agent: build.ssh"),
+        ({"context": ".", "ssh": {"default": None}}, None, "agent: build.ssh"),
+        (
+            {"context": ".", "cache_to": ["type=local,dest=/tmp/cache"]},
+            None,
+            "agent: build.cache_to",
+        ),
+        (
+            {"context": ".", "cache_to": ["type=local,dest=../cache"]},
+            None,
+            "agent: build.cache_to",
+        ),
+        (
+            {"context": ".", "cache_from": ["type=local,src=/etc"]},
+            None,
+            "agent: build.cache_from",
+        ),
+        (
+            {"context": ".", "cache_from": ["mode=max,type=local,src=/etc"]},
+            None,
+            "agent: build.cache_from",
+        ),
+        (
+            {"context": ".", "isolation": "hyperv"},
+            None,
+            "agent: build field isolation is not allowed",
+        ),
+        (
+            {"context": ".", "some_future_field": "x"},
+            None,
+            "agent: build field some_future_field is not allowed",
+        ),
+    ],
+)
+def test_build_reach_outside_the_source_is_rejected(tmp_path, build, secrets, expected):
+    (tmp_path / "escape").symlink_to("/etc")
+    build = {
+        key: (
+            value.replace("{tmp}", str(tmp_path)) if isinstance(value, str) else value
+        )
+        for key, value in build.items()
+    }
+    config = _build(tmp_path, build, secrets)
+    if expected is None:
+        _validate_compose_security(config, source=tmp_path)
+        return
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(config, source=tmp_path)
+    assert expected in str(error.value)
+
+
+def test_build_with_no_source_given_refuses_an_absolute_context():
+    with pytest.raises(ProvisionError, match="agent: build.context"):
+        _validate_compose_security(_svc(build={"context": "/srv/app"}))
+
+
+@pytest.mark.parametrize(
+    ("build", "secrets"),
+    [
+        ("{tmp}", None),
+        ({"context": "{tmp}", "dockerfile": "Dockerfile"}, None),
+        ({"context": "{tmp}/sub", "dockerfile_inline": "FROM busybox\n"}, None),
+        (
+            {"context": ".", "target": "prod", "args": {"A": "b"}, "network": "none"},
+            None,
+        ),
+        (
+            {
+                "context": ".",
+                "labels": {"a": "b"},
+                "platforms": ["linux/amd64"],
+                "tags": ["x:1"],
+                "pull": True,
+                "no_cache": True,
+                "shm_size": "1g",
+                "ulimits": {"nofile": 1024},
+                "extra_hosts": {"a": "1.2.3.4"},
+                "provenance": False,
+                "sbom": False,
+                "x-anything": 1,
+            },
+            None,
+        ),
+        (
+            {
+                "context": ".",
+                "additional_contexts": {
+                    "a": "{tmp}/sub",
+                    "b": "./sub",
+                    "c": "docker-image://alpine:3",
+                    "d": "service:db",
+                },
+            },
+            None,
+        ),
+        (
+            {"context": ".", "secrets": ["s", {"source": "t"}]},
+            {"s": {"file": "{tmp}/s.txt"}, "t": {"file": "./t.txt"}},
+        ),
+        (
+            {
+                "context": ".",
+                "cache_from": ["alpine:3", "type=registry,ref=x/y:cache"],
+                "cache_to": ["type=inline", "type=local,dest={tmp}/cache"],
+            },
+            None,
+        ),
+        ({"context": ".", "ssh": [], "secrets": [], "additional_contexts": {}}, None),
+    ],
+)
+def test_build_inside_the_source_is_accepted(tmp_path, build, secrets):
+    def fill(value):
+        if isinstance(value, str):
+            return value.replace("{tmp}", str(tmp_path))
+        if isinstance(value, list):
+            return [fill(item) for item in value]
+        if isinstance(value, dict):
+            return {key: fill(item) for key, item in value.items()}
+        return value
+
+    _validate_compose_security(
+        _build(tmp_path, fill(build), fill(secrets)), source=tmp_path
+    )
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        {"context": "/CANARY-7f3a"},
+        {"context": ".", "additional_contexts": {"h": "/CANARY-7f3a"}},
+        {"context": ".", "secrets": ["CANARY-7f3a"]},
+        {"context": ".", "ssh": ["CANARY-7f3a"]},
+        {"context": ".", "cache_to": ["type=local,dest=/CANARY-7f3a"]},
+        {"context": ".", "cache_from": ["type=local,src=/CANARY-7f3a"]},
+    ],
+)
+def test_a_build_refusal_never_contains_a_value(tmp_path, build):
+    with pytest.raises(ProvisionError) as error:
+        _validate_compose_security(_build(tmp_path, build, {}), source=tmp_path)
+    assert "CANARY" not in str(error.value)
+    assert "7f3a" not in str(error.value)
+
+
+@pytest.mark.parametrize("dockerfile", ["/etc/passwd", "../../outside/Dockerfile"])
+def test_a_dockerfile_outside_the_source_is_rejected(tmp_path, dockerfile):
+    with pytest.raises(ProvisionError, match="agent: build.dockerfile"):
+        _validate_compose_security(
+            _svc(build={"context": ".", "dockerfile": dockerfile}), source=tmp_path
+        )
+
+
+def test_a_dockerfile_beside_the_context_inside_the_source_is_accepted(tmp_path):
+    _validate_compose_security(
+        _svc(build={"context": "sub", "dockerfile": "../Dockerfile.prod"}),
+        source=tmp_path,
+    )
+
+
+def test_a_build_context_beside_the_compose_file_is_inside_the_job(tmp_path):
+    source, session = tmp_path / "source", tmp_path / "session"
+    source.mkdir()
+    session.mkdir()
+    config = _svc(build={"context": str(session / "generated-runtime-context")})
+    _validate_compose_security(config, source=(source, session))
+    with pytest.raises(ProvisionError, match="agent: build.context"):
+        _validate_compose_security(config, source=source)
+
+
+def _env_files(entries):
+    config = _svc()
+    config["x-alk-env-files"] = {"agent": entries}
+    return config
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"path": "/etc/hosts", "required": True},
+        {"path": "../outside.env", "required": False},
+        {"path": "{tmp}/../outside.env", "required": True},
+        {"path": "{tmp}/link.env", "required": True},
+        "/etc/hosts",
+        "../outside.env",
+    ],
+)
+def test_an_env_file_outside_the_source_is_rejected(tmp_path, entry):
+    (tmp_path / "link.env").symlink_to("/etc/hosts")
+    if isinstance(entry, dict):
+        entry = {**entry, "path": entry["path"].replace("{tmp}", str(tmp_path))}
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(_env_files([entry]), source=tmp_path)
+    assert "agent: env_file outside the project" in str(error.value)
+    assert "/etc" not in str(error.value)
+    assert "outside.env" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "path", ["{tmp}/${ENVF:-./b.env}", "${HOME}/x.env", "{tmp}/$ENVF", "{tmp}/a$$.env"]
+)
+def test_an_env_file_path_with_a_variable_is_rejected(tmp_path, path):
+    # The check reads a render made without interpolation, so a variable could name any file.
+    entry = {"path": path.replace("{tmp}", str(tmp_path)), "required": True}
+    with pytest.raises(ProvisionError, match="agent: env_file path with a variable"):
+        _validate_compose_security(_env_files([entry]), source=tmp_path)
+
+
+def test_an_env_file_still_in_the_service_is_checked_too(tmp_path):
+    with pytest.raises(ProvisionError, match="agent: env_file outside the project"):
+        _validate_compose_security(
+            _svc(env_file=[{"path": "/etc/hosts"}]), source=tmp_path
+        )
+    with pytest.raises(ProvisionError, match="agent: env_file outside the project"):
+        _validate_compose_security(_svc(env_file="../x.env"), source=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [],
+        ["a.env"],
+        ["./a.env", "sub/b.env"],
+        [{"path": "{tmp}/a.env", "required": True}],
+        [{"path": "{tmp}/sub/missing.env", "required": False}],
+    ],
+)
+def test_an_env_file_inside_the_source_is_accepted(tmp_path, entries):
+    entries = [
+        {**item, "path": item["path"].replace("{tmp}", str(tmp_path))}
+        if isinstance(item, dict)
+        else item
+        for item in entries
+    ]
+    _validate_compose_security(_env_files(entries), source=tmp_path)
+    _validate_compose_security(_svc(env_file=entries), source=tmp_path)
+
+
+def _env_environment(tmp_path):
+    return ProvisionedEnvironment(
+        source=str(tmp_path), compose_file=str(tmp_path / "c.yml"), project="job"
+    )
+
+
+def test_the_config_render_keeps_resolved_files_and_checks_unresolved_ones(
+    tmp_path, monkeypatch
+):
+    import json
+
+    seen = []
+    resolved = {"services": {"agent": {"environment": {"FROM_FILE": "kept"}}}}
+    unresolved = {
+        "services": {
+            "agent": {
+                "env_file": [{"path": str(tmp_path / "a.env"), "required": True}],
+                "environment": {},
+            },
+            "db": {},
+        }
+    }
+
+    def fake_run(_environment, *arguments, **kwargs):
+        seen.append((arguments, kwargs.get("process_overrides")))
+        return json.dumps(
+            unresolved if "--no-env-resolution" in arguments else resolved
+        )
+
+    monkeypatch.setattr(provisioning, "_run", fake_run)
+    config = provisioning._config(
+        _env_environment(tmp_path), process_overrides={"A": "b"}
+    )
+
+    # The file that runs is the resolved one: the job's own env_file values still reach it.
+    assert config["services"]["agent"]["environment"] == {"FROM_FILE": "kept"}
+    assert "env_file" not in config["services"]["agent"]
+    # The check sees the unresolved render's paths.
+    assert config["x-alk-env-files"] == {"agent": [str(tmp_path / "a.env")]}
+    plain = [a for a, _ in seen if "--no-env-resolution" not in a]
+    flagged = [a for a, _ in seen if "--no-env-resolution" in a]
+    assert len(seen) == len(plain) + len(flagged) == 2
+    assert len(plain) == len(flagged) == 1
+    for arguments in (plain[0], flagged[0]):
+        assert arguments[:2] == ("--profile", "*")
+        assert "config" in arguments
+    # On Compose v2.40 the env files stay as paths only with both flags.
+    assert {"--no-env-resolution", "--no-interpolate"} <= set(flagged[0])
+    assert "--no-interpolate" not in plain[0]
+    assert all(overrides == {"A": "b"} for _, overrides in seen)
+    _validate_compose_security(config, source=tmp_path)
+
+
+def test_an_env_file_outside_the_source_is_refused_after_the_config_render(
+    tmp_path, monkeypatch
+):
+    import json
+
+    unresolved = {"services": {"agent": {"env_file": [{"path": "/etc/hosts"}]}}}
+    resolved = {
+        "services": {"agent": {"environment": {"A": "b"}}},
+        # A key from the submitted file never survives: the render's own map replaces it.
+        "x-alk-env-files": {"agent": ["./safe.env"]},
+    }
+    monkeypatch.setattr(
+        provisioning,
+        "_run",
+        lambda _e, *arguments, **_k: json.dumps(
+            unresolved if "--no-env-resolution" in arguments else resolved
+        ),
+    )
+    config = provisioning._config(_env_environment(tmp_path))
+    assert config["x-alk-env-files"] == {"agent": ["/etc/hosts"]}
+    with pytest.raises(ProvisionError, match="agent: env_file outside the project"):
+        _validate_compose_security(config, source=tmp_path)
+
+
+_HOME = str(Path.home())
+_OTHER_DAEMON_SOCKETS = [
+    "/run/user",
+    "/run/user/1000",
+    "/run/user/1000/docker.sock",
+    "/run/user/1000/",
+    "/var/run/user/1000/docker.sock",
+    "/run/containerd",
+    "/run/containerd/containerd.sock",
+    "/var/run/containerd/containerd.sock",
+    "/run/./containerd/",
+    f"{_HOME}/.docker/run",
+    f"{_HOME}/.docker/run/docker.sock",
+]
+
+
+@pytest.mark.parametrize("source", _OTHER_DAEMON_SOCKETS)
+@pytest.mark.parametrize("form", ["long", "short"])
+def test_a_bind_of_another_daemon_socket_or_its_folder_is_rejected(source, form):
+    volume = (
+        {"type": "bind", "source": source, "target": "/h"}
+        if form == "long"
+        else f"{source}:/h:ro"
+    )
+    with pytest.raises(ProvisionError, match="agent: Docker socket mount"):
+        _validate_compose_security({"services": {"agent": {"volumes": [volume]}}})
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["/run/userdata", "/run/user/1000/app.sock", "/run/containerdata", "/run/user-x"],
+)
+def test_a_bind_beside_another_daemon_socket_is_accepted(source):
+    _validate_compose_security(
+        {
+            "services": {
+                "agent": {
+                    "volumes": [{"type": "bind", "source": source, "target": "/h"}]
+                }
+            }
+        }
+    )
+
+
+_GPU = {"driver": "nvidia", "capabilities": ["gpu"], "count": "all"}
+
+
+@pytest.mark.parametrize(
+    ("deploy", "expected"),
+    [
+        ({"resources": {"reservations": {"devices": [_GPU]}}}, "agent: host devices"),
+        (
+            {"resources": {"reservations": {"cpus": "1", "devices": [_GPU]}}},
+            "agent: host devices",
+        ),
+        ({"bogus": 1}, "agent: deploy field bogus is not allowed"),
+        (
+            {"resources": {"bogus": 1}},
+            "agent: deploy.resources field bogus is not allowed",
+        ),
+        (
+            {"resources": {"limits": {"bogus": 1}}},
+            "agent: deploy.resources.limits field bogus is not allowed",
+        ),
+        (
+            {"resources": {"reservations": {"generic_resources": [{"x": 1}]}}},
+            "agent: deploy.resources.reservations field generic_resources is not allowed",
+        ),
+    ],
+)
+def test_deploy_that_reaches_the_host_is_rejected(deploy, expected):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(_svc(deploy=deploy))
+    assert expected in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "deploy",
+    [
+        {"resources": {"limits": {"cpus": "1"}}},
+        {"replicas": 1, "mode": "replicated"},
+        {"resources": {"limits": {"cpus": "1", "memory": "1g", "pids": 100}}},
+        {"resources": {"reservations": {"cpus": "1", "memory": "1g"}}},
+        {"resources": {"reservations": {"devices": []}}},
+        {
+            "restart_policy": {"condition": "on-failure"},
+            "placement": {"constraints": []},
+            "update_config": {},
+            "rollback_config": {},
+            "labels": {"a": "b"},
+            "endpoint_mode": "vip",
+        },
+    ],
+)
+def test_deploy_without_host_reach_is_accepted(deploy):
+    _validate_compose_security(_svc(deploy=deploy))
+
+
+@pytest.mark.parametrize(
+    "logging",
+    [
+        {"driver": "syslog", "options": {"syslog-address": "tcp://127.0.0.1:5432"}},
+        {"driver": "fluentd", "options": {"fluentd-address": "10.0.0.5:24224"}},
+        {"driver": "awslogs", "options": {"awslogs-group": "g"}},
+        {"driver": "gelf"},
+        {"driver": "journald"},
+        {"driver": "JSON-FILE"},
+        {"driver": "CANARY-7f3a"},
+    ],
+)
+def test_a_logging_driver_that_dials_out_is_rejected(logging):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(_svc(logging=logging))
+    assert "agent: logging driver" in str(error.value)
+    assert "CANARY" not in str(error.value)
+    assert "127.0.0.1" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "logging",
+    [
+        {"driver": "json-file", "options": {"max-size": "10m", "max-file": "3"}},
+        {"driver": "local"},
+        {"driver": "none"},
+        {"options": {"max-size": "10m"}},
+        {},
+    ],
+)
+def test_a_local_logging_driver_is_accepted(logging):
+    _validate_compose_security(_svc(logging=logging))
+
+
+@pytest.mark.parametrize(
+    "security_opt",
+    [["no-new-privileges:true"], ["no-new-privileges=true"], []],
+)
+def test_the_no_new_privileges_hardening_flag_is_accepted(security_opt):
+    _validate_compose_security(_svc(security_opt=security_opt))
+
+
+@pytest.mark.parametrize(
+    "security_opt",
+    [
+        ["seccomp=unconfined"],
+        ["apparmor=unconfined"],
+        ["label=disable"],
+        ["no-new-privileges:true", "seccomp=unconfined"],
+        ["no-new-privileges:false"],
+        ["no-new-privileges"],
+        ["CANARY-7f3a"],
+        "no-new-privileges:true",
+    ],
+)
+def test_any_other_security_opt_is_rejected_by_category(security_opt):
+    with pytest.raises(ProvisionError, match="forbidden host access") as error:
+        _validate_compose_security(_svc(security_opt=security_opt))
+    assert "agent: security_opt" in str(error.value)
+    assert "field security_opt" not in str(error.value)
+    assert "CANARY" not in str(error.value)
+    assert "unconfined" not in str(error.value)
+
+
+def test_a_compose_warning_on_stderr_does_not_break_the_render(tmp_path, monkeypatch):
+    import json
+    import subprocess
+
+    warning = (
+        'time="2026-11-17T18:28:22+05:30" level=warning msg="the attribute `version` '
+        'is obsolete, it will be ignored"'
+    )
+
+    def fake_run(command, **_kwargs):
+        document = {"services": {"agent": {"environment": {"A": "b"}}}}
+        return subprocess.CompletedProcess(
+            command, 0, json.dumps(document, indent=2), warning
+        )
+
+    monkeypatch.setattr(provisioning.subprocess, "run", fake_run)
+    config = provisioning._config(_env_environment(tmp_path))
+    assert config["services"]["agent"]["environment"] == {"A": "b"}
+
+
+def test_a_failed_compose_command_still_reports_its_stderr(tmp_path, monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(
+        provisioning.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 1, "", "invalid compose file"
+        ),
+    )
+    with pytest.raises(ProvisionError, match="invalid compose file"):
+        provisioning._config(_env_environment(tmp_path))
+
+
+def test_a_service_with_a_missing_env_file_and_ports_gets_one_override_entry(tmp_path):
+    import yaml
+
+    compose = tmp_path / "compose.yml"
+    compose.write_text(
+        "services:\n  crawl:\n    image: x\n    env_file: .llm.env\n"
+        "    ports: ['11235:11235']\n  other:\n    image: y\n    env_file: .gone.env\n"
+    )
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path), compose_file=str(compose), project="isolated"
+    )
+    _write_port_override(
+        tmp_path / "session",
+        environment,
+        {
+            "services": {
+                "crawl": {"ports": [{"target": 11235, "published": "11235"}]},
+                "other": {},
+            }
+        },
+    )
+    generated = Path(environment.compose_override_file).read_text()
+
+    class Loader(yaml.SafeLoader):
+        pass
+
+    # Compose's own tags are not YAML core; keep each tagged node's value.
+    Loader.add_multi_constructor(
+        "!",
+        lambda loader, _tag, node: (
+            loader.construct_scalar(node)
+            if isinstance(node, yaml.ScalarNode)
+            else loader.construct_sequence(node, deep=True)
+            if isinstance(node, yaml.SequenceNode)
+            else loader.construct_mapping(node, deep=True)
+        ),
+    )
+    document = yaml.load(
+        generated, Loader=Loader
+    )  # a duplicate key does not parse here
+    assert generated.count('"crawl":') == 1
+    assert "env_file: !reset []" in generated
+    assert "ports: !override" in generated
+    assert document["services"]["crawl"]["ports"][0]["target"] == 11235
+    assert document["services"]["other"]["env_file"] == []

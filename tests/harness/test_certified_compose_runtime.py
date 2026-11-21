@@ -80,6 +80,7 @@ def test_reject_unsafe_security_options(tmp_path, value):
     [
         ("privileged", True),
         ("network_mode", "host"),
+        ("network_mode", "container:other"),
         ("pid", "host"),
         ("devices", ["/dev/kvm"]),
         ("cap_add", ["SYS_ADMIN"]),
