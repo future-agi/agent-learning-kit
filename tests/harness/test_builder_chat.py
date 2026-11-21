@@ -5363,6 +5363,37 @@ def test_rewording_a_rule_links_the_two_by_id_and_lists_only_the_cases_citing_th
     assert saved["amendment_records"][1]["previous"] == rule_id(old)
 
 
+def test_a_case_citing_a_reworded_rule_stands_on_its_replacement_and_an_orphaned_one_does_not(tmp_path):
+    """The live shape: "change the refund window from 14 days to 10 days" was made with add_rule replacing the old
+    rule, and every case citing it was then held as citing a source not in the environment."""
+    from fi.alk.harness.amend import add_rule, cases_citing_rules_gone, drop_rule
+    from fi.alk.harness.grounding import agent_source_root, resolve_sources
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root, contract = _cited_suite(tmp_path)
+    old = "Refund only within 30 days of delivery."
+    new = "Refund only within 10 days of delivery."
+    done, said = add_rule(contract, root, rule=new, why="the window is 10 days now", replaces=old)
+    assert done, said
+    # Reworded twice: the source still stands on the rule now held.
+    newest = "Refund only within 7 days of delivery."
+    done, said = add_rule(contract, root, rule=newest, why="7 days now", replaces=new)
+    assert done, said
+    by_name = {one.name: one for one in load_scenarios(root)}
+
+    [entry] = resolve_sources(by_name["adds-a-big-mac"], contract, root, agent_source_root(root))
+
+    assert entry["resolved"] is True and contract.hard_constraints[entry["rule_index"]] == newest
+    assert cases_citing_rules_gone(root, load_scenarios(root), contract) == []
+
+    # Dropped with nothing in its place, it stays unresolved and listed.
+    done, said = drop_rule(contract, root, rule="Never sell more than 130 items.", why="gone", orphan=True)
+    assert done, said
+    [entry] = resolve_sources(by_name["adds-one-big-mac"], contract, root, agent_source_root(root))
+    assert entry["resolved"] is False
+    assert cases_citing_rules_gone(root, load_scenarios(root), contract) == [_key(root, "adds-one-big-mac")]
+
+
 def test_a_rule_dropped_first_is_linked_when_its_rewrite_names_it(tmp_path):
     from fi.alk.harness.amend import add_rule, drop_rule
     from fi.alk.harness.contract import rule_id
@@ -5478,8 +5509,14 @@ def test_a_rule_written_in_a_policy_file_rests_its_cases_on_that_line_only_once_
     assert saved.rule_source(new) == RuleSource(rule=new, file="knowledge/refund-policy.md", quote=line)
     assert cases_citing_rules_gone(root, load_scenarios(root), saved) == []
 
-    # The policy now says 25 days: the case quoting the old line exactly rests on a rule gone; a part never does.
+    # The policy now says 25 days. The reworded rule still stands, so no rule is gone yet.
     policy.write_text("# Refunds\n\nRefunds are accepted within 25 days of delivery.\n")
+    assert cases_citing_rules_gone(root, load_scenarios(root), saved) == []
+    # Dropped with nothing in its place: the case quoting its line exactly rests on a rule gone; a part never does.
+    done, said = drop_rule(saved, root, rule=new, why="no window any more")
+    assert not done and "1 case(s) cite this rule" in said
+    done, said = drop_rule(saved, root, rule=new, why="no window any more", orphan=True)
+    assert done, said
     assert cases_citing_rules_gone(root, load_scenarios(root), saved) == [_key(root, "adds-one-big-mac")]
 
 

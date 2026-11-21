@@ -94,6 +94,39 @@ class Rules:
     hard_constraints: list[str]
 
 
+def _field(record: Any, name: str) -> str:
+    return str((record.get(name) if isinstance(record, dict) else getattr(record, name, "")) or "")
+
+
+def _replacement(wanted: str, rules: list[str], records: Sequence[Any]) -> int | None:
+    """The rule now held that replaced the one whose words a rule source quotes (already normalised), following the
+    contract's `amendment_records` through every rewording (a removed rule's `replaced_by`, or an added rule's
+    `previous`, by `rule_id`); None for a rule removed with no replacement, or for words no recorded rule held. The
+    platform reads it the same way (future-agi ``harness_scenario_sources.replacement``)."""
+    from .contract import rule_id
+
+    ruled = [one for one in records if _field(one, "kind") == "rule"]
+    held = {rule_id(rule): at for at, rule in enumerate(rules)}
+
+    def after(key: str) -> str:
+        return next(
+            (_field(one, "replaced_by") for one in ruled if _field(one, "key") == key and _field(one, "replaced_by")),
+            "",
+        ) or next((_field(one, "key") for one in ruled if _field(one, "previous") == key and _field(one, "key")), "")
+
+    for removed in ruled:
+        text = _field(removed, "text")
+        if _field(removed, "action") != "removed" or not wanted or wanted not in normalise(text):
+            continue
+        key, seen = _field(removed, "key") or rule_id(text), set()
+        while key and key not in seen:
+            seen.add(key)
+            key = after(key)
+            if key in held:
+                return held[key]
+    return None
+
+
 def resolve_sources(
     scenario: Scenario, contract: RuleSource | None, world_root: Path, source_root: Path | None = None
 ) -> list[SourceResult]:
@@ -108,6 +141,9 @@ def resolve_sources(
         if kind == "rule":
             wanted = normalise(quote)
             matched = next((at for at, rule in enumerate(rules) if wanted and wanted in normalise(rule)), None)
+            if matched is None:
+                # A rule reworded as another: the source stands on its replacement, and the case is reviewed.
+                matched = _replacement(wanted, rules, getattr(contract, "amendment_records", None) or [])
             if matched is None:
                 entry.update(resolved=False, problem="no rule of the agent contains the quoted words")
             else:
