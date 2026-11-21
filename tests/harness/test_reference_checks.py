@@ -218,7 +218,7 @@ def test_a_solution_step_must_match_the_agents_contract(tmp_path):
     assert problems(Step(tool="hand_over", arguments={"line": "claims"}))
 
 
-def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_path):
+def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_path, monkeypatch):
     import json
 
     from fi.alk.harness.prove import prepared
@@ -297,6 +297,13 @@ def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_
     # The same setup passes where the loader reads on every call, or where its timing is not recorded.
     assert not problems({**once, "loads": "each_call"}, adds)
     assert not problems({**once, "loads": "each_call"}, changes)
+    # Where the answer decides nothing, the saved world is never restored to work it out.
+    from fi.alk.harness import scenario_tools
+
+    with monkeypatch.context() as patched:
+        patched.setattr(scenario_tools, "_setup_changes_the_world", lambda *_: 1 / 0)
+        assert not problems({**once, "loads": "each_call"}, adds)
+        assert not problems({"kind": "postgres", "configured_by": "env"}, adds)
     assert not problems({**in_process, "loaded_by": "load_profile"}, adds)
     assert not problems({**in_process, "loaded_by": "load_profile"}, changes)
     assert with_actor(once, later)

@@ -1890,10 +1890,15 @@ def _setup_changes_the_world(world_root: Path, trial: Any) -> bool:
     cannot be read says nothing, so it refuses nothing."""
     try:
         saved_world = restore(world_root)
-        saved_world.reset()
-        return saved_world.state() != trial.state()
     except Exception:  # noqa: BLE001 - a world that cannot be read is not the scenario's fault
         return False
+    try:
+        saved_world.reset()
+        return saved_world.state() != trial.state()
+    except Exception:  # noqa: BLE001 - as above
+        return False
+    finally:
+        saved_world.close()
 
 
 def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path, trial: Any) -> list[str]:
@@ -1904,14 +1909,16 @@ def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path, trial: A
         return []
     from .world_door import record_action
 
-    setup_wrote = bool((scenario.setup_code or "").strip()) and _setup_changes_the_world(world_root, trial)
+    def setup_wrote() -> bool:
+        # Read only where the answer decides something: it costs a restore of the saved world.
+        return bool((scenario.setup_code or "").strip()) and _setup_changes_the_world(world_root, trial)
 
     if store.get("loader_module") or store.get("loaded_by"):
         # Refused only when the contract records that the loader runs once, at start; otherwise a note.
         if str(store.get("loads") or "").strip().lower() != "start":
             return []
         found = []
-        if setup_wrote:
+        if setup_wrote():
             # A trial's setup writes its world after the agent has started, as the run and the proof both play it.
             found.append(
                 "this agent loads its data once, when it starts, and a trial's setup_code runs after that, so a record "
@@ -1924,7 +1931,7 @@ def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path, trial: A
         return found
 
     out = []
-    if setup_wrote:
+    if setup_wrote():
         out.append(
             "this agent keeps its data inside its own process and builds it when it starts, so a record "
             "setup_code adds or changes is one the agent never sees and every run fails it for something "
