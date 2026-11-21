@@ -27,8 +27,8 @@ def test_create_classifies_redacts_and_fingerprints_diagnostic() -> None:
     )
 
     assert diagnostic.domain is FailureDomain.ENVIRONMENT
-    assert diagnostic.owner is RepairOwner.COMPILER
-    assert diagnostic.repair_strategy == "normalize_logical_array"
+    assert diagnostic.owner is RepairOwner.AUTHORING
+    assert diagnostic.repair_strategy == "author_value_in_declared_shape"
     assert secret not in diagnostic.redacted_message
     assert "password" not in diagnostic.redacted_message
     assert all(secret not in reference for reference in diagnostic.evidence_refs)
@@ -87,8 +87,10 @@ def test_unknown_code_requires_explicit_taxonomy_change() -> None:
     ("code", "owner"),
     [
         ("source_model_fingerprint_mismatch", RepairOwner.COMPILER),
-        ("generated_column_authored", RepairOwner.COMPILER),
-        ("value_shape_mismatch", RepairOwner.COMPILER),
+        ("generated_column_authored", RepairOwner.AUTHORING),
+        ("value_shape_mismatch", RepairOwner.AUTHORING),
+        ("world_ir_artifact_invalid", RepairOwner.COMPILER),
+        ("array_shape_mismatch", RepairOwner.AUTHORING),
         ("unknown_table", RepairOwner.AUTHORING),
         ("unknown_column", RepairOwner.AUTHORING),
     ],

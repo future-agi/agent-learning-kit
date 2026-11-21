@@ -90,13 +90,18 @@ _POLICIES = MappingProxyType(
         ),
         "generated_column_authored": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
-            owner=RepairOwner.COMPILER,
-            repair_strategy="mark_generated_column_absent",
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="leave_generated_column_unset",
         ),
         "value_shape_mismatch": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="author_value_in_declared_shape",
+        ),
+        "world_ir_artifact_invalid": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.COMPILER,
-            repair_strategy="normalize_value_to_discovered_type",
+            repair_strategy="regenerate_world_from_current_source_model",
         ),
         "unknown_table": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
@@ -125,8 +130,8 @@ _POLICIES = MappingProxyType(
         ),
         "array_shape_mismatch": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
-            owner=RepairOwner.COMPILER,
-            repair_strategy="normalize_logical_array",
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="author_value_in_declared_shape",
         ),
         "enum_value_invalid": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,

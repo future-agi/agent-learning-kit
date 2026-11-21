@@ -98,7 +98,7 @@ def test_external_service_outage_does_not_trigger_runtime_reauthoring() -> None:
 
 def test_repeated_compiler_failure_without_new_candidate_is_rejected() -> None:
     controller = RepairController()
-    observation = _observation("candidate-a", "array_shape_mismatch")
+    observation = _observation("candidate-a", "schema_type_mismatch")
 
     assert controller.decide(observation).action is RepairAction.RECOMPILE
     repeated = controller.decide(observation)
@@ -148,19 +148,19 @@ def test_environment_and_scenario_patch_budgets_are_independent() -> None:
 
 def test_history_contains_value_free_audit_data() -> None:
     controller = RepairController()
-    controller.decide(_observation("candidate-a", "array_shape_mismatch"))
+    controller.decide(_observation("candidate-a", "schema_type_mismatch"))
     controller.decide(_observation("candidate-b"))
 
     history = controller.history
     assert [decision.sequence for decision in history.decisions] == [1, 2]
     assert history.compiler_candidates_used == 1
     assert history.environment_patches_used == 0
-    assert "failure array_shape_mismatch" not in history.model_dump_json()
+    assert "failure schema_type_mismatch" not in history.model_dump_json()
 
 
 def test_repair_result_records_before_after_and_no_op() -> None:
     controller = RepairController()
-    decision = controller.decide(_observation("candidate-a", "array_shape_mismatch"))
+    decision = controller.decide(_observation("candidate-a", "schema_type_mismatch"))
 
     result = controller.record_result(
         decision.sequence,
@@ -298,3 +298,106 @@ def test_default_runtime_budget_allows_eight_changed_candidates_but_not_repeats(
     assert controller.decide(_observation(
         "candidate-8", "ready_condition_invalid", phase=RepairPhase.RUNTIME,
     )).action is RepairAction.REJECT
+
+
+def test_a_seeded_value_in_a_generated_column_goes_to_authoring_repair() -> None:
+    """A value written into a generated column is authored data: recompiling cannot change it,
+    so the controller must ask authoring to patch the environment, not recompile then reject."""
+    import sqlite3
+
+    from fi.alk.harness.diagnostic_adapters.world_ir import diagnose_world_ir_error
+    from fi.alk.harness.repair_controller import CandidateObservation, RepairPhase
+    from fi.alk.harness.source_model import (
+        LogicalType,
+        SourceColumn,
+        SourceModel,
+        SourceTable,
+    )
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+    from fi.alk.harness.world_ir import WorldIRValidationError
+
+    model = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="orders",
+                primary_key=("id",),
+                columns=(
+                    SourceColumn(
+                        name="id",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=False,
+                        has_default=False,
+                    ),
+                    SourceColumn(
+                        name="total_cents",
+                        logical_type=LogicalType.INTEGER,
+                        native_type="integer",
+                        nullable=True,
+                        has_default=False,
+                        generated=True,
+                    ),
+                ),
+            ),
+        ),
+    )
+    database = sqlite3.connect(":memory:")
+    database.execute("CREATE TABLE orders (id TEXT, total_cents INTEGER)")
+    database.execute("INSERT INTO orders VALUES ('o1', 1200)")
+    try:
+        import_sqlite_world(database, model)
+    except WorldIRValidationError as error:
+        diagnostics = diagnose_world_ir_error(error)
+    else:
+        raise AssertionError("a value in a generated column must be refused")
+
+    assert [one.code for one in diagnostics] == ["generated_column_authored"]
+    decision = RepairController().decide(
+        CandidateObservation(
+            candidate_hash="cand-a",
+            phase=RepairPhase.ENVIRONMENT,
+            diagnostics=diagnostics,
+        )
+    )
+    assert decision.action is RepairAction.PATCH_ENVIRONMENT
+
+
+def test_an_unreadable_generated_world_ir_goes_to_the_compiler_not_authoring(
+    tmp_path, monkeypatch
+) -> None:
+    """A corrupt generated world-ir.json is not authored data: authoring repair would have to
+    parse it to patch it, so the controller must regenerate it, not ask authoring."""
+    import sys
+    import types
+    from contextlib import nullcontext
+
+    from fi.alk.harness import process_runtime as pr
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        types.SimpleNamespace(connect=lambda **_: nullcontext(object())),
+    )
+    world_ir = tmp_path / "world-ir.json"
+    world_ir.write_text("{not json")
+    with pytest.raises(pr.GenericWorldSeedError) as raised:
+        pr.apply_postgres_world_ir(
+            world_ir,
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            source_digest="a" * 64,
+        )
+
+    diagnostics = raised.value.diagnostics
+    assert [one.code for one in diagnostics] == ["world_ir_artifact_invalid"]
+    decision = RepairController().decide(
+        CandidateObservation(
+            candidate_hash="cand-a",
+            phase=RepairPhase.ENVIRONMENT,
+            diagnostics=diagnostics,
+        )
+    )
+    assert decision.action is RepairAction.RECOMPILE
