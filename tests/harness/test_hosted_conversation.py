@@ -291,8 +291,9 @@ harness_chat:
 
 
 class QuestionClient:
-    def __init__(self, reply: str = "app/api.py") -> None:
+    def __init__(self, reply: str = "app/api.py", answered_by: str = "") -> None:
         self.reply = reply
+        self.answered_by = answered_by
         self.capabilities = _capabilities()
         self.turn_context = self.capabilities.turn_context
         self.command_watermark = 0
@@ -313,6 +314,7 @@ class QuestionClient:
                 "kind": "user_response",
                 "payload": {
                     "content": self.reply,
+                    **({"answered_by": self.answered_by} if self.answered_by else {}),
                     "reply_to": question["message_id"],
                 },
             }
@@ -386,22 +388,31 @@ harness_chat:
         }
     ]
 
-    def reply(content):
+    def reply(content, answered_by="", questions=asked):
         runtime = HostedChatRuntime(
-            client=QuestionClient(content),  # type: ignore[arg-type]
+            client=QuestionClient(content, answered_by),  # type: ignore[arg-type]
             policy=load_chat_policy(policy_path),
             workspace=tmp_path,
             source=tmp_path,
             job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
         )
-        result = asyncio.run(runtime._ask("AskUserQuestion", {"questions": asked}, None))
-        return result.updated_input["answers"]["How would you like to restore it?"]
+        result = asyncio.run(runtime._ask("AskUserQuestion", {"questions": questions}, None))
+        return result.updated_input["answers"][questions[0]["question"]]
 
-    framed = reply(typed)
+    # The chat records how the reply reached it. Typed into the message box while options were offered: said so.
+    framed = reply(typed, "typed")
     assert typed in framed and "instead of picking one of the options" in framed and "different request" in framed
-    # A picked option, or several, reach it as they are.
-    assert reply("Exactly as it was") == "Exactly as it was"
-    assert reply("Exactly as it was, As a copy") == "Exactly as it was, As a copy"
+    # Typed text that happens to read like an option is still typed: the words are never compared.
+    assert "instead of picking one of the options" in reply("Exactly as it was", "typed")
+    # Picked from the question's options, one or several, in any wording or language: as it is.
+    assert reply("Exactly as it was", "picked") == "Exactly as it was"
+    assert reply("Exactly as it was, As a copy", "picked") == "Exactly as it was, As a copy"
+    assert reply("जैसा था वैसा ही", "picked") == "जैसा था वैसा ही"
+    # A client that records nothing (an older page, the CLI) is taken at its word.
+    assert reply(typed) == typed
+    # A question with no options can only be answered by typing.
+    open_question = [{"question": "Which file starts the agent?"}]
+    assert reply("app/api.py", "typed", open_question) == "app/api.py"
 
 
 def test_runtime_reuses_warm_state_and_does_not_reexecute_cold_replays(
