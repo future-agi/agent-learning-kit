@@ -3874,8 +3874,8 @@ def scenario_tools(
 
     @tool(
         "drop_rule",
-        "Take away a hard rule the agent does not really have. Say why.",
-        schema({"rule": str, "why": str}, ["rule", "why"]),
+        "Take away a hard rule the agent does not really have. Say why. When scenarios still cite it, say in this call what becomes of it: `replaced_by` with the new rule's text when it is reworded (linked like add_rule with replaces), or `orphan: true` when the agent really no longer has it.",
+        schema({"rule": str, "why": str, "replaced_by": str, "orphan": bool}, ["rule", "why"]),
     )
     async def drop_rule_tool(args: dict[str, Any]) -> dict[str, Any]:
         done, said = drop_rule(
@@ -3883,6 +3883,8 @@ def scenario_tools(
             world_root,
             rule=str(args.get("rule") or ""),
             why=str(args.get("why") or ""),
+            replaced_by=str(args.get("replaced_by") or ""),
+            orphan=args.get("orphan") is True,
         )
         return _ok(said) if done else _err(said)
 

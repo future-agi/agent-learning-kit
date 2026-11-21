@@ -5335,7 +5335,7 @@ def test_a_rule_dropped_first_is_linked_when_its_rewrite_names_it(tmp_path):
 
     root, contract = _cited_suite(tmp_path)
     old = "Refund only within 30 days of delivery."
-    done, said = drop_rule(contract, root, rule=old, why="being reworded")
+    done, said = drop_rule(contract, root, rule=old, why="being reworded", orphan=True)
     assert done and rule_id(old) in said and "adds-a-big-mac" in said
 
     done, said = add_rule(contract, root, rule="Refund only within 14 days.", why="reworded", replaces=old)
@@ -5352,7 +5352,7 @@ def test_a_rule_dropped_and_added_in_one_message_is_never_linked_but_the_reply_n
     root, contract = _cited_suite(tmp_path)
     begin_turn(root)
     old = "Refund only within 30 days of delivery."
-    drop_rule(contract, root, rule=old, why="gone")
+    drop_rule(contract, root, rule=old, why="gone", orphan=True)
     # An unrelated rule added in the same message: whether it rewords the dropped one is the builder's call.
     done, said = add_rule(contract, root, rule="Never take a card payment over the phone.", why="new")
 
@@ -5363,6 +5363,49 @@ def test_a_rule_dropped_and_added_in_one_message_is_never_linked_but_the_reply_n
     begin_turn(root)
     done, said = add_rule(contract, root, rule="Never sell gift cards.", why="new")
     assert "earlier in this message" not in said
+
+
+def test_a_cited_rule_is_dropped_only_reworded_or_explicitly_orphaned(tmp_path):
+    """The live shape: asked to make a 30-day window 14 days, the builder dropped the rule and added the new one with
+    no link, and every case citing it read "A cited source is not in this environment". Dropping a cited rule now
+    has to say what becomes of it."""
+    from fi.alk.harness.amend import drop_rule
+    from fi.alk.harness.contract import rule_id
+
+    root, contract = _cited_suite(tmp_path)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 14 days of delivery."
+
+    done, said = drop_rule(contract, root, rule=old, why="the window is 14 days now")
+    assert not done and "1 case(s) cite this rule" in said and "`replaced_by`" in said and "`orphan: true`" in said
+    assert old in contract.hard_constraints and contract.amendment_records == []
+
+    # Reworded: linked as add_rule with replaces does it, and the citing case listed for review.
+    done, said = drop_rule(contract, root, rule=old, why="the window is 14 days now", replaced_by=new)
+    assert done and "adds-a-big-mac" in said
+    removed, added = contract.amendment_records
+    assert (removed.replaced_by, added.previous) == (rule_id(new), rule_id(old))
+    assert old not in contract.hard_constraints and new in contract.hard_constraints
+
+
+def test_an_orphaned_cited_rule_leaves_its_cases_listed_until_they_are_fixed(tmp_path, monkeypatch):
+    from fi.alk.harness.amend import cases_citing_rules_gone, drop_rule
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root, contract = _cited_suite(tmp_path)
+    old = "Refund only within 30 days of delivery."
+    assert cases_citing_rules_gone(root, load_scenarios(root), contract.hard_constraints) == []
+    done, said = drop_rule(contract, root, rule=old, why="the agent no longer has a window", orphan=True)
+    assert done and "adds-a-big-mac" in said
+    gone = cases_citing_rules_gone(root, load_scenarios(root), contract.hard_constraints)
+    assert gone == [_key(root, "adds-a-big-mac")]
+
+    # The reply's closing lines list it, as they do a heading left unreviewed.
+    runtime = _runtime(tmp_path / "chat", BuilderClient(), monkeypatch)
+    runtime.workspace = root
+    runtime._suite_here = lambda: load_scenarios(root)  # type: ignore[method-assign]
+    line = runtime._review_line()
+    assert "1 case(s) cite a rule the agent no longer has: adds-a-big-mac" in line
+    assert "add_rule with replaces" in line
 
 
 def test_a_rule_written_in_a_policy_file_reviews_the_cases_citing_that_line_when_it_changes(tmp_path):
@@ -5386,7 +5429,7 @@ def test_a_rule_written_in_a_policy_file_reviews_the_cases_citing_that_line_when
         sources=[{"kind": "file", "ref": "file:knowledge/refund-policy.md", "quote": "accepted within 30 days"}],
     )
     begin_turn(root)
-    done, said = drop_rule(contract, root, rule=old, why="the window changes")
+    done, said = drop_rule(contract, root, rule=old, why="the window changes", orphan=True)
     assert done and "adds-one-big-mac" in said and "adds-a-big-mac" not in said
     done, said = add_rule(contract, root, rule=new, why="the window is 25 days now", replaces=old)
     assert done and "rest on what changed" in said and "adds-one-big-mac" in said
@@ -5498,7 +5541,7 @@ def test_a_rule_added_with_no_replaces_is_never_linked_to_one_that_reads_alike(t
 
     root, contract = _cited_suite(tmp_path)
     old, new = "Refund only within 30 days of delivery.", "Refund only within 20 days of delivery."
-    drop_rule(contract, root, rule=old, why="gone")
+    drop_rule(contract, root, rule=old, why="gone", orphan=True)
     # A later message: the drop is not this message's rewrite.
     begin_turn(root)
     done, said = add_rule(contract, root, rule=new, why="new")
