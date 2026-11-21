@@ -1412,6 +1412,8 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, _READS + " (rewrites stale pre-run sessions in scenario.json)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "validate_native"): (
         1, _READS + " (the native validation record)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "keep_rejected_certification"): (
+        1, _READS + " (the rejected certification log)"),
     # The job document and the secrets copy, written by `_prepare_runtime_work`, which a prove-only pass shares.
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "_prepare_runtime_work"): (
         1, _READS + " (the runtime workspace's job and secrets copy)"),

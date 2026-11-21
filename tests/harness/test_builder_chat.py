@@ -5393,10 +5393,10 @@ def test_an_orphaned_cited_rule_leaves_its_cases_listed_until_they_are_fixed(tmp
 
     root, contract = _cited_suite(tmp_path)
     old = "Refund only within 30 days of delivery."
-    assert cases_citing_rules_gone(root, load_scenarios(root), contract.hard_constraints) == []
+    assert cases_citing_rules_gone(root, load_scenarios(root), contract) == []
     done, said = drop_rule(contract, root, rule=old, why="the agent no longer has a window", orphan=True)
     assert done and "adds-a-big-mac" in said
-    gone = cases_citing_rules_gone(root, load_scenarios(root), contract.hard_constraints)
+    gone = cases_citing_rules_gone(root, load_scenarios(root), contract)
     assert gone == [_key(root, "adds-a-big-mac")]
 
     # The reply's closing lines list it, as they do a heading left unreviewed.
@@ -5408,34 +5408,95 @@ def test_an_orphaned_cited_rule_leaves_its_cases_listed_until_they_are_fixed(tmp
     assert "add_rule with replaces" in line
 
 
-def test_a_rule_written_in_a_policy_file_reviews_the_cases_citing_that_line_when_it_changes(tmp_path):
+def test_a_rule_written_in_a_policy_file_rests_its_cases_on_that_line_only_once_the_line_is_gone(tmp_path):
     from test_nudge_turn import _edit_scenario
 
-    from fi.alk.harness.amend import add_rule, begin_turn, drop_rule
+    from fi.alk.harness.amend import add_rule, begin_turn, cases_citing_rules_gone, drop_rule
     from fi.alk.harness.contract import RuleSource, write_contract
+    from fi.alk.harness.scenario_tools import load_scenarios
     from fi.alk.harness.understand import load as load_contract
 
     root, contract = _cited_suite(tmp_path)
     old, new = "Refund only within 30 days of delivery.", "Refund only within 25 days of delivery."
     line = "Refunds are accepted within 30 days of delivery."
+    policy = root / "knowledge" / "refund-policy.md"
+    policy.parent.mkdir(parents=True, exist_ok=True)
+    policy.write_text(f"# Refunds\n\n{line}\n")
     contract.rule_sources = [RuleSource(rule=old, file="knowledge/refund-policy.md", quote=line)]
     write_contract(contract, root)
-    # The cases cite the policy file's line, not the rule: as a build over an attached policy writes them.
-    for name in ("adds-a-big-mac", "adds-one-big-mac"):
-        _edit_scenario(root, name, sources=[])
+    # The cases cite the policy file, not the rule: one its whole line, one only a part of it.
     _edit_scenario(
         root,
-        "adds-one-big-mac",
+        "adds-a-big-mac",
         sources=[{"kind": "file", "ref": "file:knowledge/refund-policy.md", "quote": "accepted within 30 days"}],
     )
+    _edit_scenario(
+        root, "adds-one-big-mac", sources=[{"kind": "file", "ref": "file:knowledge/refund-policy.md", "quote": line}]
+    )
     begin_turn(root)
-    done, said = drop_rule(contract, root, rule=old, why="the window changes", orphan=True)
-    assert done and "adds-one-big-mac" in said and "adds-a-big-mac" not in said
+    # The line is still in the file, so no case loses its ground: the drop needs neither replaced_by nor orphan.
+    done, said = drop_rule(contract, root, rule=old, why="the window changes")
+    assert done and "adds-one-big-mac" not in said and "adds-a-big-mac" not in said
     done, said = add_rule(contract, root, rule=new, why="the window is 25 days now", replaces=old)
-    assert done and "rest on what changed" in said and "adds-one-big-mac" in said
+    assert done, said
     # The reworded rule keeps the line it is written on, saved with the contract.
     saved = load_contract(root)
     assert saved.rule_source(new) == RuleSource(rule=new, file="knowledge/refund-policy.md", quote=line)
+    assert cases_citing_rules_gone(root, load_scenarios(root), saved) == []
+
+    # The policy now says 25 days: the case quoting the old line exactly rests on a rule gone; a part never does.
+    policy.write_text("# Refunds\n\nRefunds are accepted within 25 days of delivery.\n")
+    assert cases_citing_rules_gone(root, load_scenarios(root), saved) == [_key(root, "adds-one-big-mac")]
+
+
+def test_a_cited_rule_drop_is_refused_only_for_cases_that_lose_their_ground(tmp_path):
+    from test_nudge_turn import _edit_scenario
+
+    from fi.alk.harness.amend import cases_citing_rules_gone, drop_rule
+    from fi.alk.harness.contract import write_contract
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root, contract = _cited_suite(tmp_path)
+    old = "Refund only within 30 days of delivery."
+    # Another rule the agent keeps holds the case's quoted words, so dropping this one leaves the case its ground.
+    contract.hard_constraints.append("Exchange only within 30 days of delivery.")
+    write_contract(contract, root)
+    # A case quoting words no rule ever held, and one quoting nothing, never rest on a dropped rule.
+    _edit_scenario(
+        root,
+        "adds-one-big-mac",
+        sources=[{"kind": "rule", "ref": "rule:9", "quote": "never more than two refunds a year"}],
+    )
+
+    done, said = drop_rule(contract, root, rule=old, why="the agent no longer refunds")
+    assert done, said
+    assert cases_citing_rules_gone(root, load_scenarios(root), contract) == []
+
+
+def test_a_cited_rule_drop_refused_again_and_again_is_counted_like_every_refusal(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract = _cited_suite(tmp_path)
+    server, _kept = scenario_tools(contract, root, root, wanted=2)
+    drop = {one.name: one.handler for one in server.tools}["drop_rule"]
+    asked = {"rule": "Refund only within 30 days of delivery.", "why": "gone"}
+
+    said = [asyncio.run(drop(asked))["content"][0]["text"] for _ in range(3)]
+
+    assert "not removed" in said[0] and "refusal" not in said[0]
+    assert "This is refusal 3 of dropping this rule" in said[2]
+
+
+def test_world_stage_drop_rule_needs_only_the_rule_and_why(tmp_path):
+    from fi.alk.harness.world.tools import world_tools
+
+    root, contract = _cited_suite(tmp_path)
+    server, _world = world_tools(contract, root)
+    [drop] = [one for one in server.tools if one.name == "drop_rule"]
+
+    assert sorted(drop.input_schema["required"]) == ["rule", "why"]
 
 
 def test_a_rule_source_is_a_file_and_its_line_together(tmp_path):
@@ -5511,22 +5572,6 @@ def test_a_rule_source_quote_longer_than_a_line_is_refused_before_anything_chang
         contract, root, rule="Never sell gift cards.", why="asked", source_file="knowledge/p.md", source_quote="x" * 501
     )
     assert not done and "at most 500 characters" in said and contract.hard_constraints == before
-
-
-def test_a_case_cites_a_rule_s_line_only_by_quoting_enough_of_it():
-    from types import SimpleNamespace
-
-    from fi.alk.harness.amend import _cites_line
-    from fi.alk.harness.contract import RuleSource
-
-    written = RuleSource(rule="r", file="knowledge/refund-policy.md", quote="Refunds are accepted within 30 days.")
-
-    def case(quote):
-        return SimpleNamespace(sources=[SimpleNamespace(kind="file", ref="file:knowledge/refund-policy.md", quote=quote)])
-
-    assert not _cites_line(case("days"), written)
-    assert _cites_line(case("accepted within 30 days"), written)
-    assert _cites_line(case("Policy: Refunds are accepted within 30 days. Exchanges any time."), written)
 
 
 def test_a_contract_with_no_rule_sources_saves_as_before():

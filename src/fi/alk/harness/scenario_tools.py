@@ -746,6 +746,17 @@ def _count_refusal(refused: dict[tuple[str, int], int], name: str, said: str) ->
     return refused[key]
 
 
+def refused_drop(refused: dict[tuple[str, int], int], rule: str, said: str) -> str:
+    """A drop_rule refusal, counted like every other: the same one again past the limit says so."""
+    seen = _count_refusal(refused, f"drop_rule:{rule.strip().lower()}", said)
+    if seen < _REFUSALS_BEFORE_MOVING_ON:
+        return said
+    return (
+        f"{said}\n\nThis is refusal {seen} of dropping this rule for the same reason, so asking again will not "
+        "work. Say what becomes of it (`replaced_by` or `orphan`), or keep the rule."
+    )
+
+
 def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
@@ -3890,7 +3901,7 @@ def scenario_tools(
             replaced_by=str(args.get("replaced_by") or ""),
             orphan=args.get("orphan") is True,
         )
-        return _ok(said) if done else _err(said)
+        return _ok(said) if done else _err(refused_drop(refused, str(args.get("rule") or ""), said))
 
     @tool(
         "fix_tool",
