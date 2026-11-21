@@ -76,8 +76,8 @@ function compact(node: ts.Node | undefined, source: ts.SourceFile): string | und
 }
 
 describe('installed ESM package contract (static RED controls)', () => {
-  test('version is the approved 0.4.0', () => {
-    expect(manifest.version).toBe('0.4.0');
+  test('version is the approved 0.4.1', () => {
+    expect(manifest.version).toBe('0.4.1');
   });
 
   test('exports never advertises a require condition', () => {

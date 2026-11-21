@@ -20,7 +20,7 @@ yarn add @future-agi/agent-learning-kit
 
 ### Runtime and imports
 
-Version 0.4.0 targets Node.js 18 or later and is **ESM-only**. Use `.mjs` files
+Version 0.4.1 targets Node.js 18 or later and is **ESM-only**. Use `.mjs` files
 or set `"type": "module"` in your application's `package.json`; CommonJS
 `require()` is not supported. For TypeScript consumers, use TypeScript 5.9.3
 or later with `"module": "NodeNext"` and `"moduleResolution": "NodeNext"`.
