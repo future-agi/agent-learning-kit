@@ -2523,7 +2523,7 @@ def accept_scenario(
     if lost:
         done += (
             (f". EDITED {scenario.scenario_key}, a case of its own" if previous is not None
-             else f". ADDED AS A NEW CASE under {scenario.scenario_key}" + (", as asked" if as_new else ""))
+             else f". ADDED AS A NEW CASE under {scenario.scenario_key}" + (" (as_new)" if as_new else ""))
             + f", NOT restored: it matches the removed case {lost}, and its history stays with that one. To restore "
             "that case with its history, drop this one, "
             f"read it with find_scenarios(removed: true) and submit it with scenario_key {lost!r} and restored_from "
@@ -2583,7 +2583,7 @@ def _removed_case_matching(
         if isinstance(content, dict) and str(key) not in held
     }
     for key in (named, scenario_slug(scenario.name)):
-        if key and key in keys and key not in held:
+        if key and (key in keys or key in readable) and key not in held:
             return key, key in readable
     named_alike = next((key for key, content in readable.items() if content.get("name") == scenario.name), "")
     return named_alike, bool(named_alike)
@@ -2838,7 +2838,9 @@ def scenario_tools(
         if (args.get("restored_from") or {}).get("key"):
             return
         key = str(args.get("scenario_key") or "").strip() or scenario_slug(str(args.get("name") or ""))
-        if key and key in used and not any(one.scenario_key == key for one in kept):
+        # Asked whatever this session knows of the key: a case removed in another session or an earlier version is
+        # not among the keys this one has seen.
+        if key and not any(one.scenario_key == key for one in kept):
             await removed_record(key)
 
     def offered_parties() -> tuple[list[str], int, set[str]]:
@@ -3486,7 +3488,9 @@ def scenario_tools(
             if record is None:
                 return _refuse(
                     f"Not kept. No removed case {key!r} could be read. Read it with find_scenarios(removed: true) "
-                    "and restore it from that row, with its scenario_key and restored_from."
+                    "and restore it from that row, with its scenario_key and restored_from. When no removed row holds "
+                    "it, tell the person it could not be found; never add it as new (as_new) unless they asked for a "
+                    "copy."
                 )
             args = {**record, "scenario_key": key, "restored_from": {"key": key}}
         else:
