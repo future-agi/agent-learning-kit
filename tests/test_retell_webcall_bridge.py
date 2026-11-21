@@ -1053,19 +1053,21 @@ class _Refused:
 
 
 @pytest.mark.parametrize(
-    ("responses", "code"),
+    ("responses", "code", "retryable"),
     [
-        ([_NotJson(201)], "retell_webcall_response_invalid"),
-        ([_Refused()], "retell_webcall_create_failed"),
+        ([_NotJson(201)], "retell_webcall_response_invalid", False),
+        # Refused or reset: the most common passing cause, so it is retried.
+        ([_Refused()], "retell_webcall_create_failed", True),
         (
             [_Response(201, CALL), _NotJson(201)],
             "retell_webcall_session_response_invalid",
+            False,
         ),
-        ([_Response(201, CALL), _Refused()], "retell_webcall_session_failed"),
+        ([_Response(201, CALL), _Refused()], "retell_webcall_session_failed", True),
     ],
 )
 def test_a_post_that_fails_without_a_status_is_still_coded(
-    monkeypatch, responses, code
+    monkeypatch, responses, code, retryable
 ) -> None:
     http = _Http(responses)
     _install(monkeypatch, http, _PeerConnection())
@@ -1074,6 +1076,8 @@ def test_a_post_that_fails_without_a_status_is_still_coded(
         asyncio.run(_connector().connect())
 
     assert exc.value.code == code
+    assert exc.value.status is None
+    assert exc.value.retryable is retryable
     assert http.closed
 
 
@@ -1084,6 +1088,8 @@ def test_a_post_that_fails_without_a_status_is_still_coded(
         (RetellWebCallError("retell_webcall_session_failed", 502), True),
         (RetellWebCallError("retell_webcall_create_failed", 429), True),
         (RetellWebCallError("retell_webcall_create_timeout"), True),
+        (RetellWebCallError("retell_webcall_create_failed", transient=True), True),
+        (RetellWebCallError("retell_webcall_session_failed", transient=True), True),
         (RetellWebCallError("retell_webcall_create_failed", 422), False),
         (RetellWebCallError("retell_webcall_session_failed", 401), False),
         (RetellWebCallError("retell_webcall_response_invalid"), False),
