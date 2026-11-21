@@ -1,0 +1,2 @@
+langgraph==1.2.22
+langchain-openai==1.7.3
