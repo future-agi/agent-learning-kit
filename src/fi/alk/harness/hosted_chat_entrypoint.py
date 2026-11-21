@@ -1647,22 +1647,34 @@ class HostedChatRuntime:
     def _review_line(self) -> str:
         """The texts a rule or tool change listed for review that still read as they did then: never left to the
         model's account of what it reviewed."""
-        from .amend import review_still_open
+        from .amend import cases_citing_rules_gone, review_still_open
 
         try:
             kept = self._suite_here() or []
             still = review_still_open(self.workspace, kept)
+            contract = load_contract(self.workspace)
+            gone = cases_citing_rules_gone(self.workspace, kept, contract.hard_constraints) if contract else []
         except Exception:  # noqa: BLE001 - a review file that cannot be read never costs the reply
             return ""
-        if not still:
-            return ""
         names = {one.scenario_key: one.name for one in kept}
-        return (
-            "Still to review against the rule that changed (neither edited nor kept since): "
-            + "; ".join(f"{names.get(key, key)}: {', '.join(fields)}" for key, fields in list(still.items())[:20])
-            + ("; and more" if len(still) > 20 else "")
-            + "."
-        )
+        lines = []
+        if still:
+            lines.append(
+                "Still to review against the rule that changed (neither edited nor kept since): "
+                + "; ".join(f"{names.get(key, key)}: {', '.join(fields)}" for key, fields in list(still.items())[:20])
+                + ("; and more" if len(still) > 20 else "")
+                + "."
+            )
+        if gone:
+            # A rule dropped while cases still cite it: each shows its source as not in this environment until fixed.
+            lines.append(
+                f"Still to review: {len(gone)} case(s) cite a rule the agent no longer has: "
+                + ", ".join(names.get(key, key) for key in gone[:20])
+                + ("; and more" if len(gone) > 20 else "")
+                + ". Link the rule that replaced it (add_rule with replaces naming the old rule), or rewrite each case's "
+                "rule source."
+            )
+        return "\n".join(lines)
 
     async def _overview(self) -> dict[str, Any]:
         """The platform's overview of the environment, or {} when it does not answer."""

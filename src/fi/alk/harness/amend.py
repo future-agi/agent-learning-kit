@@ -345,7 +345,13 @@ def set_modality(
 
 
 def drop_rule(
-    contract: AgentContract, destination: Path, *, rule: str, why: str
+    contract: AgentContract,
+    destination: Path,
+    *,
+    rule: str,
+    why: str,
+    replaced_by: str = "",
+    orphan: bool = False,
 ) -> tuple[bool, str]:
     """Take away a rule the agent does not really have.
 
@@ -372,6 +378,18 @@ def drop_rule(
         return False, (
             "no rule like that. It has:\n  - "
             + "\n  - ".join(saved_rules)
+        )
+    if replaced_by.strip():
+        # The rule reworded: added with `replaces`, so the two are linked and the cases citing it are reviewed.
+        return add_rule(contract, destination, rule=replaced_by, why=why, replaces=rule_id(match))
+    resting = _cases_resting_on(destination, rule=match, written=contract.rule_source(match))
+    if resting and not orphan:
+        # Cases still rest on it: whether it is reworded or really goes is the builder's to say, in this call.
+        return False, (
+            f"not removed: {len(resting)} case(s) cite this rule ({rule_id(match)}). Say what becomes of it in this "
+            "call: `replaced_by` with the new rule's text when it is reworded (the two are linked and those cases "
+            "are listed for review), or `orphan: true` when the agent really no longer has it (those cases must then "
+            "be rewritten or dropped)."
         )
     contract.hard_constraints.remove(match)
     contract.amendments.append(f"rule removed — {match}: {why.strip()}")
@@ -683,22 +701,19 @@ def _sub_goals_quoting(destination: Path, rule: str) -> list[str]:
     ]
 
 
-def cases_citing(
+def _cases_resting_on(
     destination: Path, *, rule: str = "", tool: str = "", written: RuleSource | None = None
-) -> str:
-    """The cases that rest on a rule or tool that just changed, as the rest of the reply: those whose `rule` source
-    cites it (resolved as the case's sources are, `grounding.resolve_sources`, against the rule as it read), those
-    citing the line of the agent's material the rule is written on (`written`), or whose
-    solution or negative controls call the tool. Nothing in their text is read for values: the builder re-reads each
-    against the current rules."""
+) -> list[Any]:
+    """The cases whose `rule` source cites `rule`, that cite the line it is written on (`written`), or whose solution
+    or controls call `tool`; [] when the suite cannot be read."""
     from .grounding import Rules, agent_source_root, resolve_sources
     from .scenario_tools import load_scenarios
 
     try:
         scenarios = load_scenarios(destination)
     except Exception:  # noqa: BLE001 - the change is made; this only says what to review next
-        return ""
-    citing = [
+        return []
+    return [
         one
         for one in scenarios
         if _cites_line(one, written)
@@ -719,6 +734,33 @@ def cases_citing(
             )
         )
     ]
+
+
+def cases_citing_rules_gone(destination: Path, scenarios: list[Any], rules: list[str]) -> list[str]:
+    """The cases whose `rule` source cites no rule the agent still has (`rules`), by key: a rule dropped while they
+    still rest on it. Read as their sources are, `grounding.resolve_sources`."""
+    from .grounding import Rules, agent_source_root, resolve_sources
+
+    gone = []
+    for one in scenarios:
+        try:
+            entries = resolve_sources(one, Rules(hard_constraints=list(rules)), destination, agent_source_root(destination))
+        except Exception:  # noqa: BLE001 - a case whose sources cannot be read is not listed
+            continue
+        if any(entry["kind"] == "rule" and entry["resolved"] is False for entry in entries):
+            gone.append(one.scenario_key or one.name)
+    return gone
+
+
+def cases_citing(
+    destination: Path, *, rule: str = "", tool: str = "", written: RuleSource | None = None
+) -> str:
+    """The cases that rest on a rule or tool that just changed, as the rest of the reply: those whose `rule` source
+    cites it (resolved as the case's sources are, `grounding.resolve_sources`, against the rule as it read), those
+    citing the line of the agent's material the rule is written on (`written`), or whose
+    solution or negative controls call the tool. Nothing in their text is read for values: the builder re-reads each
+    against the current rules."""
+    citing = _cases_resting_on(destination, rule=rule, tool=tool, written=written)
     goals = _sub_goals_quoting(destination, rule) if rule else []
     said = (
         f"\n{len(goals)} sub-goal(s) quote the rule that changed in their contract or text: "

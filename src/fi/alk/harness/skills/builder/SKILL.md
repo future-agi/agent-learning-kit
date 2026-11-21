@@ -217,8 +217,10 @@ what the gates check. Then:
   CASE ... NOT restored" means it came back as a new case with no history: follow what it says, or tell the
   person it is new.
 - **Change a rule or a fixed value** (a 30-day window made 20): reword it with one `add_rule` call
-  whose `replaces` names the old rule (its id or exact words). Never `drop_rule` and then `add_rule`
-  without `replaces`: the versions would show the old rule as never there. If a reply lists a removed
+  whose `replaces` names the old rule (its id or exact words), or one `drop_rule` with `replaced_by`
+  holding the new rule's text. Never `drop_rule` and then `add_rule` without `replaces`: the versions
+  would show the old rule as never there, and `drop_rule` refuses a rule cases still cite unless it is
+  given `replaced_by` or `orphan: true` (the agent really no longer has it). If a reply lists a removed
   rule nothing replaces and your new rule rewords it, call `add_rule` again with the same rule and
   `replaces` set to that id; it links the two and changes nothing else. Where the value is written in a file of
   the agent's material (a policy or knowledge file the rule or the cases cite), change that line of the file too,
