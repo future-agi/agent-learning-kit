@@ -172,6 +172,33 @@ def test_add_sub_goal_agrees_with_the_sub_goal_model(
             )
 
 
+@pytest.mark.parametrize("build_server", ["provision", "world"])
+def test_add_sub_goal_keeps_an_actor_of_this_environment_and_refuses_one_it_lacks(build_server: str, tmp_path) -> None:
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="reviewer", name="Robin", role="reviewer")]))
+    contract = AgentContract(agent="a")
+    server = (
+        provision_tools(contract, tmp_path)[0] if build_server == "provision" else world_tools(contract, tmp_path)[0]
+    )
+    handler = next(one.handler for one in server.tools if one.name == "add_sub_goal")
+    goal = {
+        "what": "The agent waits for the reviewer.",
+        "judged": (
+            "Applies when: the reviewer has not answered yet.\n"
+            "Pass when: the agent tells the person it is waiting for the reviewer.\n"
+            "Fail when: the agent says the request is approved.\n"
+            "If it does not arise: pass, because there was nothing to wait for."
+        ),
+    }
+
+    kept = asyncio.run(handler({"name": "waits_for_reviewer", "actor": "reviewer", **goal}))
+    lacking = asyncio.run(handler({"name": "waits_for_nobody", "actor": "nobody", **goal}))
+
+    assert "not added" not in str(kept).lower()
+    assert "'nobody' is not an actor of this environment" in str(lacking)
+
+
 def test_judged_is_a_reason_not_a_flag() -> None:
     """Asserted on the model itself, since both schemas are checked against it."""
     assert SubGoal.model_fields["judged"].annotation is str

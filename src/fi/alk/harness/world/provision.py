@@ -25,6 +25,7 @@ from typing import Any
 from ..backends import tool, tool_server
 
 from ..catalogue import CHECK_RULES, CONTRACT_FIELDS, CONTRACT_SCHEMA, CRITERIA_RULES
+from ..actors import load_actors
 from ..contract import AgentContract
 from ..environment import (
     SubGoal,
@@ -321,9 +322,23 @@ def provision_tools(
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an "
         "overlay is refused until it names a sub-goal that fails when that overlay is "
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
-        "task sub-goal.",
+        "task sub-goal."
+        + (
+            " `actor` names the actor this sub-goal depends on, by id, when it grades how the agent dealt with that "
+            "actor (it always grades the agent, never the actor): it reads not applicable on a call the actor never "
+            "came into. Leave it empty for a sub-goal about the person's task."
+        ),
         schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
+            {
+                "name": str,
+                "what": str,
+                "check": str,
+                "judged": str,
+                "output": str,
+                "overlay": str,
+                "actor": str,
+                **CONTRACT_SCHEMA,
+            },
             ["name", "what"],
         ),
     )
@@ -335,9 +350,12 @@ def provision_tools(
             judged=str(args.get("judged") or ""),
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
+            actor=str(args.get("actor") or ""),
             **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
         problems = validate_sub_goal(one)
+        if one.actor and one.actor not in load_actors(destination).by_id():
+            problems.append(f"actor: {one.actor!r} is not an actor of this environment; add it with add_actor first")
         if problems:
             return _err(f"{one.name} not added:\n  - " + "\n  - ".join(problems))
         catalogue.sub_goals = [

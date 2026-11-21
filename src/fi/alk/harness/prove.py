@@ -34,7 +34,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
-from .actors import load_actors
+from .actors import load_actors, without_actors
+from .job import actors_on, current_actors_switch
 from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
@@ -754,7 +755,10 @@ def prove(
     catalogue: Catalogue,
     world_root: Path,
 ) -> Proof:
-    """Run all three gates and say whether this scenario is worth keeping."""
+    """Run all three gates and say whether this scenario is worth keeping. With the actors switch off, the scenario is
+    proved as a run plays it: no actor, pre-run, first speaker or fault (`without_actors`)."""
+    if not actors_on(current_actors_switch()):
+        scenario = without_actors(scenario)
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
     if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
