@@ -716,33 +716,19 @@ observable artifact proves that the requested change has taken effect.
 """
 
 
-def _offered_labels(payload: dict[str, Any], asked: list[dict[str, Any]]) -> list[str]:
-    """The options a question offered, by label, and as the person was shown them."""
-    offered = list(payload.get("options") or [])
-    for one in asked:
-        offered.extend(one.get("options") or [])
-    labels: list[str] = []
-    for option in offered:
-        if isinstance(option, dict):
-            label = str(option.get("label") or "")
-            labels.append(label)
-            if option.get("description"):
-                labels.append(f"{label}: {option.get('description')}")
-        else:
-            labels.append(str(option))
-    return [one.strip().casefold() for one in labels if one.strip()]
+# How the chat says a reply to an open question reached it: `picked` from the question's own options, or `typed`
+# into the message box. Recorded by the client on the reply; a client that records nothing is taken at its word.
+ANSWERED_BY = "answered_by"
+TYPED = "typed"
 
 
-def _framed_answer(answer: str, payload: dict[str, Any], asked: list[dict[str, Any]]) -> str:
+def _framed_answer(answer: str, reply: dict[str, Any], payload: dict[str, Any], asked: list[dict[str, Any]]) -> str:
     """The reply to a question as the model reads it. The chat sends whatever the person types while a question is
-    open as its answer, so a reply that is none of the options offered is said to be typed text, which may be a
-    new request rather than an answer."""
-    labels = _offered_labels(payload, asked)
-    if not answer or not labels:
-        return answer
-    picked = answer.strip().casefold()
-    # A pick of several options arrives as their labels joined.
-    if picked in labels or all(part.strip() in labels for part in picked.split(", ")):
+    open as its answer, and records on the reply that it was typed. Where the question offered options and the
+    reply was typed instead, the model is told so: it may be a new request rather than an answer. Which it is, the
+    model judges; nothing here reads the words."""
+    offered = bool(payload.get("options")) or any(one.get("options") for one in asked)
+    if not answer or not offered or reply.get(ANSWERED_BY) != TYPED:
         return answer
     return (
         "The person typed this instead of picking one of the options, so it may not answer the question: "
@@ -3088,7 +3074,7 @@ class HostedChatRuntime:
                         pass
                     await self._checkpoint()
                     answer_sequence = int(command["sequence"])
-                    answered = _framed_answer(answer, payload, asked)
+                    answered = _framed_answer(answer, command_payload, payload, asked)
                     if not any(
                         self._turn_acknowledged_through
                         < int(queued["sequence"])
