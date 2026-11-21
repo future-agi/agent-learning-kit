@@ -1930,11 +1930,16 @@ in its own setup before the conversation starts: measured on a real run, three o
 `references/world-api.md` has the exact signatures, the `key=` caveat, how to handle either shape, and
 a worked `ready_code`.
 
-One exception. Where the contract says the target's store is hardcoded and process-local, with no
-configuration seam, `setup_code` cannot alter target records, because the world and the live target
-are separate copies. Use only records already in the frozen base, keep setup empty for them, and
-settle outcomes from the captured calls. If coverage needs state the base lacks, report that the
-target needs a seed or reset seam rather than writing a scenario that cannot run.
+One exception, and it is about when the agent reads its data, not about how it is built. Setup
+runs after the agent has started. Where the contract's `data_store` records that the agent holds its
+data inside its own process, either with no seam at all or with a loader that runs once at start
+(`loads: start`), nothing setup writes ever reaches the agent: the world and the running agent are
+separate copies, and the case would fail every run for a record only the world holds. Use the
+records the world already holds, as they are, with an empty `setup_code`, and settle outcomes from
+the captured calls. A change the case needs happens during the run, through the agent's own tools,
+which is the only writing such an agent can see. If coverage needs state the base lacks, report that
+the target needs a seed or reset seam rather than writing a scenario that cannot run. Where the
+contract records a loader that reads on every call, setup is seen and this does not apply.
 
 ## The solution is not optional
 
