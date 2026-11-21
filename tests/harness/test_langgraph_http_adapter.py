@@ -611,3 +611,42 @@ def test_close_refuses_to_run_on_the_adapters_own_loop(load) -> None:
 
     with pytest.raises(RuntimeError, match="own event loop"):
         _turn(adapter)
+
+
+def test_a_block_list_reply_keeps_only_its_text(load) -> None:
+    adapter = load(
+        "class Message:\n"
+        "    content = [\n"
+        "        {'type': 'thinking', 'thinking': 'hmm', 'signature': 'sig-abc'},\n"
+        "        {'type': 'text', 'text': 'The status '},\n"
+        "        {'type': 'text', 'text': 'is complete.'},\n"
+        "    ]\n"
+        "class Graph:\n"
+        "    async def ainvoke(self, state):\n"
+        "        return {'messages': [Message()]}\n"
+        "graph = Graph()\n",
+        name="text_graph",
+    )
+    assert adapter._invoke({"new_message": {"content": "hi"}}) == {
+        "content": "The status is complete."
+    }
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["[]", "[{'type': 'thinking', 'thinking': 'hmm', 'signature': 'sig-abc'}]", "''"],
+    ids=["empty-list", "only-thinking", "empty-string"],
+)
+def test_a_reply_with_no_text_is_an_empty_answer_whatever_its_form(
+    load, content
+) -> None:
+    adapter = load(
+        "class Message:\n"
+        f"    content = {content}\n"
+        "class Graph:\n"
+        "    async def ainvoke(self, state):\n"
+        "        return {'messages': [Message()]}\n"
+        "graph = Graph()\n",
+        name="empty_graph",
+    )
+    assert adapter._invoke({"new_message": {"content": "hi"}}) == {"content": ""}

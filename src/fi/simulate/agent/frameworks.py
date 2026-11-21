@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
+from fi.simulate.agent.content import text_of
 from fi.simulate.agent.generic import GenericAgentWrapper, InputMode
 from fi.simulate.agent.wrapper import AgentInput, AgentResponse, AgentWrapper
 
@@ -1935,11 +1936,12 @@ async def _run_probe_case(
     case_id = str(case.get("id") or f"case_{index}")
     agent_input = _probe_agent_input(framework, case, index=index)
     raw_response = await wrapper.call(agent_input)
-    response = (
-        raw_response
-        if isinstance(raw_response, AgentResponse)
-        else AgentResponse(content=str(raw_response))
-    )
+    if isinstance(raw_response, AgentResponse):
+        response = raw_response
+        if not isinstance(response.content, str):
+            response = response.model_copy(update={"content": text_of(response.content)})
+    else:
+        response = AgentResponse(content=text_of(raw_response))
     response_payload = _probe_response_payload(response)
     runtime_trace = dict((response.state or {}).get("framework_runtime") or {})
     observed_io_contract = _probe_observed_io_contract(
