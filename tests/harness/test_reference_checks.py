@@ -221,20 +221,53 @@ def test_a_solution_step_must_match_the_agents_contract(tmp_path):
 def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_path):
     import json
 
+    from fi.alk.harness.prove import prepared
     from fi.alk.harness.scenario import Scenario
     from fi.alk.harness.scenario_tools import _records_the_agent_cannot_see
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "orders"
+        tools = [{"name": "refund"}, {"name": "look_up"}]
+        handlers = {
+            "refund": (
+                "def handle(args, db):\n"
+                "    db.execute('UPDATE orders SET amount = 0 WHERE order_id = ?', [args['order_id']])\n"
+                "    return {'ok': 1}\n"
+            ),
+            "look_up": "def handle(args, db):\n    return {'order_id': args['order_id']}\n",
+        }
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE orders(order_id TEXT, amount INTEGER); INSERT INTO orders VALUES ('1', 9);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
 
     adds = "def setup(world):\n    world.put('orders', {'order_id': '9', 'amount': 5})\n"
-    changes = "def setup(world):\n    world.change('orders', {'order_id': '1'}, {'amount': 5})\n"
+    changes = "def setup(world):\n    world.change('orders', '1', {'amount': 5}, by='order_id')\n"
+    # What the setup did is read from the world, so how it is written does not matter: a tool it drives that
+    # writes, a helper of its own, or a statement that only reads.
+    through_a_tool = "def setup(world):\n    world.call('refund', {'order_id': '1'})\n"
+    through_a_helper = (
+        "def seed(w):\n    getattr(w, 'p' + 'ut')('orders', {'order_id': '9', 'amount': 5})\n\n"
+        "def setup(world):\n    seed(world)\n"
+    )
+    only_reads = "def setup(world):\n    world.call('look_up', {'order_id': '1'})\n    world.state()\n"
 
     def problems(store: dict, setup: str) -> list[str]:
         (tmp_path / "contract.json").write_text(json.dumps({"data_store": store}))
-        return _records_the_agent_cannot_see(Scenario(name="s", instruction="Help.", setup_code=setup), tmp_path)
+        scenario = Scenario(name="s", instruction="Help.", setup_code=setup)
+        trial, applied, _ready = prepared(scenario, tmp_path)
+        assert applied.ok, applied.said
+        return _records_the_agent_cannot_see(scenario, tmp_path, trial)
 
     in_process = {"kind": "in_process", "configured_by": "hardcoded", "database": "in_memory"}
     assert problems(in_process, adds)
     assert not problems(in_process, "")
     assert problems(in_process, changes)
+    assert problems(in_process, through_a_tool) and problems(in_process, through_a_helper)
+    assert not problems(in_process, only_reads)
     assert not problems({**in_process, "loader_module": "agent.data"}, adds)
     assert not problems({"kind": "postgres", "configured_by": "env"}, adds)
 
@@ -242,7 +275,8 @@ def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_
     def with_actor(store: dict, actor: dict) -> list[str]:
         (tmp_path / "contract.json").write_text(json.dumps({"data_store": store}))
         scenario = Scenario(name="s", instruction="Help.", actors=[actor])
-        return _records_the_agent_cannot_see(scenario, tmp_path)
+        trial, _applied, _ready = prepared(scenario, tmp_path)
+        return _records_the_agent_cannot_see(scenario, tmp_path, trial)
 
     approves = {"id": "manager", "actions": [{"action": "approvals.put", "arguments": {"status": "approved"}}]}
     assert with_actor(in_process, approves)
@@ -258,6 +292,8 @@ def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_
     # Setup runs on a world whose agent already started: a record it adds is one a start-time loader never sees.
     assert problems(once, adds) and "loads its data once, when it starts" in problems(once, adds)[0]
     assert problems(once, changes) and not problems(once, "")
+    assert problems(once, through_a_tool) and problems(once, through_a_helper)
+    assert not problems(once, only_reads)
     # The same setup passes where the loader reads on every call, or where its timing is not recorded.
     assert not problems({**once, "loads": "each_call"}, adds)
     assert not problems({**once, "loads": "each_call"}, changes)

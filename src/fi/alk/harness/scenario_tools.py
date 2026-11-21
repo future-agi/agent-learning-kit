@@ -1884,22 +1884,34 @@ def late_changes_note(scenario: Scenario, world_root: Path) -> str:
     return f"\nIf this agent's loader runs only when it starts: {', '.join(late)} {_LOADED_ONCE}." if late else ""
 
 
-def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[str]:
+def _setup_changes_the_world(world_root: Path, trial: Any) -> bool:
+    """Whether the world this scenario runs in differs from the saved one: every table's rows, read before and after
+    its setup ran. What the setup did is read from the world, never from how its code is written. A world that
+    cannot be read says nothing, so it refuses nothing."""
+    try:
+        saved_world = restore(world_root)
+        saved_world.reset()
+        return saved_world.state() != trial.state()
+    except Exception:  # noqa: BLE001 - a world that cannot be read is not the scenario's fault
+        return False
+
+
+def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path, trial: Any) -> list[str]:
     """A setup that writes records for an agent whose data lives inside its own process: the agent copied its data
-    at start, so it never sees such a record."""
+    at start, so it never sees such a record. `trial` is the world with this scenario's setup applied."""
     store = _in_process_store(world_root)
     if not store:
         return []
-    from .scenario import _CREATES_A_RECORD, _ONLY_TOUCHES_EXISTING
     from .world_door import record_action
+
+    setup_wrote = bool((scenario.setup_code or "").strip()) and _setup_changes_the_world(world_root, trial)
 
     if store.get("loader_module") or store.get("loaded_by"):
         # Refused only when the contract records that the loader runs once, at start; otherwise a note.
         if str(store.get("loads") or "").strip().lower() != "start":
             return []
         found = []
-        setup = scenario.setup_code or ""
-        if _CREATES_A_RECORD.search(setup) or _ONLY_TOUCHES_EXISTING.search(setup):
+        if setup_wrote:
             # A trial's setup writes its world after the agent has started, as the run and the proof both play it.
             found.append(
                 "this agent loads its data once, when it starts, and a trial's setup_code runs after that, so a record "
@@ -1912,8 +1924,7 @@ def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[
         return found
 
     out = []
-    setup = scenario.setup_code or ""
-    if _CREATES_A_RECORD.search(setup) or _ONLY_TOUCHES_EXISTING.search(setup):
+    if setup_wrote:
         out.append(
             "this agent keeps its data inside its own process and builds it when it starts, so a record "
             "setup_code adds or changes is one the agent never sees and every run fails it for something "
@@ -2304,7 +2315,7 @@ def accept_scenario(
                 problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
                 problems.extend(_steps_the_contract_refuses(scenario, world_root))
                 problems.extend(_controls_the_contract_refuses(scenario, world_root))
-                problems.extend(_records_the_agent_cannot_see(scenario, world_root))
+                problems.extend(_records_the_agent_cannot_see(scenario, world_root, trial))
                 problems.extend(_overlay_asserts_nothing(scenario, catalogue))
                 problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
                 problems.extend(
