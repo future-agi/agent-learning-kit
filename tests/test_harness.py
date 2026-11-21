@@ -2869,7 +2869,7 @@ def test_a_new_case_that_matches_a_removed_one_is_not_kept_unless_asked_for_as_n
     # The person asked for a copy: kept as a new case, and the reply says so.
     copied = accept_scenario(_delta(as_new=True), world_root=root, catalogue=catalogue, kept=kept, used=used)
     assert not copied.get("is_error"), copied
-    assert f"ADDED AS A NEW CASE under {kept[0].scenario_key}, as asked, NOT restored" in copied["content"][0]["text"]
+    assert f"ADDED AS A NEW CASE under {kept[0].scenario_key} (as_new), NOT restored" in copied["content"][0]["text"]
     assert kept[0].scenario_key != key
     # Asked for the original with a change, editing that new case instead still says it is not the removed one.
     edited = accept_scenario(
@@ -2927,6 +2927,33 @@ def test_restore_exactly_without_searching_is_refused_with_the_restore_call_then
     assert not restored.get("is_error"), restored
     assert "Restored exactly as it was" in restored["content"][0]["text"]
     assert key in [one.scenario_key for one in kept]
+
+
+def test_a_case_removed_in_another_session_is_still_read_from_the_platform_and_restored(tmp_path):
+    """The live shape: the chat that restores is not the one that removed the case, so the key is not among those
+    this session has seen; the removed case is still read by its key and the fresh submit refused."""
+    import asyncio
+
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario import used_keys
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    first, kept = scenario_tools(contract, root, root, wanted=4)
+    tools = {one.name: one.handler for one in first.tools}
+    asyncio.run(tools["submit_scenario"](_delta()))
+    asyncio.run(tools["submit_scenario"](_delta(name="adds-two-big-macs")))
+    key, content = kept[0].scenario_key, document_for(kept[0])
+    assert not asyncio.run(tools["drop_scenario"]({"name": "adds-a-big-mac"})).get("is_error")
+    # A new session: it has seen none of the keys the environment gave before.
+    used_keys(root).clear()
+
+    async def platform(wanted):
+        return [{"scenario_key": key, "name": "adds-a-big-mac", "suite_version": "v13", "content": content}] if wanted == key else []
+
+    chat, kept = scenario_tools(contract, root, root, wanted=4, can_grow=True, removed_lookup=platform)
+    said = asyncio.run({one.name: one.handler for one in chat.tools}["submit_scenario"](_delta()))
+    assert said.get("is_error") and f'restored_from {{"key": "{key}"}} and as_it_was true' in said["content"][0]["text"]
 
 
 def test_restore_as_it_was_brings_back_the_last_saved_revision_not_a_copy(tmp_path):
@@ -3008,6 +3035,7 @@ def test_an_unreadable_as_it_was_restore_is_counted_like_any_refusal(tmp_path):
         for _ in range(3)
     ]
     assert all("No removed case 'gone' could be read" in one for one in said)
+    assert "never add it as new (as_new) unless they asked for a copy" in said[0]
     assert "submitting it again will not work" in said[-1]
 
 
