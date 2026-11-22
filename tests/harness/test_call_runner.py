@@ -4182,6 +4182,40 @@ _VOICE_CASES = {
                       "ended_at": 2.6}),
         seam=EvidenceSeam.TOOL_TRACE, log=_LOST_ANSWER_LOG,
     ),
+    # A span that recorded less than the line it pairs with: it never takes the line's arguments or result.
+    "a span that kept fewer arguments": dict(
+        lines=(
+            {"name": "book", "arguments": {"date": "fri", "party": 2}, "output": "ok", "at": 10.0},
+            {"name": "book", "arguments": "{\"date\": \"fri\"}", "output": "ok", "source": "otel", "event_id": "b1",
+             "at": 9.5, "ended_at": 10.5},
+        ),
+        seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "a span that kept no result": dict(
+        lines=(
+            {"name": "book", "arguments": {"date": "fri"}, "output": "booked #7", "at": 10.0},
+            {"name": "book", "arguments": "{\"date\": \"fri\"}", "source": "otel", "event_id": "b1", "at": 9.5,
+             "ended_at": 10.5},
+        ),
+        seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "a span that typed an argument differently": dict(
+        lines=(
+            {"name": "book", "arguments": {"party": "2"}, "output": "ok", "at": 10.0},
+            {"name": "book", "arguments": "{\"party\": 2}", "output": "ok", "source": "otel", "event_id": "b1",
+             "at": 9.5, "ended_at": 10.5},
+        ),
+        seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "a span that kept only the framework's wrapper": dict(
+        lines=(
+            {"name": "book", "arguments": {"date": "fri"}, "output": {"table": 7}, "at": 10.0},
+            {"name": "book", "arguments": "{\"date\": \"fri\"}",
+             "output": {"output": "content='Booked table 7' name='book' tool_call_id='call_1'"}, "source": "otel",
+             "event_id": "b1", "at": 9.5, "ended_at": 10.5},
+        ),
+        seam=EvidenceSeam.TOOL_TRACE,
+    ),
     "the http_tool seam": dict(lines=None, seam=EvidenceSeam.HTTP_TOOL, table=_table_rows()),
     "the http_tool seam with nothing": dict(lines=None, seam=EvidenceSeam.HTTP_TOOL),
     "the hook's line timing the agent's own line": dict(
@@ -4201,6 +4235,16 @@ def test_a_voice_trial_reads_its_calls_as_before_sources_were_named(tmp_path, mo
     now = _voice_reading(tmp_path, monkeypatch, lend=_lend_span_now, **_VOICE_CASES[case])
 
     assert now == before
+
+
+@pytest.mark.parametrize("case", [case for case in _VOICE_CASES if case.startswith("a span that")])
+def test_a_voice_span_that_recorded_less_never_takes_the_lines_record(tmp_path, monkeypatch, case) -> None:
+    calls, _graded = _voice_reading(tmp_path, monkeypatch, lend=_lend_span_now, **_VOICE_CASES[case])
+
+    line = _VOICE_CASES[case]["lines"][0]
+    (call,) = calls
+    assert (call["arguments"], call["result"], call["output_omitted"]) == (line["arguments"], line["output"], False)
+    assert (call["at"], call["ended_at"]) == (9.5, 10.5)
 
 
 def test_every_voice_record_names_its_source(tmp_path, monkeypatch) -> None:

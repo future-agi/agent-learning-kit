@@ -2028,25 +2028,11 @@ def _collect_file_tool_calls(
 def _with_span_calls(
     observed: Sequence[Call], runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
-    """A chat trial's calls, one record each, read in one order (tool_evidence.py): the calls the kit carried out
-    against the world, then the trace file's span lines, then its other lines, then the agent's own account of its
-    calls. ``observed`` holds the calls the trial recorded as they ran: the agent's account is tagged where it is
-    recorded, and the rest are the world's."""
+    """Calls another source saw, else the trace file's own lines, joined with the file's span lines. Each record names
+    its source (tool_evidence.py): the agent's own account is tagged where it is recorded, and the rest of ``observed``
+    is the world's."""
     written, from_spans = _read_file_tool_calls(runtime, strict=strict)
-    recorded = list(observed)
-    world = evidence.tagged((call for call in recorded if call.source != evidence.AGENT), evidence.WORLD)
-    agent = [call for call in recorded if call.source == evidence.AGENT]
-    # Spans are paired last, by the span pairing every route already uses; which record of a pair wins is the order's.
-    natives = evidence.join(world, written, agent, same_tool=_same_tool, same_arguments=_same_arguments)
-    return _merge_span_calls(list(natives), from_spans)
-
-
-def _same_tool(one: Call, other: Call) -> bool:
-    return _tool_key(one.name) == _tool_key(other.name)
-
-
-def _same_arguments(one: Call, other: Call) -> bool:
-    return same_json(one.arguments, other.arguments)
+    return _merge_span_calls(evidence.tagged(observed, evidence.WORLD) or written, from_spans)
 
 
 def tool_routes(contract: Mapping[str, Any]) -> dict[str, str]:
@@ -2603,14 +2589,24 @@ def _other_worker(span: Call, call: Call) -> bool:
 
 
 def _lend_span(span: Call, other: Call) -> None:
-    """A span and another source's record are one call: ``other`` becomes its one record, with the graded facts of
-    whichever source wins (tool_evidence.settle) and from the other only what the winner does not carry."""
-    started = span.at
-    evidence.settle(other, span)
-    # The call's time is not a graded fact, so it follows what measured it, not which record won: a source that stamps a
-    # call only when it reads the result carries no start time at all, while a span measured the call's start. So the
-    # span's start is the call's whichever record won; where no paired source measured it, the winner's stamp stays.
-    other.at = started or other.at
+    """Give another tracer's call the span's agent, hand-off and times, keeping what it recorded itself. The span is
+    listed as having seen the call; it never takes the call's graded facts (tool_evidence.py)."""
+    if not (other.worker_id or other.worker_label):
+        other.worker_id, other.worker_label = span.worker_id, span.worker_label
+    other.delegated_to = other.delegated_to or span.delegated_to
+    other.transferred = other.transferred or span.transferred
+    other.ended_at = other.ended_at or span.ended_at
+    if not other.runtime_ids:
+        # The span's place among the agents goes with its ids: a parent is an id in the same record.
+        other.runtime_ids = span.runtime_ids
+        other.parent_span_id, other.relationship = (
+            span.parent_span_id,
+            span.relationship,
+        )
+    # The call's time is not a graded fact: it comes from the source that measured it. A span starts when the call
+    # does; another tracer may stamp a call only once it reads its result.
+    other.at = span.at or other.at
+    evidence.seen(other, span.source or evidence.SPAN)
 
 
 def _target_metrics(case: Any) -> dict[str, Any] | None:
@@ -3971,8 +3967,7 @@ class CallRunnerImpl:
             # rather than crashing keeps this on the scheduler's own evidence_missing path, never
             # a raw exception).
             observed = []
-        # The table is read only when the file holds no graded call: its rows are what entered the world's door, not
-        # one record per tool call, so it does not outrank the file here (tool_evidence.py).
+        # The table is read only when the file holds no graded call, as before; its rows are tagged as the world's.
         calls = _merge_span_calls([*written, *evidence.tagged(observed, evidence.WORLD)], from_spans)
         if unread is not None and not graded_calls(calls):
             raise ToolCaptureFailed(str(unread), calls=calls) from None

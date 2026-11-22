@@ -557,16 +557,14 @@ def _record_completed_tool_call(
     name: str,
     arguments: Mapping[str, Any],
     response: Mapping[str, Any],
-    call_id: str = "",
 ) -> None:
     """Record a tool the submitted agent says it already ran: the agent's own account of the call.
 
     Callback-backed agents can return the request and its completed response together. Such a call
     is never replayed through the generated world: that would risk repeating a side effect, and
     would turn a real success into ``no such tool`` when no mock handler was authored. It is kept
-    in the world's list but tagged as the agent's account, so a span or the kit's tracer that saw
-    the same call wins over it (tool_evidence.py). ``call_id`` is the id the agent gave the call,
-    when it gave one.
+    in the world's list, tagged as the agent's own account (tool_evidence.py), since the world did
+    not serve it and the kit did not see it run.
     """
     error_value = response.get("error")
     error = str(error_value) if error_value not in (None, "") else ""
@@ -586,7 +584,6 @@ def _record_completed_tool_call(
             refused=refused,
             error=error,
             at=time.time(),
-            runtime_ids={"call_id": call_id} if call_id else {},
             source=evidence.AGENT,
         )
     )
@@ -696,11 +693,9 @@ class _HostedChatTarget:
             if trace and not trace.get("success", False):
                 raise HTTPCallFailure(trace)
             for observed in (response.metadata or {}).get("native_completed_tools", []):
-                # The completed rows carry no id yet, so these pair with other sources by name and arguments.
                 _record_completed_tool_call(
                     self.world, name=observed["name"],
                     arguments=observed["arguments"], response=observed,
-                    call_id=str(observed.get("id") or ""),
                 )
             conversation_ended = bool(
                 (response.metadata or {}).get("conversation_ended")
@@ -744,8 +739,6 @@ class _HostedChatTarget:
                         name=name,
                         arguments=arguments,
                         response=provided,
-                        # Only an id the agent gave: a made-up one would read as a different call.
-                        call_id=str(call["id"]) if call.get("id") else "",
                     )
                     result_content = provided.get("content", provided.get("result"))
                     if not isinstance(result_content, str):
