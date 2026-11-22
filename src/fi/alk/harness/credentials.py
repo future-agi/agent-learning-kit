@@ -436,6 +436,49 @@ def _python_environment_reads(content: str) -> list[tuple[str, bool]]:
     return found
 
 
+_GOOGLE_CREDENTIALS = (
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+    "GOOGLE_CLOUD_PROJECT",
+)
+_PLUGIN_CONSTRUCTOR = re.compile(
+    r"\b(deepgram|cartesia|elevenlabs|openai|google)\s*\.\s*(LLM|STT|TTS|RealtimeModel)\s*\("
+)
+_VERTEX_ON = re.compile(r"\bvertexai\s*=\s*True\b")
+_VERTEX_CLIENTS = (
+    (re.compile(r"\bChatGoogleGenerativeAI\s*\("), "langchain_google_genai.ChatGoogleGenerativeAI"),
+    (re.compile(r"\bgenai\s*\.\s*Client\s*\("), "google.genai.Client"),
+)
+
+
+def _unparsed_sdk_requirements(content: str) -> list[tuple[str, str]]:
+    """The constructors' credentials in a file the kit's own Python can't parse, by a line search.
+
+    Nothing in the file can be read as an ``api_key=``, so each plugin asks for every name it may
+    read, as for ``**opts``, and ``vertexai=True`` anywhere in the file counts for every Google constructor in it: a
+    name too many is asked for, a name needed is never missed.
+    """
+    found: set[tuple[str, str]] = set()
+    vertex = _VERTEX_ON.search(content) is not None
+    if "livekit" in content:
+        for match in _PLUGIN_CONSTRUCTOR.finditer(content):
+            provider, constructor = match.groups()
+            if provider in _LIVEKIT_PROVIDER_CREDENTIALS:
+                # As for ``**opts``: whether an ``api_key=`` is passed can't be read either.
+                extra = _LIVEKIT_UNREADABLE_KEY_EXTRA.get(provider, ())
+                for name in _LIVEKIT_PROVIDER_CREDENTIALS[provider] + extra:
+                    found.add((name, f"sdk:livekit.plugins.{provider}"))
+            elif provider == "google" and constructor != "RealtimeModel" and vertex:
+                for name in _GOOGLE_CREDENTIALS:
+                    found.add((name, "sdk:livekit.plugins.google.vertex"))
+    if vertex:
+        for pattern, client in _VERTEX_CLIENTS:
+            if pattern.search(content):
+                for name in _GOOGLE_CREDENTIALS:
+                    found.add((name, f"sdk:{client}.vertex"))
+    return sorted(found)
+
+
 def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
     """Discover credentials consumed internally by constructors in submitted Python.
 
@@ -446,7 +489,7 @@ def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
     try:
         tree = ast.parse(content)
     except SyntaxError:
-        return []
+        return _unparsed_sdk_requirements(content)
     aliases: dict[str, str] = {}
     imports: dict[str, str] = {}
     for node in ast.walk(tree):

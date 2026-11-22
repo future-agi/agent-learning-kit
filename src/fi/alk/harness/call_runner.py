@@ -70,6 +70,7 @@ from fi.simulate.simulation.call_actors import (
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_acts, world_summary
 from .actor_meter import ActorMeter
 from .world_door import (
+    TRIAL_FAULTS_DDL,
     APPROVAL_REQUIRED,
     APPROVAL_UNKNOWN,
     FAULTS_UNKNOWN,
@@ -94,7 +95,7 @@ from .actors import (
     actor_brief,
     brief_text,
     load_actors,
-    with_caller_actor,
+    as_played,
     with_knowledge_read,
 )
 from .background_noise import place_of, scenario_source
@@ -106,7 +107,7 @@ from .call_actor import (
 )
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
-from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode
+from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode, job_actors_switch
 from .isolated_process import run_json_worker
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
@@ -1610,9 +1611,6 @@ def _agent_marks(
     return marks
 
 
-# Kept in the world's database, never in a file the agent's process could read or rewrite.
-# Known limit: a connection with the world's role can write it until per-user database isolation is on.
-TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
 
 
 def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
@@ -3178,7 +3176,7 @@ class CallRunnerImpl:
         doc = _with_scenario_edits(
             doc, getattr(self._context.job, "metadata", None), source_key
         )
-        doc = with_caller_actor(doc, self._context.bundle_dir)
+        doc = as_played(doc, self._context.bundle_dir, job_actors_switch(self._context.job))
 
         room_count = self._scenario_room_counts.get(scenario.scenario_key, 0) + 1
         self._scenario_room_counts[scenario.scenario_key] = room_count

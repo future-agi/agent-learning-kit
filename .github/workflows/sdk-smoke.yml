@@ -37,6 +37,28 @@ jobs:
             -k real_openai_agents_sdk | tee pytest.out
           ! grep -q "skipped" pytest.out
 
+  langgraph-reference:
+    # The LangGraph reference agent on the versions its requirements file pins, driven through
+    # the kit's adapter against a local endpoint. The pins are for this job only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit with the reference's pinned libraries
+        run: >-
+          python -m pip install . pytest
+          -r examples/harness/langgraph_support/requirements.txt
+      - name: Run the reference on its pins, failing if it skips
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_langgraph_reference.py \
+            -k pinned_libraries | tee pytest.out
+          ! grep -q "skipped" pytest.out
+
   tool-trace-other-pythons:
     # The tool tracer's own subprocesses on another Python, which reads frames differently from
     # 3.12 (a suspension ends on a RESUME on 3.13; a close or a cancel is not carried by the
@@ -67,13 +89,15 @@ jobs:
           ALK_TEST_PYTHON: ${{ steps.traced.outputs.python-path }}
         run: python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py
 
-  tool-trace-python-3-12-3:
-    # 3.12.3 is the release the sandbox runs, and it closes a generator paused at a bare yield
-    # without an event, as 3.13.3 does; "3.12" elsewhere floats to the newest release.
-    # setup-python has no 3.12.3 build for the current Ubuntu image, so this runs in the official
-    # 3.12.3 image, where pytest and the tracer's subprocesses both run on it.
+  python-3-12-3:
+    # The hosted image's own Python: Ubuntu 24.04's python3.12, which is 3.12.3 (Dockerfile.hosted,
+    # /opt/alk-venv). "3.12" elsewhere floats to the newest release, and setup-python has no
+    # 3.12.3 build for the current Ubuntu image, so this runs in the official 3.12.3 image, where
+    # pytest and the tracer's subprocesses both run on it. 3.12.3 closes a generator paused at a
+    # bare yield without an event, as 3.13.3 does, so the tool tracer runs here, and the kit
+    # finds, reads and documents an agent here as the sandbox does.
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     container: python:3.12.3-slim-bookworm
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +107,54 @@ jobs:
         run: python -m pip install . pytest
       - name: Run the tool tracer tests on Python 3.12.3
         run: python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py
+      - name: Run the finding, reading and agent-document tests on Python 3.12.3
+        shell: bash
+        # A skip hides a test from the 3.12.3 check. The only ones allowed are the container's
+        # own: it runs as root, which reads a mode-000 folder, on a case-sensitive disk.
+        run: >-
+          set -o pipefail;
+          python -m pytest -q -rs
+          tests/harness/test_agent_scan.py
+          tests/harness/test_scan_walk.py
+          tests/harness/test_scan_folders.py
+          tests/harness/test_scan_document.py
+          tests/harness/test_scan_ai.py
+          tests/harness/test_import_lines.py
+          tests/harness/test_import_lines_diff.py
+          tests/harness/test_reading_entry.py
+          tests/harness/test_agent_reading.py
+          tests/harness/test_framework_detection.py
+          tests/harness/test_authoring_entrypoint_find_agents.py
+          tests/harness/test_python_source_codecs.py
+          tests/harness/test_newer_python_syntax.py
+          tests/harness/test_source_tool_evidence.py
+          tests/harness/test_instrumentation_evidence.py
+          tests/harness/test_agent_type_refusal.py
+          | tee pytest.out;
+          ! grep '^SKIPPED' pytest.out
+          | grep -v -e 'root reads a mode-000' -e "case-sensitive disk can't spell"
+
+  langchain-reference:
+    # The LangChain reference agent on the versions its requirements file pins, driven through
+    # the kit's LangGraph adapter against a local endpoint. The pins are for this job only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit with the reference's pinned libraries
+        run: >-
+          python -m pip install . pytest
+          -r examples/harness/langchain_support/requirements.txt
+      - name: Run the reference on its pins, failing if it skips
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_langchain_reference.py \
+            -k pinned_libraries | tee pytest.out
+          ! grep -q "skipped" pytest.out
 
   clean-install:
     # Install, doctor, the local simulation and the suites that need their own SDK versions. The
@@ -329,13 +401,17 @@ jobs:
           tests/harness/test_agent_type_refusal.py
           tests/harness/test_google_adk_reference.py
           tests/harness/test_http_streamed_tool_calls.py
+          tests/harness/test_livekit_reference.py
           tests/harness/test_python_source_codecs.py
           tests/harness/test_executor_completed_counts.py
           tests/harness/test_deep_agents_reference.py
           tests/harness/test_langgraph_http_adapter.py
+          tests/harness/test_langgraph_reference.py
           tests/harness/test_reading_entry.py
           tests/harness/test_agent_reading.py
+          tests/harness/test_newer_python_syntax.py
           tests/harness/test_crewai_reference.py
+          tests/harness/test_langchain_reference.py
           tests/harness/test_scan_walk.py
           tests/harness/test_browser_scan_cut.py
           tests/harness/test_save_child.py
@@ -353,3 +429,11 @@ jobs:
           tests/test_e2b_template_build_id.py
           tests/test_release_pr_step.py
           tests/episode
+      - name: Run the LiveKit reference on the version it pins, failing if it skips
+        if: matrix.dependencies == 'minimum-livekit'
+        # This row installs livekit-agents 1.8.3, the reference's pin. The newest row has no
+        # livekit extra, so the tests that import the example skip there.
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_livekit_reference.py | tee livekit.out
+          ! grep -q "skipped" livekit.out

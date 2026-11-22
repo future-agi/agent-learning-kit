@@ -30,6 +30,7 @@ from fi.simulate.simulation.call_actors import (
 )
 
 from .backends import tool, tool_server
+from .job import actors_on, current_actors_switch
 
 from .amend import add_rule, drop_rule, fix_tool, widen
 from .background_noise import place_for, places
@@ -81,7 +82,7 @@ from .prove import (
     workspace_bindings,
     workspace_fixture,
 )
-from .actors import ACTORS_FILE, CALLER, Actor, ActorShare, cycles, load_actors, save_actors
+from .actors import ACTOR_SCENARIO_FIELDS, ACTORS_FILE, CALLER, Actor, ActorShare, cycles, load_actors, save_actors
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -204,6 +205,19 @@ def _no_longer_hold(
             )
             failed.append((scenario.name, why))
     return failed
+
+
+def actors_off_fields(args: dict[str, Any]) -> list[str]:
+    """The actor-only fields (`ACTOR_SCENARIO_FIELDS`) a submission sends that carry anything."""
+    return [name for name in ACTOR_SCENARIO_FIELDS if args.get(name) not in (None, [], {}, "")]
+
+
+def actors_off_refusal(sent: list[str]) -> str:
+    return (
+        "Not kept. Actors and faults are off for this environment, so a scenario takes none of: "
+        + ", ".join(sent)
+        + ". Send it without them."
+    )
 
 
 def _actor_fields() -> dict[str, Any]:
@@ -2017,6 +2031,9 @@ def scenario_tools(
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
+    # The job's actors switch: off, no scenario takes actors, a pre-run, a first speaker or faults.
+    switch = current_actors_switch()
+    with_actors = actors_on(switch)
     # The share an earlier session recorded carries over; an environment without one draws the default.
     if (saved := load_actors(destination).actor_share) is not None:
         target["actor_share"] = saved.model_dump()
@@ -2034,9 +2051,14 @@ def scenario_tools(
     def call_actor_share() -> float:
         """The share of scenarios that include an actor: drawn within the range the person asked for
         through `aim_for`, else within this environment's default range."""
+        if not with_actors:
+            return 0.0
         seed = os.environ.get("ALK_HARNESS_JOB_ID") or str(destination)
         asked = target.get("actor_share")
-        return default_share(seed, (asked["min"], asked["max"])) if asked else default_share(seed)
+        if asked:
+            return default_share(seed, (asked["min"], asked["max"]))
+        # The platform's default range when it sent one, else the kit's own.
+        return default_share(seed, (switch.share[0], switch.share[1])) if switch is not None else default_share(seed)
 
     def usable_call_actors() -> list[str]:
         """The listed actors a run can deliver to this agent."""
@@ -2406,7 +2428,7 @@ def scenario_tools(
                     "which the agent has to work hardest for.",
                 },
                 **_mailbox_fields(),
-                **_actor_fields(),
+                **(_actor_fields() if with_actors else {}),
                 "instruction": {
                     "type": "string",
                     "description": "What this person is trying to achieve, written to them. "
@@ -2571,6 +2593,8 @@ def scenario_tools(
         ),
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        if not with_actors and (sent := actors_off_fields(args)):
+            return _err(actors_off_refusal(sent))
         if external_runtime_target and args.get("solution"):
             # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}
@@ -2936,6 +2960,8 @@ def scenario_tools(
                 if people == "alike"
                 else ". No accent, language or location may dominate the suite"
             )
+        if args.get("actor_share") is not None and not with_actors:
+            return _err("actor_share is not taken: actors are off for this environment, so no scenario includes one.")
         if args.get("actor_share") is not None:
             given = args["actor_share"]
             try:
@@ -3018,7 +3044,7 @@ def scenario_tools(
                 f". {len(vocabulary)} keywords are the suite's vocabulary; deal them in the briefs, "
                 "because a writer that never sees the list cannot stay inside it"
             )
-        usable = usable_call_actors()
+        usable = usable_call_actors() if with_actors else []
         share = call_actor_share()
         if usable:
             said += (
@@ -3342,6 +3368,8 @@ def scenario_tools(
         edit_schema,
     )
     async def edit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        if not with_actors and (sent := actors_off_fields(args)):
+            return _err(actors_off_refusal(sent).replace("Not kept.", "Not changed."))
         key = str(args.get("scenario_key") or "").strip()
         held = next((one for one in kept if one.scenario_key == key), None)
         if held is None:

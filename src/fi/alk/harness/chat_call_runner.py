@@ -17,7 +17,8 @@ from fi._diagnostics import sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
 from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, HTTPCallFailure
 
-from .actors import with_caller_actor
+from .actors import as_played
+from .job import job_actors_switch
 from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
@@ -902,7 +903,7 @@ class HostedChatCallRunner:
             getattr(self._context.job, "metadata", None),
             source_key,
         )
-        document = with_caller_actor(document, self._context.bundle_dir)
+        document = as_played(document, self._context.bundle_dir, job_actors_switch(self._context.job))
         target_world = _tool_world(
             self._context.bundle_dir,
             self._contract,
