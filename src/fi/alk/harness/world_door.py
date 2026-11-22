@@ -1386,7 +1386,7 @@ _BASIC = "name, arguments, result, ok, error, at"
 # Written when the table has them: how a call was made, the path it went to, and the scenario's fault the door applied on it.
 _CALL_COLUMNS = ("method", "fault", "endpoint")
 _CALL_COLUMNS_DDL = (
-    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb, "
+    "ALTER TABLE IF EXISTS _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb, "
     "ADD COLUMN IF NOT EXISTS endpoint text"
 )
 # Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a
@@ -1409,7 +1409,7 @@ HARNESS_TABLES_DDL = (
     WORKER_RUNS_DDL,
     _KEYS_TABLE_DDL,
     _KEYS_RESPONSE_DDL,
-    "ALTER TABLE IF EXISTS _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb",
+    _CALL_COLUMNS_DDL,
 )
 
 
