@@ -19,7 +19,7 @@ from typing import Any
 
 from . import session
 from .agent_type_check import EXIT_REFUSED
-from .backends import StageDone
+from .backends import CallBudgetSpent, StageDone
 from .cli import guidance_text
 from .failure_file import FAILURE_FILE
 from .job import FailureDomain, HarnessFailure, HarnessJob, SourceKind, provider_profile_source
@@ -35,6 +35,7 @@ from .reading_entry import (
 )
 from .reading_result import (
     CONTRACT_FILE,
+    call_limit,
     classify,
     document,
     model_error,
@@ -59,9 +60,12 @@ _DEFAULT_SOFT_LIMIT_SECONDS = 1800.0
 # first number: readings so far took 13 to 24 calls, and a real repository will need more.
 CALL_LIMIT_ENV = "ALK_READING_MAX_MODEL_CALLS"
 DEFAULT_CALL_LIMIT = 60
-# A reader's own calls in a reading. Readers measured so far used 4 to 8; one that wanders is
-# stopped and reports what it has, and the reading keeps calls to save. A build's keeps its own.
+# A reader's own turns in a reading. Readers measured so far used 4 to 8 calls; one that wanders
+# is stopped and reports what it has, and the reading keeps calls to save. A build's keeps its own.
 READER_CALL_LIMIT = 12
+# Readers running at once in a reading. Where the budget can only be counted as calls arrive, one
+# call per loop running may land past it when the reading is stopped, so this bounds the overshoot.
+READERS_AT_ONCE = 4
 # The hard limit outlasts the soft one by the longest stop (the interrupt, the wait after it and
 # the close: 90 s) and room for the saved contract's document after it, whose framework scan can
 # take well over a minute on a crafted repository, so a reading that stops itself is never cut
@@ -80,7 +84,7 @@ def _soft_limit() -> float:
     return limit_seconds(_LIMIT_ENV, _DEFAULT_SOFT_LIMIT_SECONDS)
 
 
-def call_limit() -> int:
+def call_limit_setting() -> int:
     """The calls ``ALK_READING_MAX_MODEL_CALLS`` names when a positive whole number, else 60.
 
     Anything else falls back to the default rather than to no limit, so a mistyped setting never
@@ -137,13 +141,24 @@ class _ReadingStage(Stage):
         self.done: list[StageDone] = []
         self.in_flight = False
         self.opened = False
+        # Set when a backend that counts calls as they arrive says the budget is reached.
+        self.budget_reached = asyncio.Event()
+        self._calls_reported = 0
 
     async def __aenter__(self) -> "_ReadingStage":
         await super().__aenter__()
         self.opened = True
         return self
 
+    def calls_made(self) -> int:
+        """Model calls the reading made, as far as the backend has reported them."""
+        return max(self._calls_reported, sum(int(done.calls or 0) for done in self.done))
+
     def _events(self, received: Any, turn: Any) -> list[Any]:
+        if isinstance(received, CallBudgetSpent):
+            self._calls_reported = max(self._calls_reported, received.calls)
+            self.budget_reached.set()
+            return []
         if not isinstance(received, StageDone):
             return super()._events(received, turn)
         # Each backend reports a turn's own figures (the Claude backend takes the difference of
@@ -199,11 +214,11 @@ async def _stop(
     await asyncio.wait({interrupting}, timeout=bound)
     if not interrupting.done():
         interrupting.cancel()
-        logger.warning("the stop at the time limit was not delivered within %g s", bound)
+        logger.warning("the reading's stop was not delivered within %g s", bound)
     elif interrupting.cancelled() or interrupting.exception() is not None:
-        # A stop that can't be delivered is still a timeout, not a crash.
+        # A stop that can't be delivered still ends the reading as stopped, not as a crash.
         logger.warning(
-            "the stop at the time limit was not delivered",
+            "the reading's stop was not delivered",
             exc_info=None if interrupting.cancelled() else interrupting.exception(),
         )
     await asyncio.wait({task}, timeout=wait)
@@ -282,7 +297,8 @@ async def _reading(
     # contract saved here is one the build's gate would have kept.
     opened, _ = open_stage(agent_source, out=output, **reading_settings(job))
     # One budget for the whole reading, its readers' calls and the reminder's included.
-    opened.spec.call_budget = call_limit()
+    opened.spec.call_budget = call_limit_setting()
+    opened.spec.workers_at_once = READERS_AT_ONCE
     reader = opened.spec.workers.get(READER)
     if reader is not None:
         reader.max_turns = READER_CALL_LIMIT
@@ -296,11 +312,20 @@ async def _reading(
     # what the contract records.
     message = opening(agent_source) + guidance_text(job.authoring_guidance())
     task = asyncio.create_task(_converse(stage, message, output, stopping))
-    finished, _ = await asyncio.wait(
-        {task}, timeout=max(0.0, started + soft_limit - time.monotonic())
-    )
+    reached = asyncio.ensure_future(stage.budget_reached.wait())
+    try:
+        await asyncio.wait(
+            {task, reached},
+            timeout=max(0.0, started + soft_limit - time.monotonic()),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
+        reached.cancel()
 
-    if not finished:
+    if not task.done():
+        # The time limit, or the call budget on a backend that can only count calls as they
+        # arrive: stopped the same way, and what was saved is kept the same way.
+        out_of_calls = stage.budget_reached.is_set()
         await _stop(stage, task, stopping, wait)
         # A request cut off by the stop may be billed without being in the last total.
         saved = saved_file(output)
@@ -308,6 +333,8 @@ async def _reading(
             return EXIT_REFUSED, False
         if saved == CONTRACT_FILE:
             return document(job, source, output), False
+        if out_of_calls:
+            return call_limit(output, stage), False
         return _timed_out(output, soft_limit), False
 
     error = task.exception()

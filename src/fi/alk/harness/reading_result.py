@@ -86,6 +86,23 @@ def _refusing(status: Any) -> bool:
     )
 
 
+def call_limit(output: Path, stage: _ReadingStage) -> int:
+    """The reading spent its budget of model calls with nothing saved."""
+    write_reading_failure(
+        reading_failure(
+            FailureDomain.INFRASTRUCTURE,
+            AGENT_READING_CALL_LIMIT,
+            "We stopped reading this agent because it was taking too many steps. "
+            "Nothing was saved.",
+            # Never retried: the inputs are the same, so a retry would spend the budget again.
+            retryable=False,
+            details={"calls": stage.calls_made(), "limit": int(stage.spec.call_budget)},
+        ),
+        output,
+    )
+    return EXIT_REFUSED
+
+
 def model_error(output: Path, message: str, status: Any = None, *, retryable: bool) -> int:
     write_reading_failure(
         reading_failure(
@@ -125,22 +142,7 @@ def classify(
             retryable=False,
         )
     if any(done.outcome == CALL_BUDGET_SPENT for done in stage.done):
-        # Never retried: the inputs are the same, so a retry would spend the whole budget again.
-        write_reading_failure(
-            reading_failure(
-                FailureDomain.INFRASTRUCTURE,
-                AGENT_READING_CALL_LIMIT,
-                "We stopped reading this agent because it was taking too many steps. "
-                "Nothing was saved.",
-                retryable=False,
-                details={
-                    "calls": sum(int(done.calls or 0) for done in stage.done),
-                    "limit": int(stage.spec.call_budget),
-                },
-            ),
-            output,
-        )
-        return EXIT_REFUSED
+        return call_limit(output, stage)
     # A last turn out of turns spent a whole budget, so a retry would likely spend another and
     # stop the same way, whatever failed before it.
     ran_out = bool(stage.done) and out_of_turns(stage.done[-1])

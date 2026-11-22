@@ -261,8 +261,14 @@ class SessionSpec:
     conversation: ConversationSession | None = None
     # Model calls the whole session may make, its workers' included, across every message sent
     # to it. Zero sets none, leaving the per-loop and per-worker turn limits as the only bounds.
-    # A backend that cannot hold it logs a warning when the session is created.
+    # The Gemini backend checks it before each call and sends nothing past it. The Claude backend
+    # can only count calls as they arrive: it says when the count reaches the budget
+    # (`CallBudgetSpent`) and refuses every tool after, and its caller stops the session, so the
+    # calls already on their way, at most one per loop then running, land past the number.
     call_budget: int = 0
+    # Workers this session may run at once; zero takes MOST_WORKERS_AT_ONCE. The Claude backend
+    # holds it; the Gemini backend has no such bound.
+    workers_at_once: int = 0
 
     def granted(self) -> list[str]:
         """Every tool name this session may call, qualified the way the model calls it."""
@@ -336,6 +342,18 @@ class ToolReturned:
 
 # The outcome of an exchange stopped because the session's call budget was spent.
 CALL_BUDGET_SPENT = "call_budget_spent"
+
+
+@dataclass
+class CallBudgetSpent:
+    """The session's model calls have reached its budget; ``calls`` is the count so far.
+
+    From a backend that cannot stop a call before it is made. Sent when the count reaches the
+    budget and again for each call after it, so the caller knows to stop the session and what
+    the stop cost.
+    """
+
+    calls: int
 
 
 @dataclass

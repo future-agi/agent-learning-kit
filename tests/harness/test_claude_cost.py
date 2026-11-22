@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import threading
+import time
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -787,3 +788,196 @@ def test_ci_reruns_these_tests_on_the_locked_sdk():
     test = run.index("pytest")
     assert read < install < test
     assert "tests/harness/test_claude_cost.py" in run[test:]
+
+
+# -- the reading's call budget, on the real CLI ------------------------------------------------
+
+
+class _DelegatingStub(_MessagesStub):
+    """A model that never finishes: the reading sends a reader out every time, and the reader
+    searches every time. Each request is logged by who made it."""
+
+    served_by: list[str] = []
+    # Readers asked for in each of the reading's replies, and how long a reader's reply takes, so
+    # readers sent out together are seen running together.
+    fan_out = 1
+    hold = 0.0
+    running = 0
+    most_running = 0
+    lock = threading.Lock()
+
+    def do_POST(self) -> None:
+        raw = self.rfile.read(int(self.headers.get("content-length") or 0))
+        try:
+            request = json.loads(raw)
+        except ValueError:
+            request = {}
+        if "count_tokens" in self.path:
+            self._json({"input_tokens": 10})
+            return
+        who = "reader" if "You trace an agent's tools" in json.dumps(request.get("system")) else "main"
+        offered = {tool.get("name") for tool in request.get("tools") or []}
+        if not request.get("stream") or not offered:
+            _DelegatingStub.served_by.append("other")
+            self._json(
+                {
+                    "id": f"msg_other_{len(_DelegatingStub.served_by)}",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": request.get("model") or M,
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 1},
+                }
+            )
+            return
+        with _DelegatingStub.lock:
+            _DelegatingStub.served_by.append(who)
+            n = len(_DelegatingStub.served_by)
+            if who == "reader":
+                _DelegatingStub.running += 1
+                _DelegatingStub.most_running = max(
+                    _DelegatingStub.most_running, _DelegatingStub.running
+                )
+        try:
+            self._reply(request, who, offered, n)
+        finally:
+            if who == "reader":
+                with _DelegatingStub.lock:
+                    _DelegatingStub.running -= 1
+
+    def _reply(self, request: dict, who: str, offered: set, n: int) -> None:
+        if who == "reader":
+            time.sleep(_DelegatingStub.hold)
+            calls = [("Glob", {"pattern": "*.py"})]
+        else:
+            name = "Agent" if "Agent" in offered else "Task"
+            calls = [
+                (
+                    name,
+                    {
+                        "subagent_type": "agent_reader",
+                        "description": f"Trace tool {index}",
+                        "prompt": f"Trace tool {index}.",
+                    },
+                )
+                for index in range(_DelegatingStub.fan_out)
+            ]
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.end_headers()
+        usage = {"input_tokens": 1000, "output_tokens": 1, "cache_read_input_tokens": 0}
+        self._event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": f"msg_{n}",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": request.get("model") or M,
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": usage,
+                },
+            },
+        )
+        for index, (name, arguments) in enumerate(calls):
+            self._event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": f"toolu_{n}_{index}",
+                        "name": name,
+                        "input": {},
+                    },
+                },
+            )
+            self._event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "input_json_delta", "partial_json": json.dumps(arguments)},
+                },
+            )
+            self._event("content_block_stop", {"type": "content_block_stop", "index": index})
+        self._event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                "usage": {"output_tokens": 10},
+            },
+        )
+        self._event("message_stop", {"type": "message_stop"})
+
+
+@pytest.mark.parametrize(("fan_out", "hold"), [(1, 0.0), (6, 0.3)], ids=["one-reader", "six-at-once"])
+def test_the_cli_reading_stops_at_its_call_budget_counting_the_readers(
+    cli, tmp_path, monkeypatch, fan_out, hold
+):
+    from fi.alk.harness import agent_reading, session as harness_session
+    from fi.alk.harness.reading_entry import run_reading_mode
+
+    _DelegatingStub.served_by = []
+    _DelegatingStub.fan_out, _DelegatingStub.hold = fan_out, hold
+    _DelegatingStub.running = _DelegatingStub.most_running = 0
+    stub = ThreadingHTTPServer(("127.0.0.1", 0), _DelegatingStub)
+    threading.Thread(target=stub.serve_forever, daemon=True).start()
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", f"http://127.0.0.1:{stub.server_address[1]}")
+    monkeypatch.setenv(agent_reading.CALL_LIMIT_ENV, "6")
+    monkeypatch.setenv("ALK_READING_MAX_DURATION_SECONDS", "90")
+    monkeypatch.setattr(harness_session, "resolve", lambda *a, **k: ClaudeBackend())
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    job = tmp_path / "job.json"
+    job.write_text(
+        json.dumps(
+            {
+                "job_id": "job",
+                "run_id": "run",
+                "execution": "hosted",
+                "source": {
+                    "kind": "github",
+                    "visibility": "public",
+                    "repository": "acme/agent",
+                    "commit_sha": "a" * 40,
+                },
+                "runtime": {"isolation": "dedicated_vm"},
+                "agent": {"connector": "auto"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "reading"
+    try:
+        code = run_reading_mode(
+            agent_reading._read_agent(interrupt_wait=10.0),
+            job_path=job,
+            source=source,
+            output=output,
+        )
+    finally:
+        stub.shutdown()
+        stub.server_close()
+
+    served = [who for who in _DelegatingStub.served_by if who != "other"]
+    failure = json.loads((output / "failure.json").read_text(encoding="utf-8"))
+    print("served:", _DelegatingStub.served_by, "most at once:", _DelegatingStub.most_running,
+          "failure:", failure)
+    assert code == 78
+    assert failure["code"] == "agent_reading_call_limit"
+    # The readers' calls reach the stream, so the budget counts them with the main loop's.
+    assert "reader" in served and "main" in served
+    assert failure["details"]["limit"] == 6
+    assert 6 <= failure["details"]["calls"] <= len(served)
+    # Stopped at the budget: at most one call more for each reader running at once.
+    assert _DelegatingStub.most_running <= agent_reading.READERS_AT_ONCE
+    assert len(served) <= 6 + agent_reading.READERS_AT_ONCE

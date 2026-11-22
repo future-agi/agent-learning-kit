@@ -6,7 +6,10 @@ from types import SimpleNamespace
 from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolResultBlock, ToolUseBlock
 
 from fi.alk.harness.backends.base import (
+    CALL_BUDGET_SPENT,
+    MOST_WORKERS_AT_ONCE,
     Call,
+    CallBudgetSpent,
     ConversationSession,
     ModelReply,
     SessionSpec,
@@ -15,7 +18,7 @@ from fi.alk.harness.backends.base import (
     ToolSpec,
     WorkerSpec,
 )
-from fi.alk.harness.backends.claude import ClaudeBackend, ClaudeSession, _definition
+from fi.alk.harness.backends.claude import ClaudeBackend, ClaudeSession, _CallCount, _definition
 
 
 def _tool(name: str) -> ToolSpec:
@@ -281,3 +284,139 @@ def test_a_session_given_no_tools_is_offered_none_of_the_cli_s_own():
     assert bare.tools == []
     reading = ClaudeBackend()._options(SessionSpec(system_prompt="Read.", builtins=("Read",)))
     assert reading.tools != []
+
+
+# -- the call budget -----------------------------------------------------------------------------
+
+
+def _said(message_id, *, by=None, text="reading"):
+    return AssistantMessage(
+        content=[TextBlock(text=text)],
+        model="gemini-3.7-flash",
+        parent_tool_use_id=by,
+        message_id=message_id,
+    )
+
+
+def _finished():
+    return ResultMessage(
+        subtype="success",
+        duration_ms=1,
+        duration_api_ms=1,
+        is_error=False,
+        num_turns=2,
+        session_id="session",
+    )
+
+
+def _replies(session, received):
+    class Client:
+        async def receive_response(self):
+            for item in received:
+                yield item
+
+    session._client = Client()
+
+    async def collect():
+        return [event async for event in session.replies()]
+
+    return asyncio.run(collect())
+
+
+def test_a_call_is_one_message_id_however_many_messages_carry_it() -> None:
+    calls = _CallCount(0)
+
+    # The CLI sends one message per content block, all under the call's id.
+    assert calls.see(_said("msg_1")) is True
+    assert calls.see(_said("msg_1", text="and a tool")) is False
+    assert calls.see(_said("msg_2", by="toolu_reader")) is True
+    # A message with no id counts on its own: more, never fewer.
+    assert calls.see(_said(None)) is True
+    assert calls.see(_said(None)) is True
+
+    assert calls.total == 4
+    assert calls.spent is False
+
+
+def test_the_budget_is_reached_on_the_counted_call_and_said_for_every_call_after() -> None:
+    session = ClaudeSession(None, calls=_CallCount(2))
+
+    events = _replies(
+        session,
+        [
+            _said("msg_1"),
+            _said("msg_1", text="split"),
+            _said("msg_2", by="toolu_reader"),
+            _said("msg_2", by="toolu_reader", text="split"),
+            # Already on its way when the budget was reached.
+            _said("msg_3"),
+            _finished(),
+        ],
+    )
+
+    reached = [event.calls for event in events if isinstance(event, CallBudgetSpent)]
+    assert reached == [2, 3]
+    done = events[-1]
+    assert isinstance(done, StageDone)
+    assert (done.outcome, done.is_error, done.calls) == (CALL_BUDGET_SPENT, True, 3)
+
+
+def test_without_a_budget_calls_are_counted_and_nothing_is_said() -> None:
+    session = ClaudeSession(None)
+
+    events = _replies(
+        session, [_said("msg_1"), _said("msg_2", by="toolu_reader"), _finished()]
+    )
+
+    assert not any(isinstance(event, CallBudgetSpent) for event in events)
+    assert (events[-1].outcome, events[-1].calls) == ("success", 2)
+
+
+def test_each_turn_reports_its_own_calls_against_a_budget_held_across_turns() -> None:
+    session = ClaudeSession(None, calls=_CallCount(3))
+
+    first = _replies(session, [_said("msg_1"), _said("msg_2"), _finished()])
+    second = _replies(session, [_said("msg_3"), _finished()])
+
+    assert (first[-1].outcome, first[-1].calls) == ("success", 2)
+    assert (second[-1].outcome, second[-1].calls) == (CALL_BUDGET_SPENT, 1)
+    assert [e.calls for e in second if isinstance(e, CallBudgetSpent)] == [3]
+
+
+def _reader_spec(**fields) -> SessionSpec:
+    return SessionSpec(
+        system_prompt="parent",
+        builtins=("Read",),
+        workers={"reader": WorkerSpec(description="d", instructions="i", builtins=("Read",))},
+        **fields,
+    )
+
+
+def test_every_tool_is_refused_once_the_budget_is_spent() -> None:
+    session = ClaudeBackend().create(_reader_spec(call_budget=1))
+    guard = session._options.hooks["PreToolUse"][-1].hooks[0]
+
+    def decision(name: str) -> str | None:
+        out = asyncio.run(guard({"tool_name": name, "tool_input": {}}, None, None))
+        return (out.get("hookSpecificOutput") or {}).get("permissionDecision")
+
+    assert decision("mcp__contract__submit_contract") is None
+    session._calls.see(_said("msg_1"))
+    assert decision("mcp__contract__submit_contract") == "deny"
+    assert decision("Read") == "deny"
+    # The session's own gate is still first.
+    assert len(session._options.hooks["PreToolUse"]) == 2
+
+
+def test_no_budget_adds_no_guard() -> None:
+    session = ClaudeBackend().create(_reader_spec())
+
+    assert len(session._options.hooks["PreToolUse"]) == 1
+
+
+def test_workers_at_once_is_the_sessions_own_when_set() -> None:
+    own = ClaudeBackend()._options(_reader_spec(workers_at_once=4))
+    shared = ClaudeBackend()._options(_reader_spec())
+
+    assert own.env["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] == "4"
+    assert shared.env["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] == str(MOST_WORKERS_AT_ONCE)

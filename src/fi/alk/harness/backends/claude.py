@@ -36,10 +36,12 @@ from fi import agentcc
 
 from .base import (
     ASK_TOOL,
+    CALL_BUDGET_SPENT,
     DELEGATE_TOOL,
     KNOWN_BUILTINS,
     MOST_WORKERS_AT_ONCE,
     Call,
+    CallBudgetSpent,
     ModelReply,
     Say,
     SessionOpened,
@@ -171,6 +173,61 @@ def _flattened(content: Any) -> str:
     return content if isinstance(content, str) else str(content)
 
 
+class _CallCount:
+    """Model calls a session has made, its sub-agents' included, held to its budget.
+
+    The CLI makes the calls itself and offers no hook before one, so a call is counted when its
+    reply reaches the stream: one per provider message id, since the CLI splits one reply into a
+    message per content block under the same id. A message without an id counts on its own,
+    which can only count more, never fewer.
+    """
+
+    def __init__(self, budget: int) -> None:
+        self.budget = budget
+        self.total = 0
+        self._seen: set[str] = set()
+
+    @property
+    def spent(self) -> bool:
+        return self.budget > 0 and self.total >= self.budget
+
+    def see(self, received: AssistantMessage) -> bool:
+        """Count ``received`` if it is a new call; True when it was one."""
+        message_id = getattr(received, "message_id", None)
+        if message_id:
+            if message_id in self._seen:
+                return False
+            self._seen.add(message_id)
+        self.total += 1
+        return True
+
+
+def _refuse_after_budget(options: ClaudeAgentOptions, calls: _CallCount) -> None:
+    """Refuse every tool once the budget is spent: a guard against a late save, not the stop.
+
+    A refused call is answered with another call, so the caller still has to stop the session.
+    """
+    from claude_agent_sdk.types import HookMatcher
+
+    async def refuse(payload: dict[str, Any], _tool_use_id: Any, _context: Any) -> dict[str, Any]:
+        if not calls.spent:
+            return {}
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"This session's budget of {calls.budget} model calls is spent, so no tool "
+                    "runs now."
+                ),
+            }
+        }
+
+    hooks = dict(options.hooks or {})
+    hooks["PreToolUse"] = [*hooks.get("PreToolUse", []), HookMatcher(hooks=[refuse])]
+    options.hooks = hooks
+
+
 class ClaudeSession:
     """One Claude Code session, translated to the neutral reply vocabulary."""
 
@@ -181,8 +238,10 @@ class ClaudeSession:
         reported_model: str | None = None,
         streaming: bool = False,
         interrupt_on_terminal_save: bool = True,
+        calls: _CallCount | None = None,
     ) -> None:
         self._options = options
+        self._calls = calls or _CallCount(0)
         self._reported_model = reported_model
         self._streaming = streaming
         self._interrupt_on_terminal_save = interrupt_on_terminal_save
@@ -228,15 +287,36 @@ class ClaudeSession:
         if self._client is None:
             raise RuntimeError("session is not open")
         terminal = False
+        calls_before = self._calls.total
         async for received in self._client.receive_response():
             if terminal and not isinstance(received, ResultMessage):
                 continue
+            counted = isinstance(received, AssistantMessage) and self._calls.see(received)
             for reply in self._translate(received):
+                if isinstance(reply, StageDone):
+                    reply = self._with_calls(reply, self._calls.total - calls_before)
                 yield reply
+            if counted and self._calls.spent:
+                yield CallBudgetSpent(calls=self._calls.total)
             if self._terminal_save_succeeded:
                 self._terminal_save_succeeded = False
                 terminal = True
                 await self._client.interrupt()
+
+    def _with_calls(self, done: StageDone, calls: int) -> StageDone:
+        if not self._calls.spent:
+            return dataclasses.replace(done, calls=calls)
+        # However the CLI ended the turn, it ended because the budget ran out.
+        return dataclasses.replace(
+            done,
+            calls=calls,
+            outcome=CALL_BUDGET_SPENT,
+            is_error=True,
+            errors=[
+                *done.errors,
+                f"the session spent its whole budget of {self._calls.budget} model calls",
+            ],
+        )
 
     def _translate(self, received: Any) -> list[Any]:
         if isinstance(received, StreamEvent):
@@ -445,22 +525,19 @@ class ClaudeBackend:
     def create(self, spec: SessionSpec) -> ClaudeSession:
         from ..config import gateway_wire_model
 
-        if spec.call_budget > 0:
-            # The CLI runs its sub-agents itself and offers no hook before each model call, so
-            # only its own turn limits bound the session.
-            logger.warning(
-                "the Claude backend does not hold a call budget; %d calls asked for, "
-                "bounded by the turn limits only",
-                spec.call_budget,
-            )
         # An alias on the wire is not what was billed, so report the model the run chose.
         reported = spec.model if gateway_wire_model(spec.model) != spec.model else None
         context = spec.conversation
+        options = self._options(spec)
+        calls = _CallCount(spec.call_budget)
+        if spec.call_budget > 0:
+            _refuse_after_budget(options, calls)
         return ClaudeSession(
-            self._options(spec),
+            options,
             reported_model=reported,
             streaming=bool(context and context.streaming),
             interrupt_on_terminal_save=context is None,
+            calls=calls,
         )
 
     def _options(self, spec: SessionSpec) -> ClaudeAgentOptions:
@@ -518,7 +595,9 @@ class ClaudeBackend:
             if context.config_dir:
                 environment["CLAUDE_CONFIG_DIR"] = context.config_dir
         if spec.workers:
-            environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(MOST_WORKERS_AT_ONCE)
+            environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(
+                spec.workers_at_once or MOST_WORKERS_AT_ONCE
+            )
             # A backgrounded worker lets the stage end before the worker reports.
             environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
             allowed.extend(DELEGATION_TOOLS)

@@ -86,6 +86,17 @@ submission stands: a browser answer is refused to
 to send back, which only tells apart calls in one model message: those run before the model reads
 any result. The rule and its state are `SecondLook` in `agent_type_check.py`. A browser answer to a chat or voice look is refused at once, since that look said browser stops the build. When calls in one message run one after another, or together once the first scan is done, a later call is taken as the answer before the model has read the look. Once an answer with the value has come back, a later browser answer without it gets a look again, so answers that keep switching cost turns, up to the reading's turn limit (70, or 140 for a generic job read unattended), never a refusal without a look.
 
+**A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
+it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the
+reminder's. The platform sets it in `ALK_READING_MAX_MODEL_CALLS`; a missing, unreadable or
+non-positive value means 60, never no limit. Its reader gets 12 turns of its own, and at most 4
+readers run at once. The Gemini backend checks the budget before each call and sends nothing past
+it. The Claude backend can only count calls as they arrive, one per provider message id, so the
+reading stops at the budget, up to 4 calls more (one for each reader still running), the same way
+it stops at its time limit. Either way a contract or failure already saved stands; otherwise the
+reading ends as `agent_reading_call_limit` and is not retried. A request the provider client
+retries on its own is not counted; the time limit holds that.
+
 **How it is changed later** (`amend.py`). The contract is not frozen, but every change is
 recorded with a reason in `amendments[]`, so months later you can still tell what came from the
 agent and what came from us:
