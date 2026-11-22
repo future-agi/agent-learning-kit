@@ -5070,6 +5070,9 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         | {"company", "pan"}
         | set(_CALLER_PHONE_KEYS)
         | {"social_engineering_resisted", "true", "or"}
+        # The reading skill's tool guidance: a tool entry's modes and an execution value, two
+        # langgraph.json keys, and the Python it describes (a `def`, the `agents` package).
+        | {"import", "construct", "unreachable", "auto", "http", "auth", "def", "agents"}
     )
 
     for stage, tools in surface.items():
@@ -8976,7 +8979,8 @@ def test_the_duplicate_claim_remark_does_not_depend_on_what_the_loop_variable_is
 
     assert _tools_selected("return None\n") == set()
     assert _tools_selected('if call.tool == "book_ride":\n    return None\n') == set()
-    assert _tools_selected("def (:\n") == set()
+    # A check that does not parse is not one that selects no tool: check_problems names it.
+    assert _tools_selected("def (:\n") is None
 
 
 def test_an_overlay_that_names_no_attack_is_cleared_rather_than_claimed():

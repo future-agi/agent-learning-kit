@@ -2329,14 +2329,15 @@ def _control(name: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
 
 
 # Only the control service is the agent. The crashing process here is `tools-api`: as the control
-# service its failure is the agent's named cause; as a helper beside the agent it names none.
+# service its failure is the agent's named cause. Beside the agent, a helper that crashes names
+# none, and one that stalls names the dependency's cause, never its own name.
 _EXITED = [
     pytest.param("tools-api", FailureCause.AGENT_EXITED_BEFORE_READY, id="the agent"),
     pytest.param("agent", None, id="a helper service"),
 ]
 _STALLED = [
     pytest.param("tools-api", FailureCause.AGENT_NOT_READY_IN_TIME, id="the agent"),
-    pytest.param("agent", None, id="a helper service"),
+    pytest.param("agent", FailureCause.DEPENDENCY_NOT_READY_IN_TIME, id="a helper service"),
 ]
 
 
@@ -4630,6 +4631,8 @@ def test_freeze_baseline_readiness_timeout_is_a_typed_depends_on_timeout(
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
     assert excinfo.value.code == "depends_on_timeout"
+    # The store is not the agent: the failure names the dependency's cause, not the agent's.
+    assert excinfo.value.cause is FailureCause.DEPENDENCY_NOT_READY_IN_TIME
 
 
 def test_freeze_baseline_template_database_seeds_seals_and_measures_row_counts(

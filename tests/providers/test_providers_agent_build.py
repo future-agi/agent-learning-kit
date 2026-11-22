@@ -693,7 +693,7 @@ def test_a_token_of_many_starts_cleans_in_linear_time() -> None:
     assert _timed('"p " + "a://x/" * 400_000') < 2.0
 
 
-def test_five_mib_of_url_dense_prose_cleans_in_two_seconds() -> None:
+def test_five_mib_of_url_dense_prose_cleans_in_a_bounded_time_and_within_a_multiple_of_the_base() -> None:
     """B9: varied URLs, so urlsplit's own cache doesn't flatter it (V4)."""
     pick = random.Random(9)
     sentences = []
@@ -737,4 +737,7 @@ def test_five_mib_of_url_dense_prose_cleans_in_two_seconds() -> None:
     # Booleans, so a failure never asks pytest to explain a 5 MiB string.
     kept_a_query = "?key=" in out
     assert with_steps <= 4.5 * base, (with_steps, base)
+    # The ratio alone passes if both get slow together; bound the base cleaner too (three times
+    # the old 2 s budget, for a slower runner).
+    assert base < 6.0, base
     assert not kept_a_query
