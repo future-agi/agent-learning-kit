@@ -100,10 +100,13 @@ reading ends as `agent_reading_call_limit` and is not retried.
 
 What is counted differs by backend. The Gemini count is of calls made. The Claude count is of
 replies seen in the session's stream, so a call the CLI makes without putting a reply there is not
-counted: its summary when it compacts a long conversation, and its own retry after a failed
-request. The CLI offers no hook before a call and reports neither of these in the stream, so the
-kit cannot see them. Each is bounded by the counted calls around it, and the time limit holds the
-rest. A request the provider client retries on its own is not counted on either backend.
+counted: the one call per session it makes for a title of its own (so the gateway shows the kit's
+count plus one), its summary when it compacts a long conversation, and its own retry after a failed
+request. The CLI offers no hook before a call and reports none of these in the stream, so the kit
+cannot see them. Each is bounded by the counted calls around it, and the time limit holds the rest.
+A request the provider client retries on its own is not counted on either backend. The spend
+record keeps the limit in force (`call_limit`) beside the calls counted, for every stage that had
+one.
 
 **How it is changed later** (`amend.py`). The contract is not frozen, but every change is
 recorded with a reason in `amendments[]`, so months later you can still tell what came from the

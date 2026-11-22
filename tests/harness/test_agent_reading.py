@@ -2783,6 +2783,8 @@ def test_a_passing_reading_records_the_calls_it_made(tmp_path, model):
 
     (stage,) = _cost_in(output)["stages"]
     assert (stage["calls"], stage["turns"]) == (9, 3)
+    # The limit in force is kept beside the calls, since the platform keeps no failure details.
+    assert stage["call_limit"] == 60
 
 
 def test_a_spent_call_budget_has_its_own_code_and_gets_no_reminder(tmp_path, model, monkeypatch):
@@ -2844,7 +2846,7 @@ def test_one_gemini_budget_holds_the_main_loop_and_its_readers(
     assert (failure["code"], failure["retryable"]) == ("agent_reading_call_limit", False)
     assert failure["message"] == _CALL_LIMIT_SENTENCE
     assert failure["details"] == {"calls": 5, "limit": 5}
-    assert [stage["calls"] for stage in _cost_in(output)["stages"]] == [5]
+    assert [(stage["calls"], stage["call_limit"]) for stage in _cost_in(output)["stages"]] == [(5, 5)]
     # No request went out past the budget, so every call made is in the total.
     _assert_cost(output, _gemini_priced(5), True)
 

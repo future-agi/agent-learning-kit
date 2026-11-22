@@ -807,6 +807,9 @@ class _DelegatingStub(_MessagesStub):
     save_at = 0
     running = 0
     most_running = 0
+    # For each streamed request: who made it, how many replies of its own came before it, and
+    # how many readers' requests were already open when it arrived.
+    seen: list[tuple[str, int, int]] = []
     lock = threading.Lock()
 
     def do_POST(self) -> None:
@@ -839,6 +842,9 @@ class _DelegatingStub(_MessagesStub):
             _DelegatingStub.served_by.append(who)
             n = len(_DelegatingStub.served_by)
             call = sum(1 for each in _DelegatingStub.served_by if each != "other")
+            messages = request.get("messages") or []
+            earlier = sum(1 for message in messages if message.get("role") == "assistant")
+            _DelegatingStub.seen.append((who, earlier, _DelegatingStub.running))
             if who == "reader":
                 _DelegatingStub.running += 1
                 _DelegatingStub.most_running = max(
@@ -932,6 +938,7 @@ def _read_against_the_stub(tmp_path, monkeypatch, *, budget, fan_out=1, hold=0.0
     from fi.alk.harness.reading_entry import run_reading_mode
 
     _DelegatingStub.served_by = []
+    _DelegatingStub.seen = []
     _DelegatingStub.fan_out, _DelegatingStub.hold = fan_out, hold
     _DelegatingStub.save_at = save_at
     _DelegatingStub.running = _DelegatingStub.most_running = 0
@@ -989,19 +996,29 @@ def test_the_cli_reading_stops_at_its_call_budget_counting_the_readers(
     )
 
     served = [who for who in _DelegatingStub.served_by if who != "other"]
+    # Whatever was still running when the reading ended asks for nothing more.
+    time.sleep(1.5)
+    after = [who for who in _DelegatingStub.served_by if who != "other"]
     failure = json.loads((output / "failure.json").read_text(encoding="utf-8"))
-    print("served:", _DelegatingStub.served_by, "most at once:", _DelegatingStub.most_running,
-          "failure:", failure)
+    cost = json.loads((output / "cost.json").read_text(encoding="utf-8"))
+    print("served:", _DelegatingStub.served_by, "seen:", _DelegatingStub.seen,
+          "most at once:", _DelegatingStub.most_running, "failure:", failure)
     assert code == 78
     assert failure["code"] == "agent_reading_call_limit"
     # The readers' calls reach the stream, so the budget counts them with the main loop's.
     assert "reader" in served and "main" in served
     assert failure["details"]["limit"] == 6
-    # Stopped on the first call past the budget.
+    # Stopped on the first call past the budget, which a reader made in the middle of its run:
+    # it had replies of its own before that call.
+    who, earlier, _ = _DelegatingStub.seen[6]
+    assert (who, earlier >= 1) == ("reader", True)
     assert 7 <= failure["details"]["calls"] <= len(served)
-    # At most that call and one more for each reader running at once.
+    # At most that call and one more for each reader running at once, and none after the stop.
     assert _DelegatingStub.most_running <= agent_reading.READERS_AT_ONCE
     assert len(served) <= 6 + 1 + agent_reading.READERS_AT_ONCE
+    assert after == served
+    # The limit in force is kept beside the calls in the spend record.
+    assert [stage.get("call_limit") for stage in cost["stages"]] == [6]
 
 
 def test_the_cli_call_that_reaches_the_budget_may_still_save(cli, tmp_path, monkeypatch):
