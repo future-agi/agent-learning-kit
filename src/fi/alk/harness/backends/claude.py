@@ -29,6 +29,7 @@ from claude_agent_sdk import (
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
     create_sdk_mcp_server,
 )
 
@@ -179,7 +180,8 @@ class _CallCount:
     The CLI makes the calls itself and offers no hook before one, so a call is counted when its
     reply reaches the stream: one per provider message id, since the CLI splits one reply into a
     message per content block under the same id. A message without an id counts on its own,
-    which can only count more, never fewer.
+    which can only count more, never fewer. A sub-agent's closing reply never reaches the stream
+    and is counted from the delegate tool's result instead (``_closing_reply``).
 
     The call that reaches the budget is still inside it and finishes what it asked for, as on the
     Gemini backend, where the budget-th call is made and only the one after it is refused. A call
@@ -218,11 +220,51 @@ class _CallCount:
             )
         return new
 
+    def add(self, calls: int) -> None:
+        """Count calls made whose replies never reach the stream."""
+        self.total += calls
+
     def may_run(self, tool_use_id: str | None) -> bool:
         """Whether a tool may run: always before the budget is reached, and after it only when
         the call that asked for it was inside the budget. A tool whose call is not counted yet
         belongs to a call past the budget, since every call up to it has been counted."""
         return not self.spent or (tool_use_id is not None and tool_use_id in self._tools_inside)
+
+
+def _closing_reply(block: ToolResultBlock, details: Any) -> int:
+    """The model calls a sub-agent made for its closing reply, 1 or 0.
+
+    A sub-agent that ends by answering makes one last call for that answer, and the CLI hands the
+    answer back as the delegate tool's result instead of putting the call's reply in the stream.
+    So that call is read from the result: completed with a reply is 1; completed with none (it ran
+    out of turns, and its last call was in the stream) is 0; refused or failed is 0. When the
+    kit cannot tell, it counts: any other shape is 1, with a warning, so a change in the CLI can
+    make the count high but never quietly low.
+    """
+    if getattr(block, "is_error", False):
+        return 0
+    if isinstance(details, dict) and details.get("status") == "completed":
+        said = _said(details.get("content"))
+        if said is not None:
+            return 1 if said else 0
+    logger.warning(
+        "a sub-agent's result came back in a shape the kit does not know (%s); counted as one "
+        "model call",
+        sorted(details) if isinstance(details, dict) else type(details).__name__,
+    )
+    return 1
+
+
+def _said(content: Any) -> bool | None:
+    """Whether a sub-agent's result holds a reply; None when its shape is not one the kit knows."""
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list) and all(isinstance(part, dict) for part in content):
+        # Anything but empty text is something the sub-agent said.
+        return any(
+            part.get("type") != "text" or str(part.get("text") or "").strip() for part in content
+        )
+    return None
 
 
 def _refuse_after_budget(options: ClaudeAgentOptions, calls: _CallCount) -> None:
@@ -316,6 +358,10 @@ class ClaudeSession:
             if terminal and not isinstance(received, ResultMessage):
                 continue
             counted = isinstance(received, AssistantMessage) and self._calls.see(received)
+            closing = self._closing_replies(received)
+            if closing:
+                self._calls.add(closing)
+                counted = True
             for reply in self._translate(received):
                 if isinstance(reply, StageDone):
                     reply = self._with_calls(reply, self._calls.total - calls_before)
@@ -326,6 +372,22 @@ class ClaudeSession:
                 self._terminal_save_succeeded = False
                 terminal = True
                 await self._client.interrupt()
+
+    def _closing_replies(self, received: Any) -> int:
+        """Model calls made by sub-agents for their closing replies, read from the delegate tools'
+        results, since the CLI never puts those replies in the stream (see ``_closing_reply``)."""
+        if not isinstance(received, UserMessage) or not isinstance(received.content, list):
+            return 0
+        results = [block for block in received.content if isinstance(block, ToolResultBlock)]
+        delegated = [
+            block
+            for block in results
+            if self._tool_names.get(block.tool_use_id) in DELEGATION_TOOLS
+        ]
+        # The message's result details describe its one tool result; beside others they could
+        # belong to any of them.
+        details = getattr(received, "tool_use_result", None) if len(results) == 1 else None
+        return sum(_closing_reply(block, details) for block in delegated)
 
     def _with_calls(self, done: StageDone, calls: int) -> StageDone:
         if not self._calls.past:

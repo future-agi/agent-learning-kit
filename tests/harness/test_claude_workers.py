@@ -3,7 +3,16 @@
 import asyncio
 from types import SimpleNamespace
 
-from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolResultBlock, ToolUseBlock
+import logging
+
+from claude_agent_sdk import (
+    AssistantMessage,
+    ResultMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+)
 
 from fi.alk.harness.backends.base import (
     CALL_BUDGET_SPENT,
@@ -392,6 +401,99 @@ def test_each_turn_reports_its_own_calls_against_a_budget_held_across_turns() ->
     assert (first[-1].outcome, first[-1].calls) == ("success", 2)
     assert (second[-1].outcome, second[-1].calls) == (CALL_BUDGET_SPENT, 1)
     assert [e.calls for e in second if isinstance(e, CallBudgetSpent)] == [3]
+
+
+def _sent_out(message_id, tool_use_id, name="Agent"):
+    return AssistantMessage(
+        content=[ToolUseBlock(id=tool_use_id, name=name, input={"subagent_type": "reader"})],
+        model="gemini-3.7-flash",
+        parent_tool_use_id=None,
+        message_id=message_id,
+    )
+
+
+def _back(*tool_use_ids, details=None, is_error=False):
+    return UserMessage(
+        content=[
+            ToolResultBlock(tool_use_id=tool_use_id, content="x", is_error=is_error)
+            for tool_use_id in tool_use_ids
+        ],
+        tool_use_result=details,
+    )
+
+
+_ANSWERED = {"status": "completed", "content": [{"type": "text", "text": "Traced."}]}
+_OUT_OF_TURNS = {"status": "completed", "content": []}
+
+
+def test_a_readers_closing_reply_is_counted_from_its_result() -> None:
+    # The CLI never streams the reply a reader ends with; it hands it back as the result.
+    session = ClaudeSession(None, calls=_CallCount(0))
+
+    events = _replies(
+        session,
+        [_sent_out("msg_1", "toolu_1"), _said("msg_2", by="toolu_1"), _back("toolu_1", details=_ANSWERED),
+         _finished()],
+    )
+
+    assert events[-1].calls == 3
+
+
+def test_what_a_readers_result_says_about_its_closing_reply(caplog) -> None:
+    caplog.set_level(logging.WARNING, logger="fi.alk.harness.backends.claude")
+
+    def counted(*received):
+        session = ClaudeSession(None, calls=_CallCount(0))
+        events = _replies(session, [*received, _finished()])
+        return events[-1].calls
+
+    sent = _sent_out("msg_1", "toolu_1")
+    assert counted(sent, _back("toolu_1", details=_ANSWERED)) == 2
+    assert counted(sent, _back("toolu_1", details={"status": "completed", "content": "Traced."})) == 2
+    # Out of turns: its last call was a tool request, in the stream.
+    assert counted(sent, _back("toolu_1", details=_OUT_OF_TURNS)) == 1
+    blank = {"status": "completed", "content": [{"type": "text", "text": " "}]}
+    assert counted(sent, _back("toolu_1", details=blank)) == 1
+    # Refused by the gate, or failed: no reader call.
+    assert counted(sent, _back("toolu_1", details="Error: refused", is_error=True)) == 1
+    assert caplog.text == ""
+    # Not a delegate tool: nothing.
+    assert counted(_sent_out("msg_1", "toolu_1", name="Glob"), _back("toolu_1", details=_ANSWERED)) == 1
+    # Shapes the kit does not know: counted, and said.
+    assert counted(sent, _back("toolu_1", details=None)) == 2
+    assert counted(sent, _back("toolu_1", details={"status": "running"})) == 2
+    assert counted(sent, _back("toolu_1", details={"status": "completed", "content": 7})) == 2
+    assert caplog.text.count("a shape the kit does not know") == 3
+
+
+def test_two_results_in_one_message_are_each_counted_when_the_details_could_be_either(caplog) -> None:
+    session = ClaudeSession(None, calls=_CallCount(0))
+
+    events = _replies(
+        session,
+        [
+            _sent_out("msg_1", "toolu_1"),
+            _sent_out("msg_1", "toolu_2"),
+            _back("toolu_1", "toolu_2", details=_OUT_OF_TURNS),
+            _finished(),
+        ],
+    )
+
+    assert events[-1].calls == 3
+    assert "a shape the kit does not know" in caplog.text
+
+
+def test_a_closing_reply_past_the_budget_is_said_like_any_call_past_it() -> None:
+    session = ClaudeSession(None, calls=_CallCount(2))
+
+    events = _replies(
+        session,
+        [_sent_out("msg_1", "toolu_1"), _said("msg_2", by="toolu_1"), _back("toolu_1", details=_ANSWERED),
+         _finished()],
+    )
+
+    assert [event.calls for event in events if isinstance(event, CallBudgetSpent)] == [3]
+    assert (events[-1].outcome, events[-1].calls) == (CALL_BUDGET_SPENT, 3)
 
 
 def _reader_spec(**fields) -> SessionSpec:

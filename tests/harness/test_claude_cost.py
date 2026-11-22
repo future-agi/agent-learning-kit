@@ -805,6 +805,11 @@ class _DelegatingStub(_MessagesStub):
     # The model call (streamed requests, counted from 1) whose reply is the reading's save
     # instead of another reader; 0 for none.
     save_at = 0
+    # What the main loop does on each of its calls, by how many replies of its own came before
+    # ("agent", "glob" or "answer"; the last one repeats); empty for a reader every time.
+    main_plan: tuple[str, ...] = ()
+    # The reader answers in text once it has made this many calls; 0 for never.
+    reader_answers_after = 0
     running = 0
     most_running = 0
     # For each streamed request: who made it, how many replies of its own came before it, and
@@ -858,8 +863,19 @@ class _DelegatingStub(_MessagesStub):
                     _DelegatingStub.running -= 1
 
     def _reply(self, request: dict, who: str, offered: set, n: int, call: int) -> None:
+        earlier = sum(
+            1 for message in request.get("messages") or [] if message.get("role") == "assistant"
+        )
+        plan = _DelegatingStub.main_plan
+        step = plan[min(earlier, len(plan) - 1)] if plan and who == "main" else ""
+        answers = _DelegatingStub.reader_answers_after
+        if step == "answer" or (who == "reader" and answers and earlier >= answers):
+            self._answer(request, n, who)
+            return
         if who == "reader":
             time.sleep(_DelegatingStub.hold)
+            calls = [("Glob", {"pattern": "*.py"})]
+        elif step == "glob":
             calls = [("Glob", {"pattern": "*.py"})]
         elif call == _DelegatingStub.save_at:
             save = next(name for name in offered if name.endswith("submit_contract"))
@@ -930,8 +946,57 @@ class _DelegatingStub(_MessagesStub):
         )
         self._event("message_stop", {"type": "message_stop"})
 
+    def _answer(self, request: dict, n: int, who: str) -> None:
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.end_headers()
+        usage = {"input_tokens": 1000, "output_tokens": 1, "cache_read_input_tokens": 0}
+        message = {
+            "id": f"msg_{n}",
+            "type": "message",
+            "role": "assistant",
+            "model": request.get("model") or M,
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": usage,
+        }
+        self._event("message_start", {"type": "message_start", "message": message})
+        self._event(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        )
+        self._event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": f"The {who} is done."},
+            },
+        )
+        self._event("content_block_stop", {"type": "content_block_stop", "index": 0})
+        self._event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 4},
+            },
+        )
+        self._event("message_stop", {"type": "message_stop"})
 
-def _read_against_the_stub(tmp_path, monkeypatch, *, budget, fan_out=1, hold=0.0, save_at=0):
+
+def _read_against_the_stub(
+    tmp_path,
+    monkeypatch,
+    *,
+    budget,
+    fan_out=1,
+    hold=0.0,
+    save_at=0,
+    main_plan=(),
+    reader_answers_after=0,
+):
     """Run a hosted reading on the real CLI against ``_DelegatingStub``; its exit code and
     output folder."""
     from fi.alk.harness import agent_reading, session as harness_session
@@ -941,6 +1006,8 @@ def _read_against_the_stub(tmp_path, monkeypatch, *, budget, fan_out=1, hold=0.0
     _DelegatingStub.seen = []
     _DelegatingStub.fan_out, _DelegatingStub.hold = fan_out, hold
     _DelegatingStub.save_at = save_at
+    _DelegatingStub.main_plan = tuple(main_plan)
+    _DelegatingStub.reader_answers_after = reader_answers_after
     _DelegatingStub.running = _DelegatingStub.most_running = 0
     stub = ThreadingHTTPServer(("127.0.0.1", 0), _DelegatingStub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
@@ -1045,3 +1112,103 @@ def test_the_cli_call_that_reaches_the_budget_may_still_save(cli, tmp_path, monk
     assert code == 78
     assert failure["code"] == "agent_reading_call_limit"
     assert failure["details"] == {"calls": 2, "limit": 1}
+
+
+def _streamed() -> list[str]:
+    return [who for who in _DelegatingStub.served_by if who != "other"]
+
+
+def _counted(output) -> int:
+    cost = json.loads((output / "cost.json").read_text(encoding="utf-8"))
+    return sum(stage["calls"] for stage in cost["stages"])
+
+
+@pytest.fixture
+def closing(monkeypatch):
+    """What the backend made of each sub-agent result: (is_error, calls counted)."""
+    from fi.alk.harness.backends import claude as backend
+
+    seen = []
+    original = backend._closing_reply
+
+    def logged(block, details):
+        calls = original(block, details)
+        seen.append((bool(block.is_error), calls))
+        return calls
+
+    monkeypatch.setattr(backend, "_closing_reply", logged)
+    return seen
+
+
+def test_the_cli_counts_a_readers_closing_reply_that_never_reaches_the_stream(
+    cli, tmp_path, monkeypatch, closing
+):
+    # The reader searches twice and then answers; the CLI hands that answer back as the delegate
+    # tool's result and never streams its call (DevOps's rows 12 and 13, one short per reader).
+    code, output = _read_against_the_stub(
+        tmp_path, monkeypatch, budget=60, main_plan=("agent", "answer"), reader_answers_after=2
+    )
+
+    print("served:", _DelegatingStub.served_by, "closing:", closing)
+    assert _streamed().count("reader") == 3
+    assert closing == [(False, 1)]
+    assert _counted(output) == len(_streamed())
+
+
+def test_the_cli_counts_nothing_more_for_a_reader_that_ran_out_of_turns(
+    cli, tmp_path, monkeypatch, closing
+):
+    # The reader never answers: its 12 turns end on a call that was in the stream.
+    code, output = _read_against_the_stub(
+        tmp_path, monkeypatch, budget=60, main_plan=("agent", "answer")
+    )
+
+    print("served:", _DelegatingStub.served_by, "closing:", closing)
+    assert _streamed().count("reader") == 12
+    assert closing == [(False, 0)]
+    assert _counted(output) == len(_streamed())
+
+
+def test_the_cli_counts_nothing_for_a_delegate_call_the_gate_refused(
+    cli, tmp_path, monkeypatch, closing
+):
+    # The call past the budget asks for a reader; the gate refuses it, so no reader runs.
+    code, output = _read_against_the_stub(
+        tmp_path, monkeypatch, budget=1, main_plan=("glob", "agent", "answer")
+    )
+
+    failure = json.loads((output / "failure.json").read_text(encoding="utf-8"))
+    print("served:", _DelegatingStub.served_by, "closing:", closing, "failure:", failure)
+    assert "reader" not in _streamed()
+    assert closing == [(True, 0)]
+    assert failure["details"] == {"calls": 2, "limit": 1}
+
+
+def test_the_cli_counts_a_result_of_a_shape_it_does_not_know_and_says_so(
+    cli, tmp_path, monkeypatch, closing, caplog
+):
+    # A CLI that hands the sub-agent's result back some other way: the kit counts the call it
+    # cannot rule out, so the count runs high, never quietly low.
+    from claude_agent_sdk import UserMessage
+    from claude_agent_sdk._internal import message_parser
+
+    parse = message_parser.parse_message
+
+    def reshaped(data):
+        message = parse(data)
+        if isinstance(message, UserMessage) and isinstance(message.tool_use_result, dict):
+            message.tool_use_result = {"state": "done"}
+        return message
+
+    monkeypatch.setattr(message_parser, "parse_message", reshaped)
+    caplog.set_level(logging.WARNING, logger="fi.alk.harness.backends.claude")
+
+    code, output = _read_against_the_stub(
+        tmp_path, monkeypatch, budget=60, main_plan=("agent", "answer")
+    )
+
+    print("served:", _DelegatingStub.served_by, "closing:", closing)
+    # The reader ran out of turns, so the count is one high.
+    assert closing == [(False, 1)]
+    assert _counted(output) == len(_streamed()) + 1
+    assert "a sub-agent's result came back in a shape the kit does not know" in caplog.text

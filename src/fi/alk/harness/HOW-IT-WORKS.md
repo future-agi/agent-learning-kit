@@ -99,11 +99,20 @@ each reader still running. Either way a contract or failure already saved stands
 reading ends as `agent_reading_call_limit` and is not retried.
 
 What is counted differs by backend. The Gemini count is of calls made. The Claude count is of
-replies seen in the session's stream, so a call the CLI makes without putting a reply there is not
-counted: the one call per session it makes for a title of its own (so the gateway shows the kit's
-count plus one), its summary when it compacts a long conversation, and its own retry after a failed
-request. The CLI offers no hook before a call and reports none of these in the stream, so the kit
-cannot see them. Each is bounded by the counted calls around it, and the time limit holds the rest.
+replies seen in the session's stream, plus each reader's closing reply. The CLI never streams that
+reply: it hands it back as the result of the call that sent the reader out, so the kit counts it
+from that result. A reader that answered made that call; one that ran out of turns, was refused, or
+failed did not. When the result's shape is one the kit does not know, it counts the call and logs a
+warning, so a change in the CLI can make the count high but never quietly low.
+
+Still not counted on Claude, because the CLI makes these calls without putting a reply in the
+stream or anywhere else the kit can read, and offers no hook before a call:
+- the one call per session it makes for a title of its own, so the gateway shows the kit's count
+  plus one;
+- its own retry after a failed request;
+- its summary call when it compacts a long conversation.
+
+Each is bounded by the counted calls around it, and the time limit holds the rest.
 A request the provider client retries on its own is not counted on either backend. The spend
 record keeps the limit in force (`call_limit`) beside the calls counted, for every stage that had
 one.
