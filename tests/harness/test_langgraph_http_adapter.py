@@ -6,6 +6,7 @@ import json
 import sys
 import threading
 import time
+import types
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -650,3 +651,160 @@ def test_a_reply_with_no_text_is_an_empty_answer_whatever_its_form(
         name="empty_graph",
     )
     assert adapter._invoke({"new_message": {"content": "hi"}}) == {"content": ""}
+
+
+THREAD_GRAPH = """
+SEEN = []
+NO_CONFIG = "no config"
+
+
+class Graph:
+    checkpointer = None
+
+    async def ainvoke(self, state, config=NO_CONFIG):
+        SEEN.append(config)
+        return {"final_report": "ok"}
+
+
+graph = Graph()
+"""
+
+
+def test_each_requests_thread_reaches_the_graph_as_its_langgraph_thread(load) -> None:
+    adapter = load(THREAD_GRAPH, "thread_graph")
+    graph = sys.modules["thread_graph.graph"]
+
+    for thread in ("one", "two"):
+        adapter._invoke({"thread_id": thread, "new_message": {"content": "hi"}})
+    # A request with no thread, or a blank one, calls the graph as before.
+    for payload in ({}, {"thread_id": ""}, {"thread_id": "  "}, {"thread_id": 7}):
+        adapter._invoke({**payload, "new_message": {"content": "hi"}})
+
+    assert graph.SEEN == [
+        {"configurable": {"thread_id": "one"}},
+        {"configurable": {"thread_id": "two"}},
+        *[graph.NO_CONFIG] * 4,
+    ]
+
+
+@pytest.fixture
+def stand_in_langgraph(monkeypatch):
+    """A ``Pregel`` and a ``RunnableBindingBase`` for the adapter to recognise, whether or not
+    the real libraries are installed."""
+    pregel = types.ModuleType("langgraph.pregel")
+    runnables = types.ModuleType("langchain_core.runnables.base")
+    exec("class Pregel:\n    checkpointer = None\n", pregel.__dict__)
+    exec(
+        "class RunnableBindingBase:\n"
+        "    def __init__(self, bound):\n"
+        "        self.bound = bound\n"
+        "    def __getattr__(self, name):\n"
+        "        return getattr(self.bound, name)\n",
+        runnables.__dict__,
+    )
+    for name, module in (
+        ("langgraph", types.ModuleType("langgraph")),
+        ("langgraph.pregel", pregel),
+        ("langchain_core", types.ModuleType("langchain_core")),
+        ("langchain_core.runnables", types.ModuleType("langchain_core.runnables")),
+        ("langchain_core.runnables.base", runnables),
+    ):
+        monkeypatch.setitem(sys.modules, name, module)
+
+
+CHECKPOINTED_GRAPH = """
+from langchain_core.runnables.base import RunnableBindingBase
+from langgraph.pregel import Pregel
+
+
+class InMemorySaver:
+    pass
+
+
+class Graph(Pregel):
+    checkpointer = CHECKPOINTER
+
+    async def ainvoke(self, state, config=None):
+        return {"final_report": "ok"}
+
+
+graph = GRAPH
+"""
+
+
+@pytest.mark.parametrize(
+    "checkpointer,graph,named",
+    [
+        ("InMemorySaver()", "Graph()", "InMemorySaver"),
+        ("True", "Graph()", "True"),
+        # with_retry() or bind() around it; with_config returns a Pregel, the first case.
+        ("InMemorySaver()", "RunnableBindingBase(RunnableBindingBase(Graph()))", "InMemorySaver"),
+    ],
+    ids=["saver", "inherit", "in_a_binding"],
+)
+def test_a_langgraph_graph_compiled_with_a_checkpointer_is_refused_when_it_is_loaded(
+    tmp_path, monkeypatch, stand_in_langgraph, checkpointer, graph, named
+) -> None:
+    # It would keep every turn, and every turn carries the whole history.
+    graph_source = CHECKPOINTED_GRAPH.replace("CHECKPOINTER", checkpointer).replace(
+        "GRAPH", graph
+    )
+    source = tmp_path / "source"
+    try:
+        with pytest.raises(ValueError) as refused:
+            _load_adapter(tmp_path, monkeypatch, graph_source, "checkpointed_graph")
+    finally:
+        sys.modules.pop("fi.alk.harness.langgraph_http_adapter", None)
+        sys.modules.pop("checkpointed_graph.graph", None)
+        sys.modules.pop("checkpointed_graph", None)
+        if str(source / "src") in sys.path:
+            sys.path.remove(str(source / "src"))
+
+    message = str(refused.value)
+    assert f"compiled with a checkpointer ({named})" in message
+    assert "sends the whole conversation every turn" in message
+
+
+def test_another_object_with_a_checkpointer_is_called_with_no_thread(
+    load, stand_in_langgraph
+) -> None:
+    # Not a LangGraph graph: it answered before threads were passed, and is called as it was.
+    adapter = load(
+        THREAD_GRAPH.replace("checkpointer = None", "checkpointer = object()"),
+        "wrapped_graph",
+    )
+
+    assert adapter._invoke({"thread_id": "one", "new_message": {"content": "hi"}}) == {
+        "content": "ok"
+    }
+    assert sys.modules["wrapped_graph.graph"].SEEN == ["no config"]
+
+
+@pytest.mark.parametrize(
+    "signature,receives",
+    [
+        ("self, state", None),
+        ("self, state, **options", {"configurable": {"thread_id": "one"}}),
+        ("self, state, *, config=None", {"configurable": {"thread_id": "one"}}),
+    ],
+    ids=["no_config", "kwargs", "keyword_config"],
+)
+def test_an_ainvoke_that_takes_no_config_is_called_with_the_state_alone(
+    load, signature, receives
+) -> None:
+    # The loader accepts any object with an ainvoke; one written without config ran before
+    # threads were passed, and still does.
+    adapter = load(
+        "SEEN = []\n"
+        "class Graph:\n"
+        f"    async def ainvoke({signature}):\n"
+        "        SEEN.append(locals().get('config', locals().get('options', {}).get('config')))\n"
+        "        return {'final_report': 'ok'}\n"
+        "graph = Graph()\n",
+        "plain_graph",
+    )
+
+    assert adapter._invoke({"thread_id": "one", "new_message": {"content": "hi"}}) == {
+        "content": "ok"
+    }
+    assert sys.modules["plain_graph.graph"].SEEN == [receives]
