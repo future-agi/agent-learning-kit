@@ -37,6 +37,28 @@ jobs:
             -k real_openai_agents_sdk | tee pytest.out
           ! grep -q "skipped" pytest.out
 
+  langgraph-reference:
+    # The LangGraph reference agent on the versions its requirements file pins, driven through
+    # the kit's adapter against a local endpoint. The pins are for this job only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit with the reference's pinned libraries
+        run: >-
+          python -m pip install . pytest
+          -r examples/harness/langgraph_support/requirements.txt
+      - name: Run the reference on its pins, failing if it skips
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_langgraph_reference.py \
+            -k pinned_libraries | tee pytest.out
+          ! grep -q "skipped" pytest.out
+
   tool-trace-other-pythons:
     # The tool tracer's own subprocesses on another Python, which reads frames differently from
     # 3.12 (a suspension ends on a RESUME on 3.13; a close or a cancel is not carried by the
@@ -361,6 +383,7 @@ jobs:
           tests/harness/test_executor_completed_counts.py
           tests/harness/test_deep_agents_reference.py
           tests/harness/test_langgraph_http_adapter.py
+          tests/harness/test_langgraph_reference.py
           tests/harness/test_reading_entry.py
           tests/harness/test_agent_reading.py
           tests/harness/test_newer_python_syntax.py
