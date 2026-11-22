@@ -2043,6 +2043,9 @@ class _FakeCursor:
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self._rows
 
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._rows[0] if self._rows else None
+
 
 class _FakeConnection:
     def __init__(self, rows: list[tuple[Any, ...]], columns: list[str]) -> None:
@@ -2052,6 +2055,9 @@ class _FakeConnection:
 
     def execute(self, statement: str, params: Any = None) -> _FakeCursor:
         self.executed.append(statement)
+        if "to_regclass" in statement:
+            # A world without the trial tables yet: the presence read finds none of them.
+            return _FakeCursor([(False, [])], ["present", "columns"])
         if "_alk_worker_stops" in statement:
             # No worker was stopped: the rows are the door's log, not stops.
             return _FakeCursor([], self._columns)

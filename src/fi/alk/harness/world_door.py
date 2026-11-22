@@ -436,19 +436,29 @@ _TRIAL_SCHEMA_MADE: set[str] = set()
 _TRIAL_SCHEMA_LOCK = threading.Lock()
 
 
+_TRIAL_COLUMNS = frozenset({"worker_deadline_at", "worker_deadlines", "sealed_at", "started_at"})
+
+
 def _trial_schema(address: str) -> None:
-    """Makes this world's trial tables and columns, once per world database in this process."""
+    """Makes this world's trial tables and columns when any is missing, once per world database in this process. A
+    world made from a baseline has them all (`HARNESS_TABLES_DDL`), and its role may neither create nor alter them."""
     with _TRIAL_SCHEMA_LOCK:
         if address in _TRIAL_SCHEMA_MADE:
             return
         import psycopg
 
         with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
-            for statement in (
-                TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, TRIAL_STARTED_DDL,
-                WORKER_STOPS_DDL, WORKER_RUNS_DDL,
-            ):
-                connection.execute(statement)
+            present = connection.execute(
+                "SELECT to_regclass('_alk_worker_stops') IS NOT NULL AND to_regclass('_alk_worker_runs') IS NOT NULL, "
+                "ARRAY(SELECT attname::text FROM pg_attribute WHERE attrelid = to_regclass('_alk_trial_faults') "
+                "AND NOT attisdropped)"
+            ).fetchone()
+            if not (present[0] and _TRIAL_COLUMNS <= set(present[1])):
+                for statement in (
+                    TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL,
+                    TRIAL_STARTED_DDL, WORKER_STOPS_DDL, WORKER_RUNS_DDL,
+                ):
+                    connection.execute(statement)
         _TRIAL_SCHEMA_MADE.add(address)
 
 
