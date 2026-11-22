@@ -2607,8 +2607,9 @@ def _lend_span(span: Call, other: Call) -> None:
     whichever source wins (tool_evidence.settle) and from the other only what the winner does not carry."""
     started = span.at
     evidence.settle(other, span)
-    # A span starts when the call does; another source may stamp a call only once it reads its result. So the span's
-    # time is the call's whichever record won, as it was before sources were named.
+    # The call's time is not a graded fact, so it follows what measured it, not which record won: a source that stamps a
+    # call only when it reads the result carries no start time at all, while a span measured the call's start. So the
+    # span's start is the call's whichever record won; where no paired source measured it, the winner's stamp stays.
     other.at = started or other.at
 
 

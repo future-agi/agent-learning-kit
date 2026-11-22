@@ -4108,7 +4108,7 @@ def _table_rows() -> list[Call]:
     ]
 
 
-def _voice_reading(tmp_path, monkeypatch, *, lines, seam, table=None, table_fails=False, lend):
+def _voice_reading(tmp_path, monkeypatch, *, lines, seam, table=None, table_fails=False, log=None, lend):
     folder = tmp_path / lend.__name__
     folder.mkdir()
     trace = folder / "agent-tool-calls.jsonl"
@@ -4129,6 +4129,9 @@ def _voice_reading(tmp_path, monkeypatch, *, lines, seam, table=None, table_fail
         calls = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
     except cr.ToolCaptureFailed as failed:
         return ("failed", str(failed), [_unnamed(call) for call in failed.calls])
+    if log is not None:
+        # The door's log, as the runner folds a lost answer after reading the calls.
+        calls = cr.one_call_per_lost_answer(calls, log)
     return (
         [_unnamed(call) for call in calls],
         [call.name for call in graded_calls(calls)],
@@ -4138,6 +4141,14 @@ def _voice_reading(tmp_path, monkeypatch, *, lines, seam, table=None, table_fail
 def _unnamed(call: Call) -> dict:
     return {key: value for key, value in dataclasses.asdict(call).items() if key not in _NAMED}
 
+
+_LOST_ANSWER_LOG = (
+    {"name": "start_return", "arguments": {"order_id": "A1001"}, "actor_id": "agent", "error": "response_lost",
+     "outcome": "committed"},
+)
+_RAN = {"name": "start_return", "arguments": {"order_id": "A1001"}, "output": "started", "at": 2.0}
+_HEARD_FAILED = {"name": "start_return", "arguments": {"order_id": "A1001"}, "output": "timed out", "is_error": True,
+                 "at": 2.5}
 
 _VOICE_CASES = {
     "file with graded calls": dict(lines=_SPOKEN_LINES, seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()),
@@ -4163,6 +4174,14 @@ _VOICE_CASES = {
         lines=_SPOKEN_LINES, seam=EvidenceSeam.TOOL_TRACE, table_fails=True
     ),
     "hand-offs alone": dict(lines=_HANDOFF_ONLY, seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()),
+    "a lost answer, run by the tool's tracer and failed by the framework's hook": dict(
+        lines=(_RAN, {**_HEARD_FAILED, "source": "livekit"}), seam=EvidenceSeam.TOOL_TRACE, log=_LOST_ANSWER_LOG,
+    ),
+    "a lost answer, run by the tool's tracer and failed by the agent's span": dict(
+        lines=(_RAN, {**_HEARD_FAILED, "arguments": "{\"order_id\": \"A1001\"}", "source": "otel", "event_id": "e9",
+                      "ended_at": 2.6}),
+        seam=EvidenceSeam.TOOL_TRACE, log=_LOST_ANSWER_LOG,
+    ),
     "the http_tool seam": dict(lines=None, seam=EvidenceSeam.HTTP_TOOL, table=_table_rows()),
     "the http_tool seam with nothing": dict(lines=None, seam=EvidenceSeam.HTTP_TOOL),
     "the hook's line timing the agent's own line": dict(
@@ -4199,3 +4218,17 @@ def test_every_voice_record_names_its_source(tmp_path, monkeypatch) -> None:
 
 
 _lend_span_now = cr._lend_span
+
+
+@pytest.mark.parametrize(
+    "heard",
+    ["framework's hook", "agent's span"],
+)
+def test_a_voice_lost_answer_is_one_done_call_with_the_tools_own_result(tmp_path, monkeypatch, heard) -> None:
+    case = _VOICE_CASES[f"a lost answer, run by the tool's tracer and failed by the {heard}"]
+
+    calls, graded = _voice_reading(tmp_path, monkeypatch, lend=_lend_span_now, **case)
+
+    assert graded == ["start_return"]
+    (call,) = calls
+    assert (call["ok"], call["error"], call["answer_lost"], call["result"]) == (True, "", True, "started")

@@ -331,3 +331,38 @@ def test_a_google_adk_reply_streamed_in_parts_reads_as_one_record_per_call(tmp_p
         ("return_policy", {}, AGENT, [SPAN]),
     ]
     assert all(call.runtime_ids.get("call_id") and call.result is not None for call in calls)
+
+
+_LOST = [{"name": "look_up_order", "arguments": {"order_id": "A1001"}, "actor_id": "agent",
+          "error": "response_lost", "outcome": "committed"}]
+
+
+def test_a_chat_lost_answer_run_by_the_tracer_and_failed_by_the_span_is_one_done_call(tmp_path) -> None:
+    # The door committed the call and lost its answer: the tool's tracer saw it run, the agent's span saw the failure
+    # the agent heard. After the join and the fold: one call, done, its answer lost, with the tool's own result.
+    runtime = _runtime(
+        tmp_path,
+        [
+            {"name": "look_up_order", "arguments": {"order_id": "A1001"}, "output": "shipped", "at": 1.0},
+            {"name": "look_up_order", "arguments": "{\"order_id\": \"A1001\"}", "output": "timed out",
+             "is_error": True, "source": "otel", "event_id": "e1", "at": 1.5},
+        ],
+    )
+
+    calls = call_runner.one_call_per_lost_answer(call_runner._with_span_calls([], runtime), _LOST)
+
+    assert [(call.ok, call.error, call.answer_lost, call.result) for call in calls] == [(True, "", True, "shipped")]
+
+
+def test_a_chat_lost_answer_the_world_ran_and_the_agent_heard_fail_is_one_done_call(tmp_path) -> None:
+    world = _World()
+    # The world's record of the call it committed, its answer lost on the way back (as the chat door marks it).
+    world.calls.append(_call(source="", result="shipped", at=1.0, error="response_lost"))
+    _record_completed_tool_call(
+        world, name="look_up_order", arguments={"order_id": "A1001"}, response={"error": "timed out", "success": False}
+    )
+    runtime = _runtime(tmp_path, [])
+
+    calls = call_runner.one_call_per_lost_answer(call_runner._with_span_calls(world.calls, runtime), _LOST)
+
+    assert [(call.ok, call.error, call.answer_lost, call.result) for call in calls] == [(True, "", True, "shipped")]

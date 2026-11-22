@@ -16,8 +16,11 @@ Each source hands over one record per call. When two sources saw one call, the r
   never blended from two sources.
 - A record with no arguments and no result never wins over one that has them; it is only listed as having seen
   the call.
-- The other record supplies only what the winner does not carry at all: times, the hand-off mark, the agent that
-  made the call, the runtime's ids.
+- The other record supplies only what the winner does not carry at all: the hand-off mark, the agent that made the
+  call, the runtime's ids.
+- A call's time is not a graded fact. Its start and end come from a paired source that measured them (a span, or the
+  hook's line); a source that stamps a call only when it reads the result carries no start time. Where no paired
+  source measured them, the winner's stamp stays.
 - The record names the source that won (``source``) and lists the others that saw the call (``seen_by``).
 
 A call no source saw is not here at all; a check that needs it reads as evidence missing, never as passed.
