@@ -70,6 +70,7 @@ from fi.simulate.simulation.call_actors import (
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_acts, world_summary
 from .actor_meter import ActorMeter
 from .world_door import (
+    TRIAL_FAULTS_DDL,
     APPROVAL_REQUIRED,
     APPROVAL_UNKNOWN,
     FAULTS_UNKNOWN,
@@ -1610,9 +1611,6 @@ def _agent_marks(
     return marks
 
 
-# Kept in the world's database, never in a file the agent's process could read or rewrite.
-# Known limit: a connection with the world's role can write it until per-user database isolation is on.
-TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
 
 
 def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
