@@ -4,6 +4,9 @@ All notable release changes for Agent Learning Kit are tracked here.
 
 ## Unreleased
 
+- In a hosted simulation, traceAI's exporters send traces to the simulation collector with the
+  simulation's ingest key again, including with `fi-instrumentation-otel` 1.5.1 and later.
+
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 

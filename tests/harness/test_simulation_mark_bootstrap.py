@@ -830,6 +830,92 @@ print(json.dumps({
     assert reported["traceai_grpc"]["x-api-key"] == "customer-key"
 
 
+TRACEAI = """
+from fi_instrumentation.otel import GRPCSpanExporter, HTTPSpanExporter
+
+def no_ingest(headers):
+    return not {"ingest-key", "ingest-secret"} & set(headers.values())
+
+def kept(headers, wanted):
+    return {name: headers.get(name) for name in wanted} == wanted
+"""
+
+
+def test_traceai_exporters_aimed_elsewhere_get_no_ingest_key(tmp_path: Path) -> None:
+    script = TRACEAI + """
+print(json.dumps({
+    "http": no_ingest(sent(HTTPSpanExporter(endpoint="http://elsewhere.test:4318/v1/traces"))),
+    "grpc": no_ingest(sent(GRPCSpanExporter(endpoint="elsewhere.test:4317", insecure=True))),
+    "http_env": no_ingest(sent(HTTPSpanExporter())),
+    "grpc_env": no_ingest(sent(GRPCSpanExporter(insecure=True))),
+}))
+"""
+    elsewhere = {"FI_BASE_URL": "http://elsewhere.test:4318", "FI_GRPC_URL": "elsewhere.test:4317"}
+    reported = _reported(_export_run(tmp_path, script, elsewhere))
+
+    assert reported == {"http": True, "grpc": True, "http_env": True, "grpc_env": True}
+
+
+def test_traceai_exporters_aimed_elsewhere_keep_the_callers_explicit_headers(
+    tmp_path: Path,
+) -> None:
+    # The hook must leave these exporters exactly as traceAI builds them without it, whatever
+    # that traceAI version does with an explicit credential.
+    script = TRACEAI + """
+theirs = {"x-api-key": "theirs", "x-secret-key": "theirs-secret", "x-team": "a"}
+print(json.dumps({
+    "http": sent(HTTPSpanExporter(endpoint="http://elsewhere.test:4318/v1/traces", headers=theirs)),
+    "grpc": sent(GRPCSpanExporter(endpoint="elsewhere.test:4317", insecure=True, headers=theirs)),
+}))
+"""
+    elsewhere = {"FI_BASE_URL": "http://elsewhere.test:4318", "FI_GRPC_URL": "elsewhere.test:4317"}
+    hooked = _reported(_export_run(tmp_path, script, elsewhere))
+    unhooked = _reported(
+        _run(
+            EXPORTER_HEADERS + script,
+            path=[],
+            cwd=tmp_path,
+            extra_env={**INGEST, **CUSTOMER_KEYS, **elsewhere},
+        )
+    )
+
+    assert hooked == unhooked
+    for name in ("http", "grpc"):
+        assert hooked[name]["x-team"] == "a", name
+        assert not {"ingest-key", "ingest-secret"} & set(hooked[name].values()), name
+
+
+def test_traceai_exporters_aimed_at_the_collector_send_only_the_ingest_key(
+    tmp_path: Path,
+) -> None:
+    script = TRACEAI + """
+ours = {"x-api-key": "ingest-key", "x-secret-key": "ingest-secret"}
+explicit = sent(HTTPSpanExporter(headers={"X-Api-Key": "c", "X-Team": "a"}))
+print(json.dumps({
+    "grpc": kept(sent(GRPCSpanExporter(endpoint="collector.test:4318", insecure=True)), ours),
+    "grpc_env": kept(sent(GRPCSpanExporter(insecure=True)), ours),
+    "http_explicit": kept(explicit, {**ours, "x-team": "a"}),
+}))
+"""
+    collector = {"FI_BASE_URL": COLLECTOR, "FI_GRPC_URL": "collector.test:4318"}
+    reported = _reported(_export_run(tmp_path, script, collector))
+
+    assert reported == {"grpc": True, "grpc_env": True, "http_explicit": True}
+
+
+def test_traceai_headers_that_cannot_be_read_send_the_ingest_key_and_log_the_failure(
+    tmp_path: Path,
+) -> None:
+    script = TRACEAI + """
+print(json.dumps(sent(HTTPSpanExporter(headers=42))))
+"""
+    result = _export_run(tmp_path, script, {"FI_BASE_URL": COLLECTOR})
+    reported = _reported(result)
+
+    assert {key: reported.get(key) for key in OUR_AUTH} == OUR_AUTH
+    assert FAILED in result.stderr
+
+
 def test_explicit_headers_in_code_keep_their_other_entries_and_lose_only_fi_auth(
     tmp_path: Path,
 ) -> None:
