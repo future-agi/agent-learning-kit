@@ -264,7 +264,8 @@ def _checked_contract(
             "Omitting data_store does not declare a stateless agent."
         )
     if require_setup_contract and contract.modality == "chat":
-        if problem := generated_chat_interface_problem(contract.runtime):
+        problem = generated_chat_interface_problem(contract.runtime)
+        if problem and not _build_writes_the_interface(contract.runtime, source_root, subfolder):
             problems.append(problem)
     if progress is not None:
         progress("contract", list(problems))
@@ -281,6 +282,30 @@ def _checked_contract(
             instrumentation=instrumentation,
             progress=progress,
         )
+
+
+def _build_writes_the_interface(
+    runtime: Runtime | None, source_root: Path | None, subfolder: str | None
+) -> bool:
+    """Whether the build writes the chat interface this runtime leaves out, so the reading is
+    not asked for one. Today that is `adk web` serving the one app its folder holds: the
+    source holds no interface to find for it. The build decides, so the two can't disagree."""
+    if source_root is None or runtime is None or not runtime.command:
+        return False
+    if runtime.interface is not None and runtime.interface.kind:
+        return False
+    from .bundle_author_v2 import _adk_web_interface, _is_adk_web_command
+
+    # Asked of the command alone first, so no other command costs a lookup on disk.
+    if not _is_adk_web_command(list(runtime.command)):
+        return False
+    try:
+        with path_lookup_budget():
+            bound = bind_runtime(runtime.model_dump(), source_root, subfolder)
+            return _adk_web_interface(Path(source_root), dict(bound or {})) is not None
+    except (OSError, RuntimeError, ValueError, SubfolderNotFound, PathLookupsSpent):
+        # A folder or workdir that can't be bound is refused on its own line further on.
+        return False
 
 
 def _contract_payload(payload: dict[str, Any]) -> dict[str, Any]:

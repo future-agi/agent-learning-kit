@@ -120,6 +120,73 @@ def test_runtime_patch_preserves_supported_chat_and_voice(tmp_path, modality, in
     assert repaired.runtime == patch.runtime
 
 
+def _adk_patch(tmp_path, contract, *apps, command=("adk", "web", "--port", "8080", ".")):
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (service / "app.py").write_text("print('agent')\n")
+    for app in apps:
+        (service / app).mkdir()
+        (service / app / "__init__.py").write_text("from . import agent\n")
+        (service / app / "agent.py").write_text("root_agent = None\n")
+    # The README is the evidence for the `adk` launcher, as in the kit's own ADK example.
+    (service / "README.md").write_text("Run it with `adk web --port 8080 .`\n")
+    patch = _patch(contract)
+    return patch.model_copy(update={
+        "runtime": patch.runtime.model_copy(update={
+            "command": list(command), "interface": None,
+        }),
+        "evidence_paths": (*patch.evidence_paths, "service/README.md"),
+    })
+
+
+def test_runtime_patch_keeps_an_adk_web_command_without_a_written_interface(tmp_path):
+    # The build writes ADK's interface for this command, so a repair isn't asked for one either.
+    contract = AgentContract(agent="agent", modality="chat")
+    patch = _adk_patch(tmp_path, contract, "support_agent")
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+    assert repaired.runtime == patch.runtime
+    assert repaired.runtime.interface is None
+
+
+def test_runtime_patch_keeps_an_adk_web_command_in_a_recorded_folder(tmp_path):
+    # The contract records its folder, so the patch's runtime is bound to it before this check.
+    contract = AgentContract(
+        agent="agent",
+        modality="chat",
+        runtime=Runtime(language="python", workdir="service", source_subfolder="service"),
+    )
+    patch = _adk_patch(tmp_path, contract, "support_agent")
+    (tmp_path / "another_agent").mkdir()
+    (tmp_path / "another_agent" / "__init__.py").write_text("")
+    (tmp_path / "another_agent" / "agent.py").write_text("root_agent = None\n")
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+    assert repaired.runtime.source_subfolder == "service"
+    assert repaired.runtime.command[:2] == ["adk", "web"]
+    assert repaired.runtime.interface is None
+
+
+@pytest.mark.parametrize("apps,command", [
+    (("support_agent", "billing_agent"), ("adk", "web", "--port", "8080", ".")),
+    ((), ("adk", "web", "--port", "8080", ".")),
+    (("support_agent",), ("python", "app.py")),
+])
+def test_runtime_patch_still_needs_an_interface_the_build_does_not_write(
+    tmp_path, apps, command
+):
+    contract = AgentContract(agent="agent", modality="chat")
+    patch = _adk_patch(tmp_path, contract, *apps, command=command)
+    with pytest.raises(ValueError, match="missing-chat-interface"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+
+
 def test_runtime_patch_rejects_missing_or_outside_evidence(tmp_path) -> None:
     source = tmp_path / "source"
     (source / "service").mkdir(parents=True)
