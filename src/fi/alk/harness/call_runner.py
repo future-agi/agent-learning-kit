@@ -134,6 +134,7 @@ from .simulator_voice import (
     simulator_definition,
     voice_providers,
 )
+from . import tool_evidence as evidence
 from .world.errors import WorldUnavailable
 from .world.runtime import (
     Call,
@@ -2027,9 +2028,25 @@ def _collect_file_tool_calls(
 def _with_span_calls(
     observed: Sequence[Call], runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
-    """Calls another source saw, else the trace file's own lines, joined with the file's span lines."""
+    """A chat trial's calls, one record each, read in one order (tool_evidence.py): the calls the kit carried out
+    against the world, then the trace file's span lines, then its other lines, then the agent's own account of its
+    calls. ``observed`` holds the calls the trial recorded as they ran: the agent's account is tagged where it is
+    recorded, and the rest are the world's."""
     written, from_spans = _read_file_tool_calls(runtime, strict=strict)
-    return _merge_span_calls(list(observed) or written, from_spans)
+    recorded = list(observed)
+    world = evidence.tagged((call for call in recorded if call.source != evidence.AGENT), evidence.WORLD)
+    agent = [call for call in recorded if call.source == evidence.AGENT]
+    # Spans are paired last, by the span pairing every route already uses; which record of a pair wins is the order's.
+    natives = evidence.join(world, written, agent, same_tool=_same_tool, same_arguments=_same_arguments)
+    return _merge_span_calls(list(natives), from_spans)
+
+
+def _same_tool(one: Call, other: Call) -> bool:
+    return _tool_key(one.name) == _tool_key(other.name)
+
+
+def _same_arguments(one: Call, other: Call) -> bool:
+    return same_json(one.arguments, other.arguments)
 
 
 def tool_routes(contract: Mapping[str, Any]) -> dict[str, str]:
@@ -2111,6 +2128,10 @@ def _read_file_tool_calls(
         )
         ended = record.get("ended_at")
         call.ended_at = float(ended) if isinstance(ended, (int, float)) else 0.0
+        mark = record.get("source")
+        call.source = evidence.SPAN if mark == _SPAN_SOURCE else evidence.TRACER
+        if call.source == evidence.TRACER and isinstance(mark, str):
+            call.trace_mark = mark
         if record.get("source") == _SPAN_SOURCE:
             if _framework_message(call.result):
                 # Only the framework's message object around the answer: nothing to hold against the call's own.
@@ -2582,21 +2603,13 @@ def _other_worker(span: Call, call: Call) -> bool:
 
 
 def _lend_span(span: Call, other: Call) -> None:
-    """Give another tracer's call the span's agent, hand-off and times, keeping what it recorded itself."""
-    if not (other.worker_id or other.worker_label):
-        other.worker_id, other.worker_label = span.worker_id, span.worker_label
-    other.delegated_to = other.delegated_to or span.delegated_to
-    other.transferred = other.transferred or span.transferred
-    other.ended_at = other.ended_at or span.ended_at
-    if not other.runtime_ids:
-        # The span's place among the agents goes with its ids: a parent is an id in the same record.
-        other.runtime_ids = span.runtime_ids
-        other.parent_span_id, other.relationship = (
-            span.parent_span_id,
-            span.relationship,
-        )
-    # A span starts when the call does; another tracer may stamp a call only once it reads its result.
-    other.at = span.at or other.at
+    """A span and another source's record are one call: ``other`` becomes its one record, with the graded facts of
+    whichever source wins (tool_evidence.settle) and from the other only what the winner does not carry."""
+    started = span.at
+    evidence.settle(other, span)
+    # A span starts when the call does; another source may stamp a call only once it reads its result. So the span's
+    # time is the call's whichever record won, as it was before sources were named.
+    other.at = started or other.at
 
 
 def _target_metrics(case: Any) -> dict[str, Any] | None:
@@ -3957,7 +3970,9 @@ class CallRunnerImpl:
             # rather than crashing keeps this on the scheduler's own evidence_missing path, never
             # a raw exception).
             observed = []
-        calls = _merge_span_calls([*written, *observed], from_spans)
+        # The table is read only when the file holds no graded call: its rows are what entered the world's door, not
+        # one record per tool call, so it does not outrank the file here (tool_evidence.py).
+        calls = _merge_span_calls([*written, *evidence.tagged(observed, evidence.WORLD)], from_spans)
         if unread is not None and not graded_calls(calls):
             raise ToolCaptureFailed(str(unread), calls=calls) from None
         return calls

@@ -11,6 +11,7 @@ touch a real `SimulationRunner`, `rtc.Room`, or `AgentSession`.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import sys
@@ -42,7 +43,7 @@ from fi.alk.harness.process_runtime import (
     RuntimeState,
 )
 from fi.alk.harness.world.errors import WorldUnavailable
-from fi.alk.harness.world.runtime import Call
+from fi.alk.harness.world.runtime import Call, graded_calls
 from fi.simulate.artifacts import ArtifactManifest
 from fi.simulate.runtime.failures import FailureStage, SimulationFailure
 from fi.simulate.runtime.report import SimulationReport, SimulationTestCaseResult
@@ -4057,3 +4058,144 @@ def test_were_the_in_process_door_beside_the_proxy_it_would_decide_and_hold_ever
     both = cr.in_process_tools(_order_routes("get_order", "confirm_order"), {"tool_proxy": object(), "world_door": object()})
 
     assert both["confirm_order"] == {"action": "confirm_order"} and both["get_order"] == {"action": "get_order"}
+
+
+# -- a voice trial reads its calls as before sources were named -----------------------------------
+#
+# The voice runner keeps its precedence: the trace file's records whenever the file holds a graded call, the
+# world's table only when it holds none, spans joined as before. Naming each record's source must change nothing
+# else: the same calls, in the same order, with the same fields and the same grading. Each case is read twice, with
+# the span pairing as it was and as it is now, and compared field for field.
+
+
+def _lend_span_as_it_was(span: Call, other: Call) -> None:
+    if not (other.worker_id or other.worker_label):
+        other.worker_id, other.worker_label = span.worker_id, span.worker_label
+    other.delegated_to = other.delegated_to or span.delegated_to
+    other.transferred = other.transferred or span.transferred
+    other.ended_at = other.ended_at or span.ended_at
+    if not other.runtime_ids:
+        other.runtime_ids = span.runtime_ids
+        other.parent_span_id, other.relationship = (
+            span.parent_span_id,
+            span.relationship,
+        )
+    other.at = span.at or other.at
+
+
+_NAMED = {"source", "seen_by", "trace_mark"}
+
+_SPOKEN_LINES = (
+    {"name": "look_up_order", "arguments": {"order_id": "A1001"}, "output": "shipped", "at": 1.0},
+    {"name": "start_return", "arguments": {"order_id": "A1001"}, "output": "started", "at": 2.0},
+)
+_AGREEING_SPANS = (
+    {"name": "look_up_order", "arguments": "{\"order_id\": \"A1001\"}", "output": "shipped", "source": "otel",
+     "agent_key": "Support", "event_id": "e1", "at": 0.9, "ended_at": 1.1},
+    {"name": "start_return", "arguments": "{\"order_id\": \"A1001\"}", "output": "started", "source": "otel",
+     "agent_key": "Support", "event_id": "e2", "at": 1.9, "ended_at": 2.1},
+)
+_HANDOFF_ONLY = (
+    {"name": "Returns desk", "arguments": {}, "output": "done", "source": "otel", "kind": "handoff",
+     "delegated_to": "Returns desk", "at": 1.0},
+)
+
+
+def _table_rows() -> list[Call]:
+    return [
+        Call(name="look_up_order", arguments={"order_id": "A1001"}, result="shipped", at=5.0),
+        Call(name="look_up_order", arguments={"order_id": "A1001"}, result="shipped", at=6.0),
+    ]
+
+
+def _voice_reading(tmp_path, monkeypatch, *, lines, seam, table=None, table_fails=False, lend):
+    folder = tmp_path / lend.__name__
+    folder.mkdir()
+    trace = folder / "agent-tool-calls.jsonl"
+    if lines is not None:
+        trace.write_text("".join((json.dumps(line) if isinstance(line, dict) else line) + "\n" for line in lines))
+
+    def read_table(runtime, **_):
+        if table_fails:
+            raise cr.ToolCaptureFailed("tool_trace table unreadable")
+        return tuple(dataclasses.replace(call) for call in (table or []))
+
+    monkeypatch.setattr(cr, "_collect_tool_trace_calls", read_table)
+    monkeypatch.setattr(cr, "_collect_http_tool_calls", lambda runtime, **_: tuple(read_table(runtime)))
+    monkeypatch.setattr(cr, "_lend_span", lend)
+    _job_obj, context = _context(tmp_path=folder, evidence_seam=seam)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
+    try:
+        calls = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    except cr.ToolCaptureFailed as failed:
+        return ("failed", str(failed), [_unnamed(call) for call in failed.calls])
+    return (
+        [_unnamed(call) for call in calls],
+        [call.name for call in graded_calls(calls)],
+    )
+
+
+def _unnamed(call: Call) -> dict:
+    return {key: value for key, value in dataclasses.asdict(call).items() if key not in _NAMED}
+
+
+_VOICE_CASES = {
+    "file with graded calls": dict(lines=_SPOKEN_LINES, seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()),
+    "file with graded calls and agreeing spans": dict(
+        lines=(*_SPOKEN_LINES, *_AGREEING_SPANS), seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()
+    ),
+    "file with graded calls and spans that recorded nothing": dict(
+        lines=(*_SPOKEN_LINES, *(
+            {**span, "arguments": "", "output": ""} for span in _AGREEING_SPANS
+        )), seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "the same tool twice with the same arguments": dict(
+        lines=(_SPOKEN_LINES[0], {**_SPOKEN_LINES[0], "at": 3.0}), seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "no file, the table's rows": dict(lines=None, seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()),
+    "no file, the table's rows and spans": dict(
+        lines=_AGREEING_SPANS, seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()
+    ),
+    "neither": dict(lines=None, seam=EvidenceSeam.TOOL_TRACE),
+    "an unreadable file": dict(lines=("{cut", "[]"), seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()),
+    "an unreadable table": dict(lines=None, seam=EvidenceSeam.TOOL_TRACE, table_fails=True),
+    "an unreadable table under a file with graded calls": dict(
+        lines=_SPOKEN_LINES, seam=EvidenceSeam.TOOL_TRACE, table_fails=True
+    ),
+    "hand-offs alone": dict(lines=_HANDOFF_ONLY, seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()),
+    "the http_tool seam": dict(lines=None, seam=EvidenceSeam.HTTP_TOOL, table=_table_rows()),
+    "the http_tool seam with nothing": dict(lines=None, seam=EvidenceSeam.HTTP_TOOL),
+    "the hook's line timing the agent's own line": dict(
+        lines=(
+            {"name": "look_up_order", "arguments": {"order_id": "A1001"}, "output": "shipped"},
+            {"name": "look_up_order", "arguments": {"order_id": "A1001"}, "output": "shipped",
+             "source": "livekit", "at": 4.0},
+        ),
+        seam=EvidenceSeam.TOOL_TRACE,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_VOICE_CASES), ids=lambda case: case.replace(" ", "-"))
+def test_a_voice_trial_reads_its_calls_as_before_sources_were_named(tmp_path, monkeypatch, case) -> None:
+    before = _voice_reading(tmp_path, monkeypatch, lend=_lend_span_as_it_was, **_VOICE_CASES[case])
+    now = _voice_reading(tmp_path, monkeypatch, lend=_lend_span_now, **_VOICE_CASES[case])
+
+    assert now == before
+
+
+def test_every_voice_record_names_its_source(tmp_path, monkeypatch) -> None:
+    trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPOKEN_LINES)
+    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda runtime, **_: tuple(_table_rows()))
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
+
+    from_file = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    trace.unlink()
+    from_table = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert {call.source for call in from_file} == {"tracer"}
+    assert {call.source for call in from_table} == {"world"}
+
+
+_lend_span_now = cr._lend_span
