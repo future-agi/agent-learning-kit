@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fi.alk.harness import call_runner, tool_evidence
-from fi.alk.harness.chat_call_runner import _record_completed_tool_call
+from fi.alk.harness.chat_call_runner import _HostedChatTarget, _record_completed_tool_call
 from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 from fi.alk.harness.tool_evidence import AGENT, SPAN, TRACER, WORLD, bare, join, settle
 from fi.alk.harness.world.runtime import Call, trace_row
+from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, _decode_json_or_sse
 
 
 def _call(name="look_up_order", source="", arguments=None, result=None, *, at=0.0, ids=None, **fields):
@@ -278,3 +281,53 @@ def test_a_span_that_wrote_empty_text_for_both_says_nothing(tmp_path) -> None:
     assert [(call.source, call.seen_by, call.arguments, call.result, call.worker_id) for call in calls] == [
         (AGENT, [SPAN], {"order_id": "A1001"}, {"status": "shipped"}, "Support")
     ]
+
+
+def test_a_google_adk_reply_streamed_in_parts_reads_as_one_record_per_call(tmp_path) -> None:
+    # The Google ADK agent of 19 Nov: each tool call streamed in unfinished parts, then once finished with its
+    # arguments and its response; its tracing wrote a span for each call with empty text for both.
+    fixture = Path(__file__).parent / "fixtures" / "google_adk_streamed_replies.json"
+    replies = json.loads(fixture.read_text(encoding="utf-8"))["replies"]
+    reader = HTTPAgentWrapper(
+        endpoint="http://localhost:8080/run_sse",
+        protocol="json_template",
+        request_template={"new_message": "{{new_message_content}}"},
+        response_path="content.parts.0.text",
+    )
+
+    class _Agent:
+        def __init__(self) -> None:
+            self.turn = 0
+
+        async def call(self, _request):
+            events = "".join(f"data: {json.dumps(event)}\n\n" for event in replies[self.turn])
+            self.turn += 1
+            return reader._agent_response_from_payload(_decode_json_or_sse(events))
+
+    world = _World()
+    target = _HostedChatTarget(
+        wrapper=_Agent(),
+        contract=SimpleNamespace(runtime=None, tool_entrypoints=[]),
+        world=world,
+        scenario_key="adk",
+        scenario_id="adk-1",
+        door=object(),
+    )
+    for utterance in ("Where is A1001?", "Return it, it is too small.", "What is the policy?"):
+        asyncio.run(target.say(utterance))
+    runtime = _runtime(
+        tmp_path,
+        [
+            {"name": call.name, "arguments": "", "output": "", "source": "otel", "at": call.at}
+            for call in world.calls
+        ],
+    )
+
+    calls = call_runner._with_span_calls(world.calls, runtime)
+
+    assert [(call.name, call.arguments, call.source, call.seen_by) for call in calls] == [
+        ("look_up_order", {"order_id": "A1001"}, AGENT, [SPAN]),
+        ("start_return", {"order_id": "A1001", "reason": "too small"}, AGENT, [SPAN]),
+        ("return_policy", {}, AGENT, [SPAN]),
+    ]
+    assert all(call.runtime_ids.get("call_id") and call.result is not None for call in calls)
