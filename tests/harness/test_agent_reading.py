@@ -2849,9 +2849,9 @@ def test_one_gemini_budget_holds_the_main_loop_and_its_readers(
     _assert_cost(output, _gemini_priced(5), True)
 
 
-def _reaches_the_budget(*calls: int, saves: dict | None = None):
-    """A Claude-shaped turn: the backend says the budget is reached as the calls arrive, and the
-    turn goes on until the reading stops it."""
+def _past_the_budget(*calls: int, saves: dict | None = None):
+    """A Claude-shaped turn: the backend says a call went past the budget as the calls arrive, and
+    the turn goes on until the reading stops it."""
 
     async def turn(live):
         if saves is not None:
@@ -2864,9 +2864,9 @@ def _reaches_the_budget(*calls: int, saves: dict | None = None):
     return turn
 
 
-def test_a_reached_budget_stops_the_reading_like_the_time_limit(tmp_path, model):
+def test_a_call_past_the_budget_stops_the_reading_like_the_time_limit(tmp_path, model):
     _repo(tmp_path)
-    fake = model(_reaches_the_budget(60, 61, 62))
+    fake = model(_past_the_budget(61, 62, 63))
     output = tmp_path / "reading"
 
     assert _run(tmp_path) == 78
@@ -2876,15 +2876,15 @@ def test_a_reached_budget_stops_the_reading_like_the_time_limit(tmp_path, model)
     failure = _failure_in(output)
     assert (failure["code"], failure["retryable"]) == ("agent_reading_call_limit", False)
     assert failure["message"] == _CALL_LIMIT_SENTENCE
-    # The calls already on their way when the budget was reached are counted too.
-    assert failure["details"] == {"calls": 62, "limit": 60}
+    # The calls already on their way when the first call past the budget was seen count too.
+    assert failure["details"] == {"calls": 63, "limit": 60}
     # A request cut off by the stop may be billed without being in the total.
     assert _cost_in(output)["complete"] is False
 
 
-def test_a_contract_saved_before_a_reached_budget_is_kept(tmp_path, model):
+def test_a_contract_saved_before_a_call_past_the_budget_is_kept(tmp_path, model):
     _repo(tmp_path)
-    model(_reaches_the_budget(60, saves=CHAT))
+    model(_past_the_budget(61, saves=CHAT))
     output = tmp_path / "reading"
 
     assert _run(tmp_path) == 0

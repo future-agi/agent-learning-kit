@@ -180,37 +180,61 @@ class _CallCount:
     reply reaches the stream: one per provider message id, since the CLI splits one reply into a
     message per content block under the same id. A message without an id counts on its own,
     which can only count more, never fewer.
+
+    The call that reaches the budget is still inside it and finishes what it asked for, as on the
+    Gemini backend, where the budget-th call is made and only the one after it is refused. A call
+    past the budget ends the session: Gemini refuses it unsent; here it is seen, its tools are
+    refused, and the caller stops the session.
     """
 
     def __init__(self, budget: int) -> None:
         self.budget = budget
         self.total = 0
-        self._seen: set[str] = set()
+        self._numbers: dict[str, int] = {}
+        self._tools_inside: set[str] = set()
 
     @property
     def spent(self) -> bool:
+        """The budget is reached: any call not yet counted is past it."""
         return self.budget > 0 and self.total >= self.budget
+
+    @property
+    def past(self) -> bool:
+        """A call past the budget has been counted."""
+        return self.budget > 0 and self.total > self.budget
 
     def see(self, received: AssistantMessage) -> bool:
         """Count ``received`` if it is a new call; True when it was one."""
         message_id = getattr(received, "message_id", None)
-        if message_id:
-            if message_id in self._seen:
-                return False
-            self._seen.add(message_id)
-        self.total += 1
-        return True
+        new = not message_id or message_id not in self._numbers
+        if new:
+            self.total += 1
+            if message_id:
+                self._numbers[message_id] = self.total
+        number = self._numbers[message_id] if message_id else self.total
+        if self.budget <= 0 or number <= self.budget:
+            self._tools_inside.update(
+                block.id for block in received.content if isinstance(block, ToolUseBlock)
+            )
+        return new
+
+    def may_run(self, tool_use_id: str | None) -> bool:
+        """Whether a tool may run: always before the budget is reached, and after it only when
+        the call that asked for it was inside the budget. A tool whose call is not counted yet
+        belongs to a call past the budget, since every call up to it has been counted."""
+        return not self.spent or (tool_use_id is not None and tool_use_id in self._tools_inside)
 
 
 def _refuse_after_budget(options: ClaudeAgentOptions, calls: _CallCount) -> None:
-    """Refuse every tool once the budget is spent: a guard against a late save, not the stop.
+    """Refuse every tool a call past the budget asks for: a guard against a late save, not the
+    stop. The call that reaches the budget keeps its tools, so a save made on it still counts.
 
     A refused call is answered with another call, so the caller still has to stop the session.
     """
     from claude_agent_sdk.types import HookMatcher
 
-    async def refuse(payload: dict[str, Any], _tool_use_id: Any, _context: Any) -> dict[str, Any]:
-        if not calls.spent:
+    async def refuse(payload: dict[str, Any], tool_use_id: Any, _context: Any) -> dict[str, Any]:
+        if calls.may_run(tool_use_id or payload.get("tool_use_id")):
             return {}
         return {
             "hookSpecificOutput": {
@@ -296,7 +320,7 @@ class ClaudeSession:
                 if isinstance(reply, StageDone):
                     reply = self._with_calls(reply, self._calls.total - calls_before)
                 yield reply
-            if counted and self._calls.spent:
+            if counted and self._calls.past:
                 yield CallBudgetSpent(calls=self._calls.total)
             if self._terminal_save_succeeded:
                 self._terminal_save_succeeded = False
@@ -304,9 +328,9 @@ class ClaudeSession:
                 await self._client.interrupt()
 
     def _with_calls(self, done: StageDone, calls: int) -> StageDone:
-        if not self._calls.spent:
+        if not self._calls.past:
             return dataclasses.replace(done, calls=calls)
-        # However the CLI ended the turn, it ended because the budget ran out.
+        # However the CLI ended the turn, it ended because a call went past the budget.
         return dataclasses.replace(
             done,
             calls=calls,
@@ -314,7 +338,7 @@ class ClaudeSession:
             is_error=True,
             errors=[
                 *done.errors,
-                f"the session spent its whole budget of {self._calls.budget} model calls",
+                f"the session went past its budget of {self._calls.budget} model calls",
             ],
         )
 

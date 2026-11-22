@@ -346,11 +346,11 @@ CALL_BUDGET_SPENT = "call_budget_spent"
 
 @dataclass
 class CallBudgetSpent:
-    """The session's model calls have reached its budget; ``calls`` is the count so far.
+    """A model call past the session's budget was made; ``calls`` is the count so far.
 
-    From a backend that cannot stop a call before it is made. Sent when the count reaches the
+    From a backend that cannot stop a call before it is made. Sent for the first call past the
     budget and again for each call after it, so the caller knows to stop the session and what
-    the stop cost.
+    the stop cost. The call that reaches the budget is inside it and sends nothing.
     """
 
     calls: int

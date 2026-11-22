@@ -91,11 +91,19 @@ it) has one budget of model calls for the whole reading: the main loop's, every 
 reminder's. The platform sets it in `ALK_READING_MAX_MODEL_CALLS`; a missing, unreadable or
 non-positive value means 60, never no limit. Its reader gets 12 turns of its own, and at most 4
 readers run at once. The Gemini backend checks the budget before each call and sends nothing past
-it. The Claude backend can only count calls as they arrive, one per provider message id, so the
-reading stops at the budget, up to 4 calls more (one for each reader still running), the same way
-it stops at its time limit. Either way a contract or failure already saved stands; otherwise the
-reading ends as `agent_reading_call_limit` and is not retried. A request the provider client
-retries on its own is not counted; the time limit holds that.
+it. On both, the call that reaches the budget is inside it and finishes what it asked for, a save
+included. The Claude backend can only count calls as they arrive, one per provider message id, so
+the reading stops when it sees the first call past the budget, the same way it stops at its time
+limit, and refuses that call's tools. It ends up to 5 calls past the budget: that call, and one for
+each reader still running. Either way a contract or failure already saved stands; otherwise the
+reading ends as `agent_reading_call_limit` and is not retried.
+
+What is counted differs by backend. The Gemini count is of calls made. The Claude count is of
+replies seen in the session's stream, so a call the CLI makes without putting a reply there is not
+counted: its summary when it compacts a long conversation, and its own retry after a failed
+request. The CLI offers no hook before a call and reports neither of these in the stream, so the
+kit cannot see them. Each is bounded by the counted calls around it, and the time limit holds the
+rest. A request the provider client retries on its own is not counted on either backend.
 
 **How it is changed later** (`amend.py`). The contract is not frozen, but every change is
 recorded with a reason in `amendments[]`, so months later you can still tell what came from the

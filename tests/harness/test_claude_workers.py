@@ -338,7 +338,7 @@ def test_a_call_is_one_message_id_however_many_messages_carry_it() -> None:
     assert calls.spent is False
 
 
-def test_the_budget_is_reached_on_the_counted_call_and_said_for_every_call_after() -> None:
+def test_the_first_call_past_the_budget_is_said_and_every_call_after_it() -> None:
     session = ClaudeSession(None, calls=_CallCount(2))
 
     events = _replies(
@@ -346,19 +346,30 @@ def test_the_budget_is_reached_on_the_counted_call_and_said_for_every_call_after
         [
             _said("msg_1"),
             _said("msg_1", text="split"),
+            # The budget-th call is inside the budget: nothing is said for it.
             _said("msg_2", by="toolu_reader"),
             _said("msg_2", by="toolu_reader", text="split"),
-            # Already on its way when the budget was reached.
             _said("msg_3"),
+            # Already on its way when the first call past the budget was seen.
+            _said("msg_4", by="toolu_reader"),
             _finished(),
         ],
     )
 
-    reached = [event.calls for event in events if isinstance(event, CallBudgetSpent)]
-    assert reached == [2, 3]
+    past = [event.calls for event in events if isinstance(event, CallBudgetSpent)]
+    assert past == [3, 4]
     done = events[-1]
     assert isinstance(done, StageDone)
-    assert (done.outcome, done.is_error, done.calls) == (CALL_BUDGET_SPENT, True, 3)
+    assert (done.outcome, done.is_error, done.calls) == (CALL_BUDGET_SPENT, True, 4)
+
+
+def test_a_turn_that_ends_on_the_budget_th_call_is_inside_the_budget() -> None:
+    session = ClaudeSession(None, calls=_CallCount(2))
+
+    events = _replies(session, [_said("msg_1"), _said("msg_2"), _finished()])
+
+    assert not any(isinstance(event, CallBudgetSpent) for event in events)
+    assert (events[-1].outcome, events[-1].is_error, events[-1].calls) == ("success", False, 2)
 
 
 def test_without_a_budget_calls_are_counted_and_nothing_is_said() -> None:
@@ -373,7 +384,7 @@ def test_without_a_budget_calls_are_counted_and_nothing_is_said() -> None:
 
 
 def test_each_turn_reports_its_own_calls_against_a_budget_held_across_turns() -> None:
-    session = ClaudeSession(None, calls=_CallCount(3))
+    session = ClaudeSession(None, calls=_CallCount(2))
 
     first = _replies(session, [_said("msg_1"), _said("msg_2"), _finished()])
     second = _replies(session, [_said("msg_3"), _finished()])
@@ -392,18 +403,44 @@ def _reader_spec(**fields) -> SessionSpec:
     )
 
 
-def test_every_tool_is_refused_once_the_budget_is_spent() -> None:
-    session = ClaudeBackend().create(_reader_spec(call_budget=1))
+def _asked(message_id, tool_use_id, *, by=None):
+    return AssistantMessage(
+        content=[ToolUseBlock(id=tool_use_id, name="mcp__contract__submit_contract", input={})],
+        model="gemini-3.7-flash",
+        parent_tool_use_id=by,
+        message_id=message_id,
+    )
+
+
+def test_tools_are_refused_only_for_calls_past_the_budget() -> None:
+    session = ClaudeBackend().create(_reader_spec(call_budget=2))
     guard = session._options.hooks["PreToolUse"][-1].hooks[0]
 
-    def decision(name: str) -> str | None:
-        out = asyncio.run(guard({"tool_name": name, "tool_input": {}}, None, None))
+    def decision(tool_use_id: str | None, name: str = "mcp__contract__submit_contract"):
+        payload = {"tool_name": name, "tool_input": {}, "tool_use_id": tool_use_id}
+        out = asyncio.run(guard(payload, tool_use_id, None))
         return (out.get("hookSpecificOutput") or {}).get("permissionDecision")
 
-    assert decision("mcp__contract__submit_contract") is None
-    session._calls.see(_said("msg_1"))
-    assert decision("mcp__contract__submit_contract") == "deny"
-    assert decision("Read") == "deny"
+    # Before the budget is reached, a tool runs even before its call is counted.
+    assert decision("toolu_early") is None
+    session._calls.see(_asked("msg_1", "toolu_main"))
+    # The budget-th call says something first, then asks for the save in a second message
+    # under the same id, as the CLI splits a reply.
+    session._calls.see(_said("msg_2", by="toolu_reader"))
+    assert session._calls.spent
+    session._calls.see(_asked("msg_2", "toolu_save", by="toolu_reader"))
+
+    # The call that reached the budget keeps its save, and so does a call before it whose
+    # tool was still waiting when the budget was reached.
+    assert decision("toolu_save") is None
+    assert decision("toolu_main") is None
+    # A call past the budget, counted or not yet, has its tools refused.
+    session._calls.see(_asked("msg_3", "toolu_late"))
+    assert decision("toolu_late") == "deny"
+    assert decision("toolu_not_counted_yet", "Read") == "deny"
+    assert decision(None, "Read") == "deny"
+    # The id is also read from the hook's input.
+    assert asyncio.run(guard({"tool_name": "Read", "tool_use_id": "toolu_save"}, None, None)) == {}
     # The session's own gate is still first.
     assert len(session._options.hooks["PreToolUse"]) == 2
 

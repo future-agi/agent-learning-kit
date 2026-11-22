@@ -802,6 +802,9 @@ class _DelegatingStub(_MessagesStub):
     # readers sent out together are seen running together.
     fan_out = 1
     hold = 0.0
+    # The model call (streamed requests, counted from 1) whose reply is the reading's save
+    # instead of another reader; 0 for none.
+    save_at = 0
     running = 0
     most_running = 0
     lock = threading.Lock()
@@ -835,22 +838,26 @@ class _DelegatingStub(_MessagesStub):
         with _DelegatingStub.lock:
             _DelegatingStub.served_by.append(who)
             n = len(_DelegatingStub.served_by)
+            call = sum(1 for each in _DelegatingStub.served_by if each != "other")
             if who == "reader":
                 _DelegatingStub.running += 1
                 _DelegatingStub.most_running = max(
                     _DelegatingStub.most_running, _DelegatingStub.running
                 )
         try:
-            self._reply(request, who, offered, n)
+            self._reply(request, who, offered, n, call)
         finally:
             if who == "reader":
                 with _DelegatingStub.lock:
                     _DelegatingStub.running -= 1
 
-    def _reply(self, request: dict, who: str, offered: set, n: int) -> None:
+    def _reply(self, request: dict, who: str, offered: set, n: int, call: int) -> None:
         if who == "reader":
             time.sleep(_DelegatingStub.hold)
             calls = [("Glob", {"pattern": "*.py"})]
+        elif call == _DelegatingStub.save_at:
+            save = next(name for name in offered if name.endswith("submit_contract"))
+            calls = [(save, {"summary": "Adds two numbers."})]
         else:
             name = "Agent" if "Agent" in offered else "Task"
             calls = [
@@ -918,20 +925,20 @@ class _DelegatingStub(_MessagesStub):
         self._event("message_stop", {"type": "message_stop"})
 
 
-@pytest.mark.parametrize(("fan_out", "hold"), [(1, 0.0), (6, 0.3)], ids=["one-reader", "six-at-once"])
-def test_the_cli_reading_stops_at_its_call_budget_counting_the_readers(
-    cli, tmp_path, monkeypatch, fan_out, hold
-):
+def _read_against_the_stub(tmp_path, monkeypatch, *, budget, fan_out=1, hold=0.0, save_at=0):
+    """Run a hosted reading on the real CLI against ``_DelegatingStub``; its exit code and
+    output folder."""
     from fi.alk.harness import agent_reading, session as harness_session
     from fi.alk.harness.reading_entry import run_reading_mode
 
     _DelegatingStub.served_by = []
     _DelegatingStub.fan_out, _DelegatingStub.hold = fan_out, hold
+    _DelegatingStub.save_at = save_at
     _DelegatingStub.running = _DelegatingStub.most_running = 0
     stub = ThreadingHTTPServer(("127.0.0.1", 0), _DelegatingStub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
     monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", f"http://127.0.0.1:{stub.server_address[1]}")
-    monkeypatch.setenv(agent_reading.CALL_LIMIT_ENV, "6")
+    monkeypatch.setenv(agent_reading.CALL_LIMIT_ENV, str(budget))
     monkeypatch.setenv("ALK_READING_MAX_DURATION_SECONDS", "90")
     monkeypatch.setattr(harness_session, "resolve", lambda *a, **k: ClaudeBackend())
     source = tmp_path / "source"
@@ -968,6 +975,19 @@ def test_the_cli_reading_stops_at_its_call_budget_counting_the_readers(
         stub.shutdown()
         stub.server_close()
 
+    return code, output
+
+
+@pytest.mark.parametrize(("fan_out", "hold"), [(1, 0.0), (6, 0.3)], ids=["one-reader", "six-at-once"])
+def test_the_cli_reading_stops_at_its_call_budget_counting_the_readers(
+    cli, tmp_path, monkeypatch, fan_out, hold
+):
+    from fi.alk.harness import agent_reading
+
+    code, output = _read_against_the_stub(
+        tmp_path, monkeypatch, budget=6, fan_out=fan_out, hold=hold
+    )
+
     served = [who for who in _DelegatingStub.served_by if who != "other"]
     failure = json.loads((output / "failure.json").read_text(encoding="utf-8"))
     print("served:", _DelegatingStub.served_by, "most at once:", _DelegatingStub.most_running,
@@ -977,7 +997,34 @@ def test_the_cli_reading_stops_at_its_call_budget_counting_the_readers(
     # The readers' calls reach the stream, so the budget counts them with the main loop's.
     assert "reader" in served and "main" in served
     assert failure["details"]["limit"] == 6
-    assert 6 <= failure["details"]["calls"] <= len(served)
-    # Stopped at the budget: at most one call more for each reader running at once.
+    # Stopped on the first call past the budget.
+    assert 7 <= failure["details"]["calls"] <= len(served)
+    # At most that call and one more for each reader running at once.
     assert _DelegatingStub.most_running <= agent_reading.READERS_AT_ONCE
-    assert len(served) <= 6 + agent_reading.READERS_AT_ONCE
+    assert len(served) <= 6 + 1 + agent_reading.READERS_AT_ONCE
+
+
+def test_the_cli_call_that_reaches_the_budget_may_still_save(cli, tmp_path, monkeypatch):
+    # As on the Gemini backend, the budget-th call is inside the budget, so the save it asks
+    # for runs; the reading stops on the call after it.
+    from fi.alk.harness import tools
+
+    saves = []
+    quote = tools.prompt_quote
+
+    def seen(payload):
+        saves.append(payload)
+        return quote(payload)
+
+    monkeypatch.setattr(tools, "prompt_quote", seen)
+
+    code, output = _read_against_the_stub(tmp_path, monkeypatch, budget=1, save_at=1)
+
+    failure = json.loads((output / "failure.json").read_text(encoding="utf-8"))
+    print("served:", _DelegatingStub.served_by, "saves:", saves, "failure:", failure)
+    # The save ran; this one is not a valid contract, so the reading went on, and the call
+    # after it ended the reading.
+    assert saves
+    assert code == 78
+    assert failure["code"] == "agent_reading_call_limit"
+    assert failure["details"] == {"calls": 2, "limit": 1}

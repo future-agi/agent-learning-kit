@@ -141,7 +141,7 @@ class _ReadingStage(Stage):
         self.done: list[StageDone] = []
         self.in_flight = False
         self.opened = False
-        # Set when a backend that counts calls as they arrive says the budget is reached.
+        # Set when a backend that counts calls as they arrive says a call went past the budget.
         self.budget_reached = asyncio.Event()
         self._calls_reported = 0
 
