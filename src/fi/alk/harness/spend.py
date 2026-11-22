@@ -58,10 +58,13 @@ def record(
     tokens_cached: int = 0,
     tools: dict[str, int] | None = None,
     refusals: dict[str, int] | None = None,
+    calls: int = 0,
 ) -> None:
     """Add one session's reported spend. A backend that cannot price a call reports None.
 
     ``tokens_cached`` is the cached part of ``tokens_in``, already priced at the cache rate in ``usd``.
+    ``calls`` counts every model call, a session's workers' included, where the backend counts
+    them; ``turns`` counts the main loop's replies only.
     """
     name = (stage or "stage").strip() or "stage"
     entry = _stages.setdefault(
@@ -69,6 +72,7 @@ def record(
         {
             "usd": 0.0,
             "turns": 0,
+            "calls": 0,
             "models": [],
             "priced": 0,
             "unpriced": 0,
@@ -86,6 +90,7 @@ def record(
         entry["usd"] = round(entry["usd"] + float(usd), 6)
         entry["priced"] += 1
     entry["turns"] += int(turns or 0)
+    entry["calls"] += int(calls or 0)
     entry["tokens_in"] += int(tokens_in or 0)
     entry["tokens_out"] += int(tokens_out or 0)
     entry["tokens_cached"] += int(tokens_cached or 0)
@@ -131,6 +136,7 @@ def _reading() -> dict[str, Any]:
                     for key in (
                         "usd",
                         "turns",
+                        "calls",
                         "models",
                         "priced",
                         "unpriced",

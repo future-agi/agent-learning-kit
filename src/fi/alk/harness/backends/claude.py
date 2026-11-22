@@ -445,6 +445,14 @@ class ClaudeBackend:
     def create(self, spec: SessionSpec) -> ClaudeSession:
         from ..config import gateway_wire_model
 
+        if spec.call_budget > 0:
+            # The CLI runs its sub-agents itself and offers no hook before each model call, so
+            # only its own turn limits bound the session.
+            logger.warning(
+                "the Claude backend does not hold a call budget; %d calls asked for, "
+                "bounded by the turn limits only",
+                spec.call_budget,
+            )
         # An alias on the wire is not what was billed, so report the model the run chose.
         reported = spec.model if gateway_wire_model(spec.model) != spec.model else None
         context = spec.conversation

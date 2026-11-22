@@ -463,6 +463,7 @@ class Stage:
                 received.tokens_cached,
                 dict(self.tool_calls),
                 dict(self.tool_refusals),
+                calls=received.calls,
             )
             turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id

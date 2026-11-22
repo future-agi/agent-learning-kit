@@ -259,6 +259,10 @@ class SessionSpec:
     # Workers this session may run, by name.
     workers: dict[str, WorkerSpec] = field(default_factory=dict)
     conversation: ConversationSession | None = None
+    # Model calls the whole session may make, its workers' included, across every message sent
+    # to it. Zero sets none, leaving the per-loop and per-worker turn limits as the only bounds.
+    # A backend that cannot hold it logs a warning when the session is created.
+    call_budget: int = 0
 
     def granted(self) -> list[str]:
         """Every tool name this session may call, qualified the way the model calls it."""
@@ -330,12 +334,19 @@ class ToolReturned:
     invocation_id: str = ""
 
 
+# The outcome of an exchange stopped because the session's call budget was spent.
+CALL_BUDGET_SPENT = "call_budget_spent"
+
+
 @dataclass
 class StageDone:
     """The exchange is over. The raw facts; Stage turns them into words."""
 
     outcome: str = "success"
     turns: int = 0
+    # Model calls this exchange made, its workers' included, where the backend counts them; the
+    # number a call budget is held to. Zero from a backend that does not count them.
+    calls: int = 0
     cost_usd: float | None = None
     # The units behind the price, so a bill can be checked rather than trusted.
     tokens_in: int = 0

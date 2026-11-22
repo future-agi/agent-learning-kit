@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,7 @@ from .reading_result import (
 from .session import Stage, StageIdleTimeout
 from .source_folder import refuse_unusable_folder
 from .sources import resolve as resolve_source
-from .understand import SUBMIT_REMINDER, open_stage, opening, reading_settings
+from .understand import READER, SUBMIT_REMINDER, open_stage, opening, reading_settings
 
 logger = logging.getLogger(__name__)
 logger.addFilter(MaskSecrets())
@@ -54,6 +55,13 @@ AGENT_READING_CRASHED = "agent_reading_crashed"
 
 _LIMIT_ENV = "ALK_READING_MAX_DURATION_SECONDS"
 _DEFAULT_SOFT_LIMIT_SECONDS = 1800.0
+# Model calls one reading may make, its readers' included, set by the platform. The default is a
+# first number: readings so far took 13 to 24 calls, and a real repository will need more.
+CALL_LIMIT_ENV = "ALK_READING_MAX_MODEL_CALLS"
+DEFAULT_CALL_LIMIT = 60
+# A reader's own calls in a reading. Readers measured so far used 4 to 8; one that wanders is
+# stopped and reports what it has, and the reading keeps calls to save. A build's keeps its own.
+READER_CALL_LIMIT = 12
 # The hard limit outlasts the soft one by the longest stop (the interrupt, the wait after it and
 # the close: 90 s) and room for the saved contract's document after it, whose framework scan can
 # take well over a minute on a crafted repository, so a reading that stops itself is never cut
@@ -70,6 +78,26 @@ _CLOSE_SECONDS = 20.0
 def _soft_limit() -> float:
     # The helper reads the same variable the same way for its own limit.
     return limit_seconds(_LIMIT_ENV, _DEFAULT_SOFT_LIMIT_SECONDS)
+
+
+def call_limit() -> int:
+    """The calls ``ALK_READING_MAX_MODEL_CALLS`` names when a positive whole number, else 60.
+
+    Anything else falls back to the default rather than to no limit, so a mistyped setting never
+    lets a reading run unbounded.
+    """
+    raw = os.environ.get(CALL_LIMIT_ENV, "").strip()
+    try:
+        calls = int(raw)
+    except ValueError:
+        calls = 0
+    if calls > 0:
+        return calls
+    if raw:
+        logger.warning(
+            "%s is not a positive whole number; using %d", CALL_LIMIT_ENV, DEFAULT_CALL_LIMIT
+        )
+    return DEFAULT_CALL_LIMIT
 
 
 def _check_job(job: HarnessJob) -> HarnessFailure | None:
@@ -253,6 +281,11 @@ async def _reading(
     # Opened as the build opens its own reading, turns, thinking and setup rule included, so a
     # contract saved here is one the build's gate would have kept.
     opened, _ = open_stage(agent_source, out=output, **reading_settings(job))
+    # One budget for the whole reading, its readers' calls and the reminder's included.
+    opened.spec.call_budget = call_limit()
+    reader = opened.spec.workers.get(READER)
+    if reader is not None:
+        reader.max_turns = READER_CALL_LIMIT
     stage = _ReadingStage(
         opened.spec,
         name=opened.name,

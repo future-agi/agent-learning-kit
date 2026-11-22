@@ -16,6 +16,7 @@ from collections.abc import Callable
 
 from .base import (
     ASK_TOOL,
+    CALL_BUDGET_SPENT,
     FILE_TOOLS,
     KNOWN_BUILTINS,
     OPERATOR_TOOLS,
@@ -42,6 +43,7 @@ from .base import (
 
 __all__ = [
     "ASK_TOOL",
+    "CALL_BUDGET_SPENT",
     "FILE_TOOLS",
     "KNOWN_BUILTINS",
     "OPERATOR_TOOLS",
