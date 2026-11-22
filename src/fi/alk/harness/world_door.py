@@ -467,19 +467,29 @@ _TRIAL_SCHEMA_MADE: set[str] = set()
 _TRIAL_SCHEMA_LOCK = threading.Lock()
 
 
+_TRIAL_COLUMNS = frozenset({"worker_deadline_at", "worker_deadlines", "sealed_at", "started_at"})
+
+
 def _trial_schema(address: str) -> None:
-    """Makes this world's trial tables and columns, once per world database in this process."""
+    """Makes this world's trial tables and columns when any is missing, once per world database in this process. A
+    world made from a baseline has them all (`HARNESS_TABLES_DDL`), and its role may neither create nor alter them."""
     with _TRIAL_SCHEMA_LOCK:
         if address in _TRIAL_SCHEMA_MADE:
             return
         import psycopg
 
         with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
-            for statement in (
-                TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, TRIAL_STARTED_DDL,
-                WORKER_STOPS_DDL, WORKER_RUNS_DDL,
-            ):
-                connection.execute(statement)
+            present = connection.execute(
+                "SELECT to_regclass('_alk_worker_stops') IS NOT NULL AND to_regclass('_alk_worker_runs') IS NOT NULL, "
+                "ARRAY(SELECT attname::text FROM pg_attribute WHERE attrelid = to_regclass('_alk_trial_faults') "
+                "AND NOT attisdropped)"
+            ).fetchone()
+            if not (present[0] and _TRIAL_COLUMNS <= set(present[1])):
+                for statement in (
+                    TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL,
+                    TRIAL_STARTED_DDL, WORKER_STOPS_DDL, WORKER_RUNS_DDL,
+                ):
+                    connection.execute(statement)
         _TRIAL_SCHEMA_MADE.add(address)
 
 
@@ -1403,10 +1413,25 @@ _CALL_COLUMNS_DDL = (
 )
 # Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a
 # failed write can leave without the row.
-_KEYS_DDL = (
+_KEYS_TABLE_DDL = (
     "CREATE TABLE IF NOT EXISTS _alk_action_keys "
-    "(actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (actor_id, idempotency_key));"
-    "ALTER TABLE _alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
+    "(actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (actor_id, idempotency_key))"
+)
+_KEYS_RESPONSE_DDL = "ALTER TABLE _alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
+_KEYS_DDL = f"{_KEYS_TABLE_DDL};{_KEYS_RESPONSE_DDL}"
+# The harness's own tables in a world, made on the baseline before the world role's grant: the grant then covers them
+# and every world copy has them. A world role can neither create a table nor alter one it does not own.
+HARNESS_TABLES_DDL = (
+    TRIAL_FAULTS_DDL,
+    TRIAL_DEADLINE_DDL,
+    TRIAL_WORKER_DEADLINES_DDL,
+    TRIAL_SEALED_DDL,
+    TRIAL_STARTED_DDL,
+    WORKER_STOPS_DDL,
+    WORKER_RUNS_DDL,
+    _KEYS_TABLE_DDL,
+    _KEYS_RESPONSE_DDL,
+    "ALTER TABLE IF EXISTS _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb",
 )
 
 
@@ -1453,6 +1478,9 @@ class PostgresLog:
         import psycopg
 
         self._call_columns_tried = True
+        if set(_CALL_COLUMNS) <= self._table_columns():
+            # Made on the baseline: a world role does not own the table, so it could not add them.
+            return
         try:
             with self._connect() as connection:
                 connection.execute(_CALL_COLUMNS_DDL)
@@ -1514,6 +1542,13 @@ class PostgresLog:
         """The keys table, made once per log; two first claims at once can race on creating it, and the loser finds it
         made."""
         if self._keys_made:
+            return
+        if connection.execute(
+            "SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('_alk_action_keys') "
+            "AND attname = 'response' AND NOT attisdropped"
+        ).fetchone():
+            # Made on the baseline: a world role may use it but can neither create it nor alter it.
+            self._keys_made = True
             return
         try:
             connection.execute(_KEYS_DDL)
