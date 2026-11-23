@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import atexit
 import errno
+import io
 import itertools
 import logging
 import os
+import selectors
 import signal
 import subprocess
 import sys
@@ -30,7 +32,8 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from queue import SimpleQueue
+from typing import Any, BinaryIO
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +95,8 @@ class Leaf:
         except FileNotFoundError:
             pass  # already removed
 
-    def close(self, timeout: float = _EMPTY_WAIT_SECONDS) -> None:
-        """Kill what is left, wait until the leaf is empty, and remove it. Never raises."""
+    def close(self, timeout: float = _EMPTY_WAIT_SECONDS) -> bool:
+        """Kill what is left, wait until the leaf is empty, and remove it. Return False if removal needs a retry."""
         try:
             self.kill()
             deadline = time.monotonic() + timeout
@@ -105,6 +108,8 @@ class Leaf:
         except OSError as exc:
             # A leaf that will not empty is a process the kernel cannot kill; say so.
             logger.warning("containment: %s did not empty (%s)", self.path, exc)
+            return False
+        return True
 
     def _empty(self) -> bool:
         try:
@@ -157,7 +162,9 @@ def probe(
         trial.mkdir()
         try:
             # `cgroup.kill` (Linux 5.14+) is what stops a whole leaf at once.
-            usable = (trial / "cgroup.kill").exists() and (trial / "cgroup.procs").exists()
+            usable = (trial / "cgroup.kill").exists() and (
+                trial / "cgroup.procs"
+            ).exists()
         finally:
             trial.rmdir()
     except OSError:
@@ -197,74 +204,356 @@ def _go_message(env: Mapping[Any, Any] | None) -> bytes:
     return b"go " + str(len(body)).encode() + b"\0" + body
 
 
-def _write_all(fd: int, data: bytes) -> None:
+@dataclass(frozen=True)
+class _Deadline:
+    args: Sequence[str]
+    timeout: float
+    end: float
+
+    def remaining(self) -> float:
+        return max(0.0, self.end - time.monotonic())
+
+    def require_remaining(self) -> float:
+        left = self.remaining()
+        if not left:
+            raise subprocess.TimeoutExpired(self.args, self.timeout)
+        return left
+
+    def wait(self, fd: int, event: int) -> None:
+        with selectors.DefaultSelector() as selector:
+            selector.register(fd, event)
+            left = self.remaining()
+            if not left or not selector.select(left):
+                raise subprocess.TimeoutExpired(self.args, self.timeout)
+
+
+def _write_all(fd: int, data: bytes, deadline: _Deadline | None = None) -> None:
     view = memoryview(data)
+    if deadline is not None:
+        os.set_blocking(fd, False)
     while view:
+        if deadline is not None:
+            deadline.wait(fd, selectors.EVENT_WRITE)
         view = view[os.write(fd, view) :]
 
 
-def _read_all(fd: int) -> bytes:
+def _read_all(fd: int, deadline: _Deadline | None = None) -> bytes:
     chunks = []
-    while chunk := os.read(fd, 4096):
+    while True:
+        if deadline is not None:
+            deadline.wait(fd, selectors.EVENT_READ)
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            return b"".join(chunks)
         chunks.append(chunk)
-    return b"".join(chunks)
 
 
-def _close(*fds: int) -> None:
-    for fd in fds:
-        if fd >= 0:
-            os.close(fd)
+def _close(*streams: BinaryIO) -> None:
+    for stream in streams:
+        stream.close()
 
 
-def popen(args: Sequence[str], **kwargs: Any) -> tuple[subprocess.Popen, Leaf | None]:
+_CleanupRecord = tuple[subprocess.Popen | None, Leaf | None, bool]
+
+
+class _Cleanup:
+    def __init__(self) -> None:
+        self.pending: SimpleQueue[_CleanupRecord] = SimpleQueue()
+        self.election = threading.Condition()
+        self.worker: threading.Thread | None = None
+        self.starting: threading.Thread | None = None
+
+    def ensure_worker(self, deadline: _Deadline | None = None) -> None:
+        """Refuse the launch if we cannot provide an idle reaper before acquiring handles."""
+        while True:
+            candidate = None
+            try:
+                with self.election:
+                    left = (
+                        deadline.require_remaining() if deadline is not None else None
+                    )
+                    if self.starting is not None:
+                        self.election.wait(left)
+                        continue
+                    if self.worker is not None and self.worker.is_alive():
+                        return
+                    candidate = threading.Thread(
+                        target=self._entry, name="alk-reaper", daemon=True
+                    )
+                    self.starting = candidate
+                candidate.start()  # Never hold the election lock here.
+            except BaseException:
+                if candidate is not None:
+                    # Finish rollback before propagating the original startup error.
+                    while True:
+                        try:
+                            with self.election:
+                                if self.starting is candidate:
+                                    self.starting = None
+                                self.election.notify_all()
+                            break
+                        except KeyboardInterrupt:
+                            continue
+                raise
+
+    def _entry(self) -> None:
+        # The worker completes its own election even if its creator never returns.
+        with self.election:
+            candidate = threading.current_thread()
+            if self.starting is not candidate:
+                return
+            self.worker = candidate
+            self.starting = None
+            self.election.notify_all()
+        self._consume()
+
+    def _consume(self) -> None:
+        while True:
+            first = (
+                self.pending.get()
+            )  # Block indefinitely while idle; put() never waits.
+            others = self.pending.qsize()  # Bound the pass even if records need retry.
+            self._finish(first)
+            del first
+            for _ in range(others):
+                self._finish(self.pending.get())
+            if not self.pending.empty():
+                time.sleep(0.2)
+
+    def _finish(self, record: _CleanupRecord) -> None:
+        process, leaf, group_pending = record
+        if group_pending and process is not None:
+            try:
+                if process.returncode is None:
+                    if hasattr(os, "waitid"):
+                        # Reject auto-reap during backoff; SIGCHLD ignored still leaves
+                        # an accepted numeric-ID window between probe and signal.
+                        os.waitid(
+                            os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT
+                        )
+                    # Without waitid, the unreaped leader pins the PGID except when
+                    # SIGCHLD is ignored; that existing numeric-ID window is accepted.
+                    os.killpg(process.pid, signal.SIGKILL)
+            except (ChildProcessError, ProcessLookupError):
+                group_pending = False
+            except (OSError, KeyboardInterrupt):
+                pass  # Retry the group, but keep making progress on the leaf.
+            else:
+                group_pending = False
+        if leaf is not None:
+            try:
+                leaf.kill()
+            except OSError:
+                pass  # Still try removal: the leaf may already be empty.
+            try:
+                leaf.path.rmdir()
+            except FileNotFoundError:
+                leaf = None
+            except OSError:
+                pass  # Retry kill and removal together.
+            else:
+                leaf = None
+        if group_pending and process is not None:
+            self.pending.put((process, leaf, True))
+            return  # Do not poll: the leader must stay waitable for the retry.
+        try:
+            reaped = process is None or process.poll() is not None
+        except OSError:
+            reaped = False
+        if not reaped or leaf is not None:
+            self.pending.put((process, leaf, False))
+
+
+_cleanup = _Cleanup()
+
+
+def _reset_cleanup_after_fork() -> None:
+    # Neither the parent's worker/lock nor ownership of its children survives fork.
+    global _cleanup
+    _cleanup = _Cleanup()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_cleanup_after_fork)
+
+
+def _defer_cleanup(
+    process: subprocess.Popen | None, leaf: Leaf | None, group_pending: bool = False
+) -> None:
+    # Nonblocking publication only: no election, thread creation or contended wait.
+    _cleanup.pending.put((process, leaf, group_pending))
+
+
+def _abort_child(
+    process: subprocess.Popen, leaf: Leaf | None, owns_group: bool
+) -> None:
+    reaped = False
+    group_pending = False
+    try:
+        if owns_group:  # communicate() may reap the leader before decoding fails.
+            try:
+                # Preserve the earlier synchronous fallback for surviving descendants.
+                # If the group emptied after reap, numeric-ID reuse remains possible;
+                # that existing window is accepted rather than never signalling survivors.
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except (OSError, KeyboardInterrupt) as kill_error:
+                group_pending = True
+                logger.warning(
+                    "containment: could not kill group %s (%s)", process.pid, kill_error
+                )
+        # A failed leaf kill must not leave the direct child alive or its parent blocked in wait.
+        try:
+            if not group_pending:  # Popen.kill() may poll and reap first.
+                process.kill()
+        except (OSError, KeyboardInterrupt) as exc:
+            logger.warning(
+                "containment: could not kill child %s (%s)", process.pid, exc
+            )
+        if leaf is not None:
+            try:
+                if leaf.close() is not False:
+                    leaf = None
+            except (OSError, KeyboardInterrupt) as exc:
+                logger.warning(
+                    "containment: could not close leaf for child %s (%s)",
+                    process.pid,
+                    exc,
+                )
+        try:
+            if not group_pending:
+                process.wait(timeout=_EMPTY_WAIT_SECONDS)
+                reaped = True
+        except (OSError, subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
+            logger.warning(
+                "containment: could not reap child %s (%s)", process.pid, exc
+            )
+    finally:
+        # These attributes are populated for PIPE only, never for caller-owned file objects.
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except (OSError, KeyboardInterrupt) as exc:
+                    logger.warning(
+                        "containment: could not close child stream (%s)", exc
+                    )
+        if group_pending:
+            _defer_cleanup(process, leaf, True)
+        elif not reaped or leaf is not None:
+            _defer_cleanup(process, leaf)
+
+
+class _GateEnd(io.FileIO):
+    def __init__(self) -> None:
+        # Allocate the closed FileIO before os.pipe(). Unlike an fdopen return
+        # value, it remains reachable even if interrupted *during* adoption.
+        pass
+
+    def adopt(self, fd: int, mode: str) -> None:
+        super().__init__(fd, mode)
+
+
+class _GatePipe:
+    def __init__(self) -> None:
+        self.reader, self.writer = _GateEnd(), _GateEnd()
+        self.ends: tuple[int, ...] = ()
+        self.transferred = False
+
+    def open(self) -> tuple[BinaryIO, BinaryIO]:
+        self.ends = os.pipe()
+        self.reader.adopt(self.ends[0], "rb")
+        self.writer.adopt(self.ends[1], "wb")
+        self.transferred = True
+        return self.reader, self.writer
+
+    def close(self) -> None:
+        ends, self.ends = self.ends, ()
+        for fd, stream in zip(ends, (self.reader, self.writer)):
+            try:
+                if self.transferred or not stream.closed:
+                    stream.close()  # Idempotent after an early handshake close.
+                else:
+                    os.close(fd)  # Interrupted before this FileIO took ownership.
+            except (OSError, KeyboardInterrupt):
+                logger.warning(
+                    "containment: secondary gate close failure", exc_info=True
+                )
+
+
+def popen(
+    args: Sequence[str], *, _deadline: _Deadline | None = None, **kwargs: Any
+) -> tuple[subprocess.Popen, Leaf | None]:
     """``subprocess.Popen`` for a customer execution, inside a leaf of its own when contained.
 
     Without containment this is a plain Popen. With it, the process starts as the gate, joins
     a fresh leaf, and only then runs ``args`` with ``env``; any process it starts is born inside
-    the leaf. A command that cannot be executed raises here, as ``subprocess.Popen`` does.
+    the leaf. If the cleanup worker cannot start, this raises ``RuntimeError`` before creating
+    a leaf, pipe or child. Cold thread startup may exceed the deadline by its startup time.
+    A command that cannot be executed raises here, as ``subprocess.Popen`` does.
     """
     containment = _containment
     if containment is None:
         return subprocess.Popen(list(args), **kwargs), None
+    _cleanup.ensure_worker(_deadline)
     argv = [str(arg) for arg in args]
     message = _go_message(kwargs.pop("env", None))
     pass_fds = tuple(kwargs.pop("pass_fds", ()))
+    go, done = _GatePipe(), _GatePipe()
+    process = None
+    if _deadline is not None:
+        _deadline.require_remaining()
     leaf = containment.leaf()
-    go_read = go_write = done_read = done_write = -1
     try:
-        go_read, go_write = os.pipe()
-        done_read, done_write = os.pipe()
+        go_read, go_write = go.open()
+        done_read, done_write = done.open()
         process = subprocess.Popen(
-            [sys.executable, "-I", "-S", "-c", _GATE, str(go_read), str(done_write), *argv],
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-c",
+                _GATE,
+                str(go_read.fileno()),
+                str(done_write.fileno()),
+                *argv,
+            ],
             env=_GATE_ENVIRONMENT,
-            pass_fds=(*pass_fds, go_read, done_write),
+            pass_fds=(*pass_fds, go_read.fileno(), done_write.fileno()),
             **kwargs,
         )
-    except BaseException:
-        _close(go_read, go_write, done_read, done_write)
-        leaf.close()
-        raise
-    _close(go_read, done_write)
-    try:
+        _close(go_read, done_write)
         leaf.add(process.pid)
-        _write_all(go_write, message)
+        _write_all(go_write.fileno(), message, _deadline)
         _close(go_write)
-        go_write = -1
-        failure = _read_all(done_read)  # EOF once the command is executing
+        # EOF once the command is executing.
+        failure = (
+            _read_all(done_read.fileno())
+            if _deadline is None
+            else _read_all(done_read.fileno(), _deadline)
+        )
+        if failure:
+            code = int(failure) or errno.ENOEXEC
+            raise OSError(code, os.strerror(code), argv[0])
+        _close(done_read)
     except BaseException:
-        # Closing the go pipe before the mark arrived ends the gate unrun.
-        _close(go_write, done_read)
-        leaf.close()
-        process.wait()
+        try:
+            if process is not None:
+                _abort_child(process, leaf, bool(kwargs.get("start_new_session")))
+        finally:
+            go.close()
+            done.close()
+        if process is None:
+            # Closing a leaf opens cgroup files. Release scarce gate fds first.
+            try:
+                removed = leaf.close() is not False
+            except (OSError, KeyboardInterrupt) as exc:
+                logger.warning("containment: could not close unused leaf (%s)", exc)
+                removed = False
+            if not removed:
+                _defer_cleanup(None, leaf)
         raise
-    _close(done_read)
-    if failure:
-        # The leaf first: a same-user process can reach the gate's done pipe through /proc and
-        # forge a failure; the command it hides must not keep the harness waiting.
-        leaf.close()
-        process.wait()
-        code = int(failure) or errno.ENOEXEC
-        raise OSError(code, os.strerror(code), argv[0])
     return process, leaf
 
 
@@ -279,29 +568,39 @@ def run(
 ) -> subprocess.CompletedProcess:
     """``subprocess.run`` for a customer execution, in a session of its own: what it started never
     outlives it. On a timeout or any error its process group is killed, and its leaf with
-    containment; with containment the leaf is also closed when it exits."""
+    containment; with containment the leaf is also closed when it exits. A cleanup worker
+    must be available before launch, including when containment is disabled. If it cannot
+    start, this raises ``RuntimeError`` before creating a leaf, pipe or child. A caller
+    starting a cold worker may exceed its deadline by the thread startup time."""
     if capture_output:
         kwargs["stdout"] = subprocess.PIPE
         kwargs["stderr"] = subprocess.PIPE
     if input is not None:
         kwargs["stdin"] = subprocess.PIPE
-    process, leaf = popen(args, start_new_session=True, **kwargs)
+    deadline = (
+        _Deadline(args, timeout, time.monotonic() + timeout)
+        if timeout is not None and active() is not None
+        else None
+    )
+    if active() is None:
+        _cleanup.ensure_worker()  # run owns abort cleanup even without a leaf.
+    process, leaf = popen(args, _deadline=deadline, start_new_session=True, **kwargs)
     try:
-        try:
-            stdout, stderr = process.communicate(input=input, timeout=timeout)
-        except BaseException:
-            # A timeout, or the harness interrupted: stop all it started before passing it on.
-            if leaf is not None:
-                leaf.kill()
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-            raise
-    finally:
+        stdout, stderr = process.communicate(
+            input=input, timeout=deadline.remaining() if deadline else timeout
+        )
+    except BaseException as exc:
+        _abort_child(process, leaf, owns_group=True)
+        if deadline is not None and isinstance(exc, subprocess.TimeoutExpired):
+            raise subprocess.TimeoutExpired(
+                args, deadline.timeout, output=exc.output, stderr=exc.stderr
+            ) from exc
+        raise
+    else:
         if leaf is not None:
             leaf.close()
     if check and process.returncode:
-        raise subprocess.CalledProcessError(process.returncode, list(args), stdout, stderr)
+        raise subprocess.CalledProcessError(
+            process.returncode, list(args), stdout, stderr
+        )
     return subprocess.CompletedProcess(list(args), process.returncode, stdout, stderr)

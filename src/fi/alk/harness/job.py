@@ -675,6 +675,9 @@ class FailureCause(str, Enum):
     AGENT_NOT_READY_IN_TIME = "agent_not_ready_in_time"
     CHAT_TARGET_TIMEOUT = "chat_target_timeout"
     CHAT_TARGET_REFUSED = "chat_target_refused"
+    # A process the agent depends on, not the agent, was not ready in time. Its name stays out:
+    # the manifest the user wrote names it.
+    DEPENDENCY_NOT_READY_IN_TIME = "dependency_not_ready_in_time"
 
 
 class FailureOwner(str, Enum):
