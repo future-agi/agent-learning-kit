@@ -53,6 +53,11 @@ _GRAPH_NAMESPACE = "langgraph_checkpoint_ns"
 _TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
 _TOOL_ARGUMENT_KEYS = ("gen_ai.tool.call.arguments", "tool.parameters", "input.value")
 _TOOL_RESULT_KEYS = ("gen_ai.tool.call.result", "output.value")
+# The id the agent's model gave the call. Google ADK writes "<not specified>" when it has none, and puts an event id
+# there on the span it opens for tools whose responses it merged.
+_TOOL_CALL_ID_KEYS = ("gen_ai.tool.call.id", "tool_call.id")
+_NO_CALL_ID = "<not specified>"
+_MERGED_TOOLS = "(merged tools)"
 _LIVE_SPANS_MAX = 4096
 _TRACE_LINE_MAX = 65536
 _PAYLOAD_MAX = 4096
@@ -629,6 +634,9 @@ class _ToolSpans:
             "parent_span_id": parent_span_id,
             "relationship": relationship,
         }
+        call_id = _first(attributes, _TOOL_CALL_ID_KEYS)
+        if call_id and call_id != _NO_CALL_ID and name != _MERGED_TOOLS:
+            record["call_id"] = call_id[:256]
         _bounded(
             record,
             "arguments",

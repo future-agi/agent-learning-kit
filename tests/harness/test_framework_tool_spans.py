@@ -2061,3 +2061,35 @@ def test_a_call_named_by_its_worker_label_never_takes_another_worker_s_place() -
         (c.worker_label, c.runtime_ids.get("event_id"), c.parent_span_id) for c in merged if c.name == "search"
     )
     assert searches == [("A", None, ""), ("B", "sB", "hB")]
+
+
+
+def test_a_tool_span_carries_the_call_id_the_agents_model_gave(tmp_path: Path) -> None:
+    records = _run(
+        tmp_path,
+        """
+        with span("Support", **{"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Support"}):
+            with span("execute_tool look_up_order", **{"gen_ai.operation.name": "execute_tool",
+                                                      "gen_ai.tool.name": "look_up_order",
+                                                      "gen_ai.tool.call.id": "adk-1", "tool_call.id": "other"}):
+                pass
+            with span("execute_tool start_return", **{"gen_ai.operation.name": "execute_tool",
+                                                     "gen_ai.tool.name": "start_return",
+                                                     "gen_ai.tool.call.id": "<not specified>"}):
+                pass
+            with span("execute_tool (merged tools)", **{"gen_ai.operation.name": "execute_tool",
+                                                       "gen_ai.tool.name": "(merged tools)",
+                                                       "gen_ai.tool.call.id": "event-9"}):
+                pass
+            with span("lookup", **{"openinference.span.kind": "TOOL", "tool.name": "lookup",
+                                   "tool_call.id": "call_7"}):
+                pass
+    """,
+    )
+
+    assert {record["name"]: record.get("call_id") for record in records} == {
+        "look_up_order": "adk-1",
+        "start_return": None,
+        "(merged tools)": None,
+        "lookup": "call_7",
+    }
