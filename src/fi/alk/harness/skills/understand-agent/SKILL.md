@@ -144,8 +144,8 @@ Find, in roughly this order:
    lines are recorded as unconfirmed).
 
 7. **The modality.** How this agent is run: a voice session, a text conversation, or work it
-   carries out in a browser, through a screen or by crawling. This decides how it is later run, so getting it wrong
-   reroutes every test.
+   carries out in a browser, through a screen or by crawling. This decides how it is later run,
+   so getting it wrong reroutes every test.
    **Decide it from the source and always record it.** A run is unattended, so there is nobody to
    ask, and a modality left unsaid is read as chat: a voice agent then never places a call and the
    whole run tests nothing. Read it off what the agent depends on:

@@ -299,3 +299,12 @@ def test_the_hosted_build_carries_on_with_sites(tmp_path):
     assert asyncio.run(runtime._carry_on()) is True
     assert len(runtime.handled) == 1
     assert not (tmp_path / FAILURE_FILE).exists()
+
+
+def test_the_hosted_check_needs_only_the_jobs_metadata(tmp_path):
+    # A job this process can't validate still has its metadata read: it never passes unchecked.
+    _write(tmp_path, _BROWSER)
+    runtime = _hosted(tmp_path, {})
+    runtime.job = {"scenario_count": 2, "metadata": {}}
+    assert asyncio.run(runtime._carry_on()) is False
+    assert _failure(tmp_path)["code"] == BROWSER_ENVIRONMENT_REQUIRED

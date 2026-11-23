@@ -78,13 +78,36 @@ not exist, or — the one that mattered most in practice — *every* tool having
 means the arguments were read and then not recorded. Problems are returned **into the
 conversation**, so the model corrects and resubmits rather than a bad contract landing.
 
-A browser reading gets one second look first, naming any browser, crawling or
-computer-use tool the code check found in the source. So does a chat or voice reading of source
-where the check found one, or where the check stopped before reading all of it. The next
-submission stands: a browser answer is refused to
-`failure.json` and the build exits 78, and a chat or voice answer is saved. The look gives a value
-to send back, which only tells apart calls in one model message: those run before the model reads
-any result. The rule and its state are `SecondLook` in `agent_type_check.py`. A browser answer to a chat or voice look is refused at once, since that look said browser stops the build. When calls in one message run one after another, or together once the first scan is done, a later call is taken as the answer before the model has read the look. Once an answer with the value has come back, a later browser answer without it gets a look again, so answers that keep switching cost turns, up to the reading's turn limit (70, or 140 for a generic job read unattended), never a refusal without a look.
+The reading answers one of three kinds where an agent's main job is work rather than a
+conversation: `browser` (it drives a web browser with a browser library), `computer_use` or `cua`
+(it acts through a screen) and `crawler` (it fetches pages by rule). A mixed answer is refused if
+any part of it is a refused kind. Any of the three gets one second look first, naming any browser,
+crawling or computer-use tool the code check found in the source, and which kind each belongs to
+where some differ from the answer. So does a chat or voice reading of source where the check found
+one, or where the check stopped before reading all of it. The next submission stands: a
+`computer_use` or `crawler` answer is refused to `failure.json` (`agent_type_unsupported`, its
+kind in `details.agent_type`) and the build exits 78; a `browser` answer is saved as modality
+`chat` with `environment_needs: ["browser"]`; a chat or voice answer is saved as it is. The gate
+alone sets `environment_needs`: a value the model writes itself is dropped. `how_it_runs` in
+`contract.py` answers how an agent is reached and what it needs.
+
+The look gives a value to send back, which only tells apart calls in one model message: those run
+before the model reads any result. The rule and its state are `SecondLook` in
+`agent_type_check.py`. An answer to a chat or voice look stands at once, since that look said what
+each kind leads to. When calls in one message run one after another, or together once the first
+scan is done, a later call is taken as the answer before the model has read the look. Once an
+answer with the value has come back, a later answer of another kind without it gets a look again,
+so answers that keep switching cost turns, up to the reading's turn limit (70, or 140 for a generic
+job read unattended), never a refusal without a look.
+
+A reading never refuses a browser agent for want of a browser: a reading knows no job. A build
+does, with `browser_environment_required` (exit 78), when the contract needs a browser and the
+job's `metadata.browser_allowed_sites` is absent. It checks at the build command's start (a
+contract already on disk, else an accepted seed that matches the job), between the reading and the
+environment in the staged run, and when the hosted build first sees a saved contract
+(`browser_environment.py`). The list itself is read strictly: present, it must be a non-empty list
+of host names (`browser_allowed_sites_invalid`), each one the run's egress allows when the job
+controls egress (`browser_site_not_in_egress`).
 
 **A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
 it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the

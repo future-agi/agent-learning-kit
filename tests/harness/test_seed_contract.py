@@ -2241,3 +2241,31 @@ def test_a_broken_site_list_is_refused_at_intake(tmp_path, monkeypatch, sites):
     assert _code(tmp_path) == "browser_allowed_sites_invalid"
     assert calls == []
     assert not _marker(tmp_path).exists()
+
+
+def test_the_contract_on_disk_is_checked_over_a_seed(tmp_path, monkeypatch):
+    # The build keeps a contract already on disk over any seed, so that is the one checked.
+    calls = _watch_authoring(monkeypatch)
+    job = _job()
+    _place(tmp_path, _seed_bytes(job))
+    output = tmp_path / "authoring"
+    output.mkdir()
+    (output / "contract.json").write_text(json.dumps(_NEEDS_BROWSER), encoding="utf-8")
+
+    assert _build_job(tmp_path, job, *_seeded(tmp_path)) == EXIT_REFUSED
+
+    assert _code(tmp_path) == "browser_environment_required"
+    assert calls == []
+
+
+def test_a_seed_that_doesnt_match_the_job_is_left_to_be_read_again(tmp_path, monkeypatch):
+    # Its kind is not this build's: the agent is read again, and that reading checked once saved.
+    calls = _watch_authoring(monkeypatch)
+    job = _job()
+    older = _job(source={**GITHUB, "commit_sha": OTHER_COMMIT})
+    _place(tmp_path, _seed_bytes(older, _NEEDS_BROWSER))
+
+    assert _build_job(tmp_path, job, *_seeded(tmp_path)) == 0
+
+    assert not (tmp_path / "authoring" / "failure.json").exists()
+    assert calls == ["compose", "await"]

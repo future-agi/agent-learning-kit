@@ -308,21 +308,21 @@ def _starting_environment_failure(
     job: HarnessJob, output: Path, seed: Path | None
 ) -> HarnessFailure | None:
     """The refusal of the contract a build starts from, when its agent needs an environment the
-    job doesn't give: the platform's seed, else one an earlier build left. A contract that can't
-    be read is left to the steps that read it."""
+    job doesn't give. That is the contract an earlier build left, which the build keeps over any
+    seed; else the platform's seed, when it matches this job (one that doesn't is read again, and
+    the new reading is checked once saved). A contract that can't be read is left to the steps
+    that read it."""
     from .browser_environment import environment_failure
     from .contract import AgentContract
-    from .seed_contract import read_seed
+    from .seed_contract import differs, read_seed
     from .understand import load
 
-    contract = None
     try:
-        if seed is not None:
+        contract = load(output)
+        if contract is None and seed is not None:
             body, problem, _ = read_seed(seed)
-            if problem is None and body is not None:
+            if problem is None and body is not None and not differs(body, job):
                 contract = AgentContract.model_validate(body)
-        if contract is None:
-            contract = load(output)
     except (OSError, ValueError):
         return None
     return None if contract is None else environment_failure(contract, job.metadata)

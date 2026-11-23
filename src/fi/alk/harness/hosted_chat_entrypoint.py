@@ -1727,13 +1727,14 @@ class HostedChatRuntime:
     def _environment_refused(self) -> bool:
         """Refuse a saved contract whose agent needs an environment the job doesn't give, before
         its world is built. True once refused: the failure is written for the build."""
-        from .cli import environment_refusal
-        from .job import HarnessJob
+        from types import SimpleNamespace
 
-        try:
-            job = HarnessJob.model_validate(self.job)
-        except Exception:  # noqa: BLE001 - the build command read the job, and refuses one it can't
-            return False
+        from .cli import environment_refusal
+
+        # Only the metadata is read, never the whole job: a job this process can't validate must
+        # not pass for one with nothing to check.
+        metadata = self.job.get("metadata") if isinstance(self.job, dict) else None
+        job = SimpleNamespace(metadata=metadata if isinstance(metadata, dict) else {})
         try:
             return environment_refusal(self.workspace, job) is not None
         except (OSError, ValueError):
