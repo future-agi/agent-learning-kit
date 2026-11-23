@@ -119,8 +119,31 @@ TOOL_MARKER = re.compile(
 NOT_THE_AGENT = frozenset(
     {"docs", "doc", "examples", "example", "samples", "vendor", "third_party", "evals"}
 )
-# What the world registry already treats as a browser.
-BROWSER_MODALITIES = frozenset({"browser", "computer_use", "cua"})
+# The three kinds a reading tells apart. A browser agent drives a web browser with a browser
+# library, and runs in an environment that gives it one. A computer-use agent acts through a screen
+# (pixels, mouse and keyboard), and a crawler fetches pages by rule with no model choosing each
+# step: both are refused.
+BROWSER = "browser"
+COMPUTER_USE = "computer_use"
+CRAWLER = "crawler"
+REFUSED_KINDS = (COMPUTER_USE, CRAWLER)
+# The answers a reading may give for each kind, beside the conversation modalities.
+_KIND_ANSWERS = {COMPUTER_USE: (COMPUTER_USE, "cua"), CRAWLER: (CRAWLER,), BROWSER: (BROWSER,)}
+# What the code check finds, by kind, as `browser_tools_found` names them. Every other name is a
+# browser tool.
+COMPUTER_USE_TOOLS = frozenset({"computer-use tool", "pyautogui", "pywinauto", "e2b-desktop"})
+CRAWLER_TOOLS = frozenset(
+    {
+        "scrapy",
+        "crawl4ai",
+        "firecrawl",
+        "crawlee",
+        "scrapegraphai",
+        "apify-client",
+        "@mendable/firecrawl-js",
+        "@crawlee/*",
+    }
+)
 
 # Every match of TOOL_MARKER starts with one of these, inside one name or string, so a file
 # without one has no marker, and isn't tokenized to strip its comments.
@@ -956,8 +979,32 @@ def modality_text(value: Any) -> str:
 
 
 def is_browser(text: str) -> bool:
-    # Whole list items only: free text such as "not a browser" isn't a reading of browser.
-    return text in BROWSER_MODALITIES or "browser" in text.split("\n")
+    """Whether the reading names any of the three kinds a conversation agent is not."""
+    return bool(reading_kind(text))
+
+
+def reading_kind(text: str) -> str:
+    """The kind the reading names: ``computer_use``, ``crawler``, ``browser``, or "" for a
+    conversation. Whole list items only: free text such as "not a browser" names none. Where a
+    reading names more than one, a refused kind wins."""
+    items = set(text.split("\n"))
+    for kind in (*REFUSED_KINDS, BROWSER):
+        if items & set(_KIND_ANSWERS[kind]):
+            return kind
+    return ""
+
+
+def tool_kind(name: str) -> str:
+    """The kind a tool the code check found belongs to."""
+    if name in COMPUTER_USE_TOOLS:
+        return COMPUTER_USE
+    if name in CRAWLER_TOOLS:
+        return CRAWLER
+    return BROWSER
+
+
+def tools_of(kind: str, found: Sequence[str]) -> list[str]:
+    return [name for name in found if tool_kind(name) == kind]
 
 
 def decide(
@@ -967,13 +1014,17 @@ def decide(
     looked_again: bool,
     cut: frozenset[str] = frozenset(),
 ) -> Literal["refuse", "second_look", "keep"]:
-    """What the model read against what the code check found. A browser reading always gets one
-    more look first, and so does a reading the check disagrees with, or one it couldn't check all
-    of (``cut``, the limits that stopped it); the answer then stands."""
-    if is_browser(modality_text(claimed)):
+    """What the model read against what the code check found. A reading of any of the three kinds
+    always gets one more look first, and so does a reading the check disagrees with, or one it
+    couldn't check all of (``cut``, the limits that stopped it); the answer then stands: a
+    computer-use or crawler reading is refused, and a browser reading is kept."""
+    kind = reading_kind(modality_text(claimed))
+    if kind:
         # Never at once: what was found can be a dev dependency or a helper script of a chat
         # agent, and a refusal can't be retried.
-        return "refuse" if looked_again else "second_look"
+        if not looked_again:
+            return "second_look"
+        return "refuse" if kind in REFUSED_KINDS else "keep"
     # A cut is never a refusal: a limit reached on an honest repository says nothing of its job.
     return "second_look" if (found or cut) and not looked_again else "keep"
 
@@ -1002,6 +1053,8 @@ class SecondLook:
         # must still be able to answer, or every submission earns another look until the turns run
         # out.
         self._unanswered = False
+        # The kind of the answer a value came back on ("" for a conversation), once one has.
+        self._answered: str | None = None
 
     @property
     def given(self) -> bool:
@@ -1020,13 +1073,15 @@ class SecondLook:
     ) -> Literal["refuse", "second_look", "keep"]:
         # A call holding a value read a look, so its answer stands. Without one, the call after a
         # look that no value came back for is taken as the answer. Once a value came back, a call
-        # without one that reads the same stands too; one that reads otherwise may have run beside
-        # that answer unread, so it gets a look of its own. A value that came back on a browser
-        # answer was refused and stopped every later call, so the answer that came back read chat.
+        # without one that reads the same kind stands too; one that reads otherwise may have run
+        # beside that answer unread, so it gets a look of its own. A value that came back on a
+        # refused kind stopped every later call.
+        kind = reading_kind(claimed)
         read_it = isinstance(receipt, str) and receipt in self._receipts
         if read_it:
             self._unanswered = False
-        same_answer = not is_browser(claimed)
+            self._answered = kind
+        same_answer = self._answered == kind
         return decide(
             claimed,
             found,
@@ -1053,62 +1108,86 @@ class SecondLook:
     @staticmethod
     def prompt(claimed: str, found: Sequence[str], *, cut: frozenset[str] = frozenset()) -> str:
         # What was found already says what to decide, cut or not, so its text is the same.
-        if is_browser(claimed) and found:
-            return (
-                "second-look: you recorded modality browser, which stops this build as not "
-                f"supported, and the source uses {', '.join(found)}. A chat or voice agent can "
-                "list one for its tests or use one in a helper script. Does a person come to this "
-                "agent for a conversation, or to have it carry out work on websites or a computer? "
-                "For a conversation, submit again as chat or voice. If its main job is that work, "
-                "submit again as browser. Decide this from the source; don't ask anyone."
-            )
-        if is_browser(claimed) and cut:
+        kind = reading_kind(claimed)
+        if found:
+            others = _other_kinds(kind, found)
+            evidence = f"the source uses {', '.join(found)}" + (f" ({others})" if others else "")
+            helper = " A chat or voice agent can list one for its tests or use one in a helper script."
+        elif cut:
             # Nothing found in code left unread isn't nothing found.
+            evidence = _CHECK_STOPPED
+            helper = " A chat or voice agent can use one in its tests or a helper script."
+        else:
+            evidence = "no browser, crawling or computer-use tool was found in the source"
+            helper = ""
+        if kind:
             return (
-                "second-look: you recorded modality browser, which stops this build as not "
-                f"supported, and {_CHECK_STOPPED}. A chat or voice agent can use one in its tests "
-                "or a helper script. Does a person come to this agent for a conversation, or to "
-                "have it carry out work on websites or a computer? For a conversation, submit "
-                "again as chat or voice. If you're sure, submit again as browser. Decide this "
-                "from the source; don't ask anyone."
+                f"second-look: you recorded modality {kind}, {_WHAT_IT_DOES[kind]}, and "
+                f"{evidence}.{helper} Does a person come to this agent for a conversation, or to "
+                "have it carry out work? For a conversation, submit again as chat or voice. If "
+                f"its main job is carrying out work: {_WORK} {_DECIDE}"
             )
-        if is_browser(claimed):
-            return (
-                "second-look: you recorded modality browser, which stops this build as not "
-                "supported, and no browser, crawling or computer-use tool was found in the "
-                "source. Does a person come to this agent for a conversation, or to have it carry "
-                "out work on websites or a computer? For a conversation, submit again as chat or "
-                "voice. If you're sure, submit again as browser. Decide this from the source; "
-                "don't ask anyone."
-            )
-        if cut and not found:
-            return (
-                f"second-look: you recorded modality {claimed or 'chat'}, and {_CHECK_STOPPED}. "
-                "A chat or voice agent can use one in its tests or a helper script. If a person "
-                "comes to this agent for a conversation, submit again as is. If its main job is "
-                "carrying out work on websites or a computer, submit again as browser, which "
-                "stops this build as not supported. Decide this from the source; don't ask "
-                "anyone."
-            )
+        if found:
+            helper = ""
+        lead = "If that's a helper and a" if found else "If a"
         return (
-            f"second-look: you recorded modality {claimed or 'chat'}, and the source uses "
-            f"{', '.join(found)}. If that's a helper and a person comes to this agent for a "
-            "conversation, submit again as is. If its main job is carrying out work on websites "
-            "or a computer, submit again as browser, which stops this build as not supported. "
-            "Decide this from the source; don't ask anyone."
+            f"second-look: you recorded modality {claimed or 'chat'}, and {evidence}.{helper} "
+            f"{lead} person comes to this agent for a conversation, submit again as is. If its "
+            f"main job is carrying out work instead: {_WORK} {_DECIDE}"
         )
 
 
-def agent_type_failure(found: Sequence[str]) -> HarnessFailure:
+_WHAT_IT_DOES = {
+    BROWSER: (
+        "which runs this agent only in an environment that gives it a browser and a list of sites"
+    ),
+    COMPUTER_USE: "which stops this build as not supported",
+    CRAWLER: "which stops this build as not supported",
+}
+_WORK = (
+    "by driving a web browser with a browser library, submit again as browser, which runs it "
+    "only in an environment that gives it a browser and a list of sites; through a screen "
+    "(pixels, mouse and keyboard), as computer_use; by fetching pages by rule with no model "
+    "choosing each step, as crawler. computer_use and crawler stop this build as not supported."
+)
+_DECIDE = "Decide this from the source; don't ask anyone."
+
+
+_TOOLS_OF = {
+    BROWSER: "browser libraries",
+    COMPUTER_USE: "tools that act through a screen",
+    CRAWLER: "crawling tools",
+}
+
+
+def _other_kinds(kind: str, found: Sequence[str]) -> str:
+    """Which kind each found tool belongs to, said only where some differ from the reading (for a
+    conversation, from a browser agent: browser libraries alone need no telling apart)."""
+    groups = [(other, tools_of(other, found)) for other in (BROWSER, COMPUTER_USE, CRAWLER)]
+    groups = [(other, names) for other, names in groups if names]
+    if all(other == (kind or BROWSER) for other, _ in groups):
+        return ""
+    return "; ".join(f"{', '.join(names)}: {_TOOLS_OF[other]}" for other, names in groups)
+
+
+_REFUSED_JOB = {
+    COMPUTER_USE: "operating a computer through its screen",
+    CRAWLER: "crawling sites by rule",
+}
+
+
+def agent_type_failure(found: Sequence[str], kind: str = COMPUTER_USE) -> HarnessFailure:
+    """The refusal of a computer-use or crawler agent. ``found`` is every tool the check found."""
+    job = _REFUSED_JOB[kind]
     if found:
         message = (
-            "This agent's main job is driving a browser, operating a computer or crawling sites "
-            f"(found: {', '.join(found)}). Only voice and chat agents are supported for now."
+            f"This agent's main job is {job} (found: {', '.join(found)}). Computer-use and crawler "
+            "agents are not supported yet."
         )
     else:
         message = (
-            "This agent's main job was read as driving a browser, operating a computer or "
-            "crawling sites. Only voice and chat agents are supported for now."
+            f"This agent's main job was read as {job}. Computer-use and crawler agents are not "
+            "supported yet."
         )
     return HarnessFailure(
         domain=FailureDomain.AGENT,
@@ -1116,7 +1195,7 @@ def agent_type_failure(found: Sequence[str]) -> HarnessFailure:
         code=AGENT_TYPE_UNSUPPORTED,
         message=message,
         retryable=False,
-        details={"agent_type": "browser", "tools": list(found)},
+        details={"agent_type": kind, "tools": list(found)},
     )
 
 
