@@ -111,7 +111,7 @@ def test_each_site_must_be_one_the_egress_allows():
     failure = _problem(metadata).failure
     assert failure.code == BROWSER_SITE_NOT_IN_EGRESS
     assert failure.details == {"sites": ["pay.other.com"]}
-    assert "pay.other.com" in failure.message
+    assert failure.message == "The run's egress doesn't allow these browser sites: pay.other.com."
     metadata["browser_allowed_sites"] = ["shop.example.com", "example.com", "*.docs.example.com"]
     assert allowed_sites(metadata) == ("shop.example.com", "example.com", "*.docs.example.com")
 
