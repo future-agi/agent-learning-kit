@@ -204,6 +204,8 @@ def test_native_paginated_tools_recorded_once_without_execution_or_continuation(
             {"bytes": 42},
             True,
         )
+        # The id the action and its completion share is kept as the agent's id for the call.
+        assert call.runtime_ids == {"call_id": "a"}
         assert requests == [
             ("POST", "/chat"),
             ("GET", "/events/conversation-1"),
