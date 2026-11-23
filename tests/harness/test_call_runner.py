@@ -3657,6 +3657,39 @@ def test_a_voice_call_hands_the_scheduler_the_notice_that_worker_limits_were_not
     assert placed == [] and outcome.calls == ()
 
 
+def test_a_voice_trial_says_its_span_source_was_on_but_never_that_it_was_silent(tmp_path, monkeypatch) -> None:
+    """Through the voice runner: the LiveKit worker wrote a tracer line for the tool it ran, and the hook noted the
+    framework's span source as on, with no tool span. A voice trial reads spans for hand-offs, so that is no sign of a
+    silent source."""
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    monkeypatch.setattr(cr, "_write_trial_state", lambda *args, **kwargs: None)
+    trace = tmp_path / "agent-tool-calls.jsonl"
+
+    async def place_call(spec):
+        line = {"name": "lookup", "arguments": {}, "output": "ok", "is_error": False, "at": 1.0, "source": "livekit"}
+        trace.write_text(json.dumps(line) + "\n", encoding="utf-8")
+        (tmp_path / "agent-tool-calls.jsonl.observing").write_text(
+            json.dumps({"framework": "agents", "state": "on"}) + "\n", encoding="utf-8"
+        )
+        return _report(transcript="hello", messages=[])
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    outcome = _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0", "tool_trace_path": str(trace)}),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    codes = [one["code"] for one in json.loads(sealed[cr.ArtifactKind.TRANSCRIPT]).get("notices", [])]
+    assert [call.name for call in outcome.calls] == ["lookup"]
+    assert cr.TOOL_SPANS_ON in codes
+    assert cr.TOOL_SPANS_SILENT not in codes
+    # The same trace read as a chat trial would say it.
+    assert cr.TOOL_SPANS_SILENT in [one["code"] for one in cr.tool_span_notices(_runtime(metadata={"tool_trace_path": str(trace)}), outcome.calls)]
+
+
 def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_without_any_actor(
     tmp_path, monkeypatch
 ) -> None:
