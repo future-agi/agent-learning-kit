@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
-from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -14,6 +12,7 @@ from pydantic import ValidationError
 
 from fi.alk.studio import EnvironmentInputError
 from fi.alk.studio._environment_input_types import _canonical_json
+from fi.alk.studio._source_scenarios import _sealed_source_case
 
 from .backends.files import secret_path
 from .releases import ReleaseError
@@ -24,10 +23,6 @@ PIN_FILE = "reviewed-source.json"
 _RECEIPT = "source_review_receipt"
 _DOCUMENTS = "source_review_documents"
 _SOURCE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-
-
-def _digest(value: object) -> str:
-    return "sha256:" + hashlib.sha256(_canonical_json(value).encode()).hexdigest()
 
 
 def load_review_pin(workspace: Path) -> dict[str, str] | None:
@@ -121,7 +116,7 @@ class ReviewedBuild:
                 "Choose an unused approved case ID from read_source before submitting.",
             )
         # Proof and scenario content are keyed to the approved public case, including its facts and policy.
-        approved = {**deepcopy(case), "proof_digest": _digest(case)}
+        approved = _sealed_source_case(case)
         return {**args, "fixture": {**fixture, SOURCE_FIXTURE: approved}}
 
     def check_complete(self, scenarios: list[Scenario], workspace: Path) -> None:
@@ -129,9 +124,7 @@ class ReviewedBuild:
 
         self.check_pin(workspace)
         proofs = load_proofs(workspace)
-        approved = {
-            one["id"]: {**one, "proof_digest": _digest(one)} for one in self.cases
-        }
+        approved = {one["id"]: _sealed_source_case(one) for one in self.cases}
         seen: set[str] = set()
         for scenario in scenarios:
             case = self.saved_case(scenario)

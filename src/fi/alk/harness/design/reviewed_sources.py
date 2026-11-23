@@ -15,12 +15,12 @@ from fi.alk.studio import (
     EnvironmentRequirements,
     ReviewedEnvironmentInputs,
     compile_environment_inputs,
-    generate_source_scenarios,
 )
 from fi.alk.studio._environment_input_snapshots import (
     MAX_SNAPSHOT_BYTES,
     deserialize_environment_snapshot,
 )
+from fi.alk.studio._source_scenarios import _public_source_case, _reviewable_scenarios
 
 from ..backends import ToolServer, tool, tool_server
 from ..folder import read_all
@@ -31,11 +31,6 @@ from .workspace import Design, DocumentRecord, ReviewedSourcePin
 
 EVIDENCE = "reviewed-source-evidence.json"
 REVIEW_REQUIRED = "Approve the environment documents before building this design."
-_CATEGORY_PURPOSES = {
-    "success": "Test a compliant outcome.",
-    "refusal": "Test refusal of a disallowed action.",
-    "negative_control": "Test that an incorrect outcome is rejected.",
-}
 
 
 def document_manifest(
@@ -176,31 +171,20 @@ def project_evidence(
     reviewed: ReviewedEnvironmentInputs, *, task: str, count: int
 ) -> dict[str, Any]:
     compiled = compile_environment_inputs(reviewed)
-    generated = generate_source_scenarios(
-        reviewed, environment_requirements=EnvironmentRequirements(task=task), requested_count=count,
+    generated = _reviewable_scenarios(
+        reviewed,
+        environment_requirements=EnvironmentRequirements(task=task),
+        requested_count=count,
     )
-    blocked = sum(draft.status == "blocked" for draft in generated.drafts)
-    if blocked:
-        raise ReleaseError(
-            "source_scenarios_blocked", f"{blocked} source scenarios are blocked by validation."
-        )
-    evidence: dict[str, Any] = {"documents": [], "records": [], "cases": []}
+    evidence: dict[str, Any] = {
+        "documents": [],
+        "records": [],
+        "cases": [_public_source_case(draft) for draft in generated.drafts],
+    }
     for environment in compiled.agent_environments:
         data = environment.as_dict()["data"]
         evidence["documents"].extend(data.get("documents", []))
         evidence["records"].extend(data.get("artifacts", {}).values())
-    for draft in generated.drafts:
-        persona = draft.scenario.dataset[0].persona
-        evidence["cases"].append(
-            {
-                "id": draft.scenario_id,
-                "category": draft.category,
-                "purpose": _CATEGORY_PURPOSES[draft.category],
-                "starting_facts": persona["starting_facts"],
-                "policy_reference": persona["policy_reference"],
-                "citations": persona["citations"],
-            }
-        )
     return evidence
 
 

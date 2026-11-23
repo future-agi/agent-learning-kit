@@ -12,14 +12,20 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 
+from fi.alk.harness.job import MAX_HOSTED_SCENARIO_COUNT
 from fi.alk.studio._environment_input_parsers import (
     MAX_SOURCE_BYTES,
     _reject_json_constant,
     _unique_object,
+)
+from fi.alk.studio._environment_input_snapshots import (
+    MAX_SNAPSHOT_BYTES,
+    deserialize_environment_snapshot,
+    serialize_environment_snapshot,
 )
 from fi.alk.studio._environment_input_types import (
     AgentEnvironmentSpec,
@@ -28,21 +34,22 @@ from fi.alk.studio._environment_input_types import (
     EnvironmentInputError,
     EnvironmentInputReview,
     EnvironmentSource,
-    SourceRole,
     SimulationSchemaRepair,
-    _ImmutableValue,
+    SourceRole,
     _canonical_json,
     _canonical_value,
-)
-from fi.alk.studio._environment_input_snapshots import (
-    MAX_SNAPSHOT_BYTES,
-    deserialize_environment_snapshot,
-    serialize_environment_snapshot,
+    _ImmutableValue,
 )
 from fi.alk.studio._environment_inputs import (
     compile_environment_inputs,
     prepare_environment_inputs,
     review_environment_inputs,
+)
+from fi.alk.studio._source_scenarios import (
+    EnvironmentRequirements,
+    _public_source_case,
+    _reviewable_scenarios,
+    _sealed_source_case,
 )
 
 REQUEST_VERSION = "environment-sources.request.v1"
@@ -105,6 +112,90 @@ class CompileRequest(_ImmutableValue):
     existing_environments: tuple[AgentEnvironmentSpec, ...] = ()
 
 
+@dataclass(frozen=True)
+class GenerateScenariosRequest(_ImmutableValue):
+    version: Literal["environment-sources.request.v1"]
+    operation: Literal["generate_scenarios"]
+    snapshot: dict[str, Any]
+    environment_requirements: EnvironmentRequirements
+    requested_count: Annotated[
+        int, Field(strict=True, ge=1, le=MAX_HOSTED_SCENARIO_COUNT)
+    ]
+    bundle_manifest: dict[str, Any] | None = None
+
+
+def _bundle_digest(manifest_body: dict[str, Any], pin: dict[str, str | None]) -> str:
+    from fi.alk.harness.bundle_v2 import EnvironmentBundleV2, seal_bundle_v2
+
+    try:
+        manifest = EnvironmentBundleV2.model_validate_json(
+            _canonical_json(manifest_body)
+        )
+        if (
+            pin["schema_digest"] is not None
+            and manifest.metadata.get("reviewed_source") == pin
+            and manifest.digest == seal_bundle_v2(manifest)
+        ):
+            return manifest.digest
+    except (ValidationError, ValueError):
+        pass
+    raise EnvironmentInputError(
+        "source_bundle_invalid", "The bundle does not match the approved source pin."
+    )
+
+
+def _generate_scenarios(request: GenerateScenariosRequest) -> dict[str, Any]:
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario import SOURCE_FIXTURE, Scenario
+
+    try:
+        reviewed = deserialize_environment_snapshot(
+            _canonical_json(request.snapshot).encode()
+        )
+    except EnvironmentInputError as exc:
+        raise EnvironmentInputError(
+            exc.code, "The approved source snapshot is invalid."
+        ) from None
+    pin = {
+        "id": reviewed.snapshot_id,
+        "digest": reviewed.snapshot_digest,
+        "schema_digest": reviewed.simulation_schema_digest,
+    }
+    result = {
+        "snapshot_id": pin["id"],
+        "snapshot_digest": pin["digest"],
+        "simulation_schema_digest": pin["schema_digest"],
+    }
+    if request.bundle_manifest is not None:
+        result["bundle_digest"] = _bundle_digest(request.bundle_manifest, pin)
+    generated = _reviewable_scenarios(
+        reviewed,
+        environment_requirements=request.environment_requirements,
+        requested_count=request.requested_count,
+    )
+    scenarios = []
+    for draft in generated.drafts:
+        case = _sealed_source_case(_public_source_case(draft))
+        scenario = draft.scenario.model_dump(mode="json")
+        persona = scenario["dataset"][0]
+        if draft.category == "negative_control":
+            # The calibrated incorrect response belongs only to the evaluator.
+            persona["situation"] = (
+                "Ask about the boundary described by the approved source."
+            )
+        native = Scenario(
+            name=draft.scenario_id,
+            scenario_key=draft.scenario_id,
+            use_case=request.environment_requirements.task.strip(),
+            branch=draft.category,
+            instruction=persona["situation"],
+            tests=case["purpose"],
+            fixture={"origin": "seed", SOURCE_FIXTURE: case},
+        )
+        scenarios.append({"scenario": scenario, "native": document_for(native), "source_case": case})
+    return {**result, "revision": generated.revision, "scenarios": scenarios}
+
+
 def execute_request(payload: bytes) -> dict[str, Any]:
     """Return one versioned success/error envelope without filesystem writes."""
     operation: str | None = None
@@ -121,7 +212,7 @@ def execute_request(payload: bytes) -> dict[str, Any]:
         if isinstance(data, dict) and isinstance(data.get("operation"), str):
             operation = data["operation"]
         request = TypeAdapter(
-            PrepareRequest | AcceptRequest | CompileRequest
+            PrepareRequest | AcceptRequest | CompileRequest | GenerateScenariosRequest
         ).validate_json(_canonical_json(data))
         if isinstance(request, PrepareRequest):
             draft = prepare_environment_inputs(
@@ -130,6 +221,8 @@ def execute_request(payload: bytes) -> dict[str, Any]:
                 schema_repairs=request.schema_repairs,
             )
             result = {"draft": draft, "schema_digest": draft.schema_digest}
+        elif isinstance(request, GenerateScenariosRequest):
+            result = _generate_scenarios(request)
         else:
             if isinstance(request, AcceptRequest):
                 reviewed = review_environment_inputs(

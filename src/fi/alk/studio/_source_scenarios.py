@@ -3,28 +3,35 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
+from fi.alk.studio._environment_input_snapshots import _assert_reviewed_snapshot
 from fi.alk.studio._environment_input_types import (
+    EnvironmentInputError,
     JsonScalar,
     PolicyRuleProposal,
     RecordRelationship,
     ReviewedEnvironmentInputs,
     ReviewedPolicySource,
-    ReviewedReferenceSource,
     ReviewedRecord,
     ReviewedRecordSource,
+    ReviewedReferenceSource,
     SourceSpan,
-    _ImmutableValue,
     _canonical_json,
+    _canonical_value,
     _content_digest,
+    _ImmutableValue,
 )
-from fi.alk.studio._environment_input_snapshots import _assert_reviewed_snapshot
 from fi.simulate.manifest import ManifestError
 from fi.simulate.simulation.models import Persona, Scenario, ScenarioConstraints
 from fi.simulate.suite import evaluate_assertions, validate_deterministic_assertion
 
 ScenarioCategory = Literal["success", "refusal", "negative_control"]
+_CATEGORY_PURPOSES = {
+    "success": "Test a compliant outcome.",
+    "refusal": "Test refusal of a disallowed action.",
+    "negative_control": "Test that an incorrect outcome is rejected.",
+}
 
 
 @dataclass(frozen=True)
@@ -121,6 +128,42 @@ class GeneratedScenarioDraftSet(_ImmutableValue):
     @property
     def diagnostics(self) -> tuple[ScenarioDiagnostic, ...]:
         return tuple(item for draft in self.drafts for item in draft.diagnostics)
+
+
+def _reviewable_scenarios(
+    reviewed: ReviewedEnvironmentInputs,
+    *,
+    environment_requirements: EnvironmentRequirements,
+    requested_count: int,
+) -> GeneratedScenarioDraftSet:
+    generated = generate_source_scenarios(
+        reviewed,
+        environment_requirements=environment_requirements,
+        requested_count=requested_count,
+    )
+    blocked = sum(draft.status == "blocked" for draft in generated.drafts)
+    if blocked:
+        raise EnvironmentInputError(
+            "source_scenarios_blocked",
+            f"{blocked} source scenarios are blocked by validation.",
+        )
+    return generated
+
+
+def _public_source_case(draft: SourceScenarioDraft) -> dict[str, Any]:
+    persona = draft.scenario.dataset[0].persona
+    return {
+        "id": draft.scenario_id,
+        "category": draft.category,
+        "purpose": _CATEGORY_PURPOSES[draft.category],
+        "starting_facts": persona["starting_facts"],
+        "policy_reference": persona["policy_reference"],
+        "citations": persona["citations"],
+    }
+
+
+def _sealed_source_case(case: dict[str, Any]) -> dict[str, Any]:
+    return {**_canonical_value(case), "proof_digest": _content_digest(case)}
 
 
 def generate_source_scenarios(
