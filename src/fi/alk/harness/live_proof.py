@@ -36,6 +36,7 @@ from .proofs import proof_key
 from .prove import (
     Proof,
     actors_in,
+    has_actors,
     assumed_tools,
     checks_for,
     excused_by_assumed_steps,
@@ -133,11 +134,13 @@ def _play(
     steps: list[Step],
     recordable: frozenset[str] = frozenset(),
     authoring: Path | None = None,
+    with_solution: bool = True,
 ) -> tuple[list[Call], list[str], list[str]]:
     """Set up, play `steps`, and say which ran unbound (assumed) and which were refused. A step of a `recordable` tool
     nothing here runs is recorded, not run (`record_unrun_step`), as the offline proof records it. With the
-    `authoring` tree, the scenario's actors act around the steps as in the offline proof (`actors_in`), so an
-    approval an actor gives reaches the world before the step that needs it; their calls are never the agent's."""
+    `authoring` tree, a scenario's actors act around the steps as in the offline proof (`actors_in`), so an
+    approval an actor gives reaches the world before the step that needs it; their calls are never the agent's. As
+    offline, they act before the first step of a reference or a control (`with_solution`), never in the empty run."""
     applied = apply_setup(scenario, world)
     if not applied.ok:
         raise RuntimeError(f"setup: {applied.said}")
@@ -146,8 +149,10 @@ def _play(
         raise RuntimeError(f"ready: {ready.said}")
     world.calls = []
     world.recorded = []
-    acting, by_actors = actors_in(scenario, authoring, world) if authoring is not None else (None, {})
-    if acting is not None and steps:
+    acting, by_actors = (
+        actors_in(scenario, authoring, world) if authoring is not None and has_actors(scenario) else (None, {})
+    )
+    if acting is not None and with_solution:
         acting.act_on(None)
     refused = []
     for step in steps:
@@ -470,7 +475,7 @@ async def _prove_case(
     )
     right = await asyncio.to_thread(_digest, world)
     world = await fresh()
-    nothing_calls, _, _ = await asyncio.to_thread(_play, scenario, world, [], frozenset(), authoring)
+    nothing_calls, _, _ = await asyncio.to_thread(_play, scenario, world, [], frozenset(), authoring, False)
     with_nothing = await asyncio.to_thread(_outcomes, scenario, catalogue, world, nothing_calls)
     untouched = await asyncio.to_thread(_digest, world)
     controls: list[ControlResult] = []

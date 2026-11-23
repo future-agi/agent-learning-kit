@@ -27,6 +27,7 @@ Only a scenario that clears all three is kept. That is the green light.
 from __future__ import annotations
 
 import ast
+import time
 import json
 import logging
 import re
@@ -737,6 +738,19 @@ def executes(world: GeneratedWorld, tool: str) -> bool:
     return bool((getattr(world, "endpoint_for", {}) or {}).get(tool))
 
 
+# How far apart a call and its row in the live log can be stamped and still be the same call.
+_SAME_CALL_SECONDS = 5.0
+
+
+def _records_of(world: Any) -> PostgresStore | None:
+    """The world's own records a record change lands in: a generated world's store, a live world's record store."""
+    for name in ("store", "record_store"):
+        store = getattr(world, name, None)
+        if isinstance(store, PostgresStore):
+            return store
+    return None
+
+
 # What a recorded step is called wherever a proof shows it: never run, never shown as executed.
 RECORDED_NOT_RUN = "recorded, not run (no world effect)"
 
@@ -976,9 +990,17 @@ def actors_in(scenario: Scenario, world_root: Path, world: Any) -> tuple["_World
     the agent with a message an actor wrote. The caller acts them before the first step and after each one."""
     by_actors: dict[int, str] = {}
     acting = _WorldActors(scenario, world_root, world, by_actors)
-    world.events = acting.events
+    own = getattr(world, "events", None)
+    # A live world reads the trial's real action log; it is kept, with the actors' rows credited to them. A generated
+    # world has no log of its own, and this is it.
+    world.events = acting.events_over(own) if callable(own) else acting.events
     acting.replay_pre_run()
     return acting, by_actors
+
+
+def has_actors(scenario: Scenario) -> bool:
+    """Whether anyone but the agent acts in the scenario: an actor, or a conversation before the run."""
+    return bool(getattr(scenario, "actors", None) or getattr(scenario, "pre_run", None))
 
 
 def run_steps(
@@ -1161,6 +1183,54 @@ class _WorldActors:
             and (outcome is None or row["outcome"] == outcome)
         ]
 
+    def events_over(self, own: Callable[..., list[dict[str, Any]]]) -> Callable[..., list[dict[str, Any]]]:
+        """A live world's own action log with the actors' part credited to them, never replaced: a row the log holds
+        for an actor's call through the door is relabelled with that actor, and an actor's action the log cannot hold
+        (a record change written straight to the world's records, an action not permitted) is added as theirs."""
+
+        def events(actor_id: str | None = None, outcome: str | None = None) -> list[dict[str, Any]]:
+            rows = [dict(row) for row in own()]
+            claimed: set[int] = set()
+            for index, who in sorted(self.by_actors.items()):
+                call = self.world.calls[index]
+                match = next(
+                    (
+                        at
+                        for at, row in enumerate(rows)
+                        if at not in claimed
+                        and (row.get("actor_id") or "agent") == "agent"
+                        and str(row.get("name") or "") == call.name.rsplit("/", 1)[-1]
+                        and abs(float(row.get("at") or 0) - float(call.at or 0)) < _SAME_CALL_SECONDS
+                    ),
+                    None,
+                )
+                if match is not None:
+                    claimed.add(match)
+                    rows[match]["actor_id"] = who
+                    continue
+                rows.append(
+                    {
+                        "name": call.name,
+                        "arguments": call.arguments,
+                        "result": call.result,
+                        "ok": call.ok,
+                        "error": call.error or None,
+                        "actor_id": who,
+                        "at": call.at,
+                        "outcome": "committed" if call.ok else "refused",
+                        "refusal_code": None if call.ok else (call.refusal_code or None),
+                    }
+                )
+            rows += [{**row, "at": 0.0} for _, row in self.refusals]
+            return [
+                row
+                for row in rows
+                if (actor_id is None or (row.get("actor_id") or "agent") == actor_id)
+                and (outcome is None or (row.get("outcome") or ("committed" if row.get("ok") else "refused")) == outcome)
+            ]
+
+        return events
+
     def _due(self, actor: Any, action: Any, step: Any) -> bool:
         trigger = action.trigger
         if step is None:
@@ -1221,23 +1291,25 @@ class _WorldActors:
             # A source-hosted world knows the action by its route; a generated one by its name.
             route = action.action.replace(".", "/")
             known = route in getattr(self.world, "endpoints", ())
-            if not known and record_action(action.action) and isinstance(getattr(self.world, "store", None), PostgresStore):
+            store = _records_of(self.world)
+            if not known and record_action(action.action) and store is not None:
                 # A record change has no route on the agent's service: the run's door writes it to the world's own
                 # records, so the proof does the same, or an actor's approval never reaches the world here.
-                done = RecordExecutor(self.world.store.execute).run(
+                done = RecordExecutor(store.execute).run(
                     ToolCall(action=action.action, name=action.action, arguments=dict(action.arguments), actor=actor.id)
                 )
-                self.world._record(
-                    Call(
-                        name=action.action,
-                        arguments=dict(action.arguments),
-                        ok=done.status < 400,
-                        result=done.result,
-                        refused=400 <= done.status < 500,
-                        refusal_code=refusal_code_for(done.status),
-                        error=done.error or "",
-                    )
+                made = Call(
+                    name=action.action,
+                    arguments=dict(action.arguments),
+                    ok=done.status < 400,
+                    result=done.result,
+                    refused=400 <= done.status < 500,
+                    refusal_code=refusal_code_for(done.status),
+                    error=done.error or "",
+                    at=time.time(),
                 )
+                record = getattr(self.world, "_record", None)
+                record(made) if callable(record) else self.world.calls.append(made)
             else:
                 self.world.call(
                     route if known else action.action.rsplit(".", 1)[-1],
