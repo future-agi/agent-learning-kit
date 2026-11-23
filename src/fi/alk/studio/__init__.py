@@ -72,6 +72,18 @@ _EXPORTS = {
     ),
     "DestinationField": ("fi.alk.studio._environment_inputs", "DestinationField"),
     "DestinationSchema": ("fi.alk.studio._environment_inputs", "DestinationSchema"),
+    "ProposedSimulationSchema": (
+        "fi.alk.studio._environment_input_types",
+        "ProposedSimulationSchema",
+    ),
+    "SimulationSchemaRepair": (
+        "fi.alk.studio._environment_input_types",
+        "SimulationSchemaRepair",
+    ),
+    "SchemaRepairChoice": (
+        "fi.alk.studio._environment_input_types",
+        "SchemaRepairChoice",
+    ),
     "EnvironmentInputDraft": (
         "fi.alk.studio._environment_inputs",
         "EnvironmentInputDraft",

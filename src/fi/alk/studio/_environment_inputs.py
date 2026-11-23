@@ -35,6 +35,9 @@ from fi.alk.studio._environment_input_types import (
     ParsedRecordRow,
     ParsedRecordSource,
     ParsedSource,
+    ProposedSimulationSchema,
+    SchemaRepairChoice,
+    SimulationSchemaRepair,
     PolicyStatement,
     PolicyReview,
     PolicyRuleProposal,
@@ -67,6 +70,7 @@ from fi.alk.studio._environment_input_types import (
 import hashlib
 import re
 from collections import defaultdict
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -82,6 +86,7 @@ from fi.alk.studio._environment_input_parsers import (
     parse_environment_source,
 )
 from fi.alk.studio._scan import scan_content
+from fi.alk.studio._simulation_schema import infer_simulation_schema
 from fi.simulate.manifest import ManifestError
 from fi.simulate.suite import validate_deterministic_assertion
 
@@ -89,11 +94,23 @@ from fi.simulate.suite import validate_deterministic_assertion
 def prepare_environment_inputs(
     sources: tuple[EnvironmentSource, ...] | list[EnvironmentSource],
     *,
-    destination_schema: DestinationSchema,
+    destination_schema: DestinationSchema | None = None,
+    schema_repairs: tuple[SimulationSchemaRepair, ...] = (),
 ) -> EnvironmentInputDraft:
-    if not isinstance(destination_schema, DestinationSchema):
+    if destination_schema is not None and (
+        not isinstance(destination_schema, DestinationSchema)
+        or isinstance(destination_schema, ProposedSimulationSchema)
+    ):
         raise EnvironmentInputError(
             "source_mapping_invalid", "An approved destination schema is required"
+        )
+    repairs = {repair.source_id: repair for repair in schema_repairs}
+    if len(repairs) != len(schema_repairs) or (
+        repairs and destination_schema is not None
+    ):
+        raise EnvironmentInputError(
+            "source_mapping_invalid",
+            "Supply one repair per source for an inferred schema",
         )
     source_items = tuple(sources)
     if len(source_items) > MAX_SOURCE_FILES:
@@ -157,7 +174,33 @@ def prepare_environment_inputs(
             parsed_sources.append(record_source)
             diagnostics.extend(record_diagnostics)
 
-    proposals = _propose_inputs(tuple(parsed_sources), destination_schema)
+    if destination_schema is None:
+        destination_schema = infer_simulation_schema(parsed_sources, repairs)
+        if (
+            any(s.role == "seed_records" for s in source_items)
+            and not destination_schema.fields
+        ):
+            raise EnvironmentInputError(
+                "source_parse_failed",
+                "No record fields could be read",
+                diagnostics=tuple(diagnostics),
+            )
+    relationship_choices: list[SchemaRepairChoice] = []
+    proposals = _propose_inputs(
+        tuple(parsed_sources), destination_schema, repairs, relationship_choices
+    )
+    if isinstance(destination_schema, ProposedSimulationSchema):
+        choices = (*destination_schema.repair_choices, *relationship_choices)
+        destination_schema = replace(destination_schema, repair_choices=choices)
+        diagnostics.extend(
+            SourceDiagnostic(
+                "source_schema_needs_repair",
+                "blocking",
+                choice.decision,
+                SourceSpan(choice.source_id),
+            )
+            for choice in choices
+        )
     draft_payload = {
         "sources": parsed_sources,
         "destination_schema": destination_schema,
@@ -291,8 +334,19 @@ def review_environment_inputs(
         *(reviewed_records[source_id] for source_id in sorted(reviewed_records)),
     )
     snapshot_diagnostics = (*draft.diagnostics, *conversion_diagnostics)
+    inferred = isinstance(draft.destination_schema, ProposedSimulationSchema)
+    schema_digest = draft.schema_digest if inferred else None
+    version = (
+        "environment-inputs.snapshot.v3"
+        if inferred
+        else "environment-inputs.snapshot.v2"
+    )
     snapshot_digest = _reviewed_snapshot_digest(
-        reviewed_sources, review.relationships, snapshot_diagnostics
+        reviewed_sources,
+        review.relationships,
+        snapshot_diagnostics,
+        version,
+        schema_digest,
     )
     return ReviewedEnvironmentInputs(
         snapshot_id=f"source_snapshot_{snapshot_digest.removeprefix('sha256:')[:16]}",
@@ -303,6 +357,8 @@ def review_environment_inputs(
         relationships=review.relationships,
         private_replacement_receipt=receipt,
         diagnostics=snapshot_diagnostics,
+        schema_version=version,
+        simulation_schema_digest=schema_digest,
     )
 
 
@@ -542,7 +598,7 @@ def _prepare_record_source(
     source: EnvironmentSource,
     pin: SourcePin,
     parsed: RawRecordDocument,
-    destination_schema: DestinationSchema,
+    destination_schema: DestinationSchema | None,
 ) -> tuple[ParsedRecordSource, tuple[SourceDiagnostic, ...]]:
     rows = tuple(
         ParsedRecordRow(
@@ -710,7 +766,10 @@ def _validate_rule(proposal: PolicyRuleProposal, decision: RuleDecision) -> None
 
 
 def _propose_inputs(
-    sources: tuple[ParsedSource, ...], schema: DestinationSchema
+    sources: tuple[ParsedSource, ...],
+    schema: DestinationSchema,
+    repairs: dict[str, SimulationSchemaRepair],
+    relationship_choices: list[SchemaRepairChoice],
 ) -> SourceProposals:
     records = tuple(
         source for source in sources if isinstance(source, ParsedRecordSource)
@@ -739,6 +798,11 @@ def _propose_inputs(
     relationships: list[RelationshipProposal] = []
     target_indexes: dict[tuple[str, str], dict[JsonScalar, int]] = {}
     for source in records:
+        if (
+            source.pin.source_id in repairs
+            and repairs[source.pin.source_id].manual_relationships
+        ):
+            continue
         for profile in source.fields:
             if not (
                 profile.source_field.lower().endswith("_id")
@@ -755,6 +819,7 @@ def _propose_inputs(
                 tuple[ParsedRecordSource, FieldProfile, dict[JsonScalar, int]] | None
             ) = None
             ambiguous = False
+            inferred_targets: list[str] = []
             for target in records:
                 if target is source:
                     continue
@@ -776,21 +841,40 @@ def _propose_inputs(
                         }
                         target_indexes[target_key] = target_rows
                     if values & target_rows.keys():
+                        if isinstance(schema, ProposedSimulationSchema):
+                            if len(target_rows) != len(target.rows):
+                                continue
+                            inferred_targets.append(
+                                target_profile.suggested_target_field
+                                or target_profile.source_field
+                            )
+                            ambiguous |= not values.issubset(target_rows)
                         if candidate is not None:
                             ambiguous = True
-                            break
+                            if not isinstance(schema, ProposedSimulationSchema):
+                                break
                         candidate = (target, target_profile, target_rows)
-                if ambiguous:
+                if ambiguous and not isinstance(schema, ProposedSimulationSchema):
                     break
+            if ambiguous and isinstance(schema, ProposedSimulationSchema):
+                relationship_choices.append(
+                    SchemaRepairChoice(
+                        source.pin.source_id,
+                        "review_relationships",
+                        (profile.source_field,),
+                        tuple(inferred_targets),
+                    )
+                )
             if candidate is not None and not ambiguous:
                 target, target_profile, target_rows = candidate
                 relationships.append(
                     RelationshipProposal(
                         RecordRelationship(
                             source.pin.source_id,
-                            profile.source_field,
+                            profile.suggested_target_field or profile.source_field,
                             target.pin.source_id,
-                            target_profile.source_field,
+                            target_profile.suggested_target_field
+                            or target_profile.source_field,
                         ),
                         tuple(
                             (
@@ -809,8 +893,6 @@ def _propose_inputs(
         for statement in source.statements
     ]
     opposing = {(rule.check_type, rule.check_arguments.get("value")) for rule in rules}
-    from dataclasses import replace
-
     rules = [
         replace(
             rule,

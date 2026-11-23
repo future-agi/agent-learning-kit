@@ -148,6 +148,53 @@ def _sources() -> tuple[EnvironmentSource, ...]:
     )
 
 
+def test_mixed_pdf_and_csv_schema_uses_only_records_and_parses_each_source_once(
+    monkeypatch,
+):
+    from fi.alk.studio import _environment_inputs as inputs
+
+    calls = []
+    original = inputs.parse_environment_source
+
+    def parse(**kwargs):
+        calls.append(kwargs["filename"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(inputs, "parse_environment_source", parse)
+    policy, _, customers, _ = _sources()
+    draft = prepare_environment_inputs((policy, customers))
+    assert calls == [policy.filename, customers.filename]
+    assert [f.name for f in draft.destination_schema.fields] == [
+        "customers/customer_id",
+        "customers/name",
+    ]
+    assert draft.proposals.policy_rules
+    assert not draft.diagnostics
+
+
+def test_inferred_policy_only_acceptance_without_a_record_schema():
+    policy = _sources()[0]
+    draft = prepare_environment_inputs((policy,))
+    assert draft.destination_schema.fields == ()
+    decision = EnvironmentInputReview(
+        expected_draft_digest=draft.draft_digest,
+        record_reviews=(),
+        policy_reviews=(
+            PolicyReview(
+                policy.source_id,
+                "agent_visible",
+                tuple(
+                    PolicyRuleReview(rule, "reference_only")
+                    for rule in draft.proposals.policy_rules
+                ),
+            ),
+        ),
+    )
+    reviewed = review_environment_inputs(draft, review=decision, reviewer_id="author")
+    assert reviewed.simulation_schema_digest == draft.schema_digest
+    assert reviewed.sources[0].pin.role == "policy"
+
+
 def _reviewed():
     draft = prepare_environment_inputs(_sources(), destination_schema=_schema())
     public_policy = next(

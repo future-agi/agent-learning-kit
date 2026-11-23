@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -23,6 +24,7 @@ from fi.alk.studio._environment_input_types import (
 
 LEGACY_SNAPSHOT_SCHEMA_VERSION = "environment-inputs.snapshot.v1"
 SNAPSHOT_SCHEMA_VERSION = "environment-inputs.snapshot.v2"
+SIMULATION_SNAPSHOT_SCHEMA_VERSION = "environment-inputs.snapshot.v3"
 MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
 
 
@@ -56,7 +58,11 @@ def deserialize_environment_snapshot(payload: bytes) -> ReviewedEnvironmentInput
         )
         if set(envelope) != {"version", "data", "digest"} or envelope[
             "version"
-        ] not in {LEGACY_SNAPSHOT_SCHEMA_VERSION, SNAPSHOT_SCHEMA_VERSION}:
+        ] not in {
+            LEGACY_SNAPSHOT_SCHEMA_VERSION,
+            SNAPSHOT_SCHEMA_VERSION,
+            SIMULATION_SNAPSHOT_SCHEMA_VERSION,
+        }:
             raise ValueError("Unknown snapshot schema")
         if _content_digest(envelope["data"]) != envelope["digest"]:
             raise ValueError("Snapshot envelope digest mismatch")
@@ -95,6 +101,7 @@ def _reviewed_snapshot_digest(
     relationships: tuple[RecordRelationship, ...],
     diagnostics: tuple[SourceDiagnostic, ...] = (),
     schema_version: str = SNAPSHOT_SCHEMA_VERSION,
+    simulation_schema_digest: str | None = None,
 ) -> str:
     source_data = _canonical_value(sources)
     if schema_version == LEGACY_SNAPSHOT_SCHEMA_VERSION:
@@ -105,6 +112,11 @@ def _reviewed_snapshot_digest(
             "sources": source_data,
             "relationships": relationships,
             "diagnostics": diagnostics,
+            **(
+                {"simulation_schema_digest": simulation_schema_digest}
+                if schema_version == SIMULATION_SNAPSHOT_SCHEMA_VERSION
+                else {}
+            ),
         }
     )
 
@@ -112,6 +124,18 @@ def _reviewed_snapshot_digest(
 def _snapshot_data(reviewed: ReviewedEnvironmentInputs) -> dict[str, Any]:
     data = _canonical_value(reviewed)
     data.pop("schema_version")
+    if reviewed.schema_version == SIMULATION_SNAPSHOT_SCHEMA_VERSION:
+        if not re.fullmatch(
+            r"sha256:[0-9a-f]{64}", reviewed.simulation_schema_digest or ""
+        ):
+            raise EnvironmentInputError(
+                "source_snapshot_invalid", "Missing simulation schema digest"
+            )
+    else:
+        if data.pop("simulation_schema_digest") is not None:
+            raise EnvironmentInputError(
+                "source_snapshot_invalid", "Unexpected simulation schema digest"
+            )
     if reviewed.schema_version == LEGACY_SNAPSHOT_SCHEMA_VERSION:
         for source in data["sources"]:
             if (
@@ -134,6 +158,7 @@ def _assert_reviewed_snapshot(reviewed: ReviewedEnvironmentInputs) -> None:
         reviewed.relationships,
         reviewed.diagnostics,
         reviewed.schema_version,
+        reviewed.simulation_schema_digest,
     )
     expected_id = f"source_snapshot_{digest.removeprefix('sha256:')[:16]}"
     if reviewed.snapshot_digest != digest or reviewed.snapshot_id != expected_id:

@@ -29,6 +29,7 @@ from fi.alk.studio._environment_input_types import (
     EnvironmentInputReview,
     EnvironmentSource,
     SourceRole,
+    SimulationSchemaRepair,
     _ImmutableValue,
     _canonical_json,
     _canonical_value,
@@ -82,7 +83,8 @@ class PrepareRequest(_ImmutableValue):
     version: Literal["environment-sources.request.v1"]
     operation: Literal["prepare"]
     sources: tuple[EncodedEnvironmentSource, ...]
-    destination_schema: DestinationSchema
+    destination_schema: DestinationSchema | None = None
+    schema_repairs: tuple[SimulationSchemaRepair, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -122,12 +124,12 @@ def execute_request(payload: bytes) -> dict[str, Any]:
             PrepareRequest | AcceptRequest | CompileRequest
         ).validate_json(_canonical_json(data))
         if isinstance(request, PrepareRequest):
-            result = {
-                "draft": prepare_environment_inputs(
-                    tuple(source.decode() for source in request.sources),
-                    destination_schema=request.destination_schema,
-                )
-            }
+            draft = prepare_environment_inputs(
+                tuple(source.decode() for source in request.sources),
+                destination_schema=request.destination_schema,
+                schema_repairs=request.schema_repairs,
+            )
+            result = {"draft": draft, "schema_digest": draft.schema_digest}
         else:
             if isinstance(request, AcceptRequest):
                 reviewed = review_environment_inputs(

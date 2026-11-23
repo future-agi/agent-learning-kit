@@ -9,6 +9,7 @@ from dataclasses import field as dataclass_field
 from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any, Literal, TypeAlias
+from urllib.parse import quote
 
 from pydantic import ConfigDict
 
@@ -177,6 +178,41 @@ class DestinationSchema(_ImmutableValue):
 
 
 @dataclass(frozen=True)
+class SchemaRepairChoice(_ImmutableValue):
+    source_id: str
+    decision: Literal[
+        "keep_text", "choose_identity", "confirm_entity", "review_relationships"
+    ]
+    fields: tuple[str, ...]
+    candidate_targets: tuple[str, ...] = ()
+
+
+def simulation_target_field(source_id: str, field: str) -> str:
+    return f"{quote(source_id, safe='')}/{quote(field, safe='')}"
+
+
+@dataclass(frozen=True)
+class SimulationSchemaRepair(_ImmutableValue):
+    source_id: str
+    text_fields: tuple[str, ...] = ()
+    identity_fields: tuple[str, ...] = ()
+    separate_entity: bool = False
+    manual_relationships: bool = False
+
+
+@dataclass(frozen=True)
+class ProposedSimulationSchema(DestinationSchema):
+    origin: Literal["simulation"]
+    repair_choices: tuple[SchemaRepairChoice, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.fields:
+            super().__post_init__()
+        else:
+            _ImmutableValue.__post_init__(self)
+
+
+@dataclass(frozen=True)
 class FieldProfile(_ImmutableValue):
     source_field: str
     inferred_type: DataType
@@ -239,12 +275,16 @@ class FailedEnvironmentSource(_ImmutableValue):
 @dataclass(frozen=True)
 class EnvironmentInputDraft(_ImmutableValue):
     sources: tuple[ParsedSource, ...]
-    destination_schema: DestinationSchema
+    destination_schema: ProposedSimulationSchema | DestinationSchema
     diagnostics: tuple[SourceDiagnostic, ...]
     draft_digest: str
     proposals: SourceProposals = dataclass_field(
         default_factory=lambda: SourceProposals()
     )
+
+    @property
+    def schema_digest(self) -> str:
+        return _content_digest(self.destination_schema)
 
 
 @dataclass(frozen=True)
@@ -413,8 +453,11 @@ class ReviewedEnvironmentInputs(_ImmutableValue):
     private_replacement_receipt: tuple[ReplacementReceipt, ...]
     diagnostics: tuple[SourceDiagnostic, ...] = ()
     schema_version: Literal[
-        "environment-inputs.snapshot.v1", "environment-inputs.snapshot.v2"
+        "environment-inputs.snapshot.v1",
+        "environment-inputs.snapshot.v2",
+        "environment-inputs.snapshot.v3",
     ] = dataclass_field(default="environment-inputs.snapshot.v2", kw_only=True)
+    simulation_schema_digest: str | None = dataclass_field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)

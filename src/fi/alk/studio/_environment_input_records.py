@@ -13,6 +13,7 @@ from fi.alk.studio._environment_input_types import (
     FieldProfile,
     JsonScalar,
     ParsedRecordSource,
+    ProposedSimulationSchema,
     RecordRelationship,
     RecordReview,
     RejectedRecord,
@@ -23,6 +24,7 @@ from fi.alk.studio._environment_input_types import (
     SourceSpan,
     _canonical_json,
     _normalize_audience,
+    simulation_target_field,
 )
 
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
@@ -38,12 +40,14 @@ _PERSONAL_FIELD_RE = re.compile(
 def _profile_field(
     field: str,
     values: list[JsonScalar],
-    destination_schema: DestinationSchema,
+    destination_schema: DestinationSchema | None,
 ) -> FieldProfile:
     populated = [value for value in values if value not in (None, "")]
     inferred_type = _infer_type(populated)
     unique_values = {_canonical_json(value) for value in populated}
-    destination = destination_schema.field(field)
+    destination = (
+        destination_schema.field(field) if destination_schema is not None else None
+    )
     return FieldProfile(
         source_field=field,
         inferred_type=inferred_type,
@@ -224,6 +228,14 @@ def _validate_field_mappings(
             + ", ".join(unmarked_personal_fields),
         )
     for mapping in review.fields:
+        if isinstance(destination_schema, ProposedSimulationSchema) and (
+            mapping.target_field
+            != simulation_target_field(source.pin.source_id, mapping.source_field)
+        ):
+            raise EnvironmentInputError(
+                "source_mapping_invalid",
+                "A simulation field must belong to its source entity",
+            )
         destination = destination_schema.field(mapping.target_field)
         if destination is None or destination.data_type != mapping.data_type:
             raise EnvironmentInputError(
