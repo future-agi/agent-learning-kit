@@ -2761,6 +2761,13 @@ def spawn_source_process(
         env["PYTHONPATH"] = os.pathsep.join(
             part for part in (str(world_dir), existing_pythonpath) if part
         )
+    if env.get("HARNESS_TOOL_TRACE"):
+        # The mark hook notes beside the trace which framework span sources this start turned on;
+        # a note left by an earlier start never speaks for this one.
+        try:
+            Path(env["HARNESS_TOOL_TRACE"] + ".observing").unlink(missing_ok=True)
+        except OSError:
+            pass
     try:
         handle = runner(
             command,
@@ -7855,6 +7862,9 @@ class ProcessRuntimeProvider:
             agent_name = _agent_name_source_default(Path("/work/source"))
         if agent_name:
             metadata["livekit_agent_name"] = _fill(agent_name)
+        if env.get("ALK_TOOL_SPANS_JOIN"):
+            # The build switched this agent's spans on with a rule for how the reader joins them.
+            metadata["tool_spans_join"] = env["ALK_TOOL_SPANS_JOIN"]
         trace = env.get("HARNESS_TOOL_TRACE")
         if trace:
             metadata["tool_trace_path"] = _fill(trace)

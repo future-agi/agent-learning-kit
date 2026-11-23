@@ -712,6 +712,7 @@ def _record_completed_tool_call(
     name: str,
     arguments: Mapping[str, Any],
     response: Mapping[str, Any],
+    call_id: str = "",
 ) -> None:
     """Record a tool the submitted agent says it already ran: the agent's own account of the call.
 
@@ -719,7 +720,8 @@ def _record_completed_tool_call(
     is never replayed through the generated world: that would risk repeating a side effect, and
     would turn a real success into ``no such tool`` when no mock handler was authored. It is kept
     in the world's list, tagged as the agent's own account (tool_evidence.py), since the world did
-    not serve it and the kit did not see it run.
+    not serve it and the kit did not see it run. ``call_id`` is the id the agent gave the call, when
+    it gave one; it is kept with the runtime's ids.
     """
     error_value = response.get("error")
     error = str(error_value) if error_value not in (None, "") else ""
@@ -739,6 +741,7 @@ def _record_completed_tool_call(
             refused=refused,
             error=error,
             at=time.time(),
+            runtime_ids={"call_id": call_id} if call_id else {},
             source=evidence.AGENT,
         )
     )
@@ -853,6 +856,7 @@ class HostedChatTarget:
                 _record_completed_tool_call(
                     self.world, name=observed["name"],
                     arguments=observed["arguments"], response=observed,
+                    call_id=str(observed.get("id") or ""),
                 )
             conversation_ended = bool(
                 (response.metadata or {}).get("conversation_ended")
@@ -896,6 +900,8 @@ class HostedChatTarget:
                         name=name,
                         arguments=arguments,
                         response=provided,
+                        # Only an id the agent gave; `call_{index}` is the kit's own stand-in.
+                        call_id=call_id if call.get("id") else "",
                     )
                     result_content = provided.get("content", provided.get("result"))
                     if not isinstance(result_content, str):
@@ -1429,6 +1435,7 @@ class HostedChatCallRunner:
             hand_off_notices,
             in_process_tools,
             repeated_untimed_notices,
+            tool_span_notices,
         )
 
         said = list(deadline_notices)
@@ -1457,6 +1464,7 @@ class HostedChatCallRunner:
         # Such a worker's own checks are not graded; the rest of the trial is.
         said += unenforced_deadline_notices(unenforced) + stopped_notices
         said += repeated_untimed_notices(transcript.calls) + hand_off_notices(runtime)
+        said += tool_span_notices(runtime, transcript.calls)
         if said:
             transcript.notices = said
         ended = datetime.now(timezone.utc)
