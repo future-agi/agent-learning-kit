@@ -921,6 +921,8 @@ def _only_fields_the_agent_adds(effect: Call, arguments: Mapping[str, Any]) -> b
         return False
     body = effect.result
     if not isinstance(body, dict):
+        if not effect.error:
+            return False
         try:
             body = json.loads(effect.error)
         except (TypeError, ValueError):
@@ -1226,7 +1228,7 @@ class _WorldActors:
                         ok=done.status < 400,
                         result=done.result,
                         refused=400 <= done.status < 500,
-                        refusal_code=refusal_code_for(done.status) if 400 <= done.status < 500 else "",
+                        refusal_code=refusal_code_for(done.status),
                         error=done.error or "",
                     )
                 )
