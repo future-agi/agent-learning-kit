@@ -54,6 +54,7 @@ SUBMISSION: frozenset[str] = frozenset(
         "connect_only_requires_",
         "provider_mode_only_supported_for_vapi_retell_or_phone_connect_only",
         "target_model_must_be_nonempty_string",
+        "direct_model_names_must_be_a_list_of_names",
         "resolved_secret_forbidden",
         # Secrets the caller referenced.
         "hosted_secret_manager_unsupported",
