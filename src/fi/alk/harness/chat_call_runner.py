@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -11,29 +12,55 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from urllib.parse import urljoin
 
+from fi._diagnostics import sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
-from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
+from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, HTTPCallFailure
 
+from .actors import with_caller_actor
 from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
+    ToolCaptureFailed,
     _clear_file_tool_calls,
-    _collect_file_tool_calls,
+    _with_span_calls,
     _with_scenario_edits,
 )
 from .contract import AgentContract
+from .privilege import IsolationMode, isolation_mode
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
-from .run.conversation import TargetConversationEnded, Transcript, converse
+from .run.conversation import ChatActors, TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
-from .usage import failure_domain_for_code, simulator_funding
-from .world.runtime import Call, GeneratedWorld
+from .source_folder import contract_folder
+from .usage import (
+    UsageDenied,
+    UsageUnavailable,
+    failure_domain_for_code,
+    simulator_funding,
+)
+from .handler_child import ChildWorld, HandlerChannel, HandlerChild, start_handler_child
+from .world.runtime import Call, GeneratedWorld, graded_calls, trace_row
 from .world.stores.postgres import AttachedPostgresStore
 
 logger = logging.getLogger(__name__)
+
+
+async def _check_text_usage(reporter: Any, funding: str) -> None:
+    """Stop a platform-funded text call the plan does not allow, before it starts."""
+    if reporter is None or funding != "platform":
+        return
+    try:
+        await asyncio.to_thread(reporter.check, "text_call")
+    except UsageDenied as exc:
+        raise CallAborted(
+            f"text_usage_check_denied: {exc}", code="usage_exhausted"
+        ) from exc
+    except UsageUnavailable as exc:
+        raise CallAborted(
+            f"text_usage_check_failed: {exc}", code="usage_check_failed"
+        ) from exc
 
 
 async def _record_text_usage(
@@ -56,7 +83,9 @@ async def _record_text_usage(
         if isinstance(partial, Transcript)
         else 0
     )
-    completed = transcript is not None
+    # A call that failed midway still carries the transcript it got, for the record; it is billed as
+    # failed, under the failure's domain, all the same.
+    completed = failure is None
     try:
         await asyncio.to_thread(
             reporter.record,
@@ -84,7 +113,7 @@ async def _record_text_usage(
         )
 
 
-DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 120.0
+DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 300.0
 
 
 def _chat_target_timeout_seconds() -> float:
@@ -158,28 +187,312 @@ class _HostedToolStore:
         return self._store.add(collection, dict(record))
 
 
+def _entries(contract: Any) -> list[dict[str, Any]]:
+    return [entry if isinstance(entry, dict) else entry.model_dump() for entry in (contract.tool_entrypoints or [])]
+
+
+def service_actions(contract: Any) -> set[str]:
+    """The agent's tools its own tools service runs, as world actions: a service entry's route, `/` read as `.`.
+    A route with a path parameter is left to the world's handler."""
+    return {
+        route.replace("/", ".")
+        for entry in _entries(contract)
+        if entry.get("mode") == "service"
+        and (route := str(entry.get("endpoint") or "").strip("/"))
+        and "{" not in route
+    }
+
+
+class _ServiceTools:
+    """The agent's own tools service runs its service actions, as the tool proxy forwards them on a voice call; any
+    other tool runs through the world's handler. The agent's calls are recorded in the world as its handlers would
+    record them, so grading reads them the same way, a call the service never answered included."""
+
+    def __init__(self, world: Any, service: Any, handlers: Any, actions: set[str]) -> None:
+        self.world = world
+        self.service = service
+        self.handlers = handlers
+        self.actions = actions
+
+    def run(self, call: Any) -> Any:
+        from .world_door import AGENT
+
+        if call.actor == AGENT and call.action not in self.actions:
+            return self.handlers.run(call)
+        try:
+            ran = self.service.run(call)
+        except Exception as failed:
+            if call.actor == AGENT and hasattr(self.world, "calls"):
+                self.world.calls.append(
+                    Call(name=call.name, arguments=dict(call.arguments or {}), ok=False, error=str(failed), at=time.time())
+                )
+            raise
+        if call.actor == AGENT and hasattr(self.world, "calls"):
+            ok = ran.status < 400
+            self.world.calls.append(
+                Call(
+                    name=call.name,
+                    arguments=dict(call.arguments or {}),
+                    result=ran.result,
+                    ok=ok,
+                    refused=not ok and ran.status < 500,
+                    error="" if ok else (ran.error or f"HTTP {ran.status}"),
+                    at=time.time(),
+                )
+            )
+        return ran
+
+
+def chat_door(
+    world: Any,
+    mirror_dsn: str | None,
+    roster: dict[str, dict[str, Any]],
+    faults: list[Any],
+    tools_url: str | None = None,
+    service_actions: set[str] | None = None,
+) -> Any:
+    """The world's door for a chat run: the agent's own tools service runs its service actions and every actor's tool
+    action when it has one, the world's own handlers the rest; the trial's action log is kept in memory (mirrored to the world's table when it keeps actors), and
+    who may do what is the environment's actor list."""
+    from .world_door import (
+        AGENT,
+        DictRoster,
+        HandlerExecutor,
+        HttpExecutor,
+        MemoryLog,
+        PostgresLog,
+        RecordExecutor,
+        Routed,
+        TeeLog,
+        WorldDoor,
+    )
+
+    def handle(call: Any) -> tuple[bool, Any, str] | None:
+        made = len(getattr(world, "calls", []))
+        result = world.handle_tool_call({"name": call.name, "arguments": call.arguments})
+        if call.actor != AGENT and hasattr(world, "calls"):
+            # An actor's action is in the action log, never in the agent's own calls that grading reads.
+            del world.calls[made:]
+        if result is None:
+            return None
+        return bool(getattr(result, "success", True)), getattr(result, "result", None), str(result.content)
+
+    records = None
+    if mirror_dsn:
+        from .world_door import PostgresRecords
+
+        records = RecordExecutor(PostgresRecords(mirror_dsn))
+    tools = (
+        _ServiceTools(world, HttpExecutor(tools_url), HandlerExecutor(handle), set(service_actions or ()))
+        if tools_url
+        else HandlerExecutor(handle)
+    )
+    return WorldDoor(
+        Routed(tools, records),
+        TeeLog(MemoryLog(), PostgresLog(mirror_dsn) if mirror_dsn else None),
+        DictRoster(roster),
+        faults=lambda: [one for one in faults if isinstance(one, dict)],
+        faults_by_tool=True,
+    )
+
+
+def _at(row: Mapping[str, Any]) -> float:
+    value = row.get("at")
+    if isinstance(value, datetime):
+        return value.timestamp()
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _trial_log(door: Any, since: float = 0.0) -> list[dict[str, Any]]:
+    """This trial's action log. The world's own table holds every row, the agent's calls through its tool proxy
+    included; this process's memory holds only what passed its own door. The table keeps every trial played on it, so
+    this trial's rows are the ones from its start on."""
+    return _readable_trial_log(door, since) or []
+
+
+def _faults_readable(runtime: Any) -> bool:
+    """Whether the faults set for this trial read back from the world's database, where the tool proxy reads them."""
+    from .call_runner import _find_postgres_endpoint, trial_faults_readable
+
+    database = _find_postgres_endpoint(runtime)
+    return database is not None and trial_faults_readable(database.address)
+
+
+def _readable_trial_log(door: Any, since: float = 0.0, *, proxied: bool = False) -> list[dict[str, Any]] | None:
+    """This trial's action log as `_trial_log` reads it, or None when it could not be read: neither the world's table
+    nor this process's own rows, or, on a proxied trial, the world's table, which alone holds the agent's calls."""
+    try:
+        log = door.log.rows()
+    except Exception:  # noqa: BLE001 - this process's own rows unreadable: the world's table may stand
+        log = None
+    mirror = getattr(door.log, "mirror", None)
+    if mirror is not None:
+        try:
+            own = [row for row in mirror.rows() if _at(row) >= since]
+            log = own or (log if log is not None else own)
+        except Exception:  # noqa: BLE001 - the world's table unreadable: this process's own rows stand, unless proxied
+            if proxied:
+                return None
+    return log
+
+
+def _world_actors_record(
+    door: Any, listing: Any, dispatcher: Any, cast: Any, meter: Any, limits: dict[str, Any], since: float = 0.0
+) -> dict[str, Any] | None:
+    """What actors did in the world this trial and what each participant changed, sealed beside the transcript as a
+    call seals it, on every trial with a door, actors or not (`actions` and `decisions` then empty); None only when
+    there is no door."""
+    from .call_runner import actor_rows, approvals, trial_state_changes
+
+    if door is None:
+        return None
+
+    listed = listing.by_id()
+    log = _trial_log(door, since)
+    decisions = dispatcher.record() if dispatcher is not None else []
+    if cast is not None:
+        decisions += [
+            {"actor": one["actor"], "play": "live", "action": one.get("action"),
+             "outcome": (one.get("outcome") or {}).get("outcome"), "why": one.get("why"),
+             "verdict": one.get("verdict")}
+            for one in cast.events
+            if one.get("kind") == "acted"
+        ]
+        # A wait that ran out, and what was taken for the actor, as the world's dispatcher records its own.
+        decisions += [
+            {"actor": one["actor"], "play": "timeout",
+             **({"action": one.get("fallback")} if one.get("outcome") == "fallback_action" else {}),
+             "fallback": one.get("fallback"), "outcome": one.get("outcome"),
+             **({"status": one["status"]} if one.get("status") is not None else {}),
+             **({"action_outcome": one["action_outcome"]} if one.get("action_outcome") else {}),
+             **({"timeout_seconds": one["timeout_seconds"]} if one.get("timeout_seconds") else {})}
+            for one in cast.events
+            if one.get("kind") == "timeout"
+        ]
+    acted = actor_rows(log, listed, decisions)
+    return {
+        "actions": acted,
+        "decisions": decisions,
+        "state_changes": trial_state_changes(log, listed, decisions),
+        "approvals": approvals(log, decisions),
+        "limits": dict(limits),
+        "usage": meter.rows(),
+    }
+
+
+def _chat_actor_summary(cast: Any, world_record: dict[str, Any] | None, listing: Any) -> tuple[dict[str, Any], ...]:
+    """The call's actor summary: the actors who wrote in the conversation and every actor that acted in the world."""
+    from .actor_dispatch import with_acts, world_summary
+
+    speaking = tuple(cast.summary()) if cast is not None else ()
+    decisions = (world_record or {}).get("decisions") or []
+    return with_acts(
+        speaking + tuple(world_summary(decisions, listing.by_id(), {str(one.get("actor")) for one in speaking})),
+        decisions,
+    )
+
+
+def handler_sources(bundle_dir: Path, contract: AgentContract) -> dict[str, str]:
+    """Each declared tool's generated handler source, by tool name."""
+    sources: dict[str, str] = {}
+    for tool in contract.tools:
+        path = bundle_dir / "handlers" / f"{tool.name}.py"
+        if path.is_file():
+            sources[tool.name] = path.read_text(encoding="utf-8")
+    return sources
+
+
 def _tool_world(
     bundle_dir: Path,
     contract: AgentContract,
     runtime: EnvironmentRuntime,
     source_directory: Path | None = None,
+    handler_channel: HandlerChannel | None = None,
 ) -> GeneratedWorld:
+    if runtime.metadata.get("observation_mode") == "native":
+        import random
+        from .world.observation import ObservationWorld, http_endpoints
+        return ObservationWorld(
+            runtime.world_index, random.Random(0), http_endpoints(runtime),
+            observations=contract.runtime.observations if contract.runtime else {},
+        )
     endpoint = runtime.endpoints.get("world_db")
     if endpoint is None or endpoint.protocol != "postgres":
         raise CallAborted(
             "chat_world_unavailable: world_db postgres endpoint is absent"
         )
+    tools = [tool.model_dump(mode="json") for tool in contract.tools]
+    if handler_channel is not None:
+        # Under per-user isolation the handlers, and the agent code they import, run in the
+        # handler child; nothing of the agent's code is imported into this process. State is
+        # read as the harness, as with one fixed user, so checks grade the same rows.
+        return ChildWorld(
+            store=_HostedToolStore(endpoint.address),
+            channel=handler_channel,
+            tools=tools,
+            refusal_signature=contract.refusal_signature,
+        )
     world = GeneratedWorld(store=_HostedToolStore(endpoint.address))
-    world.tools = [tool.model_dump(mode="json") for tool in contract.tools]
-    world.handlers = {}
-    for tool in contract.tools:
-        path = bundle_dir / "handlers" / f"{tool.name}.py"
-        if path.is_file():
-            world.handlers[tool.name] = path.read_text(encoding="utf-8")
+    world.tools = tools
+    world.handlers = handler_sources(bundle_dir, contract)
     world.refusal_signature = contract.refusal_signature
     if source_directory is not None:
-        world.reach(str(source_directory))
+        if isolation_mode() is IsolationMode.PER_USER:
+            # This process holds the harness's capabilities; the agent's code runs only in its
+            # handler child.
+            raise CallAborted(
+                "handler_child_required: per-user isolation never imports the agent's code here",
+                code="call_failed",
+            )
+        world.reach(
+            str(source_directory),
+            contract_folder(contract),
+        )
     return world
+
+
+def handler_child_for(
+    context: CallRunnerContext, runtime: EnvironmentRuntime
+) -> HandlerChild | None:
+    """Under per-user isolation, the process a conversation's generated tool handlers run in.
+
+    None with one fixed user, and for a world that runs no generated handlers.
+    """
+    if isolation_mode() is not IsolationMode.PER_USER:
+        return None
+    if runtime.metadata.get("observation_mode") == "native":
+        return None
+    endpoint = runtime.endpoints.get("world_db")
+    contract_path = context.bundle_dir / "contract.json"
+    if (
+        endpoint is None
+        or endpoint.protocol != "postgres"
+        or not contract_path.is_file()
+    ):
+        return None
+    if endpoint.tool_address is None:
+        # The world's own role is what the agent's code may use; without one (an authoring lane)
+        # there is no safe address to hand it, so the conversation does not start.
+        raise CallAborted(
+            "handler_world_unscoped: this world has no role of its own",
+            code="call_failed",
+        )
+    contract = AgentContract.model_validate_json(
+        contract_path.read_text(encoding="utf-8")
+    )
+    return start_handler_child(
+        handlers=handler_sources(context.bundle_dir, contract),
+        tools=[tool.model_dump(mode="json") for tool in contract.tools],
+        refusal_signature=contract.refusal_signature,
+        dsn=endpoint.tool_address,
+        source=context.source_directory,
+        work_directory=context.work_directory,
+        world_index=runtime.world_index,
+        subfolder=contract_folder(contract),
+    )
 
 
 def _tools(contract: AgentContract) -> list[dict[str, Any]]:
@@ -296,6 +609,8 @@ class _HostedChatTarget:
         world: GeneratedWorld,
         scenario_key: str,
         scenario_id: str,
+        faults: list[dict[str, Any]] | None = None,
+        door: Any = None,
     ) -> None:
         self._wrapper = wrapper
         self._contract = contract
@@ -303,10 +618,58 @@ class _HostedChatTarget:
         self._scenario_key = scenario_key
         self._scenario_id = scenario_id
         self._messages: list[dict[str, Any]] = []
+        self._tool_call_ids: set[str] = set()
         self._turn = 0
+        # The world's door for the agent's calls: permission, faults and the action log, as at the HTTP door.
+        self._door = door if door is not None else chat_door(world, None, {}, faults or [])
 
     async def open(self) -> None:
         return
+
+    def _action(self, tool: str) -> str:
+        """A tool's world action, named as the HTTP door names it (its route with `/` as `.`), else the tool."""
+        for entry in self._contract.tool_entrypoints or []:
+            entry = entry if isinstance(entry, dict) else entry.model_dump()
+            if entry.get("tool") == tool and str(entry.get("endpoint") or "").strip("/"):
+                return str(entry["endpoint"]).strip("/").replace("/", ".")
+        return tool
+
+    def _world_call(self, call_id: str, name: str, arguments: Any) -> str:
+        """One of the agent's calls in the generated world, through the world's door: the scenario's timeout on it if
+        it has one (before commit the world never runs it; after commit it runs and the agent never hears back), then
+        the answer the world gave. A retry is not deduplicated, as at the HTTP door."""
+        from .world_door import ToolCall
+
+        del call_id
+        arguments = dict(arguments or {}) if isinstance(arguments, Mapping) else {}
+        method = next(
+            (
+                str(entry.get("method") or "POST").upper()
+                for entry in _entries(self._contract)
+                if entry.get("tool") == name and entry.get("mode") == "service"
+            ),
+            "POST",
+        )
+        effect = next((str(entry.get("effect") or "") for entry in _entries(self._contract) if entry.get("tool") == name), "")
+        outcome = self._door.enter(
+            ToolCall(action=self._action(name), name=name, arguments=arguments, method=method, effect=effect)
+        )
+        if outcome.fault is not None:
+            mode = outcome.fault.get("mode")
+            if mode == "timeout_after_commit":
+                if self.world.calls:
+                    # Committed, with the answer lost on the way back.
+                    self.world.calls[-1].error = "response_lost"
+                return "Error: the request timed out"
+            self.world._record(
+                Call(name=name, arguments=arguments, result=None, ok=False, error=str(mode or "faulted"))
+            )
+            if mode == "unavailable":
+                return "Error: the service is unavailable (503)"
+            if mode == "error":
+                return f"Error ({outcome.status}): {outcome.reason}"
+            return "Error: the request timed out"
+        return outcome.answer().decode("utf-8", errors="replace")
 
     async def say(self, utterance: str) -> str:
         self._messages.append({"role": "user", "content": utterance})
@@ -329,13 +692,20 @@ class _HostedChatTarget:
             )
             trace = dict((response.metadata or {}).get("external_agent") or {})
             if trace and not trace.get("success", False):
-                raise RuntimeError(
-                    str(trace.get("error") or "submitted endpoint request failed")
+                raise HTTPCallFailure(trace)
+            for observed in (response.metadata or {}).get("native_completed_tools", []):
+                _record_completed_tool_call(
+                    self.world, name=observed["name"],
+                    arguments=observed["arguments"], response=observed,
                 )
             conversation_ended = bool(
                 (response.metadata or {}).get("conversation_ended")
             )
-            returned = list(response.tool_calls or [])
+            returned = [
+                call
+                for call in (response.tool_calls or [])
+                if not call.get("id") or str(call["id"]) not in self._tool_call_ids
+            ]
             if not returned:
                 answer = response.content.strip()
                 if conversation_ended:
@@ -361,6 +731,8 @@ class _HostedChatTarget:
             for index, call in enumerate(returned, start=1):
                 name, arguments, call_id = _tool_call(call, index)
                 returned_ids.add(call_id)
+                if call.get("id"):
+                    self._tool_call_ids.add(call_id)
                 provided = response_by_id.get(call_id)
                 if provided is not None:
                     _record_completed_tool_call(
@@ -373,12 +745,7 @@ class _HostedChatTarget:
                     if not isinstance(result_content, str):
                         result_content = json.dumps(result_content, default=str)
                 else:
-                    result = self.world.handle_tool_call(
-                        {"id": call_id, "name": name, "arguments": arguments}
-                    )
-                    result_content = (
-                        result.content if result is not None else f"no such tool {name}"
-                    )
+                    result_content = self._world_call(call_id, name, arguments)
                 self._messages.append(
                     {
                         "role": "tool",
@@ -425,17 +792,64 @@ def _conversation_scenario(document: dict[str, Any]) -> ConversationScenario:
         raise CallAborted(f"chat_scenario_invalid: {exc}") from exc
 
 
+def _resolved_chat_actors(
+    document: dict[str, Any], bundle_dir: Path, records: Any = None
+) -> list[dict[str, Any]]:
+    """Every actor the scenario includes that writes in the conversation, with its brief; one that cannot reach a
+    chat agent is kept with `entered: false` and the reason, so the record still names it."""
+    from fi.simulate.simulation.call_actors import CHANNELS, known_to_others
+
+    from .actors import ScenarioActor, actor_brief, brief_text, load_actors, with_knowledge_read
+    from .call_actor import load_call_actors, speaking_entries
+
+    if not document.get("actors"):
+        return []
+    listing = load_call_actors(bundle_dir)
+    full = load_actors(bundle_dir).by_id()
+    entries = [ScenarioActor.model_validate(one) for one in document.get("actors") or []]
+    resolved = []
+    for included in speaking_entries(entries, listing, set(full), full):
+        actor = full.get(included.id)
+        here = {
+            **(actor.model_dump(exclude_none=True) if actor is not None else {"id": included.id}),
+            "instruction": included.instruction,
+            "trigger": included.trigger.model_dump(),
+        }
+        if actor is None or "chat" not in CHANNELS.get(str(actor.channel), {}).get("modalities", ()):
+            reason = "not_in_list" if actor is None else "not_a_chat_channel"
+            resolved.append({**here, "entered": False, "reason": reason})
+            continue
+        entry = next((one for one in document.get("actors") or [] if (one or {}).get("id") == actor.id), None)
+        resolved.append(
+            {
+                **here,
+                "situation": known_to_others(str(document.get("instruction") or "")),
+                "language": ", ".join((document.get("persona") or {}).get("languages") or []),
+                "brief": brief_text(
+                    actor_brief(
+                        with_knowledge_read(actor.model_dump(exclude_none=True), bundle_dir, records) or {},
+                        entry=with_knowledge_read(entry, bundle_dir, records),
+                        scenario=dict(document),
+                    )
+                ),
+            }
+        )
+    return resolved
+
+
 async def _drive_conversation(
     target: _HostedChatTarget,
     scenario: ConversationScenario,
     contract: AgentContract,
     bundle_dir: Path,
+    actors: ChatActors | None = None,
 ) -> Transcript:
     return await converse(
         target,
         scenario,
         contract,
         world_root=bundle_dir,
+        actors=actors,
     )
 
 
@@ -443,8 +857,11 @@ class HostedChatCallRunner:
     """Drive a repository chat ingress inside its leased world."""
 
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
+        from .call_runner import TrialRecords, sealed_seed
+
         self._adapter = adapter
         self._context = context
+        self._records = TrialRecords(sealed_seed(context.work_directory))
         contract_path = context.bundle_dir / "contract.json"
         if not contract_path.is_file():
             self._contract: AgentContract | None = None
@@ -452,6 +869,10 @@ class HostedChatCallRunner:
             self._contract = AgentContract.model_validate_json(
                 contract_path.read_text(encoding="utf-8")
             )
+
+    def started_before_setup(self, runtime: EnvironmentRuntime, state: dict[str, Any]) -> None:
+        """Whether the trial started from the seed, as the process that ran its setup read it first."""
+        self._records.started(id(runtime), state)
 
     async def run(
         self,
@@ -468,9 +889,9 @@ class HostedChatCallRunner:
                 "chat_contract_unavailable: bundle/contract.json is absent"
             )
         interface = self._contract.runtime.interface if self._contract.runtime else None
-        if interface is None or interface.kind not in {"http", "callable"}:
+        if interface is None or interface.kind not in {"http", "callable", "command"}:
             raise CallAborted(
-                "chat_interface_unsupported: an HTTP or callable runtime interface is required"
+                "chat_interface_unsupported: an HTTP, callable, or command runtime interface is required"
             )
         endpoint = runtime.endpoints.get("target_http")
         if endpoint is None:
@@ -478,48 +899,145 @@ class HostedChatCallRunner:
                 "chat_capability_unavailable: target_http endpoint is absent"
             )
 
-        source_key = getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        source_key = (
+            getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        )
         document = _with_scenario_edits(
             _scenario_document(self._context.bundle_dir, source_key),
             getattr(self._context.job, "metadata", None),
             source_key,
         )
-        conversation_scenario = _conversation_scenario(document)
-        if not conversation_scenario.instruction.strip():
-            raise CallAborted("chat_scenario_invalid: instruction is empty")
+        document = with_caller_actor(document, self._context.bundle_dir)
         target_world = _tool_world(
             self._context.bundle_dir,
             self._contract,
             runtime,
             self._context.source_directory,
+            self._context.handler_channel,
         )
-        adapter_path = "/invoke" if interface.kind == "callable" else interface.path
-        adapter_protocol = (
-            "fi.alk" if interface.kind == "callable" else interface.protocol
+        # An actor's knowledge of the world's records is read from this trial's own store.
+        chat_actors = _resolved_chat_actors(
+            document,
+            self._context.bundle_dir,
+            getattr(getattr(target_world, "store", None), "records", None),
         )
-        wrapper = HTTPAgentWrapper(
-            endpoint=urljoin(
-                endpoint.address.rstrip("/") + "/", adapter_path.lstrip("/")
-            ),
-            protocol=adapter_protocol,
-            include_tools=interface.include_tools,
-            request_template=interface.request_template,
-            response_path=interface.response_path,
-            setup_requests=[
-                item.model_dump(mode="python") for item in interface.setup_requests
-            ],
-            timeout=_chat_target_timeout_seconds(),
+        if chat_actors:
+            from fi.simulate.simulation.call_actors import with_others
+
+            # The person is told who else is in the conversation, never what they will write.
+            document = {
+                **document,
+                "instruction": with_others(
+                    str(document.get("instruction") or ""),
+                    [one for one in chat_actors if one.get("entered") is not False],
+                ),
+            }
+        # The world's door for this trial: the agent's calls and the actors' actions, one rule set, one log.
+        from .actor_dispatch import DoorActs, action_descriptions, build_dispatcher
+        from .actor_meter import ActorMeter
+        from .actors import acting_fields, load_actors
+        from .call_runner import actor_limits
+
+        listing = load_actors(self._context.bundle_dir)
+        world_db = runtime.endpoints.get("world_db")
+        service = runtime.endpoints.get("tools_api")
+        # Read the world's table whenever the trial is proxied, cast or not, so the fault notices see those calls.
+        proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
+        # The scenario's faults are a rule of its graded trials; a readiness probe checks the tools' binding without them.
+        from .call_runner import _bundle_contract
+        from .world_door import routed_faults
+
+        faults = (
+            []
+            if self._context.readiness_probe
+            else routed_faults(document.get("faults") or [], _bundle_contract(self._context.bundle_dir))
+        )
+        door = chat_door(
+            target_world,
+            world_db.address
+            if (listing.actors or proxied) and world_db is not None and world_db.protocol == "postgres"
+            else None,
+            {
+                one.id: {"permitted_actions": list(one.permitted_actions), "on_behalf_of": one.on_behalf_of}
+                for one in listing.actors
+            },
+            faults,
+            tools_url=service.address if service is not None else None,
+            service_actions=service_actions(self._contract),
+        )
+        acts = DoorActs(door, self._contract.model_dump())
+        meter = ActorMeter()
+        limits = actor_limits(document, self._context.bundle_dir, "chat")
+        records = getattr(getattr(target_world, "store", None), "records", None)
+        # A readiness probe runs a chat with no job of its own; its trial is still one scenario's.
+        job_id = getattr(self._context.job, "job_id", None) or "probe"
+        trial = f"{job_id}:{scenario.scenario_key}"
+        trial_started = time.time()
+        records_dsn = world_db.address if world_db is not None and world_db.protocol == "postgres" else None
+        # The door sees the agent's tools when it runs them itself (tools the agent asks for over its interface), or
+        # when a tool proxy or the in-process door stands in front of the agent's own.
+        door_sees_tools = proxied or bool(interface is not None and getattr(interface, "include_tools", False))
+        dispatcher = build_dispatcher(
+            # What actors watch (an on_tool trigger) includes the agent's calls through its tool proxy.
+            document, self._context.bundle_dir, act=acts, read_log=lambda: _trial_log(door, trial_started),
+            records=records, trial_id=trial, meter=meter,
+            columns=getattr(getattr(target_world, "store", None), "columns", None),
+        )
+        cast = (
+            ChatActors(
+                [{**one, **acting_fields(listing.by_id().get(str(one.get("id"))))} for one in chat_actors],
+                seed=trial, model=None, limits=limits, act=acts, records=records, meter=meter,
+                about=action_descriptions(self._contract.model_dump()),
+                # Each actor's own rows in this trial's log (scheduled ones included), so it decides knowing them.
+                history=lambda key, since=time.time(): [
+                    row for row in _trial_log(door, since) if row.get("actor_id") == key
+                ],
+            )
+            if chat_actors
+            else None
+        )
+        conversation_scenario = _conversation_scenario(document)
+        if not conversation_scenario.instruction.strip():
+            raise CallAborted("chat_scenario_invalid: instruction is empty")
+        from .chat_transport import create_chat_wrapper
+
+        target_timeout = _chat_target_timeout_seconds()
+        wrapper = create_chat_wrapper(
+            interface,
+            endpoint.address,
+            wrapper_type=HTTPAgentWrapper,
+            secret_values=self._context.target_provider_secret_values,
+            local_auth_values=getattr(runtime, "_local_auth_values", None),
+            timeout=target_timeout,
+            total_timeout=target_timeout if interface.sse else None,
             metadata={
                 "target": "hosted_repository_runtime",
                 "scenario": scenario.scenario_key,
             },
         )
         funding = simulator_funding()
+        await _check_text_usage(self._context.usage_reporter, funding)
         started = datetime.now(timezone.utc)
         transcript: Transcript | None = None
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
+        acting: asyncio.Task[None] | None = None
+        # An agent that runs its own tools reaches them through the tool proxy, which reads this trial's faults from
+        # the world's database, as on a voice call.
+        if proxied:
+            from .call_runner import _set_trial_faults
+
+            # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
+            _set_trial_faults(runtime, faults)
         try:
+            # The trial's starting records, after its reset: whether it started from the seed.
+            await asyncio.to_thread(self._records.begin, id(runtime), records_dsn)
+            if dispatcher is not None:
+                # What the actors wrote before T0 is in the world before the conversation starts.
+                await dispatcher.replay()
+                if dispatcher.pre_run:
+                    await asyncio.to_thread(self._records.rebase, id(runtime), records_dsn)
+                acting = asyncio.create_task(dispatcher.run())
             transcript = await _drive_conversation(
                 _HostedChatTarget(
                     wrapper=wrapper,
@@ -527,25 +1045,63 @@ class HostedChatCallRunner:
                     world=target_world,
                     scenario_key=scenario.scenario_key,
                     scenario_id=scenario.scenario_id,
+                    door=door,
                 ),
                 conversation_scenario,
                 self._contract,
                 self._context.bundle_dir,
+                **({"actors": cast} if cast is not None else {}),
             )
         except CallAborted as exc:
             failure = exc
-            raise
+            transcript = getattr(exc, "partial_transcript", None) or Transcript()
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
+            status = (
+                exc.trace.get("status_code")
+                if isinstance(exc, HTTPCallFailure)
+                else None
+            )
             wrapped = CallAborted(
-                f"chat_target_failed: {type(exc).__name__}: {exc}",
-                code="target_agent_failed",
+                f"chat_target_failed: {type(exc).__name__}: "
+                + sanitize_diagnostic(
+                    str(exc),
+                    {
+                        **self._context.target_provider_secret_values,
+                        **getattr(runtime, "_local_auth_values", {}),
+                    },
+                ),
+                code=(
+                    "call_failed"
+                    if isinstance(status, int)
+                    and status in {408, 429, 502, 503, 504}
+                    else "target_agent_failed"
+                ),
             )
             partial = getattr(exc, "partial_transcript", None)
             if partial is not None:
                 setattr(wrapped, "partial_transcript", partial)
             failure = wrapped
-            raise wrapped from exc
+            transcript = partial or Transcript()
+            trace = getattr(exc, "trace", None)
+            if trace is not None:
+                await self._adapter.upload_artifact(
+                    json.dumps(trace, sort_keys=True).encode("utf-8"),
+                    kind=ArtifactKind.TRACE,
+                    scenario_key=scenario.scenario_key,
+                )
         finally:
+            if proxied:
+                from .call_runner import _write_trial_state
+
+                with contextlib.suppress(Exception):
+                    _write_trial_state(runtime, [])
+            if acting is not None:
+                acting.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await acting
+                # An actor the agent's last calls woke still takes its turn, within the settle's bound.
+                with contextlib.suppress(Exception):
+                    await dispatcher.settle()
             await _record_text_usage(
                 self._context.usage_reporter,
                 scenario_key=scenario.scenario_key,
@@ -558,10 +1114,98 @@ class HostedChatCallRunner:
         # The submitted agent may execute tools entirely inside its Python process instead
         # of returning tool requests over HTTP. These observed calls belong to the same attempt;
         # do not replay the tool through the generated world or fabricate evidence from text.
-        traced_calls = _collect_file_tool_calls(runtime)
-        if traced_calls and not transcript.calls:
-            transcript.calls.extend(traced_calls)
+        try:
+            transcript.calls[:] = _with_span_calls(
+                transcript.calls, runtime, strict=True
+            )
+            capture_failed = False
+        except ToolCaptureFailed as exc:
+            logger.warning("tool capture failed for %s: %s", scenario.scenario_key, exc)
+            capture_failed = True
+        # Calls returned over HTTP are recorded here as they run, so they are a full capture.
+        capture_failed = capture_failed and not graded_calls(transcript.calls)
 
+        world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
+        from .call_runner import (
+            NOT_RECORDED,
+            SEALED_WITHOUT_DOOR,
+            duplicate_commits,
+            missing_evidence,
+            one_call_per_lost_answer,
+            sealed_without_door,
+            unmeasured_reasons,
+        )
+
+        if door_sees_tools:
+            from .call_runner import upload_end_state
+
+            sealed = await asyncio.to_thread(self._records.end, id(runtime), records_dsn)
+            kept = await upload_end_state(self._adapter, scenario.scenario_key, sealed, _trial_log(door, trial_started))
+            # `door` says a door stood for these counts, so a reader never takes a record from before it for one.
+            world_record = {
+                **(world_record or {}),
+                **sealed,
+                "door": True,
+                **({"end_state_artifact": kept} if kept else {}),
+            }
+        else:
+            # The agent runs its own tools where no door stands: World changes says so, never "no change".
+            world_record = dict(NOT_RECORDED)
+
+        # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
+        trial_log = _readable_trial_log(door, trial_started, proxied=proxied) if door is not None else []
+        transcript.calls[:] = one_call_per_lost_answer(transcript.calls, trial_log)
+        duplicates = duplicate_commits(trial_log or [], getattr(scenario, "solution", None) or ())
+        if duplicates:
+            world_record = {**(world_record or {}), "duplicates": duplicates}
+        if door_sees_tools and sealed_without_door(runtime.endpoints, transcript.calls, trial_log):
+            # Sealed with no world door, the agent ran the tools it was offered itself: its calls are in its own trace
+            # and none reached the world here, so what it changed is unknown, never "no change".
+            world_record = dict(SEALED_WITHOUT_DOOR)
+        if world_record is not None:
+            transcript.world_actors = world_record
+        # Every actor that took part, the ones acting only through the world too, so the call is found by each.
+        summary = list(_chat_actor_summary(cast, world_record, listing))
+        if summary:
+            transcript.call_actors = {
+                "resolved": chat_actors,
+                "summary": summary,
+                "events": cast.events if cast is not None else [],
+            }
+        from .call_runner import (
+            DUPLICATES_UNREADABLE,
+            _bundle_contract,
+            evidence_notices,
+            fault_notices,
+            in_process_tools,
+            repeated_untimed_notices,
+        )
+
+        if faults:
+            # A fault that did not take effect is said, never only logged: the trial ran without it.
+            transcript.notices = (
+                fault_notices(
+                    faults, None, transcript.calls, unreachable="the trial's faults were unreadable in the world's "
+                    "database", code="fault_unreadable",
+                )
+                if proxied and not _faults_readable(runtime)
+                else fault_notices(
+                    faults, _trial_log(door, trial_started), transcript.calls,
+                    contract=_bundle_contract(self._context.bundle_dir),
+                )
+            )
+        if door is not None:
+            # A call of the agent's that ran without the door recording it leaves the trial's evidence incomplete.
+            # An action log that could not be read is missing evidence, never an empty log.
+            transcript.notices = (
+                list(transcript.notices or [])
+                + evidence_notices(
+                    trial_log, transcript.calls,
+                    in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints),
+                )
+                + ([dict(DUPLICATES_UNREADABLE)] if trial_log is None else [])
+            )
+        transcript.notices = list(transcript.notices or []) + repeated_untimed_notices(transcript.calls)
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),
@@ -571,19 +1215,7 @@ class HostedChatCallRunner:
         calls = tuple(transcript.calls)
         if calls:
             tool_trace = "\n".join(
-                json.dumps(
-                    {
-                        "name": call.name,
-                        "arguments": call.arguments,
-                        "result": call.result,
-                        "ok": call.ok,
-                        "error": call.error,
-                        "refused": call.refused,
-                        "at": call.at,
-                    },
-                    sort_keys=True,
-                    default=str,
-                )
+                json.dumps(trace_row(call), sort_keys=True, default=str)
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(
@@ -591,12 +1223,26 @@ class HostedChatCallRunner:
                 kind=ArtifactKind.TOOL_TRACE,
                 scenario_key=scenario.scenario_key,
             )
-        return CallOutcome(
+        outcome = CallOutcome(
             calls=calls,
+            tool_capture_failed=capture_failed,
             turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),
             transcript_artifact=transcript_id,
             messages=tuple(transcript.canonical_messages()),
+            call_actors=_chat_actor_summary(cast, world_record, listing),
+            world_actions=tuple((world_record or {}).get("actions") or ()),
+            duplicates=tuple(duplicates),
+            unmeasured=unmeasured_reasons(transcript.notices or ()),
+            missing_evidence=missing_evidence(transcript.notices or (), world_record),
+            actor_briefs={
+                **{str(one["id"]): str(one.get("brief") or "") for one in chat_actors if one.get("brief")},
+                **(dispatcher.briefs if dispatcher is not None else {}),
+            },
         )
+        if failure is not None:
+            failure.partial = outcome
+            raise failure
+        return outcome

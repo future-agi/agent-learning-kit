@@ -6,6 +6,9 @@ description: Reads an AI agent's source or definition and records what is verifi
 # Understand the agent
 
 Record executable capabilities, not commented examples, docstrings or suggested future features.
+For a framework or platform repository, do not inventory its component or integration catalogue.
+Choose one runnable source-owned agent/example that matches the requested target configuration,
+prove its startup and interaction path, and submit the contract once those facts are sufficient.
 An agent can legitimately have no custom tools: submit `tools: []` and `tool_entrypoints: []`.
 Do not invent a tool or database to make a contract look complete. Zero-argument tools are also
 valid when their actual signatures take no arguments. Follow registrations into executable code;
@@ -57,6 +60,9 @@ Find, in roughly this order:
    schema, a tool array. Record the exact callable name the model would emit, not a friendly
    label.
 
+   If the agent hands work to other agents, record each one in `workers`: an `id`, the `name` the
+   app gives it, and the contract tools it holds. Every worker tool is also in `tools`.
+
 2. **Argument names and types.** Read the signature. An argument declared as a list is a
    different tool from one declared as a single value, and an environment built on the wrong one
    fails at the first call. Record types wherever the source states them.
@@ -100,8 +106,19 @@ Find, in roughly this order:
    when a record says so; and each argument whose text the agent writes itself rather than takes
    from the person or a record. `refuses`: every refusal by value or by something outside the
    call, and every refusal returned as an ordinary value rather than an error. `inputs_from`: an
-   argument whose value must come from an earlier tool's output, and that tool. Fill these for
-   every tool that has them; a writer sees nothing else.
+   argument whose value must come from an earlier tool's output, and that tool. `arg_units`: the
+   unit or format of every amount, duration, date or time argument whose name does not say it
+   (a currency's minor or major unit, seconds or milliseconds, an ISO date or a timestamp), from the
+   code that reads it, the data it holds, or what the person you work with told you. When the code or
+   its data and the person's words disagree (they name one unit, the column holds another), the code
+   wins: record what it
+   does and tell them about the mismatch. The agent, the world and every actor read the field by it,
+   so a field left without one is read three ways. `returns`: every field the tool hands back, with
+   its type and the same unit or format rule (`{"<an id field>": "string", "<an amount field>":
+   "integer, <its minor unit and currency>"}`), read from the code that builds the result or the
+   record it returns. `tables_read` and `tables_changed`: the world's tables the tool reads, and
+   the ones it adds to, changes or deletes from, read from its code. Fill these for every
+   tool that has them; a writer sees nothing else.
 
 6. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
    wording from its system prompt or its validation code. These matter: the agent under test is
@@ -109,10 +126,18 @@ Find, in roughly this order:
    often kept away from the main agent file, so search the whole source for a long instructions
    string before concluding there are none. Name where the whole prompt is written in
    `system_prompt_from`, every part it is assembled from: it is copied into the contract as written,
-   and every later stage decides what the agent should do from it.
+   and every later stage decides what the agent should do from it. If the prompt is built or
+   fetched at run time and has no lines to name, quote it in `system_prompt_excerpt`; the save
+   asks once whether lines can be named. A quote is word for word from the prompt, a sentence or
+   more, with ... where you leave text out. The lines you name are checked against your latest
+   such quote, given with them or before. Lines that don't hold it are refused, and asked about
+   once more if they come without a quote; after that, the quote is kept and the lines are
+   recorded as unconfirmed (with a quote of fewer than 16 letters, no prompt is saved; the
+   lines are recorded as unconfirmed).
 
-7. **The modality.** How a person reaches this agent: a voice session, a text interface, or a
-   browser it drives. This decides how it is later run, so getting it wrong reroutes every test.
+7. **The modality.** How this agent is run: a voice session, a text conversation, or work it
+   carries out on websites or a computer. This decides how it is later run, so getting it wrong
+   reroutes every test.
    **Decide it from the source and always record it.** A run is unattended, so there is nobody to
    ask, and a modality left unsaid is read as chat: a voice agent then never places a call and the
    whole run tests nothing. Read it off what the agent depends on:
@@ -121,10 +146,52 @@ Find, in roughly this order:
      name, an STT or TTS provider, an audio session it enters on connect.
    - **chat** if a person reaches it as text: an HTTP endpoint taking messages, a completions-shaped
      API, a socket carrying turns.
-   - **browser** if it drives a page rather than being talked to.
+   - **browser** if a person uses it to carry out work on websites or a computer rather than for
+     a conversation: driving a browser, operating a computer or crawling sites is its main job.
+     Ask: does a person come to this agent for a conversation, or to have it carry out that work?
+     An agent that looks things up on the web to answer a person (research, comparison, support)
+     is chat, or voice if it takes calls, even if it can't work without that tool. So is one with a
+     web page in front of it. A coding agent is chat.
 
    When an agent genuinely ships more than one runtime, take the one its entrypoint starts, and say
    in `notes` which others exist and that you chose by entrypoint. Never leave the field out.
+
+   For a native HTTP server that requires a locally chosen shared token, inspect its auth guard.
+   Declare `runtime.interface.local_auth` with `server_environment` and `template_variable`
+   names, then use `{{template_variable}}` in the source-required `headers_template` header.
+   ALK generates the token privately per world and supplies it to that server and chat client.
+   Never declare token values, disable authentication, override supplied credentials, or use this
+   for external provider/account keys. This facility requires native HTTP, not Compose or CLI.
+
+   Inspect the selected chat route's response producers for structured application failures,
+   including errors returned with HTTP 200. Declare `runtime.interface.failure_rule` using the
+   source-defined status field, failure or success values, and error message path. A readable
+   assistant message does not prove successful execution. Do not infer failure from prose alone.
+
+   Inspect whether the selected chat route returns pending tool requests for its caller to execute,
+   or executes tools internally before replying. For internal execution, inspect the source response
+   schema or correlated event API and declare `runtime.interface.completed_tools` or
+   `runtime.interface.completed_tool_events` to collect completed results, including errors. Pair
+   actions and observations using source identifiers and preserve conversation correlation. Inspect
+   success, error and rejection event producers, including native tool result wrappers. Completion
+   status means execution ended, not that it succeeded. When source defines a nullable boolean or
+   string error field inside the result, declare `result_error_path` relative to `result_path`.
+   ALK decodes a JSON-text result once for classification and preserves the original result.
+   Missing, null, false or empty string reports no error; true or nonempty string reports failure.
+   Other values and incompatible traversal invalidate the evidence. Declare this convention only
+   when supported by the source, and retain any existing boolean `error_path`.
+   Declare distinct failed terminal kinds with
+   `completed_tool_events.failure_events`, each containing `kind`, `action_id_path` and `result_path`.
+   Verify that all terminal kinds join the same action identifier; chronological parents are not
+   necessarily action references. Failure events always record `ok=false` and require an error
+   result. Select arguments present even when native validation fails, such as the raw tool-call
+   arguments JSON rather than a parsed action created only after validation. Tool
+   declarations, registration/factory calls, and assistant text are not execution evidence.
+   Importable tool bindings do not replace a completed-result observation mapping for internal
+   execution. Never fabricate events or replay
+   completed tools. If the source offers equivalent chat routes, prefer one that exposes completed
+   tool results over a text-only compatibility route. If no supported observation seam exists,
+   record that limitation.
 
 8. **Which side places the call.** Voice only, and read from the agent's own instructions rather
    than inferred from its tools. An agent told it **placed** this call ("you placed this call",
@@ -137,12 +204,21 @@ Find, in roughly this order:
    This is not who speaks first: an outbound agent usually still greets. It decides how the
    simulated person is briefed, and briefing someone who did not dial as though they had an errand
    to raise tests nothing about how the agent opens a call it placed. Two builds of the same agent
-   can differ only in this, so quote the line you read it from in `system_prompt_excerpt`.
+   can differ only in this, so quote the line you read it from in `notes`, unless it is already in
+   the prompt you name or quote.
 
 9. **What it depends on.** Everything the agent reaches for that has to exist before it can
    work: a datastore, a service it calls over HTTP, a file it reads, a queue. Record each one,
    what it provides, and which tools cannot work without it. The environment stage builds these,
    so a dependency you do not record is a tool that will have nothing to answer it.
+
+   For tools that read or edit task files, trace the directory they actually use through
+   startup arguments, environment and session creation. Declare a stable private directory in
+   `runtime.workspaces` only when source proves the target uses it. Paths are relative to the
+   target process working directory. The uploaded agent repository is not automatically its
+   task workspace. If the directory is configurable, use the source-supported setting and
+   record the same directory in the binding. If it is remote, per-session or unknown, leave
+   the binding absent and record that existing-file tasks cannot be seeded through ALK.
 
 10. **Whether its tools have code, and how to reach it.** This is the difference between testing
    the agent and testing somebody's reimplementation of it, so it is worth real effort.
@@ -159,6 +235,10 @@ Find, in roughly this order:
    sees the dependency path; without this mapping ALK cannot normalize it back to the semantic
    tool the agent actually chose.
 
+   Record each entry's effect: "read" when the code only reads (a lookup, a search, a list),
+   "write" when it creates, changes or deletes anything. Leave it empty only when you cannot tell;
+   an empty one counts as a write unless the endpoint is called with GET.
+
    Some tools cannot be reached at all. A framework may define them as closures inside a class,
    so there is nothing importable. **Record that plainly rather than leaving the entry blank**:
    the environment stage must stop and tell the person which runnable seam the agent needs. It
@@ -171,7 +251,14 @@ Find, in roughly this order:
 
 12. **What it takes to run.** Its install command from its own lockfile or requirements, the
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
-   Its own Dockerfile is used in preference to anything written for it. For a chat agent, also
+   When the selected execution runtime supports Dockerfiles, prefer its own Dockerfile to
+   generating one. Otherwise use it as evidence for a supported native startup path; do not
+   select an unsupported container build. If source deployment instructions offer a published
+   image for a Compose service, `runtime.compose_image_services` can select that service's
+   existing image instead of its build. Declare the source Compose file and control service;
+   retain the deployment evidence and resolve image variables only from source-owned values.
+   This selection does not add services, invent images, or establish an immutable image identity.
+   It requires a container runtime. For a chat agent, also
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
@@ -185,8 +272,15 @@ Find, in roughly this order:
    request, declare a capture from its dotted response path (for example
    `{"session_id": "id"}`) and reference it later as `{{session_id}}`; never substitute an
    unrelated built-in identifier. Use only documented template placeholders and only routes
-   proven in source. In particular, a source field named user ID is not itself a template
-   variable: map it to an available identifier such as `{{thread_id}}` when appropriate.
+   proven in source. If setup imports a graph or workflow, use a runnable source-owned example,
+   bind every required component input, and configure its provider and model through the
+   repository's supported mechanism using the requested target configuration. A starter template
+   with an unselected model is not a runnable agent. If the repository has no example already
+   bound to the requested model and the supported API cannot bind it during setup, do not select
+   that flow and do not rewrite its source. Prefer a source-owned example with no model dependency
+   so the repository's real interaction path can still be proved. In particular, a source field
+   named user ID is not itself a template variable: map it to an available identifier such as
+   `{{thread_id}}` when appropriate.
 
 13. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
     connection comes from an environment variable, a config file, or a constructor argument. Say
@@ -231,6 +325,19 @@ Find, in roughly this order:
     agent's own text says it does; a capability stretched from a passing word or a tool name
     becomes a whole slice of scenarios testing what the agent was never built to do.
 
+16. **The model.** Record `model` only from the agent's own source: the one model the agent talks
+    to the person with. A voice agent's speech-to-text and text-to-speech models don't count. Its
+    provider is the company or service as the source names it (openai, anthropic, google, azure),
+    left out when the source doesn't say. Its name is written exactly and wholly as it appears on
+    the line you cite (openai/gpt-4o, if that is what is written); its path is relative to the
+    source root, as for the prompt's lines; its line is the 1-based line the name is written on. A name
+    or provider is made only of letters, digits and . _ : / @ -, so a name with a space in it
+    can't be recorded; leave `model` out then.
+
+    Leave `model` out when the name is only set at run time: an environment variable with no
+    default in the code, or a value fetched from elsewhere. Where the code gives an environment
+    variable a default, record the default.
+
 ## A repository may not hold one agent
 
 What you are pointed at is a directory, not necessarily a single agent. Before reading anything in
@@ -245,8 +352,8 @@ directory. **List what you found and ask which one is being tested.** Do not pic
 contract for the wrong one wastes every stage after it, and the person who pointed you here knows
 which they meant.
 
-**One agent with several runtimes.** The same tools reachable over voice, over chat, or through a
-browser. That is one agent, and what to ask about is the modality, not which agent.
+**One agent with several runtimes.** The same tools reachable over voice or over chat. That is one
+agent, and what to ask about is the modality, not which agent.
 
 How to tell them apart: look for repeated structure. Several directories that each define their own
 set of tools, their own instructions and their own data are several agents. Several entry points

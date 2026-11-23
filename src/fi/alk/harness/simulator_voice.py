@@ -58,6 +58,26 @@ SIMULATOR_MODEL_ENV = frozenset(
     }
 )
 
+# The simulator's model by provider when SIMULATOR_LLM_MODEL is unset.
+SIMULATOR_LLM_DEFAULTS = {"google": "gemini-3.8-flash", "openai": "gpt-4o-mini"}
+
+
+def simulator_llm_models(
+    get: Callable[[str], str | None] = os.environ.get, config: Mapping[str, Any] | None = None
+) -> tuple[str, ...]:
+    """The models the simulator is configured to run on: its own model, then each fallback, in order. The provider is
+    read as the runner reads it: the job's `simulator_llm_provider` first, then the setting."""
+    provider = (
+        str((config or {}).get("simulator_llm_provider") or get("SIMULATOR_LLM_PROVIDER") or "").strip().lower()
+        or "google"
+    )
+    primary = (get("SIMULATOR_LLM_MODEL") or "").strip() or SIMULATOR_LLM_DEFAULTS.get(
+        provider, next(iter(SIMULATOR_LLM_DEFAULTS.values()))
+    )
+    fallbacks = [one.strip() for one in (get("SIMULATOR_LLM_FALLBACK_MODELS") or "").split(",") if one.strip()]
+    return tuple(dict.fromkeys([primary, *fallbacks]))
+
+
 _TARGET_NAME = "harness-livekit-target"
 # Urgency, cooperation and withdrawal per personality, compiled into the caller's behaviour policy.
 _TEMPERAMENTS = (
@@ -1119,7 +1139,9 @@ def _cartesia_voice_served(voice: str, key: str) -> bool | None:
     return served
 
 
-def served_cartesia_voice(persona: dict, key: str | None = None) -> str:
+def served_cartesia_voice(
+    persona: dict, key: str | None = None, avoid: frozenset[str] = frozenset()
+) -> str:
     """This caller's voice, or the next one Cartesia still serves when it has removed theirs.
 
     `key` is the call's own Cartesia key; None reads this process's. Without one (a gateway-relayed
@@ -1127,6 +1149,7 @@ def served_cartesia_voice(persona: dict, key: str | None = None) -> str:
     """
     key = os.environ.get("CARTESIA_API_KEY", "") if key is None else key
     candidates = _cartesia_voice_candidates(persona)
+    candidates = [one for one in candidates if one not in avoid] or candidates
     last = candidates[-1]
     for voice in [*candidates[:_VOICE_TRIES], *candidates[-_VOICE_TRIES - 1 :]]:
         if _cartesia_voice_served(voice, key) is not False:
@@ -1217,7 +1240,7 @@ _AURA_BY_ACCENT: dict[str, dict[str, list[str]]] = {
 }
 
 
-def aura_voice_for(persona: dict) -> str:
+def aura_voice_for(persona: dict, avoid: frozenset[str] = frozenset()) -> str:
     """A stable aura voice for one caller, chosen by accent and gender.
 
     Callers who share an accent still differ: the voice within the accent's set is picked by the
@@ -1235,7 +1258,25 @@ def aura_voice_for(persona: dict) -> str:
     index = sum(ord(character) for character in str(persona.get("name") or "")) % len(
         voices
     )
-    return voices[index]
+    rotated = voices[index:] + voices[:index]
+    return next((one for one in rotated if one not in avoid), voices[index])
+
+
+def persona_voice(
+    persona: Mapping[str, Any],
+    tts_provider: str,
+    avoid: frozenset[str] = frozenset(),
+    cartesia_key: str | None = None,
+) -> str:
+    """The voice this person speaks in on this provider, never one in `avoid` while the provider has another.
+
+    Empty when the provider has no voices to choose from."""
+    provider = (tts_provider or "").lower()
+    if provider == "cartesia":
+        return served_cartesia_voice(dict(persona), cartesia_key, avoid)
+    if provider == "deepgram":
+        return aura_voice_for(dict(persona), avoid)
+    return ""
 
 
 def simulator_definition(
@@ -1257,7 +1298,7 @@ def simulator_definition(
     stt_default_provider, stt_model, stt_language = transcriber_for(language)
     stt_provider = stt_override or stt_default_provider
     defaults = {
-        "llm": {"google": "gemini-3.8-flash", "openai": "gpt-4o-mini"},
+        "llm": SIMULATOR_LLM_DEFAULTS,
         "stt": {"deepgram": stt_model, "cartesia": "ink-2", "google": "chirp_2"},
         "tts": {
             "deepgram": "aura-asteria-en",
