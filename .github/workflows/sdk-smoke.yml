@@ -344,6 +344,7 @@ jobs:
           tests/test_harness_credentials.py
           tests/harness/test_controller_env.py
           tests/harness/test_call_runner.py
+          tests/harness/test_tool_evidence.py
           tests/test_harness_secrets.py
           tests/test_evals_openai_instrumentor.py
           tests/test_live_mcp_worker_errors.py

@@ -210,6 +210,14 @@ class Call:
     output_omitted: bool = False
     # The world committed it, but the answer never reached the agent.
     answer_lost: bool = False
+    # Which source's record this is ("world", "span", "tracer" or "agent"; see tool_evidence.py), and the other
+    # sources that saw the same call. These name where the record came from and are not part of the call, so two
+    # records that differ only here are equal.
+    source: str = field(default="", compare=False)
+    seen_by: list[str] = field(default_factory=list, compare=False)
+    # A tool-trace file line's own mark: the framework hook or observer that wrote it, empty when the kit's tracer or
+    # the agent wrote it.
+    trace_mark: str = field(default="", compare=False)
 
 
 def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -313,6 +321,9 @@ def trace_row(call: Call) -> dict[str, Any]:
             if getattr(call, key)
         },
         **_worker_event(call),
+        **({"source": call.source} if call.source else {}),
+        **({"seen_by": list(call.seen_by)} if call.seen_by else {}),
+        **({"trace_mark": call.trace_mark} if call.trace_mark else {}),
     }
 
 
