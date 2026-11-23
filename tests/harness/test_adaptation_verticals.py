@@ -39,6 +39,9 @@ needs_releases = pytest.mark.skipif(
     not (RELEASES and DSN),
     reason="set ALK_ADAPTATION_RELEASES and ALK_RELEASE_POSTGRES_DSN",
 )
+needs_release_files = pytest.mark.skipif(
+    not RELEASES, reason="set ALK_ADAPTATION_RELEASES"
+)
 
 
 def _adapt(
@@ -147,3 +150,97 @@ def test_cardguard_is_adapted_to_banking(tmp_path):
         for key in call["arguments"]
     }
     assert "customer_id" not in arguments and "customer" in arguments
+
+
+@needs_release_files
+def test_an_explicit_agent_id_is_the_one_compose_finds(tmp_path):
+    """Job -> binding -> compose with a customer id that is not the name's slug: the binding is
+    sealed for `bank-support-42`, and compose accepts the run's own declaration as that agent."""
+    from fi.alk.harness.adaptation.declared import MCP_CLIENT
+    from fi.alk.harness.adaptation.profile import profile_from_job, seal_binding
+    from fi.alk.harness.job import HarnessJob
+    from fi.alk.harness.releases import (
+        RELEASES_SUITE,
+        BindingMode,
+        compose_bundle,
+        environment_directory,
+        load_environment_release,
+        load_suite_release,
+        seal_run_manifest,
+    )
+
+    release = Path(RELEASES) / "banking"
+    profile, mapping = fixtures.declared_agent(
+        release / "environment",
+        name="CardGuard",
+        instructions=fixtures.CARDGUARD_INSTRUCTIONS,
+        renames=fixtures.CARDGUARD_RENAMES,
+        unsupported=fixtures.CARDGUARD_UNSUPPORTED,
+        agent_id="bank-support-42",
+    )
+    config = {key: value for key, value in profile.items() if key != "provider"}
+    digest = "sha256:" + "ab" * 32
+    job = HarnessJob(
+        job_id="job-cardguard",
+        run_id="run-cardguard",
+        execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
+        source={"kind": "archive", "archive_artifact_id": "source-id"},
+        agent={"connector": MCP_CLIENT, "config": config},
+        metadata={
+            "adaptation": {
+                "agent": {
+                    "agent_definition_id": "cardguard",
+                    "agent_version_id": "cardguard-v3",
+                    "configuration_digest": digest,
+                    "agent_config_digest": digest,
+                    "connector": MCP_CLIENT,
+                }
+            }
+        },
+    )
+    adapted = profile_from_job(job, credentials={})
+    binding = seal_binding(
+        adapted,
+        BindingMode.TOOL_ROUTED,
+        mapping,
+        environment_root=release / "environment",
+    )
+    assert binding.agent.provider_target_id == "bank-support-42"
+
+    releases = tmp_path / "releases"
+    environment = load_environment_release(release / "environment")
+    environment_directory(releases, environment.digest).parent.mkdir(parents=True)
+    environment_directory(releases, environment.digest).symlink_to(
+        release / "environment"
+    )
+    (releases / RELEASES_SUITE).symlink_to(release / "suite")
+    suite = load_suite_release(release / "suite")
+    manifest = seal_run_manifest(
+        {
+            "environment": [{"digest": environment.digest, "name": environment.name}],
+            "suite": {"digest": suite.digest},
+            "binding": {"digest": binding.digest},
+            "agent": binding.agent.model_dump(mode="json"),
+            "selection": {"scenario_keys": [suite.scenarios[0].key], "trials": 1},
+            "simulator": {"llm": {"provider": "openai", "model": "gpt-4.1-mini"}},
+            "scorer": {"alk_version": "test"},
+            "runtime": {"provider": "e2b", "image_name": "alk", "image_digest": digest},
+        }
+    )
+    paths = {}
+    for name, body in (
+        ("binding", binding.model_dump(mode="json", by_alias=True)),
+        ("manifest", manifest.model_dump(mode="json", by_alias=True)),
+        ("job", job.model_dump(mode="json")),
+    ):
+        paths[name] = tmp_path / f"{name}.json"
+        paths[name].write_text(json.dumps(body), encoding="utf-8")
+    bundle = compose_bundle(
+        releases,
+        binding_path=paths["binding"],
+        manifest_path=paths["manifest"],
+        job_path=paths["job"],
+        output=tmp_path / "bundle",
+    )
+    assert bundle.metadata["release"]["binding"] == binding.digest

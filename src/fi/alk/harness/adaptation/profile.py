@@ -81,13 +81,7 @@ def build_profile(
         # A declaration holds only what the customer wrote down: nothing to redact, and every
         # tool is routed, so its argument names stay exactly as the agent sends them.
         try:
-            redacted = declared_profile(
-                {
-                    k: v
-                    for k, v in dict(target).items()
-                    if k not in ("provider", "source_target_id", "modality")
-                }
-            )
+            redacted = declared_profile(target)
         except ValueError as exc:
             raise AdaptationFailure("adaptation_profile_invalid", str(exc)) from exc
         admission = declared_admission(redacted)

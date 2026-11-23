@@ -67,11 +67,21 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "agent"
 
 
+_DERIVED = ("provider", "source_target_id", "modality")
+
+
 def declared_profile(config: Mapping[str, Any]) -> dict[str, Any]:
-    """The inspected-profile shape of a declared agent, from a job's `agent.config` or a saved
-    profile file. `ValueError` when the declaration is not one."""
-    agent = DeclaredAgent.model_validate(dict(config))
-    return {
+    """The inspected-profile shape of a declared agent, from a job's `agent.config`, a saved
+    profile file or a profile this made. `ValueError` when the declaration is not one.
+
+    The one normalization of a declaration: adaptation's profile, the binding's identity and
+    compose's check of the run's agent all come through here, and a profile normalizes to itself,
+    so an explicit `agent_id` is kept rather than replaced by the name's slug on the way."""
+    body = dict(config)
+    if body.get("provider") == DECLARED:
+        body = {key: value for key, value in body.items() if key not in _DERIVED}
+    agent = DeclaredAgent.model_validate(body)
+    profile = {
         "provider": DECLARED,
         "source_target_id": agent.agent_id or _slug(agent.name),
         "name": agent.name,
@@ -79,6 +89,9 @@ def declared_profile(config: Mapping[str, Any]) -> dict[str, Any]:
         "instructions": agent.instructions,
         "tools": [tool.model_dump() for tool in agent.tools],
     }
+    if agent.agent_id:
+        profile["agent_id"] = agent.agent_id
+    return profile
 
 
 def declared_digest(config: Mapping[str, Any]) -> str:

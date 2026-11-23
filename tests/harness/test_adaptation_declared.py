@@ -5,10 +5,21 @@ from __future__ import annotations
 
 import pytest
 
-from fi.alk.harness.adaptation.declared import MCP_CLIENT, declared_digest
+from fi.alk.harness.adaptation.declared import (
+    MCP_CLIENT,
+    declared_digest,
+    declared_profile,
+)
 from fi.alk.harness.adaptation.errors import AdaptationFailure
-from fi.alk.harness.adaptation.profile import profile_from_file, select_mode
-from fi.alk.harness.adaptation.workbench import parse_binding_draft
+from fi.alk.harness.adaptation.profile import (
+    profile_from_file,
+    profile_from_job,
+    select_mode,
+)
+from fi.alk.harness.adaptation.workbench import (
+    parse_binding_draft,
+    profile_from_document,
+)
 from fi.alk.harness.binding_trajectories import derive_trajectories
 from fi.alk.harness.catalogue import Catalogue, SubGoal
 from fi.alk.harness.releases import AgentBindingV1, BindingMode, ToolDefinition
@@ -128,6 +139,48 @@ def test_a_changed_declaration_is_another_agent():
         profile_from_file(body).agent.provider_digest
         != profile_from_file(changed).agent.provider_digest
     )
+
+
+def _job(config: dict):
+    from fi.alk.harness.job import HarnessJob
+
+    return HarnessJob(
+        job_id="job-adapt",
+        run_id="run-adapt",
+        execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
+        source={"kind": "archive", "archive_artifact_id": "source-id"},
+        agent={"connector": MCP_CLIENT, "config": config},
+        metadata={
+            "adaptation": {
+                "agent": {
+                    "agent_definition_id": "d",
+                    "agent_version_id": "v",
+                    "configuration_digest": SHA,
+                    "agent_config_digest": SHA,
+                    "connector": MCP_CLIENT,
+                }
+            }
+        },
+    )
+
+
+def test_an_explicit_agent_id_survives_every_normalization():
+    """The customer's own id is the agent's id in the profile, the binding and compose's check,
+    however many times the declaration is normalized; the name's slug is only the fallback."""
+    config = {k: v for k, v in _declared(SCHEDULE).items() if k != "provider"}
+    config.update(name="CardGuard", agent_id="bank-support-42")
+    profile = profile_from_job(_job(config), credentials={})
+    assert profile.agent.provider_target_id == "bank-support-42"
+    # What compose computes from the run's job is what adaptation sealed.
+    assert profile.agent.provider_digest == declared_digest(config)
+    again = profile_from_document(profile.document())
+    assert again.agent == profile.agent
+    assert declared_profile(profile.target) == profile.target
+    anonymous = profile_from_job(
+        _job({k: v for k, v in config.items() if k != "agent_id"}), credentials={}
+    )
+    assert anonymous.agent.provider_target_id == "cardguard"
 
 
 @pytest.mark.parametrize(
