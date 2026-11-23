@@ -40,7 +40,7 @@ def _runtime(tmp_path: Path, lines: list[dict], route: str = "") -> EnvironmentR
         bundle_digest="sha256:" + "0" * 64,
         state=RuntimeState.READY,
         endpoints={},
-        metadata={"tool_trace_path": str(trace), **({"tool_trace_route": route} if route else {})},
+        metadata={"tool_trace_path": str(trace), **({"tool_spans_join": route} if route else {})},
     )
 
 
@@ -458,7 +458,7 @@ _A1001 = "{\"order_id\": \"A1001\"}"
 
 
 def _callback(tmp_path, observed, lines) -> tuple[Call, ...]:
-    return call_runner._with_span_calls(copy.deepcopy(observed), _runtime(tmp_path, lines, call_runner.CALLBACK_ROUTE))
+    return call_runner._with_span_calls(copy.deepcopy(observed), _runtime(tmp_path, lines, call_runner.SPANS_INTO_AN_EMPTY_LIST))
 
 
 def test_on_the_callback_route_the_agents_account_pairs_with_its_span_as_on_the_command_route(tmp_path, monkeypatch) -> None:
@@ -579,7 +579,7 @@ def _codes(notices) -> list[str]:
     return [notice["code"] for notice in notices]
 
 
-@pytest.mark.parametrize("route", ["", call_runner.CALLBACK_ROUTE])
+@pytest.mark.parametrize("route", ["", call_runner.SPANS_INTO_AN_EMPTY_LIST])
 @pytest.mark.parametrize("recorded_by", ["the tracer", "the agent's account"])
 def test_a_silent_span_source_leaves_the_calls_as_with_the_source_off(tmp_path, route, recorded_by) -> None:
     observed = [] if recorded_by == "the tracer" else [_told()]

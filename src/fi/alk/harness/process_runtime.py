@@ -7553,9 +7553,9 @@ class ProcessRuntimeProvider:
             agent_name = _agent_name_source_default(Path("/work/source"))
         if agent_name:
             metadata["livekit_agent_name"] = _fill(agent_name)
-        if env.get("ALK_CALLBACK_ENTRYPOINT"):
-            # The agent is served by the callback adapter: the reader joins its spans by the callback route's rule.
-            metadata["tool_trace_route"] = "callback"
+        if env.get("ALK_TOOL_SPANS_JOIN"):
+            # The build switched this agent's spans on with a rule for how the reader joins them.
+            metadata["tool_spans_join"] = env["ALK_TOOL_SPANS_JOIN"]
         trace = env.get("HARNESS_TOOL_TRACE")
         if trace:
             metadata["tool_trace_path"] = _fill(trace)

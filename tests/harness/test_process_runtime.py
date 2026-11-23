@@ -11559,8 +11559,8 @@ def test_the_tool_trace_is_read_from_the_process_that_writes_it(tmp_path: Path, 
     metadata = provider._control_metadata(0)
 
     assert metadata["tool_trace_path"] == str(tmp_path / "worlds" / "w0" / traced_by / "agent-tool-calls.jsonl")
-    # Not served by the callback adapter: the reader joins spans by the command route's rule.
-    assert "tool_trace_route" not in metadata
+    # Spans not switched on with the callback rule: the reader joins them as kit dev does.
+    assert "tool_spans_join" not in metadata
 
 
 def test_a_span_source_note_from_an_earlier_start_is_removed_before_the_process_starts(tmp_path: Path) -> None:

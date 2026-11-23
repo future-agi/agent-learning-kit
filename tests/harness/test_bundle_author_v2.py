@@ -13,12 +13,14 @@ import pytest
 
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
+    _CALLBACK_SPAN_ENVIRONMENT,
     _SOURCE_TOOL_TRACE_VERSION,
     _carries_world,
     _compile_source_tool_handlers,
     _contract_column_declarations,
     _contract_sql_type,
     _docker_python,
+    _observed_by_frameworks,
     _source_schema_artifacts,
     _sqlite_sql,
     _uv_sync_build_command,
@@ -1391,7 +1393,7 @@ def test_callable_contract_compiles_repository_callback_adapter(
     )
 
 
-def test_a_callback_bundle_tells_the_reader_its_route(tmp_path: Path) -> None:
+def test_a_callback_bundle_with_no_command_has_its_spans_switched_on(tmp_path: Path) -> None:
     from types import SimpleNamespace
 
     from fi.alk.harness import call_runner
@@ -1418,7 +1420,74 @@ def test_a_callback_bundle_tells_the_reader_its_route(tmp_path: Path) -> None:
     provider._manifest = bundle
     provider._context = SimpleNamespace(work_directory=tmp_path, dispatch_id="", job_id="job-1")
 
-    assert provider._control_metadata(0)["tool_trace_route"] == call_runner.CALLBACK_ROUTE
+    control = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
+    assert {k: control.environment.get(k) for k in _CALLBACK_SPAN_ENVIRONMENT} == _CALLBACK_SPAN_ENVIRONMENT
+    assert control.build_commands[-1] == framework_instrumentation_command()
+    assert provider._control_metadata(0)["tool_spans_join"] == call_runner.SPANS_INTO_AN_EMPTY_LIST
+
+
+def _callback_source(tmp_path: Path, requirements: str = "agent-simulate\n") -> Path:
+    source = tmp_path / "ava"
+    (source / "app").mkdir(parents=True)
+    (source / "app" / "__init__.py").write_text("", encoding="utf-8")
+    (source / "app" / "agent.py").write_text(
+        "async def agent_callback(input):\n    return {'content': input.new_message['content']}\n",
+        encoding="utf-8",
+    )
+    (source / "requirements.txt").write_text(requirements, encoding="utf-8")
+    return source
+
+
+def _control(plan):
+    return next(p for p in plan.processes if p.name == plan.control_service)
+
+
+def test_the_callback_span_switch_adds_only_the_switch_and_its_install(tmp_path: Path) -> None:
+    """The control process differs from kit dev's only by the span switch, its marker, the trace file and the
+    instrumentor install. The CrewAI observer, which writes calls of its own, stays off."""
+    source = _callback_source(tmp_path, "agent-simulate\ncrewai==1.6.1\n")
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_runtime={"language": "python"},
+        contract_interface_kind="callable", contract_modality="chat",
+    )
+    control = _control(plan)
+    assert "ALK_CALLBACK_ENTRYPOINT" in control.environment
+    switch = {k: v for k, v in control.environment.items() if k in _CALLBACK_SPAN_ENVIRONMENT}
+    assert switch == _CALLBACK_SPAN_ENVIRONMENT
+    assert "ALK_CREWAI_TOOL_TRACE" not in control.environment
+    assert control.build_commands[-1] == framework_instrumentation_command()
+    assert framework_instrumentation_command() not in control.build_commands[:-1]
+    # The tracer keeps its `unreachable` bindings where the spans came on with this rule.
+    assert not _observed_by_frameworks(plan.processes)
+
+
+def test_a_voice_agent_gets_no_callback_span_switch(tmp_path: Path) -> None:
+    plan = resolve_environment_plan(
+        _callback_source(tmp_path), _job(connector="auto"), contract_runtime={"language": "python"},
+        contract_interface_kind="callable", contract_modality="voice",
+    )
+    # Its tool calls are traced by its LiveKit worker alone (the trace file is that worker's, as on kit dev).
+    assert all(
+        not {"ALK_OBSERVE_FRAMEWORKS", "ALK_TOOL_SPANS_JOIN"} & set(getattr(p, "environment", None) or {})
+        and framework_instrumentation_command() not in getattr(p, "build_commands", [])
+        for p in plan.processes
+    )
+
+
+def test_a_callback_bundle_with_a_runtime_command_keeps_kit_devs_reading(tmp_path: Path) -> None:
+    """Kit dev already switched its spans on through the command; it gets no marker, so the reader joins them as kit dev
+    does, and the tracer leaves `unreachable` tools to the spans as on kit dev."""
+    source = _callback_source(tmp_path)
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"),
+        contract_runtime={"language": "python", "execution": "native", "command": ["python", "-m", "app.agent"]},
+        contract_interface_kind="callable", contract_modality="chat",
+    )
+    control = _control(plan)
+    assert "ALK_CALLBACK_ENTRYPOINT" in control.environment
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert "ALK_TOOL_SPANS_JOIN" not in control.environment
+    assert _observed_by_frameworks(plan.processes)
 
 
 def test_repository_callback_is_discovered_when_contract_omits_interface(

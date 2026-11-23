@@ -3562,6 +3562,29 @@ def resolve_environment_plan(
                 else process
                 for process in processes
             ]
+    elif (
+        not isinstance(selected, ComposeSelection)
+        and str(contract_modality or "").strip().lower() != "voice"
+        and runtime_model.language.lower() in {"", "python", "py"}
+    ):
+        # A callback agent with no runtime command: its framework spans are switched on here. The marker tells the
+        # reader that a span is a call only where no other source recorded one, and keeps the tracer's bindings.
+        processes = [
+            process.model_copy(
+                update={
+                    "environment": {**process.environment, **_CALLBACK_SPAN_ENVIRONMENT},
+                    "build_commands": [
+                        *process.build_commands,
+                        framework_instrumentation_command(uv_run_project(process.run_command)),
+                    ],
+                }
+            )
+            if isinstance(process, SourceProcess)
+            and process.name == control_name
+            and "ALK_CALLBACK_ENTRYPOINT" in process.environment
+            else process
+            for process in processes
+        ]
 
     return EnvironmentPlanV2(
         packaging=packaging,
@@ -3643,6 +3666,14 @@ def _source_tool_trace_environment(
 
 
 _SOURCE_TOOL_TRACE_VERSION = 1
+
+# Spans switched on where kit dev had them off; the reader adds a span as a call only to an empty list.
+_SPANS_NEWLY_ON = "ALK_TOOL_SPANS_JOIN"
+_CALLBACK_SPAN_ENVIRONMENT = {
+    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+    "ALK_OBSERVE_FRAMEWORKS": "1",
+    _SPANS_NEWLY_ON: "empty_list_only",
+}
 
 
 def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
@@ -3892,6 +3923,9 @@ def _observed_by_frameworks(processes: Sequence[Any]) -> bool:
     return any(
         {"ALK_OBSERVE_FRAMEWORKS", "FI_WORKER_HEALTH_PORT"}
         & set(getattr(process, "environment", None) or {})
+        # Where spans were switched on with the callback rule they add no call to a list another
+        # source started, so the tracer keeps watching what it watched before.
+        and _SPANS_NEWLY_ON not in (getattr(process, "environment", None) or {})
         for process in processes
     )
 

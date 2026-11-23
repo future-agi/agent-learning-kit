@@ -2028,8 +2028,9 @@ def _collect_file_tool_calls(
     return _with_span_calls((), runtime, strict=strict)
 
 
-# Set on a runtime's metadata when its agent is served by the callback adapter (``ALK_CALLBACK_ENTRYPOINT``).
-CALLBACK_ROUTE = "callback"
+# A runtime's ``tool_spans_join`` when the build switched its spans on where kit dev had them off (a callback agent with
+# no runtime command): a span is a call only in an empty list. No value means kit dev's reading.
+SPANS_INTO_AN_EMPTY_LIST = "empty_list_only"
 
 
 def _with_span_calls(
@@ -2039,12 +2040,12 @@ def _with_span_calls(
     its source (tool_evidence.py): the agent's own account is tagged where it is recorded, and the rest of ``observed``
     is the world's.
 
-    On the callback route a span is a call only when no other source recorded one: where any did, spans pair with
-    those calls and lend to them, and add none."""
+    Where the build switched spans on with ``SPANS_INTO_AN_EMPTY_LIST``, a span is a call only when no other source
+    recorded one: where any did, spans pair with those calls and lend to them, and add none."""
     written, from_spans = _read_file_tool_calls(runtime, strict=strict)
     calls = evidence.tagged(observed, evidence.WORLD) or written
-    callback = (getattr(runtime, "metadata", None) or {}).get("tool_trace_route") == CALLBACK_ROUTE
-    if callback and calls and from_spans:
+    join = (getattr(runtime, "metadata", None) or {}).get("tool_spans_join")
+    if join == SPANS_INTO_AN_EMPTY_LIST and calls and from_spans:
         return _lend_only(calls, from_spans)
     return _merge_span_calls(calls, from_spans)
 
