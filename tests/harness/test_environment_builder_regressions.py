@@ -68,6 +68,7 @@ def test_concurrent_finish_and_stop_finalize_a_design_once(
     tools = DesignTools.__new__(DesignTools)
     tools.workspace = workspace
     tools.output = output
+    tools.attempt_id = None
     tools.done = False
     tools._finishing = asyncio.Lock()
     tools._not_ready = lambda: ""

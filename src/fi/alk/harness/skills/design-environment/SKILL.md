@@ -146,9 +146,10 @@ rules: there is no other agent to describe. In addition:
 
 - every scenario's `use_case` is one of the approved use cases, copied exactly, and each use case
   has at least one scenario;
-- when approved source cases are available, ground scenarios in them. Read the cases with
-  `read_source`, use their facts in the case and its proof, and set `fixture.reviewed_source` to the
-  case ID when submitting. The writer records the approved facts and citations;
+- when approved source cases are available, prove one native scenario for each case. Read its
+  facts and public policy with `read_source`, use them in the case and its proof, and set
+  `fixture.reviewed_source` to that case ID when submitting. The writer records the approved facts
+  and citations. Inherited template scenarios may stay untagged;
 - every agent rule is graded: a sub-goal grades it, a scenario names that sub-goal, and the rule's
   `graded_by` lists it;
 - checks read the world for the effect: a check that only sees a successful call is refused,

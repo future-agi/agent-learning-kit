@@ -13,6 +13,7 @@ the design is already there and is kept.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import time
@@ -30,13 +31,23 @@ from ..releases import (
 )
 from .reviewed_sources import document_manifest
 from .tools import FINISHED_MARKER, RESULT
-from .workspace import DocumentRecord, open_design
+from .workspace import DocumentRecord, marker_matches, open_design
 
 OUTPUT = "design-output"
 
 
 def ready_marker(workspace: Path) -> Path:
     return workspace.parent / f".{workspace.name}-design-ready"
+
+
+async def wait_for_design(workspace: Path, attempt_id: str) -> None:
+    for _ in range(150):
+        if marker_matches(ready_marker(workspace), attempt_id):
+            return
+        if marker_matches(workspace / FINISHED_MARKER, attempt_id):
+            raise RuntimeError("The design control process could not open the design.")
+        await asyncio.sleep(2)
+    raise RuntimeError("The design control process has not opened the design.")
 
 
 class _Release(BaseModel):
@@ -59,6 +70,7 @@ class DesignTemplateRef(BaseModel):
 class DesignDocumentRef(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+    id: str = Field(min_length=1)
     name: str
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     size: int = Field(ge=0)
@@ -69,6 +81,7 @@ class DesignJob(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    attempt_id: str = Field(min_length=1)
     name: str = Field(pattern=_SLUG_PATTERN)
     requirements: str = ""
     modality: Literal["chat", "voice"] = "chat"
@@ -81,15 +94,28 @@ def design_job(job: dict) -> DesignJob:
     return DesignJob.model_validate((job.get("metadata") or {}).get("design"))
 
 
-def failed(output: Path, workspace: Path, code: str, message: str) -> int:
+def failed(
+    output: Path,
+    workspace: Path,
+    code: str,
+    message: str,
+    *,
+    attempt_id: str | None = None,
+) -> int:
     workspace.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
     (output / RESULT).write_text(
-        json.dumps({"status": "failed", "failure": {"code": code, "message": message}}),
+        json.dumps(
+            {
+                "status": "failed",
+                "failure": {"code": code, "message": message},
+                **({"attempt_id": attempt_id} if attempt_id is not None else {}),
+            }
+        ),
         encoding="utf-8",
     )
     (workspace / FINISHED_MARKER).write_text(
-        json.dumps({"status": "failed"}), encoding="utf-8"
+        json.dumps({"status": "failed", "attempt_id": attempt_id}), encoding="utf-8"
     )
     print(f"design failed: {code}: {message}")
     return 2
@@ -110,7 +136,6 @@ def clear_source_failure(output: Path, workspace: Path) -> None:
 def run_hosted(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace)
     output = workspace / OUTPUT
-    ready_marker(workspace).unlink(missing_ok=True)
     try:
         payload = json.loads(Path(args.job).read_text(encoding="utf-8"))
         job = design_job(payload)
@@ -128,7 +153,11 @@ def run_hosted(args: argparse.Namespace) -> int:
     try:
         documents = [
             DocumentRecord(
-                name=doc.name, file=doc.name, sha256=doc.sha256, size=doc.size
+                id=doc.id,
+                name=doc.name,
+                file=doc.name,
+                sha256=doc.sha256,
+                size=doc.size,
             )
             for doc in job.documents
         ]
@@ -143,16 +172,22 @@ def run_hosted(args: argparse.Namespace) -> int:
             documents=documents,
             scenario_count=payload.get("scenario_count", 10),
             reviewed_snapshot=args.reviewed_snapshot,
+            source_review_receipt=payload["metadata"].get("source_review_receipt"),
         )
     except ReleaseError as exc:
-        return failed(output, workspace, exc.code, exc.detail[:600])
-    clear_source_failure(output, workspace)
-    ready_marker(workspace).touch()
+        return failed(
+            output, workspace, exc.code, exc.detail[:600], attempt_id=job.attempt_id
+        )
+    ready_marker(workspace).write_text(
+        json.dumps({"attempt_id": job.attempt_id}), encoding="utf-8"
+    )
     deadline = time.monotonic() + int(
         os.environ.get("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS") or 3300
     )
     while time.monotonic() < deadline:
-        if (workspace / FINISHED_MARKER).is_file() and (output / RESULT).is_file():
+        if marker_matches(
+            workspace / FINISHED_MARKER, job.attempt_id
+        ) and marker_matches(output / RESULT, job.attempt_id):
             result = json.loads((output / RESULT).read_text(encoding="utf-8"))
             print(
                 json.dumps(
@@ -162,5 +197,9 @@ def run_hosted(args: argparse.Namespace) -> int:
             return 0 if result.get("status") == "completed" else 2
         time.sleep(5)
     return failed(
-        output, workspace, "design_unfinished", "the design did not finish in time"
+        output,
+        workspace,
+        "design_unfinished",
+        "the design did not finish in time",
+        attempt_id=job.attempt_id,
     )

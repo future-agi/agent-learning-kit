@@ -54,7 +54,14 @@ from .contract import write_contract
 from .handlers import ALLOWED_IMPORTS, behaviour_problems, source_problems
 from .proof import ViewProof
 from .reviewed_sources import REVIEW_REQUIRED, load_evidence
-from .workspace import Design, Proposal, load_design, save_design, seal_design
+from .workspace import (
+    Design,
+    Proposal,
+    load_design,
+    marker_matches,
+    save_design,
+    seal_design,
+)
 
 DESIGN_SERVER = "design"
 FINISHED_MARKER = ".futureagi-build-finished.json"
@@ -176,6 +183,7 @@ class DesignTools:
         postgres_dsn: Callable[[], str],
         output: Path,
         view_proof: ViewProof,
+        attempt_id: str | None = None,
     ) -> None:
         self.workspace = workspace
         self.world = world
@@ -183,6 +191,7 @@ class DesignTools:
         self.approve = approve
         self.postgres_dsn = postgres_dsn
         self.output = output
+        self.attempt_id = attempt_id
         # Proves scenarios that call attached servers' tools on PostgreSQL, and reads what a
         # server offers; the caller owns it across reopenings and closes it.
         self.view_proof = view_proof
@@ -604,12 +613,14 @@ class DesignTools:
         """Why a design that already finished takes no second finish or stop. Sealing again
         rewrites the output the platform collects, so a later turn could hand it a half-written
         folder (a live design failed that way)."""
-        if not (self.workspace / FINISHED_MARKER).is_file():
+        if not marker_matches(self.workspace / FINISHED_MARKER, self.attempt_id):
             return ""
         try:
             result = json.loads((self.output / RESULT).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             result = {}
+        if not isinstance(result, dict) or result.get("attempt_id") != self.attempt_id:
+            return ""
         if result.get("status") == "completed":
             return (
                 f"Already sealed as {result['environment']['name']} with "
@@ -853,8 +864,13 @@ class DesignTools:
 
     def _finish(self, result: dict[str, Any]) -> None:
         self.output.mkdir(parents=True, exist_ok=True)
+        if self.attempt_id is not None:
+            result = {**result, "attempt_id": self.attempt_id}
         _json(self.output / RESULT, result)
-        _json(self.workspace / FINISHED_MARKER, {"status": result["status"]})
+        _json(
+            self.workspace / FINISHED_MARKER,
+            {"status": result["status"], "attempt_id": self.attempt_id},
+        )
         self.done = True
 
     def guard_world(self, server: ToolServer, left_out: frozenset[str]) -> ToolServer:

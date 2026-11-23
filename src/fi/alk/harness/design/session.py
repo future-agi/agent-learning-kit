@@ -69,6 +69,7 @@ def open_for_designing(
     view_proof: ViewProof,
     ask: Callable[..., Any] | None = None,
     hosted_prompt: str = "",
+    attempt_id: str | None = None,
 ) -> tuple[Stage, DesignTools]:
     """The design's session for its current phase. `view_proof` is the caller's, kept across
     reopenings and closed when the design ends."""
@@ -81,6 +82,7 @@ def open_for_designing(
         "postgres_dsn": postgres_dsn,
         "output": output,
         "view_proof": view_proof,
+        "attempt_id": attempt_id,
     }
     if design.stage == "suite":
         tools = DesignTools(workspace, restore(workspace), contract, **options)

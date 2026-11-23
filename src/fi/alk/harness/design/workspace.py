@@ -75,6 +75,7 @@ class DesignTemplate(BaseModel):
 
     environment: ReleaseRef
     suite: ReleaseRef
+    scenario_keys: list[str] = Field(default_factory=list)
 
 
 class Proposal(BaseModel):
@@ -96,6 +97,7 @@ class DocumentRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    id: str | None = None
     name: str
     file: str
     sha256: str
@@ -172,6 +174,14 @@ def load_design(workspace: str | Path) -> Design:
         raise ReleaseError("design_invalid", str(exc)) from exc
 
 
+def marker_matches(path: Path, attempt_id: str | None) -> bool:
+    try:
+        marker = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return False
+    return isinstance(marker, dict) and marker.get("attempt_id") == attempt_id
+
+
 def save_design(workspace: Path, design: Design) -> None:
     temporary = workspace / f"{DESIGN}.tmp"
     temporary.write_text(
@@ -191,22 +201,25 @@ def open_design(
     documents: list[DocumentRecord] | None = None,
     scenario_count: int = 10,
     reviewed_snapshot: Path | None = None,
+    source_review_receipt: object | None = None,
 ) -> Design:
     """The workspace's design: an empty one, or a root template's environment and suite unpacked
-    into it. `template` is `(environment_root, suite_root)`; `documents` are the person's uploads
-    as parsed. A workspace that already holds a design keeps it."""
+    into it. `template` is `(environment_root, suite_root)`; `documents` identify the uploaded
+    bytes. A resumed sourced design re-projects the independently approved snapshot."""
     from .reviewed_sources import bind_reviewed_sources, load_evidence
 
     workspace = Path(workspace)
     if (workspace / DESIGN).is_file():
         design = load_design(workspace)
-        if documents and {(doc.file, doc.sha256) for doc in documents} != {
-            (doc.file, doc.sha256) for doc in design.documents
+        if documents is not None and {(doc.id, doc.sha256) for doc in documents} != {
+            (doc.id, doc.sha256) for doc in design.documents
         }:
             raise ReleaseError(
                 "source_snapshot_changed", "The design's uploaded documents changed."
             )
-        updated = bind_reviewed_sources(workspace, design, reviewed_snapshot)
+        updated = bind_reviewed_sources(
+            workspace, design, reviewed_snapshot, source_review_receipt
+        )
         if updated != design:
             save_design(workspace, updated)
         load_evidence(workspace, updated)
@@ -224,7 +237,9 @@ def open_design(
     workspace.mkdir(parents=True, exist_ok=True)
     if template is not None:
         design = _unpack(workspace, design, Path(template[0]), Path(template[1]))
-    design = bind_reviewed_sources(workspace, design, reviewed_snapshot)
+    design = bind_reviewed_sources(
+        workspace, design, reviewed_snapshot, source_review_receipt
+    )
     # Written last, so a failed unpack leaves no design and opening again lays it out afresh.
     save_design(workspace, design)
     load_evidence(workspace, design)
@@ -271,6 +286,7 @@ def _unpack(
                     digest=environment.digest, name=environment.name
                 ),
                 suite=ReleaseRef(digest=suite.digest, name=suite.name),
+                scenario_keys=[entry.key for entry in suite.scenarios],
             ),
             "policy_profile": suite.policy_profile,
             "inherited_schema": unseeded_schema(environment_root / WORLD / DATABASE),
@@ -445,7 +461,7 @@ def seal_design(
 
     workspace, out = Path(workspace), Path(out)
     design = load_design(workspace)
-    check_grounded_suite(workspace, load_evidence(workspace, design))
+    check_grounded_suite(workspace, load_evidence(workspace, design), design)
     if not saved(workspace):
         raise ReleaseError("design_world_missing", "the design has no saved world yet")
     _derive_policy_rows(workspace)
@@ -461,14 +477,26 @@ def seal_design(
         )
     shutil.rmtree(out, ignore_errors=True)
     environment_root, suite_root = release_view(workspace, out)
+    source_metadata: dict[str, JsonValue] = (
+        {"reviewed_source": design.reviewed_source.model_dump(include={"id", "digest"})}
+        if design.reviewed_source
+        else {}
+    )
+    suite_metadata = dict(source_metadata)
+    if design.template:
+        suite_metadata["template_suite"] = design.template.suite.digest
     try:
+        environment_metadata = {
+            **(_provenance(design, environment_root) or {}),
+            **source_metadata,
+        }
         environment = seal_environment_release(
             environment_root,
             name=design.name,
             derived_from=f"release:{design.template.environment.digest}"
             if design.template
             else None,
-            metadata=_provenance(design, environment_root),
+            metadata=environment_metadata or None,
         )
         if drift := check_file_drift(suite_root, load_catalogue(suite_root)):
             raise ReleaseError("design_check_files_invalid", "; ".join(drift))
@@ -483,9 +511,7 @@ def seal_design(
             name=f"{design.name}_base",
             environment_root=environment_root,
             policy_profile=design.policy_profile,
-            metadata={"template_suite": design.template.suite.digest}
-            if design.template
-            else None,
+            metadata=suite_metadata or None,
             postgres_dsn=postgres_dsn,
         )
     except BaseException:

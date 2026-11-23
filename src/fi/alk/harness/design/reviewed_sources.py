@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fi.alk.studio import (
     EnvironmentInputError,
     EnvironmentRequirements,
+    ReviewedEnvironmentInputs,
     compile_environment_inputs,
     generate_source_scenarios,
 )
@@ -27,6 +31,11 @@ from .workspace import Design, DocumentRecord, ReviewedSourcePin
 EVIDENCE = "reviewed-source-evidence.json"
 REVIEW_REQUIRED = "Approve the environment documents before building this design."
 SOURCE_FIXTURE = "reviewed_source"
+_CATEGORY_PURPOSES = {
+    "success": "Test a compliant outcome.",
+    "refusal": "Test refusal of a disallowed action.",
+    "negative_control": "Test that an incorrect outcome is rejected.",
+}
 
 
 def document_manifest(
@@ -51,6 +60,7 @@ def document_manifest(
                 digest.update(chunk)
         documents.append(
             DocumentRecord(
+                id=path.name,
                 name=path.name,
                 file=path.name,
                 sha256=digest.hexdigest(),
@@ -60,8 +70,102 @@ def document_manifest(
     return documents
 
 
-def bind_reviewed_sources(workspace: Path, design: Design, path: Path | None) -> Design:
+class _ReceiptModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _UploadOrigin(_ReceiptModel):
+    kind: Literal["upload"]
+    document_id: str = Field(min_length=1)
+    original_sha256: str = Field(pattern=r"^(sha256:)?[a-f0-9]{64}$")
+
+
+class _KnowledgeBaseOrigin(_ReceiptModel):
+    kind: Literal["knowledge_base"]
+    kb_id: str = Field(min_length=1)
+    file_id: str = Field(min_length=1)
+    original_sha256: str = Field(pattern=r"^(sha256:)?[a-f0-9]{64}$")
+
+
+class _Binding(_ReceiptModel):
+    source_id: str = Field(min_length=1)
+    source_sha256: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    parser_revision: str = Field(min_length=1)
+    role: Literal["seed_records", "policy", "reference"]
+    origin: _UploadOrigin | _KnowledgeBaseOrigin = Field(discriminator="kind")
+
+
+class _Receipt(_ReceiptModel):
+    review_id: str = Field(min_length=1)
+    snapshot_id: str = Field(min_length=1)
+    snapshot_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    bindings: list[_Binding] = Field(min_length=1)
+
+
+def _validate_receipt(
+    value: object | None,
+    reviewed: ReviewedEnvironmentInputs,
+    documents: list[DocumentRecord],
+) -> None:
+    if value is None:
+        raise ReleaseError(
+            "source_review_receipt_required",
+            "Supply the approved source review receipt.",
+        )
+    try:
+        receipt = _Receipt.model_validate(value)
+    except ValidationError as exc:
+        raise ReleaseError(
+            "source_review_receipt_invalid", "The source review receipt is invalid."
+        ) from exc
+    expected = {
+        binding.source_id: (
+            binding.source_sha256,
+            binding.parser_revision,
+            binding.role,
+        )
+        for binding in receipt.bindings
+    }
+    actual = {
+        source.pin.source_id: (
+            source.pin.source_sha256,
+            source.pin.parser_revision,
+            source.pin.role,
+        )
+        for source in reviewed.sources
+    }
+    uploads = {
+        (
+            binding.origin.document_id,
+            binding.origin.original_sha256.removeprefix("sha256:"),
+        )
+        for binding in receipt.bindings
+        if isinstance(binding.origin, _UploadOrigin)
+    }
+    if (
+        receipt.snapshot_id != reviewed.snapshot_id
+        or receipt.snapshot_digest != reviewed.snapshot_digest
+        or expected != actual
+        or len(expected) != len(receipt.bindings)
+        or len(actual) != len(reviewed.sources)
+        or uploads != {(doc.id, doc.sha256) for doc in documents}
+        or len(uploads) != len(documents)
+    ):
+        raise ReleaseError(
+            "source_review_receipt_mismatch",
+            "The approved source review does not match this design's sources.",
+        )
+
+
+def bind_reviewed_sources(
+    workspace: Path, design: Design, path: Path | None, receipt: object | None
+) -> Design:
     if path is None:
+        if design.reviewed_source is not None or receipt is not None:
+            raise ReleaseError(
+                "source_snapshot_required",
+                "Supply the private approved source snapshot for this launch.",
+            )
         return design
     if path.resolve().is_relative_to(workspace.resolve()):
         raise ReleaseError(
@@ -89,12 +193,7 @@ def bind_reviewed_sources(workspace: Path, design: Design, path: Path | None) ->
                 "source_snapshot_changed",
                 "Start a new design to replace unreviewed source changes.",
             )
-        actual = {source.pin.source_sha256 for source in reviewed.sources}
-        if any(f"sha256:{doc.sha256}" not in actual for doc in design.documents):
-            raise ReleaseError(
-                "source_snapshot_changed",
-                "The approved snapshot does not cover the uploaded documents.",
-            )
+        _validate_receipt(receipt, reviewed, design.documents)
         compiled = compile_environment_inputs(reviewed)
         generated = generate_source_scenarios(
             reviewed,
@@ -110,25 +209,30 @@ def bind_reviewed_sources(workspace: Path, design: Design, path: Path | None) ->
     except EnvironmentInputError as exc:
         raise ReleaseError(exc.code, str(exc)) from exc
 
+    blocked = sum(draft.status == "blocked" for draft in generated.drafts)
+    if blocked:
+        raise ReleaseError(
+            "source_scenarios_blocked",
+            f"{blocked} source scenarios are blocked by validation.",
+        )
     evidence: dict[str, Any] = {"documents": [], "records": [], "cases": []}
     for environment in compiled.agent_environments:
         data = environment.as_dict()["data"]
         evidence["documents"].extend(data.get("documents", []))
         evidence["records"].extend(data.get("artifacts", {}).values())
     for draft in generated.drafts:
-        if not draft.source_spans:
-            continue
         persona = draft.scenario.dataset[0].persona
         evidence["cases"].append(
             {
                 "id": draft.scenario_id,
                 "category": draft.category,
-                "facts": persona["starting_facts"],
+                "purpose": _CATEGORY_PURPOSES[draft.category],
+                "starting_facts": persona["starting_facts"],
+                "policy_reference": persona["policy_reference"],
                 "citations": persona["citations"],
             }
         )
     target = workspace / EVIDENCE
-    temporary = target.with_suffix(".tmp")
     body = json.dumps(evidence, ensure_ascii=False, sort_keys=True).encode()
     pin = ReviewedSourcePin(
         id=reviewed.snapshot_id,
@@ -140,8 +244,14 @@ def bind_reviewed_sources(workspace: Path, design: Design, path: Path | None) ->
         or not target.is_file()
         or target.read_bytes() != body
     ):
-        temporary.write_bytes(body)
-        temporary.replace(target)
+        with tempfile.NamedTemporaryFile(dir=workspace, delete=False) as file:
+            temporary = Path(file.name)
+            try:
+                file.write(body)
+                file.close()
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
     return design.model_copy(update={"reviewed_source": pin})
 
 
@@ -203,23 +313,37 @@ def bind_scenario(evidence: dict[str, Any], args: dict[str, Any]) -> str:
     return ""
 
 
-def check_grounded_suite(workspace: Path, evidence: dict[str, Any]) -> None:
-    cases = {case["id"]: case for case in evidence.get("cases", [])}
-    if not cases:
+def check_grounded_suite(
+    workspace: Path, evidence: dict[str, Any], design: Design
+) -> None:
+    if not evidence:
         return
-    grounded = False
+    cases = {case["id"]: case for case in evidence["cases"]}
+    inherited = set(design.template.scenario_keys) if design.template else set()
+    seen: set[str] = set()
     for scenario in read_all(workspace):
         source = scenario.fixture.get(SOURCE_FIXTURE)
         if source is None:
-            continue
-        if not isinstance(source, dict) or source != cases.get(source.get("id")):
+            if scenario.scenario_key in inherited:
+                continue
+            raise ReleaseError(
+                "design_source_required",
+                f"{scenario.name} needs an approved source case.",
+            )
+        case_id = source.get("id") if isinstance(source, dict) else None
+        if not isinstance(case_id, str) or source != cases.get(case_id):
             raise ReleaseError(
                 "design_source_invalid",
                 f"{scenario.name} cites an unapproved source case.",
             )
-        grounded = True
-    if not grounded:
+        if case_id in seen:
+            raise ReleaseError(
+                "design_source_duplicate",
+                f"{scenario.name} reuses an approved source case.",
+            )
+        seen.add(case_id)
+    if missing := len(cases.keys() - seen):
         raise ReleaseError(
             "design_source_required",
-            "Prove a scenario that uses at least one approved source case.",
+            f"Prove the {missing} missing approved source cases.",
         )

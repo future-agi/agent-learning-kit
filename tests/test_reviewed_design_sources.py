@@ -3,30 +3,78 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+from fi.alk.harness.catalogue import Catalogue, SubGoal, load_catalogue, save_catalogue
 from fi.alk.harness.design import hosted
 from fi.alk.harness.design.__main__ import main
 from fi.alk.harness.design.hosted import OUTPUT, ready_marker
 from fi.alk.harness.design.proof import ViewProof
-from fi.alk.harness.design.reviewed_sources import EVIDENCE, document_manifest
+from fi.alk.harness.design.reviewed_sources import (
+    EVIDENCE,
+    bind_scenario,
+    check_grounded_suite,
+    document_manifest,
+)
 from fi.alk.harness.design.session import open_for_designing
 from fi.alk.harness.design.workspace import (
+    DesignTemplate,
+    Provenance,
+    marker_matches,
+    seal_design,
     Proposal,
     load_design,
     open_design,
     release_view,
     save_design,
 )
-from fi.alk.harness.releases import TOOLS, ReleaseError
+from fi.alk.harness.folder import document_for, read_all, write_folder
+from fi.alk.harness.releases import (
+    POLICY,
+    TOOLS,
+    ReleaseError,
+    ReleaseRef,
+    load_environment_release,
+    load_suite_release,
+)
+from fi.alk.harness.scenario import Scenario
 from fi.alk.harness.world.runtime import GeneratedWorld
 from fi.alk.harness.world.snapshot import save
 from fi.alk.studio._environment_input_snapshots import serialize_environment_snapshot
+import test_environment_inputs
 from test_environment_inputs import _approve_proposals, _reviewed, _sources
+
+
+def _receipt(reviewed, uploads):
+    bindings = []
+    for source in reviewed.sources:
+        binding = {
+            "source_id": source.pin.source_id,
+            "source_sha256": source.pin.source_sha256,
+            "parser_revision": source.pin.parser_revision,
+            "role": source.pin.role,
+        }
+        origin = (
+            {"kind": "upload", "document_id": source.filename}
+            if uploads
+            else {
+                "kind": "knowledge_base",
+                "kb_id": "kb-secret",
+                "file_id": source.filename,
+            }
+        )
+        binding["origin"] = {**origin, "original_sha256": source.pin.source_sha256}
+        bindings.append(binding)
+    return {
+        "review_id": "private-review-id",
+        "snapshot_id": reviewed.snapshot_id,
+        "snapshot_digest": reviewed.snapshot_digest,
+        "bindings": bindings,
+    }
 
 
 def _snapshot(tmp_path: Path):
@@ -37,11 +85,11 @@ def _snapshot(tmp_path: Path):
     _, reviewed = _reviewed()
     private = tmp_path / "private.json"
     private.write_bytes(serialize_environment_snapshot(reviewed))
-    return uploads, private, reviewed
+    return uploads, private, reviewed, _receipt(reviewed, uploads)
 
 
 def test_raw_uploads_wait_for_source_review_in_both_entrypoints(tmp_path):
-    uploads, _, _ = _snapshot(tmp_path)
+    uploads, _, _, _ = _snapshot(tmp_path)
     output = tmp_path / "output"
     workspace = tmp_path / "design"
     assert (
@@ -72,12 +120,25 @@ def test_raw_uploads_wait_for_source_review_in_both_entrypoints(tmp_path):
     hosted = tmp_path / "hosted"
     job = tmp_path / "job.json"
     documents = [
-        {"name": document.file, "sha256": document.sha256, "size": document.size}
+        {
+            "id": document.id,
+            "name": document.file,
+            "sha256": document.sha256,
+            "size": document.size,
+        }
         for document in document_manifest(uploads)
     ]
     job.write_text(
         json.dumps(
-            {"metadata": {"design": {"name": "refunds", "documents": documents}}}
+            {
+                "metadata": {
+                    "design": {
+                        "attempt_id": "current",
+                        "name": "refunds",
+                        "documents": documents,
+                    }
+                }
+            }
         )
     )
     assert (
@@ -102,10 +163,10 @@ def test_raw_uploads_wait_for_source_review_in_both_entrypoints(tmp_path):
 def test_hosted_control_starts_from_approved_snapshot_without_raw_mount(
     tmp_path, monkeypatch
 ):
-    uploads, private, reviewed = _snapshot(tmp_path)
+    uploads, private, reviewed, receipt = _snapshot(tmp_path)
     workspace = tmp_path / "workspace"
     documents = [
-        {"name": doc.file, "sha256": doc.sha256, "size": doc.size}
+        {"id": doc.id, "name": doc.file, "sha256": doc.sha256, "size": doc.size}
         for doc in document_manifest(uploads)
     ]
     job = tmp_path / "job.json"
@@ -113,18 +174,34 @@ def test_hosted_control_starts_from_approved_snapshot_without_raw_mount(
         json.dumps(
             {
                 "scenario_count": 3,
-                "metadata": {"design": {"name": "refunds", "documents": documents}},
+                "metadata": {
+                    "design": {
+                        "attempt_id": "current",
+                        "name": "refunds",
+                        "documents": documents,
+                    },
+                    "source_review_receipt": receipt,
+                },
             }
         )
     )
 
+    workspace.mkdir()
+    (workspace / OUTPUT).mkdir()
+    (workspace / OUTPUT / hosted.RESULT).write_text(
+        '{"status":"failed","attempt_id":"old"}'
+    )
+    (workspace / hosted.FINISHED_MARKER).write_text('{"attempt_id":"old"}')
+    ready_marker(workspace).write_text('{"attempt_id":"old"}')
+
     def finish(_seconds):
-        assert ready_marker(workspace).is_file()
+        assert marker_matches(ready_marker(workspace), "current")
         assert load_design(workspace).reviewed_source.digest == reviewed.snapshot_digest
         assert load_design(workspace).scenario_count == 3
-        (workspace / OUTPUT).mkdir()
-        (workspace / OUTPUT / hosted.RESULT).write_text('{"status":"completed"}')
-        (workspace / hosted.FINISHED_MARKER).touch()
+        (workspace / OUTPUT / hosted.RESULT).write_text(
+            '{"status":"completed","attempt_id":"current"}'
+        )
+        (workspace / hosted.FINISHED_MARKER).write_text('{"attempt_id":"current"}')
 
     monkeypatch.setattr(
         hosted, "time", SimpleNamespace(monotonic=lambda: 0, sleep=finish)
@@ -150,21 +227,48 @@ def test_hosted_control_starts_from_approved_snapshot_without_raw_mount(
     assert (workspace / EVIDENCE).is_file()
 
 
+def test_chat_ignores_readiness_and_completion_from_previous_attempt(
+    tmp_path, monkeypatch
+):
+    ready_marker(tmp_path).write_text('{"attempt_id":"old"}')
+    (tmp_path / hosted.FINISHED_MARKER).write_text('{"attempt_id":"old"}')
+    waited = False
+
+    async def wait(_seconds):
+        nonlocal waited
+        waited = True
+        ready_marker(tmp_path).write_text('{"attempt_id":"current"}')
+
+    monkeypatch.setattr(hosted.asyncio, "sleep", wait)
+    asyncio.run(hosted.wait_for_design(tmp_path, "current"))
+    assert waited
+
+
 def test_snapshot_is_pinned_and_projection_survives_resume(tmp_path):
-    uploads, private, reviewed = _snapshot(tmp_path)
+    uploads, private, reviewed, receipt = _snapshot(tmp_path)
     workspace = tmp_path / "workspace"
     design = open_design(
         workspace,
         name="refunds",
         documents=document_manifest(uploads),
         reviewed_snapshot=private,
+        source_review_receipt=receipt,
     )
     assert design.stage == "interview"
     assert design.reviewed_source.id == reviewed.snapshot_id
     assert design.reviewed_source.digest == reviewed.snapshot_digest
     before = (workspace / EVIDENCE).read_bytes()
-    assert open_design(workspace, name="refunds", reviewed_snapshot=private) == design
-    assert open_design(workspace, name="refunds") == design
+    assert (
+        open_design(
+            workspace,
+            name="refunds",
+            reviewed_snapshot=private,
+            source_review_receipt=receipt,
+        )
+        == design
+    )
+    with pytest.raises(ReleaseError, match="source_snapshot_required"):
+        open_design(workspace, name="refunds")
     assert (workspace / EVIDENCE).read_bytes() == before
 
     tampered = tmp_path / "tampered.json"
@@ -181,8 +285,172 @@ def test_snapshot_is_pinned_and_projection_survives_resume(tmp_path):
     assert load_design(workspace) == design
 
     (workspace / EVIDENCE).write_bytes(before + b" ")
-    with pytest.raises(ReleaseError, match="source_snapshot_invalid"):
-        open_design(workspace, name="refunds")
+    assert (
+        open_design(
+            workspace,
+            name="refunds",
+            reviewed_snapshot=private,
+            source_review_receipt=receipt,
+        )
+        == design
+    )
+    assert (workspace / EVIDENCE).read_bytes() == before
+
+
+def test_accepted_snapshot_requires_an_exact_receipt_even_for_kb_only(tmp_path):
+    uploads, private, reviewed, receipt = _snapshot(tmp_path)
+    docs = document_manifest(uploads)
+    with pytest.raises(ReleaseError, match="source_review_receipt_required"):
+        open_design(tmp_path / "missing", name="scratch", reviewed_snapshot=private)
+
+    wrong_upload = json.loads(json.dumps(receipt))
+    wrong_upload["bindings"][0]["origin"]["document_id"] = "some-other-document"
+    with pytest.raises(ReleaseError, match="source_review_receipt_mismatch"):
+        open_design(
+            tmp_path / "wrong",
+            name="scratch",
+            documents=docs,
+            reviewed_snapshot=private,
+            source_review_receipt=wrong_upload,
+        )
+
+    knowledge = _receipt(reviewed, None)
+    workspace = tmp_path / "knowledge"
+    design = open_design(
+        workspace,
+        name="scratch",
+        reviewed_snapshot=private,
+        source_review_receipt=knowledge,
+    )
+    assert design.documents == []
+    assert design.reviewed_source.id == reviewed.snapshot_id
+    assert b"kb-secret" not in (workspace / EVIDENCE).read_bytes()
+    assert b"private-review-id" not in (workspace / "design.json").read_bytes()
+    with pytest.raises(ReleaseError, match="source_snapshot_required"):
+        open_design(workspace, name="scratch", source_review_receipt=knowledge)
+    missing_binding = {**knowledge, "bindings": knowledge["bindings"][:-1]}
+    with pytest.raises(ReleaseError, match="source_review_receipt_mismatch"):
+        open_design(
+            workspace,
+            name="scratch",
+            reviewed_snapshot=private,
+            source_review_receipt=missing_binding,
+        )
+
+
+def test_equal_uploaded_bytes_can_have_distinct_approved_source_ids(tmp_path):
+    first = _sources()[0]
+    second = replace(first, source_id="second-policy", filename="second.pdf")
+    _, reviewed = _approve_proposals((first, second))
+    private = tmp_path / "private.json"
+    private.write_bytes(serialize_environment_snapshot(reviewed))
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    for original in (first, second):
+        (uploads / original.filename).write_bytes(original.content)
+    receipt = _receipt(reviewed, uploads)
+    workspace = tmp_path / "workspace"
+    design = open_design(
+        workspace,
+        name="scratch",
+        documents=document_manifest(uploads),
+        reviewed_snapshot=private,
+        source_review_receipt=receipt,
+    )
+    assert design.reviewed_source.id == reviewed.snapshot_id
+    receipt["bindings"][1]["source_id"] = receipt["bindings"][0]["source_id"]
+    with pytest.raises(ReleaseError, match="source_review_receipt_mismatch"):
+        open_design(
+            workspace,
+            name="scratch",
+            reviewed_snapshot=private,
+            source_review_receipt=receipt,
+        )
+
+
+def test_blocking_diagnostics_stop_authoring_and_keep_private_detail_out(tmp_path):
+    _, reviewed = _approve_proposals((_sources()[0],), hidden=("public-policy",))
+    private = tmp_path / "private.json"
+    private.write_bytes(serialize_environment_snapshot(reviewed))
+    receipt_file = tmp_path / "receipt.json"
+    receipt_file.write_text(json.dumps(_receipt(reviewed, None)))
+    workspace = tmp_path / "workspace"
+    output = tmp_path / "output"
+    assert (
+        main(
+            [
+                "run",
+                "--workspace",
+                str(workspace),
+                "--output",
+                str(output),
+                "--name",
+                "refunds",
+                "--reviewed-snapshot",
+                str(private),
+                "--reviewed-receipt",
+                str(receipt_file),
+                "--postgres-dsn",
+                "unused",
+            ]
+        )
+        == 2
+    )
+    result = json.loads((output / "result.json").read_bytes())
+    assert result["failure"] == {
+        "code": "source_scenarios_blocked",
+        "message": "10 source scenarios are blocked by validation.",
+    }
+    assert not (workspace / EVIDENCE).exists()
+
+
+def test_changed_approved_value_changes_native_bound_fixture(tmp_path, monkeypatch):
+    original = _sources()
+    bound = []
+    for status in ("eligible", "expired"):
+        changed = replace(
+            original[-1],
+            content=b'[{"buyer_id":"C17","status":"' + status.encode() + b'"}]',
+        )
+        monkeypatch.setattr(
+            test_environment_inputs, "_sources", lambda: (*original[:-1], changed)
+        )
+        _, reviewed = _reviewed()
+        private = tmp_path / f"{status}.json"
+        private.write_bytes(serialize_environment_snapshot(reviewed))
+        workspace = tmp_path / status
+        open_design(
+            workspace,
+            name="refunds",
+            requirements="Handle a refund",
+            scenario_count=2,
+            reviewed_snapshot=private,
+            source_review_receipt=_receipt(reviewed, None),
+        )
+        evidence = json.loads((workspace / EVIDENCE).read_bytes())
+        case = next(
+            case
+            for case in evidence["cases"]
+            if any(fact["field"] == "status" for fact in case["starting_facts"])
+        )
+        args = {
+            "name": "refund",
+            "fixture": {"origin": "seed", "reviewed_source": case["id"]},
+        }
+        assert bind_scenario(evidence, args) == ""
+        bound.append(
+            document_for(Scenario.model_validate(args))["fixture"]["reviewed_source"]
+        )
+    assert [
+        next(
+            fact["value"]
+            for fact in case["starting_facts"]
+            if fact["field"] == "status"
+        )
+        for case in bound
+    ] == ["eligible", "expired"]
+    assert bound[0]["id"] != bound[1]["id"]
+    assert {"source_id": "orders", "page": None, "row": 1} in bound[1]["citations"]
 
 
 async def _approve(*_args):
@@ -237,7 +505,7 @@ def test_source_free_design_keeps_the_existing_interview(tmp_path, monkeypatch):
 
 def test_native_scenario_proof_keeps_public_facts_and_citations(tmp_path, monkeypatch):
     monkeypatch.setenv("ALK_HARNESS_MODEL", "test-model")
-    uploads, private, _ = _snapshot(tmp_path)
+    uploads, private, _, receipt = _snapshot(tmp_path)
     workspace = tmp_path / "workspace"
     design = open_design(
         workspace,
@@ -245,6 +513,7 @@ def test_native_scenario_proof_keeps_public_facts_and_citations(tmp_path, monkey
         requirements="Approve an eligible refund",
         documents=document_manifest(uploads),
         reviewed_snapshot=private,
+        source_review_receipt=receipt,
         scenario_count=6,
     )
     proposal = Proposal(
@@ -255,6 +524,7 @@ def test_native_scenario_proof_keeps_public_facts_and_citations(tmp_path, monkey
     save_design(
         workspace, design.model_copy(update={"stage": "suite", "proposal": proposal})
     )
+    (workspace / POLICY).write_text('{"rules":[]}')
     (workspace / TOOLS).write_text(
         json.dumps(
             [
@@ -320,7 +590,8 @@ def test_native_scenario_proof_keeps_public_facts_and_citations(tmp_path, monkey
         case_index, expected = next(
             (index, case)
             for index, case in enumerate(evidence["cases"], start=1)
-            if any(fact["field"] == "status" for fact in case["facts"])
+            if case["category"] == "success"
+            and any(fact["field"] == "status" for fact in case["starting_facts"])
         )
         shown = _tool(
             stage,
@@ -356,14 +627,77 @@ def test_native_scenario_proof_keeps_public_facts_and_citations(tmp_path, monkey
             (suite / "scenarios/approve-eligible-refund/scenario.json").read_bytes()
         )
         grounding = saved["fixture"]["reviewed_source"]
-        assert any(fact["value"] == "eligible" for fact in grounding["facts"])
+        assert any(fact["value"] == "eligible" for fact in grounding["starting_facts"])
         assert {"source_id": "public-policy", "page": 1, "row": None} in grounding[
             "citations"
         ]
-        for artifact in (*workspace.rglob("*"), *suite.parent.rglob("*")):
+        assert "approved" in grounding["policy_reference"]
+        assert all("situation" not in case for case in evidence["cases"])
+
+        catalogue = load_catalogue(workspace)
+        native = read_all(workspace)[0]
+        with pytest.raises(ReleaseError, match="design_source_required"):
+            check_grounded_suite(workspace, evidence, design)
+        extra = native.model_copy(update={"name": "extra", "scenario_key": "extra"})
+        write_folder(extra, catalogue, workspace)
+        with pytest.raises(ReleaseError, match="design_source_duplicate"):
+            check_grounded_suite(workspace, evidence, design)
+        extra.fixture = {"origin": "seed", "reviewed_source": {"id": "unknown"}}
+        write_folder(extra, catalogue, workspace)
+        with pytest.raises(ReleaseError, match="design_source_invalid"):
+            check_grounded_suite(workspace, evidence, design)
+        extra.fixture = {"origin": "seed"}
+        write_folder(extra, catalogue, workspace)
+        design = load_design(workspace).model_copy(
+            update={
+                "template": DesignTemplate(
+                    environment=ReleaseRef(
+                        name="template", digest="sha256:" + "a" * 64
+                    ),
+                    suite=ReleaseRef(name="template_base", digest="sha256:" + "b" * 64),
+                    scenario_keys=["extra"],
+                ),
+                "provenance": [
+                    Provenance(
+                        target="table:orders", document="previous", sha256="example"
+                    )
+                ],
+            }
+        )
+        save_design(workspace, design)
+        for index, case in enumerate(evidence["cases"]):
+            if case == grounding:
+                continue
+            key = f"approved-{index}"
+            write_folder(
+                native.model_copy(
+                    update={
+                        "name": key,
+                        "scenario_key": key,
+                        "fixture": {"origin": "seed", "reviewed_source": case},
+                    }
+                ),
+                catalogue,
+                workspace,
+            )
+
+        release = tmp_path / "sealed"
+        environment, suite = seal_design(workspace, release, postgres_dsn="")
+        pin = design.reviewed_source.model_dump(include={"id", "digest"})
+        assert (
+            environment.metadata["reviewed_source"]
+            == suite.metadata["reviewed_source"]
+            == pin
+        )
+        assert environment.metadata["provenance"][0]["target"] == "table:orders"
+        assert suite.metadata["template_suite"] == design.template.suite.digest
+        assert load_environment_release(release / "environment") == environment
+        assert load_suite_release(release / "suite") == suite
+        for artifact in (*workspace.rglob("*"), *release.rglob("*")):
             if artifact.is_file():
                 content = artifact.read_bytes()
                 assert b"HIDDEN_SENTINEL_74Q" not in content
                 assert b"Alice" not in content
+                assert b"private-review-id" not in content
     finally:
         tools.world.close()

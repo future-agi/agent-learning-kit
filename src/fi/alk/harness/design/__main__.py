@@ -3,6 +3,7 @@
     run  --workspace DIR --name NAME (--requirements TEXT | --requirements-file FILE)
          [--template-environment DIR --template-suite DIR] [--modality chat|voice]
          --output DIR --postgres-dsn DSN
+         [--reviewed-snapshot FILE --reviewed-receipt FILE]
          [--answers auto|console] [--question-window SECONDS] [--park-at N]
 
 Designs an environment locally with the configured harness model. The person is played by
@@ -12,6 +13,7 @@ asked, parks the design; running again on the same workspace re-asks it and resu
 
 `hosted --job /work/job.json --releases /work/releases --workspace /work/authoring` is the
 sandbox's control process; the conversation's builder does the design (see `hosted.py`).
+For a sourced hosted launch, give `--reviewed-snapshot FILE` and its trusted receipt in job metadata.
 
 Exit codes: 0 sealed, 2 failed or stopped (result.json says why), 3 parked (`run` only; a hosted
 design parks as a failure with the code `design_waiting`).
@@ -175,6 +177,20 @@ async def _design(args: argparse.Namespace) -> int:
         else None
     )
     try:
+        receipt = None
+        if args.reviewed_receipt is not None:
+            if args.reviewed_receipt.resolve().is_relative_to(workspace.resolve()):
+                raise ReleaseError(
+                    "source_review_receipt_invalid",
+                    "Keep the receipt outside the design workspace.",
+                )
+            try:
+                receipt = json.loads(args.reviewed_receipt.read_bytes())
+            except (OSError, ValueError) as exc:
+                raise ReleaseError(
+                    "source_review_receipt_invalid",
+                    "Cannot read the approved source review receipt.",
+                ) from exc
         open_design(
             workspace,
             name=args.name,
@@ -186,6 +202,7 @@ async def _design(args: argparse.Namespace) -> int:
             else None,
             scenario_count=args.scenario_count,
             reviewed_snapshot=args.reviewed_snapshot,
+            source_review_receipt=receipt,
         )
     except ReleaseError as exc:
         return failed(output, workspace, exc.code, exc.detail[:600])
@@ -266,6 +283,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--modality", choices=("chat", "voice"), default="chat")
     run.add_argument("--documents", help="a folder of the person's documents")
     run.add_argument("--scenario-count", type=int, default=10)
+    run.add_argument(
+        "--reviewed-receipt",
+        type=Path,
+        help="private approval receipt for the source snapshot",
+    )
     run.add_argument("--output", required=True)
     run.add_argument(
         "--postgres-dsn",

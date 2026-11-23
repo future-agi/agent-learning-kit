@@ -848,21 +848,14 @@ class HostedChatRuntime:
 
     async def _open_for_designing(self) -> Stage:
         from . import spend
-        from .design.hosted import OUTPUT, ready_marker
+        from .design.hosted import OUTPUT, design_job, wait_for_design
         from .design.session import open_for_designing
-        from .design.tools import FINISHED_MARKER
 
         # The platform reads this ledger before the sandbox is deleted and bills it as authoring.
         spend.journal_to(self.workspace / "cost.json")
         # A resumed design file predates validation for this launch.
-        for _ in range(150):
-            if ready_marker(self.workspace).is_file():
-                break
-            if (self.workspace / FINISHED_MARKER).is_file():
-                raise RuntimeError("The design control process could not open the design.")
-            await asyncio.sleep(2)
-        else:
-            raise RuntimeError("The design control process has not opened the design.")
+        attempt_id = design_job(self.job).attempt_id
+        await wait_for_design(self.workspace, attempt_id)
         if self._view_proof is None:
             from .design.proof import ViewProof
 
@@ -874,6 +867,7 @@ class HostedChatRuntime:
             postgres_dsn=self._design_postgres,
             output=self.workspace / OUTPUT,
             view_proof=self._view_proof,
+            attempt_id=attempt_id,
             hosted_prompt=(
                 "\n\n## Hosted conversation behavior\n"
                 "Reply directly to the person in this conversation. Never describe work as done "
@@ -2846,16 +2840,18 @@ class HostedChatRuntime:
     async def _park_design(self, asked: list[dict[str, Any]]) -> Any:
         """Checkpoint the design with its open question, then finish the job as waiting: the
         platform keeps the checkpoint, and continuing the design starts from it."""
-        from .design.hosted import OUTPUT
+        from .design.hosted import OUTPUT, design_job
         from .design.tools import FINISHED_MARKER, PARKED, RESULT
 
         await self._checkpoint()
+        attempt_id = design_job(self.job).attempt_id
         output = self.workspace / OUTPUT
         output.mkdir(parents=True, exist_ok=True)
         (output / RESULT).write_text(
             json.dumps(
                 {
                     "status": "failed",
+                    "attempt_id": attempt_id,
                     "failure": {
                         "code": "design_waiting",
                         "message": "the design is waiting for an answer; continue it to resume",
@@ -2864,7 +2860,9 @@ class HostedChatRuntime:
             ),
             encoding="utf-8",
         )
-        (self.workspace / FINISHED_MARKER).write_text(json.dumps({"status": "failed"}), encoding="utf-8")
+        (self.workspace / FINISHED_MARKER).write_text(
+            json.dumps({"status": "failed", "attempt_id": attempt_id}), encoding="utf-8"
+        )
         if asked and self.backend_name == "claude":
             from claude_agent_sdk.types import PermissionResultDeny
 
