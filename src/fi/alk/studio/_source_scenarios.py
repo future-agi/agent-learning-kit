@@ -11,6 +11,7 @@ from fi.alk.studio._environment_input_types import (
     RecordRelationship,
     ReviewedEnvironmentInputs,
     ReviewedPolicySource,
+    ReviewedReferenceSource,
     ReviewedRecord,
     ReviewedRecordSource,
     SourceSpan,
@@ -152,6 +153,12 @@ def generate_source_scenarios(
     public_rules = tuple(
         rule for source in public_policies for rule in source.active_rules
     )
+    references = tuple(
+        statement
+        for source in reviewed.sources
+        if isinstance(source, ReviewedReferenceSource) and source.audience.tested_agent
+        for statement in source.statements
+    )
     private_rules = tuple(
         rule
         for source in reviewed.sources
@@ -209,7 +216,8 @@ def generate_source_scenarios(
             for field, value in record.values
         )
         applicable = _rules_for_category(public_rules, category)
-        excerpt = statements[index % len(statements)] if statements else None
+        candidates = statements if applicable else references
+        excerpt = candidates[index % len(candidates)] if candidates else None
         if applicable:
             excerpt = next(
                 (
@@ -265,14 +273,14 @@ def generate_source_scenarios(
             available_tools.update(
                 ("list_structured_artifacts", "inspect_structured_artifact")
             )
-        if public_policies:
+        if public_policies or references:
             available_tools.update(("search_knowledge_base", "read_document"))
         if set(environment_requirements.required_tools) - available_tools:
             block(
                 "scenario_evidence_missing",
                 "A required action or read tool is unavailable",
             )
-        if not applicable:
+        if not applicable and category != "success":
             block(
                 "scenario_evidence_missing",
                 "No accepted public check supports this case",
@@ -302,7 +310,11 @@ def generate_source_scenarios(
         if excerpt:
             cited_spans += (excerpt.span,)
         situation = {
-            "success": "Ask for a compliant resolution using the quoted policy and starting facts.",
+            "success": (
+                "Ask for a compliant resolution using the quoted policy and starting facts."
+                if applicable
+                else "Ask for a resolution using the approved source evidence and starting facts."
+            ),
             "refusal": "Ask for the prohibited or ineligible action described by the quoted policy.",
             "negative_control": "Use this deliberately incorrect candidate response "
             + json.dumps(control),
