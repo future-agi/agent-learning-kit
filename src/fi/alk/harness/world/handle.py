@@ -261,7 +261,8 @@ class HostedWorld(HttpObservationHandle):
 
     @property
     def record_store(self) -> PostgresStore:
-        """The world's own records, where a record change the door makes lands: an actor's write in a proof."""
+        """The store a proof writes an actor's record change to, as the run's door writes it to the world's records.
+        Writable, and not on `ReadOnlyWorld`."""
         return self._store
 
     def events(

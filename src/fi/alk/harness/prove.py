@@ -742,6 +742,16 @@ def executes(world: GeneratedWorld, tool: str) -> bool:
 _SAME_CALL_SECONDS = 5.0
 
 
+def _canonical(arguments: Any) -> str:
+    """Arguments as one comparable text, whatever their key order: a call and its row in the log, the same call."""
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            return arguments
+    return json.dumps(arguments if arguments is not None else {}, sort_keys=True, default=str)
+
+
 def _records_of(world: Any) -> PostgresStore | None:
     """The world's own records a record change lands in: a generated world's store, a live world's record store."""
     for name in ("store", "record_store"):
@@ -1185,25 +1195,16 @@ class _WorldActors:
 
     def events_over(self, own: Callable[..., list[dict[str, Any]]]) -> Callable[..., list[dict[str, Any]]]:
         """A live world's own action log with the actors' part credited to them, never replaced: a row the log holds
-        for an actor's call through the door is relabelled with that actor, and an actor's action the log cannot hold
-        (a record change written straight to the world's records, an action not permitted) is added as theirs."""
+        for an actor's call through the door (the same tool, the same arguments, the closest in time) is relabelled
+        with that actor, and an actor's action the log cannot hold, or that matches no one row, is added as theirs.
+        Rows read in the order they happened."""
 
         def events(actor_id: str | None = None, outcome: str | None = None) -> list[dict[str, Any]]:
             rows = [dict(row) for row in own()]
             claimed: set[int] = set()
             for index, who in sorted(self.by_actors.items()):
                 call = self.world.calls[index]
-                match = next(
-                    (
-                        at
-                        for at, row in enumerate(rows)
-                        if at not in claimed
-                        and (row.get("actor_id") or "agent") == "agent"
-                        and str(row.get("name") or "") == call.name.rsplit("/", 1)[-1]
-                        and abs(float(row.get("at") or 0) - float(call.at or 0)) < _SAME_CALL_SECONDS
-                    ),
-                    None,
-                )
+                match = self._row_for(call, rows, claimed)
                 if match is not None:
                     claimed.add(match)
                     rows[match]["actor_id"] = who
@@ -1221,15 +1222,35 @@ class _WorldActors:
                         "refusal_code": None if call.ok else (call.refusal_code or None),
                     }
                 )
-            rows += [{**row, "at": 0.0} for _, row in self.refusals]
+            rows += [dict(row) for _, row in self.refusals]
+            ordered = [row for _, row in sorted(enumerate(rows), key=lambda pair: (float(pair[1].get("at") or 0), pair[0]))]
             return [
                 row
-                for row in rows
+                for row in ordered
                 if (actor_id is None or (row.get("actor_id") or "agent") == actor_id)
                 and (outcome is None or (row.get("outcome") or ("committed" if row.get("ok") else "refused")) == outcome)
             ]
 
         return events
+
+    @staticmethod
+    def _row_for(call: Any, rows: list[dict[str, Any]], claimed: set[int]) -> int | None:
+        """The one unclaimed row of the agent's the door logged for `call`: the same tool and arguments, stamped
+        closest to it within `_SAME_CALL_SECONDS`. Two equally close leave it unmatched, never guessed."""
+        name = call.name.rsplit("/", 1)[-1]
+        wanted = _canonical(call.arguments)
+        close = sorted(
+            (abs(float(row.get("at") or 0) - float(call.at or 0)), at)
+            for at, row in enumerate(rows)
+            if at not in claimed
+            and (row.get("actor_id") or "agent") == "agent"
+            and str(row.get("name") or "") == name
+            and _canonical(row.get("arguments")) == wanted
+            and abs(float(row.get("at") or 0) - float(call.at or 0)) < _SAME_CALL_SECONDS
+        )
+        if not close or (len(close) > 1 and close[0][0] == close[1][0]):
+            return None
+        return close[0][1]
 
     def _due(self, actor: Any, action: Any, step: Any) -> bool:
         trigger = action.trigger
@@ -1284,6 +1305,7 @@ class _WorldActors:
                     "actor_id": actor.id,
                     "outcome": "refused",
                     "refusal_code": "not_permitted",
+                    "at": time.time(),
                 }
                 self.refusals.append((len(self.world.calls), refusal))
                 continue
@@ -1309,7 +1331,10 @@ class _WorldActors:
                     at=time.time(),
                 )
                 record = getattr(self.world, "_record", None)
-                record(made) if callable(record) else self.world.calls.append(made)
+                if callable(record):
+                    record(made)
+                else:
+                    self.world.calls.append(made)
             else:
                 self.world.call(
                     route if known else action.action.rsplit(".", 1)[-1],
