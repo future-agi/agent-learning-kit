@@ -3,15 +3,24 @@ trajectories; the world's MCP endpoint serves its own tool names; a `both` goal 
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from fi.alk.harness.adaptation.declared import MCP_CLIENT, declared_digest
 from fi.alk.harness.adaptation.errors import AdaptationFailure
 from fi.alk.harness.adaptation.profile import profile_from_file, select_mode
 from fi.alk.harness.adaptation.workbench import parse_binding_draft
+from fi.alk.harness.binding_proof import BindingProofV1, unscored
 from fi.alk.harness.binding_trajectories import derive_trajectories
 from fi.alk.harness.catalogue import Catalogue, SubGoal
-from fi.alk.harness.releases import AgentBindingV1, BindingMode, ToolDefinition
+from fi.alk.harness.releases import (
+    AgentBindingV1,
+    BindingMode,
+    DigestRef,
+    ReleaseError,
+    ToolDefinition,
+)
 from fi.alk.harness.run.grade import _claims
 from fi.alk.harness.scenario import Scenario, Step
 from fi.alk.harness.world_tools import WorldTools
@@ -362,6 +371,39 @@ def test_a_tool_no_entry_reaches_needs_no_trajectory():
     assert not derived.undecided
 
 
+def test_an_authored_alternative_is_derived_when_the_reference_is_not_reached():
+    """The reference escalates, which the binding does not reach; the scenario's authored
+    alternative books instead, so the agent's trajectory follows the alternative."""
+    reference = [Step(tool="escalate_to_staff", arguments={"reason": "late"})]
+    alternative = [
+        Step(
+            tool="book_appointment",
+            arguments={"patient_id": "P-1001", "slot_id": "S-104", "reason": "late"},
+        )
+    ]
+    derived = derive_trajectories(
+        CLINIC_BINDING, [("late", reference, [alternative])], TOOLS
+    )
+    assert derived.trajectories == {
+        "late": [
+            {
+                "tool": "schedule_visit",
+                "arguments": {
+                    "patient_number": "P-1001",
+                    "opening": "S-104",
+                    "reason_for_visit": "late",
+                },
+            }
+        ]
+    }
+    assert not derived.unreached and not derived.undecided
+    # With no route open, the reference's unreached tools are reported, as before.
+    closed = derive_trajectories(
+        CLINIC_BINDING, [("late", reference, [reference])], TOOLS
+    )
+    assert closed.unreached == {"late": "escalate_to_staff"}
+
+
 def test_an_argument_the_entry_never_sends_is_not_dropped_silently():
     binding = _binding(
         {
@@ -454,6 +496,76 @@ def test_a_draft_may_leave_the_trajectories_to_the_harness():
     assert draft.trajectories == {}
     with pytest.raises(TypeError):
         parse_binding_draft({"binding": {"tools": []}, "trajectories": []})
+
+
+# --- the proved subset a run may select --------------------------------------------------------
+
+
+def _proof(binding: AgentBindingV1, **scenarios: tuple[str, str]) -> BindingProofV1:
+    return BindingProofV1(
+        binding={"digest": binding.digest},
+        suite={"digest": SUITE_SHA},
+        environment={"digest": SHA},
+        scenarios={
+            key: {"status": status, "reason": reason}
+            for key, (status, reason) in scenarios.items()
+        },
+        passed=True,
+    )
+
+
+SUITE_SHA = "sha256:" + "cd" * 32
+SUITE = SimpleNamespace(
+    digest=SUITE_SHA,
+    scenarios=[SimpleNamespace(key=key) for key in ("book", "late", "added")],
+)
+
+
+def test_a_routed_binding_is_scored_only_on_the_scenarios_its_proof_proved():
+    proof = _proof(
+        CLINIC_BINDING,
+        book=("proved", ""),
+        late=("unscorable", "the reference solution uses escalate_to_staff"),
+    )
+    assert unscored(CLINIC_BINDING, SUITE, SHA, proof) == {
+        "late": "the reference solution uses escalate_to_staff",
+        "added": "the binding proof does not cover it",
+    }
+
+
+@pytest.mark.parametrize(
+    "proof, environment, said",
+    [
+        (None, SHA, "binding proof against the suite"),
+        ("other_suite", SHA, "another suite"),
+        ("failed", SHA, "did not pass"),
+        ("ok", "sha256:" + "ef" * 32, "another environment"),
+    ],
+)
+def test_a_routed_binding_without_its_proof_against_the_suite_is_not_run(
+    proof, environment, said
+):
+    document = _proof(CLINIC_BINDING, book=("proved", ""))
+    if proof == "other_suite":
+        document = document.model_copy(update={"suite": DigestRef(digest=SHA)})
+    elif proof == "failed":
+        document = document.model_copy(update={"passed": False})
+    with pytest.raises(ReleaseError) as caught:
+        unscored(
+            CLINIC_BINDING, SUITE, environment, None if proof is None else document
+        )
+    assert caught.value.code == "binding_unproved" and said in caught.value.detail
+
+
+def test_a_canonical_binding_is_scored_on_the_whole_suite():
+    canonical = CLINIC_BINDING.model_copy(
+        update={
+            "mode": BindingMode.CANONICAL,
+            "agent_tools": [],
+            "tools": [],
+        }
+    )
+    assert unscored(canonical, SUITE, SHA, None) == {}
 
 
 # --- the world's MCP endpoint -----------------------------------------------------------------
