@@ -2040,8 +2040,7 @@ def _with_span_calls(
     is the world's.
 
     On the callback route a span is a call only when no other source recorded one: where any did, spans pair with
-    those calls and lend to them, and add none. There a span and the agent's own account that carry the agent's call
-    id pair by it."""
+    those calls and lend to them, and add none."""
     written, from_spans = _read_file_tool_calls(runtime, strict=strict)
     calls = evidence.tagged(observed, evidence.WORLD) or written
     callback = (getattr(runtime, "metadata", None) or {}).get("tool_trace_route") == CALLBACK_ROUTE
@@ -2058,7 +2057,7 @@ def _lend_only(calls: list[Call], from_spans: list[Call]) -> tuple[Call, ...]:
         id(call): (call.delegated_to, call.runtime_ids.get("parent_event_id"), call.parent_span_id, call.relationship)
         for call in calls
     }
-    merged = _merge_span_calls(calls, from_spans, by_call_id=True)
+    merged = _merge_span_calls(calls, from_spans)
     kept = [call for call in merged if id(call) in before]
     left_out = {call.runtime_ids.get("event_id") for call in merged if id(call) not in before} - {None}
     for call in kept:
@@ -2232,11 +2231,6 @@ def _call_id(call: Call) -> str:
     return call.runtime_ids.get("call_id") or call.runtime_ids.get("tool_call_id") or ""
 
 
-def _agents_call_id(call: Call) -> str:
-    """The call id on the agent's own account of a call; empty for any other record."""
-    return _call_id(call) if call.source == evidence.AGENT else ""
-
-
 # Said when the agent's trace holds identical untimed lines with no call id: one call written twice or two calls.
 CALLS_MAYBE_REPEATED = "calls_maybe_repeated"
 # Said when the agent's process turned on a framework's span source (the mark hook's ``.observing`` file beside the
@@ -2341,9 +2335,8 @@ def _keep_recorded_parents(from_spans: list[Call]) -> None:
             span.parent_span_id, span.relationship = "", ""
 
 
-def _merge_span_calls(calls: list[Call], from_spans: list[Call], *, by_call_id: bool = False) -> tuple[Call, ...]:
-    """Count a call a framework span and another tracer both report once, with the span's agent, hand-off and times.
-    ``by_call_id``: a span and the agent's own account that carry the agent's call id pair by it."""
+def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, ...]:
+    """Count a call a framework span and another tracer both report once, with the span's agent, hand-off and times."""
     # A background job is written when it starts and again when it ends; the later line carries its return.
     ended = {
         span.runtime_ids.get("event_id")
@@ -2384,7 +2377,7 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call], *, by_call_id: 
             tools[_tool_key(call.name)][1].append(call)
     unknown: set[str | None] = set()
     for spans, natives in tools.values():
-        groups, apart, can_be = _pair_tool(spans, natives, span_ids, by_call_id=by_call_id)
+        groups, apart, can_be = _pair_tool(spans, natives, span_ids)
         # A span no call left could be is a call only the spans saw.
         merged.extend(apart)
         for spans_left, calls_left in groups:
@@ -2406,7 +2399,7 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call], *, by_call_id: 
 
 
 def _pair_tool(
-    spans: list[Call], natives: list[Call], span_ids: set[str], *, by_call_id: bool = False
+    spans: list[Call], natives: list[Call], span_ids: set[str]
 ) -> tuple[list[tuple[list[Call], list[Call]]], list[Call], Callable[[Call, Call], bool]]:
     """Pair one tool's spans with the calls another tracer saw of it, on evidence that holds across the two tracers'
     clocks: an event id, then arguments and outcome between competing calls, then order when the spans did not
@@ -2428,30 +2421,12 @@ def _pair_tool(
     free = [
         call for call in natives if call.runtime_ids.get("event_id") not in span_ids
     ]
-    # The agent's own account and a span that both carry the agent's call id: the id decides, whatever the arguments
-    # look like. Equal ids are one call; unequal ids are never paired (``fit``). Without an id on either side, pairing
-    # goes on below.
-    accounts: dict[str, Call] = {}
-    for call in free if by_call_id else ():
-        if _agents_call_id(call):
-            accounts.setdefault(_agents_call_id(call), call)
-    unpaired: list[Call] = []
-    for span in rest:
-        own = accounts.pop(_call_id(span), None) if _call_id(span) else None
-        if own is None:
-            unpaired.append(span)
-        else:
-            _lend_span(span, own)
-            free = [call for call in free if call is not own]
-    rest = unpaired
     values = {id(call): _argument_values(call) for call in [*rest, *free]}
 
     def fit(span: Call, call: Call) -> tuple[bool, bool] | None:
         """How strongly a span claims a call: matching arguments, then outcome; None when anything both recorded
         differs."""
         if _recorded_differently(span, call):
-            return None
-        if by_call_id and _call_id(span) and _agents_call_id(call) and _call_id(span) != _agents_call_id(call):
             return None
         mine, theirs = values[id(span)], values[id(call)]
         shared = (
@@ -2661,9 +2636,9 @@ def _digest(call: Call) -> str:
         for key, value in vars(call).items()
         if key not in ("at", "ended_at", *evidence.FIELDS)
     }
-    if call.source in (evidence.AGENT, evidence.SPAN):
-        # The agent's own account and a span carry the agent's call ids, and two of their calls alike in all else are
-        # as interchangeable as they were when they carried none.
+    if call.source == evidence.AGENT:
+        # The agent's own account carries the agent's call ids, and two of its calls alike in all else are as
+        # interchangeable as they were when it carried none.
         fields["runtime_ids"] = {
             key: value for key, value in call.runtime_ids.items() if key not in ("call_id", "tool_call_id")
         }

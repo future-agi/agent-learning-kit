@@ -450,7 +450,7 @@ def test_a_google_adk_reply_streamed_in_parts_reads_as_one_record_per_call(tmp_p
 
 
 
-# -- the callback route: spans pair by the agent's call id, and add calls only to an empty list -----------------
+# -- the callback route: spans add calls only to an empty list ---------------------------------------------
 
 _ID_SPAN = {"name": "look_up_order", "output": "", "source": "otel", "agent_key": "Support", "event_id": "e1",
             "at": 1.0}
@@ -461,50 +461,7 @@ def _callback(tmp_path, observed, lines) -> tuple[Call, ...]:
     return call_runner._with_span_calls(copy.deepcopy(observed), _runtime(tmp_path, lines, call_runner.CALLBACK_ROUTE))
 
 
-def test_a_span_and_the_agents_account_with_one_call_id_are_one_call_however_the_arguments_are_shaped(
-    tmp_path, monkeypatch
-) -> None:
-    # The span wrapped the value the agent gave; by its arguments alone it is not the agent's call.
-    observed = [_told(call_id="c1")]
-    lines = [{**_ID_SPAN, "arguments": "{\"order_id\": {\"id\": \"A1001\"}}", "call_id": "c1"}]
-
-    before, _ = _chat_readings(tmp_path, monkeypatch, observed, lines)
-    now = _callback(tmp_path, observed, lines)
-
-    assert len(before) == 2
-    assert [(call.source, call.seen_by, call.arguments, call.runtime_ids) for call in now] == [
-        (AGENT, [SPAN], {"order_id": "A1001"}, {"call_id": "c1", "event_id": "e1"})
-    ]
-
-
-def test_the_call_id_picks_the_agents_account_a_span_is_whatever_the_order(tmp_path) -> None:
-    observed = [_told(call_id="c1"), _told(call_id="c2")]
-    lines = [
-        {**_ID_SPAN, "arguments": _A1001, "call_id": "c2"},
-        {**_ID_SPAN, "arguments": _A1001, "call_id": "c1", "event_id": "e2", "at": 2.0},
-    ]
-
-    now = _callback(tmp_path, observed, lines)
-
-    assert sorted((call.runtime_ids["call_id"], call.runtime_ids.get("event_id")) for call in now) == [
-        ("c1", "e2"), ("c2", "e1")
-    ]
-
-
-def test_a_span_and_the_agents_account_with_different_call_ids_are_never_one_call(tmp_path, monkeypatch) -> None:
-    # Alike in all else: without the ids, the span would be the agent's call. Here it is no call either, since the
-    # agent's account is.
-    observed = [_told(call_id="c1")]
-    lines = [{**_ID_SPAN, "arguments": _A1001, "call_id": "c2"}]
-
-    before, _ = _chat_readings(tmp_path, monkeypatch, observed, lines)
-    now = _callback(tmp_path, observed, lines)
-
-    assert [(call.source, call.seen_by) for call in before] == [(AGENT, [])]
-    assert [(call.source, call.seen_by, call.runtime_ids) for call in now] == [(AGENT, [], {"call_id": "c1"})]
-
-
-def test_without_a_call_id_on_the_span_the_agents_account_pairs_as_on_the_command_route(tmp_path, monkeypatch) -> None:
+def test_on_the_callback_route_the_agents_account_pairs_with_its_span_as_on_the_command_route(tmp_path, monkeypatch) -> None:
     observed = [_told(call_id="c1")]
     lines = [{**_ID_SPAN, "arguments": _A1001}]
 
@@ -606,23 +563,6 @@ def test_on_the_callback_route_with_no_other_record_the_spans_are_the_calls(tmp_
 
     assert [(call.name, call.source) for call in now] == [("look_up_order", SPAN), ("start_return", SPAN)]
     assert _unnamed(now) == _unnamed(command)
-
-
-@pytest.mark.parametrize(
-    ("account_id", "span_id"),
-    [("adk-1", "adk-1"), ("adk-1", "adk-2"), ("", "adk-1"), ("adk-1", "")],
-)
-def test_on_the_command_route_a_spans_call_id_leaves_dev_graded_calls(tmp_path, monkeypatch, account_id, span_id):
-    observed = [_told(call_id=account_id)]
-    lines = [{**_ID_SPAN, "arguments": _A1001, **({"call_id": span_id} if span_id else {})}]
-    dev_lines = [{**_ID_SPAN, "arguments": _A1001}]
-
-    before, _ = _chat_readings(tmp_path / "dev", monkeypatch, observed, dev_lines)
-    _, now = _chat_readings(tmp_path / "now", monkeypatch, observed, lines)
-
-    assert _graded(now) == _graded(before)
-    assert [(call.source, call.seen_by, call.runtime_ids.get("event_id")) for call in now] == [(AGENT, [SPAN], "e1")]
-
 
 
 # -- a span source that was on, and silent -------------------------------------------------------------------------
