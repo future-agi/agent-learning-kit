@@ -113,6 +113,8 @@ stream or anywhere else the kit can read, and offers no hook before a call:
 - the one call per session it makes for a title of its own, so the gateway shows the kit's count
   plus one;
 - its own retry after a failed request;
+- its second call when a sub-agent's answer comes back empty: it asks again, once, and neither
+  empty reply reaches the stream, so the sub-agent's result counts one call, not two;
 - its summary call when it compacts a long conversation.
 
 Each is bounded by the counted calls around it, and the time limit holds the rest.

@@ -1214,6 +1214,8 @@ def test_the_cli_counts_a_readers_empty_answer(cli, tmp_path, monkeypatch, closi
 
     print(_cli_in_use(), "served:", _DelegatingStub.served_by, "seen:", _DelegatingStub.seen,
           "retried:", _retried(), "closing:", closing)
+    # More than one repeat would leave more than one call per reader uncounted: that must fail here.
+    assert _retried() <= 1
     assert _streamed().count("reader") - _retried() == 3
     assert closing == [(False, 1)]
     assert _counted(output) == len(_streamed()) - _retried()
