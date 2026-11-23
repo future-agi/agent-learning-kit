@@ -144,7 +144,7 @@ def test_brief_names_required_arguments_and_limits():
     brief = contract.brief()
 
     assert "required: item_id" in brief
-    assert "limits: quantity max 10 min 1" in brief
+    assert "limits: quantity min 1 max 10" in brief
 
 
 def test_a_provider_schema_marks_only_required_arguments_and_carries_limits():

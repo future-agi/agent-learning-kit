@@ -175,7 +175,7 @@ class ToolSpec(BaseModel):
     # The unit or format a field is written in, where the name alone does not say: `timeout` -> "milliseconds".
     arg_units: dict[str, str] = Field(default_factory=dict)
     arg_required: list[str] = Field(default_factory=list)
-    arg_bounds: dict[str, dict[str, float]] = Field(default_factory=dict)
+    arg_bounds: dict[str, dict[str, int | float]] = Field(default_factory=dict)
     # What the tool hands back, by output field: its type and, where the name does not say it, its unit or format.
     returns: dict[str, str] = Field(default_factory=dict)
     # The world's tables the tool reads, and the ones it adds to, changes or deletes from, declared from its code.
@@ -195,10 +195,10 @@ class ToolSpec(BaseModel):
 
     @field_validator("arg_bounds", mode="before")
     @classmethod
-    def _numeric_bounds(cls, value: Any) -> dict[str, dict[str, float]]:
+    def _numeric_bounds(cls, value: Any) -> dict[str, dict[str, int | float]]:
         if not isinstance(value, dict):
             return {}
-        bounds: dict[str, dict[str, float]] = {}
+        bounds: dict[str, dict[str, int | float]] = {}
         for argument, bound in value.items():
             if not isinstance(bound, dict):
                 continue
@@ -1361,7 +1361,7 @@ class AgentContract(BaseModel):
                         (
                             "limits",
                             ", ".join(
-                                f"{arg} " + " ".join(f"{side} {limit}" for side, limit in sorted(bound.items()))
+                                f"{arg} " + " ".join(f"{side} {bound[side]}" for side in ("min", "max") if side in bound)
                                 for arg, bound in sorted(tool.arg_bounds.items())
                             ),
                         ),
@@ -1561,6 +1561,8 @@ FREE_TEXT = (
 )
 # A field that holds models is kept for itself, and its models' fields are classified in their
 # own right. A name without a dot is a whole technical model, every field of it kept.
+OMITTED_WHEN_EMPTY = ("arg_required", "arg_bounds")
+
 KEPT_AS_WRITTEN = (
     "AgentContract.agent",
     "AgentContract.modality",
@@ -1787,6 +1789,10 @@ def write_contract(
     edit's save keeps the saved file's shape, with no new empty fields).
     """
     body = contract.model_dump()
+    for tool in body.get("tools") or []:
+        for field in OMITTED_WHEN_EMPTY:
+            if not tool.get(field):
+                tool.pop(field, None)
     places: list[tuple[Any, Any, Any, str]] = []
     for name in FREE_TEXT:
         model, field = name.split(".")
