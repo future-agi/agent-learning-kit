@@ -4,6 +4,9 @@ that publishes a template over some other image (TH-10400)."""
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -148,27 +151,33 @@ def test_an_image_built_here_is_published_with_the_revision_it_was_built_with(
 
 
 def _browser_check(script) -> str:
-    import json
-
     catalog = json.loads((ROOT / "hosted-snapshot" / "catalog.json").read_text())
     return dict(script._base_checks(catalog))["browser-chromium"]
 
 
 def test_the_image_puts_the_kits_browser_where_its_certification_looks():
     text = (ROOT / "Dockerfile.hosted").read_text()
-    assert "playwright install --with-deps chromium" in text
-    assert "ln -s \"$chrome\" /usr/local/bin/alk-chromium" in text
+    assert "playwright install --with-deps --no-shell chromium" in text
+    assert 'ln -s "$chrome" /usr/local/bin/alk-chromium' in text
     assert "chmod -R a+rX,a-w /opt/ms-playwright" in text
     # The folder is not the default for an agent's own Playwright.
     assert "ENV PLAYWRIGHT_BROWSERS_PATH" not in text
 
 
+def test_the_playwright_pin_is_set_in_one_place():
+    text = (ROOT / "Dockerfile.hosted").read_text()
+    assert text.count("ARG PLAYWRIGHT_VERSION=") == 1
+    assert '"playwright==${PLAYWRIGHT_VERSION}"' in text
+    assert "playwright==1" not in text
+
+
 @pytest.mark.parametrize("compose_profile", [False, True])
 def test_every_template_profile_certifies_the_browser(script, compose_profile):
-    import json
-
     catalog = json.loads((ROOT / "hosted-snapshot" / "catalog.json").read_text())
-    labels = [label for label, _ in script._base_checks(catalog, compose_profile=compose_profile)]
+    labels = [
+        label
+        for label, _ in script._base_checks(catalog, compose_profile=compose_profile)
+    ]
     assert labels.count("browser-chromium") == 1
 
 
@@ -176,45 +185,68 @@ def test_every_template_profile_certifies_the_browser(script, compose_profile):
 _PNG = "\\211PNG\\r\\n\\032\\n"
 
 _FAKE_CHROMIUM = """#!/bin/sh
-# Stands in for Chromium: prints the page for --dump-dom, writes the page as a PNG for --screenshot.
+# Stands in for Chromium. For --screenshot it writes PNG_BYTES. For --dump-dom it prints the DOM
+# a page's script left (RENDERS=1), or only its own arguments back, as a binary that loads no page.
 for arg in "$@"; do
   case "$arg" in
     --screenshot=*) printf "${PNG_BYTES}" > "${arg#--screenshot=}" ;;
-    data:*) page="$arg" ;;
   esac
 done
-case " $* " in *" --dump-dom "*) printf '%s\\n' "$page" ;; esac
+case " $* " in
+  *" --dump-dom "*)
+    if [ "$RENDERS" = 1 ]; then printf '<html><head></head><body data-ready="42"></body></html>\\n'
+    else printf '[ERROR] could not load page: %s\\n' "$*"; fi ;;
+esac
 """
 
 
-def _run_browser_check(script, tmp_path, *, mode: int, png_bytes: str):
-    import os
-    import shutil
-    import subprocess
-
-    if subprocess.run(["stat", "-L", "-c", "%a", "/"], capture_output=True).returncode != 0:
+def _run_browser_check(
+    script, tmp_path, *, mode: int, png_bytes: str, renders: bool = True
+):
+    if (
+        subprocess.run(["stat", "-L", "-c", "%a", "/"], capture_output=True).returncode
+        != 0
+    ):
         pytest.skip("needs GNU stat, as in the template")
     fake = tmp_path / "bin" / "alk-chromium"
     fake.parent.mkdir()
     fake.write_text(_FAKE_CHROMIUM)
     fake.chmod(mode)
-    env = {**os.environ, "PATH": f"{fake.parent}:{os.environ['PATH']}", "PNG_BYTES": png_bytes}
-    return subprocess.run(["sh", "-c", _browser_check(script)], env=env, capture_output=True)
+    env = {
+        **os.environ,
+        "PATH": f"{fake.parent}:{os.environ['PATH']}",
+        "PNG_BYTES": png_bytes,
+        "RENDERS": "1" if renders else "0",
+    }
+    return subprocess.run(
+        ["sh", "-c", _browser_check(script)], env=env, capture_output=True
+    )
 
 
-def test_the_browser_check_passes_a_browser_that_renders_and_screenshots(script, tmp_path):
+def test_the_browser_check_passes_a_browser_that_runs_the_page_and_screenshots(
+    script, tmp_path
+):
     result = _run_browser_check(script, tmp_path, mode=0o555, png_bytes=_PNG)
     assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
-    ("mode", "png_bytes"),
+    ("mode", "png_bytes", "renders"),
     [
-        (0o755, _PNG),  # writable: an agent's user could replace the kit's browser
-        (0o550, _PNG),  # not runnable by the agent's user
-        (0o555, "GIF89a"),  # wrote something that is not a PNG
+        (
+            0o755,
+            _PNG,
+            True,
+        ),  # writable: an agent's user could replace the kit's browser
+        (0o550, _PNG, True),  # not runnable by the agent's user
+        (0o555, "GIF89a", True),  # wrote something that is not a PNG
+        (0o555, _PNG, False),  # printed its own arguments back, and no page
     ],
 )
-def test_the_browser_check_fails_a_browser_it_should_not_certify(script, tmp_path, mode, png_bytes):
-    result = _run_browser_check(script, tmp_path, mode=mode, png_bytes=png_bytes)
+def test_the_browser_check_fails_a_browser_it_should_not_certify(
+    script, tmp_path, mode, png_bytes, renders
+):
+    result = _run_browser_check(
+        script, tmp_path, mode=mode, png_bytes=png_bytes, renders=renders
+    )
     assert result.returncode != 0

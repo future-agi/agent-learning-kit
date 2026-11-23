@@ -383,15 +383,16 @@ PY""",
     checks.append(
         (
             # The kit's browser for browser agents (Dockerfile.hosted): any service user can run it,
-            # and it starts headless, renders a page and writes a screenshot with no network.
+            # and it starts headless, runs a page's script and writes a screenshot with no network.
+            # The marker is one only the page's script writes, never text on the command line.
             "browser-chromium",
             (
                 "test \"$(stat -L -c '%a' \"$(command -v alk-chromium)\")\" = 555 && "
                 "profile=\"$(mktemp -d)\" && "
                 "alk-chromium --headless=new --no-sandbox --disable-gpu --no-first-run "
                 "--user-data-dir=\"$profile\" --dump-dom "
-                "'data:text/html,<title>alk</title><p>alk-browser-ready</p>' "
-                "| grep -q alk-browser-ready && "
+                "'data:text/html,<body><script>document.body.dataset.ready=6*7</script>' "
+                "| grep -q 'data-ready=\"42\"' && "
                 "alk-chromium --headless=new --no-sandbox --disable-gpu --no-first-run "
                 "--user-data-dir=\"$profile\" --window-size=800,600 "
                 "--screenshot=\"$profile/shot.png\" "
