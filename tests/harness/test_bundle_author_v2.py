@@ -1499,6 +1499,74 @@ def test_a_callback_bundle_with_a_runtime_command_keeps_kit_devs_reading(tmp_pat
     assert _observed_by_frameworks(plan.processes)
 
 
+def test_the_builds_span_marker_declared_in_alk_yaml_is_refused(tmp_path: Path) -> None:
+    """Only the build sets the marker the reader acts on; a repository that declares it is refused, not ignored."""
+    source = _callback_source(tmp_path)
+    (source / "alk.yaml").write_text(
+        'schema_version: "1"\nruntime:\n  environment:\n    ALK_TOOL_SPANS_JOIN: empty_list_only\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(BundleAuthorError, match="runtime_environment_reserved_name: ALK_TOOL_SPANS_JOIN"):
+        resolve_environment_plan(
+            source, _job(connector="auto"), contract_runtime={"language": "python"},
+            contract_interface_kind="callable", contract_modality="chat",
+        )
+
+
+def test_the_builds_span_marker_in_a_compose_services_environment_is_refused(tmp_path: Path) -> None:
+    (tmp_path / "Dockerfile").write_text('FROM python:3.12\nCMD ["python", "main.py"]\n')
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: [{target: 8000, published: 8000}]\n"
+        "    environment: {ALK_TOOL_SPANS_JOIN: empty_list_only}\n"
+    )
+    with pytest.raises(BundleAuthorError, match="runtime_environment_reserved_name: ALK_TOOL_SPANS_JOIN"):
+        resolve_environment_plan(
+            tmp_path, _job(connector="auto"), contract_modality="chat", contract_interface_kind="http",
+            contract_runtime={"command": ["python", "main.py"], "interface": {"kind": "http", "port": 8000}},
+        )
+
+
+def test_the_builds_span_marker_in_a_config_files_public_values_is_refused(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text("print('hello')")
+    runtime = {
+        "execution": "native",
+        "command": ["python", "agent.py"],
+        "config_files": {".env": {"values": {"ALK_TOOL_SPANS_JOIN": "empty_list_only"}}},
+    }
+    with pytest.raises(BundleAuthorError, match="runtime_environment_reserved_name: ALK_TOOL_SPANS_JOIN"):
+        resolve_environment_plan(
+            tmp_path, _job(connector="auto"), contract_modality="chat", contract_interface_kind="command",
+            contract_runtime=runtime,
+        )
+
+
+def test_a_non_callback_bundle_that_declares_the_callback_name_keeps_kit_devs_environment(tmp_path: Path) -> None:
+    """The switch follows the build's own finding that the agent is a callback, not a name in the environment."""
+
+    def control_of(folder: str, declare: bool):
+        source = tmp_path / folder
+        source.mkdir()
+        (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+        (source / "requirements.txt").write_text("agent-simulate\n", encoding="utf-8")
+        if declare:
+            (source / "alk.yaml").write_text(
+                'schema_version: "1"\nruntime:\n  environment:\n    ALK_CALLBACK_ENTRYPOINT: "agent:run"\n',
+                encoding="utf-8",
+            )
+        plan = resolve_environment_plan(
+            source, _job(connector="auto"), contract_runtime={"language": "python"},
+            contract_interface_kind=None, contract_modality="chat",
+        )
+        return _control(plan), _observed_by_frameworks(plan.processes)
+
+    plain, plain_observed = control_of("plain", declare=False)
+    declared, declared_observed = control_of("declared", declare=True)
+    assert declared.environment == {**plain.environment, "ALK_CALLBACK_ENTRYPOINT": "agent:run"}
+    assert declared.build_commands == plain.build_commands
+    assert declared_observed == plain_observed
+
+
 def test_repository_callback_is_discovered_when_contract_omits_interface(
     tmp_path: Path,
 ) -> None:

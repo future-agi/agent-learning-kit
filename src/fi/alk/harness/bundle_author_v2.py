@@ -1256,6 +1256,9 @@ def _declared_runtime_environment(source: Path) -> dict[str, str]:
             raise BundleAuthorError(f"runtime_environment_name_invalid: {name}")
         if _SECRET_ENVIRONMENT_NAME.search(name):
             raise BundleAuthorError(f"runtime_environment_secret_forbidden: {name}")
+        if name == _SPANS_NEWLY_ON:
+            # The build's own marker: only the build sets it, from what it found (`_CALLBACK_SPAN_ENVIRONMENT`).
+            raise BundleAuthorError(f"runtime_environment_reserved_name: {name}")
         if not isinstance(raw_value, (str, int, float, bool)):
             raise BundleAuthorError(f"runtime_environment_value_invalid: {name}")
         value = str(raw_value)
@@ -2971,6 +2974,7 @@ def resolve_environment_plan(
             readiness=tuple(readiness),
         )
 
+    is_callback = False
     if compose is not None:
         services = selected.services
         declared_control = selected.control_service or None
@@ -3674,6 +3678,12 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
+    # The build's own marker reaches a process from the build alone: a Compose service's environment or a
+    # configuration file's public values that name it are refused, as alk.yaml's are.
+    for process in processes:
+        if _SPANS_NEWLY_ON in (getattr(process, "environment", None) or {}):
+            raise BundleAuthorError(f"runtime_environment_reserved_name: {_SPANS_NEWLY_ON}")
+
     # A Compose agent, selected or authored, gets the framework observation too, but not import-mode tool bindings.
     compose = isinstance(selected, ComposeSelection) or runtime_model.execution == "compose"
     voice = str(contract_modality or "").strip().lower() == "voice"
@@ -3696,16 +3706,7 @@ def resolve_environment_plan(
         # spans are read too, in every job process the worker starts, for the hand-offs between its agents. A tool call
         # both report is counted once (`collect_seam_calls`).
         trace_environment = {"ALK_OBSERVE_FRAMEWORKS": "1"}
-    elif (
-        not voice
-        and runtime_model.language.lower() in {"", "python", "py"}
-        and any(
-            isinstance(process, SourceProcess)
-            and process.name == control_name
-            and "ALK_CALLBACK_ENTRYPOINT" in process.environment
-            for process in processes
-        )
-    ):
+    elif is_callback and not voice and runtime_model.language.lower() in {"", "python", "py"}:
         # A callback agent with no runtime command: its framework spans are switched on here. The marker tells the
         # reader that a span is a call only where no other source recorded one, and keeps the tracer's bindings.
         trace_environment = dict(_CALLBACK_SPAN_ENVIRONMENT)

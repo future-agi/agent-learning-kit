@@ -2954,12 +2954,9 @@ def _with_span_calls(
 ) -> tuple[Call, ...]:
     """Calls another source saw, else the trace file's own lines, joined with the file's span lines. Each record names
     its source (tool_evidence.py): the agent's own account is tagged where it is recorded, and the rest of ``observed``
-    is the world's.
-
-    Where the build switched spans on with ``SPANS_INTO_AN_EMPTY_LIST``, a span is a call only when no other source
-    recorded one: where any did, spans pair with those calls and lend to them, and add none."""
+    is the world's."""
     written, from_spans = _read_file_tool_calls(runtime, strict=strict)
-    return _join_spans(evidence.tagged(observed, evidence.WORLD) or written, from_spans, runtime)
+    return _merge_span_calls(evidence.tagged(observed, evidence.WORLD) or written, from_spans)
 
 
 def _join_spans(calls: list[Call], from_spans: list[Call], runtime: EnvironmentRuntime) -> tuple[Call, ...]:
