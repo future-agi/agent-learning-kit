@@ -30,6 +30,7 @@ from .cli import _auto
 from .failure_file import FAILURE_FILE, write_failure_file
 from .job import (
     PROVIDER_MANAGED_CONNECTORS as PROVIDER_MANAGED_CONNECTORS,
+    HarnessFailure,
     HarnessJob,
     ProviderExecutionMode,
     ExecutionMode,
@@ -301,6 +302,30 @@ def _saved_world_outgrew_world_ir(output: Path) -> bool:
     except SQLiteWorldImportError:
         return True
     return False
+
+
+def _starting_environment_failure(
+    job: HarnessJob, output: Path, seed: Path | None
+) -> HarnessFailure | None:
+    """The refusal of the contract a build starts from, when its agent needs an environment the
+    job doesn't give: the platform's seed, else one an earlier build left. A contract that can't
+    be read is left to the steps that read it."""
+    from .browser_environment import environment_failure
+    from .contract import AgentContract
+    from .seed_contract import read_seed
+    from .understand import load
+
+    contract = None
+    try:
+        if seed is not None:
+            body, problem, _ = read_seed(seed)
+            if problem is None and body is not None:
+                contract = AgentContract.model_validate(body)
+        if contract is None:
+            contract = load(output)
+    except (OSError, ValueError):
+        return None
+    return None if contract is None else environment_failure(contract, job.metadata)
 
 
 def _refresh_source_facts(job: HarnessJob, source: Path, output: Path) -> list[str]:
@@ -761,6 +786,13 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         args.source.resolve(), job.source.subfolder, args.output.resolve()
     ):
         return EXIT_REFUSED
+    from .browser_environment import job_failure
+
+    sites_failure = job_failure(job.metadata)
+    if sites_failure is not None:
+        write_failure_file(sites_failure, args.output.resolve())
+        print(f"{sites_failure.code}: {sites_failure.message}", file=sys.stderr, flush=True)
+        return EXIT_REFUSED
     from .seed_contract import SEED_ACCEPTED
 
     # Cleared before the seed checks: a mark an earlier command left must not pass for this one's yes.
@@ -777,6 +809,18 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
                 "seed contract: not used; only a build the conversation's harness runs takes one",
                 file=sys.stderr,
             )
+    # Before anything is installed: the contract this build starts from may need what the job
+    # doesn't give. A reading made in this build is checked once it is saved.
+    starting = _starting_environment_failure(
+        job,
+        args.output.resolve(),
+        args.seed_contract if args.seed_contract is not None and args.await_harness else None,
+    )
+    if starting is not None:
+        (args.output / SEED_ACCEPTED).unlink(missing_ok=True)
+        write_failure_file(starting, args.output.resolve())
+        print(f"{starting.code}: {starting.message}", file=sys.stderr, flush=True)
+        return EXIT_REFUSED
     broker_socket = initialize_hosted_compose(job, args.source.resolve())
     if broker_socket is not None:
         os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)

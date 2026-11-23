@@ -1682,6 +1682,9 @@ class HostedChatRuntime:
         elif self._idle_turns >= 3:
             return False
         self._idle_turns += 1
+        if exists[0] and not exists[1] and self._environment_refused():
+            # Written for the build, which stops on it; nothing more is built here.
+            return False
         await asyncio.to_thread(self._after_saved)
         if self._opened_with is not None and exists != self._opened_with:
             await self.conversation.close()
@@ -1720,6 +1723,22 @@ class HostedChatRuntime:
             after_contract(self.workspace, self.source, job)
         if has_world and (world_changed or not (self.workspace / "environment-bundle" / "manifest.json").is_file()):
             after_world(self.source if self.source.is_dir() else None, self.workspace, load_contract(self.workspace))
+
+    def _environment_refused(self) -> bool:
+        """Refuse a saved contract whose agent needs an environment the job doesn't give, before
+        its world is built. True once refused: the failure is written for the build."""
+        from .cli import environment_refusal
+        from .job import HarnessJob
+
+        try:
+            job = HarnessJob.model_validate(self.job)
+        except Exception:  # noqa: BLE001 - the build command read the job, and refuses one it can't
+            return False
+        try:
+            return environment_refusal(self.workspace, job) is not None
+        except (OSError, ValueError):
+            # A contract that can't be read is for the steps that read it.
+            return False
 
     def _take_seed(self) -> None:
         """Use the reading the platform handed this build, at the first opening only, and leave

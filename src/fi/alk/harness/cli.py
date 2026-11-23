@@ -34,7 +34,7 @@ from .config import (
     credentials_hint,
     permission_gate,
 )
-from .failure_file import FAILURE_FILE
+from .failure_file import FAILURE_FILE, write_failure_file
 from .run.targets import supported as target_kinds
 from .scenarios import load as load_written
 from .scenarios import open_stage as scenario_stage
@@ -256,6 +256,23 @@ def after_contract(destination: Path, source_path: Path, job: Any) -> None:
         GenericHarnessArtifactStore(destination / "generic-harness").write_source_model(
             source_model
         )
+
+
+def environment_refusal(destination: Path, job: Any) -> str | None:
+    """Refuse a saved contract whose agent needs an environment the job doesn't give it: the
+    failure is written to ``destination``, and its code returned. None when there is nothing to
+    refuse, or no contract yet."""
+    from .browser_environment import environment_failure
+
+    contract = load(destination)
+    if contract is None:
+        return None
+    metadata = getattr(job, "metadata", None) if job is not None else None
+    failure = environment_failure(contract, metadata if isinstance(metadata, dict) else None)
+    if failure is None:
+        return None
+    write_failure_file(failure, destination)
+    return failure.code
 
 
 def source_model_is_stale(destination: Path, source_path: Path) -> bool:
@@ -1369,6 +1386,13 @@ async def _auto(args: argparse.Namespace) -> int:
                         file=sys.stderr,
                     )
                     status = 1
+            if label == "understand" and not status:
+                # The kind is known only now; refused before anything is installed for it.
+                refusal = environment_refusal(destination, job)
+                if refusal is not None:
+                    emit("harness.stage.failed", label, status=EXIT_REFUSED, code=refusal)
+                    _report_failure_file(destination)
+                    return EXIT_REFUSED
             if label == "scenarios" and not status and job.require_tool_workflow:
                 from .contract import AgentContract, validate_tool_workflow
 
