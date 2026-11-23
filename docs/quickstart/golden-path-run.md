@@ -77,6 +77,6 @@ print(result["status"], result["summary"]["case_count"])
 - If `init` reports that files already exist, choose a new empty directory to preserve your work
 - If an import fails, run `agent-learn doctor` to see which module is missing
 
-To replace the scripted reply, [connect your own agent](../simulate/simulate-any-framework.md).
+To try other agents, [run the framework examples](../simulate/simulate-any-framework.md) from a checkout of the ALK repository.
 To change what counts as a passing answer, [write an evaluation](../eval/overview.md).
 For a new environment, [try the order-status plugin](../simulate/environment-authoring.md#register-a-custom-environment).
