@@ -1837,7 +1837,10 @@ def validate_runtime_plan_patch(
     # Revalidate the whole contract so nested updates cannot bypass canonical validators.
     candidate = AgentContract.model_validate(candidate.model_dump(mode="python"))
     if candidate.modality == "chat":
-        if problem := generated_chat_interface_problem(candidate.runtime):
+        from .tools import _build_writes_the_interface
+
+        problem = generated_chat_interface_problem(candidate.runtime)
+        if problem and not _build_writes_the_interface(candidate.runtime, root, recorded):
             raise ValueError(problem)
     return candidate
 
