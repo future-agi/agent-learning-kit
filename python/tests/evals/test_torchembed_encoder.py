@@ -8,7 +8,6 @@ pytest.importorskip("torch", reason="torch not installed")
 from fi.evals.feedback.torchembed_encoder import (
     FeedbackMetadataEncoder,
     is_available,
-    make_enriched_document,
 )
 from fi.evals.feedback.types import FeedbackEntry
 
@@ -66,14 +65,36 @@ def test_encode_batch():
     assert all(len(v) == enc.out_dim for v in vecs)
 
 
-def test_make_enriched_document_contains_meta_marker():
+def test_full_vector_carries_correct_score_and_time():
+    """All 68 coords matter: correct score (32-63) and time (64-67) change the vector."""
     enc = FeedbackMetadataEncoder()
-    vec = enc.encode(make_entry())
-    doc = make_enriched_document("hello world", vec)
-    assert "|meta|" in doc
-    assert "hello world" in doc
+    base = enc.encode(make_entry(0.5, 0.5))
+    other_corr = enc.encode(make_entry(0.5, 0.95))
+    assert base[32:64] != other_corr[32:64]
+    e2 = make_entry(0.5, 0.5)
+    e2.created_at = datetime(2026, 7, 5, 3, 0, tzinfo=timezone.utc)
+    assert base[64:] != enc.encode(e2)[64:]
+    assert any(abs(x) > 1e-3 for x in base[64:])  # time channel not swamped
 
 
-def test_make_enriched_document_no_vector():
-    doc = make_enriched_document("hello world", None)
-    assert doc == "hello world"
+def test_encoder_is_deterministic_across_instances():
+    a = FeedbackMetadataEncoder().encode(make_entry())
+    b = FeedbackMetadataEncoder().encode(make_entry())
+    assert a == b
+
+
+def test_encode_query_unspecified_channels_zero():
+    enc = FeedbackMetadataEncoder()
+    assert enc.encode_query() == [0.0] * enc.out_dim
+    q = enc.encode_query(correct_score=0.9)
+    assert all(v == 0.0 for v in q[:32]) and all(v == 0.0 for v in q[64:])
+    assert any(v != 0.0 for v in q[32:64])
+
+
+def test_blend_embeddings_weights():
+    from fi.evals.feedback.torchembed_encoder import blend_embeddings
+    v = blend_embeddings([3.0, 4.0], [1.0, 0.0], weight=0.25)
+    assert len(v) == 4
+    assert abs(sum(x * x for x in v) - 1.0) < 1e-9
+    zero = blend_embeddings([1.0, 0.0], [0.0, 0.0], weight=0.5)
+    assert abs(sum(x * x for x in zero) - 0.5) < 1e-9

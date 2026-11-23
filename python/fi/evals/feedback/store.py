@@ -4,20 +4,19 @@ Provides abstract FeedbackStore and two implementations:
 - InMemoryFeedbackStore: for testing and small-scale usage
 - ChromaFeedbackStore: for production with semantic vector search
 
-ChromaFeedbackStore optionally integrates torchembed to encode numerical and
-temporal metadata (scores, timestamps) alongside text, improving retrieval
-for cases where score range or recency matters as much as semantic content.
-Install with: pip install ai-evaluation[feedback-torch]
+ChromaFeedbackStore can optionally blend a torchembed-encoded score/time vector
+into the text embedding (``enrich_with_metadata=True``), so retrieval can also
+target a corrected score or time of day. Off by default; torch/torchembed are
+only imported when it is enabled. Install with: pip install ai-evaluation[feedback-torch]
 """
 
 import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional
 
 from .types import FeedbackEntry
-from .torchembed_encoder import FeedbackMetadataEncoder, make_enriched_document
-from .torchembed_encoder import is_available as _torchembed_available
 
 logger = logging.getLogger(__name__)
 
@@ -111,12 +110,15 @@ class ChromaFeedbackStore(FeedbackStore):
     (all-MiniLM-L6-v2 via sentence-transformers) OR via a LiteLLM embedding
     function for API-based embeddings.
 
-    When ``enrich_with_metadata=True`` and torchembed is installed, numerical
-    and temporal fields from each FeedbackEntry (original_score, correct_score,
-    created_at hour/weekday) are encoded with torchembed and appended to the
-    stored document string.  This gives the retrieval index a weak signal over
-    score proximity and recency — useful when surfacing few-shot examples for
-    calibration.
+    When ``enrich_with_metadata=True`` (requires the ``feedback-torch`` extra) the
+    store computes the text embedding itself, concatenates it with a torchembed
+    vector encoding original/corrected score and hour/weekday (see
+    ``torchembed_encoder``), and passes the blend to Chroma via ``embeddings=``.
+    Queries apply the same blend using a target given to ``query_similar``
+    (``correct_score=``, ``created_at=``); without a target, ranking is
+    text-only. Enriched entries live in a separate ``..._meta`` collection
+    because their vectors have a different dimension. Default behaviour
+    (enrichment off) is unchanged.
 
     Args:
         host: ChromaDB server host. None = local persistent mode.
@@ -126,11 +128,15 @@ class ChromaFeedbackStore(FeedbackStore):
         collection_prefix: Prefix for ChromaDB collection names.
         embedding_model: LiteLLM model string for embeddings.
             None = use ChromaDB's default (sentence-transformers).
-        enrich_with_metadata: Append torchembed-encoded score/time vectors to
-            stored documents for richer retrieval. Requires torchembed to be
-            installed; silently disabled when it is not.
-        metadata_weight: Blending weight hint stored alongside the metadata
-            vector (0–1, default 0.3).
+        enrich_with_metadata: Blend torchembed score/time vectors into the
+            embeddings. If requested but torch/torchembed are missing, a warning
+            is logged and the store behaves as if it were off.
+        metadata_weight: Share (0–1, default 0.3) of the similarity that comes
+            from metadata rather than text.
+        text_embedding_fn: Optional ``List[str] -> List[List[float]]`` used for
+            the text embedding (also when enrichment is off). Default: the LiteLLM
+            function if ``embedding_model`` is set, else Chroma's default MiniLM. Mainly for
+            tests / offline use.
     """
 
     def __init__(
@@ -142,6 +148,7 @@ class ChromaFeedbackStore(FeedbackStore):
         embedding_model: Optional[str] = None,
         enrich_with_metadata: bool = False,
         metadata_weight: float = 0.3,
+        text_embedding_fn: Optional[Callable[[List[str]], List[List[float]]]] = None,
     ):
         try:
             import chromadb
@@ -155,18 +162,23 @@ class ChromaFeedbackStore(FeedbackStore):
         self._embedding_model = embedding_model
         self._metadata_weight = metadata_weight
 
-        # torchembed metadata encoder (optional)
-        self._meta_encoder: Optional[FeedbackMetadataEncoder] = None
+        self._text_embedding_fn = text_embedding_fn
+
+        # torchembed metadata encoder (optional, imported lazily)
+        self._meta_encoder: Optional[Any] = None
         if enrich_with_metadata:
-            if _torchembed_available():
-                try:
+            try:
+                from .torchembed_encoder import FeedbackMetadataEncoder, is_available
+
+                if is_available():
                     self._meta_encoder = FeedbackMetadataEncoder()
                     logger.info("torchembed metadata enrichment enabled for ChromaFeedbackStore")
-                except Exception as exc:
-                    logger.warning(f"torchembed encoder init failed, enrichment disabled: {exc}")
-            else:
+                else:
+                    raise ImportError("torch/torchembed not installed")
+            except Exception as exc:
                 logger.warning(
-                    "enrich_with_metadata=True but torchembed is not installed. "
+                    "enrich_with_metadata=True but metadata enrichment is unavailable "
+                    f"({exc}); falling back to text-only retrieval. "
                     "Install with: pip install ai-evaluation[feedback-torch]"
                 )
 
@@ -202,23 +214,39 @@ class ChromaFeedbackStore(FeedbackStore):
     def _get_collection(self, metric_name: str):
         """Get or create a ChromaDB collection for a specific metric."""
         name = f"{self._collection_prefix}_{metric_name}".replace(".", "_")
+        if self._meta_encoder is not None:
+            name += "_meta"  # blended vectors have a different dimension
         kwargs: Dict[str, Any] = {"name": name}
         if self._embedding_fn:
             kwargs["embedding_function"] = self._embedding_fn
         return self._client.get_or_create_collection(**kwargs)
 
+    def _embed_text(self, text: str) -> List[float]:
+        fn = self._text_embedding_fn or self._embedding_fn
+        if fn is None:
+            from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+
+            fn = self._text_embedding_fn = DefaultEmbeddingFunction()
+        return [float(x) for x in fn([text])[0]]
+
     def add(self, entry: FeedbackEntry) -> str:
         collection = self._get_collection(entry.eval_name)
         document = entry.to_embedding_text()
+        extra: Dict[str, Any] = {}
         if self._meta_encoder is not None:
-            try:
-                meta_vec = self._meta_encoder.encode(entry)
-                document = make_enriched_document(document, meta_vec, self._metadata_weight)
-            except Exception as exc:
-                logger.debug(f"Metadata enrichment skipped for entry {entry.id}: {exc}")
+            from .torchembed_encoder import blend_embeddings
+
+            extra["embeddings"] = [blend_embeddings(
+                self._embed_text(document),
+                self._meta_encoder.encode(entry),
+                self._metadata_weight,
+            )]
+        elif self._text_embedding_fn is not None:
+            extra["embeddings"] = [self._embed_text(document)]
         collection.add(
             ids=[entry.id],
             documents=[document],
+            **extra,
             metadatas=[{
                 "metric_name": entry.eval_name,
                 "original_score": entry.original_score or 0.0,
@@ -236,7 +264,17 @@ class ChromaFeedbackStore(FeedbackStore):
         metric_name: str,
         text: str,
         n_results: int = 5,
+        correct_score: Optional[float] = None,
+        created_at: Optional[datetime] = None,
+        original_score: Optional[float] = None,
     ) -> List[FeedbackEntry]:
+        """Return the entries most similar to ``text``.
+
+        With metadata enrichment on, ``correct_score`` / ``original_score`` /
+        ``created_at`` (hour-of-day + weekday) are *targets*: entries whose
+        metadata is close to them are pulled up the ranking (by ``metadata_weight``).
+        Omitted targets are ignored. Ignored entirely when enrichment is off.
+        """
         collection = self._get_collection(metric_name)
 
         if collection.count() == 0:
@@ -244,10 +282,25 @@ class ChromaFeedbackStore(FeedbackStore):
 
         actual_n = min(n_results, collection.count())
 
-        results = collection.query(
-            query_texts=[text],
-            n_results=actual_n,
-        )
+        if self._meta_encoder is not None:
+            from .torchembed_encoder import blend_embeddings
+
+            q = blend_embeddings(
+                self._embed_text(text),
+                self._meta_encoder.encode_query(
+                    correct_score=correct_score,
+                    created_at=created_at,
+                    original_score=original_score,
+                ),
+                self._metadata_weight,
+            )
+            results = collection.query(query_embeddings=[q], n_results=actual_n)
+        elif self._text_embedding_fn is not None:
+            results = collection.query(
+                query_embeddings=[self._embed_text(text)], n_results=actual_n
+            )
+        else:
+            results = collection.query(query_texts=[text], n_results=actual_n)
 
         entries = []
         for i, meta in enumerate(results["metadatas"][0]):
