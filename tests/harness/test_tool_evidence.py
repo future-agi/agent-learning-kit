@@ -445,3 +445,62 @@ def test_a_google_adk_reply_streamed_in_parts_reads_as_one_record_per_call(tmp_p
     assert all(call.result is not None for call in now)
     # Each record carries the call id the agent gave.
     assert all(call.runtime_ids.get("call_id") for call in now)
+
+
+
+# -- the agent's call id decides a pair ---------------------------------------------------------------------------
+
+_ID_SPAN = {"name": "look_up_order", "output": "", "source": "otel", "agent_key": "Support", "event_id": "e1",
+            "at": 1.0}
+
+
+def test_a_span_and_the_agents_account_with_one_call_id_are_one_call_however_the_arguments_are_shaped(
+    tmp_path, monkeypatch
+) -> None:
+    # The span wrapped the value the agent gave; by its arguments alone it is not the agent's call.
+    observed = [_told(call_id="c1")]
+    lines = [{**_ID_SPAN, "arguments": "{\"order_id\": {\"id\": \"A1001\"}}", "call_id": "c1"}]
+
+    before, now = _chat_readings(tmp_path, monkeypatch, observed, lines)
+
+    assert len(before) == 2
+    assert [(call.source, call.seen_by, call.arguments, call.runtime_ids) for call in now] == [
+        (AGENT, [SPAN], {"order_id": "A1001"}, {"call_id": "c1", "event_id": "e1"})
+    ]
+
+
+def test_the_call_id_picks_the_agents_account_a_span_is_whatever_the_order(tmp_path, monkeypatch) -> None:
+    observed = [_told(call_id="c1"), _told(call_id="c2")]
+    lines = [
+        {**_ID_SPAN, "arguments": "{\"order_id\": \"A1001\"}", "call_id": "c2"},
+        {**_ID_SPAN, "arguments": "{\"order_id\": \"A1001\"}", "call_id": "c1", "event_id": "e2", "at": 2.0},
+    ]
+
+    _before, now = _chat_readings(tmp_path, monkeypatch, observed, lines)
+
+    assert sorted((call.runtime_ids["call_id"], call.runtime_ids.get("event_id")) for call in now) == [
+        ("c1", "e2"), ("c2", "e1")
+    ]
+
+
+def test_a_span_and_the_agents_account_with_different_call_ids_are_never_one_call(tmp_path, monkeypatch) -> None:
+    # Alike in all else: without the ids, the span would be the agent's call.
+    observed = [_told(call_id="c1")]
+    lines = [{**_ID_SPAN, "arguments": "{\"order_id\": \"A1001\"}", "call_id": "c2"}]
+
+    before, now = _chat_readings(tmp_path, monkeypatch, observed, lines)
+
+    assert len(before) == 1
+    assert sorted((call.source, call.seen_by, call.runtime_ids.get("call_id")) for call in now) == [
+        (AGENT, [], "c1"), (SPAN, [], "c2")
+    ]
+
+
+def test_without_a_call_id_on_the_span_the_agents_account_pairs_as_before(tmp_path, monkeypatch) -> None:
+    observed = [_told(call_id="c1")]
+    lines = [{**_ID_SPAN, "arguments": "{\"order_id\": \"A1001\"}"}]
+
+    before, now = _chat_readings(tmp_path, monkeypatch, observed, lines)
+
+    assert _unnamed(now) == _unnamed(before)
+    assert [(call.source, call.seen_by) for call in now] == [(AGENT, [SPAN])]

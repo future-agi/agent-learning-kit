@@ -2189,6 +2189,11 @@ def _call_id(call: Call) -> str:
     return call.runtime_ids.get("call_id") or call.runtime_ids.get("tool_call_id") or ""
 
 
+def _agents_call_id(call: Call) -> str:
+    """The call id on the agent's own account of a call; empty for any other record."""
+    return _call_id(call) if call.source == evidence.AGENT else ""
+
+
 # Said when the agent's trace holds identical untimed lines with no call id: one call written twice or two calls.
 CALLS_MAYBE_REPEATED = "calls_maybe_repeated"
 
@@ -2332,12 +2337,30 @@ def _pair_tool(
     free = [
         call for call in natives if call.runtime_ids.get("event_id") not in span_ids
     ]
+    # The agent's own account and a span that both carry the agent's call id: the id decides, whatever the arguments
+    # look like. Equal ids are one call; unequal ids are never paired (``fit``). Without an id on either side, pairing
+    # is as before.
+    by_call_id: dict[str, Call] = {}
+    for call in free:
+        if _agents_call_id(call):
+            by_call_id.setdefault(_agents_call_id(call), call)
+    unpaired: list[Call] = []
+    for span in rest:
+        own = by_call_id.pop(_call_id(span), None) if _call_id(span) else None
+        if own is None:
+            unpaired.append(span)
+        else:
+            _lend_span(span, own)
+            free = [call for call in free if call is not own]
+    rest = unpaired
     values = {id(call): _argument_values(call) for call in [*rest, *free]}
 
     def fit(span: Call, call: Call) -> tuple[bool, bool] | None:
         """How strongly a span claims a call: matching arguments, then outcome; None when anything both recorded
         differs."""
         if _recorded_differently(span, call):
+            return None
+        if _call_id(span) and _agents_call_id(call) and _call_id(span) != _agents_call_id(call):
             return None
         mine, theirs = values[id(span)], values[id(call)]
         shared = (
