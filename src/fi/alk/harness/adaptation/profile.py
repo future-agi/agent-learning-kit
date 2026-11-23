@@ -321,9 +321,11 @@ def seal_binding(
     mapping: Mapping[str, Any] | None,
     *,
     environment_root: Any,
+    environment_tools: Sequence[ToolDefinition] | None = None,
 ) -> Any:
     return seal_agent_binding(
         binding_fields(profile, mode, mapping),
         environment_root=environment_root,
         agent_tools=[one.name for one in profile.admitted],
+        environment_tools=environment_tools,
     )

@@ -242,7 +242,10 @@ def prove_binding(
     with PostgresProof(
         suite_root, environment_root, suite.policy_profile, postgres_dsn
     ) as proof:
-        check_tool_routed(binding, proof.environment_tools)
+        # A binding may map the agent onto an attached server's tool, as a run serves it.
+        check_tool_routed(
+            binding, [*proof.environment_tools, *proof.attached_definitions()]
+        )
         changing = {tool.name for tool in proof.environment_tools if tool.mutates_state}
         mapped = [
             entry for entry in binding.tools if isinstance(entry, MappedToolBinding)

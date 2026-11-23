@@ -26,6 +26,7 @@ from ..releases import (
     ScenarioOrigin,
     load_environment_release,
     load_policy,
+    load_servers,
     load_suite_release,
     load_tools,
     seal_suite_release,
@@ -165,7 +166,11 @@ class Workbench:
         }
         if self.mode is not BindingMode.TOOL_ROUTED:
             self.binding = seal_binding(
-                profile, self.mode, None, environment_root=self.target_root
+                profile,
+                self.mode,
+                None,
+                environment_root=self.target_root,
+                environment_tools=self.environment_tools,
             )
             if self.mode is BindingMode.CANONICAL:
                 admitted = {one.name for one in profile.admitted}
@@ -224,9 +229,32 @@ class Workbench:
         self.releases = [{"digest": one.digest, "name": one.name} for one in releases]
         self.target_root = self.environments[-1]
         self.target_digest = releases[-1].digest
-        self.environment_tools = load_tools(self.target_root)
+        self.environment_tools = [
+            *load_tools(self.target_root),
+            *self._attached_tools(),
+        ]
         self.policy = load_policy(self.target_root)
         self.catalogue = load_catalogue(self.suite_root)
+
+    def _attached_tools(self) -> list[Any]:
+        """The attached servers' tools as a world offers them, `<id>__<tool>` with the schema the
+        server itself lists: the agent may be mapped onto them as onto the release's own."""
+        if not load_servers(self.target_root):
+            return []
+        from ..releases import PostgresProof
+
+        try:
+            with PostgresProof(
+                self.suite_root,
+                self.target_root,
+                self.base_suite.policy_profile,
+                self.postgres_dsn,
+            ) as proof:
+                return proof.attached_definitions()
+        except Exception as exc:  # a server that will not start fails the job
+            raise AdaptationFailure(
+                "release_invalid", f"attached servers: {type(exc).__name__}: {exc}"
+            ) from exc
 
     def _suite_for_target(self) -> tuple[Path, Any, bool]:
         """The base suite on the target environment: as it is, or (on an extension) the same
@@ -360,6 +388,7 @@ class Workbench:
                 BindingMode.TOOL_ROUTED,
                 draft.mapping,
                 environment_root=self.target_root,
+                environment_tools=self.environment_tools,
             )
         except ReleaseError as exc:
             return False, "\n".join(exc.detail.splitlines() or [exc.code])

@@ -1803,13 +1803,16 @@ def seal_agent_binding(
     *,
     environment_root: str | Path,
     agent_tools: Sequence[str] = (),
+    environment_tools: Sequence[ToolDefinition] | None = None,
 ) -> AgentBindingV1:
     """Seal a binding after checking it against the release it targets.
 
     `agent_tools` are the tool names the agent version declares. A canonical agent calls the
     environment's tools by their own names and is served all of them, so its tools must be
     exactly the environment's, attached servers' included. A `tool_routed` binding is checked
-    statically (§2.4.2); every reason is listed.
+    statically (§2.4.2); every reason is listed. `environment_tools` are what it is checked
+    against when the caller has read the attached servers' tools from the servers themselves; by
+    default the release's own tools.
     """
     environment = load_environment_release(environment_root)
     binding = _validated(
@@ -1836,7 +1839,12 @@ def seal_agent_binding(
                 f"a canonical agent has every environment tool; this one lacks {', '.join(missing)}",
             )
     if binding.mode is BindingMode.TOOL_ROUTED:
-        check_tool_routed(binding, load_tools(Path(environment_root)))
+        check_tool_routed(
+            binding,
+            load_tools(Path(environment_root))
+            if environment_tools is None
+            else environment_tools,
+        )
     return _sealed(binding)  # type: ignore[return-value]
 
 
