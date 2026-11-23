@@ -469,10 +469,9 @@ def _observing(framework: str, state: str) -> None:
     if not path:
         return
     try:
-        import json
-
+        # A module name and a fixed state hold nothing JSON escapes, so the hook needs no `json`.
         with open(path + _OBSERVING, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"framework": framework, "state": state}) + "\n")
+            handle.write('{"framework": "%s", "state": "%s"}\n' % (framework, state))
     except Exception:
         pass
 
