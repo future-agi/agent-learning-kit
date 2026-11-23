@@ -5128,6 +5128,10 @@ def test_source_transport_reseals_generated_scenarios_in_current_archive(
     ]
     for native in natives:
         write_folder(native, Catalogue(), authoring)
+        (authoring / "scenarios" / native.name / "setup.py").unlink()
+        (authoring / "scenarios" / native.name / "ready.py").unlink()
+    pin_body = json.dumps(pin, sort_keys=True, separators=(",", ":"))
+    (authoring / "reviewed-source.json").write_text(pin_body, encoding="utf-8")
     native = natives[0]
     archive = _workspace_archive(authoring)
 
@@ -5155,6 +5159,15 @@ def test_source_transport_reseals_generated_scenarios_in_current_archive(
         scenario = json.load(
             contents.extractfile(f"environment-bundle/scenarios/{native.name}/scenario.json")
         )
+        assert contents.extractfile(
+            f"environment-bundle/scenarios/{native.name}/setup.py"
+        ).read().startswith(b"def setup(world):")
+        assert contents.extractfile(
+            f"environment-bundle/scenarios/{native.name}/ready.py"
+        ).read().startswith(b"def ready(world):")
+        assert contents.extractfile(
+            "environment-bundle/reviewed-source.json"
+        ).read() == pin_body.encode()
         archived_bodies = [
             contents.extractfile(member).read()
             for member in contents.getmembers()
@@ -5162,6 +5175,11 @@ def test_source_transport_reseals_generated_scenarios_in_current_archive(
         ]
     assert manifest["digest"] == result["bundle_digest"]
     assert scenario["fixture"]["reviewed_source"] == native.fixture["reviewed_source"]
+    with tarfile.open(fileobj=io.BytesIO(sealed), mode="r:gz") as contents:
+        assert contents.extractfile("reviewed-source.json").read() == pin_body.encode()
+        future_save = tmp_path / "future-save"
+        contents.extractall(future_save)
+    assert reseal_scenarios(future_save) == result["bundle_digest"]
     with tarfile.open(fileobj=io.BytesIO(sealed), mode="r:gz") as contents:
         inherited_after = {
             name.removeprefix("environment-bundle/scenarios/one/"): contents.extractfile(
@@ -5258,6 +5276,12 @@ def test_source_transport_reseals_generated_scenarios_in_current_archive(
     scenario_path.write_text(json.dumps(unrelated_document), encoding="utf-8")
     unrelated = reseal(snapshot, _workspace_archive(authoring))
     assert unrelated["error"]["code"] == "source_suite_invalid"
+    write_folder(native, Catalogue(), authoring)
+
+    setup_path = authoring / "scenarios" / native.name / "setup.py"
+    setup_path.write_text("def setup(world):\n    world.delete_everything()\n")
+    tampered_script = reseal(snapshot, _workspace_archive(authoring))
+    assert tampered_script["error"]["code"] == "source_suite_invalid"
     write_folder(native, Catalogue(), authoring)
 
     manifest_path = bundle / "manifest.json"

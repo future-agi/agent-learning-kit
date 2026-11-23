@@ -121,6 +121,18 @@ def document_for(scenario: Scenario) -> dict:
     return body
 
 
+def setup_document(scenario: Scenario) -> str:
+    return scenario.setup_code or (
+        'def setup(world):\n    """This scenario runs on the base world unchanged."""\n'
+    )
+
+
+def ready_document(scenario: Scenario) -> str:
+    return scenario.ready_code or (
+        'def ready(world):\n    """Nothing beyond the base world is presumed."""\n'
+    )
+
+
 def check_file(sub_goal: SubGoal) -> str:
     """What `checks/<name>.py` holds for a deterministic sub-goal."""
     return sub_goal.check.rstrip() + "\n" + _RUNNABLE
@@ -136,16 +148,8 @@ def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) ->
         json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
-    (root / "setup.py").write_text(
-        scenario.setup_code
-        or 'def setup(world):\n    """This scenario runs on the base world unchanged."""\n',
-        encoding="utf-8",
-    )
-    (root / "ready.py").write_text(
-        scenario.ready_code
-        or 'def ready(world):\n    """Nothing beyond the base world is presumed."""\n',
-        encoding="utf-8",
-    )
+    (root / "setup.py").write_text(setup_document(scenario), encoding="utf-8")
+    (root / "ready.py").write_text(ready_document(scenario), encoding="utf-8")
 
     for name in scenario.sub_goals:
         sub_goal = catalogue.named(name)

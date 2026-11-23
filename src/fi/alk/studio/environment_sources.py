@@ -338,7 +338,12 @@ def _same_inherited_scenario(
 def _reseal_scenarios(request: ResealScenariosRequest) -> dict[str, Any]:
     from fi.alk.harness.bundle_author_v2 import reseal_scenarios
     from fi.alk.harness.bundle_v2 import load_bundle_v2, seal_bundle_v2
-    from fi.alk.harness.folder import document_for, read_all
+    from fi.alk.harness.folder import (
+        document_for,
+        read_all,
+        ready_document,
+        setup_document,
+    )
     from fi.alk.harness.hosted_conversation import _workspace_archive
     from fi.alk.harness.reviewed_build import load_review_pin
     from fi.alk.harness.source_grounding import semantic_source_digest
@@ -382,7 +387,9 @@ def _reseal_scenarios(request: ResealScenariosRequest) -> dict[str, Any]:
                         "The reviewed build pin does not match the snapshot",
                     )
             else:
-                (authoring / "reviewed-source.json").unlink(missing_ok=True)
+                (authoring / "reviewed-source.json").write_text(
+                    _canonical_json(pin), encoding="utf-8"
+                )
 
             scenarios = read_all(authoring)
             by_key = {scenario.scenario_key: scenario for scenario in scenarios}
@@ -467,10 +474,27 @@ def _reseal_scenarios(request: ResealScenariosRequest) -> dict[str, Any]:
                     for path in folder.rglob("*")
                     if path.is_file()
                 }
-                if files != {"scenario.json", "setup.py", "ready.py"}:
+                complete_files = {"scenario.json", "setup.py", "ready.py"}
+                if request.mode == "reviewed_build":
+                    valid_files = files == complete_files
+                else:
+                    valid_files = files in ({"scenario.json"}, complete_files)
+                if not valid_files:
                     raise EnvironmentInputError(
                         "source_suite_invalid",
                         "Generated source scenarios contain unexpected files",
+                    )
+                expected_scripts = {
+                    "setup.py": setup_document(native).encode(),
+                    "ready.py": ready_document(native).encode(),
+                }
+                if files == complete_files and any(
+                    (folder / name).read_bytes() != body
+                    for name, body in expected_scripts.items()
+                ):
+                    raise EnvironmentInputError(
+                        "source_suite_invalid",
+                        "A generated source scenario script was changed",
                     )
                 if document_for(scenario) != document or semantic_source_digest(
                     case, scenario
@@ -479,6 +503,9 @@ def _reseal_scenarios(request: ResealScenariosRequest) -> dict[str, Any]:
                         "source_suite_invalid",
                         "A generated source scenario was changed",
                     )
+                if files == {"scenario.json"}:
+                    for name, body in expected_scripts.items():
+                        (folder / name).write_bytes(body)
             held = _bundle_files(bundle)
             inherited_files = (
                 {

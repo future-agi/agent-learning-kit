@@ -4593,7 +4593,10 @@ def reseal_scenarios(
             if key not in {"sealed_from", "contract_compiled"}
         }
         if reviewed_source_pin is not None:
-            (staging / PIN_FILE).unlink(missing_ok=True)
+            (staging / PIN_FILE).write_text(
+                json.dumps(reviewed_source_pin, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
             metadata["reviewed_source"] = reviewed_source_pin
         if compiled and _carries_world(authoring_root, staging):
             # Unstamped, the platform never replays this bundle for an edit.
