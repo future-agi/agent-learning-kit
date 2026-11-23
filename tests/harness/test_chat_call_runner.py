@@ -582,7 +582,7 @@ def test_hosted_chat_reads_spans_switched_on_for_a_callback_agent_only_into_an_e
     that does not pair (another argument). Where the build switched the spans on with the empty-list rule, the span
     adds no call; without the marker it reads as before, and the span is a second call."""
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     trace = tmp_path / "agent-tool-calls.jsonl"
 
