@@ -14,6 +14,7 @@ from urllib.parse import urlencode, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .backends.files import PRIVATE_SOURCE_FILES
 from .outbound import RequestsTransport, Transport, TransportError
 
 CONVERSATION_SCHEMA_VERSION = "futureagi.harness-conversation.v1"
@@ -434,7 +435,7 @@ def _pack(workspace: Path) -> bytes:
             for path in sorted(root.rglob("*")):
                 relative = path.relative_to(root)
                 if not relative.parts or any(
-                    part in {"__pycache__", "outbound-spool", "telemetry"}
+                    part in {"__pycache__", "outbound-spool", "telemetry", *PRIVATE_SOURCE_FILES}
                     for part in relative.parts
                 ):
                     continue

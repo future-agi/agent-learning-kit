@@ -1929,6 +1929,34 @@ def test_bundle_limits_authoring_scenarios_to_requested_count(tmp_path: Path) ->
     assert [path.name for path in (output / "scenarios").iterdir()] == ["one"]
 
 
+def test_reviewed_source_pin_is_hashed_into_bundle_and_reseal(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    output = authoring / "environment-bundle"
+    job = _job(connector="http")
+    snapshot = authoring / "reviewed-source.json"
+    results = []
+    for character in ("a", "b"):
+        pin = {
+            "id": "source_snapshot_" + character * 16,
+            "digest": "sha256:" + character * 64,
+            "schema_digest": "sha256:" + "c" * 64,
+        }
+        snapshot.write_text(json.dumps(pin))
+        bundle = author_bundle_v2(source=source, job=job, authoring=authoring, output=output)
+        assert load_bundle_v2(output).metadata["reviewed_source"] == pin
+        assert json.loads((output / snapshot.name).read_bytes()) == pin
+        assert any(item.path == snapshot.name for item in bundle.files)
+        results.append((bundle.digest, sealed_from(authoring)))
+
+    assert all(left != right for left, right in zip(*results, strict=True))
+    snapshot.unlink()
+    with pytest.raises(BundleAuthorError, match="source_snapshot_changed"):
+        reseal_scenarios(authoring)
+
+
 def test_bundle_preserves_sqlite_scalar_types_and_boolean_values(
     tmp_path: Path,
 ) -> None:

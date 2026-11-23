@@ -14,7 +14,7 @@ import json
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .backends import (
     ASK_TOOL,
@@ -40,6 +40,9 @@ from .scenario_tools import (
 from .scenarios import writer_worker
 from .session import Stage
 from .tools import schema
+
+if TYPE_CHECKING:
+    from .reviewed_build import ReviewedBuild
 
 BUILDER = "builder"
 BIND_AGENT = "bind-agent"
@@ -675,6 +678,7 @@ def open_for_building(
     platform: ToolServer | None = None,
     ask: Callable[..., Any] | None = None,
     hosted_prompt: str = "",
+    reviewed: ReviewedBuild | None = None,
 ) -> Stage:
     """The same harness before its environment has a contract or a world: it has the tools for
     what can be done next, and gains the rest when it is opened again after saving."""
@@ -699,6 +703,8 @@ def open_for_building(
     }
     if platform is not None:
         servers[platform.name] = platform
+    if reviewed is not None:
+        servers.update(reviewed.tool_servers())
     spec = SessionSpec(
         system_prompt=(
             load_skill(BUILDER)
@@ -709,6 +715,7 @@ def open_for_building(
             + work.spec.system_prompt
             + f"\n\nThe environment is being built in {out}."
             + hosted_prompt
+            + (reviewed.brief() if reviewed is not None else "")
         ),
         servers=servers,
         builtins=tuple(dict.fromkeys((*work.spec.builtins, *FILE_TOOLS, ASK_TOOL))),
@@ -805,6 +812,7 @@ def open_builder(
     without: frozenset[str] = frozenset(),
     skill: str = BUILDER,
     postgres_proof: Callable[[Any, Any], str] | None = None,
+    reviewed: ReviewedBuild | None = None,
 ) -> Stage:
     """The one session that owns an environment once it has a world: every tool, every skill.
     ``sealed`` is False while the environment is still being built and has no sealed bundle yet.
@@ -816,11 +824,12 @@ def open_builder(
         contract,
         out,
         out,
-        wanted=max(len(existing), 1),
-        can_grow=True,
+        wanted=len(reviewed.cases) if reviewed is not None else max(len(existing), 1),
+        can_grow=reviewed is None,
         scenario_problem=scenario_problem,
         catalogue=catalogue,
         postgres_proof=postgres_proof,
+        reviewed=reviewed,
     )
     servers: dict[str, ToolServer] = {
         SCENARIO_SERVER: server,
@@ -831,6 +840,8 @@ def open_builder(
     }
     if platform is not None:
         servers[platform.name] = platform
+    if reviewed is not None:
+        servers.update(reviewed.tool_servers())
     servers.update(more_servers or {})
     if without:
         servers = {
@@ -872,10 +883,11 @@ def open_builder(
             + (f"\n\n{brief}" if brief else "")
             + health_note
             + hosted_prompt
+            + (reviewed.brief() if reviewed is not None else "")
         ),
         servers=servers,
         builtins=(*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL),
-        workers=writer_worker(contract, out, server, BUILDER_TURNS),
+        workers=writer_worker(contract, out, server, BUILDER_TURNS, reviewed=reviewed),
         cwd=str(out),
         max_turns=BUILDER_TURNS,
         model=chosen_model(),

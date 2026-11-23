@@ -29,6 +29,8 @@ from .backends import (
 from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
 from .failure_file import FAILURE_FILE
 from .job import publish_actors_switch
+from .releases import ReleaseError
+from .reviewed_build import PIN_FILE, ReviewedBuild, prepare_reviewed_build
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 from .chat_policy import EffectiveChatPolicy, apply_chat_policy, load_chat_policy
 from .hosted_conversation import (
@@ -145,6 +147,7 @@ _PUBLISHED_PARTS = (
     "contract.json",
     "simulator_prompt.md",
     "world.sqlite",
+    PIN_FILE,
     # A composition's agent trajectories: proof inputs saved with its suite.
     "trajectories.json",
 )
@@ -644,6 +647,7 @@ class BuilderConversation:
 
 
 class HostedChatRuntime:
+    reviewed: ReviewedBuild | None = None
     # Whether this process's first opening has decided on the seed, and what it decided.
     _seed_taken = False
     _seed_outcome: tuple[str, list[str]] | None = None
@@ -656,12 +660,17 @@ class HostedChatRuntime:
         workspace: Path,
         source: Path,
         job: dict[str, Any],
+        reviewed_snapshot: Path | None = None,
+        job_path: Path | None = None,
     ) -> None:
         self.client = client
         self.policy = policy
         self.workspace = workspace
         self.source = source
-        self.job = job
+        self.job, self.reviewed = prepare_reviewed_build(
+            job, workspace=workspace, source=source, snapshot=reviewed_snapshot, job_path=job_path,
+        )
+        job = self.job
         # A builder chat is always a hosted job: with no switch in it, actors are off.
         publish_actors_switch(job.get("metadata") if isinstance(job, dict) else None, hosted=True)
         from .scenario import used_keys
@@ -731,6 +740,8 @@ class HostedChatRuntime:
         self._asking = False
         self.conversation = self._conversation()
         if isinstance(self.conversation, BuilderConversation):
+            if self.reviewed is not None:
+                self.reviewed.persist_pin(workspace)
             # What the sandbox started from is what the environment holds, unless an earlier
             # sandbox of this conversation already recorded otherwise.
             self._published_fingerprint()
@@ -979,6 +990,7 @@ class HostedChatRuntime:
             if world
             else self._cast_servers(contract),
             catalogue=catalogue,
+            reviewed=self.reviewed,
         )
         if self._nudge is not None:
             self._nudge_tools(stage, catalogue)
@@ -1070,6 +1082,7 @@ class HostedChatRuntime:
             platform=self._builder_platform_server(),
             ask=self._ask,
             hosted_prompt=self._hosted_prompt(),
+            reviewed=self.reviewed,
         )
 
     def _provider_profile(self, job: Any) -> dict[str, Any] | None:
@@ -1464,6 +1477,11 @@ class HostedChatRuntime:
                     f"{len(kept)} scenarios are saved but the build asked for {asked}; drop the "
                     "extra ones, keeping the spread, then finish"
                 ]
+            if not missing and self.reviewed is not None:
+                try:
+                    self.reviewed.check_complete(kept, self.workspace)
+                except ReleaseError as exc:
+                    missing = [str(exc)]
             if missing:
                 return text("Not finished:\n- " + "\n- ".join(missing[:60]), error=True)
             # The bundle is sealed from the world as it is now, after every change made during the build.
@@ -1472,13 +1490,17 @@ class HostedChatRuntime:
                 json.dumps({"scenarios": len(kept), "asked": asked, "note": str(args.get("note") or "")}),
                 encoding="utf-8",
             )
+            if self.reviewed is not None:
+                return text(f"Finished: {len(kept)} grounded scenarios. They are ready to be sealed.")
             return text(
                 f"Finished: {len(kept)} scenarios (the build asked for {asked}). It is now being "
                 "validated against the running agent and sealed; the environment opens when that "
                 "is done, and this conversation carries on there."
             )
 
-        tools = [find_scenarios, save_changes, read_runs, run_scenarios, remember]
+        tools = [find_scenarios, save_changes, read_runs, remember]
+        if self.reviewed is None or not self._control_only():
+            tools.insert(3, run_scenarios)
         if self._control_only():
             tools.append(finish_build)
         return tool_server(name="platform", version="0.1.0", tools=tools)
@@ -3040,6 +3062,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--capabilities", type=Path, required=True)
     parser.add_argument("--policy", type=Path, required=True)
+    parser.add_argument("--reviewed-snapshot", type=Path)
     return parser
 
 
@@ -3053,6 +3076,8 @@ async def _run(args: argparse.Namespace) -> None:
         workspace=args.workspace,
         source=args.source,
         job=job,
+        reviewed_snapshot=getattr(args, "reviewed_snapshot", None),
+        job_path=args.job,
     )
     loop = asyncio.get_running_loop()
     for name in ("SIGTERM", "SIGINT"):
@@ -3069,7 +3094,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         asyncio.run(_run(args))
-    except (ConversationTransportError, ValueError, OSError) as exc:
+    except (ConversationTransportError, ReleaseError, ValueError, OSError) as exc:
         print(f"hosted conversation stopped: {type(exc).__name__}: {exc}")
         return 1
     return 0

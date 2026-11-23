@@ -27,6 +27,7 @@ from .build import open_stage as build_stage
 from .build import opening as build_opening
 from .build import require_buildable
 from .agent_type_check import EXIT_REFUSED, failure_message
+from .releases import ReleaseError
 from .chat import open_conversation
 from .config import (
     artifact_dir,
@@ -436,6 +437,9 @@ async def _build(args: argparse.Namespace) -> int:
         external_runtime=external_runtime,
         native_runtime=native_runtime,
     )
+    if reviewed := getattr(args, "reviewed", None):
+        stage.spec.servers.update(reviewed.tool_servers())
+        stage.spec.system_prompt += reviewed.brief()
     deferred_runtime = bool(getattr(args, "skip_source_provision", False))
     await _converse(
         stage,
@@ -583,6 +587,7 @@ async def _scenarios(args: argparse.Namespace) -> int:
     # change one scenario is not asking for a different number of them.
     existing = len(load_written(destination))
     wanted = args.count or existing or 10
+    reviewed = getattr(args, "reviewed", None)
 
     # The guest-booking POC policy is supplied only through the platform-owned simulator
     # secret channel and is gated against the exact submitted phone target. Keep it in the model's
@@ -633,13 +638,25 @@ async def _scenarios(args: argparse.Namespace) -> int:
         ask=permission_gate(_ask_operator) if args.interactive else None,
         authoring_guidance=poc_guidance,
         job=policy_job,
+        reviewed=reviewed,
     )
+
+    def complete() -> bool:
+        written = load_written(destination)
+        if reviewed is None:
+            return bool(written)
+        try:
+            reviewed.check_complete(written, destination)
+        except ReleaseError:
+            return False
+        return True
+
     await _converse(
         stage,
         scenario_opening(contract, wanted, existing)
         + _guidance(argparse.Namespace(guidance=guidance)),
         interactive=args.interactive,
-        until=lambda: bool(load_written(destination)),
+        until=complete,
         nudge=(
             "Nothing was saved: you finished without calling save_scenarios. Submit anything "
             "still unsubmitted, then call save_scenarios."
@@ -650,6 +667,8 @@ async def _scenarios(args: argparse.Namespace) -> int:
     if not written:
         print("\nNo scenarios were saved.", file=sys.stderr)
         return 1
+    if reviewed is not None:
+        reviewed.check_complete(written, destination)
     print(f"\nscenarios: {len(written)} in {destination / 'scenarios.json'}")
     print(f"spent:     ${stage.spent_usd:.4f}")
     return 0
@@ -1019,6 +1038,9 @@ async def _auto(args: argparse.Namespace) -> int:
     if destination.is_dir() and any(not item.name.startswith(".") for item in destination.iterdir()):
         raise FileExistsError(f"authoring destination is not empty: {destination}")
     destination.mkdir(parents=True, exist_ok=True)
+    reviewed = getattr(args, "reviewed", None)
+    if reviewed is not None:
+        reviewed.persist_pin(destination)
     from fi.simulate.runtime.events import CanonicalEvent
 
     from .events import BufferedEventSink, EventOutbox
@@ -1137,7 +1159,7 @@ async def _auto(args: argparse.Namespace) -> int:
             ]
         )
     )
-    authoring_only = bool(getattr(args, "authoring_only", False))
+    authoring_only = reviewed is not None or bool(getattr(args, "authoring_only", False))
     readiness = getattr(args, "runtime_readiness", None)
 
     async def check_runtime_readiness(stage_args):
@@ -1199,6 +1221,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 # HTTP tools in place. Their real execution is observed during calls; no local
                 # source entrypoint exists or is required.
                 external_runtime=authoring_only and args.kind == "provider",
+                reviewed=reviewed,
             ),
         ),
         (
@@ -1211,6 +1234,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 interactive=False,
                 guidance=list(base_guidance),
                 job=job,
+                reviewed=reviewed,
             ),
         ),
     ]

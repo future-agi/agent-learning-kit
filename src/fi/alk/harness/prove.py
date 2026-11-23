@@ -38,7 +38,7 @@ from .actors import load_actors
 from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
-from .scenario import Scenario
+from .scenario import SOURCE_FIXTURE, Scenario
 from .world.runtime import Call, GeneratedWorld
 from .world.snapshot import read_manifest, restore
 
@@ -48,6 +48,7 @@ class Proof:
     """Whether a scenario holds up, and what happened when it was tried."""
 
     deferred: bool = False
+    reviewed_source_digest: str = ""
     ready: bool = False
     solvable: bool = False
     vacuous: bool = True
@@ -796,7 +797,10 @@ def prove(
     proved in full by the PostgreSQL proof, which runs those tools. With `state_changing`, a
     fourth gate grades the untouched world against the solution's calls, those tools' calls
     still successful: each check that held with the solution must then fail."""
-    proof = Proof()
+    case = scenario.fixture.get(SOURCE_FIXTURE)
+    proof = Proof(
+        reviewed_source_digest=str(case.get("proof_digest") or "") if isinstance(case, dict) else "",
+    )
     checks = _checks_for(scenario, catalogue)
     if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
         proof.deferred = True

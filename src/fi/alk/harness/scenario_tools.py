@@ -18,7 +18,7 @@ import re
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from fi.simulate.simulation.call_actors import (
     EVALUATED_BY,
@@ -73,6 +73,7 @@ from .folder import (
 )
 from .checks import reference_of, run_check
 from .proofs import record_proof, record_unprovable
+from .releases import ReleaseError
 from .prove import (
     executes,
     native_runtime,
@@ -116,6 +117,9 @@ from .simulator import load_simulator_prompt
 from .tools import brief, schema
 from .world_door import ToolCall, call_effect, route_action
 from .world.snapshot import read_manifest, restore
+
+if TYPE_CHECKING:
+    from .reviewed_build import ReviewedBuild
 
 logger = logging.getLogger(__name__)
 
@@ -1700,6 +1704,7 @@ def accept_scenario(
     service_tools: set[str] | None = None,
     read_tools: set[str] | None = None,
     attached: frozenset[str] = frozenset(),
+    case_key: bool = False,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -1833,6 +1838,10 @@ def accept_scenario(
     keys = {one.scenario_key for one in kept} | (used or set())
     if previous is not None:
         scenario.scenario_key = previous.scenario_key
+    elif case_key and proof is not None:
+        scenario.scenario_key = unused_key(
+            "reviewed-" + proof.reviewed_source_digest.removeprefix("sha256:")[:24], keys,
+        )
     else:
         scenario.scenario_key = unused_key(
             _slug(scenario.name) if named else scenario.scenario_key, keys
@@ -2061,6 +2070,7 @@ def scenario_tools(
     scenario_problem: Callable[[dict[str, Any]], str] | None = None,
     catalogue: Catalogue | None = None,
     postgres_proof: Callable[[Scenario, Catalogue], str] | None = None,
+    reviewed: ReviewedBuild | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
 
@@ -2690,6 +2700,11 @@ def scenario_tools(
                 return _refuse("Not kept. " + " ".join(unwritable))
             # The actors write their pre-run conversations now, once, so every trial replays the same thread.
             args = await written(dict(args), world_root)
+        if reviewed is not None:
+            try:
+                args = reviewed.bind(args, kept)
+            except ReleaseError as exc:
+                return _refuse(str(exc))
 
         # A submission carrying a kept scenario's key replaces that one, under its new name if renamed,
         # so the checks below never count it against itself.
@@ -2772,6 +2787,12 @@ def scenario_tools(
                 )
         if said := await _attached_unproved(args, attached, catalogue, postgres_proof):
             return _refuse(said)
+        if reviewed is not None:
+            # An attached proof may yield to another writer. Recheck before saving.
+            try:
+                args = reviewed.bind(args, kept)
+            except ReleaseError as exc:
+                return _refuse(str(exc))
         result = accept_scenario(
             args,
             world_root=world_root,
@@ -2793,6 +2814,7 @@ def scenario_tools(
             service_tools=_service_tools(contract),
             read_tools=_read_tools(contract),
             attached=attached,
+            case_key=reviewed is not None,
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0

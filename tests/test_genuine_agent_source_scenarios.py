@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from fi.alk.studio import (
     PolicyRuleReview,
     RecordRelationship,
     RecordReview,
+    SimulationSchemaRepair,
     SourceRecordReference,
     compile_environment_inputs,
     generate_source_scenarios,
@@ -34,7 +36,7 @@ AGENTS = (
 )
 
 
-def _reviewed_order_knowledge():
+def _reviewed_order_knowledge(eta: str = "Tuesday", *, infer_schema: bool = False):
     sources = (
         EnvironmentSource(
             source_id="public-policy",
@@ -63,7 +65,9 @@ def _reviewed_order_knowledge():
             source_id="orders",
             filename="orders.json",
             media_type="application/json",
-            content=b'[{"order_id":"4821","buyer_id":"C17","status":"shipped","eta":"Tuesday"}]',
+            content=json.dumps(
+                [{"order_id": "4821", "buyer_id": "C17", "status": "shipped", "eta": eta}]
+            ).encode(),
             role="seed_records",
         ),
     )
@@ -76,7 +80,13 @@ def _reviewed_order_knowledge():
             DestinationField("eta", "string"),
         )
     )
-    draft = prepare_environment_inputs(sources, destination_schema=schema)
+    if infer_schema:
+        sources = (sources[0], sources[1], sources[3])
+    draft = prepare_environment_inputs(
+        sources, destination_schema=None if infer_schema else schema,
+        schema_repairs=(SimulationSchemaRepair("orders", identity_fields=("order_id",)),)
+        if infer_schema else (),
+    )
     public_policy = next(
         source
         for source in draft.sources
@@ -100,6 +110,11 @@ def _reviewed_order_knowledge():
     review = EnvironmentInputReview(
         expected_draft_digest=draft.draft_digest,
         record_reviews=(
+            RecordReview(
+                "orders", "agent_visible", "synthetic_replace",
+                tuple(item.mapping for item in draft.proposals.field_mappings),
+            ),
+        ) if infer_schema else (
             RecordReview(
                 "customers",
                 "agent_visible",
@@ -148,7 +163,7 @@ def _reviewed_order_knowledge():
                 ),
             ),
         ),
-        relationships=(
+        relationships=() if infer_schema else (
             RecordRelationship("orders", "customer_id", "customers", "customer_id"),
         ),
     )

@@ -34,8 +34,10 @@ SCHEMA = DestinationSchema(
 )
 
 
-def _approve(sources, audiences, *, relationships=()):
-    draft = prepare_environment_inputs(sources, destination_schema=SCHEMA)
+def _approve(sources, audiences, *, relationships=(), infer_schema=False):
+    draft = prepare_environment_inputs(
+        sources, destination_schema=None if infer_schema else SCHEMA
+    )
     records, policies, references = [], [], []
     for source in draft.sources:
         source_id = source.pin.source_id
@@ -58,6 +60,9 @@ def _approve(sources, audiences, *, relationships=()):
             )
         else:
             mappings = tuple(
+                item.mapping for item in draft.proposals.field_mappings
+                if item.source_id == source_id
+            ) if infer_schema else tuple(
                 FieldMapping(
                     field.source_field,
                     field.source_field,

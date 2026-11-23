@@ -31,6 +31,9 @@ from .failure_file import FAILURE_FILE, write_failure_file
 from .job import (
     PROVIDER_MANAGED_CONNECTORS as PROVIDER_MANAGED_CONNECTORS,
     HarnessJob,
+    HarnessFailure,
+    FailureDomain,
+    HarnessStage,
     ProviderExecutionMode,
     ExecutionMode,
     SourceKind,
@@ -39,6 +42,8 @@ from .job import (
 )
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
+from .releases import ReleaseError
+from .reviewed_build import prepare_reviewed_build
 from .scenarios import load as load_written
 from .source_folder import non_github_folder_failure, refuse_unusable_folder, saved_runtime
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
@@ -646,11 +651,26 @@ def _review_while_writing(job: HarnessJob, source: Path, output: Path, done: thr
             return
 
 
+def _refuse_reviewed(output: Path, error: ReleaseError) -> int:
+    write_failure_file(
+        HarnessFailure(
+            domain=FailureDomain.ENVIRONMENT,
+            stage=HarnessStage.GENERATING_SCENARIOS,
+            code=error.code,
+            message=error.detail,
+        ),
+        output,
+    )
+    print(str(error), file=sys.stderr, flush=True)
+    return EXIT_REFUSED
+
+
 def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("job", type=Path)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--reviewed-snapshot", type=Path)
     parser.add_argument(
         "--adjustments",
         type=Path,
@@ -749,6 +769,13 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
 
     raw_job = json.loads(args.job.read_text(encoding="utf-8"))
     try:
+        raw_job, reviewed = prepare_reviewed_build(
+            raw_job, workspace=args.output, source=args.source,
+            snapshot=args.reviewed_snapshot, job_path=args.job,
+        )
+    except ReleaseError as exc:
+        return _refuse_reviewed(args.output, exc)
+    try:
         job = HarnessJob.model_validate(raw_job)
     except ValidationError as error:
         failure = non_github_folder_failure(error, raw_job)
@@ -809,10 +836,11 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
             else None
         ),
         authoring_only=True,
-        runtime_readiness=runtime_readiness if validate_runtime else None,
+        runtime_readiness=runtime_readiness if validate_runtime and reviewed is None else None,
         run_model=None,
         job=job,
         provider_profile=profile if source_free_provider else None,
+        reviewed=reviewed,
     )
     previous_profile_path = os.environ.get(PROVIDER_IMPORT_PROFILE_PATH_ENV)
     with tempfile.TemporaryDirectory(prefix="alk-provider-profile-") as temporary:
@@ -827,6 +855,7 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         if (
             args.await_harness
             and validate_runtime
+            and reviewed is None
             and job.metadata.get("generic_harness_v1") is True
             and not source_free_provider
             and job.source.kind is not SourceKind.PROVIDER
@@ -845,11 +874,15 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
                     if args.await_harness
                     else asyncio.run(_auto(namespace))
                 )
+                if status == 0 and reviewed is not None:
+                    reviewed.check_complete(load_written(args.output), args.output)
+            except ReleaseError as exc:
+                return _refuse_reviewed(args.output, exc)
             finally:
                 early.set()
                 if reviewer is not None:
                     reviewer.join()
-            if status == 0 and validate_runtime:
+            if status == 0 and validate_runtime and reviewed is None:
                 from .authoring_runtime_validation import validate_and_repair
 
                 _persist_authored_scenario_count(args.job, job, args.output.resolve())
@@ -869,7 +902,8 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
             else:
                 os.environ[PROVIDER_IMPORT_PROFILE_PATH_ENV] = previous_profile_path
     if status == 0:
-        _persist_authored_scenario_count(args.job, job, args.output.resolve())
+        if reviewed is None:
+            _persist_authored_scenario_count(args.job, job, args.output.resolve())
         if profile is not None:
             (args.output.resolve() / "provider-import-profile.json").write_text(
                 json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8"

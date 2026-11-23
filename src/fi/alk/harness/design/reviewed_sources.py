@@ -25,12 +25,12 @@ from fi.alk.studio._environment_input_snapshots import (
 from ..backends import ToolServer, tool, tool_server
 from ..folder import read_all
 from ..releases import ReleaseError
+from ..scenario import SOURCE_FIXTURE
 from ..tools import schema
 from .workspace import Design, DocumentRecord, ReviewedSourcePin
 
 EVIDENCE = "reviewed-source-evidence.json"
 REVIEW_REQUIRED = "Approve the environment documents before building this design."
-SOURCE_FIXTURE = "reviewed_source"
 _CATEGORY_PURPOSES = {
     "success": "Test a compliant outcome.",
     "refusal": "Test refusal of a disallowed action.",
@@ -114,10 +114,10 @@ def _validate_receipt(
         )
     try:
         receipt = _Receipt.model_validate(value)
-    except ValidationError as exc:
+    except ValidationError:
         raise ReleaseError(
             "source_review_receipt_invalid", "The source review receipt is invalid."
-        ) from exc
+        ) from None
     expected = {
         binding.source_id: (
             binding.source_sha256,
@@ -134,13 +134,18 @@ def _validate_receipt(
         )
         for source in reviewed.sources
     }
-    uploads = {
+    upload_bindings = [
         (
             binding.origin.document_id,
             binding.origin.original_sha256.removeprefix("sha256:"),
         )
         for binding in receipt.bindings
         if isinstance(binding.origin, _UploadOrigin)
+    ]
+    knowledge_base_files = {
+        (binding.origin.kb_id, binding.origin.file_id)
+        for binding in receipt.bindings
+        if isinstance(binding.origin, _KnowledgeBaseOrigin)
     }
     if (
         receipt.snapshot_id != reviewed.snapshot_id
@@ -148,72 +153,36 @@ def _validate_receipt(
         or expected != actual
         or len(expected) != len(receipt.bindings)
         or len(actual) != len(reviewed.sources)
-        or uploads != {(doc.id, doc.sha256) for doc in documents}
-        or len(uploads) != len(documents)
+        or set(upload_bindings) != {(doc.id, doc.sha256) for doc in documents}
+        or len({doc.id for doc in documents}) != len(documents)
+        or len(upload_bindings) != len(documents)
+        or len(knowledge_base_files) + len(upload_bindings) != len(receipt.bindings)
     ):
         raise ReleaseError(
             "source_review_receipt_mismatch",
-            "The approved source review does not match this design's sources.",
+            "The approved source review does not match the selected sources.",
         )
 
 
-def bind_reviewed_sources(
-    workspace: Path, design: Design, path: Path | None, receipt: object | None
-) -> Design:
-    if path is None:
-        if design.reviewed_source is not None or receipt is not None:
-            raise ReleaseError(
-                "source_snapshot_required",
-                "Supply the private approved source snapshot for this launch.",
-            )
-        return design
-    if path.resolve().is_relative_to(workspace.resolve()):
-        raise ReleaseError(
-            "source_snapshot_invalid",
-            "Keep the private snapshot outside the design workspace.",
-        )
+def read_reviewed_snapshot(path: Path) -> ReviewedEnvironmentInputs:
     try:
         with path.open("rb") as source:
-            reviewed = deserialize_environment_snapshot(
-                source.read(MAX_SNAPSHOT_BYTES + 1)
-            )
-        pinned = design.reviewed_source
-        if pinned is not None and (
-            pinned.id != reviewed.snapshot_id
-            or pinned.digest != reviewed.snapshot_digest
-        ):
-            raise ReleaseError(
-                "source_snapshot_changed",
-                "The resumed design has a different approved snapshot.",
-            )
-        if design.reviewed_source is None and (
-            design.provenance or (design.documents and design.stage != "interview")
-        ):
-            raise ReleaseError(
-                "source_snapshot_changed",
-                "Start a new design to replace unreviewed source changes.",
-            )
-        _validate_receipt(receipt, reviewed, design.documents)
-        compiled = compile_environment_inputs(reviewed)
-        generated = generate_source_scenarios(
-            reviewed,
-            environment_requirements=EnvironmentRequirements(
-                task=design.requirements.strip() or f"Design {design.name}",
-            ),
-            requested_count=design.scenario_count,
-        )
-    except OSError as exc:
-        raise ReleaseError(
-            "source_snapshot_invalid", "Cannot read the approved source snapshot."
-        ) from exc
-    except EnvironmentInputError as exc:
-        raise ReleaseError(exc.code, str(exc)) from exc
+            return deserialize_environment_snapshot(source.read(MAX_SNAPSHOT_BYTES + 1))
+    except OSError:
+        raise ReleaseError("source_snapshot_invalid", "Cannot read the approved source snapshot.") from None
 
+
+def project_evidence(
+    reviewed: ReviewedEnvironmentInputs, *, task: str, count: int
+) -> dict[str, Any]:
+    compiled = compile_environment_inputs(reviewed)
+    generated = generate_source_scenarios(
+        reviewed, environment_requirements=EnvironmentRequirements(task=task), requested_count=count,
+    )
     blocked = sum(draft.status == "blocked" for draft in generated.drafts)
     if blocked:
         raise ReleaseError(
-            "source_scenarios_blocked",
-            f"{blocked} source scenarios are blocked by validation.",
+            "source_scenarios_blocked", f"{blocked} source scenarios are blocked by validation."
         )
     evidence: dict[str, Any] = {"documents": [], "records": [], "cases": []}
     for environment in compiled.agent_environments:
@@ -232,6 +201,54 @@ def bind_reviewed_sources(
                 "citations": persona["citations"],
             }
         )
+    return evidence
+
+
+def bind_reviewed_sources(
+    workspace: Path, design: Design, path: Path | None, receipt: object | None
+) -> Design:
+    if path is None:
+        if design.reviewed_source is not None or receipt is not None:
+            raise ReleaseError(
+                "source_snapshot_required",
+                "Supply the private approved source snapshot for this launch.",
+            )
+        return design
+    if path.resolve().is_relative_to(workspace.resolve()):
+        raise ReleaseError(
+            "source_snapshot_invalid",
+            "Keep the private snapshot outside the design workspace.",
+        )
+    try:
+        reviewed = read_reviewed_snapshot(path)
+        pinned = design.reviewed_source
+        if pinned is not None and (
+            pinned.id != reviewed.snapshot_id
+            or pinned.digest != reviewed.snapshot_digest
+        ):
+            raise ReleaseError(
+                "source_snapshot_changed",
+                "The resumed design has a different approved snapshot.",
+            )
+        if design.reviewed_source is None and (
+            design.provenance or (design.documents and design.stage != "interview")
+        ):
+            raise ReleaseError(
+                "source_snapshot_changed",
+                "Start a new design to replace unreviewed source changes.",
+            )
+        _validate_receipt(receipt, reviewed, design.documents)
+        evidence = project_evidence(
+            reviewed, task=design.requirements.strip() or f"Design {design.name}",
+            count=design.scenario_count,
+        )
+    except OSError as exc:
+        raise ReleaseError(
+            "source_snapshot_invalid", "Cannot read the approved source snapshot."
+        ) from exc
+    except EnvironmentInputError as exc:
+        raise ReleaseError(exc.code, str(exc)) from exc
+
     target = workspace / EVIDENCE
     body = json.dumps(evidence, ensure_ascii=False, sort_keys=True).encode()
     pin = ReviewedSourcePin(

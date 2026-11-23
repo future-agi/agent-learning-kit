@@ -103,6 +103,7 @@ from .process_preflight import preflight_bundle
 from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
 from .provider_import import ProviderImportSpec
+from .reviewed_build import PIN_FILE, load_review_pin
 from .world.tools import _binding
 
 
@@ -4022,7 +4023,8 @@ def author_bundle_v2(
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
     output_root.parent.mkdir(parents=True, exist_ok=True)
-    if include_scenarios and job.metadata.get("generic_harness_v1") is True:
+    reviewed_source = load_review_pin(authoring_root)
+    if include_scenarios and reviewed_source is None and job.metadata.get("generic_harness_v1") is True:
         certified = _reuse_certified_bundle(
             source=source_root,
             job=job,
@@ -4264,6 +4266,12 @@ def author_bundle_v2(
         adopted_chat_files = _copy_chat_authoring(
             authoring_root, temporary, include_simulator=include_scenarios
         )
+        if reviewed_source is not None:
+            (temporary / PIN_FILE).write_text(
+                json.dumps(reviewed_source, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            adopted_chat_files.append(PIN_FILE)
         if "contract.json" in adopted_chat_files and contract_body:
             (temporary / "contract.json").write_text(
                 json.dumps(contract_body, indent=2, sort_keys=True) + "\n",
@@ -4461,6 +4469,7 @@ def author_bundle_v2(
                 ),
                 **_adk_web_app(source_root, contract_body),
                 **({"generic_harness": "v1"} if generic_pipeline else {}),
+                **({"reviewed_source": reviewed_source} if reviewed_source is not None else {}),
                 **(
                     {
                         "provider_connect_only": {
@@ -4557,6 +4566,9 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
     if not (bundle / BUNDLE_V2_MANIFEST).is_file():
         return None
     manifest = load_bundle_v2(bundle)
+    reviewed_source = load_review_pin(authoring_root)
+    if reviewed_source != (manifest.metadata or {}).get("reviewed_source"):
+        raise BundleAuthorError("source_snapshot_changed: the approved source pin changed")
     count = sum(1 for path in (authoring_root / "scenarios").iterdir() if path.is_dir())
     staging = Path(tempfile.mkdtemp(prefix=".environment-bundle.", dir=authoring_root))
     try:
@@ -4803,7 +4815,7 @@ def _carry_contract(
 
 
 # What a reseal carries from the authoring folders into the bundle.
-RESEAL_INPUTS = ("contract.json", CATALOGUE, "world.sqlite")
+RESEAL_INPUTS = ("contract.json", CATALOGUE, "world.sqlite", PIN_FILE)
 
 
 def sealed_from(authoring: Path) -> str:

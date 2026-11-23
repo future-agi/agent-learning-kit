@@ -51,6 +51,7 @@ def record_proof(destination: Path, scenario_key: str, proof: Proof) -> None:
         "not_vacuous": not proof.vacuous,
         "why": "" if proof.holds else proof.why(),
         "proved_at": _now(),
+        **({"reviewed_source_digest": proof.reviewed_source_digest} if proof.reviewed_source_digest else {}),
         **({"trial": proof.trial} if proof.trial else {}),
     }
     _save(destination, proofs)
