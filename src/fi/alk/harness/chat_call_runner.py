@@ -47,6 +47,7 @@ from .usage import (
     simulator_funding,
 )
 from .handler_child import ChildWorld, HandlerChannel, HandlerChild, start_handler_child
+from . import tool_evidence as evidence
 from .world.runtime import Call, GeneratedWorld, graded_calls, trace_row
 from .world.stores.postgres import AttachedPostgresStore
 from .world_door import world_action
@@ -700,12 +701,13 @@ def _record_completed_tool_call(
     arguments: Mapping[str, Any],
     response: Mapping[str, Any],
 ) -> None:
-    """Record a tool the submitted callback already executed.
+    """Record a tool the submitted agent says it already ran: the agent's own account of the call.
 
-    Callback-backed agents can return the request and its completed response together. Replaying
-    that request through the generated world both risks repeating a side effect and incorrectly
-    turns a real success into ``no such tool`` when no mock handler was authored. The callback's
-    response is the authoritative execution evidence at this seam.
+    Callback-backed agents can return the request and its completed response together. Such a call
+    is never replayed through the generated world: that would risk repeating a side effect, and
+    would turn a real success into ``no such tool`` when no mock handler was authored. It is kept
+    in the world's list, tagged as the agent's own account (tool_evidence.py), since the world did
+    not serve it and the kit did not see it run.
     """
     error_value = response.get("error")
     error = str(error_value) if error_value not in (None, "") else ""
@@ -725,6 +727,7 @@ def _record_completed_tool_call(
             refused=refused,
             error=error,
             at=time.time(),
+            source=evidence.AGENT,
         )
     )
 
