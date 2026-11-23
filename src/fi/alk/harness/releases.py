@@ -1807,8 +1807,9 @@ def seal_agent_binding(
     """Seal a binding after checking it against the release it targets.
 
     `agent_tools` are the tool names the agent version declares. A canonical agent calls the
-    environment's tools by their own names, so every one of them must exist there. A
-    `tool_routed` binding is checked statically (§2.4.2); every reason is listed.
+    environment's tools by their own names and is served all of them, so its tools must be
+    exactly the environment's, attached servers' included. A `tool_routed` binding is checked
+    statically (§2.4.2); every reason is listed.
     """
     environment = load_environment_release(environment_root)
     binding = _validated(
@@ -1822,9 +1823,18 @@ def seal_agent_binding(
         "binding_invalid",
     )
     if binding.mode is BindingMode.CANONICAL:
-        known = {tool.name for tool in load_tools(Path(environment_root))}
+        known = {
+            tool.name for tool in load_tools(Path(environment_root))
+        } | attached_tool_names(Path(environment_root))
         if unknown := sorted(set(agent_tools) - known):
             raise ReleaseError("binding_tool_unknown", ", ".join(unknown))
+        # A canonical binding serves every environment tool: an agent declaring fewer would be
+        # granted the rest. It is bound tool_routed, onto its own tools only.
+        if missing := sorted(known - set(agent_tools)):
+            raise ReleaseError(
+                "binding_tools_differ",
+                f"a canonical agent has every environment tool; this one lacks {', '.join(missing)}",
+            )
     if binding.mode is BindingMode.TOOL_ROUTED:
         check_tool_routed(binding, load_tools(Path(environment_root)))
     return _sealed(binding)  # type: ignore[return-value]

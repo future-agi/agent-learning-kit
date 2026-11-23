@@ -6,8 +6,8 @@ by the builder; a vertical with a hundred scenarios cannot wait for that. Where 
 inverts one environment operation (one step, each argument renamed from one of the agent's,
 perhaps converted, mapped or aliased, the rest fixed) the agent's call is determined by the
 reference step, so code writes it. What the inversion cannot settle (an entry of several steps, a
-joined or split value, a conversion with many preimages, an argument the entry never sends) is
-left to the builder, with the reason; a scenario whose reference uses a tool no entry reaches
+joined or split value, a conversion with many preimages, an argument the entry never sends, a call
+the agent's own schema refuses) is left to the builder, with the reason; a scenario whose reference uses a tool no entry reaches
 needs no trajectory, because the proof reports it unscorable.
 """
 
@@ -18,7 +18,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from .bindings import CONVERSIONS, MappedToolBinding, Value
+from .bindings import CONVERSIONS, MappedToolBinding, Value, agent_call_problems
 from .releases import AgentBindingV1, BindingMode, ToolDefinition
 
 _PLAIN_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -153,6 +153,14 @@ def _invert(
         raise _Undecided(
             f"the agent's {entry.agent_tool} requires {', '.join(unmet)}, which no "
             "environment argument determines"
+        )
+    # The inverse of a conversion is a value the environment accepts, not necessarily one the
+    # agent can send (`lower` takes back `checking`, the agent's enum has only `CHECKING`).
+    if problems := agent_call_problems(
+        list(agent_tools.values()), entry.agent_tool, produced
+    ):
+        raise _Undecided(
+            f"the agent's {entry.agent_tool} schema refuses the call: {'; '.join(problems)}"
         )
     return produced
 

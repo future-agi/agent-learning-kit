@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from ..binding_trajectories import derive_trajectories
+from ..bindings import agent_call_problems
 from ..catalogue import load_catalogue
 from ..folder import read_folder
 from ..releases import (
@@ -34,6 +35,7 @@ from .profile import (
     AgentProfile,
     argument_mismatches,
     build_profile,
+    identity_mapping,
     seal_binding,
     select_mode,
 )
@@ -193,6 +195,15 @@ class Workbench:
                     for entry in self.base_suite.scenarios
                 ]
         self._restore()
+        # An agent with some of the environment's tools, each called as-is, needs no mapping
+        # written: its own tools onto themselves, so only those are served.
+        self.identity = (
+            identity_mapping(profile, self.environment_tools)
+            if self.mode is BindingMode.TOOL_ROUTED
+            else None
+        )
+        if self.identity is not None and self.draft is None:
+            self.submit_binding({"binding": self.identity})
 
     # --- releases -------------------------------------------------------------------------
 
@@ -315,6 +326,12 @@ class Workbench:
                 )
             )
         }
+        if self.identity is not None:
+            lines.append(
+                "\nThe agent's tools are some of the environment's, each called as-is: the "
+                "harness submitted the binding that maps each onto itself, so the agent is served "
+                "its own tools and no others. Resubmit only to change it; run_proof next."
+            )
         if mismatched:
             lines.append(
                 "\nSAME NAME, DIFFERENT ARGUMENTS (these need a mapping like any other tool):\n"
@@ -376,6 +393,15 @@ class Workbench:
                     problems.append(
                         f"trajectory {key} call {index} must be "
                         f"{{tool: one of {agent_tools}, arguments: object}}"
+                    )
+                # A call the agent's own schema refuses is not one it can make, so it proves
+                # nothing about the agent.
+                elif refused := agent_call_problems(
+                    binding.agent_tools, call["tool"], call["arguments"]
+                ):
+                    problems.append(
+                        f"trajectory {key} call {index}: the agent's {call['tool']} schema "
+                        f"refuses it: {'; '.join(refused)}"
                     )
         problems.extend(
             f"extension candidate {one['agent_tool']}: not an admitted agent tool"

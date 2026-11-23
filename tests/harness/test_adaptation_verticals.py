@@ -244,3 +244,112 @@ def test_an_explicit_agent_id_is_the_one_compose_finds(tmp_path):
         output=tmp_path / "bundle",
     )
     assert bundle.metadata["release"]["binding"] == binding.digest
+
+
+@needs_releases
+def test_a_call_the_agents_schema_refuses_proves_nothing(tmp_path):
+    """CardGuard's policy tool takes its topics in capitals and the binding lowers them for the
+    bank. A trajectory that sends the bank's own spelling is not a call CardGuard can make: it is
+    not derived, and the proof does not pass the scenario on it; the capitalized call proves it."""
+    from fi.alk.harness.adaptation.profile import profile_from_file, seal_binding
+    from fi.alk.harness.binding_proof import prove_binding
+    from fi.alk.harness.binding_trajectories import derive_trajectories
+    from fi.alk.harness.folder import read_folder
+    from fi.alk.harness.releases import BindingMode, load_suite_release, load_tools
+
+    release = Path(RELEASES) / "banking"
+    environment = release / "environment"
+    suite = load_suite_release(release / "suite")
+    scenarios = [
+        (entry.key, read_folder(release / "suite", Path(entry.path).name).solution)
+        for entry in suite.scenarios
+    ]
+
+    def bound(capitals: bool):
+        profile, mapping = fixtures.declared_agent(
+            environment,
+            name="CardGuard",
+            instructions=fixtures.CARDGUARD_INSTRUCTIONS,
+            renames=fixtures.CARDGUARD_RENAMES,
+        )
+        if capitals:
+            tool = next(one for one in profile["tools"] if one["name"] == "policy")
+            topic = tool["parameters"]["properties"]["topic"]
+            topic["enum"] = [value.upper() for value in topic["enum"]]
+            entry = next(
+                one for one in mapping["tools"] if one["agent_tool"] == "policy"
+            )
+            entry["steps"][0]["arguments"]["policy_type"]["convert"] = "lower"
+        return seal_binding(
+            profile_from_file(profile),
+            BindingMode.TOOL_ROUTED,
+            mapping,
+            environment_root=environment,
+        )
+
+    binding = bound(capitals=True)
+    derived = derive_trajectories(binding, scenarios, load_tools(environment))
+    key = next(
+        key for key, why in sorted(derived.undecided.items()) if "schema refuses" in why
+    )
+    # The bank's spelling, as a derivation that ignored the agent's schema wrote it.
+    lowered = derive_trajectories(
+        bound(capitals=False), scenarios, load_tools(environment)
+    ).trajectories[key]
+    capitalized = [
+        {
+            **call,
+            "arguments": {
+                name: value.upper() if name == "topic" else value
+                for name, value in call["arguments"].items()
+            },
+        }
+        for call in lowered
+    ]
+    assert any(call["tool"] == "policy" for call in lowered)
+    for calls, status in ((lowered, "failed"), (capitalized, "proved")):
+        proof = prove_binding(
+            environment, release / "suite", binding, {key: calls}, postgres_dsn=DSN
+        )
+        assert proof.scenarios[key].status == status, proof.scenarios[key]
+        if status == "failed":
+            assert "cannot make" in proof.scenarios[key].reason
+
+
+@needs_releases
+def test_an_agent_with_some_of_the_banks_own_tools_is_served_only_those(tmp_path):
+    """An agent that calls the bank's tools by their own names but lacks three of them is not
+    canonical: the harness binds it onto its own tools, the world serves only those, and the
+    proof holds every scenario it can reach."""
+    from fi.alk.harness.adaptation.profile import profile_from_file
+    from fi.alk.harness.adaptation.workbench import Workbench
+    from fi.alk.harness.releases import BindingMode, load_tools
+    from fi.alk.harness.world_tools import WorldTools
+
+    release = Path(RELEASES) / "banking"
+    environment = release / "environment"
+    lacking = {"update_contact_details", "withdraw_dispute", "create_handoff"}
+    own = {
+        tool.name: (tool.name, {})
+        for tool in load_tools(environment)
+        if tool.name not in lacking
+    }
+    profile, _mapping = fixtures.declared_agent(
+        environment, name="Teller", instructions="Help.", renames=own
+    )
+    workbench = Workbench(
+        environments=[environment],
+        suite_root=release / "suite",
+        output=tmp_path / "out",
+        postgres_dsn=DSN,
+        profile=profile_from_file(profile),
+    )
+    assert workbench.mode is BindingMode.TOOL_ROUTED
+    assert workbench.draft is not None
+    served = WorldTools({}, load_tools(environment), "postgresql://unused/world")
+    served.binding = workbench.binding
+    assert {tool.name for tool in served.tools()} == set(own)
+    passed, said = workbench.run_proof()
+    assert passed, said
+    statuses = {verdict.status for verdict in workbench.verdicts.values()}
+    assert statuses <= {"proved", "unscorable"} and "proved" in statuses

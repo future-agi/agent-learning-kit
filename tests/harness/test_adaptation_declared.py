@@ -3,6 +3,10 @@ trajectories; the world's MCP endpoint serves its own tool names; a `both` goal 
 
 from __future__ import annotations
 
+import json
+import os
+import uuid
+
 import pytest
 
 from fi.alk.harness.adaptation.declared import (
@@ -12,6 +16,7 @@ from fi.alk.harness.adaptation.declared import (
 )
 from fi.alk.harness.adaptation.errors import AdaptationFailure
 from fi.alk.harness.adaptation.profile import (
+    identity_mapping,
     profile_from_file,
     profile_from_job,
     select_mode,
@@ -21,6 +26,7 @@ from fi.alk.harness.adaptation.workbench import (
     profile_from_document,
 )
 from fi.alk.harness.binding_trajectories import derive_trajectories
+from fi.alk.harness.bindings import agent_call_problems, run_bound_call
 from fi.alk.harness.catalogue import Catalogue, SubGoal
 from fi.alk.harness.releases import AgentBindingV1, BindingMode, ToolDefinition
 from fi.alk.harness.run.grade import _claims
@@ -117,17 +123,42 @@ def test_a_declared_agent_is_adapted_like_an_inspected_one():
     assert select_mode(profile, [BOOK, SEND]) is BindingMode.TOOL_ROUTED
 
 
-def test_a_declared_agent_with_the_environments_own_tools_is_canonical():
-    profile = profile_from_file(
-        _declared(
-            _tool(
-                "book_appointment",
-                BOOK.parameters["properties"],
-                BOOK.parameters["required"],
-            )
-        )
+def _as_declared(tool: ToolDefinition) -> dict:
+    return _tool(
+        tool.name, tool.parameters["properties"], tool.parameters.get("required") or []
     )
+
+
+def test_a_declared_agent_with_the_environments_own_tools_is_canonical():
+    profile = profile_from_file(_declared(_as_declared(BOOK), _as_declared(SEND)))
     assert select_mode(profile, [BOOK, SEND]) is BindingMode.CANONICAL
+
+
+def test_a_declared_agent_with_fewer_tools_is_routed_onto_its_own():
+    """A canonical binding serves every environment tool; an agent declaring only some of them,
+    each as-is, is bound onto exactly those, so the rest are never its to call."""
+    profile = profile_from_file(_declared(_as_declared(BOOK)))
+    assert select_mode(profile, [BOOK, SEND]) is BindingMode.TOOL_ROUTED
+    assert identity_mapping(profile, [BOOK, SEND]) == {
+        "tools": [
+            {
+                "agent_tool": "book_appointment",
+                "steps": [
+                    {
+                        "id": "call",
+                        "tool": "book_appointment",
+                        "arguments": {
+                            name: {"arg": name}
+                            for name in ("patient_id", "slot_id", "reason")
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    # One that calls a tool differently needs its mapping written.
+    renamed = profile_from_file(_declared(SCHEDULE))
+    assert identity_mapping(renamed, [BOOK, SEND]) is None
 
 
 def test_a_changed_declaration_is_another_agent():
@@ -502,6 +533,99 @@ def test_a_fixed_value_the_reference_also_passes_needs_no_agent_argument():
     )
 
 
+BALANCE = ToolDefinition(
+    name="get_balance",
+    description="An account's balance.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "account_type": {"type": "string", "enum": ["checking", "savings"]}
+        },
+        "required": ["account_type"],
+    },
+    mutates_state=False,
+)
+# The customer's tool takes only CHECKING; the binding lowers it for the environment.
+CHECKING_ONLY = _binding(
+    {
+        "agent_tool": "balance",
+        "steps": [
+            {
+                "id": "read",
+                "tool": "get_balance",
+                "arguments": {"account_type": {"arg": "account", "convert": "lower"}},
+            }
+        ],
+    },
+    agent_tools=[
+        _tool(
+            "balance",
+            {"account": {"type": "string", "enum": ["CHECKING"]}},
+            ["account"],
+        )
+    ],
+)
+
+
+def test_a_derived_call_the_agents_schema_refuses_goes_back_to_the_builder():
+    """`lower` takes `checking` back to itself, and the environment has `savings` too; neither is
+    a call this agent can make, so neither is derived."""
+    derived = derive_trajectories(
+        CHECKING_ONLY,
+        [
+            (
+                "checking",
+                [Step(tool="get_balance", arguments={"account_type": "checking"})],
+            ),
+            (
+                "savings",
+                [Step(tool="get_balance", arguments={"account_type": "savings"})],
+            ),
+        ],
+        [BALANCE],
+    )
+    assert derived.trajectories == {}
+    assert set(derived.undecided) == {"checking", "savings"}
+    assert all("schema refuses" in reason for reason in derived.undecided.values())
+
+
+def test_a_bound_call_the_agents_schema_refuses_is_invalid_and_runs_nothing():
+    ran = []
+
+    def run(tool, arguments):
+        ran.append((tool, arguments))
+        return {"balance": 10}
+
+    for account in ("checking", "savings"):
+        outcome = run_bound_call(
+            CHECKING_ONLY,
+            "balance",
+            {"account": account},
+            run_operation=run,
+            environment_tools=[BALANCE],
+        )
+        assert outcome.status == "invalid" and "account" in outcome.error
+    assert ran == []
+    outcome = run_bound_call(
+        CHECKING_ONLY,
+        "balance",
+        {"account": "CHECKING"},
+        run_operation=run,
+        environment_tools=[BALANCE],
+    )
+    assert outcome.status == "ok"
+    assert ran == [("get_balance", {"account_type": "checking"})]
+
+
+def test_a_null_optional_argument_is_one_left_out():
+    """The binding never sends a null on, so an agent that writes one for an optional argument
+    made the call without it; a null where the agent's schema requires a value is refused."""
+    tools = CLINIC_BINDING.agent_tools
+    call = {"patient_number": "P-1", "opening": "S-1", "reason_for_visit": None}
+    assert agent_call_problems(tools, "schedule_visit", call) == []
+    assert agent_call_problems(tools, "schedule_visit", {**call, "opening": None})
+
+
 def test_a_draft_may_leave_the_trajectories_to_the_harness():
     draft = parse_binding_draft({"binding": {"tools": []}})
     assert draft.trajectories == {}
@@ -557,6 +681,153 @@ def test_the_world_lists_the_agents_own_tools_under_a_routed_binding():
     assert [tool.name for tool in canonical.tools()] == [
         "book_appointment",
         "send_intake_forms",
+    ]
+
+
+PG = os.environ.get("ALK_TEST_POSTGRES_URL", "")
+_HANDLERS = {
+    "book_appointment": (
+        "def handle(args, db):\n"
+        "    aid = 'A-' + args['slot_id']\n"
+        "    db.execute('INSERT INTO appointments VALUES (?, ?)', [aid, args['patient_id']])\n"
+        "    return {'appointment_id': aid, 'internal_note': 'double-booked last week'}\n"
+    ),
+    "send_intake_forms": (
+        "def handle(args, db):\n"
+        "    db.execute('INSERT INTO forms VALUES (?)', [args['patient_id']])\n"
+        "    return {'sent': True}\n"
+    ),
+}
+
+
+@pytest.fixture()
+def world_url():
+    """A world database with the clinic's two tables and the trace, on ALK_TEST_POSTGRES_URL."""
+    if not PG:
+        pytest.skip("ALK_TEST_POSTGRES_URL is not set")
+    import psycopg
+    from psycopg import conninfo
+
+    name = f"alk_declared_{uuid.uuid4().hex[:10]}"
+    with psycopg.connect(PG, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{name}"')
+    url = conninfo.make_conninfo(PG, dbname=name)
+    with psycopg.connect(url, autocommit=True) as connection:
+        connection.execute(
+            "CREATE TABLE appointments (appointment_id TEXT PRIMARY KEY, patient_id TEXT);"
+            "CREATE TABLE forms (patient_id TEXT);"
+            "CREATE TABLE _alk_tool_trace (id SERIAL PRIMARY KEY, name TEXT, arguments TEXT, "
+            "result TEXT, ok BOOLEAN, error TEXT, at DOUBLE PRECISION, agent_tool TEXT, "
+            "provider_call_id TEXT, tool_call_id TEXT, status TEXT)"
+        )
+    yield url
+    with psycopg.connect(PG, autocommit=True) as admin:
+        admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+
+
+def _world(url: str, binding: AgentBindingV1) -> WorldTools:
+    handlers = {
+        tool: (source, compile(source, f"<handler:{tool}>", "exec"))
+        for tool, source in _HANDLERS.items()
+    }
+    return WorldTools(handlers, [BOOK, SEND], url, binding=binding)
+
+
+def _rows(url: str, sql: str) -> list[tuple]:
+    import psycopg
+
+    with psycopg.connect(url) as connection:
+        return connection.execute(sql).fetchall()
+
+
+def _mcp(world: WorldTools, method: str, params: dict) -> dict:
+    from starlette.testclient import TestClient
+
+    from fi.alk.harness.world_mcp import build_app
+
+    with TestClient(build_app(world)) as client:
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+            headers={"accept": "application/json, text/event-stream"},
+        )
+    return response.json()["result"]
+
+
+def test_a_narrower_agent_is_served_only_its_own_tools(world_url):
+    """Over the world's MCP endpoint, an agent that declared only book_appointment lists only it,
+    and a call to the environment's send_intake_forms is refused and runs nothing."""
+    profile = profile_from_file(_declared(_as_declared(BOOK)))
+    binding = _binding(
+        *identity_mapping(profile, [BOOK, SEND])["tools"],
+        agent_tools=[_as_declared(BOOK)],
+    )
+    world = _world(world_url, binding)
+    listed = _mcp(world, "tools/list", {})
+    assert [tool["name"] for tool in listed["tools"]] == ["book_appointment"]
+    refused = _mcp(
+        world,
+        "tools/call",
+        {
+            "name": "send_intake_forms",
+            "arguments": {"patient_id": "P-1", "channel": "sms"},
+        },
+    )
+    assert refused["isError"] and "no such tool" in refused["content"][0]["text"]
+    assert _rows(world_url, "SELECT * FROM forms") == []
+    booked = _mcp(
+        world,
+        "tools/call",
+        {
+            "name": "book_appointment",
+            "arguments": {"patient_id": "P-1", "slot_id": "S-1", "reason": "check-up"},
+        },
+    )
+    assert not booked["isError"], booked
+    assert _rows(world_url, "SELECT appointment_id FROM appointments") == [("A-S-1",)]
+
+
+def test_a_call_the_agents_schema_refuses_runs_nothing(world_url):
+    """The agent's own schema is the contract at run time too: a value it does not allow is
+    refused before the binding translates it."""
+    world = _world(world_url, CLINIC_BINDING)
+    outcome = world.call("send_paperwork", {"patient_number": "P-1", "delivery": "fax"})
+    assert outcome.status == "invalid" and "delivery" in outcome.error
+    outcome = world.call("schedule_visit", {"patient_number": 1001, "opening": "S-1"})
+    assert outcome.status == "invalid" and "patient_number" in outcome.error
+    assert _rows(world_url, "SELECT * FROM appointments") == []
+
+
+def test_the_trace_records_what_the_agent_was_given_back(world_url):
+    """A response mapping that hands the agent less than the world returned is what the trace and
+    the checks see: the agent never read the internal note."""
+    binding = _binding(
+        {
+            "agent_tool": "schedule_visit",
+            "steps": [
+                {
+                    "id": "book",
+                    "tool": "book_appointment",
+                    "arguments": {
+                        "patient_id": {"arg": "patient_number"},
+                        "slot_id": {"arg": "opening"},
+                        "reason": {"arg": "reason_for_visit"},
+                    },
+                }
+            ],
+            "response": {"template": "Booked {{ steps.book.appointment_id }}."},
+        },
+        agent_tools=[SCHEDULE],
+    )
+    outcome = _world(world_url, binding).call(
+        "schedule_visit",
+        {"patient_number": "P-1", "opening": "S-1", "reason_for_visit": "check-up"},
+    )
+    assert outcome.status == "ok" and outcome.content == "Booked A-S-1."
+    assert outcome.result == "Booked A-S-1."
+    assert outcome.operations[0].world_result["internal_note"]
+    assert _rows(world_url, "SELECT name, result FROM _alk_tool_trace") == [
+        ("book_appointment", json.dumps("Booked A-S-1."))
     ]
 
 
