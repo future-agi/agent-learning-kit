@@ -8,7 +8,7 @@ exact executor. Alternative integrations must satisfy the actual contracts they
 use; whole-harness portability is not established by the backend registry.
 
 - **[Start offline](../../../../README.md#first-success-deterministic-and-credential-free)**:
-  deterministic echo evaluation and a scripted simulation, without source authoring.
+  run a scripted conversation and read its evaluation.
 - **[Author an environment](../../../../docs/simulate/environment-authoring.md)**:
   model-backed setup, commands, artifacts, trust boundaries and extension matrix.
 - **[Evaluate results](../../../../docs/eval/overview.md)**: suites, task evidence,
@@ -37,6 +37,44 @@ and exact protocols are in [`backends`](backends).
 `agent-learn doctor` checks imports and consolidation, not live credentials or
 runtime readiness. `AGENT_LEARNING_SYNC=local` controls account telemetry only;
 it does not block authoring/provider traffic.
+
+## Try the reference harness with a service
+
+Use the installed CLI to start and stop a disposable Redis environment. You need
+Docker with Compose and access to the `redis:7-alpine` image. Docker can download
+the image on first use. This example exercises service provisioning without a
+model account. For scenario generation and grading, continue to the authoring
+commands below.
+
+In a fresh working directory, create a folder named `redis-source` and save
+this as `redis-source/compose.yml`:
+
+```yaml
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+```
+
+From the parent directory, start the service and read its recorded status:
+
+```bash
+agent-learn harness environment up --path redis-source --out redis-session
+agent-learn harness environment status --out redis-session
+```
+
+Look for `redis` in the startup output. The harness records the service and
+its assigned endpoint in `redis-session/environment.json`. When you finish,
+remove this example's runtime and test volumes:
+
+```bash
+agent-learn harness environment down --out redis-session
+```
 
 ## Choose a command
 
