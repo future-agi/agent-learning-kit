@@ -616,9 +616,9 @@ class GeneratedWorld(EnvironmentAdapter):
         return ToolExecutionResult(
             tool_call_id=call_id,
             tool_name=name or "unknown",
-            content=call.error if not call.ok else content,
+            content=(call.error or "") if not call.ok else content,
             result=call.result,
-            success=call.ok,
+            success=bool(call.ok),
             error=call.error or None,
             state_updates=self.state(),
         )
