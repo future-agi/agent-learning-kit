@@ -430,6 +430,7 @@ jobs:
           tests/harness/test_agent_scan.py
           tests/harness/test_authoring_entrypoint_find_agents.py
           tests/harness/test_seed_contract.py
+          tests/harness/test_browser_environment.py
           tests/test_bump_deployment_values.py
           tests/test_release_workflow.py
           tests/test_e2b_template_build_id.py
