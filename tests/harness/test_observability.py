@@ -7,6 +7,7 @@ so every string a span carries is cleaned of credentials first (TH-9504).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 
@@ -85,6 +86,33 @@ def test_tracing_off_is_silent_rather_than_fatal(monkeypatch):
     observability.stage_event("harness.stage.started", "environment")
     with observability.scenario("k", 0) as span:
         assert span is None
+
+
+def test_tracing_never_takes_over_the_harness_s_stop_signal(monkeypatch):
+    """The tracing library installs its own SIGTERM handler that exits at once; the platform's Stop is a SIGTERM the
+    harness must keep, or a stopped call seals nothing."""
+    import signal
+
+    monkeypatch.setenv("FI_API_KEY", "k")
+    monkeypatch.setenv("FI_SECRET_KEY", "s")
+    monkeypatch.setattr(observability, "_provider", None)
+    monkeypatch.setattr(observability, "_tracer", None)
+    def ours(signum, frame):
+        return None
+
+    previous = {one: signal.getsignal(one) for one in (signal.SIGTERM, signal.SIGINT)}
+    signal.signal(signal.SIGTERM, ours)
+    try:
+        observability.begin("job-1", "run-1")
+        assert observability._provider is not None
+        assert signal.getsignal(signal.SIGTERM) is ours
+        assert signal.getsignal(signal.SIGINT) is previous[signal.SIGINT]
+    finally:
+        for one, handler in previous.items():
+            signal.signal(one, handler)
+        with contextlib.suppress(Exception):
+            observability._provider.shutdown()
+        observability._session.close()
 
 
 URL = "https://u:pw@h/x?key=v"

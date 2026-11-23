@@ -42,6 +42,7 @@ from ..actors import (
 )
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
+    worker_subjects_note,
     CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     CHECK_RULES,
@@ -1730,7 +1731,10 @@ def world_tools(
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an "
         "overlay is refused until it names a sub-goal that fails when that overlay is "
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
-        "task sub-goal.",
+        "task sub-goal. "
+        "`subject` is `task` (the default) or `worker:<id>` for one of the contract's workers: that check is "
+        "given only that worker's calls, and is inconclusive when the worker made none."
+        + worker_subjects_note(contract),
         schema(
             {
                 "name": str,
@@ -1739,22 +1743,33 @@ def world_tools(
                 "judged": str,
                 "output": str,
                 "overlay": str,
+                "subject": str,
                 **CONTRACT_SCHEMA,
             },
             ["name", "what"],
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
-        sub_goal = SubGoal(
-            name=str(args.get("name") or ""),
-            what=str(args.get("what") or ""),
-            check=str(args.get("check") or ""),
-            judged=str(args.get("judged") or ""),
-            output=str(args.get("output") or "pass_fail"),
-            overlay=str(args.get("overlay") or ""),
-            **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
-        )
+        # Repairing a sub-goal keeps whose result it checks and the actor it depends on unless the repair says
+        # otherwise: a fix to its check never quietly turns a worker's check into the task's.
+        previous = next((one for one in catalogue.sub_goals if one.name == str(args.get("name") or "")), None)
+        try:
+            sub_goal = SubGoal(
+                name=str(args.get("name") or ""),
+                what=str(args.get("what") or ""),
+                check=str(args.get("check") or ""),
+                judged=str(args.get("judged") or ""),
+                output=str(args.get("output") or "pass_fail"),
+                overlay=str(args.get("overlay") or ""),
+                subject=str(args.get("subject") or (previous.subject if previous is not None else "task")),
+                actor=previous.actor if previous is not None else "",
+                **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+            )
+        except ValueError as invalid:
+            return _err(f"Not added: {invalid}")
         problems = validate_sub_goal(sub_goal)
+        if sub_goal.worker and sub_goal.worker not in {one.id for one in contract.workers}:
+            problems.append(f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers")
         if native_runtime and sub_goal.deterministic():
             from ..prove import native_source_problem
 

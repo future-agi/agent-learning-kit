@@ -142,13 +142,16 @@ def validate_source(
 
 def compile_bundle(*, source, job, authoring, output, contract, include_scenarios=True):
     from .bundle_author_v2 import (
+        EnvironmentPlanV2,
         _copy_scenarios,
         _copy_sub_goal_catalogue,
         _copy_chat_authoring,
         _compile_source_tool_handlers,
         _files,
+        door_outcome,
         source_fingerprint,
     )
+    from .world_door import DOOR_FILE
 
     runtime = contract.get("runtime") or {}
     from .contract import (
@@ -271,6 +274,17 @@ def compile_bundle(*, source, job, authoring, output, contract, include_scenario
             _copy_sub_goal_catalogue(authoring, temporary)
         _copy_chat_authoring(authoring, temporary, include_simulator=include_scenarios)
         _compile_source_tool_handlers(contract, temporary)
+        # A compose build runs no door of the world's in front of the agent's tools: sealed as a native build seals it.
+        no_door = EnvironmentPlanV2(packaging="compose", control_service=None, processes=(), capabilities={}, readiness=())
+        (temporary / DOOR_FILE).write_text(
+            json.dumps(door_outcome(no_door, contract), sort_keys=True) + "\n", encoding="utf-8"
+        )
+        if include_scenarios:
+            from .call_runner import write_worker_limits
+
+            # Sealed as on a native build, after door.json, so the platform reads each worker's flag and what each
+            # scenario relies on.
+            write_worker_limits(temporary)
         (temporary / "compose.json").write_text(json.dumps(document, indent=2))
         manifest = EnvironmentBundleV2(
             schema_version=BUNDLE_V2_SCHEMA_VERSION,

@@ -36,6 +36,9 @@ run the next ``sitecustomize`` on the path, which is theirs, so a repository's o
 not lost behind this one; a failure of that hook is reported as Python reports it, never as ours.
 A failure of this patch leaves the process as it would be without the hook and writes one fixed
 line to stderr.
+
+Framework instrumentation differs per framework, so what this hook knows about one (its instrumentor, a helper to
+guard) sits in data tables only: the stated exception to the rule that harness code names no framework.
 """
 
 from __future__ import annotations
@@ -433,6 +436,10 @@ def _sandbox_provider():
     return provider
 
 
+# The tracer names LiveKit's agents framework records its own session spans under.
+_LIVEKIT_TRACERS = ("livekit",)
+
+
 def _patch_proxy(module) -> None:
     """Serve a span asked for before any provider is set from ours, leaving the process free to set its own."""
     cls = module.ProxyTracer
@@ -443,7 +450,11 @@ def _patch_proxy(module) -> None:
 
         def wrapper(self, *args, __original=original, __method=method, **kwargs):
             try:
-                if getattr(module, "_TRACER_PROVIDER", None) is None:
+                # LiveKit's own telemetry stays its own: a voice agent's tool calls are traced by its LiveKit hook,
+                # and its session spans are never served, read or exported here.
+                if getattr(module, "_TRACER_PROVIDER", None) is None and not str(
+                    getattr(self, "_instrumenting_module_name", "") or ""
+                ).startswith(_LIVEKIT_TRACERS):
                     tracer = _sandbox_provider().get_tracer(
                         self._instrumenting_module_name
                     )
@@ -474,8 +485,38 @@ def _instrument(module, target) -> None:
         return
     instrumentor.instrument()
     _yield_to_process(type(instrumentor))
+    serialiser = _SERIALISERS.get(name)
+    if serialiser is not None:
+        _guard_serialiser(*serialiser)
     if module.__name__ == "agents":
         _keep_agents_processors()
+
+
+# Instrumentor helpers whose failure to serialise an object into a span would fail the app's call.
+_SERIALISERS = {"traceai_smolagents": ("traceai_smolagents._wrappers", "_to_dict")}
+
+
+def _guard_serialiser(module_name, attribute) -> None:
+    """Keep an instrumentor's serialiser from failing the app: an object it cannot serialise is recorded by name."""
+    try:
+        module = importlib.import_module(module_name)
+        original = getattr(module, attribute)
+    except Exception:
+        return
+    if getattr(original, _PATCHED, False):
+        return
+
+    def guarded(result, __original=original):
+        try:
+            return __original(result)
+        except Exception:
+            name = getattr(result, "name", None)
+            return name if isinstance(name, str) and name else type(result).__name__
+
+    functools.update_wrapper(guarded, original)
+    setattr(guarded, _PATCHED, True)
+    # Recursive calls go through the module name, so each item is guarded on its own.
+    setattr(module, attribute, guarded)
 
 
 def _yield_to_process(cls) -> None:
@@ -512,6 +553,13 @@ def _keep_agents_processors() -> None:
     cls.set_processors = wrapper
 
 
+def _livekit_own(tracer) -> bool:
+    """A span of LiveKit's own session telemetry (recorded on a provider of its own when LiveKit Cloud observability is
+    on): never part of the app's work, so an app run opened under it is still the top of the app's work."""
+    scope = getattr(tracer, "_instrumentation_scope", None) or getattr(tracer, "instrumentation_info", None)
+    return str(getattr(scope, "name", "") or "").startswith(_LIVEKIT_TRACERS)
+
+
 def _patch_tracer(module, path, tool_trace) -> None:
     cls = module.Tracer
     original = cls.start_span
@@ -535,7 +583,7 @@ def _patch_tracer(module, path, tool_trace) -> None:
             if call and span.is_recording():
                 span.set_attribute(_CALL_KEY, call)
                 _restamp_at_end(span, call)
-            if tools is not None and span.is_recording():
+            if tools is not None and span.is_recording() and not _livekit_own(self):
                 tools.started(span)
         except Exception:
             pass

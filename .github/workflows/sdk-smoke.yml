@@ -335,6 +335,7 @@ jobs:
           tests/test_retell_evidence.py
           tests/test_retell_webcall_bridge.py
           tests/harness/test_process_runtime.py
+          tests/harness/test_multi_agent_compatibility_references.py
           tests/harness/test_source_folder.py
           tests/test_harness_sandbox_server.py
           tests/test_harness_refusals.py
@@ -374,6 +375,11 @@ jobs:
           tests/harness/test_hosted_authoring_entrypoint.py
           tests/harness/test_certify_only.py
           tests/harness/test_bundle_author_v2.py
+          tests/harness/test_in_process_door.py
+          tests/harness/test_framework_tool_spans.py
+          tests/harness/test_python_extras.py
+          tests/harness/test_tool_certification.py
+          tests/harness/test_contract.py
           tests/harness/test_tool_module_rewrite.py
           tests/harness/test_reading_routes.py
           tests/harness/test_reading_guidance.py

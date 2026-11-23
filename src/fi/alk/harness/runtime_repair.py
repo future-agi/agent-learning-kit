@@ -1318,6 +1318,12 @@ def validate_runtime_plan_patch(
         raise ValueError("runtime_repair_ingress_repair_not_allowed")
     if patch.base_contract_hash != _contract_hash(contract):
         raise ValueError("runtime_repair_base_contract_hash_mismatch")
+    from .framework_servers import langgraph_config_problem
+
+    # A `langgraph dev` server reads only a LangGraph JSON config: any other file is never the fix.
+    problem = langgraph_config_problem(root, patch.runtime.model_dump())
+    if problem:
+        raise ValueError(f"runtime_repair_langgraph_config_invalid: {problem}")
     if not set(patch.diagnostic_codes) or not set(patch.diagnostic_codes).issubset(
         allowed_diagnostic_codes
     ):

@@ -294,7 +294,7 @@ def _build_writes_the_interface(
         return False
     if runtime.interface is not None and runtime.interface.kind:
         return False
-    from .bundle_author_v2 import _adk_web_interface, _is_adk_web_command
+    from .framework_servers import _adk_web_interface, _is_adk_web_command
 
     # Asked of the command alone first, so no other command costs a lookup on disk.
     if not _is_adk_web_command(list(runtime.command)):
@@ -1122,12 +1122,19 @@ def contract_tools(
                             "id": {"type": "string"},
                             "name": {"type": "string"},
                             "tools": {"type": "array", "items": {"type": "string"}},
+                            "allowed_tools": {"type": "array", "items": {"type": "string"}},
+                            "binding": {"type": "string", "enum": ["separate", "shared"]},
+                            "address_env": {"type": "string"},
+                            "process": {"type": "string"},
                         },
                         "required": ["id"],
                     },
                     "description": "Agents this one hands work to, if any: an id no other worker has, the name the app "
-                    "gives the agent (its spans carry it), and the names of the tools above that it "
-                    "holds. Leave out for an agent that hands no work on.",
+                    "gives the agent (its spans carry it), the names of the tools above that it holds, "
+                    "separate when its tools run through code of their own, with address_env naming the "
+                    "environment variable that code reads for its tools' base address, allowed_tools when it "
+                    "may use fewer tools than its code holds, and process naming the environment process that runs "
+                    "it alone when the app serves it as its own service. Leave out for an agent that hands no work on.",
                 },
                 "data_schema": {
                     "type": "object",
