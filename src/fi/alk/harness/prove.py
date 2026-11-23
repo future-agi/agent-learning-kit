@@ -969,6 +969,18 @@ def _resolve_reference_values(value: object, calls: list[Call]) -> object:
     return current
 
 
+def actors_in(scenario: Scenario, world_root: Path, world: Any) -> tuple["_WorldActors", dict[int, str]]:
+    """The scenario's actors acting in `world` as they do in the run, and which of `world.calls` are theirs (by
+    index). A check reads the trial's action log the way the run gives it, `world.events(actor_id, outcome)`, and the
+    conversations before the run are in the world when the agent starts, as the actors' own: a check never credits
+    the agent with a message an actor wrote. The caller acts them before the first step and after each one."""
+    by_actors: dict[int, str] = {}
+    acting = _WorldActors(scenario, world_root, world, by_actors)
+    world.events = acting.events
+    acting.replay_pre_run()
+    return acting, by_actors
+
+
 def run_steps(
     scenario: Scenario,
     world_root: Path,
@@ -985,13 +997,7 @@ def run_steps(
     world.answered_by_record = []
     refused: list[str] = []
     assumed: list[str] = []
-    by_actors: dict[int, str] = {}
-    acting = _WorldActors(scenario, world_root, world, by_actors)
-    # A check reads the trial's action log the way the run gives it: `world.events(actor_id, outcome)`.
-    world.events = acting.events
-    # The conversations before the run are in the world when the agent starts, in the proof as in the run, and
-    # they are the actors' own: a check never credits the agent with a message an actor wrote.
-    acting.replay_pre_run()
+    acting, by_actors = actors_in(scenario, world_root, world)
     if with_solution:
         acting.act_on(None)
         faults = _Faults(scenario, world_root)
