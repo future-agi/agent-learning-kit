@@ -212,6 +212,14 @@ class ToolSpec(BaseModel):
                 bounds[str(argument)] = kept
         return bounds
 
+    @model_serializer(mode="wrap")
+    def _omit_empty_argument_facts(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        for field in ("arg_required", "arg_bounds"):
+            if not data.get(field):
+                data.pop(field, None)
+        return data
+
 
 class ToolEntry(BaseModel):
     """How to reach the agent's own implementation of one tool.
@@ -1561,8 +1569,6 @@ FREE_TEXT = (
 )
 # A field that holds models is kept for itself, and its models' fields are classified in their
 # own right. A name without a dot is a whole technical model, every field of it kept.
-OMITTED_WHEN_EMPTY = ("arg_required", "arg_bounds")
-
 KEPT_AS_WRITTEN = (
     "AgentContract.agent",
     "AgentContract.modality",
@@ -1789,10 +1795,6 @@ def write_contract(
     edit's save keeps the saved file's shape, with no new empty fields).
     """
     body = contract.model_dump()
-    for tool in body.get("tools") or []:
-        for field in OMITTED_WHEN_EMPTY:
-            if not tool.get(field):
-                tool.pop(field, None)
     places: list[tuple[Any, Any, Any, str]] = []
     for name in FREE_TEXT:
         model, field = name.split(".")
