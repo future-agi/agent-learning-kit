@@ -2652,6 +2652,13 @@ def spawn_source_process(
         env["PYTHONPATH"] = os.pathsep.join(
             part for part in (str(world_dir), existing_pythonpath) if part
         )
+    if env.get("HARNESS_TOOL_TRACE"):
+        # The mark hook notes beside the trace which framework span sources this start turned on;
+        # a note left by an earlier start never speaks for this one.
+        try:
+            Path(env["HARNESS_TOOL_TRACE"] + ".observing").unlink(missing_ok=True)
+        except OSError:
+            pass
     try:
         handle = runner(
             command,

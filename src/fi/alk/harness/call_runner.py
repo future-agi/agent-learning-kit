@@ -2233,50 +2233,63 @@ def _call_id(call: Call) -> str:
 
 # Said when the agent's trace holds identical untimed lines with no call id: one call written twice or two calls.
 CALLS_MAYBE_REPEATED = "calls_maybe_repeated"
-# Said when the agent's process turned on a framework's span source (the mark hook's ``.observing`` file beside the
-# trace), and when such a source wrote no tool span for a call that other records hold. Neither is a call, and
-# neither is missing evidence: the calls are what the other sources recorded.
+# Said when the agent's process turned framework span sources on, when it could not because an instrumentor was not
+# installed, and when a source that was on wrote no tool span for a call the agent's own process ran. None is a call,
+# and none is missing evidence: the calls are what the other sources recorded.
 TOOL_SPANS_ON = "tool_spans_on"
+TOOL_SPANS_NOT_INSTALLED = "tool_spans_not_installed"
 TOOL_SPANS_SILENT = "tool_spans_silent"
-_SPANS_ON_STATES = ("on", "process_own")
 
 
-def _observing(runtime: EnvironmentRuntime) -> dict[str, str]:
-    """Each framework's span source as the agent's process last noted it."""
+def _observing(runtime: EnvironmentRuntime) -> set[tuple[str, str]] | None:
+    """The framework span sources the agent's process noted (the mark hook's ``.observing`` file beside the trace), as
+    a set of framework and state; None when the note is missing or any of it cannot be read."""
     path = _tool_trace_file(runtime)
     if path is None:
-        return {}
+        return None
     try:
-        lines = Path(str(path) + ".observing").read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return {}
-    states: dict[str, str] = {}
-    for line in lines:
+        text = Path(str(path) + ".observing").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    noted: set[tuple[str, str]] = set()
+    for line in text.splitlines():
         try:
             record = json.loads(line)
         except ValueError:
-            continue
-        if isinstance(record, dict) and isinstance(record.get("framework"), str):
-            states[record["framework"]] = str(record.get("state") or "")
-    return states
+            return None
+        if not (isinstance(record, dict) and isinstance(record.get("framework"), str)
+                and isinstance(record.get("state"), str)):
+            return None
+        noted.add((record["framework"], record["state"]))
+    return noted or None
 
 
 def tool_span_notices(runtime: EnvironmentRuntime, calls: Sequence[Call]) -> list[dict[str, Any]]:
-    """Which framework span sources were on for the trial, and whether they were silent: on, with no tool span in
-    the trace, while other records hold a call."""
-    states = _observing(runtime)
-    if not states:
+    """What the trial's framework span sources were: on, not installed, and silent (on, no tool span in the trace,
+    while the agent's own process ran a call: a tracer line or a completed call in the agent's account)."""
+    noted = _observing(runtime)
+    if noted is None:
         return []
-    on = sorted(framework for framework, state in states.items() if state in _SPANS_ON_STATES)
-    off = sorted(framework for framework, state in states.items() if state not in _SPANS_ON_STATES)
-    said = ", ".join([*(f"{one} on" for one in on), *(f"{one} {states[one].replace('_', ' ')}" for one in off)])
-    notices = [{"code": TOOL_SPANS_ON, "message": f"Framework span sources in the agent's process: {said}."}]
-    if on and graded_calls(calls) and not _read_file_tool_calls(runtime)[1]:
+    on = sorted({framework for framework, state in noted if state in ("on", "process_own")})
+    live = sorted({framework for framework, state in noted if state == "on"})
+    missing = sorted({framework for framework, state in noted if state == "not_installed"})
+    notices = []
+    if on:
+        notices.append({"code": TOOL_SPANS_ON, "message": f"Framework span sources were on for {', '.join(on)}."})
+    if missing:
+        notices.append(
+            {
+                "code": TOOL_SPANS_NOT_INSTALLED,
+                "message": f"No span source for {', '.join(missing)}: its instrumentor was not installed.",
+            }
+        )
+    ran = [call for call in graded_calls(calls) if call.source in (evidence.TRACER, evidence.AGENT)]
+    if live and ran and not _read_file_tool_calls(runtime)[1]:
         notices.append(
             {
                 "code": TOOL_SPANS_SILENT,
-                "message": f"Spans were on for {', '.join(on)}, but the trace holds no tool span; the calls are "
-                "the other sources' records.",
+                "message": f"Spans were on for {', '.join(live)}, but the trace holds no tool span for the calls the "
+                "agent ran; the calls are the other sources' records.",
             }
         )
     return notices

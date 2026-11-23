@@ -580,11 +580,9 @@ def _codes(notices) -> list[str]:
 
 
 @pytest.mark.parametrize("route", ["", call_runner.CALLBACK_ROUTE])
-@pytest.mark.parametrize("recorded_by", ["the tracer", "the world", "the agent's account"])
+@pytest.mark.parametrize("recorded_by", ["the tracer", "the agent's account"])
 def test_a_silent_span_source_leaves_the_calls_as_with_the_source_off(tmp_path, route, recorded_by) -> None:
-    observed = {"the tracer": [], "the world": [_call(result="shipped", at=5.0)], "the agent's account": [_told()]}[
-        recorded_by
-    ]
+    observed = [] if recorded_by == "the tracer" else [_told()]
     lines = [_RAN] if recorded_by == "the tracer" else []
     off = call_runner._with_span_calls(copy.deepcopy(observed), _runtime(tmp_path / "off", lines, route))
     runtime = _runtime(tmp_path / "on", lines, route)
@@ -600,6 +598,16 @@ def test_a_silent_span_source_leaves_the_calls_as_with_the_source_off(tmp_path, 
     assert not set(_codes(notices)) & set(call_runner.UNMEASURED_NOTICES)
 
 
+def test_a_call_only_the_world_ran_never_makes_a_span_source_silent(tmp_path) -> None:
+    # The kit carried the call out, so no span of the agent's could exist.
+    runtime = _runtime(tmp_path, [])
+    _observing(tmp_path, agents="on")
+
+    calls = call_runner._with_span_calls([_call(result="shipped", at=5.0)], runtime)
+
+    assert _codes(call_runner.tool_span_notices(runtime, calls)) == [call_runner.TOOL_SPANS_ON]
+
+
 def test_a_span_source_that_wrote_a_span_is_on_and_not_silent(tmp_path) -> None:
     runtime = _runtime(tmp_path, [_RAN, {**_SPAN_LINE, "name": "look_up_order", "arguments": _A1001,
                                          "output": "shipped", "event_id": "e1"}])
@@ -610,24 +618,52 @@ def test_a_span_source_that_wrote_a_span_is_on_and_not_silent(tmp_path) -> None:
     assert _codes(notices) == [call_runner.TOOL_SPANS_ON]
 
 
-def test_a_silent_span_source_is_not_said_when_no_record_holds_a_call(tmp_path) -> None:
+def test_a_silent_span_source_is_not_said_when_the_agent_ran_no_call(tmp_path) -> None:
     runtime = _runtime(tmp_path, [])
     _observing(tmp_path, agents="on")
 
     assert _codes(call_runner.tool_span_notices(runtime, ())) == [call_runner.TOOL_SPANS_ON]
 
 
-def test_an_instrumentor_that_was_not_installed_is_named_and_never_silent(tmp_path) -> None:
+def test_a_source_the_process_turned_on_itself_is_on_and_never_silent(tmp_path) -> None:
     runtime = _runtime(tmp_path, [_RAN])
-    _observing(tmp_path, smolagents="not_installed")
+    _observing(tmp_path, agents="process_own")
 
     notices = call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime))
 
     assert _codes(notices) == [call_runner.TOOL_SPANS_ON]
-    assert "smolagents not installed" in notices[0]["message"]
 
 
-def test_without_the_hooks_note_nothing_is_said(tmp_path) -> None:
+def test_an_instrumentor_that_was_not_installed_has_its_own_notice_and_is_never_silent(tmp_path) -> None:
     runtime = _runtime(tmp_path, [_RAN])
+    _observing(tmp_path, agents="on", smolagents="not_installed")
+
+    notices = call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime))
+
+    assert _codes(notices) == [
+        call_runner.TOOL_SPANS_ON, call_runner.TOOL_SPANS_NOT_INSTALLED, call_runner.TOOL_SPANS_SILENT
+    ]
+    assert "smolagents" not in notices[0]["message"] and "agents" not in notices[1]["message"].replace("smolagents", "")
+    assert "smolagents" not in notices[2]["message"]
+
+
+def test_the_note_is_read_as_a_set(tmp_path) -> None:
+    runtime = _runtime(tmp_path, [_RAN])
+    _observing(tmp_path, agents="on")
+    note = tmp_path / "calls.jsonl.observing"
+    note.write_text(note.read_text() * 3, encoding="utf-8")
+
+    notices = call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime))
+
+    assert notices[0]["message"] == "Framework span sources were on for agents."
+
+
+@pytest.mark.parametrize("tail", [None, '{"framework": "agents", "sta', "not json\n", '{"framework": "agents"}\n'])
+def test_a_note_that_is_missing_cut_or_unreadable_says_nothing(tmp_path, tail) -> None:
+    runtime = _runtime(tmp_path, [_RAN])
+    if tail is not None:
+        (tmp_path / "calls.jsonl.observing").write_text(
+            json.dumps({"framework": "agents", "state": "on"}) + "\n" + tail, encoding="utf-8"
+        )
 
     assert call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime)) == []

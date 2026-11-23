@@ -11561,3 +11561,18 @@ def test_the_tool_trace_is_read_from_the_process_that_writes_it(tmp_path: Path, 
     assert metadata["tool_trace_path"] == str(tmp_path / "worlds" / "w0" / traced_by / "agent-tool-calls.jsonl")
     # Not served by the callback adapter: the reader joins spans by the command route's rule.
     assert "tool_trace_route" not in metadata
+
+
+def test_a_span_source_note_from_an_earlier_start_is_removed_before_the_process_starts(tmp_path: Path) -> None:
+    world_dir = tmp_path / "worlds" / "w0" / "svc"
+    world_dir.mkdir(parents=True)
+    stale = world_dir / "agent-tool-calls.jsonl.observing"
+    stale.write_text('{"framework": "agents", "state": "on"}\n', encoding="utf-8")
+
+    captured = _spawn(
+        tmp_path,
+        _source_process(environment={"HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl"}),
+    )
+
+    assert captured["env"]["HARNESS_TOOL_TRACE"] + ".observing" == str(stale)
+    assert not stale.exists()
