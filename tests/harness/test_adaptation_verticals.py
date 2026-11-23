@@ -343,6 +343,7 @@ def test_an_explicit_agent_id_is_the_one_compose_finds(tmp_path):
     sealed for `bank-support-42`, and compose accepts the run's own declaration as that agent."""
     from fi.alk.harness.adaptation.declared import MCP_CLIENT
     from fi.alk.harness.adaptation.profile import profile_from_job, seal_binding
+    from fi.alk.harness.binding_proof import BindingProofV1
     from fi.alk.harness.job import HarnessJob
     from fi.alk.harness.releases import (
         RELEASES_SUITE,
@@ -413,11 +414,21 @@ def test_an_explicit_agent_id_is_the_one_compose_finds(tmp_path):
             "runtime": {"provider": "e2b", "image_name": "alk", "image_digest": digest},
         }
     )
+    # A routed binding runs only on what its proof proved; this test is about identity, so the
+    # proof covers the one scenario selected.
+    proof = BindingProofV1(
+        binding={"digest": binding.digest},
+        suite={"digest": suite.digest},
+        environment={"digest": environment.digest},
+        scenarios={suite.scenarios[0].key: {"status": "proved", "reason": ""}},
+        passed=True,
+    )
     paths = {}
     for name, body in (
         ("binding", binding.model_dump(mode="json", by_alias=True)),
         ("manifest", manifest.model_dump(mode="json", by_alias=True)),
         ("job", job.model_dump(mode="json")),
+        ("proof", proof.model_dump(mode="json")),
     ):
         paths[name] = tmp_path / f"{name}.json"
         paths[name].write_text(json.dumps(body), encoding="utf-8")
@@ -427,6 +438,7 @@ def test_an_explicit_agent_id_is_the_one_compose_finds(tmp_path):
         manifest_path=paths["manifest"],
         job_path=paths["job"],
         output=tmp_path / "bundle",
+        binding_proof_path=paths["proof"],
     )
     assert bundle.metadata["release"]["binding"] == binding.digest
 
