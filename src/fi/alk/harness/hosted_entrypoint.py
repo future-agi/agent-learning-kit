@@ -1537,6 +1537,15 @@ class OutboundAdapter:
         # wait knows it is in flight.
         await self.aflush_events()
 
+    async def call_connected(self, *, scenario_key: str, provider_call_id: str) -> None:
+        await self._aemit_event(
+            stage=HarnessStage.RUNNING,
+            type_=ob.OutboundEventType.CALL_CONNECTED,
+            payload={"scenario_key": scenario_key, "provider_call_id": provider_call_id},
+        )
+        # Sent while the call is live: a stop checks this call with its provider by id.
+        await self.aflush_events()
+
     async def scenario_retried(
         self, *, scenario_key: str, from_world: int, to_world: int, cause: str = ""
     ) -> None:
@@ -2980,6 +2989,9 @@ async def run_job(
             source_directory=source,
             usage_reporter=usage_reporter,
             stop_requested=cancel_requested,
+            call_connected=lambda scenario_key, provider_call_id: adapter.call_connected(
+                scenario_key=scenario_key, provider_call_id=provider_call_id
+            ),
         )
         call_runner = deps.build_call_runner(adapter, call_runner_context)
         scheduler = HostedScheduler(

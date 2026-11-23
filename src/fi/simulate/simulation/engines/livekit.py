@@ -1634,6 +1634,19 @@ async def _without_hold_marker(
             on_unspoken(text)
 
 
+async def _announce_call(provider_call_id: str | None) -> None:
+    """Tell the hosting harness the provider's id for the call just placed. Never fails the call."""
+    on_call_connected = CALL_CONNECTED.get()
+    if on_call_connected is None or not provider_call_id:
+        return
+    try:
+        await on_call_connected(provider_call_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "voice call connected callback failed", exc_info=redacted_exc_info(exc)
+        )
+
+
 class LiveKitEngine(BaseEngine):
     async def run(
         self,
@@ -2514,6 +2527,7 @@ class LiveKitEngine(BaseEngine):
                         audio_bridge.connect(), timeout=connect_timeout
                     )
                     provider_call_id = audio_bridge.call_id
+                    await _announce_call(provider_call_id)
                     bridge_task = asyncio.create_task(audio_bridge.run())
                 except asyncio.TimeoutError:
                     outcome = _failure_outcome(
@@ -2640,6 +2654,7 @@ class LiveKitEngine(BaseEngine):
                         call_originator.start(), timeout=connect_timeout
                     )
                     provider_call_id = originated_call.call_id
+                    await _announce_call(provider_call_id)
                 except asyncio.TimeoutError:
                     outcome = _failure_outcome(
                         TestCaseStatus.TIMED_OUT,
@@ -4046,6 +4061,12 @@ STOP_CHECK: contextvars.ContextVar[Callable[[], bool] | None] = contextvars.Cont
     "livekit_stop_check", default=None
 )
 _STOP_POLL_SECONDS = 0.25
+
+# The hosting harness's ear for a placed call: set by its call worker for one run, so a stop can check the call with
+# its provider by id while it is still live.
+CALL_CONNECTED: contextvars.ContextVar[Callable[[str], Awaitable[None]] | None] = (
+    contextvars.ContextVar("livekit_call_connected", default=None)
+)
 
 
 # After a person's Stop the call is sealed with what it has: teardown gets this much in all, so the transcript and the

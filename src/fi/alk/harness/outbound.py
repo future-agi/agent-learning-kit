@@ -629,6 +629,7 @@ class OutboundEventType(str, Enum):
     WORLD_UNHEALTHY = "world_unhealthy"
     SCENARIO_STARTED = "scenario_started"
     SCENARIO_RETRIED = "scenario_retried"
+    CALL_CONNECTED = "call_connected"
     LOG = "log"
     TERMINAL = "terminal"
 
@@ -691,6 +692,15 @@ class ScenarioStartedPayload(BaseModel):
     scenario_key: str = Field(min_length=1)
     world_index: int = Field(ge=0)
     scenario_attempt: Literal[1, 2]
+
+
+class CallConnectedPayload(BaseModel):
+    """The provider's id for a call the moment it is placed, so a stop can check that call."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_key: str = Field(min_length=1)
+    provider_call_id: str = Field(min_length=1, max_length=255)
 
 
 class ScenarioRetriedPayload(BaseModel):
@@ -805,6 +815,7 @@ _PAYLOAD_MODELS: dict[OutboundEventType, type[BaseModel]] = {
     OutboundEventType.WORLD_UNHEALTHY: WorldUnhealthyPayload,
     OutboundEventType.SCENARIO_STARTED: ScenarioStartedPayload,
     OutboundEventType.SCENARIO_RETRIED: ScenarioRetriedPayload,
+    OutboundEventType.CALL_CONNECTED: CallConnectedPayload,
     OutboundEventType.LOG: LogPayload,
     OutboundEventType.TERMINAL: TerminalPayload,
 }
@@ -3325,6 +3336,7 @@ __all__ = [
     "ScenarioCounts",
     "ScenarioRetriedPayload",
     "ScenarioStartedPayload",
+    "CallConnectedPayload",
     "ScenarioStatus",
     "SpooledRecord",
     "StageChangedPayload",
