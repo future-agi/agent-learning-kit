@@ -210,6 +210,55 @@ def test_a_background_job_is_a_hand_off_from_the_tool_call_that_launched_it(
         assert 0 < hand_off["at"] <= hand_off["ended_at"]
 
 
+def test_a_served_coordinator_s_own_calls_and_its_jobs_hand_offs_name_the_same_agent(
+    tmp_path: Path,
+) -> None:
+    # As a graph server traces a deep agent: the coordinator's run and its tools node carry no span kind and no agent
+    # name, only the conversation; its jobs name their own agent. The launch is the coordinator's call, the same
+    # agent its job's hand-off names, and a job's tools stay the job's.
+    records = _run(
+        tmp_path,
+        """
+        sup = {"gen_ai.conversation.id": "thread-sup"}
+        with span("agent", **sup):
+            with span("tools", **{"langgraph_node": "tools", **sup}):
+                with span("start_async_task", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "start_async_task",
+                                                 "langgraph_node": "tools", "langgraph_checkpoint_ns": "tools:1",
+                                                 "input.value": "researcher", **sup,
+                                                 "output.value": "Launched async subagent. task_id: job-r"}):
+                    pass
+        own = {"lc_agent_name": "researcher", "gen_ai.conversation.id": "job-r"}
+        with span("researcher", **{"output.value": "done", **own}):
+            with span("tools", **{"langgraph_node": "tools", **own}):
+                with span("analyze_topic", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "analyze_topic",
+                                              "langgraph_node": "tools", "langgraph_checkpoint_ns": "tools:2", **own}):
+                    pass
+    """,
+    )
+    launch = next(
+        r for r in records if r["name"] == "start_async_task" and not r.get("delegated_to")
+    )
+    hand_off = next(r for r in records if r.get("delegated_to") == "researcher" and "ended_at" in r)
+    assert launch.get("agent_key") == hand_off["agent_key"] == "agent"
+    assert hand_off["parent_event_id"] == launch["event_id"]
+    assert next(r for r in records if r["name"] == "analyze_topic")["agent_key"] == "researcher"
+
+
+def test_a_call_in_a_run_with_no_conversation_and_no_agent_stays_unnamed(
+    tmp_path: Path,
+) -> None:
+    # Outside a served conversation the run's name is only a span name (a request handler, a chain), not an agent.
+    records = _run(
+        tmp_path,
+        """
+        with span("POST /chat"):
+            with span("lookup", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "lookup"}):
+                pass
+    """,
+    )
+    assert [r.get("agent_key") for r in records if r["name"] == "lookup"] == [None]
+
+
 def test_a_job_s_answer_is_what_its_model_last_said_not_its_whole_conversation(
     tmp_path: Path,
 ) -> None:
@@ -398,6 +447,8 @@ def test_an_agent_named_on_the_tool_span_or_by_operation_name_is_read(
         "search_notes": ("research_worker", None),
         "publish_note": ("writer_worker", None),
         "WebSearch": ("researcher", None),
+        # The Task span is the hand-off and the sub-agent's run at once.
+        "Task": (None, "researcher"),
     }
 
 
@@ -476,6 +527,26 @@ def test_a_process_that_sets_no_provider_is_still_observed(tmp_path: Path) -> No
         provider="",
     )
     assert _by_tool(records) == {"lookup": ("Worker", None)}
+
+
+def test_a_voice_agent_s_livekit_session_spans_are_never_served_read_or_exported(tmp_path: Path) -> None:
+    """Observation is on in a voice agent too; LiveKit's own tracer (`livekit-agents`) stays as it was, a no-op with no
+    provider, so its session and tool spans never reach the trace or an exporter. A framework's tracer is served."""
+    records = _run(
+        tmp_path,
+        """
+        livekit = trace.get_tracer("livekit-agents")
+        with livekit.start_as_current_span("function_tool", attributes={
+            "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "issue_refund", "lk.function_tool.name": "issue_refund",
+        }) as session_span:
+            assert not session_span.is_recording()
+        with span("Refund worker", **{"gen_ai.span.kind": "AGENT", "agent.name": "Refund worker"}):
+            with span("lookup", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "lookup"}):
+                pass
+    """,
+        provider="",
+    )
+    assert _by_tool(records) == {"lookup": ("Refund worker", None)}
 
 
 def test_a_process_that_sets_its_own_provider_later_keeps_it(tmp_path: Path) -> None:
@@ -1211,7 +1282,9 @@ def test_two_hundred_identical_calls_pair_in_well_under_a_second() -> None:
     ]
     started = time.perf_counter()
     merged = call_runner._merge_span_calls(natives, spans)
-    assert time.perf_counter() - started < 0.5
+    # About 0.3 s on a laptop and up to three times that on a shared CI runner; a pairing that grew a power would take
+    # far longer than this bound.
+    assert time.perf_counter() - started < 2.0
     assert len(merged) == 200
     assert {c.runtime_ids["event_id"] for c in merged} == {f"e{i}" for i in range(200)}
 
@@ -1416,6 +1489,72 @@ def test_a_span_starting_or_ending_waits_for_another_thread_s_bookkeeping(
         assert not thread.is_alive()
 
 
+def test_a_smolagents_tool_that_uses_a_module_helper_never_fails_the_call_through_the_instrumentor(
+    tmp_path: Path,
+) -> None:
+    # traceai-smolagents 0.1.6 serialises a call's arguments with each object's to_dict(); smolagents' to_dict() on a
+    # tool whose code uses a module-level helper raises its self-contained check. The guard records that tool by name.
+    files = {
+        "smolagents/__init__.py": "",
+        "traceai_smolagents/__init__.py": "from traceai_smolagents._wrappers import SmolagentsInstrumentor\n",
+        "traceai_smolagents/_wrappers.py": textwrap.dedent("""
+            def _to_dict(result):
+                if hasattr(result, "to_dict"):
+                    return result.to_dict()
+                if isinstance(result, list):
+                    return [_to_dict(item) for item in result]
+                return result
+
+            class SmolagentsInstrumentor:
+                is_instrumented_by_opentelemetry = False
+
+                def instrument(self, **kwargs):
+                    self.is_instrumented_by_opentelemetry = True
+
+                def uninstrument(self):
+                    self.is_instrumented_by_opentelemetry = False
+        """),
+        "hook/sitecustomize.py": "import simulation_mark_bootstrap\nsimulation_mark_bootstrap.install()\n",
+    }
+    for path, source in files.items():
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_text(source)
+    _place_hook(tmp_path / "hook")
+    script = textwrap.dedent("""
+        import smolagents
+        from traceai_smolagents import _wrappers
+
+        def _ledger(order_id):
+            return order_id
+
+        class GetOrder:
+            name = "get_order"
+
+            def to_dict(self):
+                raise ValueError("SimpleTool validation failed for get_order: Name '_ledger' is undefined.")
+
+        class Plain:
+            def to_dict(self):
+                return {"plain": True}
+
+        print(_wrappers._to_dict([GetOrder(), Plain(), "order 1043"]))
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={
+            **os.environ,
+            "PYTHONPATH": f"{tmp_path / 'hook'}:{tmp_path}",
+            "ALK_OBSERVE_FRAMEWORKS": "1",
+            "HARNESS_TOOL_TRACE": str(tmp_path / "calls.jsonl"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "['get_order', {'plain': True}, 'order 1043']"
+
+
 def test_the_process_instrumenting_after_the_hook_with_its_own_provider_gets_it() -> (
     None
 ):
@@ -1537,6 +1676,98 @@ def test_two_open_hand_offs_to_one_worker_each_hold_their_own_calls(
     assert asks["q1"]["span_id"] != asks["q2"]["span_id"]
 
 
+def test_a_worker_still_out_when_the_process_stops_keeps_its_hand_off_with_no_return(
+    tmp_path: Path,
+) -> None:
+    # The OpenAI Agents SDK ends a hand-off's span only when the worker returns: Stop while the worker is out leaves
+    # the tool span open. The hand-off written when the worker started is kept, with no end and no answer.
+    _run(
+        tmp_path,
+        """
+        from opentelemetry.trace import set_span_in_context
+        lead = tracer.start_span("Lead", attributes={"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"})
+        ask = tracer.start_span("refund", context=set_span_in_context(lead), attributes={
+            "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "refund", "input.value": "order 1042"})
+        run = tracer.start_span("Refund worker", context=set_span_in_context(ask), attributes={
+            "gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Refund worker"})
+        with trace.use_span(run):
+            with span("list_refunds", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "list_refunds"}):
+                pass
+    """,
+    )
+    rows = _sealed(tmp_path)
+    (hand_off,) = [row for row in rows if row["name"] == "refund"]
+    lookup = next(row for row in rows if row["name"] == "list_refunds")
+    assert (hand_off["delegated_to"], "ended_at" in hand_off, bool(hand_off["result"])) == ("Refund worker", False, False)
+    assert _placed([hand_off, lookup]) == [
+        ("refund", "delegated", "Lead", "observed", ""),
+        ("list_refunds", "tool_call", "Refund worker", "observed", hand_off["span_id"]),
+    ]
+
+
+def test_a_worker_the_openai_agents_instrumentor_names_only_by_its_span_keeps_its_hand_off_at_stop(
+    tmp_path: Path,
+) -> None:
+    # traceai-openai-agents 0.1.6 starts an agent span named after the agent with an empty input and sets
+    # gen_ai.agent.name only when the span ends; a worker still out at Stop never gets that attribute.
+    _run(
+        tmp_path,
+        """
+        from opentelemetry.trace import set_span_in_context
+        lead = tracer.start_span("Lead", attributes={"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"})
+        ask = tracer.start_span("refund", context=set_span_in_context(lead), attributes={
+            "gen_ai.span.kind": "TOOL", "input.value": '{"name": "refund", "input": "order 1042"}'})
+        run = tracer.start_span("Refund worker", context=set_span_in_context(ask), attributes={
+            "gen_ai.span.kind": "AGENT", "gen_ai.provider.name": "openai", "input.value": "{}"})
+        with trace.use_span(run):
+            with span("list_refunds", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "list_refunds"}):
+                pass
+    """,
+    )
+    rows = _sealed(tmp_path)
+    (hand_off,) = [row for row in rows if row["name"] == "refund"]
+    lookup = next(row for row in rows if row["name"] == "list_refunds")
+    assert (hand_off["delegated_to"], "ended_at" in hand_off) == ("Refund worker", False)
+    assert lookup["parent_span_id"] == hand_off["span_id"]
+
+
+def test_a_hand_off_written_at_its_start_is_replaced_by_the_line_written_when_the_worker_returns(
+    tmp_path: Path,
+) -> None:
+    records = _run(
+        tmp_path,
+        """
+        with span("Lead", **{"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"}):
+            with span("refund", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "refund",
+                                   "output.value": "refund r-1"}):
+                with span("Refund worker", **{"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Refund worker"}):
+                    pass
+    """,
+    )
+    assert [(r.get("opened", False), "ended_at" in r) for r in records if r["name"] == "refund"] == [
+        (True, False),
+        (False, True),
+    ]
+    (hand_off,) = [row for row in _sealed(tmp_path) if row["name"] == "refund"]
+    assert (hand_off["delegated_to"], bool(hand_off.get("ended_at"))) == ("Refund worker", True)
+
+
+def test_a_worker_named_only_after_the_tool_that_ran_it_writes_no_hand_off_at_its_start(
+    tmp_path: Path,
+) -> None:
+    records = _run(
+        tmp_path,
+        """
+        from opentelemetry.trace import set_span_in_context
+        lead = tracer.start_span("Lead", attributes={"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"})
+        ask = tracer.start_span("refund", context=set_span_in_context(lead), attributes={
+            "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "refund"})
+        tracer.start_span("agent.run", context=set_span_in_context(ask), attributes={"gen_ai.span.kind": "AGENT"})
+    """,
+    )
+    assert [r for r in records if r.get("opened")] == []
+
+
 _ROOT_TRANSFER = """
 from opentelemetry.trace import set_span_in_context
 root = tracer.start_span("invoke_agent root_agent", attributes={"gen_ai.operation.name": "invoke_agent"})
@@ -1602,6 +1833,141 @@ def test_a_transfer_named_call_whose_agent_never_runs_is_a_tool_call_and_the_lea
         ("transfer_to_agent", "tool_call", "root_agent", "observed", ""),
         ("look_up_tide", "tool_call", "leaf_agent", "unknown", ""),
     ]
+
+
+def test_a_root_agent_that_hands_off_to_two_top_level_agents_has_two_workers_each_under_its_transfer(
+    tmp_path: Path,
+) -> None:
+    turn = _ROOT_TRANSFER.replace("TOOL_TYPE", "TransferToAgentTool")
+    second = turn.replace("leaf_agent", "billing_agent").replace("look_up_tide", "look_up_invoice")
+    records = _run(tmp_path, turn + second)
+    first_pass, second_pass = (r["event_id"] for r in records if r["name"] == "transfer_to_agent")
+    assert _placed(_sealed(tmp_path)) == [
+        ("transfer_to_agent", "transferred", "root_agent", "observed", ""),
+        ("look_up_tide", "tool_call", "leaf_agent", "observed", first_pass),
+        ("transfer_to_agent", "transferred", "root_agent", "observed", ""),
+        ("look_up_invoice", "tool_call", "billing_agent", "observed", second_pass),
+    ]
+
+
+# A LangGraph graph as traceai-langchain 0.2.1 records it: every attribute is set only when the span ends, a run whose name
+# says "agent" is labelled an agent, and a hand-off tool's metadata names the agent that takes over.
+_GRAPH = """
+from opentelemetry.trace import set_span_in_context
+graph = tracer.start_span("LangGraph")
+
+def node(name, parent):
+    return tracer.start_span(name, context=set_span_in_context(parent))
+
+def call(parent, tool, agent, step, **extra):
+    one = node(tool, parent)
+    one.set_attributes({"fi.span.kind": "AGENT" if "agent" in tool else "TOOL", "tool.name": tool,
+                        "lc_agent_name": agent, "langgraph_node": "tools",
+                        "langgraph_checkpoint_ns": agent + ":" + step + "|tools:" + step, **extra})
+    one.end()
+
+def turn(agent, step, tool, **extra):
+    run = node(agent, graph)
+    tools = node("tools", run)
+    call(tools, tool, agent, step, **extra)
+    tools.end()
+    run.end()
+"""
+
+
+def test_a_langgraph_hand_off_tool_is_a_transfer_that_holds_the_named_agent_s_calls(
+    tmp_path: Path,
+) -> None:
+    records = _run(
+        tmp_path,
+        _GRAPH
+        + """
+turn("supervisor", "1", "transfer_to_billing_agent", __handoff_destination="billing_agent")
+turn("billing_agent", "2", "look_up_invoice")
+graph.end()
+""",
+    )
+    handed = next(r for r in records if r["name"] == "transfer_to_billing_agent")
+    assert (handed["transfer"], handed["delegated_to"]) == (True, "billing_agent")
+    assert _placed(_sealed(tmp_path)) == [
+        ("transfer_to_billing_agent", "transferred", "supervisor", "unknown", ""),
+        ("look_up_invoice", "tool_call", "billing_agent", "observed", handed["event_id"]),
+    ]
+
+
+def test_an_agent_handed_control_again_holds_its_later_calls_under_the_latest_transfer(
+    tmp_path: Path,
+) -> None:
+    records = _run(
+        tmp_path,
+        _GRAPH
+        + """
+turn("triage", "1", "transfer_to_billing", __handoff_destination="billing")
+turn("billing", "2", "transfer_to_triage", __handoff_destination="triage")
+turn("triage", "3", "close_ticket")
+graph.end()
+""",
+    )
+    back = next(r for r in records if r["name"] == "transfer_to_triage")
+    rows = {row["name"]: row for row in _sealed(tmp_path)}
+    assert (rows["close_ticket"]["agent"], rows["close_ticket"]["parent_span_id"]) == ("triage", back["event_id"])
+
+
+def test_a_supervisor_s_hand_off_whose_worker_comes_back_to_it_is_a_hand_off_that_returned(
+    tmp_path: Path,
+) -> None:
+    # langgraph-supervisor adds an edge from each worker back to the supervisor: the supervisor's node running again
+    # after its worker's is the worker returning, so the transfer reads as a hand-off with its return.
+    records = _run(
+        tmp_path,
+        _GRAPH
+        + """
+turn("supervisor", "1", "transfer_to_billing_agent", __handoff_destination="billing_agent")
+turn("billing_agent", "2", "look_up_invoice")
+turn("supervisor", "3", "close_ticket")
+graph.end()
+""",
+    )
+    handed = next(r for r in records if r["name"] == "transfer_to_billing_agent" and "ended_at" in r)
+    assert "transfer" not in handed and handed["delegated_to"] == "billing_agent"
+    rows = _sealed(tmp_path)
+    assert _placed(rows)[:2] == [
+        ("transfer_to_billing_agent", "delegated", "supervisor", "unknown", ""),
+        ("look_up_invoice", "tool_call", "billing_agent", "observed", handed["event_id"]),
+    ]
+    assert [one["type"] for one in rows[0]["worker_events"]] == ["delegated", "returned"]
+
+
+def test_a_swarm_agent_handed_control_back_is_passed_control_not_returned_to(tmp_path: Path) -> None:
+    # Each agent of a swarm passes control on; the first agent running again because control was passed back to it is
+    # no return, so both transfers stay control passes with nothing returned.
+    _run(
+        tmp_path,
+        _GRAPH
+        + """
+turn("triage", "1", "transfer_to_billing", __handoff_destination="billing")
+turn("billing", "2", "transfer_to_triage", __handoff_destination="triage")
+turn("triage", "3", "close_ticket")
+graph.end()
+""",
+    )
+    rows = [row for row in _sealed(tmp_path) if row["name"].startswith("transfer_to_")]
+    assert [row["kind"] for row in rows] == ["transferred", "transferred"]
+    assert all("returned" not in [one["type"] for one in row["worker_events"]] for row in rows)
+
+
+def test_a_graph_agent_no_transfer_named_keeps_an_unknown_place(tmp_path: Path) -> None:
+    _run(
+        tmp_path,
+        _GRAPH
+        + """
+turn("supervisor", "1", "transfer_to_billing", __handoff_destination="billing")
+turn("reviewer", "2", "read_notes")
+graph.end()
+""",
+    )
+    rows = {row["name"]: row for row in _sealed(tmp_path)}
+    assert (rows["read_notes"]["agent"], rows["read_notes"]["relationship"]) == ("reviewer", "unknown")
 
 
 def test_the_top_agent_under_the_caller_s_context_hands_off_at_the_top_level(
@@ -1797,6 +2163,35 @@ def test_the_first_agent_in_an_openai_agents_run_hands_off_at_the_top_level(
     tmp_path: Path,
 ) -> None:
     _run(tmp_path, _OPENAI_AGENTS_RUN.replace("LATER", ""))
+    assert _placed(_sealed(tmp_path)) == [
+        ("ask_research", "delegated", "Lead", "observed", ""),
+    ]
+
+
+@pytest.mark.parametrize(
+    "livekit_tracer",
+    [
+        # LiveKit Cloud observability on: LiveKit records on a provider of its own.
+        'from opentelemetry.sdk.trace import TracerProvider as _Own\nlivekit = _Own().get_tracer("livekit-agents")',
+        # The process set a global provider, which LiveKit's tracer then records on.
+        'livekit = trace.get_tracer("livekit-agents")',
+    ],
+)
+def test_a_voice_turn_run_inside_livekit_s_own_recorded_spans_hands_off_at_the_top_level(
+    tmp_path: Path, livekit_tracer: str
+) -> None:
+    """A voice agent answering a turn inside LiveKit's `llm_node`, with LiveKit's session spans recorded: the app's run
+    opens under them. Those spans are LiveKit's, never the app's, so the run's first agent still hands off at the top,
+    as the same app does over chat."""
+    voice = """
+""" + livekit_tracer + """
+session = livekit.start_span("agent_session")
+turn_node = livekit.start_span("llm_node", context=set_span_in_context(session))
+with trace.use_span(turn_node):
+""" + "\n".join("    " + line for line in _OPENAI_AGENTS_RUN.replace("LATER", "").splitlines())
+    voice = voice.replace("    from opentelemetry.trace import set_span_in_context", "    pass")
+    voice = "from opentelemetry.trace import set_span_in_context\n" + voice + "\nturn_node.end()\nsession.end()\n"
+    _run(tmp_path, voice)
     assert _placed(_sealed(tmp_path)) == [
         ("ask_research", "delegated", "Lead", "observed", ""),
     ]
@@ -2062,6 +2457,419 @@ def test_a_call_named_by_its_worker_label_never_takes_another_worker_s_place() -
     )
     assert searches == [("A", None, ""), ("B", "sB", "hB")]
 
+
+# Two workers, order_lookup and refund, under one coordinator, as each framework's pinned instrumentor shapes the spans
+# (the shapes read from traceai-claude-agent-sdk 0.1.1, traceai-pydantic-ai 0.1.0, traceai-smolagents 0.1.6,
+# traceai-llamaindex 0.1.10 and Strands' own telemetry).
+_TWO_WORKERS = {
+    "claude_agent_sdk": """
+        from opentelemetry.trace import set_span_in_context
+        root = tracer.start_span("claude_agent.conversation", attributes={"claude_agent.span_kind": "conversation"})
+        for worker, tools in (("order_lookup", ("get_order", "list_refunds")), ("refund", ("issue_refund",))):
+            # The SDK's hook starts the Task span, then sets what it is.
+            task = tracer.start_span("tool.Task", context=set_span_in_context(root))
+            task.set_attribute("claude_agent.span_kind", "subagent")
+            task.set_attribute("claude_agent.tool.name", "Task")
+            task.set_attribute("claude_agent.subagent.type", worker)
+            task.set_attribute("claude_agent.tool.input", '{"subagent_type": "%s"}' % worker)
+            for tool in tools:
+                call = tracer.start_span("tool.mcp__%s__%s" % (worker, tool), context=set_span_in_context(task))
+                call.set_attribute("claude_agent.span_kind", "tool_execution")
+                call.set_attribute("claude_agent.tool.name", "mcp__%s__%s" % (worker, tool))
+                call.set_attribute("claude_agent.tool.input", '{"order_id": "1043"}')
+                call.set_attribute("claude_agent.tool.output", "ok")
+                call.end()
+            task.set_attribute("claude_agent.tool.output", worker + " done")
+            task.end()
+        root.end()
+    """,
+    "pydantic_ai": """
+        lead = {"pydantic_ai.span_kind": "agent_run", "pydantic_ai.agent.name": "returns_coordinator"}
+        with span("agent_run", **lead):
+            for worker, tools in (("order_lookup", ("get_order", "list_refunds")), ("refund", ("issue_refund",))):
+                with span("tool_call." + worker, **{"pydantic_ai.span_kind": "tool_call",
+                                                    "pydantic_ai.tool.name": worker,
+                                                    "pydantic_ai.tool.args": '{"order_id": "1043"}'}):
+                    with span("agent_run", **{"pydantic_ai.span_kind": "agent_run",
+                                              "pydantic_ai.agent.name": worker}):
+                        for tool in tools:
+                            with span("tool_call." + tool, **{"pydantic_ai.span_kind": "tool_call",
+                                                              "pydantic_ai.tool.name": tool,
+                                                              "pydantic_ai.tool.args": '{"order_id": "1043"}',
+                                                              "pydantic_ai.tool.result": "ok"}):
+                                pass
+    """,
+    # smolagents names an agent's span by its class only; each worker is a Tool that runs it, so the worker takes the
+    # name of the tool that handed it the work.
+    "smolagents": """
+        with span("CodeAgent.run", **{"gen_ai.span.kind": "AGENT"}):
+            for worker, tools in (("order_lookup", ("get_order", "list_refunds")), ("refund", ("issue_refund",))):
+                with span("WorkerTool", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": worker,
+                                           "input.value": '{"task": "order 1043"}'}):
+                    with span("ToolCallingAgent.run", **{"gen_ai.span.kind": "AGENT"}):
+                        for tool in tools:
+                            with span("SimpleTool", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": tool,
+                                                       "input.value": '{"order_id": "1043"}'}):
+                                pass
+    """,
+    # LlamaIndex's workflow agents carry no agent name either: each worker is a FunctionTool that runs it.
+    "llama_index": """
+        with span("FunctionAgent.run", **{"fi.span.kind": "AGENT"}):
+            for worker, tools in (("order_lookup", ("get_order", "list_refunds")), ("refund", ("issue_refund",))):
+                with span("FunctionTool.acall", **{"fi.span.kind": "TOOL", "gen_ai.tool.name": worker,
+                                                   "input.value": '{"order_id": "1043"}'}):
+                    with span("FunctionAgent.run", **{"fi.span.kind": "AGENT"}):
+                        for tool in tools:
+                            with span("FunctionTool.acall", **{"fi.span.kind": "TOOL", "gen_ai.tool.name": tool,
+                                                               "input.value": '{"order_id": "1043"}'}):
+                                pass
+    """,
+    "strands": """
+        with span("invoke_agent returns_coordinator", **{"gen_ai.operation.name": "invoke_agent",
+                                                       "gen_ai.agent.name": "returns_coordinator"}):
+            for worker, tools in (("order_lookup", ("get_order", "list_refunds")), ("refund", ("issue_refund",))):
+                with span("execute_tool " + worker, **{"gen_ai.operation.name": "execute_tool",
+                                                       "gen_ai.tool.name": worker}):
+                    with span("invoke_agent " + worker, **{"gen_ai.operation.name": "invoke_agent",
+                                                           "gen_ai.agent.name": worker}):
+                        for tool in tools:
+                            with span("execute_tool " + tool, **{"gen_ai.operation.name": "execute_tool",
+                                                                 "gen_ai.tool.name": tool}):
+                                pass
+    """,
+}
+# The tool each framework's worker calls is recorded under the name its instrumentor gives it.
+_WORKER_TOOLS = {
+    "claude_agent_sdk": {
+        "order_lookup": ["mcp__order_lookup__get_order", "mcp__order_lookup__list_refunds"],
+        "refund": ["mcp__refund__issue_refund"],
+    },
+}
+
+
+@pytest.mark.parametrize("framework", sorted(_TWO_WORKERS))
+def test_each_framework_s_two_workers_are_handed_off_to_and_own_their_tool_calls(tmp_path: Path, framework) -> None:
+    _run(tmp_path, _TWO_WORKERS[framework])
+    rows = _sealed(tmp_path)
+    hand_offs = {row["delegated_to"]: row for row in rows if row.get("delegated_to")}
+    assert set(hand_offs) == {"order_lookup", "refund"}
+    assert all(row.get("ended_at") for row in hand_offs.values())
+    tools = _WORKER_TOOLS.get(
+        framework, {"order_lookup": ["get_order", "list_refunds"], "refund": ["issue_refund"]}
+    )
+    for worker, names in tools.items():
+        owned = [row for row in rows if row["name"] in names]
+        assert [row["name"] for row in owned] == names
+        for row in owned:
+            assert (row["agent"], row["relationship"], row["parent_span_id"]) == (
+                worker,
+                "observed",
+                hand_offs[worker]["span_id"],
+            )
+
+
+def test_a_nul_byte_in_a_span_s_worker_name_or_payload_is_dropped(tmp_path: Path) -> None:
+    _run(
+        tmp_path,
+        r"""
+        from opentelemetry.trace import set_span_in_context
+        root = tracer.start_span("claude_agent.conversation", attributes={"claude_agent.span_kind": "conversation"})
+        task = tracer.start_span("tool.Task", context=set_span_in_context(root))
+        task.set_attribute("claude_agent.span_kind", "subagent")
+        task.set_attribute("claude_agent.subagent.type", "ref\x00und")
+        call = tracer.start_span("tool.issue_refund", context=set_span_in_context(task))
+        call.set_attribute("claude_agent.span_kind", "tool_execution")
+        call.set_attribute("claude_agent.tool.name", "issue_refund")
+        call.set_attribute("claude_agent.tool.input", '{"order_id": "10\x0043"}')
+        call.end(); task.end(); root.end()
+        """,
+    )
+    rows = _sealed(tmp_path)
+    assert [row["delegated_to"] for row in rows if row.get("delegated_to")] == ["refund"]
+    assert [row["agent"] for row in rows if row["name"] == "issue_refund"] == ["refund"]
+    assert "\\u0000" not in json.dumps(rows)
+
+
+def test_a_hand_off_the_observer_cannot_write_is_said_once_never_read_as_none(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness import call_runner as cr
+    from fi.alk.harness import simulation_worker_events as bootstrap
+
+    path = tmp_path / "calls.jsonl"
+    observer = bootstrap._ToolSpans(str(path))
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("could not write")
+
+    monkeypatch.setattr(observer, "_returned_to", broken)
+    for span_id in (1, 2):
+        observer.started(
+            SimpleNamespace(
+                get_span_context=lambda span_id=span_id: SimpleNamespace(span_id=span_id),
+                parent=None,
+                attributes={},
+                name="s",
+                end=lambda: None,
+                status=None,
+                start_time=0,
+                end_time=0,
+            )
+        )
+    lines = [json.loads(one) for one in path.read_text().splitlines()]
+    assert [one["kind"] for one in lines] == [bootstrap.HAND_OFF_UNRECORDED]
+
+    runtime = SimpleNamespace(metadata={"tool_trace_path": str(path)})
+    [notice] = cr.hand_off_notices(runtime)
+    assert notice["code"] == cr.HAND_OFFS_INCOMPLETE
+    # The marker is not a call, and not an unreadable line that would fail the capture.
+    assert cr._read_file_tool_calls(runtime, strict=True) == ([], [])
+    assert cr.HAND_OFF_UNRECORDED == bootstrap.HAND_OFF_UNRECORDED
+
+
+def test_a_trace_that_cannot_be_read_marks_the_trial_s_hand_offs_incomplete(tmp_path, monkeypatch) -> None:
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from fi.alk.harness import call_runner as cr
+
+    path = tmp_path / "calls.jsonl"
+    path.write_text("", encoding="utf-8")
+    runtime = SimpleNamespace(metadata={"tool_trace_path": str(path)})
+    assert cr.hand_off_notices(runtime) == []
+
+    def unreadable(*_args, **_kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    [notice] = cr.hand_off_notices(runtime)
+    assert notice["code"] == cr.HAND_OFFS_INCOMPLETE
+
+
+@pytest.mark.parametrize("start", ["spawn", "forkserver", "fork"])
+def test_a_voice_worker_s_job_process_records_the_hand_offs_its_agents_make(tmp_path: Path, start: str) -> None:
+    """A LiveKit worker runs each call in a job process it starts. With the voice bundle's environment and the hook
+    laid out as the sandbox lays it out for a LiveKit agent, the framework's instrumentor is turned on in the job
+    process, and the hand-off it reports is in the trace."""
+    from fi.alk.harness import livekit_tool_trace_bootstrap
+
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    _place_hook(hook)
+    (hook / "sitecustomize.py").write_bytes(Path(livekit_tool_trace_bootstrap.__file__).read_bytes())
+    site = tmp_path / "site"
+    site.mkdir()
+    # A framework whose agents hand off only through its instrumentor's spans, as the OpenAI Agents SDK's do.
+    (site / "langchain_core.py").write_text("def hand_off():\n    pass\n")
+    (site / "traceai_langchain.py").write_text(
+        textwrap.dedent(
+            """
+            from opentelemetry import trace
+
+            class LangChainInstrumentor:
+                def instrument(self):
+                    import langchain_core
+
+                    def hand_off():
+                        tracer = trace.get_tracer("traceai")
+                        def span(name, **attributes):
+                            return tracer.start_as_current_span(name, attributes=attributes)
+                        with span("Returns desk", **{"gen_ai.span.kind": "AGENT", "graph.node.id": "Returns desk"}):
+                            with span("ask_refund", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "ask_refund"}):
+                                with span("Refund worker", **{"gen_ai.span.kind": "AGENT",
+                                                              "graph.node.id": "Refund worker"}):
+                                    with span("issue_refund", **{"gen_ai.span.kind": "TOOL",
+                                                                 "gen_ai.tool.name": "issue_refund",
+                                                                 "input.value": '{"order": 7}',
+                                                                 "output.value": "issued"}):
+                                        pass
+
+                    langchain_core.hand_off = hand_off
+            """
+        )
+    )
+    (site / "job.py").write_text(
+        textwrap.dedent(
+            """
+            def run_call():
+                from opentelemetry import trace
+                from opentelemetry.sdk.trace import TracerProvider
+
+                trace.set_tracer_provider(TracerProvider())
+                import langchain_core
+
+                langchain_core.hand_off()
+                trace.get_tracer_provider().force_flush()
+                # The LiveKit worker's own line for the same tool call, as its hook writes it.
+                import json, os, time
+
+                with open(os.environ["HARNESS_TOOL_TRACE"], "a") as trace_file:
+                    trace_file.write(json.dumps({"name": "issue_refund", "arguments": {"order": 7}, "output": "issued",
+                                                 "is_error": False, "at": time.time(), "source": "livekit"}) + "\\n")
+            """
+        )
+    )
+    (tmp_path / "worker.py").write_text(
+        textwrap.dedent(
+            f"""
+            import multiprocessing, sys
+            import job
+
+            if __name__ == "__main__":
+                process = multiprocessing.get_context({start!r}).Process(target=job.run_call)
+                process.start()
+                process.join(30)
+                sys.exit(process.exitcode)
+            """
+        )
+    )
+    trace = tmp_path / "calls.jsonl"
+
+    def hand_offs(observe: str) -> list[dict]:
+        trace.unlink(missing_ok=True)
+        result = subprocess.run(
+            [sys.executable, str(tmp_path / "worker.py")],
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join([str(hook), str(site)]),
+                "HARNESS_TOOL_TRACE": str(trace),
+                "ALK_OBSERVE_FRAMEWORKS": observe,
+            },
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        assert result.returncode == 0, result.stderr
+        records = [json.loads(line) for line in trace.read_text().splitlines()] if trace.exists() else []
+        return [one for one in records if one.get("delegated_to")]
+
+    # The voice bundle's agent environment (ALK_OBSERVE_FRAMEWORKS) turns the instrumentor on in the job process.
+    # (A hand-off is written when the worker starts and again when it returns.)
+    assert {one["delegated_to"] for one in hand_offs("1")} == {"Refund worker"}
+    # The tool call the LiveKit hook and the framework's span both report is counted once, under its worker.
+    sealed = _sealed(tmp_path)
+    assert [row["name"] for row in sealed if row["name"] == "issue_refund"] == ["issue_refund"]
+    # Without it, as voice bundles were built before, the framework reports nothing: no hand-off.
+    assert hand_offs("0") == []
+
+
+_ADK_TRAVEL_APP = '''
+import asyncio
+from google.adk.agents import LlmAgent
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_response import LlmResponse
+from google.adk.runners import InMemoryRunner
+from google.adk.tools.agent_tool import AgentTool
+from google.genai import types
+
+
+class Scripted(BaseLlm):
+    script: list = []
+    step: int = 0
+
+    async def generate_content_async(self, llm_request, stream=False):
+        kind, value = self.script[min(self.step, len(self.script) - 1)]
+        self.step += 1
+        part = (
+            types.Part(function_call=types.FunctionCall(name=value[0], args=value[1]))
+            if kind == "call"
+            else types.Part(text=value)
+        )
+        yield LlmResponse(content=types.Content(role="model", parts=[part]))
+
+
+def memorize(key: str, value: str) -> dict:
+    return {"status": "stored"}
+
+
+poi = LlmAgent(name="poi_agent", model=Scripted(model="poi", script=[("say", "Trams.")]), instruction="poi")
+booking = LlmAgent(name="booking_agent", model=Scripted(model="book", script=[("say", "Booked.")]), instruction="b")
+planning = LlmAgent(
+    name="planning_agent",
+    model=Scripted(model="plan", script=[
+        ("call", ("memorize", {"key": "origin", "value": "San Francisco"})),
+        ("call", ("transfer_to_agent", {"agent_name": "booking_agent"})),
+    ]),
+    instruction="plan",
+    tools=[memorize],
+)
+root = LlmAgent(
+    name="root_agent",
+    model=Scripted(model="root", script=[
+        ("call", ("poi_agent", {"request": "ideas"})),
+        ("call", ("transfer_to_agent", {"agent_name": "planning_agent"})),
+    ]),
+    instruction="root",
+    tools=[AgentTool(agent=poi)],
+    sub_agents=[planning, booking],
+)
+
+
+async def main():
+    from opentelemetry import trace
+
+    runner = InMemoryRunner(agent=root, app_name="travel")
+    session = await runner.session_service.create_session(app_name="travel", user_id="u")
+    message = types.Content(role="user", parts=[types.Part(text="plan a trip")])
+    async for _ in runner.run_async(user_id="u", session_id=session.id, new_message=message):
+        pass
+    provider = trace.get_tracer_provider()
+    if hasattr(provider, "force_flush"):
+        provider.force_flush()
+
+
+asyncio.run(main())
+'''
+
+
+def test_adk_s_transfers_and_agent_tool_calls_are_read_as_hand_offs_beside_the_calls_the_chat_reports(
+    tmp_path: Path,
+) -> None:
+    """A real ADK 2.7.1 app, as the travel concierge runs: a root agent asks an AgentTool, then transfers control, and
+    the agent it handed to transfers again. ADK's own transfer spans keep no arguments, while the chat reports each
+    `transfer_to_agent` with the agent it named: every transfer keeps the agent it handed control to."""
+    pytest.importorskip("google.adk")
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    _place_hook(hook)
+    (hook / "sitecustomize.py").write_text("import simulation_mark_bootstrap\nsimulation_mark_bootstrap.install()\n")
+    (tmp_path / "app.py").write_text(_ADK_TRAVEL_APP)
+    result = subprocess.run(
+        [sys.executable, str(tmp_path / "app.py")],
+        env={
+            **os.environ,
+            "PYTHONPATH": str(hook),
+            "HARNESS_TOOL_TRACE": str(tmp_path / "calls.jsonl"),
+            "ALK_OBSERVE_FRAMEWORKS": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    runtime = EnvironmentRuntime(
+        runtime_id="rt-1",
+        world_index=0,
+        bundle_digest="sha256:" + "0" * 64,
+        state=RuntimeState.READY,
+        endpoints={},
+        metadata={"tool_trace_path": str(tmp_path / "calls.jsonl")},
+    )
+    # What the chat itself reported: each transfer with the agent it named, and no span of its own.
+    reported = [
+        Call(name="transfer_to_agent", arguments={"agent_name": name}, result={"result": None}, at=at)
+        for at, name in ((1.0, "planning_agent"), (2.0, "booking_agent"))
+    ]
+    sealed = [trace_row(call) for call in call_runner.collect_seam_calls(runtime, None, observed=reported)]
+    transfers = {row["arguments"]["agent_name"]: row for row in sealed if row["name"] == "transfer_to_agent"}
+    assert set(transfers) == {"planning_agent", "booking_agent"}
+    assert {name: (row.get("delegated_to"), row.get("agent")) for name, row in transfers.items()} == {
+        "planning_agent": ("planning_agent", "root_agent"),
+        "booking_agent": ("booking_agent", "planning_agent"),
+    }
+    # The AgentTool call is still a hand-off that returns, and a worker's own call keeps its worker.
+    assert any(row["name"] == "poi_agent" for row in sealed)
+    assert next(row for row in sealed if row["name"] == "memorize")["agent"] == "planning_agent"
 
 
 def test_the_hook_notes_each_frameworks_span_source_beside_the_trace(tmp_path: Path) -> None:

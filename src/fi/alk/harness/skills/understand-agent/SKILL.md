@@ -60,8 +60,16 @@ Find, in roughly this order:
    schema, a tool array. Record the exact callable name the model would emit, not a friendly
    label.
 
-   If the agent hands work to other agents, record each one in `workers`: an `id`, the `name` the
-   app gives it, and the contract tools it holds. Every worker tool is also in `tools`.
+   If the agent hands work to other agents (a sub-agent called as a tool, a hand-off, graph nodes,
+   a crew), record each one in `workers`: an `id`, the `name` the app gives it, the contract tools
+   it holds, and `binding: separate` when its tools are reached through code of their own rather
+   than code the agents share, with `address_env` naming the environment variable that code reads
+   for its tools' base address. When the repository says a separate worker may use fewer tools than
+   its code holds, list those in `allowed_tools`; a shared worker gets none, because the world cannot
+   tell its calls apart. Every worker tool is also in `tools`. When the app runs a worker as a
+   service of its own (its own process, which the coordinator reaches over the network), set
+   `process` to the name of that process in the environment; leave it empty for a worker that runs
+   inside the app's one process.
 
 2. **Argument names and types.** Read the signature. An argument declared as a list is a
    different tool from one declared as a single value, and an environment built on the wrong one
@@ -272,7 +280,9 @@ Find, in roughly this order:
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
-   startable but the simulator cannot honestly claim to have exercised it.
+   startable but the simulator cannot honestly claim to have exercised it. When the ingress is
+   HTTP, the runtime command must start the long-running web or API server the source documents
+   for it, never a terminal REPL that reads a console.
 
    **A LangGraph app comes first.** Before choosing a command or an HTTP interface, look for a
    `langgraph.json` that names a graph. When the requirements the app installs have no

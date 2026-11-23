@@ -988,6 +988,8 @@ def workflow_probe(tmp_path, url, **changes):
         redaction_values={"key": "secret123"}, timeout=1,
     )
     args.update(changes)
+    if args["timeout"] is None:
+        del args["timeout"]
     return probe_chat_workflow(**args)
 
 
@@ -1428,6 +1430,11 @@ def test_native_http_200_failure_rule_unlocks_existing_setup_repair(tmp_path, pr
         ([dict(ok=False, refused=True, refusal_code="not_permitted")], False),
         # The world's own rule said no: the tool ran, so the binding works.
         ([dict(ok=False, refused=True, refusal_code="world_rule")], True),
+        # A worker's call refused at the door for that worker's limits came through its bound channel.
+        ([dict(ok=False, refused=True, refusal_code="not_permitted", worker_id="refund")], True),
+        ([dict(ok=False, refused=True, refusal_code="deadline_passed", worker_id="refund")], True),
+        # A channel no worker owns is a binding problem.
+        ([dict(ok=False, refused=True, refusal_code="identity_conflict", worker_id="refund")], False),
         # One call ran among failures.
         ([dict(ok=False, refused=True, refusal_code="unknown_tool"), dict(ok=True, result={"active": True})], True),
     ],
@@ -1502,6 +1509,65 @@ def test_an_aborted_readiness_call_counts_its_tool_calls_not_its_hand_offs(
         asyncio.run(workflow_probe(tmp_path, url))
     _, receipt = workflow_receipt(tmp_path)
     assert receipt["tool_call_count"] == 1
+
+
+def test_the_readiness_call_reads_calls_from_the_bundle_s_own_evidence_seam(tmp_path, monkeypatch):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.bundle_v2 import EvidenceSeam
+    from fi.alk.harness.world.runtime import Call
+
+    seen = {}
+
+    class Runner:
+        def __init__(self, _artifacts, context):
+            seen["seam"] = context.evidence_seam
+            self._contract = None
+            self.received = []
+
+        async def run(self, _scenario, _runtime):
+            return SimpleNamespace(calls=(Call(name="issue_refund", arguments={}),), turns=1)
+
+    monkeypatch.setattr(chat_call_runner, "HostedChatCallRunner", Runner)
+    asyncio.run(workflow_probe(tmp_path, "http://x", evidence_seam=EvidenceSeam.TOOL_TRACE))
+    assert seen["seam"] is EvidenceSeam.TOOL_TRACE
+    assert workflow_receipt(tmp_path)[1]["status"] == "passed"
+
+
+@pytest.mark.parametrize(
+    ("config", "budget", "deadline"),
+    [
+        # No reply deadline of its own: the conversation keeps today's 300 s.
+        ({}, None, "300s"),
+        # One reply deadline per turn (the scenario's 10), within the build's budget.
+        ({"chat_call_timeout_seconds": 60}, None, "600s"),
+        ({"chat_call_timeout_seconds": 900}, None, "3300s"),
+        ({"chat_call_timeout_seconds": 900}, "1200", "1200s"),
+        # A short reply deadline never shortens the conversation below the default.
+        ({"chat_call_timeout_seconds": 20}, None, "300s"),
+    ],
+)
+def test_the_private_workflow_keeps_the_agent_s_chat_call_timeout_within_the_budget(
+    tmp_path, monkeypatch, config, budget, deadline
+):
+    from fi.alk.harness import chat_call_runner
+
+    if budget is not None:
+        monkeypatch.setenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", budget)
+    else:
+        monkeypatch.delenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", raising=False)
+
+    async def past_deadline(self, scenario, runtime):
+        raise TimeoutError
+
+    monkeypatch.setattr(chat_call_runner.HostedChatCallRunner, "run", past_deadline)
+    job = SimpleNamespace(metadata={}, require_tool_workflow=True, agent=SimpleNamespace(config=config))
+    with pytest.raises(RuntimeValidationError) as failure:
+        # No timeout given: the probe's own default stands unless the agent sets one.
+        asyncio.run(workflow_probe(tmp_path, "http://127.0.0.1:1", job=job, timeout=None))
+    assert failure.value.diagnostics[0].code == "chat_ingress_timeout"
+    assert f"exceeded its {deadline} deadline" in failure.value.diagnostics[0].redacted_message
+    _path, receipt = workflow_receipt(tmp_path)
+    assert receipt["timeout_seconds"] == float(deadline[:-1])
 
 
 def _traced_unreachable_contract():

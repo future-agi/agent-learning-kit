@@ -43,7 +43,15 @@ def test_overlapping_calls_keep_scenario_settings_private(tmp_path, monkeypatch)
     async def run():
         both_started = asyncio.Event()
 
-        async def worker(module, payload, *, environ, work_directory, pass_fds=()):
+        async def worker(
+            module,
+            payload,
+            *,
+            environ,
+            work_directory,
+            stop_requested=None,
+            pass_fds=(),
+        ):
             before = dict(environ)
             assert "HARNESS_PLATFORM_API_KEY" not in environ
             snapshots.append(environ)

@@ -27,9 +27,11 @@ import ast
 import inspect
 import re
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
+from .actors import is_pre_run
 from .world.runtime import Call, GeneratedWorld
+from .world_door import AGENT, is_committed, is_read, logged_as, named_alike, row_arguments, same_write
 
 
 @dataclass
@@ -141,11 +143,105 @@ def same_id(first: Any, second: Any) -> bool:
     return bool(mine) and mine == theirs
 
 
+# What the action log says of a call the world timed out on: refused before its commit, or committed with the answer
+# lost (`world_door._faulted`).
+TIMED_OUT = ("timeout_before_commit", "response_lost")
+
+
+def _agent_writes(world: Any) -> list[Mapping[str, Any]]:
+    """The agent's attempts to change the world this trial, in the order the world saw them."""
+    return [
+        row
+        for row in world.events(actor_id=AGENT)
+        if not is_read(row) and not is_pre_run(row.get("idempotency_key"))
+    ]
+
+
+def _fixed(reference: Sequence[Mapping[str, Any]], action: str) -> set[str]:
+    """The arguments the reference fixes for this action: a check's reference keeps only those of each step."""
+    return {
+        field
+        for step in reference or ()
+        if named_alike(action, str(step.get("tool") or ""))
+        for field in step.get("arguments") or {}
+    }
+
+
+def _repeats(
+    first: Mapping[str, Any],
+    later: Mapping[str, Any],
+    reference: Sequence[Mapping[str, Any]],
+    own_words: Sequence[str] = (),
+) -> bool:
+    """The same write of one record, as duplicate commits read it: rewording an argument the check names as the
+    agent's own words (`own_words`) is still the same write."""
+    action = logged_as(first)
+    return logged_as(later) == action and same_write(first, later, _fixed(reference, action), own_words)
+
+
+def _pair(first: Mapping[str, Any], later: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "action": logged_as(first),
+        "arguments": row_arguments(first.get("arguments")),
+        "first_action_id": first.get("action_id"),
+        "later_action_id": later.get("action_id"),
+        "later_outcome": later.get("outcome"),
+    }
+
+
+def retried_timeouts(
+    world: Any, reference: Sequence[Mapping[str, Any]] = (), own_words: Sequence[str] = ()
+) -> list[dict[str, Any]]:
+    """Each write of the agent's the world timed out on that the agent then attempted again on the same record.
+    `own_words` names arguments the agent may reword on a retry (a note); every other argument has to match."""
+    rows = _agent_writes(world)
+    found = []
+    for index, first in enumerate(rows):
+        if first.get("error") not in TIMED_OUT:
+            continue
+        retry = next((later for later in rows[index + 1 :] if _repeats(first, later, reference, own_words)), None)
+        if retry is not None:
+            found.append(_pair(first, retry))
+    return found
+
+
+def repeated_commits(
+    world: Any, reference: Sequence[Mapping[str, Any]] = (), own_words: Sequence[str] = ()
+) -> list[dict[str, Any]]:
+    """Each write of the agent's the world committed again on the same record: one entry per extra commit.
+    `own_words` names arguments the agent may reword on a retry (a note); every other argument has to match."""
+    committed = [row for row in _agent_writes(world) if is_committed(row)]
+    found = []
+    for index, later in enumerate(committed):
+        first = next((row for row in committed[:index] if _repeats(row, later, reference, own_words)), None)
+        if first is not None:
+            found.append(_pair(first, later))
+    return found
+
+
+def committed_writes(world: Any) -> list[dict[str, Any]]:
+    """The agent's writes the world committed. None means any change the reply reports never happened."""
+    return [
+        {"action": logged_as(row), "arguments": row_arguments(row.get("arguments")), "action_id": row.get("action_id")}
+        for row in _agent_writes(world)
+        if is_committed(row)
+    ]
+
+
+# Read-only helpers every check is given beside `world` and `calls`.
+CHECK_HELPERS = {
+    "same_id": same_id,
+    "retried_timeouts": retried_timeouts,
+    "repeated_commits": repeated_commits,
+    "committed_writes": committed_writes,
+}
+
+
 def check_namespace() -> dict[str, Any]:
     """The names every check is given when it runs, wherever it runs (authoring, a hosted trial's phase worker, an
     injected local world): the helpers authoring tells checks to use, such as ``same_id``. One set, so a check that
     proves while authoring never fails on a name a trial does not give it."""
-    return {"same_id": same_id}
+    return dict(CHECK_HELPERS)
 
 
 def run_check(

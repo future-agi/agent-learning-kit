@@ -881,6 +881,38 @@ def configuration_addresses_from_endpoints(
 
 _PLACEHOLDER = re.compile(r"\{\{([^{}]+)\}\}")
 _NAMED_PLACEHOLDER = re.compile(r"^(PORT|HOST)_(.+)$")
+# A declared worker's own channel at this world's tool proxy; see `_worker_channel`.
+WORKER_CHANNEL_PLACEHOLDER = re.compile(r"^WORKER_CHANNEL_([A-Za-z0-9_.-]+)$")
+WORKER_CHANNELS_FILE = "worker-channels.json"
+
+
+def _worker_channel(world_dir: Path, worker: str) -> str:
+    """This world's channel token for one worker, minted on first use and kept in the tool proxy's world directory,
+    which the proxy reads to tell workers apart. A sibling of `world_dir`: every process of a world shares a parent."""
+    path = world_dir.parent / "tool-proxy" / WORKER_CHANNELS_FILE
+    try:
+        channels = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        channels = {}
+    token = next((key for key, value in channels.items() if value == worker), None)
+    if token is None:
+        token = secrets.token_hex(16)
+        channels[token] = worker
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_private(path, json.dumps(channels))
+    return token
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Writes `path` readable by its owner only, given to the owner of its directory (the tool proxy's user, once its
+    world directory is made); the proxy's spawn re-owns it when the file came first."""
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    path.chmod(0o600)
+    owner = path.parent.stat()
+    if (owner.st_uid, owner.st_gid) != (os.getuid(), os.getgid()):
+        user_files.chown_no_follow(path, owner.st_uid, owner.st_gid)
 
 
 def render_template(
@@ -909,6 +941,9 @@ def render_template(
             return str(world_dir)
         if token == "DB_NAME":
             return f"w{world_index}"
+        channel = WORKER_CHANNEL_PLACEHOLDER.match(token)
+        if channel:
+            return _worker_channel(world_dir, channel.group(1))
         named = _NAMED_PLACEHOLDER.match(token)
         if named:
             kind, name = named.groups()
@@ -2445,6 +2480,9 @@ def spawn_source_process(
                 observer.chmod(0o444)
         if resolved_user is not None:
             chown(world_dir, resolved_user.pw_uid, resolved_user.pw_gid)
+            # Worker channel tokens written before this world directory was given away stay readable by its process.
+            if (world_dir / WORKER_CHANNELS_FILE).is_file():
+                chown(world_dir / WORKER_CHANNELS_FILE, resolved_user.pw_uid, resolved_user.pw_gid)
             if isolation_mode() is IsolationMode.PER_USER:
                 # The harness's workers hold no capabilities, yet read what the process writes
                 # here (its tool-call trace) by name: they pass through, though not list it.
@@ -5617,6 +5655,12 @@ def _clone_or_reset_world(
     in_place = (
         keep_processes
         and bool(existing_handles)
+        # A process the harness stopped mid-trial (a worker past its deadline) comes back with a full respawn.
+        and all(
+            handle.handle.is_running()
+            for name, handle in existing_handles.items()
+            if name not in job_shared_handles
+        )
         and _stores_reset_in_place(manifest)
         and not any(
             isinstance(p, SourceProcess) and p.workspaces for p in manifest.processes
@@ -7711,6 +7755,21 @@ class ProcessRuntimeProvider:
         import asyncio
 
         await asyncio.to_thread(self._reset_sync, runtime, keep_processes)
+
+    async def stop_process(self, runtime: EnvironmentRuntime, process_name: str) -> bool:
+        """End one of this world's own processes mid-trial (a worker the app serves alone, past its deadline). The
+        world's next reset starts it again. False when the world has no such process of its own: a job-shared engine
+        is never stopped for one world."""
+        import asyncio
+
+        return await asyncio.to_thread(self._stop_process_sync, runtime, process_name)
+
+    def _stop_process_sync(self, runtime: EnvironmentRuntime, process_name: str) -> bool:
+        handle = (self._world_handles.get(runtime.world_index) or {}).get(process_name)
+        if handle is None or process_name in self._job_shared_handles:
+            return False
+        _terminate_and_wait(handle.handle)
+        return True
 
     def _reset_sync(
         self, runtime: EnvironmentRuntime, keep_processes: bool = False

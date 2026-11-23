@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
+import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -432,3 +433,29 @@ def test_an_older_bundle_s_action_log_records_how_each_call_was_made(worlds, mon
     log._ensure_call_columns()
 
     assert {"method", "fault"} <= log._table_columns()
+
+
+@real_postgres
+def test_a_world_s_role_keeps_its_workers_runs_and_stops(worlds):
+    """The in-process door marks a worker's run and claims its stop with the world's role, which may neither create
+    nor alter a table: the baseline made them before the grant."""
+    from fi.alk.harness import world_door
+
+    connect, _reset, _baseline = worlds
+    with connect(0, "w0") as connection:
+        address = (
+            f"postgresql://{connection.info.user}:{connection.info.password}"
+            f"@{connection.info.host}:{connection.info.port}/w0"
+        )
+        connection.execute(
+            "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at, started_at) VALUES (1, '[]', %s, %s)",
+            (time.time() - 5, time.time() - 10),
+        )
+    world_door._TRIAL_SCHEMA_MADE.discard(address)
+    world_door.mark_worker_run(address, "refunds")
+    assert world_door.claim_worker_stop(address, "refunds", "", lambda: True) is True
+    with connect(0, "w0") as connection:
+        assert connection.execute("SELECT worker FROM _alk_worker_runs").fetchall() == [("refunds",)]
+        assert connection.execute("SELECT worker, reason FROM _alk_worker_stops").fetchall() == [
+            ("refunds", "deadline_passed")
+        ]

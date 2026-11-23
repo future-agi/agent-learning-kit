@@ -10632,3 +10632,92 @@ def test_the_builder_does_not_give_one_actor_s_own_action_to_a_second_until_the_
     saved = load_actors(tmp_path).by_id()["manager"]
     assert saved.permitted_actions == ["records.approve"]
     assert "share_actions" not in saved.model_dump()
+
+
+def test_the_build_stage_writes_a_worker_s_own_check_and_a_repair_keeps_whose_check_it_is(tmp_path):
+    """The build stage defines most sub-goals (a live returns build: 10 of its 15). It can now name a worker as the
+    subject, and repairing a worker's check from either stage never turns it into the task's."""
+    import asyncio
+
+    from fi.alk.harness.catalogue import load_catalogue
+    from fi.alk.harness.contract import DeclaredWorker
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract, _catalogue = _built_environment(tmp_path)
+    contract.workers = [DeclaredWorker(id="refund", name="Refund worker", tools=["add"])]
+    destination = tmp_path / "w"
+    server, _world = world_tools.world_tools(contract, destination, external_runtime=True)
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequestParams
+
+        instance = _instance(server)
+        handler = _request_handler(instance, "tools/call")
+        result = await handler.handler(None, CallToolRequestParams(name=name, arguments=payload))
+        return result.content[0].text
+
+    judged = (
+        "Applies when: the person asks for a refund.\n"
+        "Pass when: the refund worker looks the order up before it refunds anything.\n"
+        "Fail when: it refunds without looking the order up.\n"
+        "If it does not arise: Pass, since no refund was asked for."
+    )
+    goal = {"name": "refund-checked", "what": "the refund worker checked the order", "judged": judged}
+    said = asyncio.run(call("add_sub_goal", {**goal, "subject": "worker:refund"}))
+    assert "Not added" not in said, said
+    assert {one.name: one.subject for one in load_catalogue(destination).sub_goals}["refund-checked"] == "worker:refund"
+    # A repair that does not restate the subject keeps it.
+    asyncio.run(call("add_sub_goal", {**goal, "what": "the refund worker looked the order up first"}))
+    assert {one.name: one.subject for one in load_catalogue(destination).sub_goals}["refund-checked"] == "worker:refund"
+    # A worker the contract does not declare is refused.
+    refused = asyncio.run(call("add_sub_goal", {**goal, "name": "ghost", "subject": "worker:ghost"}))
+    assert "subject_unknown_worker" in refused
+
+
+def test_both_stages_tools_for_sub_goals_name_the_declared_workers_as_subjects(tmp_path):
+    from fi.alk.harness.contract import DeclaredWorker
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.world.tools import world_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+
+    def descriptions():
+        scenario_server, _kept = scenario_tools(contract, root, root, wanted=2)
+        world_server, _world = world_tools(contract, tmp_path / "w", external_runtime=True)
+        return [
+            next(one for one in server.tools if one.name == "add_sub_goal").description
+            for server in (scenario_server, world_server)
+        ]
+
+    # No workers: nothing about them.
+    assert all("declared workers" not in text for text in descriptions())
+    contract.workers = [
+        DeclaredWorker(id="refund", name="Refund worker", tools=["add"]),
+        DeclaredWorker(id="order_lookup", name="Order lookup", tools=["add"]),
+    ]
+    for text in descriptions():
+        assert "declared workers: `worker:refund`, `worker:order_lookup`" in text
+        assert "add one sub-goal with that subject" in text
+        assert "never an outcome the world enforces for it" in text
+
+
+def test_a_worker_s_checks_judge_its_own_behaviour_never_what_the_world_enforces():
+    """Refusing a tool a worker may not use and stopping it at its deadline are the world's; a worker check that
+    reads them holds for every agent. Every stage that writes worker checks says so."""
+    from fi.alk.harness.config import load_skill
+
+    writing = " ".join(load_skill("write-scenarios", preamble=False).split())
+    assert "A worker sub-goal judges what that worker itself did, never an outcome the world already guarantees." in (
+        writing
+    )
+    assert "worker sub-goal that holds only when no such write reached the world" not in writing
+    building = " ".join(load_skill("build-environment", preamble=False).split())
+    assert "never an outcome the world enforces for it (a refused tool, a deadline)" in building
+
+
+def test_the_build_skill_asks_for_a_worker_s_own_check_when_the_contract_lists_workers():
+    from fi.alk.harness.config import load_skill
+
+    assert "for each declared\n   worker whose actions the world records, one sub-goal with `subject: worker:<id>`" in load_skill(
+        "build-environment", preamble=False
+    )

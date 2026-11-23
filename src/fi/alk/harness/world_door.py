@@ -11,7 +11,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Protocol
@@ -86,6 +86,15 @@ class ToolCall:
     content_type: str = "application/json"
     # Who the actor is in the service it acts in (its identity there), sent to the service beside the call.
     identity: str = ""
+    # The agent's worker that made the call, from the channel it came in on: None when it came in on no worker's
+    # channel, "" when the channel belongs to no worker of this trial.
+    worker: str | None = None
+    # Why a call is the coordinator's though this trial gave its workers channels: it came in on the shared tools
+    # address (`SHARED_ADDRESS`). Attributed, not isolated: any worker can call that address, and the log says so.
+    attribution: str | None = None
+    # The agent's own name for the tool this action is, when the surface knows it (a route is often named otherwise,
+    # `<tool>` -> `<resource>.get`); kept beside `name` so grading reads the tool the agent called.
+    tool: str = ""
     # `read` or `write` as the tool's contract declares it; empty reads the HTTP method (see `call_effect`).
     effect: str = ""
 
@@ -291,6 +300,80 @@ def same_action(row: Mapping[str, Any], action: str) -> bool:
     return bool(action) and str(row.get("name") or "") in (action, action.rsplit(".", 1)[-1])
 
 
+def row_arguments(value: Any) -> Any:
+    """A row's arguments as data: a log read back from the database can hold them as JSON text."""
+    if isinstance(value, (str, bytes)):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def is_committed(row: Mapping[str, Any]) -> bool:
+    """Whether a log row is a committed action; a row from before outcomes were logged says so by `ok`."""
+    return (row.get("outcome") or ("committed" if row.get("ok", True) else "")) == "committed"
+
+
+def named_alike(action: str, name: str) -> bool:
+    """A fault names the world action (`service_a.update`); a call may carry the tool's own name (`update`). Two full
+    names match only when equal, so `crm.update` is never `ticket.update`."""
+    if not action or not name:
+        return False
+    if "." in action and "." in name:
+        return action == name
+    return action.rsplit(".", 1)[-1] == name.rsplit(".", 1)[-1]
+
+
+def fixed_fields(solution: Sequence[Any], action: str) -> set[str]:
+    """The arguments the reference solution fixes for this action, over every step that takes it."""
+    fields: set[str] = set()
+    for step in solution or ():
+        step = step.model_dump() if hasattr(step, "model_dump") else step
+        if isinstance(step, Mapping) and named_alike(action, str(step.get("tool") or "")):
+            fields |= set(step.get("fixed") or {})
+    return fields
+
+
+def chosen_fields(solution: Sequence[Any], action: str) -> set[str]:
+    """The arguments the reference solution gives this action without fixing them: values the agent chooses (a note,
+    a category), so a retry may word them otherwise."""
+    fields: set[str] = set()
+    for step in solution or ():
+        step = step.model_dump() if hasattr(step, "model_dump") else step
+        if isinstance(step, Mapping) and named_alike(action, str(step.get("tool") or "")):
+            fields |= set(step.get("arguments") or {}) - set(step.get("fixed") or {})
+    return fields
+
+
+def same_write(
+    first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[str], own_words: Collection[str] = ()
+) -> bool:
+    """Whether two writes of one action are the same write: equal arguments, or equal on every fixed argument and on
+    every other argument but those the caller names as the agent's own words (`own_words`, a note it may reword on a
+    retry). Nothing is read from an argument's name: unnamed, every argument has to match, so another value
+    (order-A, order-B) is another write."""
+    one, two = row_arguments(first.get("arguments")), row_arguments(later.get("arguments"))
+    if exactly(one, two):
+        return True
+    if not isinstance(one, dict) or not isinstance(two, dict):
+        return False
+    carried = [field for field in fixed if field in one or field in two]
+    if not carried:
+        return False
+    others = (set(one) | set(two)) - set(fixed)
+    return all(exactly(one.get(field), two.get(field)) for field in carried) and all(
+        exactly(one.get(field), two.get(field))
+        for field in others
+        if not (field in own_words and isinstance(one.get(field), str) and isinstance(two.get(field), str))
+    )
+
+
+def exactly(one: Any, two: Any) -> bool:
+    """Equal as the same JSON: `true` is never `1`, nor `1.0` the integer `1`."""
+    return json.dumps(one, sort_keys=True, default=str) == json.dumps(two, sort_keys=True, default=str)
+
+
 def call_effect(call: ToolCall) -> str:
     """Whether a call reads or writes the world: a record change writes; else the tool's declared effect; else a
     read-only HTTP method reads. Anything undeclared and not read-only counts as a write, as every call did before."""
@@ -307,6 +390,253 @@ def is_read(row: Mapping[str, Any]) -> bool:
     return row.get("effect") == "read"
 
 
+def world_action(route: str) -> str:
+    """A route or endpoint as the world names the action it takes: the path without its query, `/` read as `.`.
+    Every surface (the proxy, the sealed allow-lists, the service routes) names actions through this one rule."""
+    return str(route or "").split("?", 1)[0].strip("/").replace("/", ".")
+
+
+# What this door enforces, sealed beside it in a bundle: a runner reads it rather than assume a newer door than shipped.
+DOOR_FILE = "door.json"
+DOOR_CAPABILITIES = {"worker_deadlines": "per_worker"}
+# A worker's call refused because the world could not read its limits: an infrastructure failure, not the worker's.
+LIMITS_UNREADABLE = "limits_unreadable"
+# The attribution of a call that reached the door on the shared tools address while workers had channels.
+SHARED_ADDRESS = "shared_address"
+
+# Kept in the world's database, never in a file the agent's process could read or rewrite.
+# Known limit: a connection with the world's role can write it until per-user database isolation is on.
+TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
+# When this trial's workers stop being allowed to act, beside its faults; null when the scenario sets no budget.
+TRIAL_DEADLINE_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadline_at DOUBLE PRECISION"
+# Each named worker's own deadline, {worker id: epoch seconds}, when the scenario gives a budget per worker.
+TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadlines JSONB"
+# When this trial's call read its stopped workers to seal them; a worker's process is never ended after it, so a stop
+# is sealed or never made. Null until then, and again at each trial's start.
+TRIAL_SEALED_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS sealed_at DOUBLE PRECISION"
+# When this trial started: a stop row from before it is an earlier trial's, left by a clear that failed.
+TRIAL_STARTED_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS started_at DOUBLE PRECISION"
+
+
+# The workers the harness stopped in this trial, written by whoever ended a worker past its deadline (the scheduler ends
+# its process, the in-process door its task); cleared at each trial's start.
+WORKER_STOPS_DDL = (
+    "CREATE TABLE IF NOT EXISTS _alk_worker_stops "
+    "(worker TEXT PRIMARY KEY, process TEXT NOT NULL, at DOUBLE PRECISION NOT NULL, reason TEXT NOT NULL)"
+)
+
+# The workers the in-process door saw run as a task of their own this trial, so ones it could stop at their deadline;
+# only the run shows how the framework runs a worker. Cleared at each trial's start.
+WORKER_RUNS_DDL = "CREATE TABLE IF NOT EXISTS _alk_worker_runs (worker TEXT PRIMARY KEY, at DOUBLE PRECISION NOT NULL)"
+
+
+# The world databases whose trial tables this process has made, so the schema is changed once per world, never at
+# each trial: an ALTER takes the table's lock, which a stop under way holds.
+_TRIAL_SCHEMA_MADE: set[str] = set()
+_TRIAL_SCHEMA_LOCK = threading.Lock()
+
+
+_TRIAL_COLUMNS = frozenset({"worker_deadline_at", "worker_deadlines", "sealed_at", "started_at"})
+
+
+def _trial_schema(address: str) -> None:
+    """Makes this world's trial tables and columns when any is missing, once per world database in this process. A
+    world made from a baseline has them all (`HARNESS_TABLES_DDL`), and its role may neither create nor alter them."""
+    with _TRIAL_SCHEMA_LOCK:
+        if address in _TRIAL_SCHEMA_MADE:
+            return
+        import psycopg
+
+        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+            present = connection.execute(
+                "SELECT to_regclass('_alk_worker_stops') IS NOT NULL AND to_regclass('_alk_worker_runs') IS NOT NULL, "
+                "ARRAY(SELECT attname::text FROM pg_attribute WHERE attrelid = to_regclass('_alk_trial_faults') "
+                "AND NOT attisdropped)"
+            ).fetchone()
+            if not (present[0] and _TRIAL_COLUMNS <= set(present[1])):
+                for statement in (
+                    TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL,
+                    TRIAL_STARTED_DDL, WORKER_STOPS_DDL, WORKER_RUNS_DDL,
+                ):
+                    connection.execute(statement)
+        _TRIAL_SCHEMA_MADE.add(address)
+
+
+def _on_trial_tables(address: str, work: Callable[[], Any]) -> Any:
+    """Runs `work` on this world's trial tables, making them first; once more after making them again when the world's
+    database was made anew since (a reset from its seed drops them)."""
+    import psycopg
+
+    _trial_schema(address)
+    try:
+        return work()
+    except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
+        with _TRIAL_SCHEMA_LOCK:
+            _TRIAL_SCHEMA_MADE.discard(address)
+        _trial_schema(address)
+        return work()
+
+
+def worker_due(own: object, trial: object) -> float | None:
+    """When a worker's time in this trial is up: the earlier of its own deadline and the trial's, as the door refuses
+    its calls; None when neither is set."""
+    times = [
+        float(one) for one in (own, trial) if isinstance(one, (int, float)) and not isinstance(one, bool)
+    ]
+    return min(times) if times else None
+
+
+# A worker past its deadline whose run did not end at its cancel: not held to its deadline.
+NOT_STOPPED = "not_stopped"
+
+
+def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[], bool]) -> bool:
+    """End this worker's run with `stop` and keep that it ended, unless the call has already sealed its stops: the
+    trial's row stays locked from the check to the record, so the seal (`read_worker_stops`) waits for a stop under
+    way and a stop never lands after it. True when the run was ended and kept."""
+    import psycopg
+
+    def claim() -> bool:
+        with psycopg.connect(address, connect_timeout=5) as connection:
+            with connection.transaction():
+                row = connection.execute(
+                    "SELECT sealed_at, worker_deadline_at, worker_deadlines, started_at FROM _alk_trial_faults WHERE id = 1 "
+                    "FOR UPDATE"
+                ).fetchone()
+                if row is None or row[0] is not None:
+                    return False
+                # Read again under the lock: the deadline the watcher saw may since have been cleared with the call.
+                named = row[2] if isinstance(row[2], dict) else {}
+                due = worker_due(named.get(worker), row[1])
+                if due is None or time.time() <= due:
+                    return False
+                started = row[3] if isinstance(row[3], (int, float)) else 0.0
+                stopped = stop()
+                # Kept either way: a worker that ran on past its cancel was not held to its deadline, and grading must
+                # know that as surely as it knows a stop. A run that ran on in this trial is never turned into a stop;
+                # an earlier trial's row (left by a clear that failed, so from before this trial started) is replaced
+                # whole by this stop, so this trial's seal reads only what happened in it.
+                connection.execute(
+                    "INSERT INTO _alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT (worker) DO UPDATE SET process = EXCLUDED.process, at = EXCLUDED.at, reason = CASE "
+                    "WHEN _alk_worker_stops.reason = %s AND _alk_worker_stops.at >= %s THEN _alk_worker_stops.reason "
+                    "ELSE EXCLUDED.reason END",
+                    (worker, process, time.time(), "deadline_passed" if stopped else NOT_STOPPED, NOT_STOPPED, started),
+                )
+                return stopped
+
+    return bool(_on_trial_tables(address, claim))
+
+
+def mark_worker_run(address: str, worker: str) -> None:
+    """Keep that this worker ran as a task of its own in this trial, which the in-process door can stop."""
+    import psycopg
+
+    def mark() -> None:
+        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+            connection.execute(
+                # An earlier trial's row, left by a clear that failed, takes this run's time, so this trial reads it.
+                "INSERT INTO _alk_worker_runs (worker, at) VALUES (%s, %s) "
+                "ON CONFLICT (worker) DO UPDATE SET at = EXCLUDED.at",
+                (worker, time.time()),
+            )
+
+    _on_trial_tables(address, mark)
+
+
+_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+
+
+def method_action(method: str, action: str) -> str:
+    """A world action with the HTTP method that takes it (`GET <resource>.{id}`): two tools on one path are two
+    actions. Sealed routes and worker allow-lists are named this way."""
+    return f"{(method or 'POST').upper()} {action}"
+
+
+def _split(value: str) -> tuple[str, str]:
+    """The method and path of `GET <resource>.get`, or no method for a bare action (`<resource>.get`), which any method
+    takes."""
+    method, _, path = str(value).partition(" ")
+    return (method, path) if path and method in _METHODS else ("", str(value))
+
+
+def _matches(allowed: str, action: str) -> bool:
+    """An allowed action matches the same action, and a templated route (`<resource>.{id}`) matches any value in
+    each of its `{...}` segments. When both name a method, the methods must agree."""
+    allowed_method, want = _split(allowed)
+    action_method, have = _split(action)
+    if allowed_method and action_method and allowed_method != action_method:
+        return False
+    if want == have:
+        return True
+    if "{" not in want:
+        return False
+    wants, haves = want.split("."), have.split(".")
+    return len(wants) == len(haves) and all(
+        (w.startswith("{") and w.endswith("}") and h) or w == h for w, h in zip(wants, haves)
+    )
+
+
+def plain_route(action: str) -> bool:
+    """Whether a world action names one route as written: no encoded separator, backslash or `..` segment that the
+    service behind the proxy would decode into a different route than the one checked."""
+    lowered = str(action or "").lower()
+    if any(mark in lowered for mark in ("%2f", "%5c", "\\", "%2e")):
+        return False
+    return ".." not in lowered.split("?", 1)[0]
+
+
+def permitted(permitted_actions: object, action: str, routes: object = ()) -> bool:
+    """Whether an actor or worker with these permitted actions may take this world action. A path that is one of the
+    world's own routes (`routes`, the sealed route map) is that route's action, never a value of a template."""
+    if not isinstance(permitted_actions, list):
+        return False
+    literal = {_split(str(route))[1] for route in routes or () if "{" not in str(route)}
+    path = _split(action)[1]
+    return any(
+        _matches(str(allowed), action) and ("{" not in str(allowed) or path not in literal or _split(str(allowed))[1] == path)
+        for allowed in permitted_actions
+    )
+
+
+def declared_read(read_actions: object, action: str, routes: object = ()) -> bool:
+    """Whether the contract declares this world action read-only, matched as an allow-list is: a templated read
+    (`GET <resource>.{id}`) covers each record it is called for, never another tool's own route or method."""
+    return permitted(list(read_actions) if isinstance(read_actions, (list, tuple, frozenset, set)) else None, action, routes)
+
+
+def action_tool(actions: object, action: str) -> str:
+    """The agent's own tool a world action is, from the sealed map of routes to tools: the action itself first, then a
+    templated route (`<resource>.{id}.<verb>`) whose `{...}` segments its values fill. Empty when no route names it."""
+    if not isinstance(actions, dict):
+        return ""
+    tool = actions.get(action)
+    if tool is None:
+        tool = next((name for route, name in actions.items() if _templated_match(actions, str(route), action)), "")
+    return tool if isinstance(tool, str) else ""
+
+
+def _templated_match(actions: Mapping[str, Any], route: str, action: str) -> bool:
+    """A templated route matches an action whose path is not one of the map's own literal routes."""
+    literal = {_split(str(one))[1] for one in actions if "{" not in str(one)}
+    return "{" in route and _split(action)[1] not in literal and _matches(route, action)
+
+
+def route_values(actions: object, action: str) -> dict[str, str]:
+    """The values a world action's path carries for the templated route it matches (`<resource>.{id}.<verb>` and
+    `<resource>.7.<verb>` give `{"id": "7"}`), so a check reads them as it reads the body. Empty otherwise."""
+    if not isinstance(actions, dict) or action in actions:
+        return {}
+    for route in actions:
+        if _templated_match(actions, str(route), action):
+            return {
+                want[1:-1]: have
+                for want, have in zip(_split(str(route))[1].split("."), _split(action)[1].split("."))
+                if want.startswith("{") and want.endswith("}")
+            }
+    return {}
+
+
 def is_timeout(fault: Mapping[str, Any]) -> bool:
     """Whether a fault holds the call for its delay and then says it timed out (the two timeouts); an unavailable or
     error fault answers at once."""
@@ -317,11 +647,6 @@ def fault_status(fault: Mapping[str, Any]) -> int:
     """The status an `error` fault answers with: the scenario's own, 500 when it set none or one outside 400-599."""
     status = _int(fault.get("status"), 500)
     return status if 400 <= status <= 599 else 500
-
-
-def permitted(permitted_actions: object, action: str) -> bool:
-    """Whether an actor with these permitted actions may take this world action."""
-    return isinstance(permitted_actions, list) and action in permitted_actions
 
 
 def record_action(action: str) -> tuple[str, str] | None:
@@ -344,13 +669,19 @@ class WorldDoor:
         faults: Callable[[], list[dict[str, Any]]] = list,
         write_seconds: float = LOG_WRITE_SECONDS,
         faults_by_tool: bool = False,
+        workers: Callable[[], Mapping[str, Any]] = dict,
         trial: Callable[[], Any] | None = None,
     ) -> None:
         self.executor = executor
         self.log = log
         self.roster = roster
         self.faults = faults
+        # This trial's limits on the agent's workers: `permissions`, {worker id: [world actions]} as sealed (absent:
+        # workers are not limited), and `deadline_at`, epoch seconds past which no worker's call reaches the world.
+        self.workers = workers
         self.write_seconds = write_seconds
+        # Log rows this door could not write.
+        self.unwritten = 0
         # A surface whose calls are named by the tool also matches a fault by the tool's own name.
         self.faults_by_tool = faults_by_tool
         self._keys_lock = threading.Lock()
@@ -430,13 +761,37 @@ class WorldDoor:
                     call, "unknown_actor", f"{call.actor} is not an actor in this world"
                 )
             on_behalf_of = listed.get("on_behalf_of")
-            if not permitted(listed.get("permitted_actions"), call.action):
+            allowed = listed.get("permitted_actions")
+            if not plain_route(call.action):
+                # An encoded separator or `..` would be read as another route by the service behind the door.
+                return self._refused(
+                    call,
+                    "not_permitted",
+                    f"{call.action} is not a plain route, so it is not permitted for {call.actor}",
+                    on_behalf_of,
+                )
+            try:
+                routes = self._routes()
+            except Exception:  # noqa: BLE001 - unreadable routes: a template could then stand for another tool's route
+                if any("{" in str(one) for one in allowed or []):
+                    return self._refused(
+                        call,
+                        LIMITS_UNREADABLE,
+                        f"the world could not read its routes to check {call.actor}'s permissions",
+                        on_behalf_of,
+                    )
+                routes = []
+            if not permitted(allowed, method_action(call.method, call.action), routes):
                 return self._refused(
                     call,
                     "not_permitted",
                     f"{call.action} is not permitted for {call.actor}",
                     on_behalf_of,
                 )
+        elif call.worker is not None:
+            refused = self._worker_refusal(call)
+            if refused is not None:
+                return self._refused(call, *refused)
         key = (call.key or "").strip()
         if not key:
             return self._attempt(call, None, on_behalf_of)
@@ -510,6 +865,34 @@ class WorldDoor:
             )
             self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
             return outcome
+
+    def _worker_refusal(self, call: ToolCall) -> tuple[str, str] | None:
+        """Why a worker's call never reaches the world, or None: a channel no worker of this trial owns, the trial's
+        worker deadline passed, or an action the worker's sealed allow-list does not hold. Limits that cannot be read
+        refuse as the world's failure (`LIMITS_UNREADABLE`), never the worker's: a broken seal never widens them."""
+        if not call.worker:
+            return "identity_conflict", "this channel does not belong to a worker of this trial"
+        try:
+            limits = self.workers() or {}
+        except Exception:  # noqa: BLE001 - unreadable limits are no permission, and no violation of the worker's
+            return LIMITS_UNREADABLE, f"the world could not read the limits of {call.worker}"
+        own = (limits.get("deadlines") or {}).get(call.worker)
+        for deadline in (own, limits.get("deadline_at")):
+            if isinstance(deadline, (int, float)) and not isinstance(deadline, bool) and time.time() > deadline:
+                return "deadline_passed", f"the deadline for {call.worker} has passed"
+        if "permissions" in limits:
+            allowed = (limits.get("permissions") or {}).get(call.worker)
+            if not plain_route(call.action):
+                # An encoded separator or `..` would be read as another route by the service behind the proxy.
+                return "not_permitted", f"{call.action} is not a plain route, so it is not permitted for {call.worker}"
+            if not permitted(allowed, method_action(call.method, call.action), limits.get("routes")):
+                return "not_permitted", f"{call.action} is not permitted for {call.worker}"
+        return None
+
+    def _routes(self) -> list[str]:
+        """The world's own sealed routes (the tool proxy's actions.json), so a templated permission never reaches
+        another tool's route; raises when they cannot be read."""
+        return list((self.workers() or {}).get("routes") or [])
 
     def _forget_past_trials(self) -> None:
         """A door that outlives a trial (the tool proxy) forgets the keys an earlier trial used: the world was reset
@@ -605,7 +988,11 @@ class WorldDoor:
         """The faults this trial sets on this action of the agent's, whichever call of it they name; raises when the
         trial's faults cannot be read."""
         faults = [one for one in self.faults() or [] if isinstance(one, dict)]
-        names = (call.action, call.name) if self.faults_by_tool else (call.action,)
+        names = {call.action, call.name} if self.faults_by_tool else {call.action}
+        if call.tool:
+            # A route's sealed tool is the agent's own name for it: a fault naming the tool holds its call on every
+            # surface, a worker's channel included.
+            names.add(call.tool)
         # A fault on a route with a part (`orders.{id}.cancel`) holds every call of it (`orders.1043.cancel`); one that
         # names its method holds only calls made with it.
         return [
@@ -771,6 +1158,9 @@ class WorldDoor:
             "refusal_code": outcome.refusal_code,
             "idempotency_key": key,
             "actor_id": call.actor,
+            "worker_id": call.worker or None,
+            "attribution": call.attribution,
+            "agent_tool": call.tool or None,
             "parent_event_id": call.parent,
             "on_behalf_of": on_behalf_of,
             "effect": call_effect(call),
@@ -789,8 +1179,13 @@ class WorldDoor:
     def _write_row(self, row: dict[str, Any]) -> None:
         try:
             self.log.write(row)
-        except Exception:  # noqa: BLE001 - evidence persistence must never alter the tool's answer
-            pass
+        except Exception as exc:  # noqa: BLE001 - evidence persistence must never alter the tool's answer
+            # The row is lost, never hidden: counted here, and the agent's call with no row is read as missing
+            # evidence (`evidence_notices`), never as a clean log.
+            self.unwritten += 1
+            logger.warning(
+                "world door could not write an action log row for %s: %s", row.get("name"), type(exc).__name__
+            )
 
 
 def _int(value: Any, default: int) -> int:
@@ -977,10 +1372,14 @@ _EXTENDED = (
     "name, arguments, result, ok, error, at, action_id, outcome, refusal, refusal_code, idempotency_key, actor_id, "
     "parent_event_id, on_behalf_of"
 )
+# Written beside the extended columns when the table has them: a log made before workers were recorded has neither.
+_WORKER_COLUMNS = ("worker_id", "agent_tool")
 # Written beside the extended columns when the table has it.
 _ACTION = "action"
 # Written beside either set of columns when the table has it: a log made before effects were recorded has no column.
 _EFFECT = "effect"
+# Likewise: why a call with no worker is the coordinator's while workers had channels.
+_ATTRIBUTION = "attribution"
 _BASIC = "name, arguments, result, ok, error, at"
 # Written when the table has them: how a call was made, and the scenario's fault the door applied on it.
 _CALL_COLUMNS = ("method", "fault")
@@ -995,13 +1394,16 @@ _KEYS_TABLE_DDL = (
 )
 _KEYS_RESPONSE_DDL = "ALTER TABLE _alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
 _KEYS_DDL = f"{_KEYS_TABLE_DDL};{_KEYS_RESPONSE_DDL}"
-# This trial's faults, written by the runner and read by the tool proxy; kept in the world's database, never in a file
-# the agent's process could read or rewrite.
-TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
 # The harness's own tables in a world, made on the baseline before the world role's grant: the grant then covers them
 # and every world copy has them. A world role can neither create a table nor alter one it does not own.
 HARNESS_TABLES_DDL = (
     TRIAL_FAULTS_DDL,
+    TRIAL_DEADLINE_DDL,
+    TRIAL_WORKER_DEADLINES_DDL,
+    TRIAL_SEALED_DDL,
+    TRIAL_STARTED_DDL,
+    WORKER_STOPS_DDL,
+    WORKER_RUNS_DDL,
     _KEYS_TABLE_DDL,
     _KEYS_RESPONSE_DDL,
     "ALTER TABLE IF EXISTS _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb",
@@ -1070,7 +1472,10 @@ class PostgresLog:
         columns = _EXTENDED if extended else _BASIC
         if extended and self._records_action():
             columns += ", " + _ACTION
-        for optional in (_EFFECT, *_CALL_COLUMNS):
+        optional_columns = (*_WORKER_COLUMNS, _EFFECT, _ATTRIBUTION, *_CALL_COLUMNS) if extended else (
+            _EFFECT, _ATTRIBUTION, *_CALL_COLUMNS
+        )
+        for optional in optional_columns:
             if optional in self._table_columns():
                 columns += ", " + optional
         keys = [one.strip() for one in columns.split(",")]
