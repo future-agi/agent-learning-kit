@@ -99,11 +99,14 @@ each reader still running. Either way a contract or failure already saved stands
 reading ends as `agent_reading_call_limit` and is not retried.
 
 What is counted differs by backend. The Gemini count is of calls made. The Claude count is of
-replies seen in the session's stream, plus each reader's closing reply. The CLI never streams that
-reply: it hands it back as the result of the call that sent the reader out, so the kit counts it
-from that result. A reader that answered made that call; one that ran out of turns, was refused, or
-failed did not. When the result's shape is one the kit does not know, it counts the call and logs a
-warning, so a change in the CLI can make the count high but never quietly low.
+replies seen in the session's stream, plus each reader's closing reply the stream did not show. The
+CLI may hand that reply back only as the result of the call that sent the reader out, so each such
+result counts one more call unless the stream shows there was none: the reader was refused or
+failed, its last call in the stream asked for no tool (that call was its answer), or its calls in
+the stream reached the turn limit the kit set for it. The result's own text and status are not
+read. Readers are followed by the call that sent each out, never by the worker's name, since several
+readers of one worker run at once. When a reader's turn limit is not known, the result counts one
+call and a warning is logged, so a change in the CLI can make the count high but never quietly low.
 
 Still not counted on Claude, because the CLI makes these calls without putting a reply in the
 stream or anywhere else the kit can read, and offers no hook before a call:

@@ -403,11 +403,29 @@ def test_each_turn_reports_its_own_calls_against_a_budget_held_across_turns() ->
     assert [e.calls for e in second if isinstance(e, CallBudgetSpent)] == [3]
 
 
-def _sent_out(message_id, tool_use_id, name="Agent"):
+# The session's options, as far as the count reads them: the turn limit the kit set for a reader.
+_READERS = SimpleNamespace(agents={"reader": SimpleNamespace(maxTurns=3)})
+
+
+def _sent_out(message_id, tool_use_id, name="Agent", worker="reader"):
     return AssistantMessage(
-        content=[ToolUseBlock(id=tool_use_id, name=name, input={"subagent_type": "reader"})],
+        content=[ToolUseBlock(id=tool_use_id, name=name, input={"subagent_type": worker})],
         model="gemini-3.7-flash",
         parent_tool_use_id=None,
+        message_id=message_id,
+    )
+
+
+def _worked(message_id, by, *, asked=True):
+    """A reader's call as the stream shows it: a tool request, or text alone."""
+    return AssistantMessage(
+        content=(
+            [ToolUseBlock(id=f"toolu_{message_id}", name="Glob", input={"pattern": "*.py"})]
+            if asked
+            else [TextBlock(text="Traced.")]
+        ),
+        model="gemini-3.7-flash",
+        parent_tool_use_id=by,
         message_id=message_id,
     )
 
@@ -422,74 +440,83 @@ def _back(*tool_use_ids, details=None, is_error=False):
     )
 
 
-_ANSWERED = {"status": "completed", "content": [{"type": "text", "text": "Traced."}]}
-_OUT_OF_TURNS = {"status": "completed", "content": []}
+def _counted(*received, options=_READERS):
+    session = ClaudeSession(options, calls=_CallCount(0))
+    return _replies(session, [*received, _finished()])[-1].calls
 
 
-def test_a_readers_closing_reply_is_counted_from_its_result() -> None:
-    # The CLI never streams the reply a reader ends with; it hands it back as the result.
-    session = ClaudeSession(None, calls=_CallCount(0))
-
-    events = _replies(
-        session,
-        [_sent_out("msg_1", "toolu_1"), _said("msg_2", by="toolu_1"), _back("toolu_1", details=_ANSWERED),
-         _finished()],
-    )
-
-    assert events[-1].calls == 3
-
-
-def test_what_a_readers_result_says_about_its_closing_reply(caplog) -> None:
-    caplog.set_level(logging.WARNING, logger="fi.alk.harness.backends.claude")
-
-    def counted(*received):
-        session = ClaudeSession(None, calls=_CallCount(0))
-        events = _replies(session, [*received, _finished()])
-        return events[-1].calls
-
+def test_a_readers_closing_reply_the_stream_did_not_show_is_counted_from_its_result() -> None:
     sent = _sent_out("msg_1", "toolu_1")
-    assert counted(sent, _back("toolu_1", details=_ANSWERED)) == 2
-    assert counted(sent, _back("toolu_1", details={"status": "completed", "content": "Traced."})) == 2
-    # Out of turns: its last call was a tool request, in the stream.
-    assert counted(sent, _back("toolu_1", details=_OUT_OF_TURNS)) == 1
-    blank = {"status": "completed", "content": [{"type": "text", "text": " "}]}
-    assert counted(sent, _back("toolu_1", details=blank)) == 1
-    # Refused by the gate, or failed: no reader call.
-    assert counted(sent, _back("toolu_1", details="Error: refused", is_error=True)) == 1
-    assert caplog.text == ""
-    # Not a delegate tool: nothing.
-    assert counted(_sent_out("msg_1", "toolu_1", name="Glob"), _back("toolu_1", details=_ANSWERED)) == 1
-    # Shapes the kit does not know: counted, and said.
-    assert counted(sent, _back("toolu_1", details=None)) == 2
-    assert counted(sent, _back("toolu_1", details={"status": "running"})) == 2
-    assert counted(sent, _back("toolu_1", details={"status": "completed", "content": 7})) == 2
-    assert caplog.text.count("a shape the kit does not know") == 3
+
+    # It searched once and answered; the CLI handed the answer back only as the result.
+    assert _counted(sent, _worked("msg_2", "toolu_1"), _back("toolu_1")) == 3
+    # The result's text and status are not read: an empty answer is a call all the same.
+    empty = {"status": "completed", "content": []}
+    assert _counted(sent, _worked("msg_2", "toolu_1"), _back("toolu_1", details=empty)) == 3
+    # Nothing of it seen in the stream: its one call was its answer.
+    assert _counted(sent, _back("toolu_1")) == 2
 
 
-def test_two_results_in_one_message_are_each_counted_when_the_details_could_be_either(caplog) -> None:
-    session = ClaudeSession(None, calls=_CallCount(0))
+def test_a_closing_reply_the_stream_showed_is_not_counted_again() -> None:
+    sent = _sent_out("msg_1", "toolu_1")
 
-    events = _replies(
-        session,
-        [
-            _sent_out("msg_1", "toolu_1"),
-            _sent_out("msg_1", "toolu_2"),
-            _back("toolu_1", "toolu_2", details=_OUT_OF_TURNS),
-            _finished(),
-        ],
-    )
+    assert _counted(sent, _worked("msg_2", "toolu_1"), _worked("msg_3", "toolu_1", asked=False), _back("toolu_1")) == 3
+    # A call is judged by its message id: one call's text and tool request in two messages asked
+    # for a tool, so the answer is still to come.
+    assert _counted(
+        sent, _worked("msg_2", "toolu_1", asked=False), _worked("msg_2", "toolu_1"), _back("toolu_1")
+    ) == 3
 
-    assert events[-1].calls == 3
-    assert "a shape the kit does not know" in caplog.text
+
+def test_a_reader_that_used_all_its_turns_has_no_closing_reply_to_count() -> None:
+    sent = _sent_out("msg_1", "toolu_1")
+    reader = [_worked(f"msg_{n}", "toolu_1") for n in (2, 3, 4)]
+    noted = {"status": "completed", "content": [{"type": "text", "text": "Stopped at its 3-turn limit."}]}
+
+    assert _counted(sent, *reader, _back("toolu_1", details=noted)) == 4
+    assert _counted(sent, *reader[:2], _back("toolu_1", details=noted)) == 4
+
+
+def test_a_delegate_call_refused_or_failed_and_any_other_tool_count_nothing_more() -> None:
+    assert _counted(_sent_out("msg_1", "toolu_1"), _back("toolu_1", is_error=True)) == 1
+    assert _counted(_sent_out("msg_1", "toolu_1", name="Glob"), _back("toolu_1")) == 1
+
+
+def test_a_reader_whose_turn_limit_is_not_known_is_counted_and_said(caplog) -> None:
+    caplog.set_level(logging.WARNING, logger="fi.alk.harness.backends.claude")
+    reader = [_worked(f"msg_{n}", "toolu_1") for n in (2, 3, 4)]
+
+    assert _counted(_sent_out("msg_1", "toolu_1", worker="other"), *reader, _back("toolu_1")) == 5
+    assert _counted(_sent_out("msg_1", "toolu_1"), *reader, _back("toolu_1"), options=None) == 5
+    assert caplog.text.count("turn limit is not known") == 2
+    # Not needed when the stream shows the answer.
+    assert _counted(
+        _sent_out("msg_1", "toolu_1", worker="other"), _worked("msg_2", "toolu_1", asked=False), _back("toolu_1")
+    ) == 2
+    assert caplog.text.count("turn limit is not known") == 2
+
+
+def test_readers_of_one_worker_running_at_once_are_each_followed_by_their_own_call() -> None:
+    events = [
+        _sent_out("msg_1", "toolu_1"),
+        _sent_out("msg_1", "toolu_2"),
+        _worked("msg_2", "toolu_1"),
+        _worked("msg_3", "toolu_2"),
+        _worked("msg_4", "toolu_1"),
+        _worked("msg_5", "toolu_1"),
+        # Both results in one message: the first used its 3 turns, the second answered unseen.
+        _back("toolu_1", "toolu_2"),
+    ]
+
+    assert _counted(*events) == 6
 
 
 def test_a_closing_reply_past_the_budget_is_said_like_any_call_past_it() -> None:
-    session = ClaudeSession(None, calls=_CallCount(2))
+    session = ClaudeSession(_READERS, calls=_CallCount(2))
 
     events = _replies(
         session,
-        [_sent_out("msg_1", "toolu_1"), _said("msg_2", by="toolu_1"), _back("toolu_1", details=_ANSWERED),
-         _finished()],
+        [_sent_out("msg_1", "toolu_1"), _worked("msg_2", "toolu_1"), _back("toolu_1"), _finished()],
     )
 
     assert [event.calls for event in events if isinstance(event, CallBudgetSpent)] == [3]

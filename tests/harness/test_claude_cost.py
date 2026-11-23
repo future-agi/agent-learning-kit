@@ -810,6 +810,8 @@ class _DelegatingStub(_MessagesStub):
     main_plan: tuple[str, ...] = ()
     # The reader answers in text once it has made this many calls; 0 for never.
     reader_answers_after = 0
+    # What the reader's answer says; "" for an empty answer.
+    reader_says = "The reader is done."
     running = 0
     most_running = 0
     # For each streamed request: who made it, how many replies of its own came before it, and
@@ -962,18 +964,20 @@ class _DelegatingStub(_MessagesStub):
             "usage": usage,
         }
         self._event("message_start", {"type": "message_start", "message": message})
+        said = _DelegatingStub.reader_says if who == "reader" else f"The {who} is done."
         self._event(
             "content_block_start",
             {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
         )
-        self._event(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "text_delta", "text": f"The {who} is done."},
-            },
-        )
+        if said:
+            self._event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": said},
+                },
+            )
         self._event("content_block_stop", {"type": "content_block_stop", "index": 0})
         self._event(
             "message_delta",
@@ -996,6 +1000,7 @@ def _read_against_the_stub(
     save_at=0,
     main_plan=(),
     reader_answers_after=0,
+    reader_says="The reader is done.",
 ):
     """Run a hosted reading on the real CLI against ``_DelegatingStub``; its exit code and
     output folder."""
@@ -1008,6 +1013,7 @@ def _read_against_the_stub(
     _DelegatingStub.save_at = save_at
     _DelegatingStub.main_plan = tuple(main_plan)
     _DelegatingStub.reader_answers_after = reader_answers_after
+    _DelegatingStub.reader_says = reader_says
     _DelegatingStub.running = _DelegatingStub.most_running = 0
     stub = ThreadingHTTPServer(("127.0.0.1", 0), _DelegatingStub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
@@ -1131,13 +1137,28 @@ def closing(monkeypatch):
     seen = []
     original = backend._closing_reply
 
-    def logged(block, details):
-        calls = original(block, details)
-        seen.append((bool(block.is_error), calls))
-        return calls
+    def logged(is_error, calls, limit):
+        counted = original(is_error, calls, limit)
+        seen.append((is_error, counted))
+        return counted
 
     monkeypatch.setattr(backend, "_closing_reply", logged)
     return seen
+
+
+def _cli_in_use() -> str:
+    """The CLI the SDK runs, and its version: its bundled one, else ``claude`` on the path."""
+    import shutil
+    import subprocess
+
+    import claude_agent_sdk
+    from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
+
+    path = SubprocessCLITransport._find_bundled_cli(None) or shutil.which("claude") or "none"
+    version = subprocess.run(
+        [path, "--version"], capture_output=True, text=True, timeout=30, check=False
+    ).stdout.strip() if path != "none" else ""
+    return f"claude-agent-sdk {claude_agent_sdk.__version__}, CLI {path} {version}"
 
 
 def test_the_cli_counts_a_readers_closing_reply_that_never_reaches_the_stream(
@@ -1149,7 +1170,7 @@ def test_the_cli_counts_a_readers_closing_reply_that_never_reaches_the_stream(
         tmp_path, monkeypatch, budget=60, main_plan=("agent", "answer"), reader_answers_after=2
     )
 
-    print("served:", _DelegatingStub.served_by, "closing:", closing)
+    print(_cli_in_use(), "served:", _DelegatingStub.served_by, "closing:", closing)
     assert _streamed().count("reader") == 3
     assert closing == [(False, 1)]
     assert _counted(output) == len(_streamed())
@@ -1158,13 +1179,82 @@ def test_the_cli_counts_a_readers_closing_reply_that_never_reaches_the_stream(
 def test_the_cli_counts_nothing_more_for_a_reader_that_ran_out_of_turns(
     cli, tmp_path, monkeypatch, closing
 ):
-    # The reader never answers: its 12 turns end on a call that was in the stream.
+    # The reader never answers: its 12 turns end on a call that was in the stream. The stub's
+    # count equal to the kit's is the guard for the one way the count could run low: a CLI that
+    # makes a call after the turn limit.
     code, output = _read_against_the_stub(
         tmp_path, monkeypatch, budget=60, main_plan=("agent", "answer")
     )
 
-    print("served:", _DelegatingStub.served_by, "closing:", closing)
+    print(_cli_in_use(), "served:", _DelegatingStub.served_by, "closing:", closing)
     assert _streamed().count("reader") == 12
+    assert closing == [(False, 0)]
+    assert _counted(output) == len(_streamed())
+
+
+def _retried() -> int:
+    """Requests that repeat the one before them by the same caller: the CLI's own retries, which no
+    reply in the stream or result shows."""
+    readers = [earlier for who, earlier, _ in _DelegatingStub.seen if who == "reader"]
+    return sum(1 for before, now in zip(readers, readers[1:]) if now == before)
+
+
+def test_the_cli_counts_a_readers_empty_answer(cli, tmp_path, monkeypatch, closing):
+    # An answer with no text is still a call the reader made, so its result counts one. The CLI
+    # may ask again after an empty reply (2.1.233 does, once); that retry is the CLI's own and is
+    # not counted, as HOW-IT-WORKS says.
+    code, output = _read_against_the_stub(
+        tmp_path,
+        monkeypatch,
+        budget=60,
+        main_plan=("agent", "answer"),
+        reader_answers_after=2,
+        reader_says="",
+    )
+
+    print(_cli_in_use(), "served:", _DelegatingStub.served_by, "seen:", _DelegatingStub.seen,
+          "retried:", _retried(), "closing:", closing)
+    assert _streamed().count("reader") - _retried() == 3
+    assert closing == [(False, 1)]
+    assert _counted(output) == len(_streamed()) - _retried()
+
+
+def test_the_cli_counts_a_closing_reply_the_stream_shows_once(cli, tmp_path, monkeypatch, closing):
+    # A CLI that does put the reader's closing reply in the stream, before its result: the kit
+    # counts it there and not again from the result.
+    from claude_agent_sdk import AssistantMessage, ClaudeSDKClient, TextBlock, ToolResultBlock
+    from claude_agent_sdk import ToolUseBlock, UserMessage
+
+    receive = ClaudeSDKClient.receive_messages
+
+    async def streaming_the_closing_reply(self):
+        sent = set()
+        async for message in receive(self):
+            if isinstance(message, AssistantMessage) and message.parent_tool_use_id is None:
+                sent.update(
+                    block.id
+                    for block in message.content
+                    if isinstance(block, ToolUseBlock) and block.name in ("Agent", "Task")
+                )
+            if isinstance(message, UserMessage) and isinstance(message.content, list):
+                for block in message.content:
+                    if isinstance(block, ToolResultBlock) and block.tool_use_id in sent:
+                        yield AssistantMessage(
+                            content=[TextBlock(text="The reader is done.")],
+                            model=M,
+                            parent_tool_use_id=block.tool_use_id,
+                            message_id=f"msg_closing_{block.tool_use_id}",
+                        )
+            yield message
+
+    monkeypatch.setattr(ClaudeSDKClient, "receive_messages", streaming_the_closing_reply)
+
+    code, output = _read_against_the_stub(
+        tmp_path, monkeypatch, budget=60, main_plan=("agent", "answer"), reader_answers_after=2
+    )
+
+    print(_cli_in_use(), "served:", _DelegatingStub.served_by, "closing:", closing)
+    assert _streamed().count("reader") == 3
     assert closing == [(False, 0)]
     assert _counted(output) == len(_streamed())
 
@@ -1178,37 +1268,34 @@ def test_the_cli_counts_nothing_for_a_delegate_call_the_gate_refused(
     )
 
     failure = json.loads((output / "failure.json").read_text(encoding="utf-8"))
-    print("served:", _DelegatingStub.served_by, "closing:", closing, "failure:", failure)
+    print(_cli_in_use(), "served:", _DelegatingStub.served_by, "closing:", closing, "failure:", failure)
     assert "reader" not in _streamed()
     assert closing == [(True, 0)]
     assert failure["details"] == {"calls": 2, "limit": 1}
 
 
-def test_the_cli_counts_a_result_of_a_shape_it_does_not_know_and_says_so(
+def test_the_cli_counts_a_reader_whose_turn_limit_it_does_not_know_and_says_so(
     cli, tmp_path, monkeypatch, closing, caplog
 ):
-    # A CLI that hands the sub-agent's result back some other way: the kit counts the call it
-    # cannot rule out, so the count runs high, never quietly low.
-    from claude_agent_sdk import UserMessage
-    from claude_agent_sdk._internal import message_parser
+    # Without the reader's turn limit, a result after a tool request is counted as one call:
+    # the count can run high, never quietly low.
+    import dataclasses
 
-    parse = message_parser.parse_message
+    from fi.alk.harness.backends import claude as backend
 
-    def reshaped(data):
-        message = parse(data)
-        if isinstance(message, UserMessage) and isinstance(message.tool_use_result, dict):
-            message.tool_use_result = {"state": "done"}
-        return message
-
-    monkeypatch.setattr(message_parser, "parse_message", reshaped)
+    definition = backend._definition
+    monkeypatch.setattr(
+        backend,
+        "_definition",
+        lambda worker, parent: dataclasses.replace(definition(worker, parent), maxTurns=None),
+    )
     caplog.set_level(logging.WARNING, logger="fi.alk.harness.backends.claude")
 
     code, output = _read_against_the_stub(
-        tmp_path, monkeypatch, budget=60, main_plan=("agent", "answer")
+        tmp_path, monkeypatch, budget=60, main_plan=("agent", "answer"), reader_answers_after=2
     )
 
-    print("served:", _DelegatingStub.served_by, "closing:", closing)
-    # The reader ran out of turns, so the count is one high.
+    print(_cli_in_use(), "served:", _DelegatingStub.served_by, "closing:", closing)
     assert closing == [(False, 1)]
-    assert _counted(output) == len(_streamed()) + 1
-    assert "a sub-agent's result came back in a shape the kit does not know" in caplog.text
+    assert _counted(output) == len(_streamed())
+    assert "turn limit is not known" in caplog.text
