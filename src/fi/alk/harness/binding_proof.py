@@ -266,7 +266,10 @@ def prove_binding(
     with PostgresProof(
         suite_root, environment_root, suite.policy_profile, postgres_dsn
     ) as proof:
-        check_tool_routed(binding, proof.environment_tools)
+        # A binding may map the agent onto an attached server's tool, as a run serves it.
+        check_tool_routed(
+            binding, [*proof.environment_tools, *proof.attached_definitions()]
+        )
         changing = {tool.name for tool in proof.environment_tools if tool.mutates_state}
         mapped = [
             entry for entry in binding.tools if isinstance(entry, MappedToolBinding)
@@ -288,6 +291,22 @@ def prove_binding(
                 continue
             calls = [(call.tool, call.arguments) for call in parsed[entry.key]]
             solved = proof.attempt(scenario, calls, binding)
+            # A call the binding refuses as invalid (the agent's schema does not take it, or it
+            # cannot be translated) is not one the agent can make: the scenario is not proved by
+            # it, whatever the checks say.
+            if invalid := [
+                f"{tool}: {outcome.error}"
+                for (tool, _arguments), outcome in zip(
+                    calls, solved.outcomes, strict=False
+                )
+                if outcome.status == "invalid"
+            ]:
+                scenarios[entry.key] = ScenarioBindingProof(
+                    status="failed",
+                    reason="the trajectory makes calls the agent cannot make: "
+                    + "; ".join(invalid),
+                )
+                continue
             if not solved.holds:
                 # With no authored route open to the binding, the supplied trajectory was the
                 # last candidate: the scenario is not scored rather than the binding failed.

@@ -426,10 +426,20 @@ class WorldTools:
 
     def _tools_for(self, agent_tool: str) -> list[Any]:
         # Attached servers start only when a call needs them, so a proof attempt or a provider
-        # call that never touches them never spawns them.
-        if self.attached is not None and agent_tool in self.attached.names:
+        # call that never touches them never spawns them. Under a `tool_routed` binding the call
+        # needs them when its entry's steps do, whatever the agent calls its tool.
+        if self.attached is not None and self.attached.names & self._targets(
+            agent_tool
+        ):
             return self._served()
         return self.environment_tools
+
+    def _targets(self, agent_tool: str) -> set[str]:
+        """The environment tools one agent call runs: the binding entry's steps, or the tool."""
+        for entry in getattr(self.binding, "tools", None) or []:
+            if entry.agent_tool == agent_tool:
+                return {step.tool for step in getattr(entry, "steps", None) or []}
+        return {agent_tool}
 
     def _run(
         self, connection: psycopg.Connection, tool: str, arguments: dict[str, Any]

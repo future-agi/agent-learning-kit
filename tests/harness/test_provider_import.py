@@ -110,6 +110,63 @@ def test_vapi_import_profile_includes_prompt_and_reusable_tools_without_secrets(
     assert "credential-1" not in str(profile)
 
 
+def test_every_provider_header_value_is_withheld_whatever_its_name() -> None:
+    """A header named nothing like a secret (`X-Client-Auth`, `X-Tenant`) may still carry one, so
+    no header value reaches the profile the builder model reads; the names are kept."""
+
+    def request(method, url, api_key, body):
+        if "/assistant/" in url:
+            return {
+                "name": "Bookings",
+                "model": {
+                    "provider": "openai",
+                    "toolIds": ["tool-1"],
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {"name": "lookup"},
+                            "server": {
+                                "url": "https://example.test/hook",
+                                "headers": {
+                                    "X-Client-Auth": "cust-live-7f3a",
+                                    "X-Tenant": "t-42",
+                                },
+                            },
+                        }
+                    ],
+                },
+            }
+        return {
+            "id": "tool-1",
+            "type": "function",
+            "function": {"name": "reserve", "parameters": {"type": "object"}},
+            "server": {
+                "url": "https://example.test/reserve",
+                "headers": {"X-Partner-Key-Id": "pk-9b21"},
+            },
+        }
+
+    profile = inspect_provider_target(
+        "vapi", source_target_id="assistant-1", api_key="vapi-secret", request=request
+    )
+    assert profile["model"]["tools"][0]["server"]["headers"] == {
+        "X-Client-Auth": "[redacted]",
+        "X-Tenant": "[redacted]",
+    }
+    assert profile["reusable_tools"][0]["server"]["headers"] == {
+        "X-Partner-Key-Id": "[redacted]"
+    }
+    for value in ("cust-live-7f3a", "t-42", "pk-9b21"):
+        assert value not in str(profile)
+    # Retell's custom tools carry theirs beside the tool, and a re-redaction keeps them withheld.
+    tool = {"name": "record", "headers": {"X-Client-Auth": "cust-live-7f3a"}}
+    assert provider_import._safe_profile_value({"general_tools": [tool]}) == {
+        "general_tools": [
+            {"name": "record", "headers": {"X-Client-Auth": "[redacted]"}}
+        ]
+    }
+
+
 def test_retell_import_profile_includes_prompt_and_exact_tool_schema() -> None:
     def request(method, url, api_key, body):
         assert method == "GET"

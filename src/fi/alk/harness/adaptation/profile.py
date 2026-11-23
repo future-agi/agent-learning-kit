@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -81,13 +83,7 @@ def build_profile(
         # A declaration holds only what the customer wrote down: nothing to redact, and every
         # tool is routed, so its argument names stay exactly as the agent sends them.
         try:
-            redacted = declared_profile(
-                {
-                    k: v
-                    for k, v in dict(target).items()
-                    if k not in ("provider", "source_target_id", "modality")
-                }
-            )
+            redacted = declared_profile(target)
         except ValueError as exc:
             raise AdaptationFailure("adaptation_profile_invalid", str(exc)) from exc
         admission = declared_admission(redacted)
@@ -196,22 +192,71 @@ def profile_from_job(
 def select_mode(
     profile: AgentProfile, environment_tools: Sequence[ToolDefinition]
 ) -> BindingMode:
-    """§7.5 step 2: canonical when every admitted tool is an environment tool the agent can call
-    as-is, same name and compatible arguments; anything else needs a routed binding."""
+    """§7.5 step 2: canonical when the admitted tools are exactly the environment's, each called
+    as-is, same name and compatible arguments; anything else needs a routed binding.
+
+    A canonical binding serves every environment tool, so an agent with fewer tools than the
+    environment, even ones it calls as-is, is routed: its binding serves only its own tools
+    (`identity_mapping`), and a call to any other is refused."""
     admitted = {one.name for one in profile.admitted}
     if not admitted:
         return BindingMode.CONVERSATION_ONLY
-    environment = {tool.name: tool.parameters for tool in environment_tools}
-    schemas = {
-        str(one.get("name")): one.get("parameters") or {} for one in profile.agent_tools
-    }
-    if all(
-        name in environment
-        and not argument_mismatches(schemas.get(name) or {}, environment[name])
-        for name in admitted
+    if admitted == {tool.name for tool in environment_tools} and admitted <= _as_is(
+        profile, environment_tools
     ):
         return BindingMode.CANONICAL
     return BindingMode.TOOL_ROUTED
+
+
+def _as_is(
+    profile: AgentProfile, environment_tools: Sequence[ToolDefinition]
+) -> set[str]:
+    """The agent's tools it can call as the environment's own: same name, compatible arguments."""
+    environment = {tool.name: tool.parameters for tool in environment_tools}
+    return {
+        name
+        for one in profile.agent_tools
+        if (name := str(one.get("name"))) in environment
+        and not argument_mismatches(one.get("parameters") or {}, environment[name])
+    }
+
+
+def identity_mapping(
+    profile: AgentProfile, environment_tools: Sequence[ToolDefinition]
+) -> dict[str, Any] | None:
+    """The routed mapping of an agent whose every tool is an environment tool it calls as-is: each
+    one onto itself, every argument passed through. None when a tool needs a mapping written."""
+    names = [str(one.get("name")) for one in profile.agent_tools]
+    if not names or set(names) - _as_is(profile, environment_tools):
+        return None
+    return {
+        "tools": [
+            {
+                "agent_tool": str(one["name"]),
+                "steps": [
+                    {
+                        "id": "call",
+                        "tool": str(one["name"]),
+                        "arguments": {
+                            argument: {"arg": _argument_path(argument)}
+                            for argument in (one.get("parameters") or {}).get(
+                                "properties"
+                            )
+                            or {}
+                        },
+                    }
+                ],
+            }
+            for one in profile.agent_tools
+        ]
+    }
+
+
+def _argument_path(name: str) -> str:
+    """The JMESPath of one top-level argument: quoted unless it is a plain identifier."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        return name
+    return json.dumps(name)
 
 
 def argument_mismatches(
@@ -276,9 +321,11 @@ def seal_binding(
     mapping: Mapping[str, Any] | None,
     *,
     environment_root: Any,
+    environment_tools: Sequence[ToolDefinition] | None = None,
 ) -> Any:
     return seal_agent_binding(
         binding_fields(profile, mode, mapping),
         environment_root=environment_root,
         agent_tools=[one.name for one in profile.admitted],
+        environment_tools=environment_tools,
     )
