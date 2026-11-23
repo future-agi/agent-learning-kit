@@ -25,10 +25,9 @@ platform owns public job submission, so that boundary is not an ALK gap.
 
 ## Boundaries that are not ALK gaps
 
-- Use the Future AGI platform dashboard to create a hosted Environment job,
-  wait for it, or read platform-stored results today. Use `futureagi-sdk` only
-  after a released version includes Environment operations. ALK's worker and
-  sandbox entry points are internal.
+- The Future AGI platform owns hosted Environment jobs and their results.
+  See the [Environment guides](https://docs.futureagi.com/docs/environments)
+  for the dashboard workflow. ALK's worker and sandbox entry points are internal.
 - Provider credentials, Docker, and model access are prerequisites for selected
   execution lanes. Their absence does not imply a missing SDK hook.
 - The current hosted venv uses Python 3.12.3. The Python 3.13 SDK-smoke job runs
