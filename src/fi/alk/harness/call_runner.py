@@ -3200,9 +3200,14 @@ def _observing(runtime: EnvironmentRuntime) -> set[tuple[str, str]] | None:
     return noted or None
 
 
-def tool_span_notices(runtime: EnvironmentRuntime, calls: Sequence[Call]) -> list[dict[str, Any]]:
+def tool_span_notices(
+    runtime: EnvironmentRuntime, calls: Sequence[Call], *, silent: bool = True
+) -> list[dict[str, Any]]:
     """What the trial's framework span sources were: on, not installed, and silent (on, no tool span in the trace,
-    while the agent's own process ran a call: a tracer line or a completed call in the agent's account)."""
+    while the agent's own process ran a call: a tracer line or a completed call in the agent's account).
+
+    A voice trial says nothing of silence (``silent=False``): its LiveKit worker writes a tracer line for every tool it
+    runs, while its framework's spans are read for hand-offs, so a framework with no tool span is no sign of a fault."""
     noted = _observing(runtime)
     if noted is None:
         return []
@@ -3220,7 +3225,7 @@ def tool_span_notices(runtime: EnvironmentRuntime, calls: Sequence[Call]) -> lis
             }
         )
     ran = [call for call in graded_calls(calls) if call.source in (evidence.TRACER, evidence.AGENT)]
-    if live and ran and not _read_file_tool_calls(runtime)[1]:
+    if silent and live and ran and not _read_file_tool_calls(runtime)[1]:
         notices.append(
             {
                 "code": TOOL_SPANS_SILENT,
@@ -4810,7 +4815,7 @@ class CallRunnerImpl:
                 trial_notices += evidence_notices(
                     action_log, calls, in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints)
                 )
-        trial_notices += repeated_untimed_notices(calls) + hand_off_notices(runtime) + tool_span_notices(runtime, calls)
+        trial_notices += repeated_untimed_notices(calls) + hand_off_notices(runtime) + tool_span_notices(runtime, calls, silent=False)
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []

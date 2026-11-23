@@ -598,6 +598,18 @@ def test_a_silent_span_source_leaves_the_calls_as_with_the_source_off(tmp_path, 
     assert not set(_codes(notices)) & set(call_runner.UNMEASURED_NOTICES)
 
 
+def test_a_voice_trial_says_its_span_sources_were_on_but_never_that_they_were_silent(tmp_path) -> None:
+    """A LiveKit worker writes a tracer line for each tool it runs, while the framework's spans are read for its
+    hand-offs, so no tool span is no sign of a silent source there."""
+    runtime = _runtime(tmp_path, [_RAN])
+    _observing(tmp_path, agents="on", crewai="not_installed")
+    calls = call_runner._with_span_calls([], runtime)
+
+    assert _codes(call_runner.tool_span_notices(runtime, calls, silent=False)) == [
+        call_runner.TOOL_SPANS_ON, call_runner.TOOL_SPANS_NOT_INSTALLED,
+    ]
+    assert call_runner.TOOL_SPANS_SILENT in _codes(call_runner.tool_span_notices(runtime, calls))
+
 
 def test_a_call_only_the_world_ran_never_makes_a_span_source_silent(tmp_path) -> None:
     # The kit carried the call out, so no span of the agent's could exist.
