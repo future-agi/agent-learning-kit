@@ -335,12 +335,15 @@ class WorldTools:
         *,
         provider_call_id: str | None = None,
         tool_call_id: str | None = None,
+        remember: bool = False,
     ) -> BoundResult:
         """Run one agent call and record its trace rows; never raises for the world's sake.
 
         The call's writes and its trace rows commit in one transaction, so a write the world keeps
         always has its record. A call whose writes are undone still leaves its rows: its effect
-        runs in a savepoint rolled back on its own."""
+        runs in a savepoint rolled back on its own. With ``remember`` (a provider's operation id
+        in ``tool_call_id``) the outcome is stored in that transaction too, and a repeat delivery
+        of the operation gets the stored outcome without running or tracing it again."""
         try:
             with (
                 psycopg.connect(
@@ -350,10 +353,20 @@ class WorldTools:
                 connection.transaction(),
             ):
                 # Calls to one world take turns. Two at once would each check a slot free and
-                # both book it; the lock lasts until this call commits or rolls back.
+                # both book it; the lock lasts until this call commits or rolls back. Holding
+                # it also makes a remembered operation's lookup and its first run one step.
                 connection.execute(
                     "SELECT pg_advisory_xact_lock(hashtext(current_database()))"
                 )
+                remembered = remember and provider_call_id and tool_call_id
+                if remembered:
+                    stored = connection.execute(
+                        "SELECT response FROM _alk_tool_responses "
+                        "WHERE provider_call_id = %s AND tool_call_id = %s",
+                        (provider_call_id, tool_call_id),
+                    ).fetchone()
+                    if stored is not None:
+                        return BoundResult(**_stored(stored[0]))
                 with connection.transaction() as effect:
                     outcome = run_bound_call(
                         self.binding,
@@ -376,6 +389,26 @@ class WorldTools:
                     provider_call_id,
                     tool_call_id,
                 )
+                if remembered:
+                    connection.execute(
+                        "INSERT INTO _alk_tool_responses "
+                        "(provider_call_id, tool_call_id, response, at) "
+                        "VALUES (%s, %s, %s, %s)",
+                        (
+                            provider_call_id,
+                            tool_call_id,
+                            json.dumps(
+                                {
+                                    "status": outcome.status,
+                                    "content": outcome.content,
+                                    "result": outcome.result,
+                                    "error": outcome.error,
+                                },
+                                default=str,
+                            ),
+                            time.time(),
+                        ),
+                    )
         except Exception as exc:  # noqa: BLE001 - the world database itself failed
             # Nothing the call wrote stands, its record included; the failure is recorded on
             # its own, and when even that cannot be written the trial is marked unmeasured.
@@ -478,3 +511,14 @@ class WorldTools:
                 )
         except Exception:  # noqa: BLE001, S110 - the database is out of reach: nothing durable is left
             pass
+
+
+def _stored(response: Any) -> dict[str, Any]:
+    """A remembered outcome as `BoundResult` fields."""
+    stored = json.loads(response) if isinstance(response, str) else dict(response)
+    return {
+        "status": str(stored.get("status") or "fault"),
+        "content": str(stored.get("content") or ""),
+        "result": stored.get("result"),
+        "error": str(stored.get("error") or ""),
+    }

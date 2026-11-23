@@ -8,7 +8,7 @@ because the second waits for the first. A refusal the world simulates on purpose
 what it wrote, in process, in the isolated handler child and on PostgreSQL alike.
 
 On PostgreSQL a call's trace rows commit with its writes, so a write the world keeps is never
-missing from the trace.
+missing from the trace, and the release tool server runs each provider operation once.
 
 The PostgreSQL half runs when ALK_TEST_POSTGRES_URL names a server it may create databases on.
 """
@@ -178,6 +178,7 @@ def pg_world():
     import psycopg
     from psycopg import conninfo
 
+    from fi.alk.harness import request_binding
     from fi.alk.harness.releases import ToolDefinition
     from fi.alk.harness.world_tools import WorldTools
 
@@ -191,6 +192,7 @@ def pg_world():
             "CREATE TABLE _alk_tool_trace (id SERIAL PRIMARY KEY, name TEXT, arguments TEXT, result TEXT, ok BOOLEAN, "
             "error TEXT, at DOUBLE PRECISION, agent_tool TEXT, provider_call_id TEXT, tool_call_id TEXT, status TEXT)"
         )
+        connection.execute(request_binding.REQUEST_BINDING_SQL)
     handlers = {tool: (source, compile(source, f"<handler:{tool}>", "exec")) for tool, source in (("book", BOOK), ("rival", RIVAL))}
     parameters = {"type": "object", "properties": {"slot": {"type": "string"}, "request_key": {"type": "string"}, "kept": {"type": "boolean"}}}
     tools = [ToolDefinition(name=tool, description=tool, parameters=parameters, mutates_state=True) for tool in handlers]
@@ -329,3 +331,120 @@ def test_postgres_a_refused_call_and_a_kept_fault_are_traced_with_their_writes(p
     assert tools.call("rival", {"slot": "S2", "kept": True}).status != "ok"
     assert _pg_rows(url) == {"appointments": ["RIVAL"], "events": ["EV-RIVAL"]}
     assert _trace_names(url) == ["rival", "rival"]
+
+
+# -- The release tool server: one run per provider operation -----------------------------------
+
+SECRET, TOKEN = "clone-secret", "bound-token"
+
+
+@pytest.fixture()
+def tool_server(pg_world):
+    from http.server import ThreadingHTTPServer
+
+    from fi.alk.harness import request_binding
+    from fi.alk.harness.release_tool_server import make_handler
+
+    tools, url = pg_world
+    request_binding.register_active_call(url, token=TOKEN, secret=SECRET, scenario_key="s1")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(tools, "/provider/tools", "/provider/events", request_binding_on=True))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}/provider/tools", url
+    server.shutdown()
+    server.server_close()
+
+
+def _post(address, body):
+    import urllib.request
+
+    request = urllib.request.Request(
+        address,
+        data=json.dumps(body).encode(),
+        headers={"content-type": "application/json", "x-alk-tool-secret": SECRET, "x-alk-binding": TOKEN},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read())
+
+
+def _retell(name, args, transcript):
+    return {"name": name, "args": args, "call": {"call_id": "retell-call-1", "transcript_with_tool_calls": transcript}}
+
+
+def _invocation(tool_call_id, name, args):
+    return {"role": "tool_call_invocation", "tool_call_id": tool_call_id, "name": name, "arguments": json.dumps(args)}
+
+
+def test_a_retried_retell_delivery_of_a_write_runs_once(tool_server) -> None:
+    address, url = tool_server
+    first = {"slot": "S1", "request_key": "K1"}
+    said = [{"role": "user", "content": "book me in"}, _invocation("tc-1", "book", first)]
+    answer = _post(address, _retell("book", first, said))
+    # Retell repeats the request after a lost answer: the stored answer comes back, nothing runs.
+    assert _post(address, _retell("book", first, said)) == answer == {"appointment_id": "AS1", "idempotent": False}
+    assert _pg_rows(url) == {"appointments": ["AS1"], "events": ["EV-AS1"]}
+    assert _trace_names(url) == ["book"]
+    # The agent asking again is a new invocation, even with the same arguments: it runs.
+    said += [{"role": "tool_call_result", "tool_call_id": "tc-1", "content": json.dumps(answer)}, _invocation("tc-2", "book", first)]
+    assert _post(address, _retell("book", first, said)) == {"appointment_id": "AS1", "idempotent": True}
+    assert _trace_names(url) == ["book", "book"]
+
+
+def test_a_retell_delivery_without_its_invocation_is_not_remembered(tool_server) -> None:
+    # No transcript, or one whose last invocation is not this one: nothing names the operation, so
+    # the call runs each time it arrives (the routed tools are never retried by Retell).
+    address, url = tool_server
+    rival = {"slot": "S1"}
+    assert "error" in _post(address, _retell("rival", rival, []))
+    assert "error" in _post(address, _retell("rival", rival, [_invocation("tc-9", "book", {"slot": "S1"})]))
+    assert _trace_names(url) == ["rival", "rival"]
+    responses = _execute(url, "SELECT count(*) FROM _alk_tool_responses", ())
+    assert responses == [(0,)]
+
+
+def test_a_repeated_vapi_tool_call_runs_once(tool_server) -> None:
+    address, url = tool_server
+    entry = {"id": "vapi-tc-1", "function": {"name": "book", "arguments": {"slot": "S2", "request_key": "K2"}}}
+    body = {"message": {"type": "tool-calls", "call": {"id": "vapi-call-1"}, "toolCallList": [entry]}}
+    first = _post(address, body)
+    assert _post(address, body) == first
+    assert first["results"][0]["toolCallId"] == "vapi-tc-1" and "result" in first["results"][0]
+    assert _pg_rows(url) == {"appointments": ["AS2"], "events": ["EV-AS2"]}
+    assert _trace_names(url) == ["book"]
+
+
+def test_a_write_whose_answer_cannot_be_stored_does_not_stand(tool_server) -> None:
+    # The effect and the stored answer commit together: a retry after a failed store runs the
+    # call afresh rather than finding a write with no answer to replay.
+    address, url = tool_server
+    args = {"slot": "S3", "request_key": "K3"}
+    said = [_invocation("tc-3", "book", args)]
+    _refuse_inserts(url, "_alk_tool_responses")
+    assert "insert refused" in _post(address, _retell("book", args, said))["error"]
+    assert _pg_rows(url) == {"appointments": [], "events": []}
+    _allow_inserts(url, "_alk_tool_responses")
+    assert _post(address, _retell("book", args, said)) == {"appointment_id": "AS3", "idempotent": False}
+    assert _pg_rows(url) == {"appointments": ["AS3"], "events": ["EV-AS3"]}
+
+
+@pytest.mark.parametrize(
+    ("transcript", "expected"),
+    [
+        ([_invocation("tc-1", "book", {"slot": "S1"})], "tc-1"),
+        # The latest invocation is this one, an earlier identical one is not.
+        ([_invocation("tc-1", "book", {"slot": "S1"}), {"role": "tool_call_result", "tool_call_id": "tc-1"}, _invocation("tc-2", "book", {"slot": "S1"})], "tc-2"),
+        # Answered already: a request carrying it is not that invocation.
+        ([_invocation("tc-1", "book", {"slot": "S1"}), {"role": "tool_call_result", "tool_call_id": "tc-1"}], None),
+        ([_invocation("tc-1", "book", {"slot": "S2"})], None),
+        ([_invocation("tc-1", "lookup", {"slot": "S1"})], None),
+        ([{"role": "tool_call_invocation", "name": "book", "arguments": "{\"slot\": \"S1\"}"}], None),
+        ([], None),
+    ],
+)
+def test_the_retell_operation_id_is_only_this_invocation_s(transcript, expected) -> None:
+    from fi.alk.harness.release_tool_server import retell_operation_id
+
+    assert retell_operation_id(_retell("book", {"slot": "S1"}, transcript), "book", {"slot": "S1"}) == expected
+    chat = {"name": "book", "args": {"slot": "S1"}, "chat": {"chat_id": "c1", "message_with_tool_calls": transcript}}
+    assert retell_operation_id(chat, "book", {"slot": "S1"}) == expected
+    assert retell_operation_id({"name": "book", "args": {"slot": "S1"}}, "book", {"slot": "S1"}) is None
