@@ -272,4 +272,6 @@ class HostedAgentCallRunner:
             transcript_artifact=transcript_id,
             messages=tuple(transcript.canonical_messages()),
             evidence_collected=trace is not None,
+            # An unread or incomplete trace is a failed capture, whatever the scenario requires.
+            tool_capture_failed=trace is None,
         )

@@ -15,16 +15,21 @@ from pathlib import Path
 
 from . import observability
 from .authoring_entrypoint import main as authoring_main
+from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
+from .privilege import IsolationUnavailable, establish_isolation
 
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
 _TARGET_SECRETS_PATH = Path("/run/futureagi/authoring-target-secrets.json")
 _SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
+# The platform reads this after exit 78: {"cause": <FailureCause value or null>}, no other text.
+_FAILURE_CAUSE_PATH = Path("/run/futureagi/failure-cause.json")
 _TARGET_CREDENTIAL_NAMES = {"RETELL_API_KEY", "VAPI_API_KEY"}
 _PASSTHROUGH = {
     "AGENTCC_API_KEY",
     "AGENTCC_BASE_URL",
+    GOOGLE_ADK_APPROVAL_ENV,
     # Not a credential: authoring writes the scenarios, so the switch has to reach it.
     "ALK_VOICEMAIL_SCENARIOS",
     "ALK_BACKGROUND_NOISE",
@@ -67,6 +72,27 @@ def _platform_simulator_values(values: dict[str, str]) -> dict[str, str]:
         for name, value in values.items()
         if name.startswith(prefix)
     }
+
+
+# In secrets.json only names a customer can't declare may be kept, and the backend refuses only
+# SIMULATOR_*. A customer may store a secret under FI_HARNESS_PROJECT, FI_BASE_URL or
+# GOOGLE_CLOUD_PROJECT, so under those names it is masked there; the gateway file still carries
+# the platform's own values for them, and they come through from it.
+_PLATFORM_ONLY_SETTINGS = frozenset(
+    name for name in observability.NON_SECRET_SETTINGS if name.startswith("SIMULATOR_")
+)
+
+
+def _span_secret_values(
+    all_values: dict[str, str], gateway_values: dict[str, str]
+) -> tuple[str, ...]:
+    """The values spans replace whole: everything in both files, except the platform settings a
+    span keeps. Each file is read on its own and the tuples joined, so a name in both masks both
+    values."""
+    return (
+        *observability.declared_values(all_values, _PLATFORM_ONLY_SETTINGS),
+        *observability.declared_values(gateway_values),
+    )
 
 
 def _configure_generation_environment(values: dict[str, str]) -> None:
@@ -144,7 +170,28 @@ def _authoring_job_context(forwarded: list[str]) -> tuple[str, str, dict]:
     return "", "", {}
 
 
+def _write_failure_cause(cause: str | None) -> None:
+    """Record the closed failure cause for the platform. The agent's processes have stopped by
+    now; removing the path first and creating it exclusively means nothing they left there,
+    a file or a symlink, survives as the answer. Never changes the exit code."""
+    try:
+        _FAILURE_CAUSE_PATH.unlink(missing_ok=True)
+        fd = os.open(
+            _FAILURE_CAUSE_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"cause": cause}, handle)
+    except OSError as exc:
+        print(f"could not record the failure cause: {exc}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
+    try:
+        establish_isolation()
+    except IsolationUnavailable as exc:
+        # Infrastructure, not the environment (not 78): the platform retries within its budget.
+        print(f"IsolationUnavailable: {exc}", file=sys.stderr, flush=True)
+        return 2
     # This process authors the environment but never runs the submitted target. Do not let a
     # launcher-provided parent environment accidentally bypass the target-secrets file boundary.
     for name in _TARGET_CREDENTIAL_NAMES:
@@ -165,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
             for name in (
                 "AGENTCC_API_KEY",
                 "AGENTCC_BASE_URL",
+                GOOGLE_ADK_APPROVAL_ENV,
                 "ALK_BACKGROUND_NOISE",
                 "ALK_BACKGROUND_NOISE_CATALOG",
                 TARGET_PHONE_ENV,
@@ -191,7 +239,13 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["ALK_FOREGROUND_COORDINATOR"] = "1"
     job_id, run_id, telemetry = _authoring_job_context(forwarded)
     if job_id:
-        observability.begin(job_id, run_id, telemetry)
+        # Spans carry tool output, and a tool can print a key.
+        observability.begin(
+            job_id,
+            run_id,
+            telemetry,
+            secret_values=_span_secret_values(all_values, gateway_values),
+        )
         observability.stage("authoring")
     try:
         from .authoring_runtime_validation import RuntimeValidationError
@@ -204,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
                 "RuntimeValidationError: " + redact_outbound_text(str(exc)),
                 file=sys.stderr,
             )
+            _write_failure_cause(exc.cause.value if exc.cause else None)
             # EX_CONFIG: deterministic generated-environment failure, not retryable infra.
             return 78
     finally:

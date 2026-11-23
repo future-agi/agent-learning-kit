@@ -17,7 +17,10 @@ def check(world, calls, reference=None):
     # transaction that carries it (a verified lookup by transaction_id).
     descriptor_of = {t["transaction_id"]: (t.get("statement_descriptor") or t.get("merchant_name") or "") for t in world.state().get("transactions", [])}
     def names(value):
-        return {value, descriptor_of.get(value, value)} | {tx for tx, d in descriptor_of.items() if d == value}
+        # An id typed without its separators names the same record (same_id).
+        named = {value, descriptor_of.get(value, value)} | {tx for tx, d in descriptor_of.items() if same_id(d, value)}
+        named |= {descriptor_of[tx] for tx in descriptor_of if same_id(tx, value)}
+        return {"".join(ch for ch in str(one) if ch.isalnum()).casefold() for one in named if one}
     for target in wanted:
         aimed = names(target)
         if not any(aimed & names(c.arguments.get("descriptor") or c.arguments.get("transaction_id") or "") for c in lookups):

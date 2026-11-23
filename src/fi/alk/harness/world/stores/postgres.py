@@ -230,6 +230,11 @@ class PostgresStore(ContainerStore):
             tables = self._tables(connection) if only is None else list(only)
             return {table: self._select_ordered(connection, table) for table in tables}
 
+    def columns(self, name: str) -> list[str]:
+        """One table's columns, as the database's catalogue lists them."""
+        with self._connect() as connection:
+            return list(self._column_types(connection, name))
+
     def table(self, name: str) -> list[dict[str, Any]]:
         """One table's rows, ordered by primary key where it has one.
 
@@ -368,7 +373,30 @@ class PostgresStore(ContainerStore):
                     "written."
                 )
             out = [description[0] for description in cursor.description or []]
+            self._advance_sequences(connection, collection, columns)
             return dict(zip(out, stored, strict=True))
+
+    @staticmethod
+    def _advance_sequences(
+        connection: Any, collection: str, columns: list[str]
+    ) -> None:
+        """Move each sequence behind a column the record gave a value for past the table's highest value, so the
+        next record that takes its key from the sequence never draws one already stored. Never moves one back."""
+        sql = _psycopg().sql
+        table = sql.Identifier(collection).as_string(connection)
+        for column, sequence in connection.execute(
+            "SELECT name, pg_get_serial_sequence(%s, name) FROM unnest(%s::text[]) AS name",
+            (table, columns),
+        ).fetchall():
+            if sequence is None:
+                continue
+            connection.execute(
+                sql.SQL(
+                    "SELECT setval(%s::regclass, "
+                    "GREATEST(MAX({}), COALESCE(pg_sequence_last_value(%s::regclass), 1))) FROM {}"
+                ).format(sql.Identifier(column), sql.Identifier(collection)),
+                (sequence, sequence),
+            )
 
     def amend(self, collection: str, key: str, changes: Any, *, by: str = "") -> int:
         if not by:

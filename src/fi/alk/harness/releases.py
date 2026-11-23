@@ -1803,12 +1803,16 @@ def seal_agent_binding(
     *,
     environment_root: str | Path,
     agent_tools: Sequence[str] = (),
+    environment_tools: Sequence[ToolDefinition] | None = None,
 ) -> AgentBindingV1:
     """Seal a binding after checking it against the release it targets.
 
     `agent_tools` are the tool names the agent version declares. A canonical agent calls the
-    environment's tools by their own names, so every one of them must exist there. A
-    `tool_routed` binding is checked statically (§2.4.2); every reason is listed.
+    environment's tools by their own names and is served all of them, so its tools must be
+    exactly the environment's, attached servers' included. A `tool_routed` binding is checked
+    statically (§2.4.2); every reason is listed. `environment_tools` are what it is checked
+    against when the caller has read the attached servers' tools from the servers themselves; by
+    default the release's own tools.
     """
     environment = load_environment_release(environment_root)
     binding = _validated(
@@ -1822,11 +1826,25 @@ def seal_agent_binding(
         "binding_invalid",
     )
     if binding.mode is BindingMode.CANONICAL:
-        known = {tool.name for tool in load_tools(Path(environment_root))}
+        known = {
+            tool.name for tool in load_tools(Path(environment_root))
+        } | attached_tool_names(Path(environment_root))
         if unknown := sorted(set(agent_tools) - known):
             raise ReleaseError("binding_tool_unknown", ", ".join(unknown))
+        # A canonical binding serves every environment tool: an agent declaring fewer would be
+        # granted the rest. It is bound tool_routed, onto its own tools only.
+        if missing := sorted(known - set(agent_tools)):
+            raise ReleaseError(
+                "binding_tools_differ",
+                f"a canonical agent has every environment tool; this one lacks {', '.join(missing)}",
+            )
     if binding.mode is BindingMode.TOOL_ROUTED:
-        check_tool_routed(binding, load_tools(Path(environment_root)))
+        check_tool_routed(
+            binding,
+            load_tools(Path(environment_root))
+            if environment_tools is None
+            else environment_tools,
+        )
     return _sealed(binding)  # type: ignore[return-value]
 
 
@@ -2049,8 +2067,14 @@ def compose_bundle(
     job_path: str | Path,
     output: str | Path,
     interpreter: str = sys.executable,
+    binding_proof_path: str | Path | None = None,
 ) -> Any:
     """Verify a run's delivered releases and write the sealed v2 bundle the guest runs.
+
+    A `tool_routed` binding is scored only on the scenarios its binding proof against this suite
+    proved: compose needs that proof, refuses a selection naming any other scenario
+    (`scenario_unscorable`), and the bundle carries only the proved scenarios, listed in its
+    `metadata.release.scenarios`.
 
     The world becomes the managed PostgreSQL `world_db` (seeded from the release's world with the
     suite's policy profile applied), the release's handlers run in a per-world tool server that
@@ -2100,6 +2124,23 @@ def compose_bundle(
     suite = load_suite_release(suite_root)
     check_run_inputs(manifest, environments=environments, suite=suite, binding=binding)
     _require_runtime_proof(suite_root, suite)
+    from .binding_proof import load_binding_proof, unscored
+
+    excluded = unscored(
+        binding,
+        suite,
+        environments[-1].digest,
+        load_binding_proof(binding_proof_path) if binding_proof_path else None,
+    )
+    if refused := [key for key in manifest.selection.scenario_keys if key in excluded]:
+        raise ReleaseError(
+            "scenario_unscorable",
+            "not scored under this binding: "
+            + "; ".join(f"{key} ({excluded[key]})" for key in refused),
+        )
+    left_out = {
+        Path(entry.path).name for entry in suite.scenarios if entry.key in excluded
+    }
     try:
         job = HarnessJob.model_validate_json(Path(job_path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -2189,7 +2230,15 @@ def compose_bundle(
         }
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     try:
-        shutil.copytree(suite_root / SCENARIOS, staging / SCENARIOS)
+        shutil.copytree(
+            suite_root / SCENARIOS,
+            staging / SCENARIOS,
+            ignore=lambda directory, names: [
+                name
+                for name in names
+                if name in left_out and Path(directory) == suite_root / SCENARIOS
+            ],
+        )
         for name in (SUB_GOALS, "simulator_prompt.md"):
             if (suite_root / name).is_file():
                 shutil.copyfile(suite_root / name, staging / name)
@@ -2323,6 +2372,12 @@ def compose_bundle(
                     "suite": suite.digest,
                     "binding": binding.digest,
                     "binding_mode": binding.mode.value,
+                    # The scenarios this binding is scored on; a run selects only these.
+                    "scenarios": sorted(
+                        entry.key
+                        for entry in suite.scenarios
+                        if entry.key not in excluded
+                    ),
                 },
             },
         )
@@ -2375,6 +2430,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     composition = commands.add_parser("compose")
     composition.add_argument("--releases", required=True)
     composition.add_argument("--binding", required=True)
+    composition.add_argument(
+        "--binding-proof",
+        help="the binding's proof against the suite; required for a tool_routed binding",
+    )
     composition.add_argument("--manifest", required=True)
     composition.add_argument("--job", required=True)
     composition.add_argument("--output", required=True)
@@ -2425,6 +2484,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 manifest_path=args.manifest,
                 job_path=args.job,
                 output=args.output,
+                binding_proof_path=args.binding_proof,
             )
             print(json.dumps({"bundle": bundle.digest}))
         else:

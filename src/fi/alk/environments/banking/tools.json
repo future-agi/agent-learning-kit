@@ -545,7 +545,10 @@
           "enum": [
             "fraud_specialist",
             "customer_support",
-            "card_services"
+            "card_services",
+            "account_services",
+            "credit_team",
+            "disputes"
           ],
           "description": "Target department for the transfer",
           "type": "string"
@@ -561,7 +564,15 @@
             "service_error",
             "complex_dispute",
             "customer_requested_agent",
-            "unrecognized_card"
+            "unrecognized_card",
+            "credit_limit_request",
+            "dispute_outside_window",
+            "locked_card_travel_options",
+            "step_up_unavailable",
+            "third_party_contact_change",
+            "third_party_dispute_inquiry",
+            "transaction_not_owned",
+            "verification_locked"
           ],
           "description": "The reason triggering the escalation or handoff"
         },

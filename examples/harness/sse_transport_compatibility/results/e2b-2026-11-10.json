@@ -1,0 +1,155 @@
+{
+  "schema_version": "futureagi.sse-e2b-qualification.v1",
+  "provenance": {
+    "expected_sha256": "ac50a54b91bccc4d9c0ff2153e18da39c1afbfe407730297f0b5cef5cf7a37b3",
+    "imported_sha256": "ac50a54b91bccc4d9c0ff2153e18da39c1afbfe407730297f0b5cef5cf7a37b3",
+    "imported_from_branch": true
+  },
+  "receipts": [
+    {
+      "case_id": "crewai_backend_tool_stream",
+      "status": "passed",
+      "reason": "ok",
+      "framework": "crewai",
+      "response_characters": 181,
+      "stream_events": 24,
+      "terminal": "RUN_FINISHED",
+      "source": {
+        "repository": "https://github.com/ag-ui-protocol/ag-ui.git",
+        "commit": "2b967c34c49759c4afe0f0a176b281a0f645de34",
+        "subdirectory": "integrations/crew-ai/python",
+        "framework": "crewai",
+        "model": "gemini-3.7-flash",
+        "endpoint": "/conversational_flows/backend_tool_rendering",
+        "provider_patch_sha256": "4dda0890381ec5ee155eb1dc0c44087f65b78a44c9025e991aa3b4d894022f82",
+        "versions": {
+          "crewai": "1.15.16",
+          "ag-ui-crewai": "1.0.0",
+          "ag-ui-protocol": "1.0.0"
+        }
+      }
+    },
+    {
+      "case_id": "langgraph_stream_text",
+      "status": "passed",
+      "reason": "ok",
+      "framework": "langgraph",
+      "response_characters": 12,
+      "stream_events": 13,
+      "terminal": "RUN_FINISHED",
+      "source": {
+        "repository": "https://github.com/ag-ui-protocol/ag-ui.git",
+        "commit": "2b967c34c49759c4afe0f0a176b281a0f645de34",
+        "subdirectory": "integrations/langgraph/python",
+        "framework": "langgraph",
+        "model": "deterministic",
+        "endpoint": "/agent/agentic_chat",
+        "provider_patch_sha256": "4dda0890381ec5ee155eb1dc0c44087f65b78a44c9025e991aa3b4d894022f82",
+        "versions": {
+          "langgraph": "1.2.10",
+          "ag-ui-langgraph": "0.0.47",
+          "ag-ui-protocol": "1.0.0"
+        }
+      }
+    },
+    {
+      "case_id": "adk_stream_text",
+      "status": "passed",
+      "reason": "ok",
+      "framework": "google_adk",
+      "response_characters": 6,
+      "stream_events": 6,
+      "terminal": "RUN_FINISHED",
+      "source": {
+        "repository": "https://github.com/ag-ui-protocol/ag-ui.git",
+        "commit": "2b967c34c49759c4afe0f0a176b281a0f645de34",
+        "subdirectory": "integrations/adk-middleware/python",
+        "framework": "google_adk",
+        "model": "gemini-3.7-flash",
+        "endpoint": "/",
+        "provider_patch_sha256": "4dda0890381ec5ee155eb1dc0c44087f65b78a44c9025e991aa3b4d894022f82",
+        "versions": {
+          "google-adk": "2.2.0",
+          "ag-ui-adk": "0.12.0",
+          "ag-ui-protocol": "1.0.0"
+        }
+      }
+    },
+    {
+      "case_id": "delta_assembly",
+      "status": "passed",
+      "reason": "ok",
+      "framework": null,
+      "response_characters": 5,
+      "stream_events": 3,
+      "terminal": "RUN_FINISHED",
+      "source": null
+    },
+    {
+      "case_id": "cumulative_assembly",
+      "status": "passed",
+      "reason": "ok",
+      "framework": null,
+      "response_characters": 5,
+      "stream_events": 3,
+      "terminal": "RUN_FINISHED",
+      "source": null
+    },
+    {
+      "case_id": "final_only",
+      "status": "passed",
+      "reason": "ok",
+      "framework": null,
+      "response_characters": 5,
+      "stream_events": 2,
+      "terminal": "RUN_FINISHED",
+      "source": null
+    },
+    {
+      "case_id": "done_before_eof",
+      "status": "passed",
+      "reason": "ok",
+      "framework": null,
+      "response_characters": 5,
+      "stream_events": 3,
+      "terminal": "RUN_FINISHED",
+      "source": null
+    },
+    {
+      "case_id": "terminal_error",
+      "status": "passed",
+      "reason": "ok",
+      "framework": null,
+      "response_characters": 0,
+      "stream_events": 1,
+      "terminal": "RUN_ERROR",
+      "source": null
+    },
+    {
+      "case_id": "incomplete_eof",
+      "status": "passed",
+      "reason": "ok",
+      "framework": null,
+      "response_characters": 0,
+      "stream_events": 1,
+      "terminal": "none",
+      "source": null
+    },
+    {
+      "case_id": "cancellation_recovery",
+      "status": "passed",
+      "reason": "ok",
+      "framework": null,
+      "response_characters": 5,
+      "stream_events": 3,
+      "terminal": "RUN_FINISHED",
+      "source": null
+    }
+  ],
+  "passed": true,
+  "sandbox": {
+    "id": "redacted",
+    "template": "redacted",
+    "cleanup_succeeded": true
+  }
+}

@@ -43,6 +43,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       'livekit-plugins-openai==1.8.3' \
       'livekit-plugins-silero==1.8.3'
 
+# Binds every interface, so the server refuses to start unless ALK_SANDBOX_TOKEN is set at run time.
 ENV ALK_SANDBOX_HOST=0.0.0.0
 ENV ALK_SANDBOX_PORT=8788
 EXPOSE 8788
