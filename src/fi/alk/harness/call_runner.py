@@ -220,6 +220,8 @@ _OUTER_WAIT_FOR_PAD_SECONDS = 60.0
 # constant + two functions (`_clear_tool_trace_calls`, `_collect_tool_trace_calls`) so a real
 # producer's disagreement on the name/shape is a one-line change.
 _TOOL_TRACE_TABLE = "_alk_tool_trace"
+# `world_tools.TRACE_FAILURES_TABLE`: calls the tool server ran but could not trace.
+_TRACE_FAILURES_TABLE = "_alk_trace_failures"
 
 _RESULT_TRUNCATE_CHARS = 2000
 
@@ -946,6 +948,11 @@ def _clear_tool_trace_calls(dsn: str) -> None:
             connection.execute(
                 "DO $$ BEGIN IF to_regclass('_alk_action_keys') IS NOT NULL THEN DELETE FROM _alk_action_keys; END IF; END $$"
             )
+            # So are the marks of calls whose rows could not be written.
+            connection.execute(
+                f"DO $$ BEGIN IF to_regclass('{_TRACE_FAILURES_TABLE}') IS NOT NULL THEN "
+                f"DELETE FROM {_TRACE_FAILURES_TABLE}; END IF; END $$"
+            )
     except Exception as exc:  # noqa: BLE001 - best-effort housekeeping only, never a call-blocking failure
         # WHY: never log exc_info / str(exc) here -- a psycopg connection failure embeds the raw
         # DSN (including the world DB password) in its own exception message; only the exception
@@ -1221,6 +1228,7 @@ def _collect_tool_trace_calls(
         return ()
     try:
         records = read_tool_trace(endpoint.address)
+        untraced = _trace_failures(endpoint.address)
     except Exception as exc:  # noqa: BLE001 - missing table / connection failure -> no evidence, not a crash
         # WHY: same DSN-in-exception-message risk as `_clear_tool_trace_calls` above -- log only
         # the exception TYPE, never exc_info/str(exc), which can carry the world DB password.
@@ -1231,6 +1239,13 @@ def _collect_tool_trace_calls(
             raise ToolCaptureFailed(
                 f"tool_trace read failed: {type(exc).__name__}"
             ) from None
+        return ()
+    if untraced:
+        # The tool server ran a call it could not trace: the rows read are not the whole record,
+        # and an empty read is not a run that made no call.
+        logger.warning("tool_trace incomplete: %d call(s) ran untraced", untraced)
+        if strict:
+            raise ToolCaptureFailed(f"tool_trace incomplete: {untraced} call(s) ran untraced")
         return ()
 
     calls: list[Call] = []
@@ -1262,6 +1277,20 @@ def _collect_tool_trace_calls(
             )
         )
     return tuple(calls)
+
+
+def _trace_failures(dsn: str) -> int:
+    """How many calls the world's tool server marked as run without their trace rows."""
+    with _read_only(dsn) as connection:
+        present = connection.execute(
+            f"SELECT to_regclass('{_TRACE_FAILURES_TABLE}') IS NOT NULL"
+        ).fetchone()
+        if not present or not present[0]:
+            return 0
+        row = connection.execute(
+            f'SELECT count(*) FROM "{_TRACE_FAILURES_TABLE}"'
+        ).fetchone()
+        return int(row[0]) if row else 0
 
 
 def _read_tool_trace(runtime: EnvironmentRuntime) -> tuple[Call, ...] | None:

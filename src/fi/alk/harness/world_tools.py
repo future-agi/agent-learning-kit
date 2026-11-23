@@ -3,10 +3,11 @@
 The release tool server (Vapi, Retell, canonical calls), the PostgreSQL proofs and the MCP
 endpoint all call `WorldTools.call`, so a proof exercises exactly what a run executes and every
 call, whoever made it, leaves the same `_alk_tool_trace` rows. A native call runs the release's
-handler in one transaction, one call at a time per world, committed only when the binding reports
-`ok` or the refusal is a fault the world simulates on purpose (`keep_writes`). A call to an attached
-MCP server (`servers.json`, tools named `<id>__<tool>`) goes to that server, started fresh for
-this world on first use and stopped by `close()`.
+handler in one transaction, one call at a time per world, its writes kept only when the binding
+reports `ok` or the refusal is a fault the world simulates on purpose (`keep_writes`). Its trace
+rows commit in that same transaction, so no write the world keeps is missing from the trace. A call
+to an attached MCP server (`servers.json`, tools named `<id>__<tool>`) goes to that server, started
+fresh for this world on first use and stopped by `close()`.
 
 The tool server is copied into bundles and run as a script on the ALK interpreter, so this module
 only imports what that interpreter has.
@@ -40,6 +41,14 @@ from fi.alk.harness.world.runtime import ToolError
 STATEMENT_TIMEOUT_MS = 30_000
 ATTACHED_CALL_SECONDS = 30.0
 ATTACHED_START_SECONDS = 60.0
+# A call whose trace rows could not be written is marked here, so its trial is read as unmeasured
+# rather than as one whose trace is complete without it (`call_runner._collect_tool_trace_calls`).
+TRACE_FAILURES_TABLE = "_alk_trace_failures"
+TRACE_FAILURES_SQL = (
+    f"CREATE TABLE IF NOT EXISTS {TRACE_FAILURES_TABLE} (id bigserial PRIMARY KEY, "
+    "agent_tool text, provider_call_id text, tool_call_id text, error text, "
+    "at double precision NOT NULL)"
+)
 # Passed through to attached servers besides what the MCP client already inherits, so a server
 # that is an ALK module runs from the same source as this process.
 _SERVER_ENV = ("PYTHONPATH", "LANG", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR")
@@ -327,32 +336,49 @@ class WorldTools:
         provider_call_id: str | None = None,
         tool_call_id: str | None = None,
     ) -> BoundResult:
-        """Run one agent call and record its trace rows; never raises for the world's sake."""
+        """Run one agent call and record its trace rows; never raises for the world's sake.
+
+        The call's writes and its trace rows commit in one transaction, so a write the world keeps
+        always has its record. A call whose writes are undone still leaves its rows: its effect
+        runs in a savepoint rolled back on its own."""
         try:
             with (
                 psycopg.connect(
                     self.database_url,
                     options=f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
                 ) as connection,
-                connection.transaction() as transaction,
+                connection.transaction(),
             ):
                 # Calls to one world take turns. Two at once would each check a slot free and
                 # both book it; the lock lasts until this call commits or rolls back.
-                connection.execute("SELECT pg_advisory_xact_lock(hashtext(current_database()))")
-                outcome = run_bound_call(
-                    self.binding,
+                connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(current_database()))"
+                )
+                with connection.transaction() as effect:
+                    outcome = run_bound_call(
+                        self.binding,
+                        agent_tool,
+                        arguments,
+                        run_operation=lambda tool, values: self._run(
+                            connection, tool, values
+                        ),
+                        environment_tools=self._tools_for(agent_tool),
+                    )
+                    if outcome.status != "ok" and not any(
+                        operation.keep_writes for operation in outcome.operations
+                    ):
+                        raise psycopg.Rollback(effect)
+                self._trace(
+                    connection,
+                    outcome,
                     agent_tool,
                     arguments,
-                    run_operation=lambda tool, values: self._run(
-                        connection, tool, values
-                    ),
-                    environment_tools=self._tools_for(agent_tool),
+                    provider_call_id,
+                    tool_call_id,
                 )
-                if outcome.status != "ok" and not any(
-                    operation.keep_writes for operation in outcome.operations
-                ):
-                    raise psycopg.Rollback(transaction)
         except Exception as exc:  # noqa: BLE001 - the world database itself failed
+            # Nothing the call wrote stands, its record included; the failure is recorded on
+            # its own, and when even that cannot be written the trial is marked unmeasured.
             outcome = BoundResult(
                 status="fault",
                 content="",
@@ -360,7 +386,9 @@ class WorldTools:
                 error=f"{type(exc).__name__}: {exc}",
                 operations=[],
             )
-        self._trace(outcome, agent_tool, arguments, provider_call_id, tool_call_id)
+            self._trace_apart(
+                outcome, agent_tool, arguments, provider_call_id, tool_call_id
+            )
         return outcome
 
     def _tools_for(self, agent_tool: str) -> list[Any]:
@@ -384,6 +412,7 @@ class WorldTools:
 
     def _trace(
         self,
+        connection: psycopg.Connection,
         outcome: BoundResult,
         agent_tool: str,
         arguments: Any,
@@ -395,25 +424,57 @@ class WorldTools:
             (operation.tool, operation.arguments, operation.result, operation.error)
             for operation in outcome.operations
         ] or [(agent_tool, arguments, outcome.result, outcome.error)]
+        for name, step_arguments, result, error in steps:
+            connection.execute(
+                "INSERT INTO _alk_tool_trace (name, arguments, result, ok, error, at, "
+                "agent_tool, provider_call_id, tool_call_id, status) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    name,
+                    json.dumps(step_arguments, default=str),
+                    json.dumps(result if ok else None, default=str),
+                    ok,
+                    "" if ok else (outcome.error or error or ""),
+                    time.time(),
+                    agent_tool,
+                    provider_call_id,
+                    tool_call_id,
+                    outcome.status,
+                ),
+            )
+
+    def _trace_apart(
+        self,
+        outcome: BoundResult,
+        agent_tool: str,
+        arguments: Any,
+        provider_call_id: str | None,
+        tool_call_id: str | None,
+    ) -> None:
+        """Record a call whose transaction failed. Its rows failing too would leave a trace that
+        reads as complete without it, so a durable mark (`TRACE_FAILURES_TABLE`) says the trace
+        is not the whole record; the agent's answer never changes for it."""
         try:
             with psycopg.connect(self.database_url, autocommit=True) as connection:
-                for name, step_arguments, result, error in steps:
-                    connection.execute(
-                        "INSERT INTO _alk_tool_trace (name, arguments, result, ok, error, at, "
-                        "agent_tool, provider_call_id, tool_call_id, status) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                        (
-                            name,
-                            json.dumps(step_arguments, default=str),
-                            json.dumps(result if ok else None, default=str),
-                            ok,
-                            "" if ok else (outcome.error or error or ""),
-                            time.time(),
-                            agent_tool,
-                            provider_call_id,
-                            tool_call_id,
-                            outcome.status,
-                        ),
-                    )
-        except Exception:  # noqa: BLE001, S110 - evidence must never change the tool's answer
+                self._trace(
+                    connection,
+                    outcome,
+                    agent_tool,
+                    arguments,
+                    provider_call_id,
+                    tool_call_id,
+                )
+            return
+        except Exception as exc:  # noqa: BLE001 - marked below instead
+            failure = type(exc).__name__
+        try:
+            with psycopg.connect(self.database_url, autocommit=True) as connection:
+                connection.execute(TRACE_FAILURES_SQL)
+                connection.execute(
+                    f"INSERT INTO {TRACE_FAILURES_TABLE} "
+                    "(agent_tool, provider_call_id, tool_call_id, error, at) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (agent_tool, provider_call_id, tool_call_id, failure, time.time()),
+                )
+        except Exception:  # noqa: BLE001, S110 - the database is out of reach: nothing durable is left
             pass

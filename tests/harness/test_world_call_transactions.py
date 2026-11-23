@@ -7,6 +7,9 @@ because the second waits for the first. A refusal the world simulates on purpose
 (`keep_writes`: a rival booking, a commit whose reply was lost) is the one failure that keeps
 what it wrote, in process, in the isolated handler child and on PostgreSQL alike.
 
+On PostgreSQL a call's trace rows commit with its writes, so a write the world keeps is never
+missing from the trace.
+
 The PostgreSQL half runs when ALK_TEST_POSTGRES_URL names a server it may create databases on.
 """
 
@@ -222,3 +225,107 @@ def test_postgres_calls_take_turns_and_roll_back(pg_world) -> None:
         thread.join(10)
     assert sorted(outcomes) == ["ok", "refused"]
     assert _pg_rows(url)["events"].count("EV-AS9") == 1
+
+
+def _execute(url, statement, params=()):
+    import psycopg
+
+    with psycopg.connect(url, autocommit=True) as connection:
+        return connection.execute(statement, params).fetchall() if params is not None else None
+
+
+def _trace_names(url):
+    import psycopg
+
+    with psycopg.connect(url) as connection:
+        return [row[0] for row in connection.execute("SELECT name FROM _alk_tool_trace ORDER BY id").fetchall()]
+
+
+def _refuse_inserts(url, table):
+    """The exact failure: every INSERT into ``table`` fails, every SELECT of it still succeeds."""
+    import psycopg
+
+    with psycopg.connect(url, autocommit=True) as connection:
+        connection.execute(
+            "CREATE OR REPLACE FUNCTION _refuse() RETURNS trigger AS $$ BEGIN "
+            "RAISE EXCEPTION 'insert refused'; END $$ LANGUAGE plpgsql"
+        )
+        connection.execute(f"CREATE TRIGGER refuse BEFORE INSERT ON {table} FOR EACH ROW EXECUTE FUNCTION _refuse()")
+
+
+def _allow_inserts(url, table):
+    import psycopg
+
+    with psycopg.connect(url, autocommit=True) as connection:
+        connection.execute(f"DROP TRIGGER refuse ON {table}")
+
+
+def _trace_runtime(url):
+    from fi.alk.harness.process_runtime import (
+        EnvironmentRuntime,
+        RuntimeEndpoint,
+        RuntimeState,
+    )
+
+    return EnvironmentRuntime(
+        runtime_id="rt-1",
+        world_index=0,
+        bundle_digest="sha256:" + "0" * 64,
+        state=RuntimeState.READY,
+        endpoints={"database": RuntimeEndpoint(capability="database", protocol="postgres", address=url, configuration_name="DATABASE_URL")},
+        metadata={},
+    )
+
+
+def test_postgres_a_write_whose_trace_cannot_be_written_is_undone_and_the_trial_unmeasured(pg_world) -> None:
+    from fi.alk.harness import call_runner
+
+    tools, url = pg_world
+    runtime = _trace_runtime(url)
+    _refuse_inserts(url, "_alk_tool_trace")
+    outcome = tools.call("book", {"slot": "S1", "request_key": "K1"})
+    # The booking and its record commit together: neither stands, and the agent hears a failure.
+    assert outcome.status == "fault" and "insert refused" in outcome.error
+    assert _pg_rows(url) == {"appointments": [], "events": []}
+    # The trace reads fine and holds nothing, which alone would grade the run as one that made no
+    # call; the durable mark makes the read a failed capture instead.
+    assert _trace_names(url) == []
+    assert call_runner._read_tool_trace(runtime) is None
+    with pytest.raises(call_runner.ToolCaptureFailed, match="ran untraced"):
+        call_runner._collect_tool_trace_calls(runtime, strict=True)
+    assert call_runner._collect_tool_trace_calls(runtime) == ()
+    _allow_inserts(url, "_alk_tool_trace")
+    # The next scenario starts from a clean slate: clearing the trace clears the marks with it.
+    call_runner._clear_tool_trace_calls(url)
+    assert tools.call("book", {"slot": "S1", "request_key": "K1"}).status == "ok"
+    assert _pg_rows(url) == {"appointments": ["AS1"], "events": ["EV-AS1"]}
+    assert [call.name for call in call_runner._read_tool_trace(runtime)] == ["book"]
+
+
+def test_postgres_a_trace_that_fails_only_in_the_call_s_transaction_records_the_failure(pg_world, monkeypatch) -> None:
+    from fi.alk.harness import call_runner
+    from fi.alk.harness.world_tools import WorldTools
+
+    tools, url = pg_world
+    real = WorldTools._trace
+    failures = iter([RuntimeError("lost the connection")])
+
+    def once(self, connection, *args):
+        if not connection.autocommit and (failure := next(failures, None)):
+            raise failure
+        return real(self, connection, *args)
+
+    monkeypatch.setattr(WorldTools, "_trace", once)
+    outcome = tools.call("book", {"slot": "S1", "request_key": "K1"})
+    assert outcome.status == "fault"
+    assert _pg_rows(url) == {"appointments": [], "events": []}
+    calls = call_runner._read_tool_trace(_trace_runtime(url))
+    assert [(call.name, call.ok) for call in calls] == [("book", False)]
+
+
+def test_postgres_a_refused_call_and_a_kept_fault_are_traced_with_their_writes(pg_world) -> None:
+    tools, url = pg_world
+    assert tools.call("rival", {"slot": "S1"}).status != "ok"
+    assert tools.call("rival", {"slot": "S2", "kept": True}).status != "ok"
+    assert _pg_rows(url) == {"appointments": ["RIVAL"], "events": ["EV-RIVAL"]}
+    assert _trace_names(url) == ["rival", "rival"]
