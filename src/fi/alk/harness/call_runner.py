@@ -1391,7 +1391,7 @@ def collect_seam_calls(
         # span and the door row of one call are read as one worker's call, not two calls.
         if call.worker_id and not call.worker_label and (worker_names or {}).get(call.worker_id):
             call.worker_label = (worker_names or {})[call.worker_id]
-    merged = _merge_span_calls(calls, from_spans)
+    merged = _join_spans(calls, from_spans, runtime)
     if unread is not None and not graded_calls(merged):
         raise ToolCaptureFailed(str(unread), calls=merged) from None
     return merged
@@ -2959,9 +2959,14 @@ def _with_span_calls(
     Where the build switched spans on with ``SPANS_INTO_AN_EMPTY_LIST``, a span is a call only when no other source
     recorded one: where any did, spans pair with those calls and lend to them, and add none."""
     written, from_spans = _read_file_tool_calls(runtime, strict=strict)
-    calls = evidence.tagged(observed, evidence.WORLD) or written
+    return _join_spans(evidence.tagged(observed, evidence.WORLD) or written, from_spans, runtime)
+
+
+def _join_spans(calls: list[Call], from_spans: list[Call], runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+    """The one place span lines join the calls, for every runner (`collect_seam_calls`). Where the build switched
+    spans on with ``SPANS_INTO_AN_EMPTY_LIST``, a span is a call only when no other source recorded a graded call."""
     join = (getattr(runtime, "metadata", None) or {}).get("tool_spans_join")
-    if join == SPANS_INTO_AN_EMPTY_LIST and calls and from_spans:
+    if join == SPANS_INTO_AN_EMPTY_LIST and from_spans and graded_calls(calls):
         return _lend_only(calls, from_spans)
     return _merge_span_calls(calls, from_spans)
 

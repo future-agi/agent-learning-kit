@@ -1070,7 +1070,7 @@ class HTTPAgentWrapper(AgentWrapper):
                     "arguments": arguments,
                     "result": result,
                     "ok": not (error or result_error),
-                    # The id the agent gave the call, so the kit pairs this row with other records of it by id.
+                    # The id the agent gave the call, kept on the kit's record of it; nothing pairs records by it yet.
                     **({"id": key} if key else {}),
                 }
             )

@@ -103,6 +103,19 @@ def test_the_sources_that_saw_a_call_are_listed_once_in_order_and_never_its_own(
     assert trace_row(call)["seen_by"] == [WORLD, SPAN, TRACER]
 
 
+def test_the_agents_call_id_alone_puts_no_attribution_on_the_stored_row() -> None:
+    """The row keeps the id, and gains no empty place among the agents: an id the agent gave says nothing of that. A
+    tracer line with a call id keeps the row it has on dev."""
+    plain = trace_row(_call(source=AGENT))
+    with_id = trace_row(_call(source=AGENT, runtime_ids={"call_id": "call-1"}))
+    assert with_id["runtime_ids"] == {"call_id": "call-1"}
+    assert {k: v for k, v in with_id.items() if k != "runtime_ids"} == plain
+    placed = trace_row(_call(source=AGENT, runtime_ids={"call_id": "call-1", "event_id": "e1"}))
+    assert placed["span_id"] == "e1"
+    traced = trace_row(_call(source=TRACER, runtime_ids={"call_id": "call-1"}))
+    assert traced["kind"] == "tool_call" and traced["relationship"] == "unknown"
+
+
 def test_two_records_that_differ_only_in_their_source_names_are_the_same_call() -> None:
     one = _call(result="shipped", at=1.0, source=WORLD)
     other = _call(result="shipped", at=2.0, source=TRACER, seen_by=[SPAN], trace_mark="crewai")
@@ -458,7 +471,7 @@ _A1001 = "{\"order_id\": \"A1001\"}"
 
 
 def _callback(tmp_path, observed, lines) -> tuple[Call, ...]:
-    return call_runner._with_span_calls(copy.deepcopy(observed), _runtime(tmp_path, lines, call_runner.SPANS_INTO_AN_EMPTY_LIST))
+    return call_runner.collect_seam_calls(_runtime(tmp_path, lines, call_runner.SPANS_INTO_AN_EMPTY_LIST), None, copy.deepcopy(observed))
 
 
 def test_on_the_callback_route_the_agents_account_pairs_with_its_span_as_on_the_command_route(tmp_path, monkeypatch) -> None:
@@ -535,7 +548,7 @@ def test_the_equal_rows_would_add_calls_on_the_command_route(tmp_path) -> None:
     for row, (written, spans) in _EQUAL_ROWS.items():
         if "hand-off" in row:
             continue
-        command = call_runner._with_span_calls((), _runtime(tmp_path / row.replace(" ", "-"), [*written, *spans]))
+        command = call_runner.collect_seam_calls(_runtime(tmp_path / row.replace(" ", "-"), [*written, *spans]), None, ())
         assert len(_graded(command)) > 1, row
 
 
@@ -559,7 +572,7 @@ def test_on_the_callback_route_with_no_other_record_the_spans_are_the_calls(tmp_
     ]
 
     now = _callback(tmp_path, [], spans)
-    command = call_runner._with_span_calls((), _runtime(tmp_path / "command", spans))
+    command = call_runner.collect_seam_calls(_runtime(tmp_path / "command", spans), None, ())
 
     assert [(call.name, call.source) for call in now] == [("look_up_order", SPAN), ("start_return", SPAN)]
     assert _unnamed(now) == _unnamed(command)
@@ -584,11 +597,11 @@ def _codes(notices) -> list[str]:
 def test_a_silent_span_source_leaves_the_calls_as_with_the_source_off(tmp_path, route, recorded_by) -> None:
     observed = [] if recorded_by == "the tracer" else [_told()]
     lines = [_RAN] if recorded_by == "the tracer" else []
-    off = call_runner._with_span_calls(copy.deepcopy(observed), _runtime(tmp_path / "off", lines, route))
+    off = call_runner.collect_seam_calls(_runtime(tmp_path / "off", lines, route), None, copy.deepcopy(observed))
     runtime = _runtime(tmp_path / "on", lines, route)
     _observing(tmp_path / "on", agents="on")
 
-    on = call_runner._with_span_calls(copy.deepcopy(observed), runtime)
+    on = call_runner.collect_seam_calls(runtime, None, copy.deepcopy(observed))
     notices = call_runner.tool_span_notices(runtime, on)
 
     assert _unnamed(on) == _unnamed(off)
@@ -603,7 +616,7 @@ def test_a_voice_trial_says_its_span_sources_were_on_but_never_that_they_were_si
     hand-offs, so no tool span is no sign of a silent source there."""
     runtime = _runtime(tmp_path, [_RAN])
     _observing(tmp_path, agents="on", crewai="not_installed")
-    calls = call_runner._with_span_calls([], runtime)
+    calls = call_runner.collect_seam_calls(runtime, None, [])
 
     assert _codes(call_runner.tool_span_notices(runtime, calls, silent=False)) == [
         call_runner.TOOL_SPANS_ON, call_runner.TOOL_SPANS_NOT_INSTALLED,
@@ -616,7 +629,7 @@ def test_a_call_only_the_world_ran_never_makes_a_span_source_silent(tmp_path) ->
     runtime = _runtime(tmp_path, [])
     _observing(tmp_path, agents="on")
 
-    calls = call_runner._with_span_calls([_call(result="shipped", at=5.0)], runtime)
+    calls = call_runner.collect_seam_calls(runtime, None, [_call(result="shipped", at=5.0)])
 
     assert _codes(call_runner.tool_span_notices(runtime, calls)) == [call_runner.TOOL_SPANS_ON]
 
@@ -626,7 +639,7 @@ def test_a_span_source_that_wrote_a_span_is_on_and_not_silent(tmp_path) -> None:
                                          "output": "shipped", "event_id": "e1"}])
     _observing(tmp_path, agents="on")
 
-    notices = call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime))
+    notices = call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ()))
 
     assert _codes(notices) == [call_runner.TOOL_SPANS_ON]
 
@@ -642,7 +655,7 @@ def test_a_source_the_process_turned_on_itself_is_on_and_never_silent(tmp_path) 
     runtime = _runtime(tmp_path, [_RAN])
     _observing(tmp_path, agents="process_own")
 
-    notices = call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime))
+    notices = call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ()))
 
     assert _codes(notices) == [call_runner.TOOL_SPANS_ON]
 
@@ -651,7 +664,7 @@ def test_an_instrumentor_that_was_not_installed_has_its_own_notice_and_is_never_
     runtime = _runtime(tmp_path, [_RAN])
     _observing(tmp_path, agents="on", smolagents="not_installed")
 
-    notices = call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime))
+    notices = call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ()))
 
     assert _codes(notices) == [
         call_runner.TOOL_SPANS_ON, call_runner.TOOL_SPANS_NOT_INSTALLED, call_runner.TOOL_SPANS_SILENT
@@ -666,7 +679,7 @@ def test_the_note_is_read_as_a_set(tmp_path) -> None:
     note = tmp_path / "calls.jsonl.observing"
     note.write_text(note.read_text() * 3, encoding="utf-8")
 
-    notices = call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime))
+    notices = call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ()))
 
     assert notices[0]["message"] == "Framework span sources were on for agents."
 
@@ -679,4 +692,4 @@ def test_a_note_that_is_missing_cut_or_unreadable_says_nothing(tmp_path, tail) -
             json.dumps({"framework": "agents", "state": "on"}) + "\n" + tail, encoding="utf-8"
         )
 
-    assert call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime)) == []
+    assert call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ())) == []
