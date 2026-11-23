@@ -272,6 +272,10 @@ class CallOutcome:
     # True when a capture surface the bundle declares could not be read for this call, so an
     # empty `calls` is not evidence that the agent made no tool call.
     tool_capture_failed: bool = False
+    # The calls came from a trace this harness wrote (the world's `_alk_tool_trace`) and reading
+    # it succeeded, so an empty `calls` means the agent made none: the scenario is graded rather
+    # than retried as missing evidence.
+    evidence_collected: bool = False
 
 
 class CallAborted(RuntimeError):
@@ -2378,7 +2382,7 @@ class HostedScheduler:
         calls = graded_calls(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
-        if not calls and (
+        if not calls and (call_outcome.tool_capture_failed or not call_outcome.evidence_collected) and (
             self._require_tool_workflow
             or getattr(scenario, "requires_tool_evidence", True)
             or call_outcome.tool_capture_failed

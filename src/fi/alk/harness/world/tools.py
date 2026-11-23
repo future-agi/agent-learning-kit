@@ -908,6 +908,7 @@ def world_tools(
     external_runtime: bool = False,
     catalogue: Catalogue | None = None,
     native_runtime: bool = False,
+    implementation: str | None = None,
 ) -> Any:
     """A server exposing the world-building surface for one agent.
 
@@ -917,6 +918,8 @@ def world_tools(
 
     ``catalogue`` shares one catalogue object with the session's other servers; without it the
     catalogue is read from disk.
+    ``implementation`` is what `save_world` records as the
+    world's `tool_implementation` (a designed environment's handlers are its own).
     """
     # An existing world is picked up rather than replaced. Amending one is the ordinary case
     # once it has been built once, and starting empty every time would mean rebuilding a
@@ -997,6 +1000,8 @@ def world_tools(
         getattr(world, "external_runtime", False)
     )
     world.refusal_signature = contract.refusal_signature
+    # A designed environment's handlers are its own, model-written: they run isolated.
+    world.isolated = getattr(world, "isolated", False) or implementation == "environment"
     if source_root:
         world.reach(
             source_root, contract_folder(contract)
@@ -2178,6 +2183,7 @@ def world_tools(
             # Written out with the world. They are judgement about this agent, and a world reopened
             # without them would have to have them rewritten before it could be saved again.
             world_checks=world_checks,
+            implementation=implementation,
         )
         draft_path.unlink(missing_ok=True)
         tables = world.state()

@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 from collections.abc import Awaitable
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -145,6 +145,8 @@ _PUBLISHED_PARTS = (
     "contract.json",
     "simulator_prompt.md",
     "world.sqlite",
+    # A composition's agent trajectories: proof inputs saved with its suite.
+    "trajectories.json",
 )
 # Only these change the workspace, so only these are worth a checkpoint before they run.
 _WRITING_TOOLS = frozenset(
@@ -711,6 +713,22 @@ class HostedChatRuntime:
         self._opened_with: tuple[bool, bool] | None = None
         self._last_progress: Any = None
         self._idle_turns = 0
+        # Set when an adaptation job's session opens: the binding work and its gates.
+        self.workbench: Any = None
+        # Set when this conversation edits a composition's suite: its verified workspace.
+        self.composition: Any = None
+        # Set when a design job's session opens: the design tools, whose state says whether the
+        # design is finished or the session must be opened again.
+        self.design_tools: Any = None
+        # A design's proofs run on a PostgreSQL cluster this process starts on first use and
+        # stops at exit; its superuser DSN stays in memory.
+        self._design_cluster = ExitStack()
+        self._design_dsn = ""
+        # The design view's PostgreSQL proof, kept across the session's reopenings.
+        self._view_proof: Any = None
+        # True while `_ask` waits for the person, so a pending question on disk without one is
+        # a parked question to ask again.
+        self._asking = False
         self.conversation = self._conversation()
         if isinstance(self.conversation, BuilderConversation):
             # What the sandbox started from is what the environment holds, unless an earlier
@@ -730,33 +748,40 @@ class HostedChatRuntime:
         from .poc_guest_booking import guest_booking_policy_job
         from .understand import load as load_contract
 
-        policy_job = guest_booking_policy_job(self.job)
-        # A reading the platform handed this build is used before anything opens.
-        await asyncio.to_thread(self._take_seed)
-        contract = load_contract(self.workspace)
-        self._opened_with = self._what_exists()
-        if not self._opened_with[1]:
-            if contract is not None:
-                try:
-                    # What follows a saved contract is done before the world stage opens.
-                    await asyncio.to_thread(self._after_saved)
-                except Exception as exc:  # noqa: BLE001 - the world stage opens without it; it is tried again after a turn, at finish_build and at the next opening
-                    from .seed_contract import print_trace
-
-                    print(
-                        f"source model not written before the world stage; class: {type(exc).__name__}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    print_trace(exc)
-            stage = self._open_for_building(contract)
+        if self._designing():
+            stage = await self._open_for_designing()
+        elif self._adapting():
+            stage = await self._open_for_adapting()
+        elif self._composing():
+            stage = await self._open_for_composition()
         else:
-            try:
-                overview = await self.client.overview()
-            except ConversationTransportError:
-                overview = None
-            stage = self._open_built(contract, overview, policy_job)
-        if not self._control_only() and self._nudge is None:
+            policy_job = guest_booking_policy_job(self.job)
+            # A reading the platform handed this build is used before anything opens.
+            await asyncio.to_thread(self._take_seed)
+            contract = load_contract(self.workspace)
+            self._opened_with = self._what_exists()
+            if not self._opened_with[1]:
+                if contract is not None:
+                    try:
+                        # What follows a saved contract is done before the world stage opens.
+                        await asyncio.to_thread(self._after_saved)
+                    except Exception as exc:  # noqa: BLE001 - the world stage opens without it; it is tried again after a turn, at finish_build and at the next opening
+                        from .seed_contract import print_trace
+
+                        print(
+                            f"source model not written before the world stage; class: {type(exc).__name__}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        print_trace(exc)
+                stage = self._open_for_building(contract)
+            else:
+                try:
+                    overview = await self.client.overview()
+                except ConversationTransportError:
+                    overview = None
+                stage = self._open_built(contract, overview, policy_job)
+        if not self._control_only() and not self._designing() and self._nudge is None:
             self._guard(stage.spec)
         capabilities = self.client.capabilities
         stage.configure(
@@ -793,6 +818,140 @@ class HostedChatRuntime:
             "requested work as completed until a tool result proves it."
             + _HOSTED_CHAT_CAPABILITIES
         )
+
+    def _adapting(self) -> bool:
+        """An adaptation job: the harness binds the person's agent to a prebuilt environment."""
+        return isinstance((self.job.get("metadata") or {}).get("adaptation"), dict)
+
+    async def _open_for_adapting(self) -> Stage:
+        from . import spend
+        from .adaptation.hosted import load_workbench
+        from .builder import open_for_adapting
+
+        # The platform reads this ledger before the sandbox is deleted and bills it as authoring.
+        spend.journal_to(self.workspace / "cost.json")
+        self.workbench = await load_workbench(self.workspace)
+        return open_for_adapting(
+            self.workbench,
+            approve=self._approve,
+            ask=self._ask,
+            hosted_prompt=(
+                "\n\n## Hosted conversation behavior\n"
+                "Reply directly to the user in this conversation. Never describe requested work "
+                "as completed until a tool result proves it."
+            ),
+        )
+
+    def _designing(self) -> bool:
+        """A design job: the harness designs an environment from requirements (and a template)."""
+        return isinstance((self.job.get("metadata") or {}).get("design"), dict)
+
+    async def _open_for_designing(self) -> Stage:
+        from . import spend
+        from .design.hosted import OUTPUT
+        from .design.session import open_for_designing
+        from .design.workspace import DESIGN
+
+        # The platform reads this ledger before the sandbox is deleted and bills it as authoring.
+        spend.journal_to(self.workspace / "cost.json")
+        # The control process lays the design out (unpacking any template) before it is opened.
+        for _ in range(150):
+            if (self.workspace / DESIGN).is_file():
+                break
+            await asyncio.sleep(2)
+        if self._view_proof is None:
+            from .design.proof import ViewProof
+
+            self._view_proof = ViewProof(self.workspace, self._design_postgres)
+        stage, self.design_tools = open_for_designing(
+            self.workspace,
+            approve=self._approve_design,
+            ask=self._ask,
+            postgres_dsn=self._design_postgres,
+            output=self.workspace / OUTPUT,
+            view_proof=self._view_proof,
+            hosted_prompt=(
+                "\n\n## Hosted conversation behavior\n"
+                "Reply directly to the person in this conversation. Never describe work as done "
+                "until a tool result proves it."
+            ),
+        )
+        return stage
+
+    def _design_postgres(self) -> str:
+        if not self._design_dsn:
+            from .adaptation.scratch_postgres import scratch_cluster
+
+            self._design_dsn = self._design_cluster.enter_context(scratch_cluster())
+        return self._design_dsn
+
+    async def _approve_design(self, question: str, options: list[dict[str, str]]) -> str:
+        answer = await self._ask("propose_design", {"question": question, "options": options}, None)
+        content = answer.get("content") if isinstance(answer, dict) else None
+        return "\n".join(str(part.get("text") or "") for part in content or [])
+
+    def _composing(self) -> bool:
+        """A composition's chat: the suite of a prebuilt environment bound to the person's agent."""
+        from .composition_edit import is_composition
+
+        return is_composition(self.workspace)
+
+    async def _open_for_composition(self) -> Stage:
+        from .builder import open_for_composition
+        from .composition_edit import open_composition
+
+        self.composition, laid_out = await asyncio.to_thread(open_composition, self.workspace)
+        if laid_out:
+            # The working copy is the composition's suite as published: nothing is unsaved yet.
+            self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+        return open_for_composition(
+            self.composition,
+            platform=self._builder_platform_server(),
+            ask=self._ask,
+            hosted_prompt=self._hosted_prompt(),
+        )
+
+    async def _seal_composition(self) -> dict[str, Any] | None:
+        """Seal the edited suite as a child of the composition's and prove the binding against
+        it. None when the change is ready to publish; otherwise the result to report."""
+        from .adaptation.scratch_postgres import scratch_cluster
+        from .composition_edit import (
+            CompositionEditError,
+            open_composition,
+            plan_change,
+            seal_change,
+        )
+
+        def seal() -> dict[str, Any] | None:
+            if self.composition is None:
+                self.composition, _laid_out = open_composition(self.workspace)
+            plan = plan_change(self.composition)
+            if plan is None:
+                return None
+            with scratch_cluster() as dsn:
+                return seal_change(plan, postgres_dsn=dsn)
+
+        try:
+            sealed = await asyncio.to_thread(seal)
+        except CompositionEditError as exc:
+            return {"applied": False, "code": exc.code, "message": exc.message[:2000]}
+        except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
+            traceback.print_exc()
+            return {
+                "applied": False,
+                "code": "composition_seal_failed",
+                "message": f"the edited suite could not be sealed: {exc}"[:600],
+            }
+        if sealed is None:
+            self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+            return {"applied": True, "unchanged": True, "message": "the suite is unchanged; nothing to save"}
+        return None
+
+    async def _approve(self, question: str, options: list[str]) -> str:
+        """The person's answer to a question code asks, not the model."""
+        answer = await self._ask("finish_adaptation", {"question": question, "options": options}, None)
+        content = answer.get("content") if isinstance(answer, dict) else None
+        return "\n".join(str(part.get("text") or "") for part in content or [])
 
     def _open_built(self, contract: Any, overview: Any, policy_job: Any) -> Stage:
         from .builder import environment_brief, open_builder
@@ -1407,20 +1566,25 @@ class HostedChatRuntime:
         fingerprint = self._environment_fingerprint()
         if fingerprint == self._published_fingerprint() and not force:
             return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
-        from .bundle_author_v2 import reseal_scenarios
-        from .pre_run import refresh_stale
+        if self._composing():
+            refused = await self._seal_composition()
+            if refused is not None:
+                return refused
+        else:
+            from .bundle_author_v2 import reseal_scenarios
+            from .pre_run import refresh_stale
 
-        try:
-            # A pre-run session written from an actor record that has since changed is written again before sealing.
-            await refresh_stale(self.workspace)
-            await asyncio.to_thread(reseal_scenarios, self.workspace)
-        except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
-            traceback.print_exc()
-            return {
-                "applied": False,
-                "code": "reseal_failed",
-                "message": f"the edited scenarios could not be sealed for runs: {exc}"[:600],
-            }
+            try:
+                # A pre-run session written from an actor record that has since changed is written again before sealing.
+                await refresh_stale(self.workspace)
+                await asyncio.to_thread(reseal_scenarios, self.workspace)
+            except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
+                traceback.print_exc()
+                return {
+                    "applied": False,
+                    "code": "reseal_failed",
+                    "message": f"the edited scenarios could not be sealed for runs: {exc}"[:600],
+                }
         result: dict[str, Any] = {}
         for _attempt in range(3):
             try:
@@ -1440,6 +1604,10 @@ class HostedChatRuntime:
                 "environment after this reply; the change has to be made again on it."
             )
         if result.get("applied"):
+            if self._composing():
+                from .composition_edit import accept_change
+
+                await asyncio.to_thread(accept_change, self.composition)
             await self._record_touched(result)
             if result.get("revision"):
                 self._write_dotfile(_AUTHORING_BASIS, {"authoring_revision": result["revision"]})
@@ -1449,6 +1617,10 @@ class HostedChatRuntime:
     async def _publish_if_changed(self) -> tuple[str, bool]:
         """A line for the reply when the turn left changes the model did not save itself,
         and whether they could not be sealed for runs."""
+        if self._designing():
+            # A design is checkpointed, never published: finish_design seals it.
+            await self._checkpoint()
+            return "", False
         if self._control_only():
             # While building, the build's own sealing publishes; there is nothing to save yet.
             return "", False
@@ -1660,6 +1832,10 @@ class HostedChatRuntime:
             with suppress(asyncio.CancelledError):
                 await activity_task
             await self.conversation.close()
+            # Its databases live on the design's cluster, so it closes first.
+            if self._view_proof is not None:
+                self._view_proof.close()
+            self._design_cluster.close()
 
     async def _carry_on(self) -> bool:
         """While the environment is being built, keep the harness at it until it calls
@@ -1668,29 +1844,47 @@ class HostedChatRuntime:
         while a question is open, and gives up after a few turns that change nothing."""
         if self._build_is_over():
             return False
-        if not self._control_only() or self._side_chat() or (self.workspace / _BUILD_FINISHED).is_file():
+        if (
+            not (self._control_only() or self._designing())
+            or self._side_chat()
+            or (self.workspace / _BUILD_FINISHED).is_file()
+        ):
             return False
+        if self._designing():
+            return await self._carry_on_designing()
         if (self.workspace / _PENDING_QUESTION).is_file():
             return False
         exists = self._what_exists()
-        progress = (exists, len(list((self.workspace / "scenarios").glob("*/scenario.json"))))
+        progress = (
+            (self.workbench.fingerprint() if self.workbench is not None else "")
+            if self._adapting()
+            else (exists, len(list((self.workspace / "scenarios").glob("*/scenario.json"))))
+        )
         if progress != self._last_progress:
             self._last_progress, self._idle_turns = progress, 0
         elif self._idle_turns >= 3:
             return False
         self._idle_turns += 1
-        await asyncio.to_thread(self._after_saved)
-        if self._opened_with is not None and exists != self._opened_with:
-            await self.conversation.close()
-            said = "[What you saved opened the next part of the build: your tools now cover it. Carry on.]"
-        else:
-            asked = int(self.job.get("scenario_count") or 0)
+        if self._adapting():
+            missing = self.workbench.unfinished() if self.workbench is not None else []
             said = (
-                f"[The build is not finished: the test environment for this agent, with {asked} "
-                "scenarios. Carry on, and call finish_build when it is.]"
-                if asked
-                else "[The build is not finished. Carry on, and call finish_build when it is.]"
+                "[The adaptation is not finished"
+                + (":\n- " + "\n- ".join(missing) if missing else "")
+                + "\nCarry on, and call finish_adaptation, or stop_adaptation with the reason.]"
             )
+        else:
+            await asyncio.to_thread(self._after_saved)
+            if self._opened_with is not None and exists != self._opened_with:
+                await self.conversation.close()
+                said = "[What you saved opened the next part of the build: your tools now cover it. Carry on.]"
+            else:
+                asked = int(self.job.get("scenario_count") or 0)
+                said = (
+                    f"[The build is not finished: the test environment for this agent, with {asked} "
+                    "scenarios. Carry on, and call finish_build when it is.]"
+                    if asked
+                    else "[The build is not finished. Carry on, and call finish_build when it is.]"
+                )
         await self._handle(
             {
                 "sequence": self.client.command_watermark,
@@ -1700,6 +1894,69 @@ class HostedChatRuntime:
             }
         )
         return True
+
+    async def _carry_on_designing(self) -> bool:
+        """Keep a design at it until finish_design or stop_design: open it again when it saved
+        what opens the scenario tools or changed the contract its writers read, and ask again a
+        question it parked on, which a resumed design starts with."""
+        from .design.session import unfinished
+        from .design.workspace import load_design
+
+        if (self.workspace / _PENDING_QUESTION).is_file():
+            if self._asking:
+                return False
+            said = await self._resume_question()
+            if not said:
+                return False
+        else:
+            tools = self.design_tools
+            if tools is None:
+                # Not opened yet: the first message opens it.
+                return False
+            stage = load_design(self.workspace).stage
+            progress = (stage, len(list((self.workspace / "scenarios").glob("*/scenario.json"))))
+            if progress != self._last_progress or tools.reopen:
+                self._last_progress, self._idle_turns = progress, 0
+            elif self._idle_turns >= 3:
+                return False
+            self._idle_turns += 1
+            if tools.reopen:
+                await self.conversation.close()
+                said = "[You were opened again with the tools for what you saved: carry on where you were.]"
+            else:
+                said = unfinished(stage)
+        await self._handle(
+            {
+                "sequence": self.client.command_watermark,
+                "message_id": str(uuid.uuid4()),
+                "kind": "continue",
+                "payload": {"content": said},
+            }
+        )
+        return True
+
+    async def _resume_question(self) -> str:
+        """The question a design parked on, asked again under its own message id; what to tell
+        the session about the answer, or nothing when it parks again."""
+        from .design.tools import PARKED, settle_proposal
+
+        pending = json.loads((self.workspace / _PENDING_QUESTION).read_text(encoding="utf-8"))
+        answer = await self._ask(
+            "resume",
+            {"question": pending.get("question"), "options": pending.get("options") or []},
+            None,
+        )
+        content = answer.get("content") if isinstance(answer, dict) else None
+        said = "\n".join(str(part.get("text") or "") for part in content or [])
+        if said == PARKED or (self.workspace / _PENDING_QUESTION).is_file():
+            return ""
+        approved = settle_proposal(self.workspace, said)
+        return (
+            f"[Resumed from the checkpoint. You had asked:\n{pending.get('question')}\n"
+            f"The person answered: {said}"
+            + ("\nThe design is approved: build it." if approved else "")
+            + "]"
+        )
 
     def _after_saved(self, *, world_changed: bool = False) -> None:
         """The work that follows a saved contract or world, the same as a staged build does it,
@@ -2453,7 +2710,7 @@ class HostedChatRuntime:
         self, _tool_name: str, payload: dict[str, Any], _context: Any
     ) -> Any:
         asked = [one for one in payload.get("questions") or [] if isinstance(one, dict)]
-        if self._from_platform:
+        if self._from_platform and not self._designing():
             return self._ask_reply(
                 "Nobody answers during the build or its check. Decide it yourself from "
                 "the agent and the contract, and say what you decided in your summary.",
@@ -2515,8 +2772,25 @@ class HostedChatRuntime:
                 **({"options_only": True} if payload.get("options_only") else {}),
             },
         )
+        self._asking = True
+        try:
+            return await self._await_reply(message_id, asked)
+        finally:
+            self._asking = False
+
+    async def _await_reply(self, message_id: str, asked: list[dict[str, Any]]) -> Any:
+        pending_path = self.workspace / _PENDING_QUESTION
+        # A design waits a set window for the person, then parks rather than idle the sandbox.
+        deadline = (
+            time.monotonic()
+            + float(os.environ.get("ALK_DESIGN_QUESTION_WINDOW_SECONDS") or 900)
+            if self._designing()
+            else None
+        )
         with asking_a_person():
             while not self.stopping.is_set():
+                if deadline is not None and time.monotonic() > deadline:
+                    return await self._park_design(asked)
                 commands = await self.client.commands()
                 for command in commands:
                     command_payload = command.get("payload") or {}
@@ -2539,6 +2813,14 @@ class HostedChatRuntime:
                         self._turn_acknowledged_through = max(
                             self._turn_acknowledged_through, answer_sequence
                         )
+                    # The turn carries on after the answer (a design builds for an hour), so the
+                    # platform settles the question now rather than at turn_completed.
+                    await self.client.emit(
+                        "question_answered",
+                        message_id=message_id,
+                        stage=self.conversation.stage_name,
+                        payload={"reply_message_id": str(command["message_id"])},
+                    )
                     if asked and self.backend_name == "claude":
                         # The CLI's own question tool takes its answers as an allowed, rewritten input.
                         from claude_agent_sdk.types import PermissionResultAllow
@@ -2556,6 +2838,34 @@ class HostedChatRuntime:
         return self._ask_reply(
             "The conversation was stopped.", is_error=True, from_the_cli=bool(asked)
         )
+
+    async def _park_design(self, asked: list[dict[str, Any]]) -> Any:
+        """Checkpoint the design with its open question, then finish the job as waiting: the
+        platform keeps the checkpoint, and continuing the design starts from it."""
+        from .design.hosted import OUTPUT
+        from .design.tools import FINISHED_MARKER, PARKED, RESULT
+
+        await self._checkpoint()
+        output = self.workspace / OUTPUT
+        output.mkdir(parents=True, exist_ok=True)
+        (output / RESULT).write_text(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "failure": {
+                        "code": "design_waiting",
+                        "message": "the design is waiting for an answer; continue it to resume",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.workspace / FINISHED_MARKER).write_text(json.dumps({"status": "failed"}), encoding="utf-8")
+        if asked and self.backend_name == "claude":
+            from claude_agent_sdk.types import PermissionResultDeny
+
+            return PermissionResultDeny(message=PARKED)
+        return {"content": [{"type": "text", "text": PARKED}], "is_error": True}
 
     def _provider_sessions_key(self) -> dict[str, str]:
         return {

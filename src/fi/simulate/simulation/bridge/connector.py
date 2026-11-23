@@ -44,3 +44,5 @@ class ConnectorConfig:
     api_url: str
     livekit_url: str = ""
     first_message_mode: str | None = None
+    call_metadata: dict[str, str] = field(default_factory=dict)
+    call_variables: dict[str, str] = field(default_factory=dict)

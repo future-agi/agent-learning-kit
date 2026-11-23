@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
+from datetime import datetime
+from unittest import mock
 import io
 import json
 import os
@@ -24,6 +27,159 @@ from fi.alk.harness.process_runtime import (
     RuntimeState,
 )
 from fi.simulate.agent.wrapper import AgentResponse
+from fi.alk.harness.usage import UsageDenied, failure_domain_for_code
+from fi.alk.harness.run.conversation import FINISHED, Exchange, Transcript
+
+
+class _MeteringReporter:
+    """Records the order of usage checks, worker starts and usage records."""
+
+    def __init__(self, *, deny: bool = False) -> None:
+        self.deny = deny
+        self.events: list[tuple[str, object]] = []
+
+    def check(self, action):
+        self.events.append(("check", action))
+        if self.deny:
+            raise UsageDenied({"reason": "limit_reached"})
+
+    def record(self, **fields):
+        self.events.append(("record", fields))
+
+
+def _in_process_worker(tmp_path, events):
+    """Run the real worker entry point with only the environment the parent hands it."""
+
+    async def worker(module, payload, *, environ, work_directory, pass_fds=()):
+        assert module == "fi.alk.harness.chat_worker"
+        events.append(("worker", payload["scenario_key"]))
+        result_path = tmp_path / f"worker-result-{len(events)}.json"
+        with (
+            mock.patch.dict(os.environ, environ, clear=True),
+            mock.patch.object(
+                chat_worker.sys, "stdin", io.StringIO(json.dumps(payload))
+            ),
+            mock.patch.object(
+                chat_worker.sys, "argv", ["chat_worker", str(result_path)]
+            ),
+        ):
+            await chat_worker.main()
+        return json.loads(result_path.read_text())
+
+    return worker
+
+
+def _metered_run(tmp_path, monkeypatch, reporter, conversation):
+    class Wrapper:
+        def __init__(self, **_kwargs):
+            pass
+
+    context = dataclasses.replace(_context(tmp_path), usage_reporter=reporter)
+    monkeypatch.setattr(chat_call_runner, "HTTPAgentWrapper", Wrapper)
+    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *_args, **_kwargs: _ToolWorld())
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    monkeypatch.setattr(
+        chat_worker, "run_json_worker", _in_process_worker(tmp_path, reporter.events)
+    )
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http",
+                protocol="http",
+                address="http://agent.invalid",
+            )
+        },
+    )
+    return asyncio.run(
+        chat_worker.IsolatedChatCallRunner(_Adapter(), context).run(
+            SimpleNamespace(
+                scenario_key="trial-key",
+                source_scenario_key="one",
+                scenario_id="trial-id",
+            ),
+            runtime,
+        )
+    )
+
+
+async def _conversation_with_tokens(_target, scenario, _contract, _bundle_dir, **_kwargs):
+    return Transcript(
+        exchanges=[
+            Exchange("customer", scenario.instruction),
+            Exchange("agent", "Done."),
+        ],
+        ended=FINISHED,
+        simulator_input_tokens=120,
+        simulator_output_tokens=30,
+    )
+
+
+@pytest.mark.parametrize(
+    ("funding", "events"),
+    [
+        ("platform", ["check", "worker", "record"]),
+        ("customer", ["worker", "record"]),
+    ],
+)
+def test_isolated_chat_call_is_checked_before_the_worker_and_billed_after_it(
+    tmp_path, monkeypatch, funding, events
+):
+    monkeypatch.setenv("ALK_SIMULATOR_FUNDING", funding)
+    reporter = _MeteringReporter()
+
+    _metered_run(tmp_path, monkeypatch, reporter, _conversation_with_tokens)
+
+    assert [kind for kind, _ in reporter.events] == events
+    (record,) = [fields for kind, fields in reporter.events if kind == "record"]
+    assert isinstance(record.pop("occurred_at"), datetime)
+    assert record == {
+        "action": "text_call",
+        "scenario_key": "trial-key",
+        "amount": 150,
+        "funding": funding,
+        "outcome": "completed",
+        "failure_domain": None,
+    }
+
+
+def test_failed_isolated_chat_call_bills_the_tokens_spent_before_it_failed(
+    tmp_path, monkeypatch
+):
+    reporter = _MeteringReporter()
+
+    async def fail_midway(_target, scenario, _contract, _bundle_dir, **_kwargs):
+        error = ConnectionError("agent hung up")
+        error.partial_transcript = Transcript(
+            exchanges=[Exchange("customer", scenario.instruction)],
+            simulator_input_tokens=40,
+            simulator_output_tokens=2,
+        )
+        raise error
+
+    with pytest.raises(CallAborted) as aborted:
+        _metered_run(tmp_path, monkeypatch, reporter, fail_midway)
+
+    assert aborted.value.code == "target_agent_failed"
+    (record,) = [fields for kind, fields in reporter.events if kind == "record"]
+    assert record["amount"] == 42
+    assert record["outcome"] == "failed"
+    assert record["failure_domain"] == failure_domain_for_code("target_agent_failed")
+
+
+def test_denied_usage_stops_an_isolated_chat_call_before_the_worker_starts(
+    tmp_path, monkeypatch
+):
+    reporter = _MeteringReporter(deny=True)
+
+    with pytest.raises(CallAborted) as aborted:
+        _metered_run(tmp_path, monkeypatch, reporter, _conversation_with_tokens)
+
+    assert aborted.value.code == "usage_exhausted"
+    assert reporter.events == [("check", "text_call")]
 
 
 def test_isolated_chat_worker_preserves_private_runtime_auth(tmp_path, monkeypatch):

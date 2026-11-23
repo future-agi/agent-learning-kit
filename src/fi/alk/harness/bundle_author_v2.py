@@ -186,6 +186,16 @@ def _catalog_image(image: str) -> tuple[str, str]:
     return name.lower(), tag if separator else ""
 
 
+# Every hosted world store starts with these: the readiness sentinel and the table the
+# `tool_trace` evidence seam reads (`call_runner._collect_tool_trace_calls`).
+WORLD_SEED_PREFIX = (
+    "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
+    "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
+    + _TOOL_TRACE_DDL
+)
+WORLD_SEED_SENTINEL_QUERY = "SELECT id FROM harness_seed_sentinel WHERE id='ready'"
+
+
 def _reuse_certified_bundle(
     *, source: Path, job: HarnessJob, authoring: Path, output: Path
 ) -> EnvironmentBundleV2 | None:
@@ -4344,10 +4354,7 @@ def author_bundle_v2(
                     version="16",
                 ),
             ),
-            sentinel=Sentinel(
-                query="SELECT id FROM harness_seed_sentinel WHERE id='ready'",
-                expected="ready",
-            ),
+            sentinel=Sentinel(query=WORLD_SEED_SENTINEL_QUERY, expected="ready"),
         )
         provider_manifest: ProviderRepositoryManifest | None = None
         provider_import: ProviderImportSpec | None = None
