@@ -3179,7 +3179,7 @@ TOOL_SPANS_NOT_INSTALLED = "tool_spans_not_installed"
 TOOL_SPANS_SILENT = "tool_spans_silent"
 # What the mark hook can note: the frameworks it instruments (`simulation_mark_bootstrap._INSTRUMENTORS`, which can't
 # be imported here, as importing it installs the hook) and its three states. The note is written by the agent's own
-# process, so a pair outside these is dropped rather than repeated in a notice, and the note is read only so far.
+# process, so a pair outside these is dropped rather than repeated in a notice, and only its first lines are read.
 # A test holds these equal to the hook's.
 _OBSERVED_FRAMEWORKS = frozenset(
     {
@@ -3196,7 +3196,7 @@ _OBSERVED_FRAMEWORKS = frozenset(
     }
 )
 _OBSERVED_STATES = frozenset({"on", "process_own", "not_installed"})
-_LARGEST_OBSERVING_NOTE = 16_384
+_LARGEST_OBSERVING_NOTE = 65_536
 
 
 def _observing(runtime: EnvironmentRuntime) -> set[tuple[str, str]] | None:
@@ -3208,11 +3208,12 @@ def _observing(runtime: EnvironmentRuntime) -> set[tuple[str, str]] | None:
     try:
         with open(str(path) + ".observing", "rb") as handle:
             raw = handle.read(_LARGEST_OBSERVING_NOTE + 1)
+        if len(raw) > _LARGEST_OBSERVING_NOTE:
+            # Each process that imports a framework appends its line, so a process started on every turn writes the
+            # same lines again: the whole lines that fit say what the rest repeats.
+            raw = raw[: raw.rfind(b"\n", 0, _LARGEST_OBSERVING_NOTE) + 1]
         text = raw.decode("utf-8")
     except (OSError, UnicodeDecodeError):
-        return None
-    if len(raw) > _LARGEST_OBSERVING_NOTE:
-        # Far beyond what the hook writes (one short line a framework and state), so not its note.
         return None
     noted: set[tuple[str, str]] = set()
     for line in text.splitlines():

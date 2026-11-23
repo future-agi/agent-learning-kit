@@ -740,14 +740,32 @@ def test_a_note_of_nothing_the_hook_writes_says_nothing(tmp_path) -> None:
     assert call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ())) == []
 
 
-def test_a_note_far_larger_than_the_hook_writes_is_not_read(tmp_path) -> None:
+def test_a_long_note_is_read_only_as_far_as_its_whole_lines_fit(tmp_path, monkeypatch) -> None:
+    # A process started on every turn appends its line each time. Only the whole lines within the limit are read.
     runtime = _runtime(tmp_path, [_RAN])
     line = json.dumps({"framework": "agents", "state": "on"}) + "\n"
-    (tmp_path / "calls.jsonl.observing").write_text(
-        line * (call_runner._LARGEST_OBSERVING_NOTE // len(line) + 1), encoding="utf-8"
-    )
+    later = json.dumps({"framework": "crewai", "state": "not_installed"}) + "\n"
+    monkeypatch.setattr(call_runner, "_LARGEST_OBSERVING_NOTE", len(line) * 3 + 5)
+    (tmp_path / "calls.jsonl.observing").write_text(line * 3 + later * 2, encoding="utf-8")
 
-    assert call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ())) == []
+    notices = call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ()))
+
+    assert _codes(notices) == [call_runner.TOOL_SPANS_ON, call_runner.TOOL_SPANS_SILENT]
+    assert notices[0]["message"] == "Framework span sources were on for agents."
+
+
+def test_a_note_at_the_limit_is_read_whole(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, [_RAN])
+    line = json.dumps({"framework": "agents", "state": "on"}) + "\n"
+    later = json.dumps({"framework": "crewai", "state": "not_installed"}) + "\n"
+    monkeypatch.setattr(call_runner, "_LARGEST_OBSERVING_NOTE", len(line) * 2 + len(later))
+    (tmp_path / "calls.jsonl.observing").write_text(line * 2 + later, encoding="utf-8")
+
+    notices = call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ()))
+
+    assert _codes(notices) == [
+        call_runner.TOOL_SPANS_ON, call_runner.TOOL_SPANS_NOT_INSTALLED, call_runner.TOOL_SPANS_SILENT
+    ]
 
 
 def test_the_note_reader_knows_each_framework_and_state_the_hook_writes() -> None:
