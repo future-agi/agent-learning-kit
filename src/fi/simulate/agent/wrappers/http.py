@@ -1065,6 +1065,8 @@ class HTTPAgentWrapper(AgentWrapper):
                     "arguments": arguments,
                     "result": result,
                     "ok": not (error or result_error),
+                    # The id the agent gave the call, so the kit pairs this row with other records of it by id.
+                    **({"id": key} if key else {}),
                 }
             )
         if spec.id_path:
@@ -1243,6 +1245,8 @@ class HTTPAgentWrapper(AgentWrapper):
                     "arguments": arguments,
                     "result": result,
                     "ok": not (error or result_error),
+                    # The id the agent gave the call: the one its action and its completion share.
+                    **({"id": str(key)} if key not in (None, "") else {}),
                 }
             )
             if correlation is not None:
