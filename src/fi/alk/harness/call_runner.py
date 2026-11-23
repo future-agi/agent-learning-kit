@@ -2538,9 +2538,11 @@ def _loose(value: Any) -> Any:
 
 
 def _digest(call: Call) -> str:
-    """Everything a call carries but its times."""
+    """Everything a call carries but its times and the names of the sources that saw it."""
     fields = {
-        key: value for key, value in vars(call).items() if key not in ("at", "ended_at")
+        key: value
+        for key, value in vars(call).items()
+        if key not in ("at", "ended_at", *evidence.FIELDS)
     }
     return json.dumps(fields, sort_keys=True, default=repr)
 

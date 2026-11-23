@@ -4085,6 +4085,13 @@ def _lend_span_as_it_was(span: Call, other: Call) -> None:
 
 _NAMED = {"source", "seen_by", "trace_mark"}
 
+
+def _digest_as_it_was(call: Call) -> str:
+    # The pairing's digest before a call named its sources: everything but its times.
+    fields = {key: value for key, value in vars(call).items() if key not in ("at", "ended_at", *_NAMED)}
+    return json.dumps(fields, sort_keys=True, default=repr)
+
+
 _SPOKEN_LINES = (
     {"name": "look_up_order", "arguments": {"order_id": "A1001"}, "output": "shipped", "at": 1.0},
     {"name": "start_return", "arguments": {"order_id": "A1001"}, "output": "started", "at": 2.0},
@@ -4123,6 +4130,7 @@ def _voice_reading(tmp_path, monkeypatch, *, lines, seam, table=None, table_fail
     monkeypatch.setattr(cr, "_collect_tool_trace_calls", read_table)
     monkeypatch.setattr(cr, "_collect_http_tool_calls", lambda runtime, **_: tuple(read_table(runtime)))
     monkeypatch.setattr(cr, "_lend_span", lend)
+    monkeypatch.setattr(cr, "_digest", _digest_as_it_was if lend is _lend_span_as_it_was else _digest_now)
     _job_obj, context = _context(tmp_path=folder, evidence_seam=seam)
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
     try:
@@ -4149,6 +4157,24 @@ _LOST_ANSWER_LOG = (
 _RAN = {"name": "start_return", "arguments": {"order_id": "A1001"}, "output": "started", "at": 2.0}
 _HEARD_FAILED = {"name": "start_return", "arguments": {"order_id": "A1001"}, "output": "timed out", "is_error": True,
                  "at": 2.5}
+
+
+def _marked_lines(mark: str) -> tuple[dict, ...]:
+    # One tool called twice with the same arguments and result, one of its two lines carrying a writer's mark, then a
+    # second tool; the agent's spans timed all three earlier than the lines and fit either line of the first tool.
+    def line(name, at, marked=False):
+        return {"name": name, "arguments": {"date": "fri"}, "output": "ok", "at": at, "ended_at": at + 0.5,
+                **({"source": mark} if marked and mark else {})}
+
+    def span(name, at, event_id, agent):
+        return {"name": name, "arguments": {"date": "fri"}, "output": "ok", "at": at, "ended_at": at + 3,
+                "source": "otel", "event_id": event_id, "agent_key": agent}
+
+    return (
+        line("book", 10.0, marked=True), line("book", 11.0), line("pay", 12.0),
+        span("book", 9.0, "e1", "booker"), span("book", 9.5, "e2", "booker"), span("pay", 9.7, "e3", "cashier"),
+    )
+
 
 _VOICE_CASES = {
     "file with graded calls": dict(lines=_SPOKEN_LINES, seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()),
@@ -4218,6 +4244,12 @@ _VOICE_CASES = {
     ),
     "the http_tool seam": dict(lines=None, seam=EvidenceSeam.HTTP_TOOL, table=_table_rows()),
     "the http_tool seam with nothing": dict(lines=None, seam=EvidenceSeam.HTTP_TOOL),
+    "two lines of one call, one marked by the CrewAI observer": dict(
+        lines=_marked_lines("crewai"), seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "two lines of one call, one written by the LiveKit hook": dict(
+        lines=_marked_lines("livekit"), seam=EvidenceSeam.TOOL_TRACE,
+    ),
     "the hook's line timing the agent's own line": dict(
         lines=(
             {"name": "look_up_order", "arguments": {"order_id": "A1001"}, "output": "shipped"},
@@ -4262,6 +4294,19 @@ def test_every_voice_record_names_its_source(tmp_path, monkeypatch) -> None:
 
 
 _lend_span_now = cr._lend_span
+_digest_now = cr._digest
+
+
+@pytest.mark.parametrize("mark", ["", "crewai", "livekit"])
+def test_a_lines_mark_never_changes_how_spans_pair(tmp_path, monkeypatch, mark) -> None:
+    calls, graded = _voice_reading(
+        tmp_path, monkeypatch, lines=_marked_lines(mark), seam=EvidenceSeam.TOOL_TRACE, lend=_lend_span_now
+    )
+
+    assert graded == ["book", "book", "pay"]
+    assert [(call["at"], call["runtime_ids"].get("event_id"), call["worker_id"]) for call in calls] == [
+        (9.0, "e1", "booker"), (9.5, "e2", "booker"), (9.7, "e3", "cashier")
+    ]
 
 
 @pytest.mark.parametrize(

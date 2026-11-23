@@ -38,6 +38,9 @@ SPAN = "span"
 TRACER = "tracer"
 AGENT = "agent"
 ORDER = (WORLD, SPAN, TRACER, AGENT)
+# The fields of a call that name its sources. They are not part of the call: no comparison, pairing or grading reads
+# them.
+FIELDS = ("source", "seen_by", "trace_mark")
 
 
 def tagged(calls: Iterable[Call], source: str) -> list[Call]:
