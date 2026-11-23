@@ -1072,6 +1072,9 @@ def one_call_per_lost_answer(calls: Sequence[Call], log: Sequence[Mapping[str, A
             continue
         if ran is not None and heard is not None:
             kept = [call for call in kept if call is not heard]
+            # The record folded away saw the same call.
+            for source in (heard.source, *heard.seen_by):
+                evidence.seen(ran, source)
         one.ok, one.error, one.answer_lost = True, "", True
     return kept
 
@@ -2544,6 +2547,12 @@ def _digest(call: Call) -> str:
         for key, value in vars(call).items()
         if key not in ("at", "ended_at", *evidence.FIELDS)
     }
+    if call.source == evidence.AGENT:
+        # The agent's own account carries the agent's call ids, and two of its calls alike in all else are as
+        # interchangeable as they were when it carried none.
+        fields["runtime_ids"] = {
+            key: value for key, value in call.runtime_ids.items() if key not in ("call_id", "tool_call_id")
+        }
     return json.dumps(fields, sort_keys=True, default=repr)
 
 
@@ -2590,6 +2599,9 @@ def _other_worker(span: Call, call: Call) -> bool:
     return bool(mine and theirs and not (mine & theirs))
 
 
+_EVENT_IDS = ("event_id", "parent_event_id", "started_event_id")
+
+
 def _lend_span(span: Call, other: Call) -> None:
     """Give another tracer's call the span's agent, hand-off and times, keeping what it recorded itself. The span is
     listed as having seen the call; it never takes the call's graded facts (tool_evidence.py)."""
@@ -2598,9 +2610,13 @@ def _lend_span(span: Call, other: Call) -> None:
     other.delegated_to = other.delegated_to or span.delegated_to
     other.transferred = other.transferred or span.transferred
     other.ended_at = other.ended_at or span.ended_at
-    if not other.runtime_ids:
-        # The span's place among the agents goes with its ids: a parent is an id in the same record.
-        other.runtime_ids = span.runtime_ids
+    if not other.runtime_ids or (
+        other.source == evidence.AGENT and not any(other.runtime_ids.get(key) for key in _EVENT_IDS)
+    ):
+        # The span's place among the agents goes with its event ids: a parent is an id in the same record. The record's
+        # own ids stay; the span supplies only those it lacks. The agent's own account carries the call id the agent
+        # gave, and still takes the span's event ids; any other record with an id of its own keeps what it has.
+        other.runtime_ids = {**span.runtime_ids, **other.runtime_ids}
         other.parent_span_id, other.relationship = (
             span.parent_span_id,
             span.relationship,

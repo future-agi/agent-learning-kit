@@ -52,7 +52,28 @@ _NAMED = {"source", "seen_by", "trace_mark"}
 
 
 def _unnamed(calls) -> list[dict]:
-    return [{key: value for key, value in dataclasses.asdict(call).items() if key not in _NAMED} for call in calls]
+    """The records as kit dev wrote them: without the source names, and without the call id the agent's own account
+    now carries."""
+    return [
+        {
+            key: (_without_call_id(value) if key == "runtime_ids" and call.source == AGENT else value)
+            for key, value in dataclasses.asdict(call).items()
+            if key not in _NAMED
+        }
+        for call in calls
+    ]
+
+
+def _without_call_id(ids: dict) -> dict:
+    return {key: value for key, value in ids.items() if key not in ("call_id", "tool_call_id")}
+
+
+def _as_on_dev(calls) -> list[Call]:
+    """The calls as kit dev recorded them: the agent's own account carried no call id."""
+    return [
+        dataclasses.replace(call, runtime_ids=_without_call_id(call.runtime_ids)) if call.source == AGENT else call
+        for call in calls
+    ]
 
 
 # -- the names ------------------------------------------------------------------------------------
@@ -201,7 +222,7 @@ def _chat_readings(tmp_path, monkeypatch, observed, lines, log=None):
             monkeypatch.setattr(call_runner, "_lend_span", lend_now)
             monkeypatch.setattr(call_runner, "_digest", digest_now)
 
-    before = as_it_was(copy.deepcopy(observed))
+    before = as_it_was(_as_on_dev(copy.deepcopy(observed)))
     now = call_runner._with_span_calls(copy.deepcopy(observed), runtime)
     if log is not None:
         before = call_runner.one_call_per_lost_answer(before, log)
@@ -209,11 +230,11 @@ def _chat_readings(tmp_path, monkeypatch, observed, lines, log=None):
     return before, now
 
 
-def _told(name="look_up_order", arguments=None, response=None):
+def _told(name="look_up_order", arguments=None, response=None, call_id=""):
     world = _World()
     _record_completed_tool_call(
         world, name=name, arguments={"order_id": "A1001"} if arguments is None else arguments,
-        response=response or {"result": {"status": "shipped"}, "success": True},
+        response=response or {"result": {"status": "shipped"}, "success": True}, call_id=call_id,
     )
     return world.calls[0]
 
@@ -266,6 +287,22 @@ _CHAT_CASES = {
             "source": "otel", "event_id": event_id, "agent_key": agent}
            for name, at, event_id, agent in (("book", 9.0, "e1", "booker"), ("book", 9.5, "e2", "booker"),
                                              ("pay", 9.7, "e3", "cashier")))],
+    ),
+    "the callback route with the agent's call id, its span with event ids": (
+        [_told(call_id="c1")],
+        [{"name": "look_up_order", "arguments": "", "output": "", "source": "otel", "agent_key": "Support",
+          "event_id": "e1", "parent_event_id": "p1", "at": 1.0}],
+    ),
+    "one call twice on the callback route with the agent's call ids, two spans": (
+        [_told(call_id="c1"), _told(call_id="c2")],
+        [{"name": "look_up_order", "arguments": "", "output": "", "source": "otel", "agent_key": "Support",
+          "event_id": event_id, "parent_event_id": "p1", "at": at} for event_id, at in (("e1", 1.0), ("e2", 1.2))],
+    ),
+    "no recorded call, a line the agent wrote with its call id, and a span": (
+        [],
+        [{**_LINE, "call_id": "c1"},
+         {"name": "look_up_order", "arguments": "{\"order_id\": \"A1001\"}", "output": "shipped", "source": "otel",
+          "agent_key": "Support", "event_id": "e1", "parent_event_id": "p1", "at": 1.0}],
     ),
     "the world's call and a span that recorded less": (
         [_call("book", arguments={"date": "fri", "party": 2}, result="booked #7", at=1.0)],
@@ -320,6 +357,45 @@ def test_a_chat_lost_answer_is_one_done_call_with_the_tools_own_result(tmp_path,
 
     assert _unnamed(now) == _unnamed(before)
     assert [(call.ok, call.error, call.answer_lost, call.result) for call in now] == [(True, "", True, "shipped")]
+    # The record folded away is listed as having seen the call.
+    (call,) = now
+    assert (call.source, call.seen_by) in [(TRACER, [SPAN]), (WORLD, [AGENT])]
+
+
+def test_the_agents_own_account_keeps_the_call_id_it_gave() -> None:
+    assert _told(call_id="c1").runtime_ids == {"call_id": "c1"}
+    assert _told().runtime_ids == {}
+
+
+def test_on_the_callback_route_the_agents_account_keeps_its_call_id_and_takes_the_spans_event_ids(
+    tmp_path, monkeypatch
+) -> None:
+    observed, lines = _CHAT_CASES["the callback route with the agent's call id, its span with event ids"]
+
+    _before, now = _chat_readings(tmp_path, monkeypatch, observed, lines)
+
+    assert [(call.runtime_ids, call.worker_id, call.seen_by) for call in now] == [
+        ({"event_id": "e1", "parent_event_id": "p1", "call_id": "c1"}, "Support", [SPAN])
+    ]
+
+
+def test_a_line_with_an_id_of_its_own_takes_none_from_its_span(tmp_path, monkeypatch) -> None:
+    observed, lines = _CHAT_CASES["no recorded call, a line the agent wrote with its call id, and a span"]
+
+    before, now = _chat_readings(tmp_path, monkeypatch, observed, lines)
+
+    assert [call.runtime_ids for call in now] == [call.runtime_ids for call in before] == [{"call_id": "c1"}]
+
+
+def test_two_calls_alike_but_for_the_agents_call_ids_pair_with_spans_as_without_them(tmp_path, monkeypatch) -> None:
+    observed, lines = _CHAT_CASES["one call twice on the callback route with the agent's call ids, two spans"]
+
+    _before, now = _chat_readings(tmp_path, monkeypatch, observed, lines)
+
+    assert [call.runtime_ids for call in now] == [
+        {"event_id": "e1", "parent_event_id": "p1", "call_id": "c1"},
+        {"event_id": "e2", "parent_event_id": "p1", "call_id": "c2"},
+    ]
 
 
 def test_a_google_adk_reply_streamed_in_parts_reads_as_one_record_per_call(tmp_path, monkeypatch) -> None:
@@ -367,3 +443,5 @@ def test_a_google_adk_reply_streamed_in_parts_reads_as_one_record_per_call(tmp_p
         ("return_policy", {}, AGENT, [SPAN]),
     ]
     assert all(call.result is not None for call in now)
+    # Each record carries the call id the agent gave.
+    assert all(call.runtime_ids.get("call_id") for call in now)
