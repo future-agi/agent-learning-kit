@@ -2239,6 +2239,53 @@ def _agents_call_id(call: Call) -> str:
 
 # Said when the agent's trace holds identical untimed lines with no call id: one call written twice or two calls.
 CALLS_MAYBE_REPEATED = "calls_maybe_repeated"
+# Said when the agent's process turned on a framework's span source (the mark hook's ``.observing`` file beside the
+# trace), and when such a source wrote no tool span for a call that other records hold. Neither is a call, and
+# neither is missing evidence: the calls are what the other sources recorded.
+TOOL_SPANS_ON = "tool_spans_on"
+TOOL_SPANS_SILENT = "tool_spans_silent"
+_SPANS_ON_STATES = ("on", "process_own")
+
+
+def _observing(runtime: EnvironmentRuntime) -> dict[str, str]:
+    """Each framework's span source as the agent's process last noted it."""
+    path = _tool_trace_file(runtime)
+    if path is None:
+        return {}
+    try:
+        lines = Path(str(path) + ".observing").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    states: dict[str, str] = {}
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and isinstance(record.get("framework"), str):
+            states[record["framework"]] = str(record.get("state") or "")
+    return states
+
+
+def tool_span_notices(runtime: EnvironmentRuntime, calls: Sequence[Call]) -> list[dict[str, Any]]:
+    """Which framework span sources were on for the trial, and whether they were silent: on, with no tool span in
+    the trace, while other records hold a call."""
+    states = _observing(runtime)
+    if not states:
+        return []
+    on = sorted(framework for framework, state in states.items() if state in _SPANS_ON_STATES)
+    off = sorted(framework for framework, state in states.items() if state not in _SPANS_ON_STATES)
+    said = ", ".join([*(f"{one} on" for one in on), *(f"{one} {states[one].replace('_', ' ')}" for one in off)])
+    notices = [{"code": TOOL_SPANS_ON, "message": f"Framework span sources in the agent's process: {said}."}]
+    if on and graded_calls(calls) and not _read_file_tool_calls(runtime)[1]:
+        notices.append(
+            {
+                "code": TOOL_SPANS_SILENT,
+                "message": f"Spans were on for {', '.join(on)}, but the trace holds no tool span; the calls are "
+                "the other sources' records.",
+            }
+        )
+    return notices
 
 
 def repeated_untimed_notices(calls: Sequence[Call]) -> list[dict[str, Any]]:
@@ -3741,7 +3788,7 @@ class CallRunnerImpl:
                 trial_notices += evidence_notices(
                     action_log, calls, in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints)
                 )
-        trial_notices += repeated_untimed_notices(calls)
+        trial_notices += repeated_untimed_notices(calls) + tool_span_notices(runtime, calls)
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []

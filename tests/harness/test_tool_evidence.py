@@ -622,3 +622,72 @@ def test_on_the_command_route_a_spans_call_id_leaves_dev_graded_calls(tmp_path, 
 
     assert _graded(now) == _graded(before)
     assert [(call.source, call.seen_by, call.runtime_ids.get("event_id")) for call in now] == [(AGENT, [SPAN], "e1")]
+
+
+
+# -- a span source that was on, and silent -------------------------------------------------------------------------
+
+
+def _observing(tmp_path: Path, **states: str) -> None:
+    (tmp_path / "calls.jsonl.observing").write_text(
+        "".join(json.dumps({"framework": framework, "state": state}) + "\n" for framework, state in states.items()),
+        encoding="utf-8",
+    )
+
+
+def _codes(notices) -> list[str]:
+    return [notice["code"] for notice in notices]
+
+
+@pytest.mark.parametrize("route", ["", call_runner.CALLBACK_ROUTE])
+@pytest.mark.parametrize("recorded_by", ["the tracer", "the world", "the agent's account"])
+def test_a_silent_span_source_leaves_the_calls_as_with_the_source_off(tmp_path, route, recorded_by) -> None:
+    observed = {"the tracer": [], "the world": [_call(result="shipped", at=5.0)], "the agent's account": [_told()]}[
+        recorded_by
+    ]
+    lines = [_RAN] if recorded_by == "the tracer" else []
+    off = call_runner._with_span_calls(copy.deepcopy(observed), _runtime(tmp_path / "off", lines, route))
+    runtime = _runtime(tmp_path / "on", lines, route)
+    _observing(tmp_path / "on", agents="on")
+
+    on = call_runner._with_span_calls(copy.deepcopy(observed), runtime)
+    notices = call_runner.tool_span_notices(runtime, on)
+
+    assert _unnamed(on) == _unnamed(off)
+    assert _codes(notices) == [call_runner.TOOL_SPANS_ON, call_runner.TOOL_SPANS_SILENT]
+    assert "agents" in notices[1]["message"]
+    assert call_runner.missing_evidence(notices, None) == call_runner.missing_evidence([], None)
+    assert not set(_codes(notices)) & set(call_runner.UNMEASURED_NOTICES)
+
+
+def test_a_span_source_that_wrote_a_span_is_on_and_not_silent(tmp_path) -> None:
+    runtime = _runtime(tmp_path, [_RAN, {**_SPAN_LINE, "name": "look_up_order", "arguments": _A1001,
+                                         "output": "shipped", "event_id": "e1"}])
+    _observing(tmp_path, agents="on")
+
+    notices = call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime))
+
+    assert _codes(notices) == [call_runner.TOOL_SPANS_ON]
+
+
+def test_a_silent_span_source_is_not_said_when_no_record_holds_a_call(tmp_path) -> None:
+    runtime = _runtime(tmp_path, [])
+    _observing(tmp_path, agents="on")
+
+    assert _codes(call_runner.tool_span_notices(runtime, ())) == [call_runner.TOOL_SPANS_ON]
+
+
+def test_an_instrumentor_that_was_not_installed_is_named_and_never_silent(tmp_path) -> None:
+    runtime = _runtime(tmp_path, [_RAN])
+    _observing(tmp_path, smolagents="not_installed")
+
+    notices = call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime))
+
+    assert _codes(notices) == [call_runner.TOOL_SPANS_ON]
+    assert "smolagents not installed" in notices[0]["message"]
+
+
+def test_without_the_hooks_note_nothing_is_said(tmp_path) -> None:
+    runtime = _runtime(tmp_path, [_RAN])
+
+    assert call_runner.tool_span_notices(runtime, call_runner._with_span_calls((), runtime)) == []

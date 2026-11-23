@@ -1184,6 +1184,7 @@ class HostedChatCallRunner:
             fault_notices,
             in_process_tools,
             repeated_untimed_notices,
+            tool_span_notices,
         )
 
         if faults:
@@ -1210,7 +1211,11 @@ class HostedChatCallRunner:
                 )
                 + ([dict(DUPLICATES_UNREADABLE)] if trial_log is None else [])
             )
-        transcript.notices = list(transcript.notices or []) + repeated_untimed_notices(transcript.calls)
+        transcript.notices = (
+            list(transcript.notices or [])
+            + repeated_untimed_notices(transcript.calls)
+            + tool_span_notices(runtime, transcript.calls)
+        )
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),
