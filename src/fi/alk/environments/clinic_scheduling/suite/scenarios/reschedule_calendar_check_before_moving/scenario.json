@@ -43,7 +43,6 @@
         "endTime": "2026-11-07T00:00:00Z",
         "pageToken": "",
         "pageSize": 10,
-        "eventType": "",
         "calendarId": "CAL-D05",
         "orderBy": "",
         "startTime": "2026-11-02T00:00:00Z"
