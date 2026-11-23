@@ -1,4 +1,5 @@
-"""Which binding mode an agent gets: canonical only when its tools can be called as-is."""
+"""Which binding mode an agent gets: canonical only when its tools are the environment's, each
+called as-is."""
 
 from __future__ import annotations
 
@@ -126,3 +127,17 @@ def test_a_value_the_environment_does_not_accept_needs_a_routed_binding():
         )
     )
     assert select_mode(agent, [BOOK, SEND]) is BindingMode.TOOL_ROUTED
+
+
+def test_an_agent_with_fewer_tools_than_the_environment_is_routed():
+    """Every tool it has is the environment's, called as-is, but a canonical binding would serve
+    it the environment's other tools too."""
+    agent = _agent(
+        _tool(
+            "book_appointment",
+            dict(BOOK.parameters["properties"]),
+            list(BOOK.parameters["required"]),
+        )
+    )
+    assert select_mode(agent, [BOOK, SEND]) is BindingMode.TOOL_ROUTED
+    assert select_mode(agent, [BOOK]) is BindingMode.CANONICAL

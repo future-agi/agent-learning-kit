@@ -8,9 +8,17 @@ def check(world, calls, reference=None):
             end = a.get("end_date") or end
     import re
 
+    from datetime import datetime
+
     def day(value):
-        value = str(value or "")
-        return value if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) else None
+        # The same date said another way ("3 November 2026") is the same day.
+        value = " ".join(str(value or "").replace(",", " ").split())
+        for form in ("%Y-%m-%d", "%d %B %Y", "%B %d %Y", "%d %b %Y", "%b %d %Y"):
+            try:
+                return datetime.strptime(value, form).date().isoformat()
+            except ValueError:
+                pass
+        return None
 
     looks = [c for c in calls if c.name == "get_team_absences" and c.ok and isinstance(c.result, dict) and "absences" in c.result]
     if not looks:
@@ -21,9 +29,9 @@ def check(world, calls, reference=None):
         if mgr and c.arguments.get("manager_id") != mgr:
             continue
         got_start, got_end = day(c.arguments.get("start_date")), day(c.arguments.get("end_date"))
-        if start and (not got_start or not day(start) or got_start > start):
+        if start and (not got_start or not day(start) or got_start > day(start)):
             continue
-        if end and (not got_end or not day(end) or got_end < end):
+        if end and (not got_end or not day(end) or got_end < day(end)):
             continue
         return None
     return f"done wrong: the team view of {mgr} from {start} to {end} was never read"

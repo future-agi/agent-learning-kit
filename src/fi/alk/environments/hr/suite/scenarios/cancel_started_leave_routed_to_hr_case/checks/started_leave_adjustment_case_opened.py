@@ -27,6 +27,7 @@ def check(world, calls, reference=None):
         return f"done wrong: the case for {employee} is filed as {sorted({c.get('category') for c in mine})}, not under {sorted(allowed)}"
     return None
 
+
 if __name__ == "__main__":
     # Run this check by hand against what a run left behind. The first argument is anything
     # inside the saved world's folder, because not every world has a database to name:

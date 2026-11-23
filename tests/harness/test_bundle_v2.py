@@ -25,6 +25,7 @@ from pydantic import ValidationError
 
 from fi.alk.harness.bundle_v2 import (
     BUNDLE_V2_SCHEMA_VERSION,
+    BundleProvenanceV2,
     BundleRuntimeV2,
     BundleV2Error,
     EnvironmentBundleV2,
@@ -745,7 +746,12 @@ def test_seal_bundle_v2_matches_a_hand_computed_vector() -> None:
             "digest": "sha256:" + "0" * 64,
             "name": "café",
             "runtime": {"kind": "external"},
-            "provenance": {"source_kind": "remote", "source_digest": "a" * 64},
+            "provenance": {
+                "public_material_admissions": [],
+                "public_test_fixture_admissions": [],
+                "source_kind": "remote",
+                "source_digest": "a" * 64,
+            },
             "files": [
                 {"path": "b.txt", "sha256": file_sha_b, "size": 5},
                 {"path": "a.txt", "sha256": file_sha_a, "size": 3},
@@ -756,7 +762,7 @@ def test_seal_bundle_v2_matches_a_hand_computed_vector() -> None:
     core_json = (
         '{"capabilities":{},"metadata":{},"name":"café","processes":[],"provenance":'
         '{"adopted_files":[],"commit":null,"generated_files":[],"generator":'
-        '"fi.alk.harness","generator_version":"1","repository":null,"source_digest":"'
+        '"fi.alk.harness","generator_version":"1","public_material_admissions":[],"public_test_fixture_admissions":[],"repository":null,"source_digest":"'
         + "a" * 64
         + '","source_kind":"remote"},"readiness":[],"runtime":'
         '{"control_service":null,"document":null,"evidence_seam":null,"kind":"external"},'
@@ -772,6 +778,25 @@ def test_seal_bundle_v2_matches_a_hand_computed_vector() -> None:
         expected.update(encoded)
 
     assert seal_bundle_v2(manifest) == "sha256:" + expected.hexdigest()
+
+
+def test_bundle_provenance_preserves_legacy_field_set() -> None:
+    legacy = BundleProvenanceV2.model_validate(
+        {"source_kind": "remote", "source_digest": "a" * 64}
+    )
+    current = BundleProvenanceV2.model_validate(
+        {
+            "public_material_admissions": [],
+            "public_test_fixture_admissions": [],
+            "source_kind": "remote",
+            "source_digest": "a" * 64,
+        }
+    )
+
+    assert "public_material_admissions" not in legacy.model_dump(mode="json")
+    assert "public_test_fixture_admissions" not in legacy.model_dump(mode="json")
+    assert current.model_dump(mode="json")["public_material_admissions"] == []
+    assert current.model_dump(mode="json")["public_test_fixture_admissions"] == []
 
 
 def test_seal_bundle_v2_ignores_the_manifests_own_digest_field() -> None:

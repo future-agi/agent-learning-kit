@@ -4,6 +4,7 @@ import asyncio
 import pytest
 
 from fi.alk.harness.contract import AgentContract, validate_contract
+from fi.alk.harness.source_tool_evidence import tool_evidence_problems
 from fi.alk.harness.tools import accept_contract
 
 
@@ -626,6 +627,133 @@ def test_empty_runtime_owned_tool_world_does_not_invent_world_checks(tmp_path):
     assert world.runtime_tools == {"get_weather"}
 
 
+def test_a_tool_declared_after_a_restore_is_owned_by_the_runtime(tmp_path):
+    """A restored deferred world keeps up with tools the contract gains in a rebuild."""
+    import asyncio
+
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.contract import AgentContract, ToolSpec
+    from fi.alk.harness.simulator import save_simulator_prompt
+    from fi.alk.harness.world.snapshot import read_manifest
+    from fi.alk.harness.world.tools import world_tools
+
+    contract = AgentContract(
+        agent="weather-agent",
+        modality="chat",
+        conversational=True,
+        tools=[{"name": "get_weather", "args": ["location"]}],
+        real_use_cases=["Look up weather"],
+    )
+    save_catalogue(
+        Catalogue(
+            sub_goals=[
+                SubGoal(
+                    name="calls_weather_tool",
+                    check=(
+                        "def check(world, calls):\n"
+                        "    return None if any(c.name == 'get_weather' for c in calls) "
+                        "else 'weather tool not called'\n"
+                    ),
+                )
+            ]
+        ),
+        tmp_path,
+    )
+    save_simulator_prompt(
+        "You are a customer described by {{ persona }}. Follow {{ instruction }} in a natural "
+        "multi-turn conversation. Never invent the assistant's responses or claim a tool result "
+        "you have not heard. Ask a concise follow-up when needed and end once the task resolves.",
+        tmp_path,
+    )
+    server, _ = world_tools(contract, tmp_path, deferred_runtime=True)
+    saved = asyncio.run(
+        next(one for one in server.tools if one.name == "save_world").handler({})
+    )
+    assert not saved.get("is_error"), saved
+
+    server, _ = world_tools(contract, tmp_path, deferred_runtime=True)
+    tools = {one.name: one.handler for one in server.tools}
+    contract.tools.append(ToolSpec(name="get_forecast", args=["location"]))
+
+    adopted = asyncio.run(tools["adopt_tool"]({"tool_name": "get_forecast"}))
+    assert not adopted.get("is_error"), adopted
+    assert "owned by the submitted runtime" in adopted["content"][0]["text"]
+    saved = asyncio.run(tools["save_world"]({}))
+    assert not saved.get("is_error"), saved
+    assert set(read_manifest(tmp_path)["runtime_tools"]) == {
+        "get_weather",
+        "get_forecast",
+    }
+
+
+def test_a_tool_the_contract_dropped_leaves_the_runtime_tools(tmp_path):
+    """A rebuild that removes a tool from the contract removes it from the saved world too."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.prove import play_reference_step
+    from fi.alk.harness.simulator import save_simulator_prompt
+    from fi.alk.harness.world.snapshot import read_manifest, restore
+    from fi.alk.harness.world.tools import world_tools
+
+    contract = AgentContract(
+        agent="weather-agent",
+        modality="chat",
+        conversational=True,
+        tools=[
+            {"name": "get_weather", "args": ["location"]},
+            {"name": "geocode_address", "args": ["query"]},
+        ],
+        real_use_cases=["Look up weather"],
+    )
+    save_catalogue(
+        Catalogue(
+            sub_goals=[
+                SubGoal(
+                    name="calls_weather_tool",
+                    check=(
+                        "def check(world, calls):\n"
+                        "    return None if any(c.name == 'get_weather' for c in calls) "
+                        "else 'weather tool not called'\n"
+                    ),
+                )
+            ]
+        ),
+        tmp_path,
+    )
+    save_simulator_prompt(
+        "You are a customer described by {{ persona }}. Follow {{ instruction }} in a natural "
+        "multi-turn conversation. Never invent the assistant's responses or claim a tool result "
+        "you have not heard. Ask a concise follow-up when needed and end once the task resolves.",
+        tmp_path,
+    )
+    server, _ = world_tools(contract, tmp_path, deferred_runtime=True)
+    saved = asyncio.run(
+        next(one for one in server.tools if one.name == "save_world").handler({})
+    )
+    assert not saved.get("is_error"), saved
+    assert set(read_manifest(tmp_path)["runtime_tools"]) == {
+        "get_weather",
+        "geocode_address",
+    }
+
+    contract.tools = [one for one in contract.tools if one.name != "geocode_address"]
+    server, _ = world_tools(contract, tmp_path, deferred_runtime=True)
+    saved = asyncio.run(
+        next(one for one in server.tools if one.name == "save_world").handler({})
+    )
+    assert not saved.get("is_error"), saved
+    assert read_manifest(tmp_path)["runtime_tools"] == ["get_weather"]
+
+    removed = play_reference_step(
+        restore(tmp_path),
+        SimpleNamespace(tool="geocode_address", arguments={"query": "SFO"}),
+    )
+    assert not removed.ok
+
+
 def test_the_agents_whole_prompt_is_copied_from_its_source(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
@@ -651,3 +779,278 @@ def test_a_contract_without_a_prompt_source_keeps_its_quoted_excerpt():
     contract = AgentContract.model_validate(payload() | {"system_prompt_excerpt": "Be brief."})
     assert contract.system_prompt_from == []
     assert "Be brief." in contract.brief()
+
+
+def _entry_contract() -> AgentContract:
+    return AgentContract.model_validate(
+        {
+            "agent": "a",
+            "tool_entrypoints": [
+                {"tool": "lookup", "mode": "import", "module": "agent", "callable": "lookup"}
+            ],
+        }
+    )
+
+
+_REAL = "def lookup():\n    return 1\n"
+_COMMENTED = "# def lookup():\n#     return 1\n"
+
+
+def test_tool_check_reads_the_agents_folder_first(tmp_path):
+    (tmp_path / "agents" / "a").mkdir(parents=True)
+    (tmp_path / "agent.py").write_text(_REAL)
+    (tmp_path / "agents" / "a" / "agent.py").write_text(_COMMENTED)
+
+    assert tool_evidence_problems(_entry_contract(), tmp_path, "agents/a")
+    assert not tool_evidence_problems(_entry_contract(), tmp_path)
+
+
+def test_tool_check_prefers_the_folders_copy_when_only_the_root_is_broken(tmp_path):
+    (tmp_path / "agents" / "a").mkdir(parents=True)
+    (tmp_path / "agent.py").write_text(_COMMENTED)
+    (tmp_path / "agents" / "a" / "agent.py").write_text(_REAL)
+
+    assert not tool_evidence_problems(_entry_contract(), tmp_path, "agents/a")
+
+
+def test_tool_check_falls_back_to_the_root_under_a_folder(tmp_path):
+    (tmp_path / "agents" / "a").mkdir(parents=True)
+    (tmp_path / "agents" / "a" / "other.py").write_text("x = 1\n")
+    (tmp_path / "agent.py").write_text(_COMMENTED)
+
+    assert tool_evidence_problems(_entry_contract(), tmp_path, "agents/a")
+
+
+def test_tool_check_with_a_bad_folder_reads_the_root(tmp_path):
+    (tmp_path / "agent.py").write_text(_REAL)
+
+    assert not tool_evidence_problems(_entry_contract(), tmp_path, "agents/missing")
+
+
+def test_tool_check_decodes_a_unicode_escape_module_as_python_does(tmp_path):
+    # \x23 is "#": Python reads both lines as comments, so no lookup is defined.
+    (tmp_path / "agent.py").write_bytes(
+        b"# coding: unicode_escape\n\\x23 def lookup():\n\\x23     return 1\n"
+    )
+
+    assert tool_evidence_problems(_entry_contract(), tmp_path)
+
+
+def test_tool_check_decodes_a_utf_7_module_as_python_does(tmp_path):
+    # +AAA- is a NUL at a line's start: Python reads nothing past it, so the definition after it
+    # never runs. Read plain, the NUL fails the parse and the file gives no problem.
+    (tmp_path / "agent.py").write_bytes(
+        b"# coding: utf-7\n# def lookup(): return 1\n+AAA-\ndef lookup(): return 1\n"
+    )
+
+    problems = tool_evidence_problems(_entry_contract(), tmp_path)
+    assert [p.split(" \u2014 ")[0] for p in problems] == [
+        "tool[lookup]:commented-only-entrypoint:agent.lookup"
+    ]
+
+
+def test_tool_check_reads_the_text_an_import_reads(tmp_path):
+    # The runtime imports a tool's module. An import joins the definition to the coding line's
+    # comment, where `python file.py` would read it as code.
+    (tmp_path / "agent.py").write_bytes(b"# coding: unicode-escape \\\ndef lookup(): return 1\n")
+
+    problems = tool_evidence_problems(_entry_contract(), tmp_path)
+    assert [p.split(" — ")[0] for p in problems] == [
+        "tool[lookup]:commented-only-entrypoint:agent.lookup"
+    ]
+
+
+def test_tool_check_finds_a_def_a_utf_7_comment_hides(tmp_path):
+    # +ACM- is a "#": Python reads the definition as a comment, and +AAA- a NUL that ends the
+    # text there. Read as UTF-8 or plain the NUL fails the parse, and a file not read gives no
+    # problem either.
+    (tmp_path / "agent.py").write_bytes(b"# coding: utf-7\n+ACM- def lookup(): return 1+AAA-\n")
+
+    problems = tool_evidence_problems(_entry_contract(), tmp_path)
+    assert [p.split(" — ")[0] for p in problems] == [
+        "tool[lookup]:commented-only-entrypoint:agent.lookup"
+    ]
+
+
+_COMMENTED_METHOD = (
+    "class Assistant:\n    def __init__(self): pass\n"
+    "    # async def lookup_weather(self, location): pass\n"
+)
+
+
+def _commented_source(tmp_path, text):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text(text)
+    return source
+
+
+def _named_twice():
+    entry = payload()["tool_entrypoints"][0]
+    return AgentContract.model_validate(
+        payload()
+        | {
+            "tools": [{"name": "lookup_weather", "args": []}, {"name": "lookup_time", "args": []}],
+            "tool_entrypoints": [entry, entry | {"tool": "lookup_time"}],
+        }
+    )
+
+
+def test_a_module_many_entries_name_is_read_once(tmp_path, monkeypatch):
+    from fi.alk.harness import source_tool_evidence
+
+    source = _commented_source(tmp_path, _COMMENTED_METHOD)
+    reads = []
+    real = source_tool_evidence.read_module
+    monkeypatch.setattr(
+        source_tool_evidence, "read_module", lambda path, **kw: reads.append(path) or real(path, **kw)
+    )
+
+    assert len(tool_evidence_problems(_named_twice(), source)) == 2
+    assert len(reads) == 1
+
+
+@pytest.mark.parametrize("over, problems", [(0, 1), (1, 0)])
+def test_a_named_module_is_read_up_to_the_limit_and_skipped_past_it(
+    tmp_path, monkeypatch, over, problems
+):
+    from fi.alk.harness import python_source
+    from fi.alk.harness.python_source import LARGEST_PARSED_MODULE
+
+    monkeypatch.setattr(python_source, "LARGEST_TOKENIZED_TOTAL", LARGEST_PARSED_MODULE)
+    text = _COMMENTED_METHOD + "#" * (LARGEST_PARSED_MODULE + over - len(_COMMENTED_METHOD))
+    source = _commented_source(tmp_path, text)
+
+    assert len(tool_evidence_problems(AgentContract.model_validate(payload()), source)) == problems
+
+
+@pytest.mark.parametrize("total, problems", [(len(_COMMENTED_METHOD), 1), (len(_COMMENTED_METHOD) - 1, 0)])
+def test_the_named_modules_are_parsed_only_up_to_a_total(tmp_path, monkeypatch, total, problems):
+    from fi.alk.harness import python_source
+
+    source = _commented_source(tmp_path, _COMMENTED_METHOD)
+    monkeypatch.setattr(python_source, "LARGEST_PARSED_TOTAL", total)
+
+    assert len(tool_evidence_problems(AgentContract.model_validate(payload()), source)) == problems
+
+
+@pytest.mark.parametrize(
+    "total, problems", [(len(_COMMENTED_METHOD), 1), (len(_COMMENTED_METHOD) - 1, 0)]
+)
+def test_the_named_modules_are_tokenized_only_up_to_a_total(tmp_path, monkeypatch, total, problems):
+    from fi.alk.harness import python_source
+
+    source = _commented_source(tmp_path, _COMMENTED_METHOD)
+    monkeypatch.setattr(python_source, "LARGEST_TOKENIZED_TOTAL", total)
+
+    assert len(tool_evidence_problems(AgentContract.model_validate(payload()), source)) == problems
+
+
+@pytest.mark.parametrize("short_of, problems", [(0, 1), (1, 0)])
+def test_the_named_modules_are_tokenized_only_up_to_the_work(tmp_path, monkeypatch, short_of, problems):
+    import io
+    import tokenize
+
+    from fi.alk.harness import python_source
+
+    # Each token is charged the line it's read from, which 3.12.3 decodes again for each token.
+    work = sum(
+        len(token.line) for token in tokenize.generate_tokens(io.StringIO(_COMMENTED_METHOD).readline)
+    )
+    source = _commented_source(tmp_path, _COMMENTED_METHOD)
+    monkeypatch.setattr(python_source, "LARGEST_TOKENIZED_WORK", work - short_of)
+
+    assert len(tool_evidence_problems(AgentContract.model_validate(payload()), source)) == problems
+
+
+@pytest.mark.parametrize("limit", ["LARGEST_TOKENIZED_WORK", "LARGEST_TOKENIZED_TOTAL"])
+def test_the_tokenize_limits_are_shared_by_the_named_modules(tmp_path, monkeypatch, limit):
+    import io
+    import tokenize
+
+    from fi.alk.harness import python_source
+
+    # Two modules, each under the limit alone and not together: one budget for the check.
+    source = _commented_source(tmp_path, _COMMENTED_METHOD)
+    other = _COMMENTED_METHOD.replace("lookup_weather", "lookup_time")
+    (source / "other.py").write_text(other)
+    entry = payload()["tool_entrypoints"][0]
+    contract = AgentContract.model_validate(
+        payload()
+        | {
+            "tools": [{"name": "lookup_weather", "args": []}, {"name": "lookup_time", "args": []}],
+            "tool_entrypoints": [
+                entry,
+                entry | {"tool": "lookup_time", "module": "other", "callable": "Assistant.lookup_time"},
+            ],
+        }
+    )
+    if limit == "LARGEST_TOKENIZED_WORK":
+        def cost(text):
+            return sum(len(token.line) for token in tokenize.generate_tokens(io.StringIO(text).readline))
+    else:
+        def cost(text):
+            return len(text.encode())
+    assert len(tool_evidence_problems(contract, source)) == 2
+    monkeypatch.setattr(python_source, limit, max(cost(_COMMENTED_METHOD), cost(other)) * 3 // 2)
+
+    assert len(tool_evidence_problems(contract, source)) == 1
+
+
+@pytest.mark.parametrize("coding", ["rot13", "nosuch"])
+def test_a_module_with_a_coding_line_python_cant_read_is_unproven(tmp_path, coding):
+    source = _commented_source(tmp_path, f"# coding: {coding}\n" + _COMMENTED_METHOD)
+
+    assert tool_evidence_problems(AgentContract.model_validate(payload()), source) == []
+
+
+def test_a_module_without_the_line_in_a_comment_is_not_tokenized(tmp_path, monkeypatch):
+    import tokenize
+
+    source = _commented_source(tmp_path, "class Assistant:\n    pass\n")
+    monkeypatch.setattr(
+        tokenize, "generate_tokens", lambda *args: pytest.fail("tokenized")
+    )
+
+    assert tool_evidence_problems(AgentContract.model_validate(payload()), source) == []
+
+
+def test_a_named_module_that_runs_the_parser_out_of_memory_is_left_alone(tmp_path):
+    source = _commented_source(tmp_path, _COMMENTED_METHOD + "x = " + "-" * 7000 + "1\n")
+
+    assert tool_evidence_problems(AgentContract.model_validate(payload()), source) == []
+
+
+def test_tool_names_are_not_read_from_a_link_or_a_pipe_or_a_file_without_end(
+    tmp_path, monkeypatch
+):
+    import io
+    import os
+    from pathlib import Path
+
+    from fi.alk.harness.source_tool_evidence import defined_tool_names
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "tools.py").write_text("def lookup_weather(location): pass\n")
+    (source / "deep.py").write_text("def nested(): pass\nx = " + "-" * 7000 + "1\n")
+    (source / "zero.py").write_text("")
+    os.mkfifo(source / "pipe.py")
+
+    class Endless(io.RawIOBase):
+        def readable(self):
+            return True
+
+        def read(self, size=-1):
+            assert size >= 0, "read to the end"
+            return b"#" * size
+
+    opened = Path.open
+
+    def open_(path, *args, **kwargs):
+        assert path.name != "pipe.py", "opened a pipe"
+        return Endless() if path.name == "zero.py" else opened(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_)
+
+    assert defined_tool_names(source) == {"lookup_weather"}

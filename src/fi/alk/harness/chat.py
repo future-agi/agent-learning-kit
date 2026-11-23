@@ -24,6 +24,7 @@ from . import understand as understand_stage
 from .backends import SessionSpec
 from .config import artifact_dir
 from .contract import AgentContract
+from .failure_file import FAILURE_FILE
 from .job import HarnessJob
 from .run import stage as run_stage
 from .session import Stage
@@ -152,6 +153,9 @@ class Conversation:
                 "cannot re-read the agent without knowing where it lives"
             )
         if stage_name == UNDERSTAND:
+            # A person's own new reading starts clean.
+            if self.out:
+                (self.out / FAILURE_FILE).unlink(missing_ok=True)
             self.stage, _ = understand_stage.open_stage(
                 self.source, out=self.out, ask=self.ask
             )
@@ -165,7 +169,8 @@ class Conversation:
             raise RuntimeError("cannot go further before there is a contract")
         if stage_name == BUILD:
             source_root = str(getattr(self.source, "root", "") or "")
-            if not self.control_only:
+            native_runtime = build_stage.uses_native_runtime(contract, source_root)
+            if not self.control_only and not native_runtime:
                 build_stage.require_buildable(contract, source_root)
                 from .provision import provision_if_present
 
@@ -179,7 +184,7 @@ class Conversation:
                 # Where the agent's own code lives, so its tools can be bound to rather than rewritten.
                 source_root=source_root,
             )
-            opening = build_stage.opening(contract)
+            opening = build_stage.opening(contract, native_runtime=native_runtime)
         elif stage_name == RUN:
             if not self.scenarios_written:
                 raise RuntimeError("cannot run anything before there are scenarios")

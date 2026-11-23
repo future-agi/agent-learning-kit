@@ -15,6 +15,16 @@ the provider shapes that reach it:
 With ``REQUEST_BINDING=1`` a tool request runs only when it carries the world's clone secret and
 the active call's token (§6.2); anything else is recorded in ``_alk_stray_calls`` and never runs.
 
+A bound request is run once per provider operation: its effect, its trace and the outcome it was
+answered with commit together, and a repeat delivery is answered from that stored outcome. Vapi
+names the operation (``toolCallList[].id``). Retell sends no id beside ``{name, call, args}``; the
+one it has is the ``tool_call_id`` of the invocation in the call's (or chat's) transcript, which
+counts only when that invocation is the transcript's last, names this tool with these arguments,
+and has no result yet (`retell_operation_id`). A Retell request without one runs unremembered: a
+retry of it would run twice, so the routed tools ALK installs set ``max_retry: 0`` and Retell
+never retries them (`provider_import`). Name, arguments and order are never used as the key: an
+agent that books the same slot twice made two calls, and folding them into one would hide it.
+
 Every call runs through ``world_tools.WorldTools``, the one execution path the release proofs
 (suite sealing, binding proofs) use too, so a proof exercises exactly what a run executes. The
 module is copied into the bundle and run as a script on the ALK interpreter, hence absolute
@@ -54,6 +64,50 @@ def _one_line(value: Any) -> str:
     return " ".join(text.splitlines())
 
 
+def retell_operation_id(body: Any, name: str, arguments: Any) -> str | None:
+    """The ``tool_call_id`` Retell gave this invocation, read from the transcript it sends
+    (``call.transcript_with_tool_calls``, or a chat's ``chat.message_with_tool_calls``), or None.
+
+    Retell documents no per-request id; its example request carries the invocation being answered
+    as the transcript's last ``tool_call_invocation``, and a retry repeats the request. Anything
+    else (another tool or other arguments last, a result already given, no transcript) is not
+    taken for this invocation: a wrong id would answer a new call with an old call's outcome."""
+    if not isinstance(body, dict):
+        return None
+    entries = None
+    for holder, key in (
+        ("call", "transcript_with_tool_calls"),
+        ("chat", "message_with_tool_calls"),
+    ):
+        found = body.get(holder)
+        if isinstance(found, dict) and isinstance(found.get(key), list):
+            entries = found[key]
+            break
+    if not entries:
+        return None
+    entries = [entry for entry in entries if isinstance(entry, dict)]
+    invocations = [
+        entry for entry in entries if entry.get("role") == "tool_call_invocation"
+    ]
+    if not invocations:
+        return None
+    last = invocations[-1]
+    tool_id = str(last.get("tool_call_id") or "")
+    answered = any(
+        entry.get("role") == "tool_call_result"
+        and str(entry.get("tool_call_id") or "") == tool_id
+        for entry in entries
+    )
+    if (
+        not tool_id
+        or answered
+        or str(last.get("name") or "") != name
+        or _parsed(last.get("arguments") or {}) != arguments
+    ):
+        return None
+    return tool_id
+
+
 class _Refused(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -80,8 +134,13 @@ def make_handler(
         call_id: str | None = None,
         tool_id: str | None = None,
     ) -> Any:
+        # Only a bound request is remembered: its tables exist and its ids are the provider's.
         return world.call(
-            name, arguments, provider_call_id=call_id, tool_call_id=tool_id
+            name,
+            arguments,
+            provider_call_id=call_id,
+            tool_call_id=tool_id,
+            remember=request_binding_on,
         )
 
     def check_binding(headers: Any, body: Any, requests: list[tuple[str, Any]]) -> None:
@@ -116,38 +175,6 @@ def make_handler(
                     ),
                 )
         raise _Refused(reason)
-
-    def remembered(call_id: str | None, tool_id: str | None, answer: Any) -> Any:
-        """Run ``answer()`` once per (provider call, tool call) pair; repeats get the stored
-        answer. The advisory lock makes a concurrent retry wait instead of executing twice."""
-        if not (request_binding_on and call_id and tool_id):
-            return answer()
-        with psycopg.connect(database_url, autocommit=True) as connection:
-            connection.execute(
-                "SELECT pg_advisory_lock(hashtext(%s), hashtext(%s))",
-                (call_id, tool_id),
-            )
-            try:
-                stored = connection.execute(
-                    "SELECT response FROM _alk_tool_responses "
-                    "WHERE provider_call_id = %s AND tool_call_id = %s",
-                    (call_id, tool_id),
-                ).fetchone()
-                if stored is not None:
-                    return stored[0]
-                response = answer()
-                connection.execute(
-                    "INSERT INTO _alk_tool_responses "
-                    "(provider_call_id, tool_call_id, response, at) "
-                    "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                    (call_id, tool_id, json.dumps(response), time.time()),
-                )
-                return response
-            finally:
-                connection.execute(
-                    "SELECT pg_advisory_unlock(hashtext(%s), hashtext(%s))",
-                    (call_id, tool_id),
-                )
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args: object) -> None:
@@ -248,18 +275,14 @@ def make_handler(
             results = []
             for entry, (name, arguments) in zip(entries, requests, strict=True):
                 tool_id = str(entry.get("id") or "") or None
-
-                def answer(name: str = name, arguments: Any = arguments) -> Any:
-                    outcome = call(name, arguments, call_id, tool_id)
-                    if outcome.status == "ok":
-                        return {"result": _one_line(outcome.content)}
-                    return {"error": _one_line(outcome.error or outcome.status)}
-
+                outcome = call(name, arguments, call_id, tool_id)
                 results.append(
-                    {
-                        "toolCallId": entry.get("id"),
-                        **remembered(call_id, tool_id, answer),
-                    }
+                    {"toolCallId": entry.get("id")}
+                    | (
+                        {"result": _one_line(outcome.content)}
+                        if outcome.status == "ok"
+                        else {"error": _one_line(outcome.error or outcome.status)}
+                    )
                 )
             self._reply(200, {"results": results})
 
@@ -277,7 +300,12 @@ def make_handler(
                         )
                     return
             self._answer_retell(
-                call(name, arguments, request_binding.provider_call_id(body))
+                call(
+                    name,
+                    arguments,
+                    request_binding.provider_call_id(body),
+                    retell_operation_id(body, name, arguments),
+                )
             )
 
         def _answer_retell(self, outcome: Any) -> None:

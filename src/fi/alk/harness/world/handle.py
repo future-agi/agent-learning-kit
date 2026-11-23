@@ -11,6 +11,8 @@ message naming what it did wrong rather than a `KeyError` or a driver traceback 
 from __future__ import annotations
 
 import random
+from pathlib import Path
+from . import files
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -23,8 +25,10 @@ from .errors import (
     WorldUnavailable,
     WorldUsageError,
 )
+from .observation import HttpObservationHandle, ObservationWorld
 from .runtime import Call
 from .stores.postgres import PostgresStore
+from .workspace_channel import WorkspaceClient, WorkspaceService
 
 # The harness's own isolation canary. It exists to prove worlds are really separate from each
 # other, never to hold scenario data, so scenario code is never allowed to see or touch it.
@@ -49,7 +53,7 @@ def _catalogue_text(value: Any) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else str(value)
 
 
-class HostedWorld:
+class HostedWorld(HttpObservationHandle):
     """The `World` surface, backed by this scenario's own logical postgres database.
 
     One handle per scenario, over one short-lived autocommit connection per operation — nothing
@@ -70,8 +74,15 @@ class HostedWorld:
         baseline_row_counts: Mapping[str, int],
         *,
         _validate_baseline: bool = True,
+        workspace_roots: Mapping[str, Path | str] | None = None,
+        workspace_channel: WorkspaceClient | None = None,
+        endpoints: Mapping[str, str] | None = None,
+        observations=None,
     ) -> None:
         """Wrap `store` as the `World` surface for one scenario.
+
+        In a phase worker, `workspace_channel` stands in for `workspace_roots`: the harness
+        process serves the workspace files (`workspace_channel.py`).
 
         `baseline_row_counts` is keyed by the bare `pg_tables.tablename` value — no schema
         prefix, no quoting — for every table `public` held when the baseline was frozen. A
@@ -79,7 +90,14 @@ class HostedWorld:
         check below fails construction outright rather than waiting for a scenario's first
         access to discover a provisioning gap through its own retry.
         """
+        self._http_client = ObservationWorld(
+            world_index, rng, endpoints, observations=observations
+        )
         self._store = store
+        self._workspace_roots = {
+            name: Path(root) for name, root in (workspace_roots or {}).items()
+        }
+        self._workspace_channel = workspace_channel
         self.world_index = world_index
         self.rng = rng
         # Row counts as they stood when the baseline was frozen, keyed by table. Never
@@ -93,12 +111,63 @@ class HostedWorld:
 
     def _execution_state(self) -> dict[str, Any]:
         return {
+            **self._http_client._execution_state(),
+            "kind": "hosted",
             "dsn": self._store.dsn(),
             "world_index": self.world_index,
             "rng": self.rng.getstate(),
             "baseline": self._baseline_row_counts,
             "read_only": False,
         }
+
+    def _workspace_service(self, *, read_only: bool = False) -> WorkspaceService | None:
+        """What answers a phase worker's workspace requests; None when there is no workspace."""
+        if not self._workspace_roots:
+            return None
+        return WorkspaceService(self, read_only=read_only)
+
+    def _workspace(self, name: str) -> Path:
+        try:
+            return self._workspace_roots[name]
+        except KeyError:
+            raise WorldUsageError(f"unknown declared workspace: {name!r}") from None
+
+    def write_file(self, workspace: str, path: str, content: str) -> None:
+        if not isinstance(content, str):
+            raise WorldUsageError("write_file content must be text")
+        if self._workspace_channel is not None:
+            self._workspace_channel.request(
+                "write_file", workspace=workspace, path=path, content=content
+            )
+            return
+        files.write(self._workspace(workspace), path, content.encode("utf-8"))
+
+    def read_file(self, workspace: str, path: str) -> str:
+        if self._workspace_channel is not None:
+            reply = self._workspace_channel.request(
+                "read_file", workspace=workspace, path=path
+            )
+            return reply["content"]
+        try:
+            return files.read(self._workspace(workspace), path).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise WorldUsageError("read_file requires UTF-8 text") from exc
+
+    def _workspace_snapshot(self):
+        snapshots = {}
+        count = size = 0
+        for name, root in self._workspace_roots.items():
+            entries = files.snapshot(root)
+            count += len(entries)
+            size += sum(
+                len(entry.data) for entry in entries.values() if entry.data is not None
+            )
+            if count > files.SNAPSHOT_ENTRIES or size > files.SNAPSHOT_BYTES:
+                raise WorldStateTooLarge(
+                    "combined workspace snapshot exceeds its entry or byte cap"
+                )
+            snapshots[name] = entries
+        return snapshots
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]:
         """A snapshot of the public schema, or of one table in it.
@@ -167,6 +236,35 @@ class HostedWorld:
         """
         _reject_unless_read(sql)
         return self._store.query(sql, tuple(params))
+
+    def events(
+        self, actor_id: str | None = None, outcome: str | None = None
+    ) -> list[dict[str, Any]]:
+        """This trial's action log: every action attempted in the world, whose it was and what came of it. No log is
+        no events; a log that cannot be read raises `EvidenceUnavailable`."""
+        from ..world_door import EvidenceUnavailable, is_attempt
+
+        try:
+            rows = self.query('SELECT * FROM "_alk_tool_trace" ORDER BY at, id')
+        except Exception as exc:  # noqa: BLE001 - told apart below: no log, or a log out of reach
+            try:
+                present = self.query("SELECT to_regclass('_alk_tool_trace') IS NOT NULL AS present")
+            except Exception:  # noqa: BLE001 - the database itself is out of reach
+                raise EvidenceUnavailable("the world's action log could not be read") from exc
+            if present and not present[0].get("present"):
+                return []
+            raise EvidenceUnavailable("the world's action log could not be read") from exc
+        return [
+            row
+            for row in rows
+            if is_attempt(row)
+            and (actor_id is None or (row.get("actor_id") or "agent") == actor_id)
+            and (
+                outcome is None
+                or (row.get("outcome") or ("committed" if row.get("ok") else "refused"))
+                == outcome
+            )
+        ]
 
     # -- writing ------------------------------------------------------------------------------
 
@@ -274,12 +372,32 @@ class HostedWorld:
         instead of special-casing hosted agents in the validator.
         """
 
-        return self._store.freeze()
+        if self._workspace_channel is not None:
+            workspaces = self._workspace_channel.request("checkpoint")["digest"]
+            return (self._store.freeze(), workspaces)
+        if not self._workspace_roots:
+            return self._store.freeze()
+        workspaces = self._workspace_snapshot()
+        return (self._store.freeze(), workspaces)
 
     def revert(self, checkpoint: Any) -> None:
         """Restore a checkpoint captured before a probe or smoke action."""
 
-        self._store.restore(checkpoint)
+        if self._workspace_channel is not None:
+            database, digest = checkpoint
+            self._workspace_channel.request("revert", digest=digest)
+            self._store.restore(database)
+            return
+        if not self._workspace_roots:
+            self._store.restore(checkpoint)
+            return
+        database, workspaces = checkpoint
+        self._workspace_restore(workspaces)
+        self._store.restore(database)
+
+    def _workspace_restore(self, workspaces) -> None:
+        for name, saved in workspaces.items():
+            files.restore(self._workspace(name), saved)
 
     # -- internal -----------------------------------------------------------------------------
 
@@ -382,15 +500,35 @@ class HostedWorld:
         )
 
 
-class ReadOnlyWorld:
+class ReadOnlyWorld(HttpObservationHandle):
     """A `World` whose write verbs are refused before they reach `HostedWorld` at all."""
 
     def __init__(self, world: HostedWorld) -> None:
         # Name-mangled so code outside this class reaching for `._world` cannot casually
         # recover the writable handle a "read-only" view exists to stand in front of.
         self.__world = world
+        self._http_client = world._http_client.read_only()
         self.world_index = world.world_index
         self.rng = world.rng
+
+    def read_file(self, workspace: str, path: str) -> str:
+        return self.__world.read_file(workspace, path)
+
+    def observe(self, name, parameters=None):
+        checkpoint = self.__world.checkpoint()
+        changed = False
+        try:
+            result = self._http_client.observe(name, parameters)
+        finally:
+            changed = self.__world.checkpoint() != checkpoint
+            if changed:
+                self.__world.revert(checkpoint)
+        if changed:
+            raise WorldReadOnly("observation changed the world")
+        return result
+
+    def write_file(self, workspace: str, path: str, content: str) -> None:
+        raise WorldReadOnly("write_file reached a read-only handle")
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]:
         return self.__world.state(table)
@@ -398,8 +536,16 @@ class ReadOnlyWorld:
     def _execution_state(self) -> dict[str, Any]:
         return {**self.__world._execution_state(), "read_only": True}
 
+    def _workspace_service(self) -> WorkspaceService | None:
+        return self.__world._workspace_service(read_only=True)
+
     def query(self, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         return self.__world.query(sql, params)
+
+    def events(
+        self, actor_id: str | None = None, outcome: str | None = None
+    ) -> list[dict[str, Any]]:
+        return self.__world.events(actor_id, outcome)
 
     def put(
         self, collection: str, record: Mapping[str, Any], *, key: str = ""

@@ -16,6 +16,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SOURCE_MODEL_SCHEMA_VERSION = "futureagi.source-model.v2"
 _DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
+HARNESS_SEED_SENTINEL = "harness_seed_sentinel"
+HARNESS_TABLE_PREFIX = "_alk_"
+
+
+def is_harness_table(name: str) -> bool:
+    """Whether ``name`` is a table the harness adds to every world database, not the source."""
+    return name == HARNESS_SEED_SENTINEL or name.startswith(HARNESS_TABLE_PREFIX)
 
 
 class LogicalType(str, Enum):
@@ -70,6 +77,7 @@ class SourceColumn(BaseModel):
     has_default: bool
     default_expression: str | None = None
     generated: bool = False
+    identity: bool = False
     enum_values: tuple[str, ...] = ()
     element_type: LogicalType | None = None
 
@@ -332,6 +340,25 @@ class SourceModel(BaseModel):
         raw["fingerprint"] = _source_model_fingerprint(raw)
         return cls.model_validate(raw)
 
+    def without_harness_tables(self) -> "SourceModel":
+        """These facts without the tables the harness adds to every world database itself."""
+        return SourceModel.create(
+            source_digest=self.source_digest,
+            engine=self.engine,
+            engine_version=self.engine_version,
+            tables=tuple(
+                table for table in self.tables if not is_harness_table(table.name)
+            ),
+            processes=self.processes,
+            interfaces=self.interfaces,
+            actions=self.actions,
+            configuration_names=self.configuration_names,
+            migrations=self.migrations,
+            seeds=self.seeds,
+            evidence=self.evidence,
+            unsupported=self.unsupported,
+        )
+
     @model_validator(mode="after")
     def _canonical_and_hashed(self) -> "SourceModel":
         if self.schema_version != SOURCE_MODEL_SCHEMA_VERSION:
@@ -421,8 +448,18 @@ def _source_model_fingerprint(raw: dict[str, object]) -> str:
             return {str(key): jsonable(item) for key, item in value.items()}
         return value
 
+    canonical = jsonable(raw)
+    if isinstance(canonical, dict):
+        # Models saved before identity support omitted the false default from their hash.
+        for table in canonical.get("tables", []):
+            if not isinstance(table, dict):
+                continue
+            for column in table.get("columns", []):
+                if isinstance(column, dict) and column.get("identity") is False:
+                    column.pop("identity")
+
     encoded = json.dumps(
-        jsonable(raw),
+        canonical,
         ensure_ascii=False,
         allow_nan=False,
         sort_keys=True,
@@ -433,6 +470,8 @@ def _source_model_fingerprint(raw: dict[str, object]) -> str:
 
 __all__ = [
     "CheckConstraint",
+    "HARNESS_SEED_SENTINEL",
+    "HARNESS_TABLE_PREFIX",
     "SOURCE_MODEL_SCHEMA_VERSION",
     "ForeignKey",
     "LogicalType",
@@ -444,4 +483,5 @@ __all__ = [
     "SourceProcess",
     "SourceTable",
     "UnsupportedSourceConstruct",
+    "is_harness_table",
 ]

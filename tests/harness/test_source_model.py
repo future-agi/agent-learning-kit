@@ -13,6 +13,7 @@ from fi.alk.harness.source_model import (
     SourceInterface,
     SourceModel,
     SourceProcess,
+    _source_model_fingerprint,
 )
 from fi.alk.harness.source_schema.sqlite import inspect_sqlite
 
@@ -218,6 +219,26 @@ def test_source_model_rejects_tampered_fingerprint() -> None:
 
     with pytest.raises(ValidationError, match="source_model_fingerprint_mismatch"):
         SourceModel.model_validate(payload)
+
+
+def test_source_model_accepts_fingerprint_from_before_identity_columns() -> None:
+    payload = inspect_sqlite(_database(), source_digest=SOURCE_DIGEST).model_dump(
+        mode="json"
+    )
+    for table in payload["tables"]:
+        for column in table["columns"]:
+            column.pop("identity")
+    payload["fingerprint"] = _source_model_fingerprint(
+        {key: value for key, value in payload.items() if key != "fingerprint"}
+    )
+
+    loaded = SourceModel.model_validate(payload)
+
+    assert all(
+        column.identity is False
+        for table in loaded.tables
+        for column in table.columns
+    )
 
 
 def test_source_evidence_is_digest_only_and_portable() -> None:

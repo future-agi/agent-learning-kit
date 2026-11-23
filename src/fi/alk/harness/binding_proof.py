@@ -7,6 +7,13 @@ state-changing call, or sending nonsense in one must each fail the scenario's ch
 same change made to the environment's own calls holds too (the profile does not need that call:
 the variant is `exempt`).
 
+Any trajectory that solves a scenario will do, not only one that follows its reference: a
+scenario whose authored routes use a tool the binding does not reach is still proved when the
+supplied trajectory (written by the builder in the agent's own tools) passes the same outcome
+and adversarial controls. Only a scenario with no route open to the binding and no trajectory
+that solves it is `unscorable`; the proved scenarios are the only ones a run under the binding may
+select (`unscored`, which `compose_bundle` enforces).
+
     python -m fi.alk.harness.binding_proof --environment DIR --suite DIR --binding FILE \
         --trajectories FILE --postgres-dsn DSN --out FILE
 
@@ -193,6 +200,23 @@ def _variants(
     return variants
 
 
+def _closed(scenario: Any, reached: set[str]) -> str:
+    """Why none of the scenario's authored routes (its reference solution and alternatives) is
+    open to the binding; empty when one is."""
+    routes = [scenario.solution, *(getattr(scenario, "alternatives", None) or ())]
+    missing = [sorted({step.tool for step in route} - reached) for route in routes]
+    if not all(missing):
+        return ""
+    return (
+        f"the reference solution uses {', '.join(missing[0])}, which no mapped step reaches"
+        + (
+            f" (nor is any of its {len(routes) - 1} alternatives reached)"
+            if len(routes) > 1
+            else ""
+        )
+    )
+
+
 def _why(attempt: Any) -> str:
     if not attempt.ready.ok:
         return attempt.ready.said
@@ -242,7 +266,10 @@ def prove_binding(
     with PostgresProof(
         suite_root, environment_root, suite.policy_profile, postgres_dsn
     ) as proof:
-        check_tool_routed(binding, proof.environment_tools)
+        # A binding may map the agent onto an attached server's tool, as a run serves it.
+        check_tool_routed(
+            binding, [*proof.environment_tools, *proof.attached_definitions()]
+        )
         changing = {tool.name for tool in proof.environment_tools if tool.mutates_state}
         mapped = [
             entry for entry in binding.tools if isinstance(entry, MappedToolBinding)
@@ -255,24 +282,40 @@ def prove_binding(
         }
         for entry in suite.scenarios:
             scenario = read_folder(suite_root, Path(entry.path).name)
-            unreached = sorted({step.tool for step in scenario.solution} - reached)
-            if unreached:
-                scenarios[entry.key] = ScenarioBindingProof(
-                    status="unscorable",
-                    reason=f"the reference solution uses {', '.join(unreached)}, "
-                    "which no mapped step reaches",
-                )
-                continue
+            closed = _closed(scenario, reached)
             if entry.key not in parsed:
                 scenarios[entry.key] = ScenarioBindingProof(
-                    status="failed", reason="no trajectory"
+                    status="unscorable" if closed else "failed",
+                    reason=closed or "no trajectory",
                 )
                 continue
             calls = [(call.tool, call.arguments) for call in parsed[entry.key]]
             solved = proof.attempt(scenario, calls, binding)
-            if not solved.holds:
+            # A call the binding refuses as invalid (the agent's schema does not take it, or it
+            # cannot be translated) is not one the agent can make: the scenario is not proved by
+            # it, whatever the checks say.
+            if invalid := [
+                f"{tool}: {outcome.error}"
+                for (tool, _arguments), outcome in zip(
+                    calls, solved.outcomes, strict=False
+                )
+                if outcome.status == "invalid"
+            ]:
                 scenarios[entry.key] = ScenarioBindingProof(
-                    status="failed", reason=_why(solved)
+                    status="failed",
+                    reason="the trajectory makes calls the agent cannot make: "
+                    + "; ".join(invalid),
+                )
+                continue
+            if not solved.holds:
+                # With no authored route open to the binding, the supplied trajectory was the
+                # last candidate: the scenario is not scored rather than the binding failed.
+                scenarios[entry.key] = ScenarioBindingProof(
+                    status="unscorable" if closed else "failed",
+                    reason=f"{closed}, and the supplied trajectory does not solve it: "
+                    f"{_why(solved)}"
+                    if closed
+                    else _why(solved),
                 )
                 continue
             adversarial: dict[str, Any] = {}
@@ -321,6 +364,55 @@ def prove_binding(
             for outcome in item.adversarial.values()
         ),
     )
+
+
+def load_binding_proof(path: str | Path) -> BindingProofV1:
+    try:
+        return BindingProofV1.model_validate_json(
+            Path(path).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        raise ReleaseError("binding_proof_invalid", f"{path}: {exc}") from exc
+
+
+def unscored(
+    binding: AgentBindingV1,
+    suite: Any,
+    environment_digest: str,
+    proof: BindingProofV1 | None,
+) -> dict[str, str]:
+    """The scenarios of `suite` a run under `binding` must not select, with why.
+
+    A `tool_routed` binding is scored only on the scenarios its proof against this very suite
+    proved, so it needs that proof; any other binding calls the environment's tools by name and
+    is scored on the whole suite.
+    """
+    if binding.mode is not BindingMode.TOOL_ROUTED:
+        return {}
+    if proof is None:
+        raise ReleaseError(
+            "binding_unproved",
+            "a tool_routed binding runs only with its binding proof against the suite",
+        )
+    problems = []
+    if proof.binding.digest != binding.digest:
+        problems.append("the binding proof is of another binding")
+    if proof.suite.digest != suite.digest:
+        problems.append("the binding proof is against another suite")
+    if proof.environment.digest != environment_digest:
+        problems.append("the binding proof is against another environment")
+    if not proof.passed:
+        problems.append("the binding proof did not pass")
+    if problems:
+        raise ReleaseError("binding_unproved", "; ".join(problems))
+    excluded: dict[str, str] = {}
+    for entry in suite.scenarios:
+        verdict = proof.scenarios.get(entry.key)
+        if verdict is None:
+            excluded[entry.key] = "the binding proof does not cover it"
+        elif verdict.status != "proved":
+            excluded[entry.key] = verdict.reason or verdict.status
+    return excluded
 
 
 def main(argv: Sequence[str] | None = None) -> int:
