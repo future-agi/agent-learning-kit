@@ -24,6 +24,118 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   environment builder from requirement files in `internal-docs`, then proved on each package's
   own world; each package seals on SQLite and twice on PostgreSQL with identical digests, and was
   run live with Claude Code over MCP, Gemini conversations and an E2B build.
+- Actors: one list, `actors.json`, of everyone the agent deals with
+  who is not the agent: the caller, someone with the caller, a manager, a coworker, a system. Every actor has
+  the same record (parent, goal, constraints, behaviour, knowledge, permitted actions, activation), and one
+  with a `channel` also speaks in the conversation: beside the person (`audio_mix`), taking the phone and
+  handing it back (`audio_handoff`), the person's own phone menu (`ivr`), or writing in a chat
+  (`chat_message`). A scenario includes actors in its `actors`, each with what it says and when (its
+  trigger) and the world actions it takes. An actor record with the id `caller` shapes the simulated person
+  under every scenario's own persona.
+- Each actor plays from one brief (`actor_brief`), built from the sealed `brief_inputs`: its own fields, the
+  scenario's part for it, and the person's situation up to the person's details. Evaluator-only fields and
+  files never reach it. The platform shows the same brief as what the actor sees.
+- Spoken lines come in a voice of their own, a background line set as a ratio of the person's measured level
+  with a limiter; per-actor and call-wide limits keep the person in charge. Every call records whether each
+  actor was triggered, delivered or dropped, and why, on voice and chat alike.
+- A build gives a speaking actor to between 15% and 25% of its scenarios by default; `aim_for` takes the
+  share the person asks for (`actor_share` with `min` and `max`: every scenario, none, or a range) in its
+  place, and the actor list keeps it for later sessions.
+- A sub-goal may name the actor it is about (`actor`): it reads not applicable on a call that actor never
+  came into and inconclusive when the actor came in and never reached the agent. A call one of its speaking
+  actors never reached, with no sub-goal about that actor, is errored as inconclusive (`actor_missing`,
+  naming the actor and why) instead of passing. The judge reads an actor's turns as someone other than the
+  customer. Sub-goal results carry their `verdict` (pass, fail, not applicable, inconclusive) alongside
+  `held`.
+- Actors act in the world only through its own actions: the tool proxy lets an actor take only its
+  `permitted_actions`, and logs every attempt with whose it was and what came of it (committed, refused,
+  faulted, duplicate). The actors' files are locked to the harness; isolation from the agent in production
+  comes with process isolation, in a later release, and until then an agent running as the same user can still write the voice actions file
+  under an actor's id. An actor's actions are sealed with the call's transcript under `world_actors`, never in the
+  agent's tool trace. A bundle with actors also seals `actor_rules.json`, the rules its release checks actors
+  by; a world without actors is seeded and sealed exactly as before.
+- One door into the world (`world_door.WorldDoor`) for every surface: the tool proxy, the chat runner's
+  in-process handlers and the actors' dispatcher all build one call and get one outcome; it never raises into its
+  caller, and the agent's own calls behave as before. Chat agents now have actors acting in the world, a full
+  action log and World changes. One conformance suite runs the same cases over every surface.
+- An actor comes in one of five ways, with one meaning on every runtime: present from the start, on an event, when
+  the agent contacts it, at a set time, or once a record exists (`conditional`). A kind its runtime cannot evaluate,
+  or two actors that bring each other in, is refused when the scenario is written. Timeout and fallback (`silent`,
+  `decline`, one of its own actions, or another actor) apply on calls, in chats and in the world.
+- Live actors act on whatever they can see, with no per-actor cap; every limit is a setting on the environment
+  (`limits` in `actors.json`, per scenario too), each actor may name its `model`, and actors' model calls count as
+  simulator usage. A speaking actor decides its line and its world action in one turn.
+- Conversations before the run (`pre_run`) are sessions in any place of the world, written by the actors in them
+  when the scenario is kept, written again before sealing when an actor's record changes, and replayed into the
+  world before every trial; `per_trial` writes a fresh one inside each trial. Typed `history` reads as one session.
+- Every actor that acts through the world is in the call's actor summary; one that cannot act is recorded as the
+  scenario's problem with the reason, and the judge is given the actors' actions and briefs. World changes add
+  approvals, a "no change" line, and a judged sub-goal whose evidence never arrived reads `unmeasured`.
+- The action log records each call's world action in full (`action`, beside `name`), and the door numbers a fault's
+  calls, holds its lock, answers an actor's repeated key and says a fault did not take effect by that action, so
+  `ticket.update` is never taken for `crm.update`; a key reused for another action is an `idempotency_conflict`. An
+  `on_tool` trigger waits for the action in full. An actor waiting for a record only it may write is refused when the
+  scenario is written. A timeout another actor answers reads `answered_by` only once that actor has acted or spoken,
+  else `limit_blocked` or `unresolved`.
+- Each trial's end-of-run world state is kept: its compared tables and its action log, uploaded as a `world_state`
+  artifact (`futureagi.world-state.v1`), so a fixed check can grade the trial again without calling the agent.
+- World changes on every trial with a door, actors or not: every new world is seeded with the full action log, and
+  a trial whose tools run where no door stands seals `{"recorded": false, "why": "in_process_tools"}`. The runner
+  snapshots the world's tables at a trial's start and end (read-only, by primary key, `_alk_*` never compared,
+  tables over 5,000 rows or without a key named in `skipped`, at most 100 changes listed) and seals `records`
+  and `start` (`seeded`, `differs` with the tables, or `unknown`). `start` is read after the trial's reset and
+  before its pre-run sessions write; `records` compares the end against the world after them, so pre-run writes
+  are neither a start that differs nor the trial's changes. A check that reads an unreadable action log
+  (`EvidenceUnavailable`) is unmeasured, never settled on an empty log; the scenario errors as
+  `evidence_unmeasured`.
+- Two more fault modes: `unavailable` (the world never sees the call; the agent hears 503 at once) and `error`
+  (the scenario's `status` 400-599 and `message`). The door answers the agent's keyed retry (`Idempotency-Key`)
+  from its first result, as it does an actor's; a fault before commit releases the key. A write the world commits
+  twice after a lost answer fails the scenario as `duplicate_commit`, sealed in `world_actors.duplicates`.
+- A Python agent's in-process tools (`import`, `construct`) get a world door of their own: a `world-door` process on
+  the world's database, and a `sitecustomize` hook that compiles the door in as each tool's innermost decorator.
+  Faults, the action log and actors' record changes then reach them; an actor's action on an in-process tool is
+  refused with why.
+- The builder records policy points it could not model (`note_unresolved`), kept in `actors.json` as `unresolved`
+  for the person to decide above the cast.
+- The door logs each call as a read or a write (`effect`): a tool entry's declared `effect` (`read` or `write`), else
+  a GET, HEAD or OPTIONS call reads and anything else writes, as before. A trial's state changes count reads apart
+  (`read`, `read_actions`), never as committed, and an approval's writes around the decision leave reads out.
+- The builder chat of a built environment can change its actors (`add_actor`, `drop_actor`) and nothing else
+  of the world; adding or dropping one, or changing which scenarios include one, waits for the person's yes,
+  and an automatic repair cannot change a scenario's actors.
+- Builder chat: every turn's ending reports what that turn spent: tokens, USD, unpriced
+  turns and only the models it called. The ending is kept before the turn's final
+  checkpoint, so a restart after a failed delivery replays the same ending, usage included.
+  A chat sandbox of its own stores each ending once in its coordinator state: a checkpoint
+  adds only the endings new or changed since the last one (the turn journal is still
+  stored whole).
+- A world whose JSON columns hold values the seed import refuses, such as a jsonb string
+  written as bare text, is refused where it is written: `save_world` and the builder's
+  `change_world` name the table and column and the JSON text expected, instead of the
+  environment failing its seed import at validation. The columns are those the agent's
+  own `CREATE TABLE` statements declare `json` or `jsonb`.
+- A claim for a scenario's coverage overlay (a refusal, an escalation, an out-of-scope request)
+  that its catalogue row settles by what was said (`verifier: llm`, no check, reference or
+  observed record) no longer requires tool evidence, so a correct agent that makes no tool call
+  is graded instead of ending `evidence_missing`. The claim is matched by the catalogue's
+  `overlay` field or by holding the overlay's whole name. Every other sub-goal, coded ones
+  included, still requires evidence.
+- A call whose declared tool capture could not be read ends `evidence_missing` even when its
+  scenario needs no tool call, instead of being graded as a call that made none. Unread means an
+  unreadable trace file, a trace file with no readable record, or a `tool_trace` world database
+  that is missing or fails. A hand-off is never graded as a tool call. A traced declared tool's
+  oversized record is now cut by value, so its trace line stays valid JSON. Only an oversize
+  value is cut, and it says it was cut; the other values keep their types.
+- Multi-agent compatibility references preserve native Google ADK, LangGraph,
+  and CrewAI orchestration, while Python command agents capture bounded tool
+  evidence with explicit worker and task attribution.
+- Multi-agent apps: the contract records the workers an app declares, and every Python agent's
+  tool calls are read from its framework spans with the worker that made each, every hand-off and
+  when that worker returned; a worker's run is never graded as a tool call. Each sealed worker event
+  names its span, the parent hand-off it ran in, its kind (`delegated`, `transferred` or
+  `tool_call`), whether that place was observed or is unknown, and whether its input or output was
+  cut; a blank or repeated worker id is a contract problem.
 - Builder chat: `edit_scenario` changes a kept scenario by its key with only the fields that change
   (`clear` resets a field), keeping its key, number, place and history; a rename alone is not
   proved again. A new scenario never takes a key the environment has used, a dropped scenario's

@@ -19,12 +19,33 @@ the same kind of guess it exists to prevent.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+from typing import Any
 
-from .contract import AgentContract, known_modalities, validate_contract
+from ..providers.agent import _redact
+from .contract import (
+    CONTRACT_FILE,
+    AgentContract,
+    known_modalities,
+    validate_contract,
+    write_contract,
+)
 
-CONTRACT = "contract.json"
+CONTRACT = CONTRACT_FILE
+
+
+def _kept_shape(written: Any, before: Any) -> Any:
+    """``written`` without the empty keys ``before`` never had, so an edit never shows a change to a field nobody
+    set."""
+    if isinstance(written, dict) and isinstance(before, dict):
+        return {
+            key: _kept_shape(value, before.get(key))
+            for key, value in written.items()
+            if key in before or value not in ("", None, [], {})
+        }
+    if isinstance(written, list) and isinstance(before, list) and len(written) == len(before):
+        return [_kept_shape(one, was) for one, was in zip(written, before)]
+    return written
 
 
 def widen(
@@ -78,12 +99,7 @@ def widen(
         contract.amendments.pop()
         return False, "the amended contract would not be valid: " + "; ".join(problems)
 
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _persist(contract, destination)
     return True, (
         f"{tool_name}.{argument} now accepts {', '.join(fresh)}. "
         f"{len(contract.amendments)} amendment(s) recorded on the contract."
@@ -104,8 +120,12 @@ def add_rule(
         return False, "no rule given"
     if not why.strip():
         return False, "say why: an unexplained rule is indistinguishable from a guess"
-    if any(rule.lower() == existing.lower() for existing in contract.hard_constraints):
-        return False, f"the agent already has that rule: {rule}"
+    # Both sides are compared as they are saved: a contract held from an older save can still
+    # hold its rules raw. One call, so a refused URL is logged once. The reply names the rule as
+    # saved too, since the chat sends it on to the platform.
+    cleaned, *existing = _redact([rule, *contract.hard_constraints])
+    if cleaned.lower() in (one.lower() for one in existing):
+        return False, f"the agent already has that rule: {cleaned}"
 
     contract.hard_constraints.append(rule)
     contract.amendments.append(f"rule added — {rule}: {why.strip()}")
@@ -115,12 +135,7 @@ def add_rule(
         contract.amendments.pop()
         return False, "the amended contract would not be valid: " + "; ".join(problems)
 
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _persist(contract, destination)
     return True, (
         f"added. The agent now has {len(contract.hard_constraints)} rules, and this one is "
         "graded from here on."
@@ -150,6 +165,8 @@ def set_modality(
             False,
             f"{named!r} is not a modality. It is one of: {', '.join(known_modalities())}",
         )
+    if named == "browser":
+        return False, "browser agents aren't supported, so the type stays " + contract.modality + "."
     if not why.strip():
         return False, "say why: modality decides how every scenario is run"
     if named == contract.modality:
@@ -164,17 +181,11 @@ def set_modality(
         contract.amendments.pop()
         return False, "the amended contract would not be valid: " + "; ".join(problems)
 
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _persist(contract, destination)
     reached = {
         "voice": "a call placed to the agent where it is hosted, its own tools answered over a "
         "webhook",
         "chat": "a typed conversation, the agent reconstructed here from its contract",
-        "browser": "a browser the agent drives",
     }[named]
     return True, f"modality is now {named}. Every scenario will be run as {reached}."
 
@@ -190,25 +201,23 @@ def drop_rule(
     """
     if not why.strip():
         return False, "say why: removing a rule changes what is being graded"
+    # Both sides are compared as they are saved: a contract held from an older save can still
+    # hold its rules raw. One call, so a refused URL is logged once.
+    wanted, *saved_rules = _redact([rule.strip(), *contract.hard_constraints])
+    wanted = wanted.lower()
+    held = list(zip(contract.hard_constraints, (one.lower() for one in saved_rules)))
     match = next(
-        (
-            existing
-            for existing in contract.hard_constraints
-            if existing.lower() == rule.strip().lower()
-        ),
+        (existing for existing, as_saved in held if as_saved == wanted),
         None,
     ) or next(
-        (
-            existing
-            for existing in contract.hard_constraints
-            if rule.strip().lower() in existing.lower()
-        ),
+        (existing for existing, as_saved in held if wanted in as_saved),
         None,
     )
     if match is None:
+        # The rules as saved, since the chat sends this reply on to the platform.
         return False, (
             "no rule like that. It has:\n  - "
-            + "\n  - ".join(contract.hard_constraints)
+            + "\n  - ".join(saved_rules)
         )
     contract.hard_constraints.remove(match)
     contract.amendments.append(f"rule removed — {match}: {why.strip()}")
@@ -224,6 +233,8 @@ def fix_tool(
     why: str,
     args: list[str] | None = None,
     arg_types: dict[str, str] | None = None,
+    arg_units: dict[str, str] | None = None,
+    returns: dict[str, str] | None = None,
     description: str = "",
     refuses: str = "",
     effects: str = "",
@@ -246,12 +257,14 @@ def fix_tool(
         )
 
     if remove:
+        before = contract.model_copy(deep=True)
         contract.tools.remove(spec)
+        drop_tool_references(contract)
         contract.amendments.append(f"tool removed — {tool_name}: {why.strip()}")
         problems = validate_contract(contract)
         if problems:
-            contract.tools.append(spec)
-            contract.amendments.pop()
+            for field in ("tools", "tool_entrypoints", "dependencies", "amendments"):
+                setattr(contract, field, getattr(before, field))
             return False, "cannot remove it: " + "; ".join(problems)
         _persist(contract, destination)
         return True, f"{tool_name} removed. {len(contract.tools)} tools left"
@@ -264,6 +277,7 @@ def fix_tool(
         spec.args = list(args)
         spec.arg_types = {k: v for k, v in spec.arg_types.items() if k in spec.args}
         spec.arg_values = {k: v for k, v in spec.arg_values.items() if k in spec.args}
+        spec.arg_units = {k: v for k, v in spec.arg_units.items() if k in spec.args}
         changed.append(f"arguments are now {', '.join(args)}")
         if orphaned:
             changed.append(f"dropped values recorded for {', '.join(orphaned)}")
@@ -273,6 +287,22 @@ def fix_tool(
             return False, f"{tool_name} takes no argument called {', '.join(unknown)}"
         spec.arg_types.update(arg_types)
         changed.append("types updated")
+    if arg_units:
+        unknown = sorted(set(arg_units) - set(spec.args))
+        if unknown:
+            return False, f"{tool_name} takes no argument called {', '.join(unknown)}"
+        spec.arg_units.update(arg_units)
+        changed.append(
+            "units updated ("
+            + "; ".join(
+                f"{field} in {unit}{_code_says(contract, spec, field)}" for field, unit in sorted(arg_units.items())
+            )
+            + "); if the code that reads a field or the data it holds says otherwise, the code's unit is the one to "
+            "record, and the person is told about the mismatch"
+        )
+    if returns:
+        spec.returns.update(returns)
+        changed.append("returned fields updated")
     if description:
         spec.description = description
         changed.append("description updated")
@@ -282,7 +312,7 @@ def fix_tool(
             changed.append(f"{field} updated")
     if not changed:
         return False, (
-            "nothing to change: give args, arg_types, description, refuses, effects, inputs_from, "
+            "nothing to change: give args, arg_types, arg_units, returns, description, refuses, effects, inputs_from, "
             "or remove"
         )
 
@@ -294,13 +324,34 @@ def fix_tool(
     return True, f"{tool_name}: {', '.join(changed)}"
 
 
+def drop_tool_references(contract: AgentContract) -> list[str]:
+    """Drop entrypoints, ``requires`` and ``used_by`` naming tools the contract no longer has.
+
+    Returns where each dropped name was. Free text is left alone.
+    """
+    kept = contract.tool_names()
+    dropped = [
+        f"tool_entrypoints {one.tool}"
+        for one in contract.tool_entrypoints
+        if one.tool not in kept
+    ]
+    contract.tool_entrypoints = [
+        one for one in contract.tool_entrypoints if one.tool in kept
+    ]
+    for owner, attribute, label in (
+        *((one, "requires", f"{one.name}.requires") for one in contract.tools),
+        *((one, "used_by", f"{one.name}.used_by") for one in contract.dependencies),
+    ):
+        names = getattr(owner, attribute)
+        dropped.extend(f"{label} {name}" for name in names if name not in kept)
+        setattr(owner, attribute, [name for name in names if name in kept])
+    return dropped
+
+
 def _persist(contract: AgentContract, destination: Path) -> None:
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    """Save the contract the stage is holding. Its free text is cleaned in place as it is saved,
+    so the stage goes on working from what was saved."""
+    write_contract(contract, Path(destination), shape=_kept_shape)
 
 
 def not_offered(contract: AgentContract, candidates: dict[str, set[str]]) -> list[str]:
@@ -320,3 +371,14 @@ def not_offered(contract: AgentContract, candidates: dict[str, set[str]]) -> lis
             if absent:
                 missing.append(f"{tool.name}.{argument}: {', '.join(absent)}")
     return missing
+
+
+def _code_says(contract: Any, spec: Any, field: str) -> str:
+    """What the code and the world's data say about a field, beside the unit just recorded for it: its declared type
+    and each stored column of that name, so the unit is checked against them where it is written."""
+    seen = [f"the code types it {spec.arg_types[field]}"] if spec.arg_types.get(field) else []
+    for collection, columns in sorted((getattr(contract, "data_schema", None) or {}).items()):
+        if isinstance(columns, dict) and field in columns:
+            seen.append(f"{collection}.{field} is stored as {columns[field]}")
+    return f" ({'; '.join(seen)})" if seen else ""
+

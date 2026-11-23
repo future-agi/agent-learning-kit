@@ -9,17 +9,23 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import hashlib
+import hmac
+import ipaddress
 import json
+import logging
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import time
 from typing import Any, Literal
 import uuid
+
+from contextlib import asynccontextmanager
 
 from fastapi import (
     Depends,
@@ -35,6 +41,7 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from fi.simulate.runtime.spec import SecretRef
 
+from ..providers.agent import _redact
 from .credentials import (
     CredentialManifest,
     CredentialRequirement,
@@ -44,6 +51,7 @@ from .credentials import (
 )
 from .executor import GitHubSourceAcquirer, SourceAcquisitionError
 from .github import parse_github_location
+from .isolated_process import _finish
 from .job import (
     AgentConnection,
     ExecutionMode,
@@ -58,10 +66,13 @@ from .job import (
 )
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
-from .secrets import resolve_worker_secrets, worker_environment
+from .secrets import SecretResolutionError, resolve_worker_secrets, worker_environment
+from .source_folder import SubfolderNotFound, agent_folder, subfolder_not_found
 
 
 _CONTROLLER_TOKEN = uuid.uuid4().hex
+_SANDBOX_JOB_PREFIX = "ALK_JOB_"
+_SANDBOX_FILE_PREFIX = "ALK_SECRET_FILE_"
 
 
 class LocalSandboxRequest(BaseModel):
@@ -73,6 +84,7 @@ class LocalSandboxRequest(BaseModel):
     github_commit_sha: str | None = None
     github_visibility: SourceVisibility = SourceVisibility.PUBLIC
     github_installation_id: str | None = None
+    github_subfolder: str | None = None
     scenario_count: int = Field(default=10, ge=1, le=200)
     seed: int | None = None
     agent_name: str | None = None
@@ -102,6 +114,14 @@ class LocalSandboxRequest(BaseModel):
             or self.connector_mode is not ProviderExecutionMode.CONNECT_ONLY
         ):
             raise ValueError("provider_only_requires_connect_only_provider")
+        if self.github_subfolder:
+            if not self.github_repository:
+                raise ValueError("A subfolder needs a GitHub repository to read it from.")
+            # The older authoring path would ignore the folder without saying so.
+            if self.metadata.get("generic_harness_v1") is not True:
+                raise ValueError(
+                    "A subfolder needs the generic harness, which this job didn't ask for."
+                )
         _validate_environment_values(self.environment_values, self.secret_refs)
         return self
 
@@ -153,6 +173,8 @@ class SandboxPreflightResponse(BaseModel):
     source_kind: SourceKind
     source_label: str
     ready_to_submit: bool
+    can_submit_for_authoring: bool = False
+    configuration_status: str = "selection_pending"
     checkout_required: bool = False
     credentials: CredentialManifest
     packaging: PackagingManifest | None = None
@@ -190,6 +212,81 @@ class UploadedSecretFileResponse(BaseModel):
     environment_name: str
     secret_ref: SecretRef
     size: int
+
+
+# How a cancelled job's worker is stopped. Tests patch these on the module.
+_STOP_GRACE_SECONDS = 10.0
+_STOP_POLL_SECONDS = 0.05
+_REAP_SECONDS = 5.0
+_STOP_OUTPUT_SECONDS = 150
+# How long a server stop waits for its jobs' cleanup. A deployment gives the service a stop grace
+# above this (Compose's stop_grace_period, e.g. 180s) and an init, or docker kills the cleanup
+# after its default 10 s.
+_CANCEL_WAIT_SECONDS = 170
+# How long a /cancel request waits for the job's cleanup before it answers; the platform's client
+# reads /cancel with a 30 s timeout. The job's own task carries on with the cleanup.
+_CANCEL_RESPONSE_SECONDS = 20
+
+
+def _start_worker(
+    command: list[str], *, log_handle: Any, env: dict[str, str]
+) -> subprocess.Popen:
+    """Start a worker in its own session. Synchronous, so a loop shutting down can't cancel it
+    halfway: asyncio's own start can wait for good when the loop closes mid-start."""
+    return subprocess.Popen(
+        command,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        env=env,
+    )
+
+
+async def _worker_exit(process: subprocess.Popen) -> int:
+    """The worker's exit code (`-signal` for a signal), polled so a cancel lands between polls."""
+    while (code := process.poll()) is None:
+        await asyncio.sleep(0.25)
+    return code
+
+
+def _signal_group(pgid: int, sig: signal.Signals) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        # PermissionError is what macOS gives for a group whose leader exited unreaped.
+        pass
+
+
+def _stop_worker(process: subprocess.Popen) -> None:
+    """Stop a worker and everything in its process group, then reap it. Safe to call twice."""
+    if process.pid <= 1 or process.returncode is not None:
+        # Already reaped before this call, so its pid may belong to someone else by now.
+        return
+    pgid = process.pid
+    _signal_group(pgid, signal.SIGTERM)
+    gone = False
+    deadline = time.monotonic() + _STOP_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        # Reap the leader as it exits: an unreaped leader still counts as a group member.
+        process.poll()
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            gone = True
+            break
+        except PermissionError:
+            # macOS: only an unreaped zombie is left.
+            break
+        time.sleep(_STOP_POLL_SECONDS)
+    if not gone:
+        # A group seen gone is never signalled again: its id could be reused.
+        _signal_group(pgid, signal.SIGKILL)
+    try:
+        process.wait(timeout=_REAP_SECONDS)
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "sandbox worker %s not reaped %ss after SIGKILL", pgid, _REAP_SECONDS
+        )
 
 
 class LocalSandbox:
@@ -236,7 +333,6 @@ class LocalSandbox:
         (self.secret_files_root / "pending").mkdir(parents=True, mode=0o700)
         (self.secret_files_root / "jobs").mkdir(parents=True, mode=0o700)
         self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
-        self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         # Values supplied through the platform's .env flow live only for the lifetime of the
         # job. Persisted job/state artifacts contain the opaque mounted references created below.
@@ -467,6 +563,69 @@ class LocalSandbox:
                 )
                 _write_json(path, state)
 
+    def _job_secret_refs(
+        self, identifier: str, request: LocalSandboxRequest, *, hosted: bool
+    ) -> tuple[dict[str, SecretRef], dict[str, str], set[str]]:
+        """Refs, values (keyed by internal key), and secret-file names for one new job."""
+        # Job keys are public through GET /v1/jobs, so a sandbox prefix proves nothing about
+        # who minted a key. Refusing every incoming ref that uses one, except an upload the
+        # claim binds to its own alias, is what lets the resolver trust a prefixed vault key.
+        for alias, reference in request.secret_refs.items():
+            if reference.key.startswith(_SANDBOX_JOB_PREFIX) or (
+                reference.key.startswith(_SANDBOX_FILE_PREFIX)
+                and reference.manager != "mounted"
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"sandbox_secret_reference_refused: {alias}",
+                )
+            if hosted and reference.manager == "platform-vault":
+                # The resolver answers only the vault keys this sandbox mints for the job, so an
+                # incoming one could only fail later, after the job took a slot. Refuse it now,
+                # with the code the resolver would give.
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"sandbox_vault_reference_unknown: {alias}",
+                )
+        claimed_files, secret_file_names = self._claim_secret_files(
+            identifier, request.secret_refs
+        )
+        # Hosted jobs admit only vault refs. The sandbox stands in for the hosting side's
+        # vault, and resolves these keys from this job's in-memory values only.
+        manager = "platform-vault" if hosted else "mounted"
+        refs = {
+            alias: reference
+            for alias, reference in request.secret_refs.items()
+            if not reference.key.startswith((_SANDBOX_JOB_PREFIX, _SANDBOX_FILE_PREFIX))
+        }
+        values: dict[str, str] = {}
+        job_prefix = f"{_SANDBOX_JOB_PREFIX}{identifier.replace('-', '').upper()}_"
+        for index, (name, value) in enumerate(request.environment_values.items()):
+            internal_key = f"{job_prefix}{index}"
+            refs[name] = SecretRef(
+                manager=manager,
+                key=internal_key,
+                # Values entered for a run configure the submitted target runtime. Bundle V2
+                # admits secrets by purpose, so a descriptive free-form purpose causes the
+                # certified process provider to drop an otherwise valid value.
+                purpose="target_provider",
+            )
+            values[internal_key] = value.get_secret_value()
+        # Only an upload the claim bound to this alias is minted. The claim's digest check already
+        # binds every mounted upload key to its alias, so this is a second guard behind it, not
+        # the only one: nothing should rely on it alone.
+        for alias, reference in request.secret_refs.items():
+            if (
+                reference.manager == "mounted"
+                and reference.key.startswith(_SANDBOX_FILE_PREFIX)
+                and alias in secret_file_names
+            ):
+                refs[alias] = SecretRef(
+                    manager=manager, key=reference.key, purpose="target_provider"
+                )
+        values.update(claimed_files)
+        return refs, values, secret_file_names
+
     def submit(self, request: LocalSandboxRequest) -> SandboxJobResponse:
         source = (
             _allowed_source(request.source_path)
@@ -485,24 +644,12 @@ class LocalSandbox:
             else None
         )
         github_repository = github_location.repository if github_location else None
-        mounted_refs: dict[str, SecretRef] = {}
-        mounted_values: dict[str, str] = {}
-        for index, (name, value) in enumerate(request.environment_values.items()):
-            internal_key = f"ALK_JOB_{identifier.replace('-', '').upper()}_{index}"
-            mounted_refs[name] = SecretRef(
-                manager="mounted",
-                key=internal_key,
-                # Values entered for a run configure the submitted target runtime. Bundle V2
-                # admits secrets by purpose, so a descriptive free-form purpose causes the
-                # certified process provider to drop an otherwise valid value.
-                purpose="target_provider",
-            )
-            mounted_values[internal_key] = value.get_secret_value()
-        claimed_files, secret_file_names = self._claim_secret_files(
-            identifier, request.secret_refs
-        )
-        mounted_values.update(claimed_files)
+        hosted = bool(request.source_id or request.github_repository)
         try:
+            # Inside the try so a refusal or raise after the claim still deletes the claim.
+            job_refs, mounted_values, secret_file_names = self._job_secret_refs(
+                identifier, request, hosted=hosted
+            )
             source_spec = (
                 RepositorySource(kind=SourceKind.PROVIDER)
                 if request.provider_only
@@ -523,22 +670,19 @@ class LocalSandbox:
                     commit_sha=request.github_commit_sha,
                     visibility=request.github_visibility,
                     installation_id=request.github_installation_id,
+                    subfolder=request.github_subfolder,
                 )
             )
             job = HarnessJob(
                 job_id=identifier,
                 run_id=run_id,
-                execution=(
-                    ExecutionMode.HOSTED
-                    if request.source_id or request.github_repository
-                    else ExecutionMode.LOCAL
-                ),
+                execution=ExecutionMode.HOSTED if hosted else ExecutionMode.LOCAL,
                 source=source_spec,
                 agent=AgentConnection(
                     connector=request.connector,
                     mode=request.connector_mode,
                     config=request.connector_config,
-                    secret_refs={**request.secret_refs, **mounted_refs},
+                    secret_refs=job_refs,
                 ),
                 scenario_count=request.scenario_count,
                 seed=request.seed,
@@ -560,7 +704,7 @@ class LocalSandbox:
                     # Both dotenv values and credential-file paths are runtime configuration. Only
                     # their names are persisted; values and provider-local paths remain ephemeral.
                     "environment_value_names": sorted(
-                        {*mounted_refs, *secret_file_names}
+                        {*request.environment_values, *secret_file_names}
                     ),
                     "secret_file_names": sorted(secret_file_names),
                 },
@@ -598,12 +742,43 @@ class LocalSandbox:
         self._tasks[identifier] = asyncio.create_task(self._execute(job, source))
         return self.get(identifier)
 
+    @staticmethod
+    def _hosted_rerun_secrets(
+        references: dict[str, SecretRef],
+        claimed_files: dict[str, str],
+        secret_file_names: set[str],
+    ) -> dict[str, str]:
+        """Resolve a hosted rerun's refs from the files it just claimed, and nothing else."""
+        resolved: dict[str, str] = {}
+        for alias, reference in references.items():
+            # Any other ref would resolve from this server's environment, which holds the
+            # runner's own credentials. Only an upload claimed under its own alias passes. The
+            # last two conditions repeat what the claim's digest check guarantees: a second
+            # guard behind it, not the only one.
+            if (
+                reference.manager != "mounted"
+                or not reference.key.startswith(_SANDBOX_FILE_PREFIX)
+                or reference.key not in claimed_files
+                or alias not in secret_file_names
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"sandbox_rerun_secret_refused: {alias}",
+                )
+            resolved[str(alias)] = claimed_files[reference.key]
+        return resolved
+
     def rerun(self, job_id: str, request: SandboxRerunRequest) -> SandboxJobResponse:
         response = self.get(job_id)
         if not response.status.stage.terminal:
             raise HTTPException(
                 status_code=409, detail="harness job is already running"
             )
+        task = self._tasks.get(job_id)
+        if task is not None and not task.done():
+            # A cancel answered before its cleanup ended: the job's state is terminal, but its
+            # worker and environment are still being stopped.
+            raise HTTPException(status_code=409, detail="harness job is still stopping")
         output = self.artifacts_root / response.job.run_id
         required = (
             output / "contract.json",
@@ -629,10 +804,15 @@ class LocalSandbox:
             job_id, request.secret_refs
         )
         try:
-            resolved = resolve_worker_secrets(
-                request.secret_refs,
-                environment={**os.environ, **claimed_files},
-            )
+            if response.job.execution is ExecutionMode.HOSTED:
+                resolved = self._hosted_rerun_secrets(
+                    request.secret_refs, claimed_files, secret_file_names
+                )
+            else:
+                resolved = resolve_worker_secrets(
+                    request.secret_refs,
+                    environment={**os.environ, **claimed_files},
+                )
         except Exception:
             self._delete_job_secret_files(job_id)
             raise
@@ -660,6 +840,77 @@ class LocalSandbox:
         )
         return self.get(job_id)
 
+    async def _cleanup_cancelled(
+        self,
+        job: HarnessJob,
+        process: subprocess.Popen | None,
+        output: Path,
+        state_path: Path,
+    ) -> None:
+        """A cancelled job's cleanup: the state first, then the worker, then its environment.
+        Each step's error is logged, so the next one still runs."""
+        canceled = True
+        try:
+            state = _read_json(state_path)
+            if state.get("stage") != HarnessStage.CANCELED.value:
+                canceled = False
+                state.update(
+                    stage=HarnessStage.FAILED.value,
+                    detail="sandbox service stopped while the job was running",
+                    failure={
+                        "domain": "infrastructure",
+                        "stage": state.get("stage") or HarnessStage.RUNNING.value,
+                        "code": "service_stopped",
+                        "message": "sandbox service stopped while the job was running",
+                        "retryable": False,
+                    },
+                    updated_at=_now(),
+                )
+                _write_json(state_path, state)
+        except Exception:
+            logger.exception("sandbox job %s: state not written on cancel", job.job_id)
+
+        async def stop_worker() -> None:
+            if process is None:
+                return
+            try:
+                await asyncio.to_thread(_stop_worker, process)
+            except Exception:
+                logger.exception("sandbox job %s: worker not stopped", job.job_id)
+
+        if canceled:
+            await stop_worker()
+            await self._stop_environment(job, output, state_path, canceled)
+        else:
+            # A service stop: docker kills the server when the worker's grace would end, so the
+            # environment's cleanup starts beside the worker's, not after it.
+            await asyncio.gather(
+                stop_worker(), self._stop_environment(job, output, state_path, canceled)
+            )
+
+    async def _stop_environment(
+        self, job: HarnessJob, output: Path, state_path: Path, canceled: bool
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(stop, output), timeout=_STOP_OUTPUT_SECONDS
+            )
+        except ProvisionError as exc:
+            try:
+                state = _read_json(state_path)
+                state.update(
+                    detail=(
+                        f"{'canceled' if canceled else 'stopped'}; isolated environment "
+                        f"cleanup failed: {exc}"
+                    ),
+                    updated_at=_now(),
+                )
+                _write_json(state_path, state)
+            except Exception:
+                logger.exception("sandbox job %s: state not written on cancel", job.job_id)
+        except Exception:
+            logger.exception("sandbox job %s: environment not stopped", job.job_id)
+
     async def _execute_rerun(self, job: HarnessJob, only: list[str]) -> None:
         """Run calls from immutable saved artifacts, with a fresh environment lifecycle."""
 
@@ -684,6 +935,7 @@ class LocalSandbox:
             )
             _write_json(state_path, state)
             log_handle = (directory / "worker.log").open("ab")
+            process: subprocess.Popen | None = None
             try:
                 shutil.rmtree(replay_root, ignore_errors=True)
                 replay_root.parent.mkdir(parents=True, exist_ok=True)
@@ -704,15 +956,9 @@ class LocalSandbox:
                 child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
 
                 async def run_stage(command: list[str]) -> int:
-                    process = await asyncio.create_subprocess_exec(
-                        *command,
-                        stdout=log_handle,
-                        stderr=asyncio.subprocess.STDOUT,
-                        start_new_session=True,
-                        env=child_environment,
-                    )
-                    self._processes[job.job_id] = process
-                    return await process.wait()
+                    nonlocal process
+                    process = _start_worker(command, log_handle=log_handle, env=child_environment)
+                    return await _worker_exit(process)
 
                 environment_up = [
                     sys.executable,
@@ -751,10 +997,16 @@ class LocalSandbox:
                 simulation_code = 1
                 cleanup_code = 0
                 if up_code == 0:
+                    cancelled = False
                     try:
                         simulation_code = await run_stage(simulation)
+                    except asyncio.CancelledError:
+                        # The cancel handler's stop(output) brings the environment down.
+                        cancelled = True
+                        raise
                     finally:
-                        cleanup_code = await run_stage(environment_down)
+                        if not cancelled:
+                            cleanup_code = await run_stage(environment_down)
 
                 # Exit 2 is a completed suite whose submitted agent failed checks.
                 successful_execution = (
@@ -809,6 +1061,15 @@ class LocalSandbox:
                         updated_at=_now(),
                     )
                     _write_json(state_path, state)
+            except asyncio.CancelledError:
+                # One owner: the job's own task stops its worker and its environment, whoever
+                # cancelled it, and no further cancel can cut that short.
+                await _finish(
+                    asyncio.create_task(
+                        self._cleanup_cancelled(job, process, output, state_path)
+                    )
+                )
+                raise
             except Exception as exc:
                 state = _read_json(state_path)
                 state.update(
@@ -826,11 +1087,7 @@ class LocalSandbox:
                 _write_json(state_path, state)
             finally:
                 log_handle.close()
-                self._processes.pop(job.job_id, None)
-                self._tasks.pop(job.job_id, None)
-                self._ephemeral_secrets.pop(job.job_id, None)
-                self._ephemeral_secret_file_names.pop(job.job_id, None)
-                self._delete_job_secret_files(job.job_id)
+                self._release_job(job.job_id)
                 shutil.rmtree(replay_root, ignore_errors=True)
 
     def preflight(self, request: SandboxPreflightRequest) -> SandboxPreflightResponse:
@@ -854,12 +1111,15 @@ class LocalSandbox:
                         for name, value in request.environment_values.items()
                     },
                 },
-                scan_paths=_credential_scan_paths(packaging),
                 template_secrets_required=(
                     request.metadata.get("generic_harness_v1") is not True
                 ),
             )
+            from .credentials import assess_configuration
+
+            admission = assess_configuration()
             return SandboxPreflightResponse(
+                configuration_status=admission.status,
                 source_kind=(
                     SourceKind.ARCHIVE
                     if request.source_id
@@ -873,6 +1133,10 @@ class LocalSandbox:
                     and packaging.ready
                     and (packaging.agent_runtime_packaged or not packaging.candidates)
                 ),
+                can_submit_for_authoring=True,
+                notes=[
+                    "Runtime selection and configuration validation continue after authoring. Packaging and credential findings are inventory."
+                ],
                 credentials=manifest,
                 packaging=packaging,
             )
@@ -904,12 +1168,44 @@ class LocalSandbox:
             source_kind=SourceKind.GITHUB,
             source_label=repository,
             ready_to_submit=manifest.ready,
+            can_submit_for_authoring=manifest.ready,
             checkout_required=True,
             credentials=manifest,
             notes=[
                 "Agent credential discovery continues inside the sandbox after checkout."
             ],
         )
+
+    def _resolve_job_secrets(self, job: HarnessJob) -> dict[str, str]:
+        """Resolve a job's refs; vault refs only from this job's own map."""
+        # Read here rather than passed in, so no caller can hand the resolver a wider store.
+        values = self._ephemeral_secrets.get(job.job_id, {})
+        own_job_prefix = f"{_SANDBOX_JOB_PREFIX}{job.job_id.replace('-', '').upper()}_"
+        resolved: dict[str, str] = {}
+        others: dict[str, SecretRef] = {}
+        for alias, reference in job.agent.secret_refs.items():
+            if reference.manager != "platform-vault":
+                others[alias] = reference
+                continue
+            # A vault ref never reads the process environment, which holds this server's own
+            # credentials, and never another job's values.
+            if reference.key.startswith(_SANDBOX_JOB_PREFIX):
+                if not reference.key.startswith(own_job_prefix):
+                    raise SecretResolutionError(
+                        f"sandbox_vault_reference_unknown: {alias}"
+                    )
+            elif not reference.key.startswith(_SANDBOX_FILE_PREFIX):
+                raise SecretResolutionError(f"sandbox_vault_reference_unknown: {alias}")
+            value = values.get(reference.key)
+            # Empty counts as missing, as it does for the other managers.
+            if not value:
+                raise SecretResolutionError(f"secret_reference_unavailable: {alias}")
+            resolved[str(alias)] = value
+        if others:
+            resolved.update(
+                resolve_worker_secrets(others, environment={**os.environ, **values})
+            )
+        return resolved
 
     async def _execute(self, job: HarnessJob, source: Path | None) -> None:
         directory = self.jobs_root / job.job_id
@@ -926,6 +1222,7 @@ class LocalSandbox:
             )
             _write_json(state_path, state)
             log_handle = (directory / "worker.log").open("ab")
+            process: subprocess.Popen | None = None
             try:
                 if source is None:
                     workspace = directory / "workspace"
@@ -955,17 +1252,21 @@ class LocalSandbox:
                             await asyncio.sleep(delay)
                     if source is None:
                         raise SourceAcquisitionError("github_checkout_missing")
+                agent_folder(source, job.source.subfolder)
                 packaging_manifest = inspect_packaging(
                     source,
                     external_environment=bool(
                         job.metadata.get("environment_value_names", [])
                     ),
                 )
-                credential_manifest = discover_credentials(
+                # The import walk reads the agent's files at bundling's limits, seconds on a
+                # crafted repository; off the loop, the server keeps answering meanwhile.
+                credential_manifest = await asyncio.to_thread(
+                    discover_credentials,
                     source,
                     secret_refs=job.agent.secret_refs,
                     provided_environment=job.agent.config,
-                    scan_paths=_credential_scan_paths(packaging_manifest),
+                    agent_subfolder=job.source.subfolder,
                     template_secrets_required=(
                         job.metadata.get("generic_harness_v1") is not True
                     ),
@@ -974,61 +1275,18 @@ class LocalSandbox:
                     directory / "packaging.json",
                     packaging_manifest.model_dump(mode="json"),
                 )
-                if not packaging_manifest.ready:
-                    detail = (
-                        "; ".join(packaging_manifest.notes)
-                        or "packaging is not runnable"
-                    )
-                    state.update(
-                        stage=HarnessStage.FAILED.value,
-                        detail=f"repository packaging preflight failed: {detail}",
-                        failure={
-                            "domain": "environment",
-                            "stage": HarnessStage.ACQUIRING_SOURCE.value,
-                            "code": "packaging_preflight_failed",
-                            "message": detail,
-                            "retryable": False,
-                        },
-                        updated_at=_now(),
-                    )
-                    _write_json(state_path, state)
-                    return
                 _write_json(
                     directory / "credentials.json",
                     credential_manifest.model_dump(mode="json"),
                 )
-                if not credential_manifest.ready:
-                    missing = [
-                        item.environment_name
-                        for item in credential_manifest.missing_required
-                    ]
-                    missing.extend(
-                        f"one of {choice.options}"
-                        for choice in credential_manifest.credential_choices
-                        if not choice.satisfied
-                    )
-                    names = ", ".join(missing)
-                    state.update(
-                        stage=HarnessStage.FAILED.value,
-                        detail=f"missing required credentials: {names}",
-                        failure={
-                            "domain": "connectivity",
-                            "stage": HarnessStage.ACQUIRING_SOURCE.value,
-                            "code": "credentials_missing",
-                            "message": f"Configure secret references for: {names}",
-                            "retryable": False,
-                        },
-                        updated_at=_now(),
-                    )
-                    _write_json(state_path, state)
-                    return
-                resolved_secrets = resolve_worker_secrets(
-                    job.agent.secret_refs,
-                    environment={
-                        **os.environ,
-                        **self._ephemeral_secrets.get(job.job_id, {}),
-                    },
+                from .credentials import assess_configuration
+
+                admission = assess_configuration()
+                _write_json(
+                    directory / "configuration-admission.json",
+                    admission.model_dump(mode="json"),
                 )
+                resolved_secrets = self._resolve_job_secrets(job)
                 submitted_source_digest = source_fingerprint(source)
                 result: dict[str, Any] = {}
                 return_code = 1
@@ -1080,26 +1338,25 @@ class LocalSandbox:
                         "1" if job.execution is ExecutionMode.HOSTED else "0"
                     )
                     child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
-                    process = await asyncio.create_subprocess_exec(
-                        sys.executable,
-                        "-m",
-                        "fi.alk.harness.sandbox_worker",
-                        str(directory / "job.json"),
-                        "--source",
-                        str(source),
-                        "--output",
-                        str(output),
-                        "--status",
-                        str(directory / "result.json"),
-                        "--adjustments",
-                        str(directory / "adjustments.jsonl"),
-                        stdout=log_handle,
-                        stderr=asyncio.subprocess.STDOUT,
-                        start_new_session=True,
+                    process = _start_worker(
+                        [
+                            sys.executable,
+                            "-m",
+                            "fi.alk.harness.sandbox_worker",
+                            str(directory / "job.json"),
+                            "--source",
+                            str(source),
+                            "--output",
+                            str(output),
+                            "--status",
+                            str(directory / "result.json"),
+                            "--adjustments",
+                            str(directory / "adjustments.jsonl"),
+                        ],
+                        log_handle=log_handle,
                         env=child_environment,
                     )
-                    self._processes[job.job_id] = process
-                    return_code = await process.wait()
+                    return_code = await _worker_exit(process)
                     result = _read_json(directory / "result.json")
                     if source_fingerprint(source) != submitted_source_digest:
                         return_code = 1
@@ -1159,6 +1416,26 @@ class LocalSandbox:
                         updated_at=_now(),
                     )
                     _write_json(state_path, state)
+            except asyncio.CancelledError:
+                # One owner: the job's own task stops its worker and its environment, whoever
+                # cancelled it, and no further cancel can cut that short.
+                await _finish(
+                    asyncio.create_task(
+                        self._cleanup_cancelled(job, process, output, state_path)
+                    )
+                )
+                raise
+            except SubfolderNotFound as exc:
+                state = _read_json(state_path)
+                if state.get("stage") != HarnessStage.CANCELED.value:
+                    failure = subfolder_not_found(exc.subfolder)
+                    state.update(
+                        stage=HarnessStage.FAILED.value,
+                        detail=failure.message,
+                        failure=failure.model_dump(mode="json"),
+                        updated_at=_now(),
+                    )
+                    _write_json(state_path, state)
             except Exception as exc:
                 state = _read_json(state_path)
                 domain = (
@@ -1181,11 +1458,7 @@ class LocalSandbox:
                 _write_json(state_path, state)
             finally:
                 log_handle.close()
-                self._processes.pop(job.job_id, None)
-                self._tasks.pop(job.job_id, None)
-                self._ephemeral_secrets.pop(job.job_id, None)
-                self._ephemeral_secret_file_names.pop(job.job_id, None)
-                self._delete_job_secret_files(job.job_id)
+                self._release_job(job.job_id)
 
     def get(self, job_id: str) -> SandboxJobResponse:
         directory = self.jobs_root / job_id
@@ -1325,38 +1598,57 @@ class LocalSandbox:
             updated_at=_now(),
         )
         _write_json(state_path, state)
-        process = self._processes.get(job_id)
-        if process and process.returncode is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), timeout=10)
-            except TimeoutError:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
         task = self._tasks.get(job_id)
         if task and not task.done():
+            # The job's own task stops its worker and environment (_cleanup_cancelled).
+            # asyncio.wait neither raises the task's cancel into this request nor re-cancels it.
             task.cancel()
-        # SIGTERM stops the worker before its async ``finally`` can reliably run.  Cancellation
-        # must therefore own the same environment boundary explicitly; otherwise every timed-out
-        # hosted job leaves its database, network and volumes behind.
-        output = self.artifacts_root / response.job.run_id
-        try:
-            await asyncio.to_thread(stop, output)
-        except ProvisionError as exc:
-            state.update(
-                detail=f"canceled; isolated environment cleanup failed: {exc}",
-                updated_at=_now(),
-            )
-            _write_json(state_path, state)
+            await asyncio.wait({task}, timeout=_CANCEL_RESPONSE_SECONDS)
+            # The job's task clears its secrets as it ends (_release_job), while it still holds
+            # the job; clearing them here could take a rerun's that has already started.
+            if not task.done():
+                # Answer now; the task carries on with its cleanup.
+                answer = self.get(job_id)
+                return answer.model_copy(
+                    update={
+                        "status": answer.status.model_copy(
+                            update={"detail": "canceled; environment cleanup still running"}
+                        )
+                    }
+                )
+            # A task that ended inside the wait cleared its secrets itself, unless it was cancelled
+            # before its own try (queued for a slot). Clear them only while it is still the job's
+            # task: a rerun that took the job in between keeps its own.
+            if self._tasks.get(job_id) in (None, task):
+                self._forget_job_secrets(job_id)
+        else:
+            # Not started, or already ended: nothing else will bring its environment down.
+            output = self.artifacts_root / response.job.run_id
+            try:
+                await asyncio.to_thread(stop, output)
+            except ProvisionError as exc:
+                state.update(
+                    detail=f"canceled; isolated environment cleanup failed: {exc}",
+                    updated_at=_now(),
+                )
+                _write_json(state_path, state)
+            # No task of the job is running, so these secrets are its last.
+            self._forget_job_secrets(job_id)
+        return self.get(job_id)
+
+    def _release_job(self, job_id: str) -> None:
+        """A job's task, ending: its entry and secrets go, unless a new run of the job (a rerun
+        after a cancel answered early) already holds them."""
+        holder = self._tasks.get(job_id)
+        if holder is not None and holder is not asyncio.current_task():
+            return
+        self._tasks.pop(job_id, None)
+        self._forget_job_secrets(job_id)
+
+    def _forget_job_secrets(self, job_id: str) -> None:
         self._ephemeral_secrets.pop(job_id, None)
         self._ephemeral_secret_file_names.pop(job_id, None)
         self._delete_job_secret_files(job_id)
-        return self.get(job_id)
 
     def adjust(
         self, job_id: str, request: SandboxAdjustmentRequest
@@ -1440,23 +1732,6 @@ def _validate_environment_values(
         total += len(name.encode()) + len(value.encode())
     if total > 262_144:
         raise ValueError("environment_values_size_exceeded")
-
-
-def _credential_scan_paths(packaging: PackagingManifest) -> list[str] | None:
-    """Scope preflight credentials to the Compose runtime that will actually run."""
-    if packaging.selected_kind is None or packaging.selected_kind.value != "compose":
-        return None
-    selected = next(
-        (
-            candidate
-            for candidate in packaging.candidates
-            if candidate.path == packaging.selected_path
-        ),
-        None,
-    )
-    if selected is None or packaging.selected_path is None:
-        return None
-    return [packaging.selected_path, *selected.runtime_source_roots]
 
 
 def _worker_failure_retryable(
@@ -1777,14 +2052,19 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
             for tool in contract.get("tools", [])
             if isinstance(tool, dict) and tool.get("name")
         ]
+        # One call: a contract written before write_contract cleaned its prose is cleaned here.
+        one_liner, *rules = _redact(
+            [
+                str(contract.get("one_liner") or ""),
+                *(str(item) for item in contract.get("hard_constraints", [])),
+            ]
+        )
         data = {
-            "one_liner": str(contract.get("one_liner") or ""),
+            "one_liner": one_liner,
             "modality": str(contract.get("modality") or "unknown"),
             "runtime": contract.get("runtime") or {},
             "tools": tools,
-            "hard_constraints": [
-                str(item) for item in contract.get("hard_constraints", [])
-            ],
+            "hard_constraints": rules,
         }
         outputs.append(
             {
@@ -1886,20 +2166,120 @@ _TERMINAL_STAGES = {
 }
 
 
-def _authorize(authorization: str | None = Header(default=None)) -> None:
-    expected = os.getenv("ALK_SANDBOX_TOKEN")
-    if expected and authorization != f"Bearer {expected}":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+logger = logging.getLogger(__name__)
+
+_TOKEN_ENV = "ALK_SANDBOX_TOKEN"
+_ALLOW_ENV = "ALK_SANDBOX_ALLOW_UNAUTHENTICATED"
+
+
+def _sandbox_token() -> str | None:
+    # Returned unstripped so the server compares exactly the bytes the platform sends.
+    token = os.getenv(_TOKEN_ENV)
+    if not token or not token.strip():
+        return None
+    try:
+        # A value that isn't valid UTF-8 can never match a header; treating it as unset
+        # keeps every request a clean refusal instead of a 500.
+        token.encode()
+    except UnicodeEncodeError:
+        return None
+    return token
+
+
+def _unauthenticated_allowed() -> bool:
+    # Only an exact "1": "0", "false" or an empty value must never open the server.
+    return os.getenv(_ALLOW_ENV) == "1"
+
+
+def _is_loopback(host: str) -> bool:
+    # A name such as "localhost" can resolve anywhere, so only an IP literal counts.
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _startup_refusal(host: str, token: str | None, allow: bool) -> str | None:
+    # A padded token would never match what the platform sends, so refuse it loudly
+    # rather than start a server that rejects every job. These messages end up in
+    # container logs, so they name variables, never values.
+    if token:
+        try:
+            token.encode()
+        except UnicodeEncodeError:
+            return f"{_TOKEN_ENV} is not valid UTF-8. Set it to a plain text value."
+    if token and token != token.strip():
+        return (
+            f"{_TOKEN_ENV} is blank or has leading or trailing whitespace. Set it "
+            "without any, and the same value as ALK_HARNESS_SANDBOX_TOKEN for the "
+            "platform."
         )
+    if token:
+        return None
+    if not allow:
+        return (
+            f"{_TOKEN_ENV} is not set. Set {_TOKEN_ENV} on the sandbox, and the "
+            "same value as ALK_HARNESS_SANDBOX_TOKEN for the platform. For a "
+            f"development server on your own laptop only, set {_ALLOW_ENV}=1 with "
+            "a loopback ALK_SANDBOX_HOST."
+        )
+    if not _is_loopback(host):
+        return (
+            f"{_ALLOW_ENV}=1 works only on a loopback address, and ALK_SANDBOX_HOST "
+            f"is {host!r}. Use 127.0.0.1 or ::1 (not localhost), or set {_TOKEN_ENV}."
+        )
+    return None
+
+
+def _authorize(authorization: str | None = Header(default=None)) -> None:
+    token = _sandbox_token()
+    if token is not None:
+        # Bytes, so a missing or non-ASCII header is a 401 rather than a TypeError.
+        if not hmac.compare_digest(
+            (authorization or "").encode(), f"Bearer {token}".encode()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+            )
+        return
+    if _unauthenticated_allowed():
+        return
+    # The operator, not the caller, has to fix this, so it is not a 401.
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="sandbox_token_not_configured",
+    )
 
 
 def create_app(root: Path | None = None) -> FastAPI:
-    app = FastAPI(title="ALK local sandbox", version="1")
+    # No schema or docs pages: they skip the token check, and a closed server shows nothing to
+    # a caller without one.
     sandbox = LocalSandbox(
         root or Path(os.getenv("ALK_SANDBOX_ROOT", "./artifacts/sandbox")),
         max_concurrency=int(os.getenv("ALK_SANDBOX_MAX_CONCURRENCY", "2")),
     )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        # uvicorn runs this before it re-raises SIGTERM, so every running job stops its worker
+        # and its environment before the server exits.
+        tasks = [task for task in sandbox._tasks.values() if not task.done()]
+        for task in tasks:
+            if not task.cancelling():
+                task.cancel()
+        if tasks:
+            await asyncio.wait(tasks, timeout=_CANCEL_WAIT_SECONDS)
+
+    app = FastAPI(
+        title="ALK local sandbox",
+        version="1",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
+    app.state.sandbox = sandbox
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -2011,11 +2391,24 @@ app = create_app()
 
 
 def main() -> None:
+    # One value for both the check and the bind, so the check sees the real host.
+    host = os.getenv("ALK_SANDBOX_HOST", "127.0.0.1")
+    refusal = _startup_refusal(host, os.getenv(_TOKEN_ENV), _unauthenticated_allowed())
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        sys.exit(2)
+    if _sandbox_token() is None:
+        logger.warning(
+            "unauthenticated sandbox: for a developer's own laptop only; any container "
+            "on this machine, including the agent under test, can submit jobs and read "
+            "this server's values"
+        )
+
     import uvicorn
 
     uvicorn.run(
         "fi.alk.harness.sandbox_server:app",
-        host=os.getenv("ALK_SANDBOX_HOST", "127.0.0.1"),
+        host=host,
         port=int(os.getenv("ALK_SANDBOX_PORT", "8788")),
     )
 

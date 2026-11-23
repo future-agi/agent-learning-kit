@@ -12,7 +12,9 @@ pytest-asyncio.
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 from fi.alk.harness import call_runner as cr
@@ -124,20 +126,29 @@ def test_known_domains_are_unchanged_by_the_fallback() -> None:
 def _runner() -> cr.CallRunnerImpl:
     runner = cr.CallRunnerImpl.__new__(cr.CallRunnerImpl)
     runner._adapter = None  # never touched: no calls, no result
-    runner._collect_calls = lambda runtime, **_: ((), False)  # instance override
+    runner._collect_calls = lambda runtime, **_: ()  # instance override
+    # A bundle with no tool-trace seam and no actors: the trial never reads the world's door.
+    runner._context = SimpleNamespace(
+        evidence_seam=None, bundle_dir=Path(tempfile.mkdtemp()), usage_reporter=None
+    )
     return runner
 
 
 def _report(*, status: TestCaseStatus, code: str | None) -> SimpleNamespace:
-    failure = SimpleNamespace(code=code, message="dispatch not acked") if code else None
+    failure = (
+        SimpleNamespace(code=code, message="dispatch not acked", details={}, stage=SimpleNamespace(value="dispatch"))
+        if code
+        else None
+    )
     case = SimpleNamespace(
+        test_case_id="case-1",
         status=status,
         started_at=None,
         ended_at=None,
         result=None,
         failure=failure,
     )
-    return SimpleNamespace(test_cases=[case])
+    return SimpleNamespace(run_id="run-1", test_cases=[case])
 
 
 def _translate(report: SimpleNamespace) -> CallAborted:
@@ -146,7 +157,7 @@ def _translate(report: SimpleNamespace) -> CallAborted:
         asyncio.run(
             runner._translate_report(
                 report,
-                runtime=object(),
+                runtime=SimpleNamespace(endpoints={}),
                 scenario_key="k1",
                 started_at=datetime.now(timezone.utc),
             )

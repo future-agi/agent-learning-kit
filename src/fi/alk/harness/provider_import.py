@@ -105,6 +105,12 @@ def _safe_profile_value(value: Any, key: str = "") -> Any:
         )
     ):
         return "[redacted]"
+    if lowered.endswith("headers"):
+        # A header's name says nothing about whether its value is a credential (`X-Client-Auth`,
+        # `X-Tenant`): every value is withheld, and only the names are kept.
+        if isinstance(value, Mapping):
+            return {str(name): "[redacted]" for name in value}
+        return "[redacted]"
     if isinstance(value, Mapping):
         return {
             str(item_key): _safe_profile_value(item, str(item_key))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -330,6 +331,7 @@ def test_runtime_reuses_warm_state_and_does_not_reexecute_cold_replays(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
+    monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     policy_path = tmp_path / "policy.yaml"
     policy_path.write_text(
         """schema_version: 1
@@ -445,7 +447,19 @@ harness_chat:
         {
             "kind": "turn_completed",
             "stage": "run",
-            "payload": {"command_message_id": "message-1", "replayed": True},
+            "payload": {
+                "command_message_id": "message-1",
+                "outcome": "success",
+                "usage": {
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "tokens_cached": 0,
+                    "usd": 0.0,
+                    "unpriced_turns": 0,
+                    "models": [],
+                },
+                "replayed": True,
+            },
             "acknowledge_through": 1,
         }
     ]
@@ -676,3 +690,137 @@ def test_carrying_on_a_build_restates_how_many_scenarios_it_was_asked_for(tmp_pa
     assert asyncio.run(runtime._carry_on())
     assert "with 60 scenarios" in handled[0]
     assert "call finish_build" in handled[0]
+
+
+def test_open_for_building_passes_subfolder(tmp_path, monkeypatch):
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8"
+    )
+    source = tmp_path / "source"
+    (source / "agents" / "a").mkdir(parents=True)
+    (source / "agents" / "a" / "agent.py").write_text("x = 1\n")
+    (source / "agents" / "b").mkdir()
+    (source / "agents" / "b" / "agent.py").write_text("x = 2\n")
+    opened: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "fi.alk.harness.builder.open_for_building",
+        lambda contract, **kwargs: opened.update(kwargs),
+    )
+    monkeypatch.setattr(HostedChatRuntime, "_builder_platform_server", lambda self: None)
+    monkeypatch.setattr(HostedChatRuntime, "_hosted_prompt", lambda self: "")
+    runtime = HostedChatRuntime(
+        client=SimpleNamespace(turn_context={}),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy_path),
+        workspace=tmp_path,
+        source=source,
+        # A job that doesn't validate, as when the platform sends a field this build doesn't know.
+        job={
+            "metadata": {"agent_name": "demo"},
+            "scenario_count": 1,
+            "source": {"kind": "github", "subfolder": "agents/a"},
+        },
+    )
+
+    runtime._open_for_building(None)
+
+    assert opened["source"].subfolder == "agents/a"
+    briefing = opened["source"].briefing()
+    assert "agents/a/agent.py" in briefing and "agents/b/agent.py" not in briefing
+
+
+def test_nudge_world_checks_cite_only_the_recorded_folder(tmp_path):
+    from fi.alk.harness.backends import SessionSpec, tool, tool_server
+    from fi.alk.harness.world.tools import WORLD_SERVER
+
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8"
+    )
+    source = tmp_path / "source"
+    for name in ("a", "b"):
+        (source / "agents" / name).mkdir(parents=True)
+        (source / "agents" / name / "seed.sql").write_text(
+            "INSERT INTO menu VALUES ('fries');\n"
+        )
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    (workspace / "contract.json").write_text(
+        json.dumps(
+            {"agent": "demo", "runtime": {"source_subfolder": "agents/a", "workdir": "agents/a"}}
+        ),
+        encoding="utf-8",
+    )
+    runtime = HostedChatRuntime(
+        client=SimpleNamespace(turn_context={}),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy_path),
+        workspace=workspace,
+        source=source,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
+    )
+    runtime._nudge = {"nudge_id": "n1", "stage": "environment"}
+
+    @tool("add_world_check", "Add one check.", {})
+    async def add_world_check(args: dict) -> dict:
+        return {"content": []}
+
+    configured: list[SessionSpec] = []
+    stage = SimpleNamespace(
+        spec=SessionSpec(
+            system_prompt="",
+            servers={WORLD_SERVER: tool_server(name=WORLD_SERVER, tools=[add_world_check])},
+        ),
+        kept=None,
+        configure=configured.append,
+    )
+
+    runtime._nudge_tools(stage, None)  # type: ignore[arg-type]
+
+    check = next(one for one in configured[0].servers[WORLD_SERVER].tools)
+
+    def cite(path: str) -> dict:
+        return asyncio.run(
+            check.handler(
+                {
+                    "name": "menu",
+                    "code": "def check(world): return None",
+                    "source_path": path,
+                    "source_quote": "INSERT INTO menu VALUES ('fries');",
+                }
+            )
+        )
+
+    assert cite("agents/b/seed.sql").get("is_error")
+    assert not cite("agents/a/seed.sql").get("is_error")
+
+
+def test_a_file_that_shrinks_while_the_workspace_is_packed_does_not_fail_the_pack(
+    tmp_path, monkeypatch
+):
+    import io
+    import tarfile
+
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+
+    (tmp_path / "scenarios").mkdir()
+    scenario = tmp_path / "scenarios" / "one.json"
+    scenario.write_text("x" * 4096)
+    (tmp_path / "contract.json").write_text("{}")
+    measured = tarfile.TarFile.gettarinfo
+    shrunk = []
+
+    def rewritten_after_its_size_is_read(self, name=None, *args, **kwargs):
+        info = measured(self, name, *args, **kwargs)
+        if name is not None and Path(name).name == "one.json" and not shrunk:
+            scenario.write_text("{}")  # a scenario writer rewrites it mid-pack
+            shrunk.append(name)
+        return info
+
+    monkeypatch.setattr(tarfile.TarFile, "gettarinfo", rewritten_after_its_size_is_read)
+
+    body = _workspace_archive(tmp_path)
+
+    assert shrunk
+    with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
+        assert archive.extractfile("scenarios/one.json").read() == b"{}"
+        assert archive.extractfile("contract.json").read() == b"{}"

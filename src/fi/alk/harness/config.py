@@ -133,6 +133,20 @@ def gateway_wire_model(model: str) -> str:
     return os.environ.get("AGENTCC_CLAUDE_MODEL_ALIAS", "").strip() or model
 
 
+# Each switches the CLI to another provider or transport. ClaudeAgentOptions.env is merged over
+# the parent's, so whichever route a session takes, the others set around the kit are blanked,
+# or one of them could take the turn instead.
+_OTHER_CLAUDE_ROUTES = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_GATEWAY",
+    "ANTHROPIC_UNIX_SOCKET",
+)
+
+
 def provider_env(model: str | None = None) -> dict[str, str]:
     """The provider block passed to the session.
 
@@ -157,6 +171,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
             "ANTHROPIC_BASE_URL": gateway.base_url,
             # ClaudeAgentOptions.env is merged over the parent's, so a parent's Vertex flag must be undone.
             "CLAUDE_CODE_USE_VERTEX": "0",
+            **dict.fromkeys(_OTHER_CLAUDE_ROUTES, ""),
             # The SDK cannot look up a non-Claude context window, so it is declared.
             **(
                 {}
@@ -194,8 +209,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
         env.update(
             {
                 "CLAUDE_CODE_USE_VERTEX": "",
-                "CLAUDE_CODE_USE_BEDROCK": "",
-                "CLAUDE_CODE_USE_FOUNDRY": "",
+                **dict.fromkeys(_OTHER_CLAUDE_ROUTES, ""),
                 "ANTHROPIC_API_KEY": "",
                 "ANTHROPIC_BASE_URL": gateway_url.rstrip("/"),
                 "ANTHROPIC_AUTH_TOKEN": gateway_key,
@@ -207,6 +221,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
         return env
 
     env["CLAUDE_CODE_USE_VERTEX"] = "1"
+    env.update(dict.fromkeys(_OTHER_CLAUDE_ROUTES, ""))
     env["CLOUD_ML_REGION"] = os.environ.get("CLOUD_ML_REGION", "us-east5")
     for passthrough in (
         "ANTHROPIC_VERTEX_PROJECT_ID",
@@ -293,8 +308,10 @@ _PROVED_NAMES = re.compile(
 )
 
 
-def secret_refusal(tool: str, arguments: dict[str, Any]) -> str:
-    """Why this call would expose a secret or skip a proof, or empty when it would not."""
+def secret_refusal(tool: str, arguments: dict[str, Any], cwd: str | None = None) -> str:
+    """Why this call would expose a secret or skip a proof, or empty when it would not. ``cwd`` is
+    the session's own folder, from the hook's payload: a relative path resolves there, as the
+    tool itself resolves it, not in the harness's folder."""
     if tool in ("Write", "Edit") and _PROVED_FILES.search(str(arguments.get("file_path") or "")):
         return (
             "That file is part of the proved environment and only changes through the tool that "
@@ -318,9 +335,10 @@ def secret_refusal(tool: str, arguments: dict[str, Any]) -> str:
         if arguments.get(key)
     ]
     pattern = str(arguments.get("pattern") or "") if tool == "Glob" else ""
-    if any(secret_path(one) for one in [*paths, pattern] if one):
+    base = Path(cwd) if cwd else None
+    if any(secret_path(one, base) for one in [*paths, pattern] if one):
         return SECRET_REFUSAL
-    if tool in ("Grep", "Glob") and any(above_secrets(one) for one in paths):
+    if tool in ("Grep", "Glob") and any(above_secrets(one, base) for one in paths):
         return SECRET_REFUSAL
     return ""
 
@@ -360,7 +378,7 @@ def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
         name = str(payload.get("tool_name") or "")
         if name in permitted:
             arguments = payload.get("tool_input") or {}
-            refusal = secret_refusal(name, arguments)
+            refusal = secret_refusal(name, arguments, payload.get("cwd"))
             if refusal:
                 return {
                     "hookSpecificOutput": {

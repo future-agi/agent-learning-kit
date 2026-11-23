@@ -31,6 +31,7 @@ Decoupling, deliberate:
 from __future__ import annotations
 
 import asyncio
+import json
 import inspect
 import logging
 import os
@@ -39,14 +40,16 @@ import re
 import threading
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
-from .checks import reference_of, takes_reference
+from .checks import check_reads, reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
+from .judge import NOT_APPLICABLE, UNMEASURED, verdict_named
+from .world_door import EvidenceUnavailable
 from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
@@ -70,7 +73,7 @@ from .world.errors import (
     WorldUnavailable,
     WorldUsageError,
 )
-from .world.runtime import Call
+from .world.runtime import Call, graded_calls
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +95,10 @@ class ReadOnlyWorld(Protocol):
     world_index: int
     rng: random.Random
 
+    def read_file(self, workspace: str, path: str) -> str: ...
+
+    def write_file(self, workspace: str, path: str, content: str) -> None: ...
+
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]: ...
 
     def put(
@@ -112,6 +119,10 @@ class ReadOnlyWorld(Protocol):
 class World(Protocol):
     world_index: int
     rng: random.Random
+
+    def read_file(self, workspace: str, path: str) -> str: ...
+
+    def write_file(self, workspace: str, path: str, content: str) -> None: ...
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]: ...
 
@@ -212,9 +223,9 @@ class Scenario(Protocol):
         str  # platform id from pre-allocation (outbound-channels.md Channel 2 "Join").
     )
     sub_goals: Sequence[SubGoal]
-    # True only when the reference solution contains an environment/tool action. Pure
-    # conversation scenarios (for example, refusing an unsafe request) legitimately produce no
-    # world calls and must still reach their judged checks.
+    # True only when the reference solution contains an environment/tool action and a sub-goal
+    # needs one to hold. Pure conversation scenarios and refusals (for example, refusing an unsafe
+    # request) legitimately produce no world calls and must still reach their checks.
     requires_tool_evidence: bool
     call_execution_id: str | None
 
@@ -247,6 +258,24 @@ class CallOutcome:
     # it succeeded, so an empty `calls` means the agent made none: the scenario is graded rather
     # than retried as missing evidence.
     evidence_collected: bool = False
+    # Per actor in the call: whether it was triggered, how much it delivered, and why any was dropped.
+    call_actors: tuple[dict[str, Any], ...] = ()
+    # Every action an actor took in the world this trial, with when and its outcome.
+    world_actions: tuple[dict[str, Any], ...] = ()
+    # What each actor was told to play from, so a judge can tell an actor that strayed from it.
+    actor_briefs: dict[str, str] = field(default_factory=dict)
+    # Each of the agent's writes the world applied twice after its answer was lost (`duplicate_commits`): the
+    # scenario fails whatever its sub-goals say.
+    duplicates: tuple[dict[str, Any], ...] = ()
+    # Why this trial cannot be graded (a fault the scenario set never applied, evidence that could not be read or was
+    # never written), one reason each, as its notices say: the trial reads unmeasured, never passed or failed.
+    unmeasured: tuple[str, ...] = ()
+    # Each kind of evidence this trial is missing or could not read (`world_state`, `tool_calls`, `transcript`,
+    # `recording`), with why: a sub-goal that reads one is unmeasured, never passed or failed.
+    missing_evidence: dict[str, str] = field(default_factory=dict)
+    # True when a capture surface the bundle declares could not be read for this call, so an
+    # empty `calls` is not evidence that the agent made no tool call.
+    tool_capture_failed: bool = False
 
 
 class CallAborted(RuntimeError):
@@ -316,6 +345,13 @@ class SubGoalResult:
     held: bool | None
     reason: str | None
     judged: bool
+    # What it was decided from (`world_state`, `transcript`, `recording`, `tool_calls`).
+    evidence: tuple[str, ...] = field(default=(), compare=False)
+    # Derived from held and reason, so a result changed with `replace` never disagrees with it.
+    verdict: str | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "verdict", verdict_named(self.held, self.reason))
 
 
 @dataclass(frozen=True)
@@ -358,6 +394,8 @@ class ResultReceipt:
     evaluations: tuple[Evaluation, ...]
     call: CallSummary | None
     failure: ReceiptFailure | None
+    # Why a scenario was skipped, or a note on a graded trial (an actor that never reached the agent).
+    reason: str | None = None
 
 
 # --- outbound (this module's own minimal sink; see the module docstring's decoupling note) ----
@@ -402,7 +440,10 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "check_broken": FailureDomain.SIMULATOR,
     "judge_undecided": FailureDomain.SIMULATOR,
     "caller_off_script": FailureDomain.SIMULATOR,
+    "duplicate_commit": FailureDomain.AGENT,
+    "evidence_unmeasured": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
+    "actor_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
@@ -516,7 +557,7 @@ _DISCARD_ON_ERROR_CODES = frozenset(
 )
 
 SETUP_TIMEOUT_SECONDS = 60.0
-READY_TIMEOUT_SECONDS = 15.0
+READY_TIMEOUT_SECONDS = 60.0
 CHECK_TIMEOUT_SECONDS = 60.0
 
 _MESSAGE_LIMIT = 2000  # matches the Call.result/error truncation convention (world-handle-interface.md).
@@ -545,6 +586,14 @@ def _sanitize_cause(message: str) -> str:
     # M7: `cause` is capped at 200 chars and must never carry endpoint credentials — postgres
     # error strings routinely embed the DSN (`postgresql://user:pw@host/db`).
     return _truncate(_USERINFO_PATTERN.sub("://***@", message), _CAUSE_LIMIT)
+
+
+def duplicate_reason(duplicates: Sequence[Mapping[str, Any]]) -> str:
+    """Why a scenario failed on duplicate commits, one sentence per action."""
+    names = list(dict.fromkeys(str(one.get("name") or one.get("action") or "an action") for one in duplicates))
+    return " ".join(
+        f"The agent repeated {name} after its answer was lost, and the world committed it twice." for name in names
+    )
 
 
 def _failure(code: str, message: str) -> ReceiptFailure:
@@ -648,6 +697,14 @@ class _PhaseStateTooLarge(Exception):
         self.cause = cause
 
 
+class _PhaseEvidenceUnavailable(Exception):
+    """A check read evidence that could not be read (the world's action log): unmeasured, never passed or failed."""
+
+    def __init__(self, phase: str, cause: BaseException) -> None:
+        super().__init__(f"{phase}: {cause}")
+        self.cause = cause
+
+
 class _PhaseCrashed(Exception):
     def __init__(self, phase: str, cause: BaseException) -> None:
         super().__init__(f"{phase}: {cause}")
@@ -660,6 +717,7 @@ async def _invoke(
     timeout: float,
     phase: str,
     executor: ThreadPoolExecutor,
+    http_events: list[dict[str, Any]] | None = None,
 ) -> object:
     # R1: a `threading.Event` set as the thread body's first statement — the only way to tell
     # "the phase ran past its budget" (genuine overrun, world half-applied) apart from "the
@@ -677,9 +735,11 @@ async def _invoke(
         from .process_runtime import _allowlisted_ambient_env
         from .world.handle import HostedWorld, ReadOnlyWorld as HostedReadOnlyWorld
 
+        from .world.observation import ObservationWorld
+
         if (
             args
-            and isinstance(args[0], (HostedWorld, HostedReadOnlyWorld))
+            and isinstance(args[0], (HostedWorld, HostedReadOnlyWorld, ObservationWorld))
             and hasattr(fn, "_alk_source")
         ):
             started_flag.set()
@@ -689,6 +749,8 @@ async def _invoke(
                 "entry": fn._alk_entry,
                 "world": world._execution_state(),
             }
+            http_client = world if isinstance(world, ObservationWorld) else world._http_client
+            payload["private_http"] = http_client._private_http_state()
             if len(args) > 1:
                 payload["calls"] = [asdict(call) for call in args[1]]
             if len(args) > 2:
@@ -698,8 +760,30 @@ async def _invoke(
                 payload,
                 environ=_allowlisted_ambient_env(dict(os.environ)),
                 work_directory=Path(tempfile.gettempdir()) / "alk-phase-workers",
+                # Authored phases can print private login responses before redaction.
+                suppress_output=True,
+                # This process opens the workspace files for the worker, which cannot.
+                serve=(
+                    world._workspace_service()
+                    if isinstance(world, (HostedWorld, HostedReadOnlyWorld))
+                    else None
+                ),
             )
             world.rng.setstate(tuples(result["rng"]))
+            from .world.http_session import validate_events
+
+            events = validate_events(
+                result.get("http_events", []), http_client._endpoints
+            )
+            if http_events is not None:
+                http_events.extend(events)
+            http_client._restore_private_http_state(result.get("private_http", {}))
+            for event in events:
+                logger.info(
+                    "native_http phase=%s evidence=%s",
+                    phase,
+                    json.dumps(event, sort_keys=True),
+                )
             if "error" in result:
                 error_types = {
                     error.__name__: error
@@ -751,6 +835,8 @@ async def _invoke(
         # the fixer report). The thread is abandoned, bounded by scenario count per the contract's
         # own accepted tradeoff; its world is discarded rather than reused (M13).
         raise _PhaseTimeout(phase) from exc
+    except EvidenceUnavailable as exc:
+        raise _PhaseEvidenceUnavailable(phase, exc) from exc
     except WorldUnavailable as exc:
         raise _PhaseWorldGone(phase, exc) from exc
     except WorldStateTooLarge as exc:
@@ -788,6 +874,8 @@ _TIMEOUT_CODE_BY_PHASE = {
 class _PhaseResult:
     value: object
     failure: ReceiptFailure | None
+    # Why the phase could not be measured: the evidence it read could not be read.
+    unmeasured: str | None = None
 
 
 async def _run_phase(
@@ -796,10 +884,14 @@ async def _run_phase(
     timeout: float,
     phase: str,
     executor: ThreadPoolExecutor,
+    audit_log: Callable[..., Awaitable[None]] | None = None,
+    audit_context: dict[str, Any] | None = None,
 ) -> _PhaseResult:
+    http_events: list[dict[str, Any]] = []
     try:
         value = await _invoke(
-            fn, *args, timeout=timeout, phase=phase, executor=executor
+            fn, *args, timeout=timeout, phase=phase, executor=executor,
+            http_events=http_events,
         )
         return _PhaseResult(value, None)
     except _PhaseNeverStarted:
@@ -818,6 +910,8 @@ async def _run_phase(
             None,
             _failure(_TIMEOUT_CODE_BY_PHASE[phase], f"{phase} exceeded its budget"),
         )
+    except _PhaseEvidenceUnavailable as exc:
+        return _PhaseResult(None, None, unmeasured=str(exc.cause))
     except _PhaseWorldGone as exc:
         return _PhaseResult(None, _failure("world_unavailable", str(exc.cause)))
     except _PhaseMisuse as exc:
@@ -831,6 +925,22 @@ async def _run_phase(
                 _CRASH_CODE_BY_PHASE[phase], f"{type(exc.cause).__name__}: {exc.cause}"
             ),
         )
+    finally:
+        if audit_log is not None:
+            for event in http_events:
+                try:
+                    await audit_log(
+                        level="info",
+                        message="native_http "
+                        + json.dumps(
+                            {"phase": phase, **(audit_context or {}), "http": event},
+                            sort_keys=True,
+                        ),
+                    )
+                except _FATAL_OUTBOUND:
+                    raise
+                except Exception:
+                    logger.warning("native_http evidence sink failed")
 
 
 # --- the world pool -----------------------------------------------------------------------------
@@ -1473,6 +1583,80 @@ class RunResult:
     fenced: BaseException | None = None
 
 
+def _call_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
+    """Each of the scenario's actors who speak on the call that never reached the agent, and why: not_triggered or
+    not_delivered. One a `probability` draw left out is absent by design and not counted."""
+    reports = {str(one.get("actor")): one for one in outcome.call_actors}
+    # What an actor did in the world reached the agent's world as surely as a line it said.
+    acted = {
+        str(row.get("actor_id") or "") for row in outcome.world_actions if row.get("outcome") == "committed"
+    }
+    missing = []
+    for actor_id in getattr(scenario, "speaking_actors", ()):
+        if actor_id in acted:
+            continue
+        report = reports.get(actor_id) or {}
+        if not report.get("delivered") and report.get("drawn", True):
+            why = "not_delivered" if report.get("triggered") else "not_triggered"
+            # Why it said nothing, when the call recorded it (its model did not answer, no room): the reader's next step.
+            dropped = [str(one) for one in report.get("dropped") or [] if one]
+            # An actor who tried to act and was refused (not a member of the channel, say): the world data's problem.
+            refused = [
+                str(row.get("name") or "")
+                for row in outcome.world_actions
+                if str(row.get("actor_id") or "") == actor_id and row.get("outcome") == "refused"
+            ]
+            # An actor who chose to wait and never spoke: why it waited, as it said.
+            waited = [str(one) for one in report.get("waited") or [] if one]
+            if why == "not_delivered" and dropped:
+                why = f"{why}: {dropped[0]}"
+            elif why == "not_delivered" and refused:
+                why = f"{why}: the world refused its {refused[0]}"
+            elif why == "not_delivered" and waited:
+                why = f"{why}: waited ({waited[-1]})"
+            missing.append(f"{report.get('name') or actor_id} ({why})")
+    # An actor acting through the world that could not act at all (no door, not listed) is the scenario's problem too.
+    for report in outcome.call_actors:
+        actor_id = str(report.get("actor") or "")
+        if report.get("problem") in ("not_listed", "no_world_door", "no_private_token"):
+            missing.append(f"{report.get('name') or actor_id} ({report.get('problem')})")
+    return ", ".join(missing)
+
+
+def _evidence_of(goal: Any, outcome: CallOutcome) -> tuple[str, ...]:
+    """What a sub-goal was decided from: a check reads the world's state and the agent's calls; a judged one reads the
+    transcript, and the recording on a call that has one."""
+    out: list[str] = []
+    # A judged sub-goal's check is a stand-in unless the sub-goal is both coded and judged.
+    if getattr(goal, "check", "") and (not getattr(goal, "judged", "") or getattr(goal, "both", False)):
+        out += list(check_reads(goal.check))
+    if getattr(goal, "judged", ""):
+        out.append("transcript")
+        if outcome.recording:
+            out.append("recording")
+    return tuple(dict.fromkeys(out))
+
+
+def _missing_evidence(goal: Any, outcome: CallOutcome) -> str:
+    """Why a sub-goal cannot be decided on this trial: each evidence it reads that the trial is missing, with why;
+    empty when it has everything it reads."""
+    return "; ".join(
+        outcome.missing_evidence[kind] for kind in _evidence_of(goal, outcome) if kind in outcome.missing_evidence
+    )
+
+
+def _about_an_actor(goal: Any, result: SubGoalResult, outcome: CallOutcome) -> SubGoalResult:
+    """A sub-goal about an actor: not applicable when the actor never came in, else as graded."""
+    actor_id = str(getattr(goal, "actor", "") or "")
+    if not actor_id:
+        return result
+    report = next((one for one in outcome.call_actors if str(one.get("actor")) == actor_id), {})
+    name = report.get("name") or actor_id
+    if not report.get("triggered"):
+        return replace(result, held=True, reason=f"{NOT_APPLICABLE}{name} never came into this call.")
+    return result
+
+
 def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
     # Exact body per outbound-channels.md Channel 2, "skipped receipt body (exact)".
     return ResultReceipt(
@@ -1485,6 +1669,7 @@ def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
         evaluations=(),
         call=None,
         failure=None,
+        reason=None,
     )
 
 
@@ -1598,6 +1783,7 @@ class HostedScheduler:
         job_seed: int,
         cancel_requested: Callable[[], bool] | None = None,
         judge: JudgeFn | None = None,
+        require_tool_workflow: bool = False,
         joint_judge: JointJudgeFn | None = None,
     ) -> None:
         self._pool = pool
@@ -1605,6 +1791,7 @@ class HostedScheduler:
         self._call_runner = call_runner
         self._outbound = outbound
         self._job_seed = job_seed
+        self._require_tool_workflow = require_tool_workflow
         self._cancel_requested = cancel_requested or (lambda: False)
         # Injected like every other collaborator, so a test decides a judged sub-goal without a
         # model call. Resolved here rather than as a default argument, which would bind at import
@@ -1821,6 +2008,7 @@ class HostedScheduler:
             evaluations=(),
             call=pending.outcome.call,
             failure=pending.outcome.failure,
+            reason=pending.outcome.reason,
         )
         await self._emit(self._outbound.receipt(receipt), what="receipt")
         return receipt
@@ -1965,6 +2153,7 @@ class HostedScheduler:
                         evaluations=(),
                         call=outcome.call,
                         failure=outcome.failure,
+                        reason=outcome.reason,
                     )
                     await self._emit(self._outbound.receipt(receipt), what="receipt")
                     return receipt
@@ -2073,12 +2262,25 @@ class HostedScheduler:
         attempt: int,
         context: "_ScenarioContext",
     ) -> "ResultReceipt | _Retry":
+        async def audit_log(**value):
+            await self._emit(self._outbound.log(**value), what="native_http")
+
+        audit_context = {
+            "scenario_key": scenario.scenario_key,
+            "world_index": world_index,
+            "scenario_attempt": attempt,
+        }
+        before_setup = getattr(self._call_runner, "before_setup", None)
+        if before_setup is not None:
+            await before_setup(runtime)
         setup = await _run_phase(
             scenario.setup,
             world,
             timeout=SETUP_TIMEOUT_SECONDS,
             phase="setup",
             executor=self._executor,
+            audit_log=audit_log,
+            audit_context=audit_context,
         )
         if setup.failure is not None:
             return self._fault(
@@ -2096,6 +2298,8 @@ class HostedScheduler:
             timeout=READY_TIMEOUT_SECONDS,
             phase="ready",
             executor=self._executor,
+            audit_log=audit_log,
+            audit_context=audit_context,
         )
         if ready.failure is not None:
             return self._fault(
@@ -2172,27 +2376,40 @@ class HostedScheduler:
         # Set the moment the call step returns, so a crash later in this method (e.g.
         # `world.read_only()` below) still reports the call that genuinely ran, not `null`.
         context.call = self._call_summary(call_outcome)
-        calls = list(
+        # An actor that never reached the agent is noted on the trial; its sub-goals are graded as usual.
+        missing = _call_actors_missing(scenario, call_outcome)
+        note = f"did not reach the agent: {missing}" if missing else None
+        calls = graded_calls(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
-        if (
-            not calls
-            and not call_outcome.evidence_collected
-            and getattr(scenario, "requires_tool_evidence", True)
+        if not calls and (
+            call_outcome.tool_capture_failed
+            or (
+                not call_outcome.evidence_collected
+                and (
+                    self._require_tool_workflow
+                    or getattr(scenario, "requires_tool_evidence", True)
+                )
+            )
         ):
-            # M10: unconditioned on `turns` — without a trace this harness collected, an empty
-            # list must never reach checks regardless of whether the simulator observed a turn
-            # (world-handle-interface.md "Coverage guarantee": "An empty list is never handed to
-            # checks").
+            # M10: unconditioned on `turns` — an empty list must never reach checks regardless of
+            # whether the simulator observed a turn (world-handle-interface.md "Coverage
+            # guarantee": "An empty list is never handed to checks"), unless the trace this
+            # harness itself wrote was read in full (`evidence_collected`): then no call is a
+            # result, and the scenario is graded. A scenario that needs no tool call still stops
+            # here when capture failed: a call nothing recorded can hold what its claim forbids.
             failure = _failure(
                 "evidence_missing",
-                "no tool calls were captured for this scenario's call",
+                "tool capture failed for this scenario's call"
+                if call_outcome.tool_capture_failed
+                else "no tool calls were captured for this scenario's call",
             )
             return _Retry(
                 failure,
                 sub_goals=_unjudged(scenario.sub_goals),
                 call=self._call_summary(call_outcome),
                 mark_unhealthy=False,
+                reason=note,
             )
 
         if not scenario.sub_goals:
@@ -2208,7 +2425,8 @@ class HostedScheduler:
                 ),
                 sub_goals=(),
                 call=self._call_summary(call_outcome),
-            )
+                           reason=note,
+ )
 
         sub_goal_results: list[SubGoalResult] = []
         judged_pending: list[tuple[int, Any]] = []
@@ -2224,6 +2442,14 @@ class HostedScheduler:
                     )
                 )
                 continue
+            missing = _missing_evidence(goal, call_outcome)
+            if missing:
+                # What this sub-goal reads is missing or unreadable for this trial: no verdict on what is not there,
+                # and never one inferred from the transcript.
+                sub_goal_results.append(
+                    SubGoalResult(name=goal.name, held=None, reason=f"{UNMEASURED}{missing}", judged=goal.judged != "")
+                )
+                continue
             outcome = await _run_phase(
                 goal.check,
                 check_handle,
@@ -2232,6 +2458,8 @@ class HostedScheduler:
                 timeout=CHECK_TIMEOUT_SECONDS,
                 phase="check",
                 executor=self._executor,
+                audit_log=audit_log,
+                audit_context={**audit_context, "check": goal.name},
             )
             if outcome.failure is not None:
                 if outcome.failure.code == "world_unavailable":
@@ -2242,11 +2470,20 @@ class HostedScheduler:
                         + _unjudged(scenario.sub_goals[len(sub_goal_results) + 1 :]),
                         call=self._call_summary(call_outcome),
                         mark_unhealthy=True,
+                        reason=note,
                     )
                 broken_failure = outcome.failure
                 sub_goal_results.append(
                     SubGoalResult(
                         name=goal.name, held=None, reason=None, judged=goal.judged != ""
+                    )
+                )
+                continue
+            if outcome.unmeasured is not None and (not goal.judged or getattr(goal, "both", False)):
+                # The check read the world's action log and the log could not be read: no verdict on missing evidence.
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=goal.name, held=None, reason=f"{UNMEASURED}{outcome.unmeasured}", judged=goal.judged != ""
                     )
                 )
                 continue
@@ -2281,12 +2518,30 @@ class HostedScheduler:
                 )
             )
 
-        # A call with no words, no actions and no recording leaves its judged sub-goals undecided, never guessed.
-        if judged_pending and (calls or call_outcome.messages or call_outcome.recording):
+        # A call with no words, no actions (the agent's or an actor's) and no recording leaves its judged sub-goals
+        # unmeasured, never guessed.
+        evidence = bool(
+            calls or call_outcome.messages or call_outcome.recording or call_outcome.world_actions
+        )
+        if judged_pending and not evidence:
+            for slot, goal in judged_pending:
+                sub_goal_results[slot] = SubGoalResult(
+                    name=goal.name,
+                    held=None,
+                    reason=f"{UNMEASURED}the call left no words, actions or recording to judge it from",
+                    judged=True,
+                )
+        if judged_pending and evidence:
             # A scenario's judged sub-goals can run together, but judge batches from parallel
             # worlds must not overlap on the shared provider session.
             async with self._judge_batch_lock:
                 offered = {"scenario": scenario, "recording": call_outcome.recording}
+                if call_outcome.call_actors or call_outcome.world_actions:
+                    offered["actors"] = {
+                        "summary": list(call_outcome.call_actors),
+                        "actions": list(call_outcome.world_actions),
+                        "briefs": dict(call_outcome.actor_briefs),
+                    }
                 joint_verdicts, off_script = await self._judge_jointly(
                     [goal for _, goal in judged_pending], check_handle, calls, call_outcome, offered
                 )
@@ -2337,8 +2592,18 @@ class HostedScheduler:
         for slot, verdict in checked.items():
             if not verdict.held:
                 judged = sub_goal_results[slot]
+                # A judge that found the sub-goal not applicable or could not decide does not explain a failed check.
+                explained = (
+                    judged.reason if judged.verdict in ("pass", "fail") else None
+                )
                 reason = " ".join(
-                    filter(None, [_sub_goal_reason(scenario.sub_goals[slot], verdict), judged.reason or None])
+                    filter(
+                        None,
+                        [
+                            _sub_goal_reason(scenario.sub_goals[slot], verdict),
+                            explained,
+                        ],
+                    )
                 )
                 sub_goal_results[slot] = replace(judged, held=False, reason=reason or None)
 
@@ -2350,7 +2615,8 @@ class HostedScheduler:
                 broken_failure,
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
-            )
+                           reason=note,
+ )
         if off_script:
             return self._fault(
                 scenario,
@@ -2360,24 +2626,61 @@ class HostedScheduler:
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
                 retry=False,
+                reason=note,
             )
 
-        # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided.
-        if any(result.held is False for result in sub_goal_results):
-            status = "failed"
-        elif any(result.held is None for result in sub_goal_results):
+        sub_goal_results = [
+            _about_an_actor(goal, result, call_outcome)
+            for goal, result in zip(scenario.sub_goals, sub_goal_results)
+        ]
+        sub_goal_results = [
+            replace(result, evidence=_evidence_of(goal, call_outcome))
+            for goal, result in zip(scenario.sub_goals, sub_goal_results)
+        ]
+        if call_outcome.unmeasured:
+            # The scenario's condition never applied, or the trial's evidence is missing: whatever its sub-goals say,
+            # it was not the trial the scenario describes.
             return self._fault(
                 scenario,
                 world_index,
                 attempt,
-                _failure("judge_undecided", "a judged sub-goal was not decided"),
+                _failure("evidence_unmeasured", "unmeasured: " + "; ".join(call_outcome.unmeasured)),
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
                 retry=False,
+                reason=note,
+            )
+        # A settled `False` fails the scenario; an unsettled sub-goal (unmeasured included) makes it not decided.
+        if any(result.held is False for result in sub_goal_results):
+            status = "failed"
+        elif any(result.held is None for result in sub_goal_results):
+            undecided = [result for result in sub_goal_results if result.held is None]
+            lacking = {goal.name for goal in scenario.sub_goals if _missing_evidence(goal, call_outcome)}
+            unmeasured = all(
+                (not result.judged or result.name in lacking) and (result.reason or "").startswith(UNMEASURED)
+                for result in undecided
+            )
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure("evidence_unmeasured", "a sub-goal's evidence could not be read: "
+                         + ", ".join(result.name for result in undecided))
+                if unmeasured
+                else _failure("judge_undecided", "a judged sub-goal was not decided"),
+                sub_goals=tuple(sub_goal_results),
+                call=self._call_summary(call_outcome),
+                retry=False,
+                reason=note,
             )
         else:
             status = "passed"
         failure = None
+        if call_outcome.duplicates:
+            # The world applied a write twice after the agent's answer was lost: a failure of the agent's, whatever
+            # the sub-goals say.
+            status = "failed"
+            failure = _failure("duplicate_commit", duplicate_reason(call_outcome.duplicates))
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,
@@ -2388,6 +2691,7 @@ class HostedScheduler:
             evaluations=(),
             call=self._call_summary(call_outcome),
             failure=failure,
+            reason=note,
         )
 
     @staticmethod
@@ -2415,6 +2719,7 @@ class HostedScheduler:
         sub_goals: tuple[SubGoalResult, ...],
         call: CallSummary | None = None,
         retry: bool | None = None,
+        reason: str | None = None,
     ) -> "ResultReceipt | _Retry":
         should_retry = _is_retryable(failure.code) if retry is None else retry
         if should_retry:
@@ -2423,6 +2728,7 @@ class HostedScheduler:
                 sub_goals=sub_goals,
                 call=call,
                 mark_unhealthy=failure.code == "world_unavailable",
+                reason=reason,
             )
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
@@ -2434,6 +2740,7 @@ class HostedScheduler:
             evaluations=(),
             call=call,
             failure=failure,
+            reason=reason,
         )
 
 
@@ -2443,6 +2750,8 @@ class _Retry:
     sub_goals: tuple[SubGoalResult, ...]
     call: CallSummary | None
     mark_unhealthy: bool
+    # A note on the trial beside its fault (an actor that never reached the agent).
+    reason: str | None = None
 
 
 __all__ = [

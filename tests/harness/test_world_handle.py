@@ -175,6 +175,32 @@ def test_world_index_and_rng_are_carried_through_unchanged() -> None:
     assert world.rng is rng
 
 
+def test_sql_ascii_catalogue_names_are_text_at_the_world_boundary() -> None:
+    class SQLAsciiStore(FakeStore):
+        def query(self, statement: str, params: tuple = ()) -> list[dict[str, Any]]:
+            return [
+                {
+                    key: value.encode() if isinstance(value, str) else value
+                    for key, value in row.items()
+                }
+                for row in super().query(statement, params)
+            ]
+
+    store = SQLAsciiStore(
+        {"orders": [{"id": "one", "item": "before"}]},
+        primary_keys={"orders": ["id"]},
+        columns={"orders": {"id", "item"}},
+    )
+    world = HostedWorld(
+        store,
+        world_index=0,
+        rng=random.Random(0),
+        baseline_row_counts={"orders": 1},
+    )
+
+    assert world.change("orders", "one", {"item": "after"}) == 1
+
+
 def test_checkpoint_and_revert_delegate_complete_state_to_hosted_store() -> None:
     world = _world(
         {"orders": [{"id": 1, "item": "before"}]},
@@ -612,6 +638,20 @@ def test_read_only_still_reads() -> None:
     view = world.read_only()
     assert view.state() == {"orders": [{"id": 1}]}
     assert view.query('SELECT * FROM "orders"') == [{"id": 1}]
+
+
+def test_read_only_observation_reverts_and_rejects_state_changes(monkeypatch) -> None:
+    world = _world({"orders": [{"id": 1}]})
+    view = world.read_only()
+
+    def mutating_observation(*_args):
+        world._store.add("orders", {"id": 2})
+        return {"status": 200}
+
+    monkeypatch.setattr(view._http_client, "observe", mutating_observation)
+    with pytest.raises(WorldReadOnly, match="observation changed the world"):
+        view.observe("history")
+    assert world.state("orders") == {"orders": [{"id": 1}]}
 
 
 @pytest.mark.parametrize(

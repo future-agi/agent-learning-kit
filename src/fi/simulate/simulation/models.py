@@ -1,7 +1,6 @@
 from typing import List, Dict, Any, Union, Optional, Literal
 from pydantic import BaseModel, Field, validator, model_validator
 import hashlib
-import pandas as pd
 import json
 from fi.simulate.agent.wrapper import SimulationArtifact, SimulationEvent
 
@@ -196,6 +195,8 @@ class Scenario(BaseModel):
     def load_dataset(cls, v: Union[List[Dict], str]) -> List[Dict]:
         if isinstance(v, str):
             if v.endswith('.csv'):
+                import pandas as pd
+
                 return pd.read_csv(v).to_dict('records')
             elif v.endswith('.json'):
                 with open(v, 'r') as f:
