@@ -86,6 +86,42 @@ submission stands: a browser answer is refused to
 to send back, which only tells apart calls in one model message: those run before the model reads
 any result. The rule and its state are `SecondLook` in `agent_type_check.py`. A browser answer to a chat or voice look is refused at once, since that look said browser stops the build. When calls in one message run one after another, or together once the first scan is done, a later call is taken as the answer before the model has read the look. Once an answer with the value has come back, a later browser answer without it gets a look again, so answers that keep switching cost turns, up to the reading's turn limit (70, or 140 for a generic job read unattended), never a refusal without a look.
 
+**A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
+it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the
+reminder's. The platform sets it in `ALK_READING_MAX_MODEL_CALLS`; a missing, unreadable or
+non-positive value means 60, never no limit. Its reader gets 12 turns of its own, and at most 4
+readers run at once. The Gemini backend checks the budget before each call and sends nothing past
+it. On both, the call that reaches the budget is inside it and finishes what it asked for, a save
+included. The Claude backend can only count calls as they arrive, one per provider message id, so
+the reading stops when it sees the first call past the budget, the same way it stops at its time
+limit, and refuses that call's tools. It ends up to 5 calls past the budget: that call, and one for
+each reader still running. Either way a contract or failure already saved stands; otherwise the
+reading ends as `agent_reading_call_limit` and is not retried.
+
+What is counted differs by backend. The Gemini count is of calls made. The Claude count is of
+replies seen in the session's stream, plus each reader's closing reply the stream did not show. The
+CLI may hand that reply back only as the result of the call that sent the reader out, so each such
+result counts one more call unless the stream shows there was none: the reader was refused or
+failed, its last call in the stream asked for no tool (that call was its answer), or its calls in
+the stream reached the turn limit the kit set for it. The result's own text and status are not
+read. Readers are followed by the call that sent each out, never by the worker's name, since several
+readers of one worker run at once. When a reader's turn limit is not known, the result counts one
+call and a warning is logged, so a change in the CLI can make the count high but never quietly low.
+
+Still not counted on Claude, because the CLI makes these calls without putting a reply in the
+stream or anywhere else the kit can read, and offers no hook before a call:
+- the one call per session it makes for a title of its own, so the gateway shows the kit's count
+  plus one;
+- its own retry after a failed request;
+- its second call when a sub-agent's answer comes back empty: it asks again, once, and neither
+  empty reply reaches the stream, so the sub-agent's result counts one call, not two;
+- its summary call when it compacts a long conversation.
+
+Each is bounded by the counted calls around it, and the time limit holds the rest.
+A request the provider client retries on its own is not counted on either backend. The spend
+record keeps the limit in force (`call_limit`) beside the calls counted, for every stage that had
+one.
+
 **How it is changed later** (`amend.py`). The contract is not frozen, but every change is
 recorded with a reason in `amendments[]`, so months later you can still tell what came from the
 agent and what came from us:
