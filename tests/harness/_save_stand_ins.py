@@ -143,8 +143,8 @@ def tool_evidence(contract, source, subfolder=None):
     return problems
 
 
-def copy_prompt(contract, source_root):
-    problems = _real_copy(contract, source_root)
+def copy_prompt(contract, source_root, **options):
+    problems = _real_copy(contract, source_root, **options)
     if _act("prompt_copy", Path(source_root)) == "refuse":
         problems.append("stand-in: prompt_copy refused")
     return problems

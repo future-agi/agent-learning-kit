@@ -2265,7 +2265,10 @@ def assess_configuration(
     if runtime is None or selected is None:
         return ConfigurationAdmission()
     supplied_by_process = supplied_by_process or {}
-    unknown = set(runtime.required_environment) - set(supplied_by_process)
+    # A process named with an empty list needs nothing, so it has no scope to check.
+    unknown = {
+        process for process, names in runtime.required_environment.items() if names
+    } - set(supplied_by_process)
     if unknown:
         raise ValueError(
             "runtime_required_environment_scope_unknown: " + ", ".join(sorted(unknown))

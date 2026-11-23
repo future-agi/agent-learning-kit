@@ -7274,3 +7274,120 @@ def test_a_leftover_that_does_not_parse_never_becomes_the_callback(tmp_path, lef
         (tmp_path / f"{name}.py").write_text(text, encoding="utf-8")
 
     assert _discover_callback_entrypoint(tmp_path) is None
+
+
+# -- A process named with an empty list needs nothing: it is no obligation anywhere -------------
+
+
+def _native_agent_beside_compose(root: Path, service: str) -> dict[str, object]:
+    (root / "agent.py").write_text("print('ready')\n")
+    (root / "requirements.txt").write_text("\n")
+    (root / "Dockerfile").write_text(
+        'FROM python:3.12-slim\nCOPY . .\nCMD ["python", "agent.py"]\n'
+    )
+    compose = f"services:\n  {service}:\n    build: .\n    command: python agent.py\n"
+    if service == "agent":
+        compose += "  cache:\n    image: redis:7\n"
+    (root / "docker-compose.yml").write_text(compose)
+    return {"language": "python", "execution": "native", "command": ["python", "agent.py"]}
+
+
+@pytest.mark.parametrize("service", ["web", "agent"])
+def test_a_native_agent_that_needs_nothing_stays_native_beside_a_compose_file(
+    tmp_path: Path, service: str
+) -> None:
+    runtime = _native_agent_beside_compose(tmp_path, service)
+
+    def processes(answer: dict[str, list[str]]) -> list[str]:
+        plan = resolve_environment_plan(
+            tmp_path, _job(connector="auto"),
+            contract_runtime={**runtime, "required_environment": answer},
+            contract_interface_kind="command", contract_modality="chat",
+        )
+        return sorted(process.name for process in plan.processes)
+
+    # Said in so many words, it plans as saying nothing does: no move to the Compose topology.
+    assert processes({"agent": []}) == processes({}) == ["agent", "world-db"]
+
+
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        pytest.param({"execution": "auto", "compose_file": "docker-compose.yml"}, id="no-service"),
+        pytest.param(
+            {"execution": "compose", "compose_file": "docker-compose.yml", "service": "web"},
+            id="another-process",
+        ),
+    ],
+)
+def test_an_empty_answer_for_a_process_compose_does_not_run_is_no_unknown_scope(
+    tmp_path: Path, runtime: dict[str, str]
+) -> None:
+    _native_agent_beside_compose(tmp_path, "web")
+
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"),
+        contract_runtime={"language": "python", **runtime, "required_environment": {"agent": []}},
+        contract_interface_kind="command", contract_modality="chat",
+    )
+
+    assert sorted(process.name for process in plan.processes) == ["web", "world-db"]
+
+
+def test_a_name_for_a_process_compose_does_not_run_is_still_an_unknown_scope(
+    tmp_path: Path,
+) -> None:
+    _native_agent_beside_compose(tmp_path, "web")
+    runtime = {
+        "language": "python", "execution": "compose", "compose_file": "docker-compose.yml",
+        "service": "web", "required_environment": {"agent": ["OPENAI_API_KEY"]},
+    }
+
+    unknown = "runtime_required_environment_scope_unknown: agent"
+    with pytest.raises(BundleAuthorError, match=unknown):
+        resolve_environment_plan(
+            tmp_path, _job(connector="auto"), contract_runtime=runtime,
+            contract_interface_kind="command", contract_modality="chat",
+        )
+
+
+@pytest.mark.parametrize(
+    ("answer", "refused"),
+    [({}, False), ({"agent": []}, False), ({"agent": ["OPENAI_API_KEY"]}, True)],
+    ids=["no-answer", "needs-nothing", "needs-a-name"],
+)
+def test_the_generated_runtime_and_provision_refuse_only_a_listed_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: dict[str, list[str]], refused: bool
+) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness import provision as provision_module
+    from fi.alk.harness.contract import Runtime
+    from fi.alk.harness.generated_runtime import detect_generated_runtime
+    from fi.alk.harness.provision import ProvisionError
+
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "requirements.txt").write_text("\n")
+    runtime = Runtime.model_validate({"language": "python", "required_environment": answer})
+
+    class PastTheGuard(Exception):
+        pass
+
+    def stop(*args, **kwargs):
+        raise PastTheGuard()
+
+    # Nothing is built or started: the step after the guard ends the call.
+    monkeypatch.setattr(provision_module, "inspect_packaging", stop)
+    if refused:
+        with pytest.raises(GeneratedRuntimeError, match="runtime_selection_unsupported"):
+            detect_generated_runtime(tmp_path, runtime)
+        with pytest.raises(ProvisionError, match="runtime_selection_unsupported"):
+            provision_module.provision(
+                tmp_path, tmp_path / "out", SimpleNamespace(runtime=runtime)
+            )
+    else:
+        assert detect_generated_runtime(tmp_path, runtime) is not None
+        with pytest.raises(PastTheGuard):
+            provision_module.provision(
+                tmp_path, tmp_path / "out", SimpleNamespace(runtime=runtime)
+            )

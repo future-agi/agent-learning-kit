@@ -782,7 +782,10 @@ def _type_parameter_defaults(tokens: list[tokenize.TokenInfo], start: int) -> li
 
 
 def unparsed_note(
-    source: Path, subfolder: str | None = None, tool_modules: Iterable[str] = ()
+    source: Path,
+    subfolder: str | None = None,
+    tool_modules: Iterable[str] = (),
+    prompt_files: Iterable[str] = (),
 ) -> dict[str, object]:
     """What the agent document says about the agent's Python files the kit's own Python can't
     parse: ``{}`` when every one parses, so the document is then the one it always was.
@@ -791,7 +794,8 @@ def unparsed_note(
     virtual environments and hidden folders; with a folder named, also the code it reaches
     outside it (which the tracing and credential checks read) and the modules ``tool_modules``
     name, found as the tool check finds them (the folder, its ``src``, the root, the root's
-    ``src``).
+    ``src``); and the ``.py`` files ``prompt_files`` name, relative to the root, which the prompt
+    copy parses to read the prompt's text.
 
     ``unparsed`` lists each as ``{"path", "python", "reason"}``: ``python`` is the version a
     newer construct needs, or ``""`` for a plain syntax error. Nothing in it is the customer's
@@ -806,7 +810,7 @@ def unparsed_note(
     root = source.resolve()
     try:
         base = agent_folder(root, subfolder) if subfolder else root
-        paths = _agent_files(root, base, subfolder, tool_modules)
+        paths = _agent_files(root, base, subfolder, tool_modules, prompt_files)
     except SubfolderNotFound:
         return {}
     budget = ParseBudget(_UNPARSED_WALK_TOTAL)
@@ -857,7 +861,11 @@ def unparsed_note(
 
 
 def _agent_files(
-    root: Path, base: Path, subfolder: str | None, tool_modules: Iterable[str]
+    root: Path,
+    base: Path,
+    subfolder: str | None,
+    tool_modules: Iterable[str],
+    prompt_files: Iterable[str] = (),
 ) -> list[Path]:
     """The ``.py`` files the agent's readers read, each once: its folder's first, in sorted
     order, since where the budget runs out decides what is listed. A link that leads out of the
@@ -886,6 +894,10 @@ def _agent_files(
             for candidate in (relative.with_suffix(".py"), relative / "__init__.py"):
                 if _file_in(one / candidate, root):
                     extra.add(one / candidate)
+    # The prompt copy parses the Python file each part of the prompt is named in, wherever it is.
+    for name in prompt_files:
+        if name.endswith(".py") and _file_in(root / name, root):
+            extra.add(root / name)
     if subfolder:
         from .agent_type_check import code_the_agent_reaches
         from .source_folder import SubfolderNotFound

@@ -293,6 +293,24 @@ def test_a_vertex_client_in_a_file_that_does_not_parse_still_asks_for_google_cre
     ]
 
 
+def test_a_prompt_in_a_file_that_does_not_parse_is_kept_as_written(tmp_path) -> None:
+    from fi.alk.harness.contract import AgentContract, PromptSource
+    from fi.alk.harness.tools import _copy_prompt
+
+    (tmp_path / "persona.py").write_text(_T_STRING + 'PROMPT = "Be brief."\n', encoding="utf-8")
+    contract = AgentContract(
+        agent="a",
+        system_prompt_excerpt="Be brief.",
+        system_prompt_from=[PromptSource(path="persona.py", start_line=2, end_line=2)],
+    )
+    as_text: list[str] = []
+
+    assert _copy_prompt(contract, tmp_path, as_text=as_text) == []
+    # Not read as text, and not lost: the lines as written.
+    assert as_text == []
+    assert contract.system_prompt_excerpt == 'PROMPT = "Be brief."'
+
+
 # --- the walk reaches what the readers read, and says when it stops ---------------------------
 
 
@@ -319,6 +337,31 @@ def test_code_the_agent_imports_from_outside_its_folder_is_listed(tmp_path) -> N
     note = unparsed_note(tmp_path, "one")
 
     assert [one["path"] for one in note["unparsed"]] == ["shared/helpers.py"]
+
+
+def test_a_prompt_file_outside_the_agents_folder_is_listed(tmp_path) -> None:
+    # The prompt copy parses the Python file each part of the prompt is named in, wherever it is.
+    (tmp_path / "one").mkdir()
+    (tmp_path / "one" / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "persona.py").write_text(_T_STRING, encoding="utf-8")
+    # A prompt file that isn't Python isn't parsed.
+    (tmp_path / "prompts" / "rules.md").write_text("t'{x}'\n", encoding="utf-8")
+
+    note = unparsed_note(tmp_path, "one", prompt_files=["prompts/persona.py", "prompts/rules.md"])
+
+    assert [one["path"] for one in note["unparsed"]] == ["prompts/persona.py"]
+
+
+def test_a_prompt_file_the_source_does_not_hold_is_not_read(tmp_path) -> None:
+    source = tmp_path / "source"
+    (source / "one").mkdir(parents=True)
+    (source / "one" / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / "outside.py").write_text(_T_STRING, encoding="utf-8")
+
+    named = ["../outside.py", str(tmp_path / "outside.py")]
+
+    assert unparsed_note(source, "one", prompt_files=named) == {}
 
 
 def test_an_agent_of_many_ordinary_modules_is_walked_to_the_end(tmp_path) -> None:

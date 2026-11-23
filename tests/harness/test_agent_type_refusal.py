@@ -3719,7 +3719,7 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path, monkeypatc
         "real_use_cases": ["o"],
         "hard_constraints": ["be polite"],
         "data_store": {"kind": "none"},
-        "runtime": {"language": "python"},
+        "runtime": {"language": "python", "required_environment": {"agent": []}},
         "tools": [{"name": "add", "args": ["i"]}],
     }
     beat = threading.Event()
@@ -4004,7 +4004,7 @@ def test_a_chain_of_nested_packages_does_not_hold_up_a_folder_save(tmp_path):
         "real_use_cases": ["o"],
         "hard_constraints": ["be polite"],
         "data_store": {"kind": "none"},
-        "runtime": {"language": "python"},
+        "runtime": {"language": "python", "required_environment": {"agent": []}},
         "tools": [{"name": "add", "args": ["i"]}],
     }
 

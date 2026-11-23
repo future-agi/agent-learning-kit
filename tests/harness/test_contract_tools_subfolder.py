@@ -16,6 +16,9 @@ from fi.alk.harness.sources import resolve
 
 
 def payload(**fields):
+    if isinstance(fields.get("runtime"), dict) and not fields["runtime"].get("service"):
+        # The settings question is answered: these tests are about something else.
+        fields["runtime"] = {"required_environment": {"agent": []}, **fields["runtime"]}
     return {
         "agent": "pair",
         "modality": "chat",
@@ -2303,7 +2306,12 @@ def test_null_optional_fields_save_in_the_child_and_pass_the_quick_check(tmp_pat
         **_plain("nulls"),
         "one_liner": None,
         "agent_languages": None,
-        "runtime": {"language": "python", "command": None, "workdir": None},
+        "runtime": {
+            "language": "python",
+            "command": None,
+            "workdir": None,
+            "required_environment": {"agent": []},
+        },
     }
 
     assert tools._quick_schema(arguments, sorted(arguments)) is None

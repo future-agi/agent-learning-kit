@@ -591,7 +591,10 @@ def test_model_line_numbering_matches_the_prompt_copy(tmp_path, root, written, l
 
     assert not result.get("is_error"), result
     contract = saved(destination)
-    assert contract["system_prompt_excerpt"] == 'MODEL = "gpt-4o"'
+    # One plain string is saved as its text. The form feed joins two statements on one line, so
+    # that file doesn't parse and its lines stay as written.
+    kept = 'MODEL = "gpt-4o"' if b"\x0c" in written else "gpt-4o"
+    assert contract["system_prompt_excerpt"] == kept
     assert contract["model"]["line"] == line
 
 
@@ -919,7 +922,7 @@ def not_the_quote(named: str) -> str:
             "You are pair,\n   a helpful   assistant who books",
             (3, 3),
             False,
-            'PROMPT = """You are pair, a helpful assistant who books tables."""',
+            "You are pair, a helpful assistant who books tables.",
             id="same-text-other-spacing",
         ),
         pytest.param(
@@ -1381,26 +1384,30 @@ def test_mismatched_quotes_are_not_a_value(root):
 
 
 @pytest.mark.parametrize(
-    "file, written",
+    "file, written, kept",
     [
+        # A Python prompt that is one plain string is saved as its text.
         pytest.param(
             "prompt.py",
             'PROMPT = ("You are pair, "\n    "a helpful assistant who books tables.")',
+            "You are pair, a helpful assistant who books tables.",
             id="string-pieces",
         ),
         pytest.param(
             "prompt.py",
             'PROMPT = "You are pair,\\na helpful assistant who books tables."',
+            "You are pair,\na helpful assistant who books tables.",
             id="escaped-newline",
         ),
         pytest.param(
             "prompt.json",
             '{"prompt": "You are pair,\\na helpful assistant who books tables."}',
+            '{"prompt": "You are pair,\\na helpful assistant who books tables."}',
             id="json",
         ),
     ],
 )
-def test_honest_prompt_forms_hold_the_quote(tmp_path, root, file, written):
+def test_honest_prompt_forms_hold_the_quote(tmp_path, root, file, written, kept):
     (root / file).write_text(written + "\n", encoding="utf-8")
     count = len(written.splitlines())
     destination = tmp_path / "out"
@@ -1416,7 +1423,7 @@ def test_honest_prompt_forms_hold_the_quote(tmp_path, root, file, written):
     )
 
     assert not result.get("is_error"), result
-    assert saved(destination)["system_prompt_excerpt"] == written
+    assert saved(destination)["system_prompt_excerpt"] == kept
 
 
 _LONG_PROMPT = "You are pair, a helpful assistant who books tables for guests. " * 4
@@ -1540,12 +1547,15 @@ def test_a_range_that_stops_short_is_refused(tmp_path, root, quote, lines, refus
     else:
         assert not result.get("is_error"), result
         copied = "\n".join(_BOOKING.splitlines()[lines[0] - 1 : lines[1]])
-        assert saved(destination)["system_prompt_excerpt"] == copied
+        # The prompt's own lines are one plain string, saved as its text.
+        kept = _BOOKING_QUOTE if lines == (6, 12) else copied
+        assert saved(destination)["system_prompt_excerpt"] == kept
 
 
 @pytest.mark.parametrize(
     "written, quote",
     [
+        # Each is one plain string: saved as its text, the value after PROMPT =.
         pytest.param('PROMPT = "Book at Tom &amp; Jerry\'s diner tonight"', "Book at Tom & Jerry's diner tonight", id="entity-in-the-source"),
         pytest.param('PROMPT = "Book at Tom & Jerry\'s diner tonight"', "Book at Tom &amp; Jerry's diner tonight", id="entity-in-the-quote"),
         pytest.param('PROMPT = "Order a caf\u00e9 and wait for the bill"', "Order a cafe\u0301 and wait for the bill", id="decomposed-accent"),
@@ -1566,7 +1576,7 @@ def test_an_honest_quote_in_another_form_fits(tmp_path, root, written, quote):
     )
 
     assert not result.get("is_error"), result
-    assert saved(destination)["system_prompt_excerpt"] == written
+    assert saved(destination)["system_prompt_excerpt"] == written.split(" = ", 1)[1][1:-1]
 
 
 def test_lines_sent_without_the_refused_quote_are_still_checked(tmp_path, root):
@@ -1618,7 +1628,7 @@ def test_the_right_lines_after_a_refusal_are_copied(tmp_path, root):
         )
     )
     assert not second.get("is_error"), second
-    assert saved(destination)["system_prompt_excerpt"] == "\n".join(_BOOKING.splitlines()[5:12])
+    assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
 
 
 def test_a_new_quote_replaces_the_refused_one(tmp_path, root):
@@ -1643,7 +1653,7 @@ def test_a_new_quote_replaces_the_refused_one(tmp_path, root):
         )
     )
     assert not second.get("is_error"), second
-    assert saved(destination)["system_prompt_excerpt"] == "\n".join(_BOOKING.splitlines()[5:12])
+    assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
 
 
 def test_a_quote_of_many_pieces_does_not_hold_up_the_check(root):
@@ -1687,7 +1697,10 @@ def test_a_prompt_with_string_prefixes_holds_the_quote(tmp_path, root, written):
     )
 
     assert not result.get("is_error"), result
-    assert saved(destination)["system_prompt_excerpt"] == written
+    # A plain string with any prefix but bytes is saved as its text; bytes beside text doesn't
+    # parse, so it stays as written.
+    as_text = "You are pair, a helpful assistant who books tables."
+    assert saved(destination)["system_prompt_excerpt"] == (written if "rb'" in written else as_text)
 
 
 @pytest.mark.parametrize(
@@ -1797,7 +1810,7 @@ def test_leaving_the_quote_out_is_not_asked_about(tmp_path, root):
     )
 
     assert not result.get("is_error"), result
-    assert saved(destination)["system_prompt_excerpt"] == 'PROMPT = "You are pair."'
+    assert saved(destination)["system_prompt_excerpt"] == "You are pair."
 
 
 def test_a_prompt_path_through_a_link_outside_is_refused(tmp_path, root):
@@ -2271,7 +2284,7 @@ _LONG_OPENING = (
         ),
     ],
 )
-def test_code_between_string_pieces_is_passed_over(tmp_path, root, written, quote):
+def test_code_between_string_pieces_is_passed_over(request, tmp_path, root, written, quote):
     (root / "prompt.py").write_text(written + "\n", encoding="utf-8")
     count = len(written.splitlines())
     destination = tmp_path / "out"
@@ -2287,7 +2300,15 @@ def test_code_between_string_pieces_is_passed_over(tmp_path, root, written, quot
     )
 
     assert not result.get("is_error"), result
-    assert saved(destination)["system_prompt_excerpt"] == written
+    # A prompt only known when the agent runs stays as written; one plain string is its text.
+    plain = {
+        "comment-between-pieces": _LONG_OPENING + "Be warm and brief.",
+        "raw-piece-late": _LONG_OPENING + "Never share \\d+ ids. Be warm and brief.",
+        "markup-left-out": _LONG_OPENING + "<rules>Be warm and brief.</rules>",
+        "a-placeholder-left-out": _LONG_OPENING + "{{ guest_name }}, be warm and brief.",
+    }
+    kept = plain.get(request.node.callspec.id, written)
+    assert saved(destination)["system_prompt_excerpt"] == kept
 
 
 def test_a_long_gap_between_words_is_not_passed_over(tmp_path, root):
@@ -2337,7 +2358,7 @@ def test_a_quote_that_passed_replaces_the_held_one(tmp_path, root):
     third = submit(payload(hard_constraints=["Be polite."], system_prompt_from=prompt))
 
     assert not third.get("is_error"), third
-    assert saved(destination)["system_prompt_excerpt"] == "\n".join(_BOOKING.splitlines()[5:12])
+    assert saved(destination)["system_prompt_excerpt"] == _BOOKING_QUOTE
     assert saved(destination)["system_prompt_from"] == prompt
 
 
@@ -2527,7 +2548,7 @@ def test_right_lines_sent_alone_after_a_refused_paraphrase_are_kept(tmp_path, ro
 
     assert not third.get("is_error"), third
     contract = saved(destination)
-    assert contract["system_prompt_excerpt"] == "\n".join(_BOOKING.splitlines()[5:12])
+    assert contract["system_prompt_excerpt"] == _BOOKING_QUOTE
     assert contract["system_prompt_from"] == prompt
     assert "unconfirmed_prompt_from" not in contract
 
@@ -3429,7 +3450,14 @@ def test_lines_are_numbered_at_each_newline(tmp_path, root, written, prompt_line
     )
 
     assert not result.get("is_error"), result
-    assert saved(destination)["system_prompt_excerpt"] == 'PROMPT = "You are Acme\'s booking agent."'
+    # One plain string is saved as its text; with a lone carriage return, which Python counts as
+    # a line end and the copy does not, the lines stay as written.
+    kept = (
+        'PROMPT = "You are Acme\'s booking agent."'
+        if b"\r" in written.replace(b"\r\n", b"")
+        else "You are Acme's booking agent."
+    )
+    assert saved(destination)["system_prompt_excerpt"] == kept
     assert saved(destination)["model"]["line"] == model_line
 
 

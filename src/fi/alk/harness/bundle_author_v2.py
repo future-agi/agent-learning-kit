@@ -2706,7 +2706,9 @@ def resolve_environment_plan(
             not isinstance(selected, ComposeSelection)
             and runtime_model.execution == "native"
             and (
-                runtime_model.required_environment
+                # A process named with an empty list needs nothing; only a listed name moves
+                # the agent to a topology that can supply it.
+                any(runtime_model.required_environment.values())
                 or any(
                     dependency.get("kind", "").lower()
                     in {"datastore", "database", "file", "queue"}
