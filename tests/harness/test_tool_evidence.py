@@ -81,6 +81,15 @@ def test_the_sources_that_saw_a_call_are_listed_once_in_order_and_never_its_own(
     assert trace_row(call)["seen_by"] == [WORLD, SPAN, TRACER]
 
 
+def test_two_records_that_differ_only_in_their_source_names_are_the_same_call() -> None:
+    one = _call(result="shipped", at=1.0, source=WORLD)
+    other = _call(result="shipped", at=2.0, source=TRACER, seen_by=[SPAN], trace_mark="crewai")
+
+    assert dataclasses.replace(one, at=2.0) == other
+    assert call_runner._digest(one) == call_runner._digest(other)
+    assert set(tool_evidence.FIELDS) == {field.name for field in dataclasses.fields(Call) if not field.compare}
+
+
 def test_the_trace_file_names_its_lines_sources_and_keeps_each_lines_mark(tmp_path) -> None:
     runtime = _runtime(
         tmp_path,
@@ -172,17 +181,25 @@ _LOST = [{"name": "look_up_order", "arguments": {"order_id": "A1001"}, "actor_id
           "error": "response_lost", "outcome": "committed"}]
 
 
+def _digest_as_it_was(call: Call) -> str:
+    # The pairing's digest before a call named its sources: everything but its times.
+    fields = {key: value for key, value in vars(call).items() if key not in ("at", "ended_at", *_NAMED)}
+    return json.dumps(fields, sort_keys=True, default=repr)
+
+
 def _chat_readings(tmp_path, monkeypatch, observed, lines, log=None):
     runtime = _runtime(tmp_path, lines)
-    lend_now = call_runner._lend_span
+    lend_now, digest_now = call_runner._lend_span, call_runner._digest
 
     def as_it_was(recorded):
         monkeypatch.setattr(call_runner, "_lend_span", _lend_span_as_it_was)
+        monkeypatch.setattr(call_runner, "_digest", _digest_as_it_was)
         try:
             written, from_spans = call_runner._read_file_tool_calls(runtime)
             return call_runner._merge_span_calls(list(recorded) or written, from_spans)
         finally:
             monkeypatch.setattr(call_runner, "_lend_span", lend_now)
+            monkeypatch.setattr(call_runner, "_digest", digest_now)
 
     before = as_it_was(copy.deepcopy(observed))
     now = call_runner._with_span_calls(copy.deepcopy(observed), runtime)
@@ -238,6 +255,17 @@ _CHAT_CASES = {
     ),
     "the callback route, a tracer line of the same call": (
         [_told()], [_LINE],
+    ),
+    "no recorded call, two lines of one call, one marked by the CrewAI observer": (
+        [],
+        [{"name": "book", "arguments": {"date": "fri"}, "output": "ok", "at": 10.0, "ended_at": 10.5,
+          "source": "crewai"},
+         {"name": "book", "arguments": {"date": "fri"}, "output": "ok", "at": 11.0, "ended_at": 11.5},
+         {"name": "pay", "arguments": {"date": "fri"}, "output": "ok", "at": 12.0, "ended_at": 12.5},
+         *({"name": name, "arguments": {"date": "fri"}, "output": "ok", "at": at, "ended_at": at + 3,
+            "source": "otel", "event_id": event_id, "agent_key": agent}
+           for name, at, event_id, agent in (("book", 9.0, "e1", "booker"), ("book", 9.5, "e2", "booker"),
+                                             ("pay", 9.7, "e3", "cashier")))],
     ),
     "the world's call and a span that recorded less": (
         [_call("book", arguments={"date": "fri", "party": 2}, result="booked #7", at=1.0)],
