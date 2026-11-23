@@ -20,45 +20,30 @@ opt_in_lane: false
 
 # Evaluation guide
 
-ALK includes the evaluation engine in this repository. Use `fi.alk.evals` as
-the public facade; its implementation delegates to `fi.evals` for metrics and
-agent-report scoring, and to `fi.simulate.suite` for suite execution. You do not
-need a separate evaluation repository. These layers are related but their
-inputs and results are not interchangeable.
+An evaluation checks an agent's response against an expectation. Start with a
+refund-policy question and a single assertion: the reply must contain
+`policy`. ALK's echo provider returns the prompt itself, so you can check the
+scoring and inspect the result before connecting a model.
 
-## First evaluation: the echo fixture
+## Run the refund-policy evaluation
 
-After installing the package in a checkout, run from the checkout root:
+From the root of an [installed source checkout](../../README.md#working-from-a-checkout),
+run the example suite. This suite runs locally without credentials.
 
 ```bash
+export LITELLM_LOCAL_MODEL_COST_MAP=True
 export AGENT_LEARNING_SYNC=local
 export AGENT_LEARNING_LEDGER_PATH="$PWD/artifacts/eval-guide/ledger"
-agent-learn eval examples/eval_suite.json --dry-run
-agent-learn eval examples/eval_suite.json \
-  --output artifacts/eval-suite.json \
-  --junit artifacts/eval-suite.xml \
-  --sarif artifacts/eval-suite.sarif \
-  --markdown artifacts/eval-suite.md
-python -c "import json; p=json.load(open('artifacts/eval-suite.json')); assert p['kind']=='agent-learning.eval.v1'; assert p['exit_code']==0; print(p['summary'])"
+agent-learn eval examples/eval_suite.json --output artifacts/eval-suite.json
 ```
 
-[`examples/eval_suite.json`](../../examples/eval_suite.json) uses only echo and
-`contains`: the declared refund-policy question contains `policy`. The checked
-command returns zero and writes an `agent-learning.eval.v1` artifact. Inspect the
-artifact's case and assertion counts before treating it as measured evidence.
-`--dry-run` validates the suite shape without executing providers and is not a
-measured pass.
+Open `artifacts/eval-suite.json` and inspect `summary` to see the verdict. With the unchanged suite, `passed_case_count` and `passed_assertion_count` both read `1`. The top-level `exit_code`
+is zero for a passing suite. [Read the suite definition](../../examples/eval_suite.json)
+to see the prompt and assertion. Use [the Python equivalent](eval-suites.md)
+to run suites in application code.
 
-The JSON artifact contains the evaluation summary, aggregate score, threshold,
-and `exit_code`. When the runner emits cases, the artifact also contains their
-provider outputs and assertions. The CLI returns the artifact exit code. JUnit,
-SARIF, and Markdown are renderings of the same result, not additional evaluation
-engines.
-See [Eval suites](eval-suites.md) for the SDK equivalent and suite builders.
-
-The backing [task-evaluation example](../../examples/sdk_task_evaluation.py)
-covers artifact/task scoring. It is not a test of every optional evaluation mode
-on this page. Only the echo recipe above is the first-success execution lane.
+For a model-backed evaluation, the selected provider receives the input and
+may charge for it. Choose the scoring method below before adding credentials.
 
 ## Choose inputs and outputs deliberately
 

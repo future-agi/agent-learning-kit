@@ -14,31 +14,15 @@ opt_in_lane: false
 
 # Agent Learning Kit documentation
 
-> A common framework for simulation environments, with an OSS reference harness
-> and included evaluation/optimization libraries. Start with an offline fixture;
-> choose model-backed authoring or live execution explicitly.
+## Start here
 
-## Start here: install to evidence
+1. [Install ALK](../README.md#install) in a Python environment
+2. [Run your first scenario](quickstart/golden-path-run.md) and inspect the scripted reply in the saved transcript
+3. [Choose a library](../LIBRARIES.md) for your own agent
 
-1. **Install and get a first result:** the [README quickstart](../README.md#first-success-deterministic-and-credential-free)
-   creates and runs a scripted simulation from the installed wheel. The wheel
-   does not contain checkout-only examples or the harness UI. The full command
-   path is in [Golden path: run](quickstart/golden-path-run.md).
-2. **Inspect and evaluate:** [Evaluation guide](eval/overview.md) distinguishes
-   suite results, artifact/task evidence, local metrics, and model/platform modes.
-3. **Create world/data/scenarios from source:** [Environment authoring](simulate/environment-authoring.md)
-   is an opt-in model-backed workflow, with artifact/proof and execution boundaries.
-4. **Choose execution:** use the [reference harness](../src/fi/alk/harness/README.md),
-   [Spec + Runner](simulate/spec-and-runner.md), or a supported
-   [extension seam](simulate/environment-authoring.md#supported-extension-seams).
-   Production need not use the reference executor; arbitrary whole-executor
-   substitution and V1/V2 bundle interchange are not established contracts.
-5. **Improve and keep evidence:** follow optimization and regression guides below.
-
-For hosted Environment jobs and results stored by Future AGI, use the platform
-dashboard today. Use `futureagi-sdk` only after a released version includes
-Environment operations. ALK's `hosted_*` modules and worker commands implement
-hosted execution, but they are not public platform-client APIs.
+To score your own inputs, start with [evaluations](eval/overview.md). To create
+a setting for an agent to act in, start with [environment authoring](simulate/environment-authoring.md).
+Both guides identify which examples run offline and when a provider is needed.
 
 ## Included library map
 
@@ -88,22 +72,6 @@ mirror. Use [cookbooks/index.md](cookbooks/index.md) for task navigation and
 | **prove** | [trinity-suite](prove/trinity-suite.md) | [capabilities](prove/capabilities.md) | [release-check-in-your-ci](prove/release-check-in-your-ci.md) | [trust-certificates](prove/trust-certificates.md) |
 
 ## Golden paths
-
-First replayable artifact in three commands or fewer, offline, no API keys,
-no provider accounts:
-
-From an empty working directory, after installing the package:
-
-```bash
-export AGENT_LEARNING_SYNC=local
-export AGENT_LEARNING_LEDGER_PATH="$PWD/artifacts/ledger"
-agent-learn init . --preset run --quiet
-agent-learn run manifests/run.json --output artifacts/run.json
-python -c "import json; p=json.load(open('artifacts/run.json')); assert p['kind']=='agent-learning.run.v1'; assert p['exit_code']==0; print('ok')"
-```
-
-This validates the scaffolded scripted fixture, not source authoring or a live
-agent. `doctor` reports package/import health, not provider readiness.
 
 - [Golden path: run](quickstart/golden-path-run.md), scaffold, simulate, verify the artifact.
 - [Golden path: red-team](quickstart/golden-path-redteam.md), scaffold, campaign, verify the findings.

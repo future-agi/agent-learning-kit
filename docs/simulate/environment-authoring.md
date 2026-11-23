@@ -17,17 +17,15 @@ opt_in_lane: true
 
 # Environment authoring and extension contracts
 
-ALK is a common framework for creating simulation environments. Its bundled
-harness is an OSS reference implementation for source understanding, world/data
-construction, scenario authoring and execution. Production systems and users may
-use different execution systems, but only through a compatible seam; swapping a
-stage backend is not replacing the whole executor.
+An environment supplies the setting in which a scenario runs. In the example
+below, a customer asks for the status of order `A-104`. Your Python plugin
+calls the agent and records its reply as a transcript. You can run that
+example locally without a model or credentials.
 
-Start with the [README quickstart](../../README.md#first-success-deterministic-and-credential-free)
-and [Spec + Runner](spec-and-runner.md). The custom plugin example below proves
-the installed environment contract without credentials. It does not certify
-source authoring, Docker, hosted execution, or an independent harness. The
-source-authoring commands later on this page use an opt-in model-backed lane.
+If you have an agent repository and want ALK to generate the environment and
+scenarios for you, use the reference harness. Source authoring uses a model,
+can incur provider charges and can execute generated code. Choose the path
+that matches what you already have.
 
 ## Choose the right entry point
 
@@ -78,15 +76,17 @@ class OrderStatusEnvironment:
         )])
 ```
 
-The environment owns the interaction and returns a `TestReport`. The runner
-selects it by `EnvironmentSpec.adapter`, passes the target and specification to
-`run`, and converts the result to a `SimulationReport`. The scenario supplies
-the persona, situation, and expected outcome. Evaluation remains a separate
-step over the report evidence.
+Four pieces meet in this example:
+
+- **Environment**: `OrderStatusEnvironment.run` asks the agent about order A-104 and returns a `TestReport` with the conversation
+- **Agent**: the target's `reply` method supplies the answer to the customer's question
+- **Runner**: `SimulationRunner` uses `EnvironmentSpec.adapter` to choose the registered environment and returns a `SimulationReport`
+- **Grader**: to score those replies separately, pass the report's `to_legacy()` result to [`evaluate_agent_report`](../eval/overview.md). This plugin example only records the conversation
 
 Run the complete credential-free example from a checkout:
 
 ```bash
+export LITELLM_LOCAL_MODEL_COST_MAP=True
 export AGENT_LEARNING_SYNC=local
 python examples/sdk_environment_plugin.py artifacts/environment-plugin.json
 python -c "import json; p=json.load(open('artifacts/environment-plugin.json')); assert p['status']=='RunStatus.COMPLETED'; assert p['environment']=='order_status_world'; print('ok')"

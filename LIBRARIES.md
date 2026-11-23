@@ -1,55 +1,51 @@
 # Library inventory
 
-ALK is one Python distribution containing public workflow facades and the
-simulation, evaluation and optimization engines. This is the source map for
-using those libraries **without separate engine clones**. Start with the
-[README](README.md) and [docs index](docs/index.md).
-
-“Public facade” below means the documented entry point, not a promise that every
-helper in its directory is stable. Underscore-prefixed modules and harness
-implementation internals should be treated as internal/version-sensitive.
-Pin and test any integration that imports them directly.
+Install `agent-learning-kit` once to use the Python libraries below. Start with
+`from fi.alk import simulate` to [run a scenario](docs/quickstart/golden-path-run.md),
+`from fi.alk import evals` to [score a result](docs/eval/overview.md), or
+`from fi.alk import optimize` to [compare changes to your agent](docs/optimize/optimize-any-agent.md).
 
 ## Workflow facades and contained libraries
 
-The status values are engineering proposals based on package exports, tests,
-and current documentation. A product owner has not approved them. `Supported`
-means the proposed release contract. `Optional` requires a selected extra or
-provider lane. `Experimental` is public but version-sensitive. `Internal` is
-installed implementation code, not a public client API.
+Each row links to the implementation and guide for this revision. The status
+column uses these labels:
 
-| Surface | Proposed status | Responsibility and boundary | Guide / source |
+- **Stable (proposed)** identifies documented and tested interfaces awaiting owner confirmation of ongoing support
+- **Optional** identifies integrations with additional setup
+- **Experimental** identifies version-sensitive interfaces
+- **Private** identifies hosting internals
+
+For credentials, outputs and tested examples, see [operational evidence by entry point](#operational-evidence-by-entry-point).
+
+| Surface | Status | What you can use it for | Guide / source |
 | --- | --- | --- | --- |
-| `fi.alk` / `configure` | Supported | Public configuration and lazy workflow imports. Keys do not make every operation platform-backed. | [Configuration](docs/reference/configure.md), [`__init__.py`](src/fi/alk/__init__.py), [`config.py`](src/fi/alk/config.py) |
-| `fi.alk.simulate` | Supported | Public simulation/manifests, runtime specs/reports, target and environment integration. | [Spec + Runner](docs/simulate/spec-and-runner.md), [worlds/hooks](docs/simulate/worlds-and-hooks.md), [`simulate.py`](src/fi/alk/simulate.py) |
-| `fi.simulate` | Supported | Included compatibility engine: scenarios/personas, environments, wrappers, adapters, runtime registry, manifests, suites, results and reports. Runtime plugins return legacy `TestReport`; `SimulationRunner` converts it. | [Extension contracts](docs/simulate/environment-authoring.md#supported-extension-seams), [`src/fi/simulate`](src/fi/simulate), [`tests/runtime/test_registry.py`](tests/runtime/test_registry.py) |
-| `fi.alk.evals` | Supported | Public suite/artifact/task evaluation facade, config builders, engine exports and HTTP hooks. | [Evaluation guide](docs/eval/overview.md), [`evals.py`](src/fi/alk/evals.py) |
-| `fi.evals` | Supported | Included compatibility engine: unified local/Turing/LLM evaluation, metrics, agent-report scoring, templates, guardrails, streaming, feedback and OTel. Not all modes are offline. | [Evaluation library map](docs/eval/overview.md#other-included-evaluation-libraries), [`src/fi/evals`](src/fi/evals) |
-| `fi.alk.optimize` | Supported | Public optimization manifests, candidate/evidence workflows, governance and backend routing. | [Optimize an agent](docs/optimize/optimize-any-agent.md), [lifecycle](docs/optimize/optimization-lifecycle.md), [`optimize.py`](src/fi/alk/optimize.py) |
-| `fi.opt` | Supported | Included compatibility engine: base classes, agent optimizers, mutation/evidence types, simulation integrations, deployment/observability utilities. Provider-backed algorithms can spend money. | [Optimizer portfolio](docs/optimize/optimizer-portfolio.md), [`src/fi/opt`](src/fi/opt) |
-| `fi.alk.redteam` | Supported | Public campaign/corpus/adaptive evaluation workflows over simulate/evals, not another external engine. | [Red-team guide](docs/redteam/red-team-anything.md), [`redteam.py`](src/fi/alk/redteam.py) |
-| `fi.alk.harness` | Supported | Public names are limited to `fi.alk.harness.__all__`. The bundled reference harness handles source understanding, world/data/scenario authoring, supported execution and grading. | [Harness README](src/fi/alk/harness/README.md), [authoring and seams](docs/simulate/environment-authoring.md), [`src/fi/alk/harness/__init__.py`](src/fi/alk/harness/__init__.py) |
-| `fi.alk.studio` | Supported | Public persona/scenario facade; create/load/save/validate/calibrate, coverage, vendor import and platform generation/pull. Shares engine classes, not a duplicate persona format. | [Studio](docs/simulate/persona-scenario-studio.md), [simulation contract](docs/prove/simulation-contract.md), [`studio/__init__.py`](src/fi/alk/studio/__init__.py) |
-| `fi.alk.bench` | Supported | Task/Verifier benchmark API with push, artifact input, and pull/RL control modes, plus coding and voice validators. Subprocess and Docker grading execute code. | [Benchmark overview](docs/eval/benchmark-overview.md), [sandbox boundary](docs/eval/benchmark-sandboxes.md), [`bench`](src/fi/alk/bench) |
-| `fi.alk.loss` | Supported | Versioned objective compilation and loss reports; guarded objectives, verdict/evidence admissibility and exclusions. | [Loss semantics](docs/eval/overview.md#loss-practice-and-benchmark-validators), [`loss.py`](src/fi/alk/loss.py) |
-| `fi.alk.practice` / `fi.alk.improve` | Supported | Practice execution, budget/schedule/report APIs and improvement workflows. Review the selected execution lane; internal operators are not separate public APIs. | [Practice loop](docs/prove/practice-loop.md), [`practice`](src/fi/alk/practice), [`improve.py`](src/fi/alk/improve.py) |
+| `fi.alk` / `configure` | Stable (proposed) | Public configuration and lazy workflow imports. Keys do not make every operation platform-backed. | [Configuration](docs/reference/configure.md), [`__init__.py`](src/fi/alk/__init__.py), [`config.py`](src/fi/alk/config.py) |
+| `fi.alk.simulate` | Stable (proposed) | Public simulation/manifests, runtime specs/reports, target and environment integration. | [Spec + Runner](docs/simulate/spec-and-runner.md), [worlds/hooks](docs/simulate/worlds-and-hooks.md), [`simulate.py`](src/fi/alk/simulate.py) |
+| `fi.simulate` | Stable (proposed) | Included compatibility engine: scenarios/personas, environments, wrappers, adapters, runtime registry, manifests, suites, results and reports. Runtime plugins return legacy `TestReport`; `SimulationRunner` converts it. | [Extension contracts](docs/simulate/environment-authoring.md#supported-extension-seams), [`src/fi/simulate`](src/fi/simulate), [`tests/runtime/test_registry.py`](tests/runtime/test_registry.py) |
+| `fi.alk.evals` | Stable (proposed) | Public suite/artifact/task evaluation facade, config builders, engine exports and HTTP hooks. | [Evaluation guide](docs/eval/overview.md), [`evals.py`](src/fi/alk/evals.py) |
+| `fi.evals` | Stable (proposed) | Included compatibility engine: unified local/Turing/LLM evaluation, metrics, agent-report scoring, templates, guardrails, streaming, feedback and OTel. Not all modes are offline. | [Evaluation library map](docs/eval/overview.md#other-included-evaluation-libraries), [`src/fi/evals`](src/fi/evals) |
+| `fi.alk.optimize` | Stable (proposed) | Public optimization manifests, candidate/evidence workflows, governance and backend routing. | [Optimize an agent](docs/optimize/optimize-any-agent.md), [lifecycle](docs/optimize/optimization-lifecycle.md), [`optimize.py`](src/fi/alk/optimize.py) |
+| `fi.opt` | Stable (proposed) | Included compatibility engine: base classes, agent optimizers, mutation/evidence types, simulation integrations, deployment/observability utilities. Provider-backed algorithms can spend money. | [Optimizer portfolio](docs/optimize/optimizer-portfolio.md), [`src/fi/opt`](src/fi/opt) |
+| `fi.alk.redteam` | Stable (proposed) | Public campaign/corpus/adaptive evaluation workflows over simulate/evals, not another external engine. | [Red-team guide](docs/redteam/red-team-anything.md), [`redteam.py`](src/fi/alk/redteam.py) |
+| `fi.alk.harness` | Stable (proposed) | Public names are limited to `fi.alk.harness.__all__`. The bundled reference harness handles source understanding, world/data/scenario authoring, supported execution and grading. | [Harness README](src/fi/alk/harness/README.md), [authoring and seams](docs/simulate/environment-authoring.md), [`src/fi/alk/harness/__init__.py`](src/fi/alk/harness/__init__.py) |
+| `fi.alk.studio` | Stable (proposed) | Public persona/scenario facade; create/load/save/validate/calibrate, coverage, vendor import and platform generation/pull. Shares engine classes, not a duplicate persona format. | [Studio](docs/simulate/persona-scenario-studio.md), [simulation contract](docs/prove/simulation-contract.md), [`studio/__init__.py`](src/fi/alk/studio/__init__.py) |
+| `fi.alk.bench` | Stable (proposed) | Task/Verifier benchmark API with push, artifact input, and pull/RL control modes, plus coding and voice validators. Subprocess and Docker grading execute code. | [Benchmark overview](docs/eval/benchmark-overview.md), [sandbox boundary](docs/eval/benchmark-sandboxes.md), [`bench`](src/fi/alk/bench) |
+| `fi.alk.loss` | Stable (proposed) | Versioned objective compilation and loss reports; guarded objectives, verdict/evidence admissibility and exclusions. | [Loss semantics](docs/eval/overview.md#loss-practice-and-benchmark-validators), [`loss.py`](src/fi/alk/loss.py) |
+| `fi.alk.practice` / `fi.alk.improve` | Stable (proposed) | Practice execution, budget/schedule/report APIs and improvement workflows. Review the selected execution lane; internal operators are not separate public APIs. | [Practice loop](docs/prove/practice-loop.md), [`practice`](src/fi/alk/practice), [`improve.py`](src/fi/alk/improve.py) |
 | `fi.alk.tasks` / `fi.alk.rewardhack` | Experimental | Task contracts and objective/anchor integrity checks used by improvement/benchmark workflows. These are advanced, version-sensitive APIs. | [`tasks.py`](src/fi/alk/tasks.py), [`rewardhack.py`](src/fi/alk/rewardhack.py), [benchmark authoring](docs/eval/benchmark-write-a-suite.md) |
-| `fi.alk.episode` | Supported | Typed voice episode/event record, provider converters, JSON serialization, schema export and conformance. Records preserve coverage/absence; conversion is not a new execution harness. | [`episode/__init__.py`](src/fi/alk/episode/__init__.py), [`episode/models.py`](src/fi/alk/episode/models.py), [voice benchmark](docs/eval/benchmark-voice.md) |
-| `fi.alk.telemetry` | Supported | Local run ledger, identity/provenance and opt-in account sync. Account delivery is separate from evaluation provider calls. | [Run ledger](docs/prove/run-ledger.md), [account sync](docs/prove/account-sync.md), [`telemetry`](src/fi/alk/telemetry) |
+| `fi.alk.episode` | Stable (proposed) | Typed voice episode/event record, provider converters, JSON serialization, schema export and conformance. Records preserve coverage/absence; conversion is not a new execution harness. | [`episode/__init__.py`](src/fi/alk/episode/__init__.py), [`episode/models.py`](src/fi/alk/episode/models.py), [voice benchmark](docs/eval/benchmark-voice.md) |
+| `fi.alk.telemetry` | Stable (proposed) | Local run ledger, identity/provenance and opt-in account sync. Account delivery is separate from evaluation provider calls. | [Run ledger](docs/prove/run-ledger.md), [account sync](docs/prove/account-sync.md), [`telemetry`](src/fi/alk/telemetry) |
 | `fi.alk.live` / `fi.alk.providers` | Optional | Framework/provider execution lanes and provider integration code. Deterministic fixture evidence does not prove a live adapter. | [Framework guides](docs/cookbooks/index.md#by-framework), [hosted targets](docs/simulate/provider-hosted-targets.md), [`live`](src/fi/alk/live), [`providers`](src/fi/alk/providers) |
 | `voice_loop`, `image_loop`, `cua_loop`, `image_perturb` | Optional | Channel-specific loop/perturbation helpers. Deterministic fixtures do not establish real-device/provider coverage. | [Voice](docs/simulate/voice-loopback.md), [image](docs/simulate/image-loop.md), [CUA](docs/simulate/cua-loop.md), [`src/fi/alk`](src/fi/alk) |
-| `suite`, `actions`, `capabilities`, `extensions`, `trinity` | Supported | Workflow composition, artifact actions/catalogs, descriptive extension metadata and release checks. `extensions.register_environment` is not the runtime plugin registry. | [Suite](docs/prove/trinity-suite.md), [actions](docs/prove/actions.md), [capabilities](docs/prove/capabilities.md), [seams](docs/simulate/environment-authoring.md#supported-extension-seams), [`src/fi/alk`](src/fi/alk) |
-| `agent-learn`, `alk` | Supported | Installed aliases for `fi.alk.cli:main`. Each command states its inputs, credentials, network behavior and output in the CLI reference. | [CLI reference](docs/reference/cli.md), [`cli.py`](src/fi/alk/cli.py), [`pyproject.toml`](pyproject.toml) |
-| `alk-harness-worker` | Internal | Hosted job worker. Job-scoped source and secret references come from the hosting system. `tests/harness/test_hosted_entrypoint.py` verifies the entry point. | [`hosted_entrypoint.py`](src/fi/alk/harness/hosted_entrypoint.py), [`tests/harness/test_hosted_entrypoint.py`](tests/harness/test_hosted_entrypoint.py) |
-| `alk-harness-sandbox` | Internal | Hosted sandbox HTTP service. Sandbox and job credentials come from the hosting system. | [`sandbox_server.py`](src/fi/alk/harness/sandbox_server.py), [`tests/test_harness_sandbox_server.py`](tests/test_harness_sandbox_server.py), [`Dockerfile.sandbox`](Dockerfile.sandbox) |
-| `@future-agi/agent-learning-kit` workspace | Experimental / source-only | TypeScript evaluation workspace with declared root, `/evals`, `/evals/local`, and `/local` exports. The manifest is evidence of source and build configuration, not npm publication or Python runtime parity. | [TypeScript boundaries](#typescript-boundaries), [`package.json`](typescript/agent-learning-kit/package.json), [package README](typescript/agent-learning-kit/README.md) |
+| `suite`, `actions`, `capabilities`, `extensions`, `trinity` | Stable (proposed) | Workflow composition, artifact actions/catalogs, descriptive extension metadata and release checks. `extensions.register_environment` is not the runtime plugin registry. | [Suite](docs/prove/trinity-suite.md), [actions](docs/prove/actions.md), [capabilities](docs/prove/capabilities.md), [seams](docs/simulate/environment-authoring.md#supported-extension-seams), [`src/fi/alk`](src/fi/alk) |
+| `agent-learn`, `alk` | Stable (proposed) | Installed aliases for `fi.alk.cli:main`. Each command states its inputs, credentials, network behavior and output in the CLI reference. | [CLI reference](docs/reference/cli.md), [`cli.py`](src/fi/alk/cli.py), [`pyproject.toml`](pyproject.toml) |
+| `alk-harness-worker` | Private | Hosted job worker. Job-scoped source and secret references come from the hosting system. `tests/harness/test_hosted_entrypoint.py` verifies the entry point. | [`hosted_entrypoint.py`](src/fi/alk/harness/hosted_entrypoint.py), [`tests/harness/test_hosted_entrypoint.py`](tests/harness/test_hosted_entrypoint.py) |
+| `alk-harness-sandbox` | Private | Hosted sandbox HTTP service. Sandbox and job credentials come from the hosting system. | [`sandbox_server.py`](src/fi/alk/harness/sandbox_server.py), [`tests/test_harness_sandbox_server.py`](tests/test_harness_sandbox_server.py), [`Dockerfile.sandbox`](Dockerfile.sandbox) |
+| `@future-agi/agent-learning-kit` workspace | Experimental (source workspace) | TypeScript evaluation workspace with declared root, `/evals`, `/evals/local`, and `/local` exports. The manifest is evidence of source and build configuration, not npm publication or Python runtime parity. | [TypeScript boundaries](#typescript-boundaries), [`package.json`](typescript/agent-learning-kit/package.json), [package README](typescript/agent-learning-kit/README.md) |
 
 ## Operational evidence by entry point
 
-This table supplies the operational fields behind the proposed classifications
-above; it does not repeat or approve them. `Base` means `pip install
-agent-learning-kit`. Installation can use the network even when the named
-execution lane is credential-free.
+`Base` means the Python package with its default dependencies. Check the row for your workflow before supplying credentials or running code.
 
 | Entry point | Installation | Execution / network class | Credentials | Output | Verification | Limits |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -149,9 +145,7 @@ declares `@future-agi/agent-learning-kit`, source version `0.2.0`, with exports:
 The source contains evaluators, local metrics, templates, execution/manager,
 protection/scanning, streaming and RAG/heuristic code. It is not a TypeScript
 implementation of the Python source-authoring harness, `SimulationRunner`, or
-all optimizer workflows. Its proposed status is **Experimental / source-only**;
-owner approval remains external. A package name/publish configuration is not
-evidence of npm availability. Build and test the workspace source as described
+all optimizer workflows. Build and test the workspace source as described
 in the [package README](typescript/agent-learning-kit/README.md); inspect the
 manifest and exports for the version you use.
 
