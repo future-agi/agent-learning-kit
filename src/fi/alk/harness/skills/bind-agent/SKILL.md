@@ -16,10 +16,13 @@ and whether it is sealed.
 1. Read the brief: the environment's tools and policy, the world's tables, the agent's admitted
    tools, and every scenario with its reference solution and checks. Read rows with `world_rows`
    whenever you need the real formats of names, dates, identifiers or enum values.
-2. When the agent calls the environment's own tools with the environment's own arguments (the
-   brief says the mode is `canonical`) or has no tools (`conversation_only`), there is no binding
-   to write: go to step 4. A tool with the environment's name but other arguments is listed under
-   "same name, different arguments" and is mapped like any other.
+2. When the agent has exactly the environment's tools, called with the environment's own
+   arguments (the brief says the mode is `canonical`), or has no tools (`conversation_only`),
+   there is no binding to write: go to step 4. When it has only some of them, each called as-is,
+   the harness has already submitted the binding that maps each onto itself (the brief says so),
+   so it is served its own tools and no others: go to `run_proof`. A tool with the environment's
+   name but other arguments is listed under "same name, different arguments" and is mapped like
+   any other.
 3. Write the binding and submit it with `submit_binding`. Code derives the trajectory of every
    scenario whose reference solution the binding inverts (an agent tool mapped onto one
    environment tool, its arguments renamed, converted, mapped or aliased); the reply says how many
@@ -69,8 +72,9 @@ value is invalid); then "alias": "<table in aliases>" (an unknown value is inval
 Every required environment argument must be present and must come from the agent's arguments, an
 earlier step or a fixture: a binding never supplies the answer itself. Templates see `args`,
 `steps` (id -> result) and `fixtures`, with filters `json` and `alias_back(table)`. Without a
-response the agent receives the last step's result. One agent call runs its steps in order in one
-transaction: the first refusal rolls it back.
+response the agent receives the last step's result. Whatever the agent receives is what the
+trace records and the checks read for that call, never the richer result the world returned. One
+agent call runs its steps in order in one transaction: the first refusal rolls it back.
 
 ## How a binding is proved
 
@@ -82,4 +86,5 @@ no calls at all, each state-changing call removed, and each state-changing call 
 argument replaced by garbage. A scenario whose reference solution uses an environment tool no
 mapped step reaches is unscorable and needs no trajectory. Write trajectories the way the agent
 really would call its tools: its names, formats and casing, as its tool schemas and prompt describe
-them.
+them. Every call is checked against the agent's own tool schema, as a run checks it: a call the
+schema refuses is refused at submission, never derived, and fails a scenario it appears in.
