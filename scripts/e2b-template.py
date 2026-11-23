@@ -380,6 +380,28 @@ if present:
 PY""",
         ),
     ]
+    checks.append(
+        (
+            # The kit's browser for browser agents (Dockerfile.hosted): any service user can run it,
+            # and it starts headless, renders a page and writes a screenshot with no network.
+            "browser-chromium",
+            (
+                "test \"$(stat -L -c '%a' \"$(command -v alk-chromium)\")\" = 555 && "
+                "profile=\"$(mktemp -d)\" && "
+                "alk-chromium --headless=new --no-sandbox --disable-gpu --no-first-run "
+                "--user-data-dir=\"$profile\" --dump-dom "
+                "'data:text/html,<title>alk</title><p>alk-browser-ready</p>' "
+                "| grep -q alk-browser-ready && "
+                "alk-chromium --headless=new --no-sandbox --disable-gpu --no-first-run "
+                "--user-data-dir=\"$profile\" --window-size=800,600 "
+                "--screenshot=\"$profile/shot.png\" "
+                "'data:text/html,<p>alk-browser-ready</p>' && "
+                "test \"$(head -c 8 \"$profile/shot.png\" | od -An -tx1 | tr -d ' \\n')\" = "
+                "89504e470d0a1a0a && "
+                "rm -rf \"$profile\""
+            ),
+        )
+    )
     for version in catalog["runtimes"].get("python", []):
         token = re.sub(r"[^0-9.]", "", str(version))
         if not re.fullmatch(r"\d+\.\d+", token):

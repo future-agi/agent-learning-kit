@@ -76,6 +76,19 @@ RUN python3.11 -m venv /tmp/python311-smoke \
 RUN rabbitmqctl version | grep -Eq '^3\.13\.' \
     && rabbitmq-plugins list -m | grep -qx rabbitmq_management
 
+# A browser for browser agents: the kit launches one for each world, and the agent attaches to it.
+# Playwright pins the build and installs its system libraries and fonts. The browsers stay in a
+# fixed, read-only folder that every service user can run, and are not put on any agent's path
+# for its own Playwright: the kit starts this one at /usr/local/bin/alk-chromium.
+RUN PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+      uvx --from 'playwright==1.52.0' playwright install --with-deps chromium \
+    && chrome="$(find /opt/ms-playwright -path '*/chrome-linux*/chrome' -type f | head -n 1)" \
+    && test -n "$chrome" \
+    && ln -s "$chrome" /usr/local/bin/alk-chromium \
+    && chmod -R a+rX,a-w /opt/ms-playwright \
+    && rm -rf /var/lib/apt/lists/* /root/.cache/uv \
+    && alk-chromium --version
+
 RUN groupadd --gid 2000 svc-control \
     && useradd --uid 2000 --gid 2000 --create-home --shell /bin/bash svc-control \
     && groupadd --gid 2001 svc-agent \
