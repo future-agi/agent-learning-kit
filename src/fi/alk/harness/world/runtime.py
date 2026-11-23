@@ -288,8 +288,11 @@ def graded_calls(calls: Sequence[Call]) -> list[Call]:
 
 def _worker_event(call: Call) -> dict[str, Any]:
     """Where a call sits among the app's agents, as the runtime recorded it, for a call any runtime attributed."""
+    # The id the agent gave its own call says nothing of where the call sits among its agents
+    # ("agent" is tool_evidence.AGENT, the agent's own account).
+    ids_only_call_id = call.source == "agent" and set(call.runtime_ids) <= {"call_id"}
     if not (
-        call.runtime_ids
+        (call.runtime_ids and not ids_only_call_id)
         or call.worker_id
         or call.worker_label
         or call.delegated_to

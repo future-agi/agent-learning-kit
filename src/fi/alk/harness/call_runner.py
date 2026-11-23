@@ -1211,6 +1211,9 @@ def one_call_per_lost_answer(calls: Sequence[Call], log: Sequence[Mapping[str, A
             continue
         if ran is not None and heard is not None:
             kept = [call for call in kept if call is not heard]
+            # The record folded away saw the same call.
+            for source in (heard.source, *heard.seen_by):
+                evidence.seen(ran, source)
         one.ok, one.error, one.answer_lost = True, "", True
     return kept
 
@@ -1389,7 +1392,7 @@ def collect_seam_calls(
         # span and the door row of one call are read as one worker's call, not two calls.
         if call.worker_id and not call.worker_label and (worker_names or {}).get(call.worker_id):
             call.worker_label = (worker_names or {})[call.worker_id]
-    merged = _merge_span_calls(calls, from_spans)
+    merged = _join_spans(calls, from_spans, runtime)
     if unread is not None and not graded_calls(merged):
         raise ToolCaptureFailed(str(unread), calls=merged) from None
     return merged
@@ -2942,6 +2945,11 @@ def collect_file_tool_calls(
     return _with_span_calls((), runtime, strict=strict)
 
 
+# A runtime's ``tool_spans_join`` when the build switched its spans on where kit dev had them off (a callback agent with
+# no runtime command): a span is a call only in an empty list. No value means kit dev's reading.
+SPANS_INTO_AN_EMPTY_LIST = "empty_list_only"
+
+
 def _with_span_calls(
     observed: Sequence[Call], runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
@@ -2950,6 +2958,46 @@ def _with_span_calls(
     is the world's."""
     written, from_spans = _read_file_tool_calls(runtime, strict=strict)
     return _merge_span_calls(evidence.tagged(observed, evidence.WORLD) or written, from_spans)
+
+
+def _join_spans(calls: list[Call], from_spans: list[Call], runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+    """The one place span lines join the calls, for every runner (`collect_seam_calls`). Where the build switched
+    spans on with ``SPANS_INTO_AN_EMPTY_LIST``, a span is a call only when no other source recorded a graded call."""
+    join = (getattr(runtime, "metadata", None) or {}).get("tool_spans_join")
+    if join == SPANS_INTO_AN_EMPTY_LIST and from_spans and graded_calls(calls):
+        return _lend_only(calls, from_spans)
+    return _merge_span_calls(calls, from_spans)
+
+
+def _lend_only(calls: list[Call], from_spans: list[Call]) -> tuple[Call, ...]:
+    """The calls with what their spans lend, and no call that only a span saw. A lend never takes a call out of the
+    graded list."""
+    graded = {id(call) for call in graded_calls(calls)}
+    before = {
+        id(call): (call.delegated_to, call.runtime_ids.get("parent_event_id"), call.parent_span_id, call.relationship)
+        for call in calls
+    }
+    merged = _merge_span_calls(calls, from_spans)
+    kept = [call for call in merged if id(call) in before]
+    left_out = {call.runtime_ids.get("event_id") for call in merged if id(call) not in before} - {None}
+    for call in kept:
+        _delegated, _parent, parent_span_id, relationship = before[id(call)]
+        if call.parent_span_id != parent_span_id and call.parent_span_id in left_out:
+            # The place a span lent points at a span that is no call here.
+            call.parent_span_id, call.relationship = parent_span_id, relationship
+    while True:
+        still = {id(call) for call in graded_calls(kept)}
+        lost = [call for call in kept if id(call) in graded and id(call) not in still]
+        if not lost:
+            break
+        # A lent hand-off mark and parent would read the call as a job repeating the call that launched it.
+        for call in lost:
+            delegated, parent, _place, _relationship = before[id(call)]
+            call.delegated_to = delegated
+            call.runtime_ids = {key: value for key, value in call.runtime_ids.items() if key != "parent_event_id"}
+            if parent:
+                call.runtime_ids["parent_event_id"] = parent
+    return tuple(kept)
 
 
 def tool_routes(contract: Mapping[str, Any]) -> dict[str, str]:
@@ -3124,6 +3172,71 @@ def _call_id(call: Call) -> str:
 
 # Said when the agent's trace holds identical untimed lines with no call id: one call written twice or two calls.
 CALLS_MAYBE_REPEATED = "calls_maybe_repeated"
+# Said when the agent's process turned framework span sources on, when it could not because an instrumentor was not
+# installed, and when a source that was on wrote no tool span for a call the agent's own process ran. None is a call,
+# and none is missing evidence: the calls are what the other sources recorded.
+TOOL_SPANS_ON = "tool_spans_on"
+TOOL_SPANS_NOT_INSTALLED = "tool_spans_not_installed"
+TOOL_SPANS_SILENT = "tool_spans_silent"
+
+
+def _observing(runtime: EnvironmentRuntime) -> set[tuple[str, str]] | None:
+    """The framework span sources the agent's process noted (the mark hook's ``.observing`` file beside the trace), as
+    a set of framework and state; None when the note is missing or any of it cannot be read."""
+    path = _tool_trace_file(runtime)
+    if path is None:
+        return None
+    try:
+        text = Path(str(path) + ".observing").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    noted: set[tuple[str, str]] = set()
+    for line in text.splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            return None
+        if not (isinstance(record, dict) and isinstance(record.get("framework"), str)
+                and isinstance(record.get("state"), str)):
+            return None
+        noted.add((record["framework"], record["state"]))
+    return noted or None
+
+
+def tool_span_notices(
+    runtime: EnvironmentRuntime, calls: Sequence[Call], *, silent: bool = True
+) -> list[dict[str, Any]]:
+    """What the trial's framework span sources were: on, not installed, and silent (on, no tool span in the trace,
+    while the agent's own process ran a call: a tracer line or a completed call in the agent's account).
+
+    A voice trial says nothing of silence (``silent=False``): its LiveKit worker writes a tracer line for every tool it
+    runs, while its framework's spans are read for hand-offs, so a framework with no tool span is no sign of a fault."""
+    noted = _observing(runtime)
+    if noted is None:
+        return []
+    on = sorted({framework for framework, state in noted if state in ("on", "process_own")})
+    live = sorted({framework for framework, state in noted if state == "on"})
+    missing = sorted({framework for framework, state in noted if state == "not_installed"})
+    notices = []
+    if on:
+        notices.append({"code": TOOL_SPANS_ON, "message": f"Framework span sources were on for {', '.join(on)}."})
+    if missing:
+        notices.append(
+            {
+                "code": TOOL_SPANS_NOT_INSTALLED,
+                "message": f"No span source for {', '.join(missing)}: its instrumentor was not installed.",
+            }
+        )
+    ran = [call for call in graded_calls(calls) if call.source in (evidence.TRACER, evidence.AGENT)]
+    if silent and live and ran and not _read_file_tool_calls(runtime)[1]:
+        notices.append(
+            {
+                "code": TOOL_SPANS_SILENT,
+                "message": f"Spans were on for {', '.join(live)}, but the trace holds no tool span for the calls the "
+                "agent ran; the calls are the other sources' records.",
+            }
+        )
+    return notices
 
 
 # Written by the agent's observer (`simulation_worker_events.HAND_OFF_UNRECORDED`) when a hand-off could not be kept.
@@ -3534,6 +3647,12 @@ def _digest(call: Call) -> str:
         for key, value in vars(call).items()
         if key not in ("at", "ended_at", *evidence.FIELDS)
     }
+    if call.source == evidence.AGENT:
+        # The agent's own account carries the agent's call ids, and two of its calls alike in all else are as
+        # interchangeable as they were when it carried none.
+        fields["runtime_ids"] = {
+            key: value for key, value in call.runtime_ids.items() if key not in ("call_id", "tool_call_id")
+        }
     return json.dumps(fields, sort_keys=True, default=repr)
 
 
@@ -3580,6 +3699,9 @@ def _other_worker(span: Call, call: Call) -> bool:
     return bool(mine and theirs and not (mine & theirs))
 
 
+_EVENT_IDS = ("event_id", "parent_event_id", "started_event_id")
+
+
 def _lend_span(span: Call, other: Call) -> None:
     """Give another tracer's call the span's agent, hand-off and times, keeping what it recorded itself. The span is
     listed as having seen the call; it never takes the call's graded facts (tool_evidence.py)."""
@@ -3588,9 +3710,13 @@ def _lend_span(span: Call, other: Call) -> None:
     other.delegated_to = other.delegated_to or span.delegated_to
     other.transferred = other.transferred or span.transferred
     other.ended_at = other.ended_at or span.ended_at
-    if not other.runtime_ids:
-        # The span's place among the agents goes with its ids: a parent is an id in the same record.
-        other.runtime_ids = span.runtime_ids
+    if not other.runtime_ids or (
+        other.source == evidence.AGENT and not any(other.runtime_ids.get(key) for key in _EVENT_IDS)
+    ):
+        # The span's place among the agents goes with its event ids: a parent is an id in the same record. The record's
+        # own ids stay; the span supplies only those it lacks. The agent's own account carries the call id the agent
+        # gave, and still takes the span's event ids; any other record with an id of its own keeps what it has.
+        other.runtime_ids = {**span.runtime_ids, **other.runtime_ids}
         other.parent_span_id, other.relationship = (
             span.parent_span_id,
             span.relationship,
@@ -4692,7 +4818,7 @@ class CallRunnerImpl:
                 trial_notices += evidence_notices(
                     action_log, calls, in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints)
                 )
-        trial_notices += repeated_untimed_notices(calls) + hand_off_notices(runtime)
+        trial_notices += repeated_untimed_notices(calls) + hand_off_notices(runtime) + tool_span_notices(runtime, calls, silent=False)
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
