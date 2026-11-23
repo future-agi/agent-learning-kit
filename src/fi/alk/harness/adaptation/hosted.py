@@ -5,6 +5,8 @@ provider key (never placed in the process environment, never seen by the model),
 PostgreSQL the proofs run on, hands the conversation's builder what it needs in the workspace, and
 waits until the builder finishes, exactly as a build waits for its harness. The builder session
 does the binding through the workbench; this process turns its `result.json` into the exit code.
+With `--auto` (the platform's run mode) there is no builder: this process binds the agent itself
+(`auto.py`) and writes the same files.
 
 Workspace layout (`/work/authoring`): `adaptation/inputs.json` and `adaptation/profile.json` from
 this process; `adaptation/result.json` and the sealed files from the workbench; the builder's
@@ -163,6 +165,8 @@ def run_hosted(args: argparse.Namespace) -> int:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump({"postgres_dsn": dsn}, stream)
         write_json(output / PROFILE, profile.document())
+        if getattr(args, "auto", False):
+            return _run_auto(output, environments, suite_root, dsn, profile, job)
         # Written last: its presence tells the builder everything else is in place.
         write_json(
             output / INPUTS,
@@ -172,6 +176,38 @@ def run_hosted(args: argparse.Namespace) -> int:
             },
         )
         return _await_result(output)
+
+
+def _run_auto(
+    output: Path,
+    environments: list[Path],
+    suite_root: Path,
+    dsn: str,
+    profile: Any,
+    job: Any,
+) -> int:
+    """Run mode: no builder session. This process binds the agent itself (`auto.py`) and leaves
+    the same result.json and marker a builder would."""
+    from .. import spend
+    from .auto import adapt
+
+    # The platform reads this ledger before the sandbox is deleted and bills it as authoring.
+    spend.journal_to(output.parent / "cost.json")
+    workbench = Workbench(
+        environments=environments,
+        suite_root=suite_root,
+        output=output,
+        postgres_dsn=dsn,
+        profile=profile,
+        finished_marker=output.parent / FINISHED_MARKER,
+    )
+    try:
+        asyncio.run(adapt(workbench, (job.metadata or {})["adaptation"].get("pairing")))
+    except AdaptationFailure as exc:
+        workbench.fail(exc.code, exc.message)
+    result = json.loads((output / RESULT).read_text(encoding="utf-8"))
+    print(json.dumps({"status": result.get("status")}))
+    return 0 if result.get("status") == "completed" else 2
 
 
 async def load_workbench(workspace: Path) -> Workbench:

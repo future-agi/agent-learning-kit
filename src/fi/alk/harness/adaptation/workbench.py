@@ -447,6 +447,28 @@ class Workbench:
             and any(v.status == "proved" for v in self.verdicts.values())
         )
 
+    def leave_failed_unscorable(self) -> None:
+        """`hosted --auto` only, with nobody to repair the mapping: a scenario whose proof still
+        fails is left out of the agent's score with the reason, rather than blocking the seal.
+        The proof is rewritten to say so, so what is sealed and what is restored agree."""
+        from ..binding_proof import BindingProofV1
+
+        if self.proof is None:
+            return
+        scenarios = self.proof.get("scenarios") or {}
+        for key, verdict in self.verdicts.items():
+            if verdict.status == "failed" and key in scenarios:
+                scenarios[key] = {
+                    "status": "unscorable",
+                    "reason": f"the mapping failed the check: {verdict.reason}",
+                    "adversarial": {},
+                }
+        self.proof["passed"] = not any(
+            one["status"] == "failed" for one in scenarios.values()
+        )
+        self.verdicts = binding_verdicts(BindingProofV1.model_validate(self.proof))
+        self._save_state()
+
     def report_conflicts(self, items: Sequence[Any]) -> tuple[bool, str]:
         rules = {rule.id: rule for rule in self.policy.rules}
         problems: list[str] = []
@@ -500,38 +522,56 @@ class Workbench:
     def approval_question(self) -> str:
         agent = self.profile.target.get("name") or "the agent"
         environment = self.releases[-1]["name"]
+        # One fact per line: the chat shows this as plain text, and a reviewer reads the
+        # mapping first. Unscorable scenarios are counted, not listed; the environment's
+        # composition lists each one.
         lines = [f"Use this binding for {agent} on {environment}?"]
         mapped, unsupported, _candidates, unscorable = self._outcome()
         if mapped:
-            lines.append(
-                "Mapped: "
-                + "; ".join(
-                    f"{one['agent_tool']} -> {' + '.join(one['steps'])}"
-                    for one in mapped
-                )
-            )
+            lines += ["", f"Mapped tools ({len(mapped)}):"]
+            lines += [
+                f"• {one['agent_tool']} → {' + '.join(one['steps'])}" for one in mapped
+            ]
         if unsupported:
-            lines.append(
-                "Unsupported: "
-                + "; ".join(
-                    f"{one['agent_tool']} ({one['reason']})" for one in unsupported
-                )
-            )
+            lines += ["", f"Unsupported tools ({len(unsupported)}):"]
+            lines += [f"• {one['agent_tool']}: {one['reason']}" for one in unsupported]
+        if self.conflicts:
+            lines += ["", f"Policy conflicts ({len(self.conflicts)}):"]
+            lines += [
+                f"• {one['rule']}: policy says '{one['policy']}', the agent says '{one['agent']}'"
+                for one in self.conflicts
+            ]
+        total = len(self.base_suite.scenarios)
+        lines += ["", f"Scenarios: {total - len(unscorable)} of {total} can be scored."]
         if unscorable:
             lines.append(
-                f"{len(unscorable)} scenario(s) cannot be scored: "
-                + ", ".join(one["scenario_key"] for one in unscorable)
-            )
-        if self.conflicts:
-            lines.append(
-                "Policy conflicts: "
-                + "; ".join(
-                    f"{one['rule']}: policy says '{one['policy']}', the agent says '{one['agent']}'"
-                    for one in self.conflicts
-                )
+                f"{len(unscorable)} need a tool this agent doesn't have, so they are left "
+                "out of its score (listed on the environment's Composition)."
             )
         lines.append("The test suite is unchanged.")
         return "\n".join(lines)
+
+    def approval_data(self) -> dict[str, Any]:
+        """What the approval question says, as data, for a page that shows it as a review."""
+        mapped, unsupported, _candidates, unscorable = self._outcome()
+        total = len(self.base_suite.scenarios)
+        return {
+            "mapped": [
+                {"agent_tool": one["agent_tool"], "steps": list(one["steps"])}
+                for one in mapped
+            ],
+            "unsupported": [
+                {"agent_tool": one["agent_tool"], "reason": one["reason"]}
+                for one in unsupported
+            ],
+            "unscorable": [
+                {"scenario_key": one["scenario_key"], "reason": one["reason"]}
+                for one in unscorable
+            ],
+            "conflicts": [dict(one) for one in self.conflicts or []],
+            "total": total,
+            "scorable": total - len(unscorable),
+        }
 
     def _outcome(
         self,
