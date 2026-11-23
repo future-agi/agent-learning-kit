@@ -5433,7 +5433,7 @@ def _voice_reading(tmp_path, monkeypatch, *, lines, seam, table=None, table_fail
             raise cr.ToolCaptureFailed("tool_trace table unreadable")
         return tuple(dataclasses.replace(call) for call in (table or []))
 
-    monkeypatch.setattr(cr, "_collect_tool_trace_calls", read_table)
+    monkeypatch.setattr(cr, "collect_tool_trace_calls", read_table)
     monkeypatch.setattr(cr, "_collect_http_tool_calls", lambda runtime, **_: tuple(read_table(runtime)))
     monkeypatch.setattr(cr, "_lend_span", lend)
     monkeypatch.setattr(cr, "_digest", _digest_as_it_was if lend is _lend_span_as_it_was else _digest_now)
@@ -5587,7 +5587,7 @@ def test_a_voice_span_that_recorded_less_never_takes_the_lines_record(tmp_path, 
 
 def test_every_voice_record_names_its_source(tmp_path, monkeypatch) -> None:
     trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPOKEN_LINES)
-    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda runtime, **_: tuple(_table_rows()))
+    monkeypatch.setattr(cr, "collect_tool_trace_calls", lambda runtime, **_: tuple(_table_rows()))
     _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
 

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from fi.alk.harness import call_runner, tool_evidence
-from fi.alk.harness.chat_call_runner import _HostedChatTarget, _record_completed_tool_call
+from fi.alk.harness.chat_call_runner import HostedChatTarget, _record_completed_tool_call
 from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 from fi.alk.harness.tool_evidence import AGENT, SPAN, TRACER, WORLD, seen, tagged
 from fi.alk.harness.world.runtime import Call, trace_row
@@ -344,7 +344,7 @@ def test_a_google_adk_reply_streamed_in_parts_reads_as_one_record_per_call(tmp_p
             return reader._agent_response_from_payload(_decode_json_or_sse(events))
 
     world = _World()
-    target = _HostedChatTarget(
+    target = HostedChatTarget(
         wrapper=_Agent(),
         contract=SimpleNamespace(runtime=None, tool_entrypoints=[]),
         world=world,
