@@ -1375,6 +1375,7 @@ async def validate_once(
                         secret_values=target_secret_values,
                         candidate_hash=_generic_candidate_hash(source, authoring),
                         local_auth_values=getattr(runtime, "_local_auth_values", None),
+                        work_directory=work,
                     )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"

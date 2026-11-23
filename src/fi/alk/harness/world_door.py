@@ -534,8 +534,11 @@ _TRIAL_SCHEMA_MADE: set[str] = set()
 _TRIAL_SCHEMA_LOCK = threading.Lock()
 
 
+
+
 def _trial_schema(address: str) -> None:
-    """Makes this world's trial tables and columns, once per world database in this process."""
+    """Makes this world's trial tables and columns when any is missing, once per world database in this process. A
+    world made from a baseline has them all (`HARNESS_TABLES_DDL`), and its role may neither create nor alter them."""
     with _TRIAL_SCHEMA_LOCK:
         if address in _TRIAL_SCHEMA_MADE:
             return
@@ -1464,19 +1467,26 @@ _BASIC = "name, arguments, result, ok, error, at"
 # Written when the table has them: how a call was made, the path it went to, and the scenario's fault the door applied on it.
 _CALL_COLUMNS = ("method", "fault", "endpoint")
 _CALL_COLUMNS_DDL = (
-    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb, "
+    "ALTER TABLE IF EXISTS _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb, "
     "ADD COLUMN IF NOT EXISTS endpoint text"
 )
 # Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a
 # failed write can leave without the row.
-_KEYS_DDL = (
+_KEYS_TABLE_DDL = (
     "CREATE TABLE IF NOT EXISTS _alk_action_keys "
-    "(actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (actor_id, idempotency_key));"
-    "ALTER TABLE _alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
+    "(actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (actor_id, idempotency_key))"
+)
+_KEYS_RESPONSE_DDL = "ALTER TABLE _alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
+_KEYS_DDL = f"{_KEYS_TABLE_DDL};{_KEYS_RESPONSE_DDL}"
+# The harness's own tables in a world, made on the baseline before the world role's grant: the grant then covers them
+# and every world copy has them. A world role can neither create a table nor alter one it does not own.
+HARNESS_TABLES_DDL = (
+    *TRIAL_TABLES_DDL,
+    _KEYS_TABLE_DDL,
+    _KEYS_RESPONSE_DDL,
+    _CALL_COLUMNS_DDL,
 )
 _KEYS_COLUMNS = ddl_columns(_KEYS_DDL)
-# Every per-trial table, made with the world's seed so it is in the sealed template before any role is granted rights.
-HARNESS_TABLES_DDL = (*TRIAL_TABLES_DDL, _KEYS_DDL)
 
 
 class PostgresLog:
@@ -1522,6 +1532,9 @@ class PostgresLog:
         import psycopg
 
         self._call_columns_tried = True
+        if set(_CALL_COLUMNS) <= self._table_columns():
+            # Made on the baseline: a world role does not own the table, so it could not add them.
+            return
         try:
             with self._connect() as connection:
                 connection.execute(_CALL_COLUMNS_DDL)

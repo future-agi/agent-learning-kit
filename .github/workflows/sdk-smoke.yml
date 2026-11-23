@@ -37,6 +37,28 @@ jobs:
             -k real_openai_agents_sdk | tee pytest.out
           ! grep -q "skipped" pytest.out
 
+  langgraph-reference:
+    # The LangGraph reference agent on the versions its requirements file pins, driven through
+    # the kit's adapter against a local endpoint. The pins are for this job only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit with the reference's pinned libraries
+        run: >-
+          python -m pip install . pytest
+          -r examples/harness/langgraph_support/requirements.txt
+      - name: Run the reference on its pins, failing if it skips
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_langgraph_reference.py \
+            -k pinned_libraries | tee pytest.out
+          ! grep -q "skipped" pytest.out
+
   tool-trace-other-pythons:
     # The tool tracer's own subprocesses on another Python, which reads frames differently from
     # 3.12 (a suspension ends on a RESUME on 3.13; a close or a cancel is not carried by the
@@ -111,6 +133,28 @@ jobs:
           | tee pytest.out;
           ! grep '^SKIPPED' pytest.out
           | grep -v -e 'root reads a mode-000' -e "case-sensitive disk can't spell"
+
+  langchain-reference:
+    # The LangChain reference agent on the versions its requirements file pins, driven through
+    # the kit's LangGraph adapter against a local endpoint. The pins are for this job only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit with the reference's pinned libraries
+        run: >-
+          python -m pip install . pytest
+          -r examples/harness/langchain_support/requirements.txt
+      - name: Run the reference on its pins, failing if it skips
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_langchain_reference.py \
+            -k pinned_libraries | tee pytest.out
+          ! grep -q "skipped" pytest.out
 
   clean-install:
     # Install, doctor, the local simulation and the suites that need their own SDK versions. The
@@ -275,10 +319,10 @@ jobs:
         # pre-existing failures unrelated to the voice engine (CLI golden-path,
         # init presets, plus test_config_and_facades hangs) — track those
         # separately so this gate stays green and meaningful.
-        # Deselected below: the two sandbox-server tests are TH-8978, and
-        # test_the_system_prompt_stays_within_budget is out until its budget is decided (the
-        # scenario writer's prompt is 170k characters against a 90k budget set on 23 Sep). (The
-        # run is one folded line, so they are named here rather than beside each --deselect.)
+        # Deselected below: test_the_system_prompt_stays_within_budget is out until its budget
+        # is decided (the scenario writer's prompt is 170k characters against a 90k budget set on
+        # 23 Sep). (The run is one folded line, so it is named here rather than beside its
+        # --deselect.)
         run: >-
           python -m pytest -q
           tests/runtime/test_livekit_engine.py
@@ -294,14 +338,14 @@ jobs:
           tests/harness/test_multi_agent_compatibility_references.py
           tests/harness/test_source_folder.py
           tests/test_harness_sandbox_server.py
-          --deselect tests/test_harness_sandbox_server.py::test_private_github_submission_becomes_hosted_job
-          --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref
+          tests/test_harness_refusals.py
           tests/test_harness_generated_runtime.py
           tests/test_harness_service_environments.py
           tests/test_harness_architecture.py
           tests/test_harness_credentials.py
           tests/harness/test_controller_env.py
           tests/harness/test_call_runner.py
+          tests/harness/test_tool_evidence.py
           tests/test_harness_secrets.py
           tests/test_evals_openai_instrumentor.py
           tests/test_live_mcp_worker_errors.py
@@ -362,14 +406,18 @@ jobs:
           tests/harness/test_instrumentation_evidence.py
           tests/harness/test_agent_type_refusal.py
           tests/harness/test_google_adk_reference.py
+          tests/harness/test_http_streamed_tool_calls.py
+          tests/harness/test_livekit_reference.py
           tests/harness/test_python_source_codecs.py
           tests/harness/test_executor_completed_counts.py
           tests/harness/test_deep_agents_reference.py
           tests/harness/test_langgraph_http_adapter.py
+          tests/harness/test_langgraph_reference.py
           tests/harness/test_reading_entry.py
           tests/harness/test_agent_reading.py
           tests/harness/test_newer_python_syntax.py
           tests/harness/test_crewai_reference.py
+          tests/harness/test_langchain_reference.py
           tests/harness/test_scan_walk.py
           tests/harness/test_browser_scan_cut.py
           tests/harness/test_save_child.py
@@ -387,3 +435,11 @@ jobs:
           tests/test_e2b_template_build_id.py
           tests/test_release_pr_step.py
           tests/episode
+      - name: Run the LiveKit reference on the version it pins, failing if it skips
+        if: matrix.dependencies == 'minimum-livekit'
+        # This row installs livekit-agents 1.8.3, the reference's pin. The newest row has no
+        # livekit extra, so the tests that import the example skip there.
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_livekit_reference.py | tee livekit.out
+          ! grep -q "skipped" livekit.out

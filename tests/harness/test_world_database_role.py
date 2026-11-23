@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
+import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -26,6 +27,7 @@ from fi.alk.harness import process_runtime as pr
 from fi.alk.harness import tool_trace_proxy as proxy
 from fi.alk.harness.actors import ACTORS_DDL
 from fi.alk.harness.bundle_v2 import BaselineStrategy
+from fi.alk.harness.world_door import HARNESS_TABLES_DDL, PostgresLog
 from fi.alk.harness.world_roles import seed_escalation_queries
 
 _CREDENTIALS = pr.EngineCredentials("harness", "pw", world_secret="job-secret")
@@ -194,6 +196,9 @@ def test_the_baseline_grants_its_rows_to_the_group_before_it_is_sealed(tmp_path:
     granted = next(i for i, s in enumerate(statements) if "GRANT SELECT, INSERT" in s)
     group = next(i for i, s in enumerate(statements) if "NOLOGIN" in s)
     assert group < granted < sealed
+    # The harness's own tables are made before the grant, so it covers them in every world copy.
+    made = [statements.index(statement) for statement in HARNESS_TABLES_DDL]
+    assert max(made) < granted
     assert "REVOKE CREATE ON SCHEMA public FROM PUBLIC" in statements[:sealed]
     assert "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC" in statements[:sealed]
     assert not [s for s in statements if "GRANT CREATE" in s or "GRANT ALL" in s]
@@ -262,6 +267,13 @@ def worlds():
     run(baseline, "INSERT INTO riders (name) VALUES ('a'), ('b')")
     run(baseline, "CREATE SCHEMA billing")
     run(baseline, "CREATE TABLE billing.invoices (id serial PRIMARY KEY, amount int)")
+    # An older bundle's action log: it records actors, but not how a call was made or the fault applied on it.
+    run(
+        baseline,
+        "CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+        "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL, "
+        "actor_id text NOT NULL DEFAULT 'agent')",
+    )
     pr._grant_world_role_group(
         port=port,
         credentials=superuser,
@@ -917,3 +929,87 @@ def test_the_seed_check_refuses_only_what_the_seed_added_or_changed(migration, s
     finally:
         run("postgres", 'ALTER ROLE "alk_world_tools" NOCREATEDB')
         run("postgres", f'DROP DATABASE IF EXISTS "{baseline}"')
+
+
+def _as_superuser(dbname: str, statement: str) -> None:
+    parts = urlsplit(_REAL)
+    pr.default_sql_runner(
+        host=parts.hostname or "localhost",
+        port=parts.port or 5432,
+        user=parts.username,
+        password=parts.password or "",
+        dbname=dbname,
+        statement=statement,
+    )
+
+
+@real_postgres
+def test_a_world_s_role_reads_the_trial_faults_the_runner_wrote(worlds, monkeypatch):
+    """The runner writes a trial's faults as the superuser, and the tool proxy reads them with the world's role."""
+    from fi.alk.harness import tool_trace_proxy
+    from fi.alk.harness.world_door import TRIAL_FAULTS_DDL
+
+    connect, _reset, _baseline = worlds
+    _as_superuser("w0", TRIAL_FAULTS_DDL)
+    _as_superuser(
+        "w0",
+        "INSERT INTO _alk_trial_faults (id, faults) VALUES "
+        """(1, '[{"tool": "book", "kind": "timeout_before_commit"}]'::jsonb) """
+        "ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults",
+    )
+    monkeypatch.setattr(tool_trace_proxy, "DATABASE_URL", "the world's role")
+    monkeypatch.setattr(tool_trace_proxy, "_FAULTS_CONNECTION", connect(0, "w0"))
+
+    assert tool_trace_proxy._trial_faults() == [{"tool": "book", "kind": "timeout_before_commit"}]
+
+
+@real_postgres
+def test_a_world_s_role_claims_an_actor_key_once(worlds, monkeypatch):
+    """A door claims each keyed actor action with the world's role, which can neither create nor alter the table."""
+    connect, _reset, _baseline = worlds
+    log = PostgresLog("the world's role")
+    monkeypatch.setattr(log, "_connect", lambda **_: connect(0, "w0"))
+
+    assert log.claim("approve-1", "manager") is None
+    assert log.claim("approve-1", "manager") == "pending"
+    log.settle("approve-1", "manager", "committed", {"ok": True})
+    assert log.claim("approve-1", "manager") == "committed"
+
+
+@real_postgres
+def test_an_older_bundle_s_action_log_records_how_each_call_was_made(worlds, monkeypatch):
+    """A log made before the method, fault and endpoint columns gains them on the baseline; a world role could not add
+    them."""
+    connect, _reset, _baseline = worlds
+    log = PostgresLog("the world's role")
+    monkeypatch.setattr(log, "_connect", lambda **_: connect(0, "w0"))
+
+    log._ensure_call_columns()
+
+    assert {"method", "fault", "endpoint"} <= log._table_columns()
+
+
+@real_postgres
+def test_a_world_s_role_keeps_its_workers_runs_and_stops(worlds):
+    """The in-process door marks a worker's run and claims its stop with the world's role, which may neither create
+    nor alter a table: the baseline made them before the grant."""
+    from fi.alk.harness import world_door
+
+    connect, _reset, _baseline = worlds
+    with connect(0, "w0") as connection:
+        address = (
+            f"postgresql://{connection.info.user}:{connection.info.password}"
+            f"@{connection.info.host}:{connection.info.port}/w0"
+        )
+        connection.execute(
+            "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at, started_at) VALUES (1, '[]', %s, %s)",
+            (time.time() - 5, time.time() - 10),
+        )
+    world_door._TRIAL_SCHEMA_MADE.discard(address)
+    world_door.mark_worker_run(address, "refunds")
+    assert world_door.claim_worker_stop(address, "refunds", "", lambda: True) is True
+    with connect(0, "w0") as connection:
+        assert connection.execute("SELECT worker FROM _alk_worker_runs").fetchall() == [("refunds",)]
+        assert connection.execute("SELECT worker, reason FROM _alk_worker_stops").fetchall() == [
+            ("refunds", "deadline_passed")
+        ]

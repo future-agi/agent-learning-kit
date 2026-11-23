@@ -22,6 +22,7 @@ from . import call_runner, chat_call_runner
 from .chat_transport import create_chat_wrapper
 from .contract import AgentContract, RuntimeInterface
 from .environment import ToolExecutionResult
+from .handler_child import HandlerChannel
 from .process_runtime import EnvironmentRuntime
 from .world.runtime import Call
 
@@ -275,6 +276,7 @@ async def request_uncovered_tools(
     secret_values: Mapping[str, str],
     candidate_hash: str,
     local_auth_values: Mapping[str, str] | None = None,
+    work_directory: Path | None = None,
     timeout: float = 120.0,
     budget: float = TOOL_REQUEST_SECONDS,
     limit: int = TOOL_REQUEST_LIMIT,
@@ -296,6 +298,10 @@ async def request_uncovered_tools(
     runs its own tools before answering, which the harness cannot stop; the world is reset
     after the check. Routing is read from the world's side as in the conversation. Never
     raises.
+
+    Under per-user isolation each request's tools run in a handler child of its own, started
+    in ``work_directory`` as a conversation's are, and the child is stopped when the request
+    ends, so a tool that outlasts the deadline is killed rather than left writing to the world.
     """
     path = authoring / "generic-harness" / TOOL_ROUTING
     try:
@@ -335,8 +341,13 @@ async def request_uncovered_tools(
         request_timeout = min(timeout, left)
         since = time.time()
         started = time.monotonic()
+        handlers = None
         try:
             traced = len(call_runner.collect_file_tool_calls(runtime))
+            if work_directory is not None:
+                handlers = await asyncio.to_thread(
+                    chat_call_runner.handler_child_at, bundle, source, work_directory, runtime
+                )
             key = f"tool-request-{uuid4().hex}"
             target = chat_call_runner.HostedChatTarget(
                 wrapper=create_chat_wrapper(
@@ -349,7 +360,13 @@ async def request_uncovered_tools(
                 ),
                 contract=contract,
                 world=_OnlyAsked(
-                    chat_call_runner.tool_world(bundle, contract, runtime, source),
+                    chat_call_runner.tool_world(
+                        bundle,
+                        contract,
+                        runtime,
+                        source,
+                        HandlerChannel(handlers.sock) if handlers is not None else None,
+                    ),
                     tool.name,
                     deadline=time.monotonic() + request_timeout,
                 ),
@@ -374,6 +391,11 @@ async def request_uncovered_tools(
                 ledger, tool.name, fingerprint, [], failed, time.monotonic() - started
             )
             continue
+        finally:
+            if handlers is not None:
+                # Kills the child's whole process group: a tool still running past the deadline
+                # makes no late write to the world.
+                await asyncio.to_thread(handlers.close)
         tools, unobserved = _routing(
             contract,
             runtime,
@@ -442,7 +464,8 @@ class _OnlyAsked:
             worker.start()
             worker.join(max(0.0, self._deadline - time.monotonic()))
             if worker.is_alive():
-                # The thread cannot be stopped; its late result is discarded with this world.
+                # The thread cannot be stopped; its late result is discarded with this world. Under
+                # per-user isolation the request's handler child is killed when the request ends.
                 self.timed_out = True
                 raise TimeoutError(
                     f"{self._asked} outlasted the readiness request deadline"

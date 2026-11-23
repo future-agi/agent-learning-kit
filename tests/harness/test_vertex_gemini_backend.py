@@ -431,3 +431,51 @@ def test_declaration_expands_python_shorthand():
             "rows": {"type": "array", "items": {"type": "object"}},
         }, "required": ["name", "count", "rows"],
     }
+
+
+def test_the_call_budget_holds_across_messages_and_sends_nothing_once_spent(monkeypatch) -> None:
+    from google.adk.models.google_llm import Gemini
+    from google.adk.models.llm_response import LlmResponse
+    from google.genai import types
+
+    from fi.alk.harness.backends import CALL_BUDGET_SPENT, SessionSpec, StageDone
+    from fi.alk.harness.backends.vertex_gemini import VertexGeminiSession
+
+    sent: list[str] = []
+
+    async def generate(self, llm_request, stream=False):
+        sent.append(llm_request.contents[-1].parts[0].text)
+        yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="ok")]))
+
+    monkeypatch.setattr(Gemini, "generate_content_async", generate)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
+
+    async def run():
+        session = VertexGeminiSession(
+            SessionSpec(system_prompt="Reply briefly", max_turns=10, call_budget=2),
+            model="gemini-3.7-flash",
+        )
+        await session.start()
+        ends = []
+        try:
+            for message in ("one", "two", "three", "four"):
+                await session.send(message)
+                ends.append([event async for event in session.replies()][-1])
+            return ends
+        finally:
+            await session.stop()
+
+    ends = asyncio.run(run())
+
+    # The budget is the session's, not one message's: the third message sends nothing.
+    assert sent == ["one", "two"]
+    assert all(isinstance(end, StageDone) for end in ends)
+    assert [(end.outcome, end.calls) for end in ends] == [
+        ("success", 1),
+        ("success", 1),
+        (CALL_BUDGET_SPENT, 0),
+        (CALL_BUDGET_SPENT, 0),
+    ]
+    assert ends[2].is_error

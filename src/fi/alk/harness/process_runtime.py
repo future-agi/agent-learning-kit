@@ -3152,7 +3152,11 @@ def wait_for_dependency(
                 f"{dependency_name}: readiness probe did not pass within {combined_timeout}s",
                 process=dependency_name,
                 domain=FailureDomain.INFRASTRUCTURE,
-                cause=FailureCause.AGENT_NOT_READY_IN_TIME if is_agent else None,
+                cause=(
+                    FailureCause.AGENT_NOT_READY_IN_TIME
+                    if is_agent
+                    else FailureCause.DEPENDENCY_NOT_READY_IN_TIME
+                ),
             ),
         )
         return
@@ -3210,7 +3214,11 @@ def wait_for_dependency(
             f"{_output_tail(spawned.handle, spawned.local_auth_values)}",
             process=dependency_name,
             domain=FailureDomain.INFRASTRUCTURE,
-            cause=FailureCause.AGENT_NOT_READY_IN_TIME if is_agent else None,
+            cause=(
+                FailureCause.AGENT_NOT_READY_IN_TIME
+                if is_agent
+                else FailureCause.DEPENDENCY_NOT_READY_IN_TIME
+            ),
         ),
     )
 
@@ -4905,6 +4913,7 @@ def _wait_for_store_ready(
             f"{process.name}: did not become ready within {timeout}s",
             process=process.name,
             domain=FailureDomain.INFRASTRUCTURE,
+            cause=FailureCause.DEPENDENCY_NOT_READY_IN_TIME,
         ),
     )
 
@@ -5695,6 +5704,8 @@ def _grant_world_role_group(
     """Before the baseline is sealed: the group every world's role belongs to may read and
     change the rows of every customer schema and create nothing, and nobody but the harness
     connects to the cluster's own databases. Template copies carry these grants into every world.
+    The harness's own tables are made first, so the grant covers them: a world role could not
+    create them, nor alter one it does not own.
 
     With a `door` (a bundle that runs its world's door as `svc-door`), the harness's tables are
     taken from the world group and given to the door's group, with only the rights the door uses.
@@ -5713,6 +5724,8 @@ def _grant_world_role_group(
             statement=statement,
         )
 
+    for statement in HARNESS_TABLES_DDL:
+        run(baseline_db, statement)
     group = f'"{WORLD_ROLE_GROUP}"'
     run(
         "postgres",

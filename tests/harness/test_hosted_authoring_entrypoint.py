@@ -149,7 +149,13 @@ def test_exhausted_runtime_repair_returns_nonretryable_exit(tmp_path, monkeypatc
     assert json.loads((tmp_path / "cause.json").read_text()) == {"cause": None}
 
 
-def test_runtime_validation_exit_records_only_the_closed_cause(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "cause",
+    ["agent_exited_before_ready", "dependency_not_ready_in_time"],
+)
+def test_runtime_validation_exit_records_only_the_closed_cause(
+    tmp_path, monkeypatch, cause
+):
     from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
     from fi.alk.harness.job import FailureCause
 
@@ -162,14 +168,12 @@ def test_runtime_validation_exit_records_only_the_closed_cause(tmp_path, monkeyp
         raise RuntimeValidationError(
             "environment",
             "agent: exited before started_check passed: RuntimeError: HELD-BACK CASE",
-            cause=FailureCause.AGENT_EXITED_BEFORE_READY,
+            cause=FailureCause(cause),
         )
 
     monkeypatch.setattr(entrypoint, "authoring_main", failed)
     assert entrypoint.main([]) == 78
-    assert json.loads(cause_path.read_text()) == {
-        "cause": "agent_exited_before_ready"
-    }
+    assert json.loads(cause_path.read_text()) == {"cause": cause}
 
 
 def test_runtime_validation_exit_replaces_what_the_agent_left_at_the_cause_path(

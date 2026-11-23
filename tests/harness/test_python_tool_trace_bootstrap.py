@@ -1708,6 +1708,101 @@ def test_where_the_hook_cant_wrap_the_sdk_the_builds_switch_is_left_on(
     assert finder.armed is (other is _RaisingFinder)
 
 
+def test_the_loader_wrapper_copies_without_recursing(monkeypatch: pytest.MonkeyPatch) -> None:
+    import copy
+    import importlib.machinery
+
+    hook = _load_hook(monkeypatch)
+    real = importlib.machinery.SourceFileLoader("agents", "/nonexistent/agents/__init__.py")
+    wrapper = hook._ChatStyleLoader(hook._OpenAIAgentsFinder(), real)
+    copied = copy.copy(wrapper)
+    assert copied.name == "agents"
+
+
+def test_the_loader_wrapper_passes_for_the_sdks_own_loader_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # pkg_resources picks its provider by the loader's class.
+    import importlib.machinery
+
+    hook = _load_hook(monkeypatch)
+    real = importlib.machinery.SourceFileLoader("agents", "/nonexistent/agents/__init__.py")
+    wrapper = hook._ChatStyleLoader(hook._OpenAIAgentsFinder(), real)
+    assert isinstance(wrapper, importlib.machinery.SourceFileLoader)
+
+
+def test_the_finder_does_not_walk_itself_again_while_it_walks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A finder ahead of it that walks the list again, or a second copy of the hook, would
+    # otherwise call back into it without end.
+    hook = _load_hook(monkeypatch)
+    calls = []
+
+    class WalksAgain:
+        def find_spec(self, fullname, path=None, target=None):
+            calls.append(fullname)
+            if len(calls) > 20:  # the test's own bound, so the old code fails rather than hangs
+                return None
+            for finder in list(sys.meta_path):
+                if finder is not self:
+                    finder.find_spec(fullname, path, target)
+            return None
+
+    first = hook._OpenAIAgentsFinder()
+    monkeypatch.setattr(sys, "meta_path", [first, WalksAgain(), hook._OpenAIAgentsFinder()])
+    assert first.find_spec("agents") is None
+    assert len(calls) < 5
+
+
+def test_a_shared_zip_loader_is_left_unchanged(tmp_path: Path) -> None:
+    import zipfile
+
+    archive = tmp_path / "standin.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("agents/__init__.py", _STANDIN_AGENTS)
+        bundle.writestr("other_module.py", "VALUE = 1\n")
+        bundle.writestr(
+            "openai_agents-0.24.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: openai-agents\nVersion: 0.24.0\n",
+        )
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py",
+        hook / "sitecustomize.py",
+    )
+    calls = tmp_path / "calls.txt"
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {_CHAT_MARK, "HARNESS_TOOL_TRACE", "PYTHONPATH", "OPENAI_API_KEY"}
+    }
+    env.update(
+        {
+            "PYTHONPATH": os.pathsep.join([str(hook), str(archive)]),
+            _CHAT_MARK: "1",
+            "STANDIN_CALLS": str(calls),
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import agents, other_module\n"
+            "print(type(other_module.__loader__).__name__, type(other_module.__spec__.loader).__name__)\n",
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    # The SDK was set, and the zip's other module kept its own, unwrapped loader.
+    assert calls.read_text().splitlines() == ["module-ran", "chat_completions"]
+    assert result.stdout.split() == ["zipimporter", "zipimporter"]
+
+
 def test_the_mechanism_in_use_is_the_one_asked_for(tmp_path: Path, mechanism: str) -> None:
     trace, env = _trace_environment(
         tmp_path, [{"name": "t", "module": "agent", "callable": "t"}]

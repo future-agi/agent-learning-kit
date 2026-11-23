@@ -33,8 +33,6 @@ Install with `pip install -r requirements.txt` on Python 3.12.
   `ALK_LANGGRAPH_TIMEOUT_SECONDS` has passed. Plain (non-`async`) tools such as this
   example's run on a worker thread and don't block the loop.
 - The orders are shared by every conversation the agent process serves, so a return started
-  in one scenario is there in the next. The kit's LangGraph adapter calls the graph with no
-  thread, so the tools can't tell conversations apart. Passing one as the graph's
-  `configurable` thread would turn on checkpointing in a graph compiled with a checkpointer,
-  which today fails visibly without a thread; with one, the checkpointer would keep the history
-  the kit already sends whole every turn, so the graph would see it twice.
+  in one scenario is there in the next. The kit's LangGraph adapter passes each conversation
+  to the graph as its LangGraph thread, but this example's tools keep one set of orders for
+  the whole process and don't read the thread.

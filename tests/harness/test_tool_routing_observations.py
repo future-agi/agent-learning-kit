@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
+import threading
 import time
 from types import SimpleNamespace
 
@@ -718,3 +720,122 @@ def test_the_tool_request_is_written_only_from_its_template(monkeypatch):
 
     # Every word sent comes from the template: here, only the filled-in fields remain.
     assert tool_routing._tool_request(_contract().tools[0]) == "lookup_order|| with order_id='A-1'"
+
+
+def _per_user_requests(tmp_path, monkeypatch, *, child_world, on_close=lambda: None, **bounds):
+    """Requests under per-user isolation: the real ``tool_world`` chooses the world, and each request's handler
+    child is a socket pair whose ``close`` is recorded."""
+    from fi.alk.harness.privilege import IsolationMode
+
+    closed = []
+
+    class Child:
+        def __init__(self):
+            self.sock, self._other = socket.socketpair()
+
+        def close(self):
+            closed.append(True)
+            on_close()
+            self.sock.close()
+            self._other.close()
+
+    class Agent:
+        def __init__(self):
+            self.returned = False
+
+        async def call(self, agent_input):
+            text = agent_input.new_message["content"]
+            tool = next((name for name in NAMES if f"your {name} tool" in text), None)
+            calls = [] if self.returned or tool is None else [{"id": "c1", "name": tool, "arguments": {}}]
+            self.returned = True
+            return SimpleNamespace(content="done", tool_calls=calls, tool_responses=[], metadata={})
+
+    runtime = SimpleNamespace(
+        metadata={},
+        endpoints={
+            "world_db": SimpleNamespace(protocol="postgres", address="postgresql://world"),
+            "tool_proxy": object(),
+        },
+    )
+    monkeypatch.setattr(chat_call_runner, "isolation_mode", lambda: IsolationMode.PER_USER)
+    monkeypatch.setattr(chat_call_runner, "handler_child_at", lambda *a: Child())
+    monkeypatch.setattr(chat_call_runner, "ChildWorld", child_world)
+    monkeypatch.setattr(chat_call_runner, "_HostedToolStore", lambda address: object())
+    monkeypatch.setattr(tool_routing, "create_chat_wrapper", lambda *a, **k: Agent())
+    monkeypatch.setattr(call_runner, "collect_file_tool_calls", lambda runtime: ())
+    record_tool_routing(
+        tmp_path, "s-1", _contract(), runtime, received=[_call("lookup")], reported=[_call("lookup_order")]
+    )
+    (tmp_path / "src").mkdir()
+    asyncio.run(
+        tool_routing.request_uncovered_tools(
+            interface=None,
+            endpoint="http://agent",
+            runtime=runtime,
+            contract=_contract(),
+            authoring=tmp_path,
+            bundle=tmp_path,
+            source=tmp_path / "src",
+            secret_values={},
+            candidate_hash="sha256:one",
+            work_directory=tmp_path,
+            **bounds,
+        )
+    )
+    return _body(tmp_path), closed
+
+
+def test_under_per_user_isolation_an_import_backed_tool_is_requested_through_its_handler_child(
+    tmp_path, monkeypatch
+):
+    """Per-user isolation never imports the agent's code in the harness: each request's tools run in a handler
+    child of its own, so an import-backed tool is still asked, and every child is stopped."""
+    world_log = []
+
+    class InChild:
+        def __init__(self, *, store, channel, tools, refusal_signature):
+            assert channel is not None
+            self.calls = []
+
+        def handle_tool_call(self, call, **context):
+            world_log.append(_call(call["name"], at=1e12))
+            self.calls.append(_call(call["name"]))
+            return SimpleNamespace(content="{}")
+
+    monkeypatch.setattr(call_runner, "collect_tool_trace_calls", lambda runtime: tuple(world_log))
+    body, closed = _per_user_requests(tmp_path, monkeypatch, child_world=InChild)
+
+    assert {"tool": "get_hours", "routed": True, "calls": 1, "outcomes": ["ok"], "source": "tool_request"} in body[
+        "tools"
+    ]
+    assert not [one for one in body["unobserved"] if one["reason"] == "request_failed"]
+    assert len(closed) == 2  # one child for each request: track_parcel and get_hours
+
+
+def test_under_per_user_isolation_a_tool_past_the_deadline_is_killed_with_its_child_and_writes_nothing_late(
+    tmp_path, monkeypatch
+):
+    """A tool that outlasts the request is stopped with its handler child, so it cannot write to the world after
+    the request has returned."""
+    late_writes = []
+    killed = threading.Event()
+
+    class Blocking:
+        def __init__(self, *, store, channel, tools, refusal_signature):
+            self.calls = []
+
+        def handle_tool_call(self, call, **context):
+            if killed.wait(1.0):
+                raise ConnectionError("the handler child was stopped")
+            late_writes.append(call["name"])
+            return SimpleNamespace(content="{}")
+
+    monkeypatch.setattr(call_runner, "collect_tool_trace_calls", lambda runtime: ())
+    body, closed = _per_user_requests(
+        tmp_path, monkeypatch, child_world=Blocking, on_close=killed.set, timeout=0.1, limit=1
+    )
+    time.sleep(1.3)
+
+    assert closed == [True]
+    assert {"tool": "track_parcel", "reason": "request_failed"} in body["unobserved"]
+    assert late_writes == []
