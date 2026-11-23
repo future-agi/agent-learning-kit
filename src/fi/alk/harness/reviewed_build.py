@@ -17,6 +17,11 @@ from fi.alk.studio._source_scenarios import _sealed_source_case
 from .backends.files import secret_path
 from .releases import ReleaseError
 from .scenario import SOURCE_FIXTURE, Scenario
+from .source_grounding import (
+    bind_source_case,
+    semantic_source_digest,
+    validate_bound_scenario,
+)
 
 SNAPSHOT_PATH = Path("/run/futureagi/reviewed-source-snapshot.json")
 PIN_FILE = "reviewed-source.json"
@@ -115,9 +120,14 @@ class ReviewedBuild:
                 "source_case_invalid",
                 "Choose an unused approved case ID from read_source before submitting.",
             )
-        # Proof and scenario content are keyed to the approved public case, including its facts and policy.
         approved = _sealed_source_case(case)
-        return {**args, "fixture": {**fixture, SOURCE_FIXTURE: approved}}
+        try:
+            return bind_source_case(args, approved)
+        except ValueError:
+            raise ReleaseError(
+                "source_case_unrelated",
+                "The scenario is unrelated to its approved source case.",
+            ) from None
 
     def check_complete(self, scenarios: list[Scenario], workspace: Path) -> None:
         from .proofs import load_proofs
@@ -134,10 +144,14 @@ class ReviewedBuild:
                     "source_suite_invalid",
                     "Every scenario needs a distinct approved source case.",
                 )
-            if (
-                proofs.get(scenario.scenario_key, {}).get("reviewed_source_digest")
-                != case["proof_digest"]
-            ):
+            if not validate_bound_scenario(scenario, case):
+                raise ReleaseError(
+                    "source_suite_invalid",
+                    "The scenario's source-grounded semantics changed.",
+                )
+            if proofs.get(scenario.scenario_key, {}).get(
+                "reviewed_source_digest"
+            ) != semantic_source_digest(case, scenario):
                 raise ReleaseError(
                     "source_suite_unproved",
                     "Prove each scenario against its current approved case.",

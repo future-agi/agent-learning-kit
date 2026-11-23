@@ -39,6 +39,7 @@ from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
 from .scenario import SOURCE_FIXTURE, Scenario
+from .source_grounding import semantic_source_digest
 from .world.runtime import Call, GeneratedWorld
 from .world.snapshot import read_manifest, restore
 
@@ -799,7 +800,9 @@ def prove(
     still successful: each check that held with the solution must then fail."""
     case = scenario.fixture.get(SOURCE_FIXTURE)
     proof = Proof(
-        reviewed_source_digest=str(case.get("proof_digest") or "") if isinstance(case, dict) else "",
+        reviewed_source_digest=(
+            semantic_source_digest(case, scenario) if isinstance(case, dict) else ""
+        ),
     )
     checks = _checks_for(scenario, catalogue)
     if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):

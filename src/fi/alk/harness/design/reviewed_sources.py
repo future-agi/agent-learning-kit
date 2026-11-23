@@ -26,6 +26,7 @@ from ..backends import ToolServer, tool, tool_server
 from ..folder import read_all
 from ..releases import ReleaseError
 from ..scenario import SOURCE_FIXTURE
+from ..source_grounding import bind_source_case, validate_bound_scenario
 from ..tools import schema
 from .workspace import Design, DocumentRecord, ReviewedSourcePin
 
@@ -164,7 +165,9 @@ def read_reviewed_snapshot(path: Path) -> ReviewedEnvironmentInputs:
         with path.open("rb") as source:
             return deserialize_environment_snapshot(source.read(MAX_SNAPSHOT_BYTES + 1))
     except OSError:
-        raise ReleaseError("source_snapshot_invalid", "Cannot read the approved source snapshot.") from None
+        raise ReleaseError(
+            "source_snapshot_invalid", "Cannot read the approved source snapshot."
+        ) from None
 
 
 def project_evidence(
@@ -223,7 +226,8 @@ def bind_reviewed_sources(
             )
         _validate_receipt(receipt, reviewed, design.documents)
         evidence = project_evidence(
-            reviewed, task=design.requirements.strip() or f"Design {design.name}",
+            reviewed,
+            task=design.requirements.strip() or f"Design {design.name}",
             count=design.scenario_count,
         )
     except OSError as exc:
@@ -310,7 +314,10 @@ def bind_scenario(evidence: dict[str, Any], args: dict[str, Any]) -> str:
     case = next((case for case in evidence["cases"] if case["id"] == selected), None)
     if case is None:
         return "Select a reviewed case ID from the cases section of read_source."
-    args["fixture"] = {**fixture, SOURCE_FIXTURE: case}
+    try:
+        args.update(bind_source_case(args, case))
+    except ValueError:
+        return "The scenario is unrelated to its approved source case."
     return ""
 
 
@@ -336,6 +343,11 @@ def check_grounded_suite(
             raise ReleaseError(
                 "design_source_invalid",
                 f"{scenario.name} cites an unapproved source case.",
+            )
+        if not validate_bound_scenario(scenario, source):
+            raise ReleaseError(
+                "design_source_invalid",
+                f"{scenario.name} changed its source-grounded semantics.",
             )
         if case_id in seen:
             raise ReleaseError(

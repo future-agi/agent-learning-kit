@@ -161,7 +161,11 @@ def test_approved_policy_can_ground_cases_without_record_schema():
     result = _generate(json.loads(serialize_environment_snapshot(reviewed)))
     assert result["ok"], result
     cases = [item["source_case"] for item in result["result"]["scenarios"]]
-    assert [case["category"] for case in cases] == ["success", "negative_control", "success"]
+    assert [case["category"] for case in cases] == [
+        "success",
+        "negative_control",
+        "success",
+    ]
     assert not any(case["starting_facts"] for case in cases)
     assert all(case["citations"][0]["source_id"] == "policy" for case in cases)
 
@@ -351,6 +355,8 @@ def test_public_cases_match_connected_authoring_on_genuine_order_agent(tmp_path)
 
     from fi.alk.harness.design.reviewed_sources import project_evidence
     from fi.alk.harness.reviewed_build import ReviewedBuild
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.source_grounding import validate_bound_scenario
     from fi.alk.studio import serialize_environment_snapshot
 
     fixture = Path(__file__).parents[1] / "examples/frameworks/openai_agents_agent.py"
@@ -403,8 +409,27 @@ def test_public_cases_match_connected_authoring_on_genuine_order_agent(tmp_path)
         native = item["native"]
         assert native["name"] == native["scenario_key"] == item["scenario"]["name"]
         assert native["fixture"]["reviewed_source"] == case
-        binder = plan.bind({"fixture": {"reviewed_source": case["id"]}}, kept=[])
+        binder = plan.bind(
+            {
+                "instruction": native["instruction"],
+                "tests": native["tests"],
+                "variables": native["variables"],
+                "fixture": {"reviewed_source": case["id"]},
+            },
+            kept=[],
+        )
         assert binder["fixture"]["reviewed_source"] == case
+        assert case["proof_digest"] not in native["instruction"]
+        assert "ORDER_GRADER_SECRET_9X" not in native["instruction"]
+        assert case["category"] in native["tests"]
+        unrelated = Scenario.model_validate(
+            {
+                **native,
+                "instruction": "Book a flight to Paris.\n\n"
+                + native["instruction"].split("\n\n", 1)[-1],
+            }
+        )
+        assert not validate_bound_scenario(unrelated, case)
     assert "Tuesday" in public
 
     changed = _reviewed_order_knowledge("Thursday", infer_schema=True)

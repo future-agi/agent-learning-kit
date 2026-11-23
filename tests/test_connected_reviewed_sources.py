@@ -206,6 +206,23 @@ def _arguments(case, name="Track a shipment"):
     }
 
 
+def test_connected_rejects_unrelated_scenario_with_approved_fixture(tmp_path):
+    _, approved = _prepare(
+        _launch(
+            tmp_path / "case", _reviewed_order_knowledge("Tuesday", infer_schema=True)
+        )
+    )
+    with pytest.raises(ReleaseError, match="source_case_unrelated"):
+        approved.bind(
+            {
+                **_arguments(approved.cases[0]),
+                "instruction": "Book a flight to Paris.",
+                "tests": "Confirms the selected airline seat.",
+            },
+            [],
+        )
+
+
 def test_foreground_uses_approved_case_and_native_proof(tmp_path, monkeypatch):
     monkeypatch.setenv("ALK_HARNESS_MODEL", "claude-sonnet-4-6")
     policy = tmp_path / "policy.yaml"
@@ -239,6 +256,11 @@ def test_foreground_uses_approved_case_and_native_proof(tmp_path, monkeypatch):
         assert not response.get("is_error"), response
         saved = scenarios.load_scenarios(workspace)
         runtime.reviewed.check_complete(saved, workspace)
+        with pytest.raises(ReleaseError, match="source_suite_(invalid|unproved)"):
+            runtime.reviewed.check_complete(
+                [saved[0].model_copy(update={"tests": saved[0].tests + " edited"})],
+                workspace,
+            )
         proof = load_proofs(workspace)[saved[0].scenario_key]
         proof.pop("proved_at")
         results.append(
@@ -258,6 +280,7 @@ def test_foreground_uses_approved_case_and_native_proof(tmp_path, monkeypatch):
     assert all(
         before != after for before, after in zip(results[0], results[2], strict=True)
     )
+    assert results[0][0]["tests"] != results[2][0]["tests"]
 
 
 def test_fallback_generates_safe_grounded_suite(tmp_path, monkeypatch):

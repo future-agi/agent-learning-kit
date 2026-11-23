@@ -42,6 +42,7 @@ from fi.alk.harness.releases import (
     load_suite_release,
 )
 from fi.alk.harness.scenario import Scenario
+from fi.alk.harness.source_grounding import safe_source_context
 from fi.alk.harness.world.runtime import GeneratedWorld
 from fi.alk.harness.world.snapshot import save
 from fi.alk.studio._environment_input_snapshots import serialize_environment_snapshot
@@ -435,6 +436,8 @@ def test_changed_approved_value_changes_native_bound_fixture(tmp_path, monkeypat
         )
         args = {
             "name": "refund",
+            "instruction": f"Ask whether this {status} order can receive a refund.",
+            "tests": "Check the approved refund source for order C17.",
             "fixture": {"origin": "seed", "reviewed_source": case["id"]},
         }
         assert bind_scenario(evidence, args) == ""
@@ -451,6 +454,38 @@ def test_changed_approved_value_changes_native_bound_fixture(tmp_path, monkeypat
     ] == ["eligible", "expired"]
     assert bound[0]["id"] != bound[1]["id"]
     assert {"source_id": "orders", "page": None, "row": 1} in bound[1]["citations"]
+
+
+def test_design_rejects_unrelated_scenario_with_approved_fixture():
+    evidence = {
+        "cases": [
+            {
+                "id": "source-case-order",
+                "category": "success",
+                "purpose": "Test a compliant outcome.",
+                "starting_facts": [
+                    {
+                        "source_id": "orders",
+                        "record_id": "4821",
+                        "field": "status",
+                        "value": "shipped",
+                    }
+                ],
+                "policy_reference": "Shipped orders may be tracked.",
+                "citations": [{"source_id": "shipping-policy", "page": 1, "row": None}],
+            }
+        ]
+    }
+    args = {
+        "name": "flight",
+        "instruction": "Book a flight to Paris.",
+        "tests": "Confirms the selected airline seat.",
+        "fixture": {"reviewed_source": "source-case-order"},
+    }
+    assert (
+        bind_scenario(evidence, args)
+        == "The scenario is unrelated to its approved source case."
+    )
 
 
 async def _approve(*_args):
@@ -669,14 +704,19 @@ def test_native_scenario_proof_keeps_public_facts_and_citations(tmp_path, monkey
             if case == grounding:
                 continue
             key = f"approved-{index}"
+            rebound = native.model_copy(
+                update={
+                    "name": key,
+                    "scenario_key": key,
+                        "instruction": f"Handle a refund for {safe_source_context(case)}.",
+                        "tests": "Checks the refund outcome.",
+                        "variables": {},
+                    "fixture": {"origin": "seed", "reviewed_source": case["id"]},
+                }
+            ).model_dump(mode="json")
+            assert bind_scenario(evidence, rebound) == ""
             write_folder(
-                native.model_copy(
-                    update={
-                        "name": key,
-                        "scenario_key": key,
-                        "fixture": {"origin": "seed", "reviewed_source": case},
-                    }
-                ),
+                Scenario.model_validate(rebound),
                 catalogue,
                 workspace,
             )

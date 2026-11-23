@@ -147,6 +147,7 @@ def _bundle_digest(manifest_body: dict[str, Any], pin: dict[str, str | None]) ->
 def _generate_scenarios(request: GenerateScenariosRequest) -> dict[str, Any]:
     from fi.alk.harness.folder import document_for
     from fi.alk.harness.scenario import SOURCE_FIXTURE, Scenario
+    from fi.alk.harness.source_grounding import bind_source_case, safe_source_context
 
     try:
         reviewed = deserialize_environment_snapshot(
@@ -183,16 +184,26 @@ def _generate_scenarios(request: GenerateScenariosRequest) -> dict[str, Any]:
             persona["situation"] = (
                 "Ask about the boundary described by the approved source."
             )
-        native = Scenario(
-            name=draft.scenario_id,
-            scenario_key=draft.scenario_id,
-            use_case=request.environment_requirements.task.strip(),
-            branch=draft.category,
-            instruction=persona["situation"],
-            tests=case["purpose"],
-            fixture={"origin": "seed", SOURCE_FIXTURE: case},
+        context = safe_source_context(case)
+        native_args = bind_source_case(
+            {
+                "name": draft.scenario_id,
+                "scenario_key": draft.scenario_id,
+                "use_case": request.environment_requirements.task.strip(),
+                "branch": draft.category,
+                "instruction": (
+                    request.environment_requirements.task.strip() + f" for {context}."
+                ),
+                "tests": case["purpose"],
+                "fixture": {"origin": "seed", SOURCE_FIXTURE: case},
+            },
+            case,
+            require_relevance=False,
         )
-        scenarios.append({"scenario": scenario, "native": document_for(native), "source_case": case})
+        native = Scenario.model_validate(native_args)
+        scenarios.append(
+            {"scenario": scenario, "native": document_for(native), "source_case": case}
+        )
     return {**result, "revision": generated.revision, "scenarios": scenarios}
 
 
