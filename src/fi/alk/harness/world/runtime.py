@@ -192,9 +192,11 @@ class Call:
     name: str
     arguments: dict[str, Any]
     result: Any = None
-    ok: bool = True
-    error: str = ""
-    refused: bool = False
+    # None on ok, error, refused and refusal_code: a step recorded without running (`prove.not_run`), which neither
+    # went through nor was turned down.
+    ok: bool | None = True
+    error: str | None = ""
+    refused: bool | None = False
     # When it happened, seconds since the epoch. What lets a recording and a list of calls be
     # read as one thing: without it the UI can show what the agent did but not when, and "when"
     # is the whole question for a spoken run.
@@ -204,7 +206,7 @@ class Call:
     task_id: str = ""
     task_label: str = ""
     # Why a refused call was refused: "world_rule" when the tool ran and said no, otherwise what stopped it first.
-    refusal_code: str = ""
+    refusal_code: str | None = ""
     # The worker this call handed work to, when the call is a hand-off, and when that worker returned.
     delegated_to: str = ""
     ended_at: float = 0.0

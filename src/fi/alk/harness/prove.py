@@ -62,9 +62,20 @@ from .world.runtime import (
     as_gone_through,
     as_refused,
     record_refusal,
+    refusal_code_for,
 )
 from .world.snapshot import read_manifest, restore, source_state
-from .world_door import fault_numbered, fault_slot, faults_named, route_action, routed_faults
+from .world.stores.postgres import PostgresStore
+from .world_door import (
+    RecordExecutor,
+    ToolCall,
+    fault_numbered,
+    fault_slot,
+    faults_named,
+    record_action,
+    route_action,
+    routed_faults,
+)
 
 
 # The lane could not execute something; the case runs labelled "kept as written", never as proved.
@@ -737,10 +748,10 @@ def not_run(name: str, arguments: Mapping[str, Any]) -> Call:
         name=name,
         arguments=dict(arguments),
         result=None,
-        ok=None,  # type: ignore[arg-type]
-        refused=None,  # type: ignore[arg-type]
-        refusal_code=None,  # type: ignore[arg-type]
-        error=None,  # type: ignore[arg-type]
+        ok=None,
+        refused=None,
+        refusal_code=None,
+        error=None,
     )
 
 
@@ -1202,10 +1213,28 @@ class _WorldActors:
             # A source-hosted world knows the action by its route; a generated one by its name.
             route = action.action.replace(".", "/")
             known = route in getattr(self.world, "endpoints", ())
-            self.world.call(
-                route if known else action.action.rsplit(".", 1)[-1],
-                dict(action.arguments),
-            )
+            if not known and record_action(action.action) and isinstance(getattr(self.world, "store", None), PostgresStore):
+                # A record change has no route on the agent's service: the run's door writes it to the world's own
+                # records, so the proof does the same, or an actor's approval never reaches the world here.
+                done = RecordExecutor(self.world.store.execute).run(
+                    ToolCall(action=action.action, name=action.action, arguments=dict(action.arguments), actor=actor.id)
+                )
+                self.world._record(
+                    Call(
+                        name=action.action,
+                        arguments=dict(action.arguments),
+                        ok=done.status < 400,
+                        result=done.result,
+                        refused=400 <= done.status < 500,
+                        refusal_code=refusal_code_for(done.status) if 400 <= done.status < 500 else "",
+                        error=done.error or "",
+                    )
+                )
+            else:
+                self.world.call(
+                    route if known else action.action.rsplit(".", 1)[-1],
+                    dict(action.arguments),
+                )
             self.by_actors.update(
                 dict.fromkeys(range(before, len(self.world.calls)), actor.id)
             )
