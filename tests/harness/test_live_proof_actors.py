@@ -120,7 +120,7 @@ class _LiveDeals:
             status, ok, code = 409, False, "world_rule"
         else:
             status, ok, code = 200, True, None
-        self.log.append({"name": name, "at": at, "ok": ok, "actor_id": None, "outcome": "committed" if ok else "refused", "refusal_code": code, "status": status})
+        self.log.append({"name": name, "arguments": dict(arguments), "at": at, "ok": ok, "actor_id": None, "outcome": "committed" if ok else "refused", "refusal_code": code, "status": status})
         call = SimpleNamespace(name=name, arguments=dict(arguments), ok=ok, error="" if ok else f"refused {status}", result=None, at=at)
         self.calls.append(call)
         return call
@@ -183,3 +183,75 @@ def test_an_actor_s_call_through_the_door_is_credited_to_the_actor_in_the_live_l
 
     assert [(row["name"], row["actor_id"]) for row in world.events(actor_id="alex")] == [("put", "alex")]
     assert len(world.events()) == len(world.log)
+
+
+def _over(calls, by_actors, log, refusals=()):
+    from fi.alk.harness.prove import _WorldActors
+
+    acting = SimpleNamespace(
+        by_actors=by_actors, world=SimpleNamespace(calls=calls), refusals=list(refusals), _row_for=_WorldActors._row_for
+    )
+    return _WorldActors.events_over(acting, lambda *args: [dict(row) for row in log])
+
+
+def _call(name, arguments, at):
+    return SimpleNamespace(name=name, arguments=arguments, at=at, ok=True, result=None, error="", refusal_code="")
+
+
+def test_an_actor_and_the_agent_calling_the_same_tool_close_together_are_each_credited_their_own_call():
+    calls = [_call("apply_discount", {"percent": 10}, 100.0), _call("apply_discount", {"percent": 20}, 101.0)]
+    log = [
+        {"name": "apply_discount", "arguments": {"percent": 10}, "at": 100.0, "actor_id": None, "ok": True},
+        {"name": "apply_discount", "arguments": {"percent": 20}, "at": 101.0, "actor_id": None, "ok": True},
+    ]
+
+    rows = _over(calls, {1: "alex"}, log)()
+
+    assert [(row["arguments"]["percent"], row.get("actor_id") or "agent") for row in rows] == [(10, "agent"), (20, "alex")]
+
+
+def test_two_rows_equally_close_to_an_actor_s_call_are_not_guessed_the_actor_s_row_is_added():
+    calls = [_call("apply_discount", {"percent": 20}, 100.0)]
+    log = [
+        {"name": "apply_discount", "arguments": {"percent": 20}, "at": 99.0, "actor_id": None, "ok": True},
+        {"name": "apply_discount", "arguments": {"percent": 20}, "at": 101.0, "actor_id": None, "ok": True},
+    ]
+
+    rows = _over(calls, {0: "alex"}, log)()
+
+    assert [row.get("actor_id") or "agent" for row in rows] == ["agent", "alex", "agent"]
+
+
+def test_rows_read_in_the_order_they_happened_an_actor_s_refusal_at_its_own_time():
+    calls = [_call("get_deal", {"deal_id": 7}, 100.0)]
+    log = [{"name": "get_deal", "arguments": {"deal_id": 7}, "at": 100.0, "actor_id": None, "ok": True},
+           {"name": "apply_discount", "arguments": {}, "at": 103.0, "actor_id": None, "ok": True}]
+    refusal = {"name": "put", "arguments": {}, "ok": False, "actor_id": "jordan", "outcome": "refused", "refusal_code": "not_permitted", "at": 101.0}
+
+    rows = _over(calls, {}, log, [(1, refusal)])()
+
+    assert [row["name"] for row in rows] == ["get_deal", "put", "apply_discount"]
+
+
+def test_the_actor_s_row_is_found_by_its_arguments_even_when_another_call_is_logged_closer_in_time():
+    calls = [_call("apply_discount", {"percent": 10}, 100.5), _call("apply_discount", {"percent": 20}, 100.4)]
+    log = [
+        {"name": "apply_discount", "arguments": {"percent": 10}, "at": 100.5, "actor_id": None, "ok": True},
+        {"name": "apply_discount", "arguments": {"percent": 20}, "at": 101.0, "actor_id": None, "ok": True},
+    ]
+
+    rows = _over(calls, {1: "alex"}, log)()
+
+    assert sorted((row["arguments"]["percent"], row.get("actor_id") or "agent") for row in rows) == [(10, "agent"), (20, "alex")]
+
+
+def test_of_two_identical_calls_the_actor_is_credited_the_one_closest_to_its_own():
+    calls = [_call("apply_discount", {"percent": 20}, 98.0), _call("apply_discount", {"percent": 20}, 101.0)]
+    log = [
+        {"name": "apply_discount", "arguments": {"percent": 20}, "at": 98.0, "actor_id": None, "ok": True},
+        {"name": "apply_discount", "arguments": {"percent": 20}, "at": 101.1, "actor_id": None, "ok": True},
+    ]
+
+    rows = _over(calls, {1: "alex"}, log)()
+
+    assert [(row["at"], row.get("actor_id") or "agent") for row in rows] == [(98.0, "agent"), (101.1, "alex")]
