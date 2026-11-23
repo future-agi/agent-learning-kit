@@ -47,6 +47,7 @@ from .usage import (
     simulator_funding,
 )
 from .handler_child import ChildWorld, HandlerChannel, HandlerChild, start_handler_child
+from . import tool_evidence as evidence
 from .world.runtime import Call, GeneratedWorld, graded_calls, trace_row
 from .world.stores.postgres import AttachedPostgresStore
 from .world_door import world_action
@@ -600,12 +601,24 @@ def handler_child_for(
 
     None with one fixed user, and for a world that runs no generated handlers.
     """
+    return handler_child_at(
+        context.bundle_dir, context.source_directory, context.work_directory, runtime
+    )
+
+
+def handler_child_at(
+    bundle_dir: Path,
+    source_directory: Path | None,
+    work_directory: Path,
+    runtime: EnvironmentRuntime,
+) -> HandlerChild | None:
+    """`handler_child_for` from its parts, for a caller that runs no conversation context."""
     if isolation_mode() is not IsolationMode.PER_USER:
         return None
     if runtime.metadata.get("observation_mode") == "native":
         return None
     endpoint = runtime.endpoints.get("world_db")
-    contract_path = context.bundle_dir / "contract.json"
+    contract_path = bundle_dir / "contract.json"
     if (
         endpoint is None
         or endpoint.protocol != "postgres"
@@ -623,12 +636,12 @@ def handler_child_for(
         contract_path.read_text(encoding="utf-8")
     )
     return start_handler_child(
-        handlers=handler_sources(context.bundle_dir, contract),
+        handlers=handler_sources(bundle_dir, contract),
         tools=[tool.model_dump(mode="json") for tool in contract.tools],
         refusal_signature=contract.refusal_signature,
         dsn=endpoint.tool_address,
-        source=context.source_directory,
-        work_directory=context.work_directory,
+        source=source_directory,
+        work_directory=work_directory,
         world_index=runtime.world_index,
         subfolder=contract_folder(contract),
     )
@@ -700,12 +713,13 @@ def _record_completed_tool_call(
     arguments: Mapping[str, Any],
     response: Mapping[str, Any],
 ) -> None:
-    """Record a tool the submitted callback already executed.
+    """Record a tool the submitted agent says it already ran: the agent's own account of the call.
 
-    Callback-backed agents can return the request and its completed response together. Replaying
-    that request through the generated world both risks repeating a side effect and incorrectly
-    turns a real success into ``no such tool`` when no mock handler was authored. The callback's
-    response is the authoritative execution evidence at this seam.
+    Callback-backed agents can return the request and its completed response together. Such a call
+    is never replayed through the generated world: that would risk repeating a side effect, and
+    would turn a real success into ``no such tool`` when no mock handler was authored. It is kept
+    in the world's list, tagged as the agent's own account (tool_evidence.py), since the world did
+    not serve it and the kit did not see it run.
     """
     error_value = response.get("error")
     error = str(error_value) if error_value not in (None, "") else ""
@@ -725,6 +739,7 @@ def _record_completed_tool_call(
             refused=refused,
             error=error,
             at=time.time(),
+            source=evidence.AGENT,
         )
     )
 

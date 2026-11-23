@@ -37,7 +37,7 @@ from fi.alk.harness import (
     spend,
     tools,
 )
-from fi.alk.harness.backends import StageDone
+from fi.alk.harness.backends import CALL_BUDGET_SPENT, CallBudgetSpent, StageDone
 from fi.alk.harness.backends.base import qualified
 from fi.alk.harness.config import chosen_model
 from fi.alk.harness.contract import AgentContract
@@ -2736,3 +2736,160 @@ def test_a_password_in_the_prompt_reaches_no_file_the_reading_writes(tmp_path, m
         )
     )
     assert holding == [f"source/{SUPPORT}/prompt.txt"]
+
+
+# -- the reading's call limit -------------------------------------------------------------------
+
+_CALL_LIMIT_SENTENCE = (
+    "We stopped reading this agent because it was taking too many steps. Nothing was saved."
+)
+
+
+@pytest.mark.parametrize(
+    ("raw", "calls"),
+    [(None, 60), ("", 60), ("25", 25), (" 7 ", 7), ("0", 60), ("-3", 60), ("1.5", 60), ("x", 60)],
+)
+def test_the_call_limit_is_a_positive_whole_number_or_sixty(monkeypatch, raw, calls):
+    if raw is None:
+        monkeypatch.delenv(agent_reading.CALL_LIMIT_ENV, raising=False)
+    else:
+        monkeypatch.setenv(agent_reading.CALL_LIMIT_ENV, raw)
+
+    assert agent_reading.call_limit_setting() == calls
+
+
+@pytest.mark.parametrize(("raw", "budget"), [(None, 60), ("25", 25)])
+def test_the_reading_session_carries_the_call_limit(tmp_path, model, monkeypatch, raw, budget):
+    if raw is None:
+        monkeypatch.delenv(agent_reading.CALL_LIMIT_ENV, raising=False)
+    else:
+        monkeypatch.setenv(agent_reading.CALL_LIMIT_ENV, raw)
+    _repo(tmp_path)
+    fake = model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    assert [spec.call_budget for spec in fake.created] == [budget]
+    # A reader's own allowance is the reading's, not a build's 40.
+    assert [spec.workers["agent_reader"].max_turns for spec in fake.created] == [12]
+
+
+def test_a_passing_reading_records_the_calls_it_made(tmp_path, model):
+    _repo(tmp_path)
+    model(_writes(CHAT, calls=9, turns=3, cost_usd=0.1))
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 0
+
+    (stage,) = _cost_in(output)["stages"]
+    assert (stage["calls"], stage["turns"]) == (9, 3)
+    # The limit in force is kept beside the calls, since the platform keeps no failure details.
+    assert stage["call_limit"] == 60
+
+
+def test_a_spent_call_budget_has_its_own_code_and_gets_no_reminder(tmp_path, model, monkeypatch):
+    monkeypatch.delenv(agent_reading.CALL_LIMIT_ENV, raising=False)
+    _repo(tmp_path)
+    fake = model(
+        _ends(outcome=CALL_BUDGET_SPENT, is_error=True, calls=60, cost_usd=0.4),
+        name="vertex-gemini",
+    )
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 78
+
+    assert len(fake.sent) == 1
+    failure = _failure_in(output)
+    assert (failure["code"], failure["retryable"]) == ("agent_reading_call_limit", False)
+    assert failure["message"] == _CALL_LIMIT_SENTENCE
+    assert failure["details"] == {"calls": 60, "limit": 60}
+    # Every call the budget let through came back with its usage.
+    _assert_cost(output, 0.4, True)
+
+
+def test_a_contract_saved_before_the_budget_ran_out_still_stands(tmp_path, model):
+    _repo(tmp_path)
+    model(_writes(CHAT, outcome=CALL_BUDGET_SPENT, is_error=True, calls=60))
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 0
+
+    assert (output / "agent.json").exists()
+    assert not (output / "failure.json").exists()
+
+
+@pytest.mark.parametrize("delegates", [False, True], ids=["main-loop", "with-readers"])
+def test_one_gemini_budget_holds_the_main_loop_and_its_readers(
+    tmp_path, model, monkeypatch, delegates
+):
+    def reply(who, calls):
+        if delegates and who != "agent_reader":
+            return _gemini_calls("agent_reader", {"request": "Trace the add tool."}, len(calls))
+        return _gemini_calls("Glob", {"pattern": "*.py"}, len(calls))
+
+    sent, calls = _real_gemini(monkeypatch, reply)
+    monkeypatch.setenv(agent_reading.CALL_LIMIT_ENV, "5")
+    _repo(tmp_path)
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 78
+
+    # Five calls went out, well under the main loop's 70 turns and a reader's 40, and no reminder
+    # opened another budget.
+    assert len(calls) == 5
+    assert len(sent) == 1
+    if delegates:
+        # The readers' calls are counted with the main loop's, against the one budget.
+        assert "agent_reader" in calls
+        assert any(who != "agent_reader" for who in calls)
+    failure = _failure_in(output)
+    assert (failure["code"], failure["retryable"]) == ("agent_reading_call_limit", False)
+    assert failure["message"] == _CALL_LIMIT_SENTENCE
+    assert failure["details"] == {"calls": 5, "limit": 5}
+    assert [(stage["calls"], stage["call_limit"]) for stage in _cost_in(output)["stages"]] == [(5, 5)]
+    # No request went out past the budget, so every call made is in the total.
+    _assert_cost(output, _gemini_priced(5), True)
+
+
+def _past_the_budget(*calls: int, saves: dict | None = None):
+    """A Claude-shaped turn: the backend says a call went past the budget as the calls arrive, and
+    the turn goes on until the reading stops it."""
+
+    async def turn(live):
+        if saves is not None:
+            _save(live.backend.output, saves)
+        for count in calls:
+            yield CallBudgetSpent(calls=count)
+        await live.interrupted.wait()
+        yield _done(outcome="error_during_execution", is_error=True)
+
+    return turn
+
+
+def test_a_call_past_the_budget_stops_the_reading_like_the_time_limit(tmp_path, model):
+    _repo(tmp_path)
+    fake = model(_past_the_budget(61, 62, 63))
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 78
+
+    assert len(fake.interrupts) == 1
+    assert len(fake.sent) == 1
+    failure = _failure_in(output)
+    assert (failure["code"], failure["retryable"]) == ("agent_reading_call_limit", False)
+    assert failure["message"] == _CALL_LIMIT_SENTENCE
+    # The calls already on their way when the first call past the budget was seen count too.
+    assert failure["details"] == {"calls": 63, "limit": 60}
+    # A request cut off by the stop may be billed without being in the total.
+    assert _cost_in(output)["complete"] is False
+
+
+def test_a_contract_saved_before_a_call_past_the_budget_is_kept(tmp_path, model):
+    _repo(tmp_path)
+    model(_past_the_budget(61, saves=CHAT))
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 0
+
+    assert (output / "agent.json").exists()
+    assert not (output / "failure.json").exists()
