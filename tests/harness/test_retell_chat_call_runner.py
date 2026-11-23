@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from test_chat_call_runner import _Adapter, _ToolWorld, _context, _single_exchange
+from test_world_call_transactions import pg_world  # noqa: F401 - a fixture
 
 from fi.alk.harness import retell_chat_call_runner as retell
 from fi.alk.harness.chat_call_runner import _HostedChatTarget
@@ -195,6 +196,181 @@ def test_retell_chat_uses_authored_scenario_document_for_selected_trial(
 
     assert looked_up == ["one"]
     assert outcome.messages[-1]["content"] == "Your account is active."
+
+
+def _bound_run(tmp_path, monkeypatch, read_trace):
+    """One Retell chat trial on a request-bound world whose agent calls its own `find_orders`."""
+    from fi.alk.harness.call_runner import _RequestBinding
+    from fi.alk.harness.world.runtime import Call
+
+    # As in the chat worker, which builds its context without the bundle's evidence seam.
+    context = _context(tmp_path)
+    assert context.evidence_seam is None
+
+    class Wrapper:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def call(self, _input):
+            return AgentResponse(content="Order O423 is in transit.")
+
+        async def aclose(self):
+            return
+
+    world = _ToolWorld()
+    # What Retell reports: the agent's own name for the tool.
+    world.calls.append(
+        Call(name="find_orders", arguments={"zip": "30301"}, result={"count": 1})
+    )
+    cleared = []
+    monkeypatch.setattr(retell, "RetellChatWrapper", Wrapper)
+    monkeypatch.setattr(retell, "_tool_world", lambda *_args: world)
+    monkeypatch.setattr(retell, "_drive_conversation", _single_exchange)
+    monkeypatch.setattr(
+        retell, "_bind_call", lambda *_args: _RequestBinding(dsn="dsn", token="t")
+    )
+    monkeypatch.setattr(
+        retell, "_find_postgres_endpoint", lambda _r: SimpleNamespace(address="dsn")
+    )
+    monkeypatch.setattr(retell, "_clear_tool_trace_calls", cleared.append)
+    monkeypatch.setattr(retell, "_collect_tool_trace_calls", read_trace)
+
+    async def upload_trace(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(retell, "_upload_tool_trace", upload_trace)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+    )
+    outcome = asyncio.run(
+        retell.RetellChatCallRunner(_Adapter(), context).run(
+            SimpleNamespace(
+                scenario_key="one", source_scenario_key="one", scenario_id="scenario-1"
+            ),
+            runtime,
+        )
+    )
+    return outcome, cleared
+
+
+def test_a_bound_retell_chat_is_graded_on_the_worlds_trace_not_retells_names(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness.world.runtime import Call
+
+    # The world's tool server ran the routed call and traced it as the environment's tool.
+    traced = (
+        Call(
+            name="search_orders",
+            arguments={"postal_code": "30301"},
+            result={"count": 1},
+        ),
+    )
+    outcome, cleared = _bound_run(tmp_path, monkeypatch, lambda _r, **_k: traced)
+
+    assert [call.name for call in outcome.calls] == ["search_orders"]
+    assert outcome.evidence_collected is True
+    assert outcome.tool_capture_failed is False
+    # The trace is emptied before the chat, so only this trial's calls are read.
+    assert cleared == ["dsn"]
+
+
+def test_a_bound_retell_chat_whose_trace_cannot_be_read_is_unmeasured(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness.call_runner import ToolCaptureFailed
+
+    def unreadable(_runtime, **_kwargs):
+        raise ToolCaptureFailed("tool_trace read failed: OperationalError")
+
+    outcome, _cleared = _bound_run(tmp_path, monkeypatch, unreadable)
+
+    # Never graded on the names Retell reported.
+    assert outcome.calls == ()
+    assert outcome.tool_capture_failed is True
+    assert outcome.evidence_collected is False
+
+
+def test_a_bound_retell_chat_with_no_world_call_keeps_the_platforms_own_actions(
+    tmp_path, monkeypatch
+) -> None:
+    outcome, _cleared = _bound_run(tmp_path, monkeypatch, lambda _r, **_k: ())
+
+    assert [call.name for call in outcome.calls] == ["find_orders"]
+    assert outcome.evidence_collected is True
+
+
+def test_postgres_a_bound_retell_chat_reads_the_call_the_world_traced(
+    pg_world,  # noqa: F811 - the imported fixture
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The world's own trace, written by its tool server's call path, is what the trial holds."""
+    from fi.alk.harness.call_runner import _RequestBinding
+    from fi.alk.harness.process_runtime import RuntimeEndpoint
+    from fi.alk.harness.run.conversation import FINISHED, Exchange, Transcript
+    from fi.alk.harness.world.runtime import Call
+
+    tools, url = pg_world
+
+    class Wrapper:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def aclose(self):
+            return
+
+    async def conversation(target, scenario, _contract, _bundle_dir):
+        # Retell's webhook reaches the tool server, which runs the call on the world.
+        assert tools.call("book", {"slot": "S1", "request_key": "K1"}).status == "ok"
+        return Transcript(
+            exchanges=[
+                Exchange("customer", scenario.instruction),
+                Exchange("agent", "Booked."),
+            ],
+            # What Retell reports: the agent's own name for the tool.
+            calls=[Call(name="reserve_slot", arguments={"when": "S1"})],
+            ended=FINISHED,
+        )
+
+    monkeypatch.setattr(retell, "RetellChatWrapper", Wrapper)
+    monkeypatch.setattr(retell, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(retell, "_drive_conversation", conversation)
+    monkeypatch.setattr(
+        retell, "_bind_call", lambda *_args: _RequestBinding(dsn=url, token="t")
+    )
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "world_db": RuntimeEndpoint(
+                capability="world_db",
+                protocol="postgres",
+                address=url,
+                configuration_name="WORLD_DATABASE_URL",
+            )
+        },
+    )
+    # A row left by setup is not this trial's call: the trace is emptied before the chat.
+    assert tools.call("book", {"slot": "S0", "request_key": "K0"}).status == "ok"
+
+    outcome = asyncio.run(
+        retell.RetellChatCallRunner(_Adapter(), _context(tmp_path)).run(
+            SimpleNamespace(
+                scenario_key="one", source_scenario_key="one", scenario_id="scenario-1"
+            ),
+            runtime,
+        )
+    )
+
+    # One call, under the environment's name: setup's row is gone and Retell's name is not used.
+    assert [call.name for call in outcome.calls] == ["book"]
+    assert outcome.evidence_collected is True
 
 
 def test_hosted_chat_target_stops_normally_on_provider_terminal_response() -> None:

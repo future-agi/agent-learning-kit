@@ -21,8 +21,13 @@ from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
     RETELL_API_KEY_ALIAS,
+    ToolCaptureFailed,
     _bind_call,
+    _clear_tool_trace_calls,
+    _collect_tool_trace_calls,
+    _find_postgres_endpoint,
     _upload_tool_trace,
+    graded_calls,
 )
 from .chat_call_runner import (
     _HostedChatTarget,
@@ -309,6 +314,15 @@ class RetellChatCallRunner:
         agent_version = int(version_value) if version_value not in (None, "") else None
         binding = _bind_call(self._context, runtime, scenario.scenario_key)
         bound = binding.call_values() if binding else {}
+        # A request-bound world's tool server runs the agent's calls and traces them as the
+        # environment's own tools; that trace, not the names Retell reports, is what checks read.
+        # Only a release bundle binds requests, and its seam is the tool trace; the chat worker
+        # this runs in is not told the seam, so the binding decides.
+        traced = binding is not None
+        if traced:
+            endpoint = _find_postgres_endpoint(runtime)
+            if endpoint is not None:
+                _clear_tool_trace_calls(endpoint.address)
         dynamic_variables.update(bound)
         wrapper = RetellChatWrapper(
             api_key=api_key,
@@ -379,11 +393,30 @@ class RetellChatCallRunner:
             scenario_key=scenario.scenario_key,
         )
         calls = tuple(transcript.calls)
+        capture_failed = False
+        if traced:
+            # Retell names the agent's own tools, which a `tool_routed` binding maps onto the
+            # environment's: graded as they are, a correct call reads as one never made. A trace
+            # that could not be read leaves the trial unmeasured, never graded on those names.
+            try:
+                world_calls = _collect_tool_trace_calls(runtime, strict=True)
+            except ToolCaptureFailed as exc:
+                logger.warning(
+                    "tool capture failed for %s: %s", scenario.scenario_key, exc
+                )
+                calls, capture_failed = tuple(exc.calls), True
+            else:
+                # With no call in the world, what Retell reports is the platform's own actions
+                # (ending the chat, a transfer), which never reach the tool server.
+                if graded_calls(world_calls):
+                    calls = world_calls
         await _upload_tool_trace(
             self._adapter, calls, scenario_key=scenario.scenario_key, binding=binding
         )
         return CallOutcome(
             calls=calls,
+            tool_capture_failed=capture_failed,
+            evidence_collected=traced and not capture_failed,
             turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
