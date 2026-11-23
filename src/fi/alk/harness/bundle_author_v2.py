@@ -98,7 +98,7 @@ from .source_folder import (
     saved_runtime,
 )
 from .job import HarnessJob
-from .job import ProviderExecutionMode, SourceKind, routed_through_gateway
+from .job import ProviderExecutionMode, SourceKind
 from .process_preflight import preflight_bundle
 from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
@@ -2943,7 +2943,7 @@ def resolve_environment_plan(
                 environment["TOOLS_API_URL"] = "{{TOOLS_API_URL}}"
             if service_name == control_name:
                 environment = {**declared_runtime_environment, **environment}
-                if routed_through_gateway(job.agent.config.get("target_model")):
+                if job.routes_target_model_through_gateway():
                     # Read at start-up by the shared sitecustomize hook.
                     environment["ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"] = "1"
                     # Off until the hook has kept the SDK's export local; it then turns it on.
@@ -3215,7 +3215,7 @@ def resolve_environment_plan(
         )
         if port is not None and not is_livekit:
             environment["PORT"] = f"{{{{PORT_{control_name}}}}}"
-        if routed_through_gateway(job.agent.config.get("target_model")):
+        if job.routes_target_model_through_gateway():
             # Read at start-up by the shared sitecustomize hook.
             # The SDK's tracing is off until the kit's hook has kept its export from reaching
             # OpenAI; the hook then turns it back on, so the kit's span observation runs. A

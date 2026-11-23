@@ -15,7 +15,7 @@ import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterable, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -368,17 +368,46 @@ def actors_on(switch: ActorsSwitch | None) -> bool:
     return switch is None or switch.enabled
 
 
-def routed_through_gateway(target_model: object) -> bool:
-    """True for a model name the model gateway must route, such as `vertex_ai/gemini-3.7-flash`.
+# OpenAI's own model families, the only bare names the model gateway serves in the Agents SDK's
+# default request style. Every other bare name is another provider's model, which it routes.
+_OPENAI_MODEL_FAMILY = re.compile(
+    r"ft:|(?:gpt|chatgpt|o[1-9]|text-embedding|codex|davinci|babbage|whisper|tts|dall-e|"
+    r"omni-moderation|computer-use)(?:[-_.:\d]|$)",
+    re.IGNORECASE,
+)
+
+
+def routed_through_gateway(
+    target_model: object, direct_names: Iterable[str] = ()
+) -> bool:
+    """True for a model name the model gateway must route: a prefixed name such as
+    `vertex_ai/gemini-3.7-flash`, or a bare name outside OpenAI's own model families, such as
+    `gemini-2.0-flash`, unless the job lists it in ``direct_names`` (an Azure OpenAI deployment
+    name such as `prod-gpt4o` that the agent sends to Azure itself).
 
     The first segment is compared case-sensitively because the Agents SDK does the same: only
-    the exact prefix `openai` is stripped and sent on as a bare OpenAI name.
+    the exact prefix `openai` is stripped, and the rest is sent on, so the rest decides.
     """
-    return (
-        isinstance(target_model, str)
-        and "/" in target_model
-        and target_model.partition("/")[0] != "openai"
-    )
+    if not isinstance(target_model, str):
+        return False
+    name = target_model.strip()
+    if name.startswith("openai/"):
+        name = name.removeprefix("openai/")
+    elif "/" in name:
+        return True
+    if not name:
+        return False
+    if "/" in name:
+        return True
+    if name in {str(direct).strip() for direct in direct_names}:
+        return False
+    return not _OPENAI_MODEL_FAMILY.match(name)
+
+
+def _with_openai_prefix(target_model: str) -> str:
+    """The model name with the SDK's openai/ prefix, written once."""
+    name = target_model.strip()
+    return name if name.startswith("openai/") else f"openai/{name}"
 
 
 class HarnessJob(BaseModel):
@@ -427,6 +456,14 @@ class HarnessJob(BaseModel):
         }
         return frozenset(process_secret_environment_names(names))
 
+    def routes_target_model_through_gateway(self) -> bool:
+        """Whether the model gateway routes this job's target model (``routed_through_gateway``,
+        with the deployment names the job lists in ``direct_model_names`` left direct)."""
+        return routed_through_gateway(
+            self.agent.config.get("target_model"),
+            self.agent.config.get("direct_model_names") or (),
+        )
+
     def authoring_guidance(self) -> list[str]:
         instructions = list(self.guidance)
         if self.metadata.get("generic_harness_v1") is True:
@@ -461,11 +498,12 @@ class HarnessJob(BaseModel):
                 "provider/model must be configured through the agent's supported settings, "
                 "then verified with a real chat. Do not substitute a different provider."
             )
-        if routed_through_gateway(target_model):
+        if self.routes_target_model_through_gateway():
             instructions.append(
                 "If the agent uses the OpenAI Agents SDK and passes its model as a name to "
                 "Agent(model=...) or RunConfig(model=...), give it "
-                f"the requested model written as openai/{target_model}: the SDK refuses or "
+                f"the requested model written as {_with_openai_prefix(target_model)}: the "
+                "SDK refuses or "
                 "reroutes a name whose first segment is not openai, and it removes openai/ and "
                 "sends the rest unchanged to its configured endpoint. A name handed to a model "
                 "object such as OpenAIChatCompletionsModel(model=...) is sent unchanged, so "
@@ -512,6 +550,12 @@ class HarnessJob(BaseModel):
             self.metadata["execution_manifest"] = [
                 entry.model_dump(mode="json") for entry in parsed_manifest
             ]
+        direct_model_names = self.agent.config.get("direct_model_names")
+        if direct_model_names is not None and (
+            not isinstance(direct_model_names, list)
+            or not all(isinstance(n, str) and n.strip() for n in direct_model_names)
+        ):
+            raise ValueError("direct_model_names_must_be_a_list_of_names")
         if (
             self.execution is ExecutionMode.LOCAL
             and self.source.kind is SourceKind.GITHUB

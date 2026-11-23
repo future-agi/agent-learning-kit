@@ -6880,14 +6880,23 @@ _GATEWAY_MARK = "ALK_OPENAI_AGENTS_CHAT_COMPLETIONS"
 _TRACING_OFF = "OPENAI_AGENTS_DISABLE_TRACING"
 
 
-def _gateway_job(target_model: str | None) -> HarnessJob:
+def _gateway_job(
+    target_model: str | None, direct_model_names: list[str] | None = None
+) -> HarnessJob:
     job = _job(connector="auto")
     if target_model is not None:
         job.agent.config["target_model"] = target_model
+    if direct_model_names is not None:
+        job.agent.config["direct_model_names"] = direct_model_names
     return job
 
 
-def _gateway_control_environment(tmp_path: Path, lane: str, target_model: str | None):
+def _gateway_control_environment(
+    tmp_path: Path,
+    lane: str,
+    target_model: str | None,
+    direct_model_names: list[str] | None = None,
+):
     if lane == "compose":
         source = tmp_path / "compose-agent"
         source.mkdir()
@@ -6900,7 +6909,7 @@ def _gateway_control_environment(tmp_path: Path, lane: str, target_model: str | 
         )
         plan = resolve_environment_plan(
             source,
-            _gateway_job(target_model),
+            _gateway_job(target_model, direct_model_names),
             contract_modality="chat",
             contract_interface_kind="http",
             contract_runtime={},
@@ -6913,7 +6922,7 @@ def _gateway_control_environment(tmp_path: Path, lane: str, target_model: str | 
         )
         plan = resolve_environment_plan(
             source,
-            _gateway_job(target_model),
+            _gateway_job(target_model, direct_model_names),
             contract_modality="chat",
             contract_interface_kind=kind,
             contract_runtime=dict(runtime),
@@ -7046,6 +7055,22 @@ def test_a_routed_python_that_skips_the_hook_gets_the_sdks_tracing_switch(
 
 
 @pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
+def test_an_azure_deployment_name_is_routed_unless_the_job_lists_it_as_direct(
+    tmp_path: Path, lane: str
+) -> None:
+    # Only OpenAI's own model families stay direct; a deployment name the job lists does too.
+    (tmp_path / "routed").mkdir()
+    (tmp_path / "direct").mkdir()
+    routed = _gateway_control_environment(tmp_path / "routed", lane, "prod-gpt4o")
+    assert routed[_GATEWAY_MARK] == "1"
+    direct = _gateway_control_environment(
+        tmp_path / "direct", lane, "prod-gpt4o", ["prod-gpt4o"]
+    )
+    assert _GATEWAY_MARK not in direct
+    assert _TRACING_OFF not in direct
+
+
+@pytest.mark.parametrize("lane", ["callback", "declared", "compose"])
 @pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])
 def test_unrouted_target_model_leaves_the_agent_process_unmarked(
     tmp_path: Path, lane: str, target_model: str | None
@@ -7055,7 +7080,9 @@ def test_unrouted_target_model_leaves_the_agent_process_unmarked(
     assert _TRACING_OFF not in environment
 
 
-def _compose_gateway_environment(tmp_path, monkeypatch, resolved, target_model, env_block):
+def _compose_gateway_environment(
+    tmp_path, monkeypatch, resolved, target_model, env_block, direct_model_names=None
+):
     from fi.alk.harness.compose_integration import compile_bundle
 
     source = tmp_path / "source"
@@ -7079,7 +7106,7 @@ def _compose_gateway_environment(tmp_path, monkeypatch, resolved, target_model, 
             },
         },
     }
-    job = _gateway_job(target_model)
+    job = _gateway_job(target_model, direct_model_names)
     monkeypatch.setenv("ALK_TRUSTED_COMPOSE_SOCKET", "/private/alk/docker.sock")
     compile_bundle(
         source=source,
@@ -7116,6 +7143,69 @@ def test_routed_compose_control_service_has_agents_sdk_tracing_off(
         assert environment.count(f"{_TRACING_OFF}=1") == 1
         assert not any(item == f"{_TRACING_OFF}=0" for item in environment)
         assert "MODE=small" in environment or "MODE" not in env_block
+
+
+def test_every_service_of_a_routed_compose_project_gets_the_tracing_switch(
+    tmp_path, monkeypatch, resolved_compose_images
+):
+    # An Agents SDK agent can run in an additional service too; no kit hook runs in any of them.
+    from fi.alk.harness.compose_integration import compile_bundle
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "compose.yaml").write_text(
+        "services:\n  chat:\n    image: example/chat:latest\n"
+        "  worker:\n    image: example/worker:latest\n"
+        "    environment:\n      - OPENAI_AGENTS_DISABLE_TRACING=0\n"
+    )
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    contract = {
+        "modality": "chat",
+        "runtime": {
+            "execution": "compose",
+            "compose_file": "compose.yaml",
+            "service": "chat",
+            "additional_services": ["worker"],
+            "interface": {"kind": "http", "protocol": "json_template", "port": 8000, "path": "/chat"},
+        },
+    }
+    monkeypatch.setenv("ALK_TRUSTED_COMPOSE_SOCKET", "/private/alk/docker.sock")
+    compile_bundle(
+        source=source,
+        job=_gateway_job("vertex_ai/gemini-3.7-flash"),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+        contract=contract,
+        include_scenarios=False,
+    )
+    services = json.loads((tmp_path / "bundle" / "compose.json").read_text())["services"]
+    for name in ("chat", "worker"):
+        environment = services[name]["environment"]
+        if isinstance(environment, dict):
+            assert environment[_TRACING_OFF] == "1", name
+        else:
+            assert f"{_TRACING_OFF}=1" in environment and f"{_TRACING_OFF}=0" not in environment, name
+
+
+def test_a_compose_project_on_a_listed_azure_deployment_name_is_left_alone(
+    tmp_path, monkeypatch, resolved_compose_images
+):
+    (tmp_path / "routed").mkdir()
+    (tmp_path / "direct").mkdir()
+    routed = _compose_gateway_environment(
+        tmp_path / "routed", monkeypatch, resolved_compose_images, "prod-gpt4o", ""
+    )
+    assert "environment" in routed
+    direct = _compose_gateway_environment(
+        tmp_path / "direct",
+        monkeypatch,
+        resolved_compose_images,
+        "prod-gpt4o",
+        "",
+        ["prod-gpt4o"],
+    )
+    assert "environment" not in direct
 
 
 @pytest.mark.parametrize("target_model", ["gpt-4o", "openai/gpt-4o", None])

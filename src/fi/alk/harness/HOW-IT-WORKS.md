@@ -370,6 +370,13 @@ chat. Secret values, vault references, simulator credential names, and arbitrary
 connection settings are not included in this briefing. The backing model preference
 does not replace `runtime.interface.model`, which may identify an application profile.
 
+The model gateway routes a target model unless it is one of OpenAI's own model families
+(`gpt`, `chatgpt`, `o1` to `o9`, `text-embedding`, `codex`, `davinci`, `babbage`,
+`whisper`, `tts`, `dall-e`, `omni-moderation`, `computer-use`, or an `ft:` fine-tune).
+A routed model gets the Agents SDK's chat-completions mark and guidance.
+`agent.config.direct_model_names` lists other bare names that stay direct, such as an
+Azure OpenAI deployment name (`prod-gpt4o`) the agent sends to Azure itself.
+
 `runtime.extras` selects optional dependency groups declared in the selected Python
 project. For a uv workspace root, a group absent from the root must have exactly
 one owner among included members. The installer then includes workspace packages
