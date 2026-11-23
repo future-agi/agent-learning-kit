@@ -2738,6 +2738,48 @@ def test_a_collected_trace_with_no_calls_is_graded_not_retried() -> None:
     asyncio.run(scenario())
 
 
+def test_a_trace_marked_incomplete_is_never_graded_as_a_call_free_run() -> None:
+    # The tool server ran a call whose trace rows could not be written (`_alk_trace_failures`):
+    # the empty trace read back is a failed capture, so even a scenario that needs no tool call is
+    # retried as missing evidence, never passed as one where the agent did nothing.
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(2, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
+                return replace(
+                    _call_outcome(turns=2, calls=()),
+                    evidence_collected=False,
+                    tool_capture_failed=True,
+                )
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        answered = FakeSubGoal("answered", lambda w, c: None)
+        result = await scheduler.run(
+            [
+                FakeScenario(
+                    "answer", "id-1", sub_goals=[answered], requires_tool_evidence=False
+                )
+            ]
+        )
+        receipt = result.receipts[0]
+        assert receipt.status != "passed"
+        assert receipt.failure.code == "evidence_missing"
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_call_aborted_with_partial_evidence_is_reported_not_null() -> None:
     async def scenario() -> None:
         outbound = FakeOutbound()

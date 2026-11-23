@@ -1884,6 +1884,9 @@ class _FakeCursor:
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self._rows
 
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._rows[0] if self._rows else None
+
 
 class _FakeConnection:
     def __init__(self, rows: list[tuple[Any, ...]], columns: list[str]) -> None:
@@ -1893,6 +1896,8 @@ class _FakeConnection:
 
     def execute(self, statement: str, params: Any = None) -> _FakeCursor:
         self.executed.append(statement)
+        if "_alk_trace_failures" in statement:  # no call ran untraced
+            return _FakeCursor([(False,)], ["present"])
         return _FakeCursor(self._rows, self._columns)
 
     def __enter__(self) -> "_FakeConnection":

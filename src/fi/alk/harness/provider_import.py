@@ -336,6 +336,8 @@ def _rewire_retell_tools(value: Any, tool_base_url: str) -> Any:
     }
     if str(copied.get("type") or "") == "custom" and copied.get("url"):
         copied["url"] = _join(tool_base_url, copied["url"])
+        # Never retried by Retell: see the routed tools below (`_retell_admitted_tool`).
+        copied["max_retry"] = 0
     return copied
 
 
@@ -770,6 +772,9 @@ def _retell_admitted_tool(
         "method": "POST",
         "headers": dict(headers),
         "args_at_root": False,
+        # A retry repeats the request, and a request without the invocation's id in its
+        # transcript cannot be told from a new call: the tool server would run it twice.
+        "max_retry": 0,
     }
     if admission.action == "routed":
         return {**dict(tool), **routed}
