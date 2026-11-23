@@ -1,0 +1,225 @@
+"""The design builder's projection of a reviewed Studio snapshot."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+from fi.alk.studio import (
+    EnvironmentInputError,
+    EnvironmentRequirements,
+    compile_environment_inputs,
+    generate_source_scenarios,
+)
+from fi.alk.studio._environment_input_snapshots import (
+    MAX_SNAPSHOT_BYTES,
+    deserialize_environment_snapshot,
+)
+
+from ..backends import ToolServer, tool, tool_server
+from ..folder import read_all
+from ..releases import ReleaseError
+from ..tools import schema
+from .workspace import Design, DocumentRecord, ReviewedSourcePin
+
+EVIDENCE = "reviewed-source-evidence.json"
+REVIEW_REQUIRED = "Approve the environment documents before building this design."
+SOURCE_FIXTURE = "reviewed_source"
+
+
+def document_manifest(
+    directory: Path, *, workspace: Path | None = None
+) -> list[DocumentRecord]:
+    if not directory.is_dir():
+        return []
+    if workspace is not None and directory.resolve().is_relative_to(
+        workspace.resolve()
+    ):
+        raise ReleaseError(
+            "source_snapshot_invalid",
+            "Keep uploaded documents outside the design workspace.",
+        )
+    documents = []
+    for path in sorted(directory.iterdir()):
+        if path.is_symlink() or not path.is_file():
+            continue
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        documents.append(
+            DocumentRecord(
+                name=path.name,
+                file=path.name,
+                sha256=digest.hexdigest(),
+                size=path.stat().st_size,
+            )
+        )
+    return documents
+
+
+def bind_reviewed_sources(workspace: Path, design: Design, path: Path | None) -> Design:
+    if path is None:
+        return design
+    if path.resolve().is_relative_to(workspace.resolve()):
+        raise ReleaseError(
+            "source_snapshot_invalid",
+            "Keep the private snapshot outside the design workspace.",
+        )
+    try:
+        with path.open("rb") as source:
+            reviewed = deserialize_environment_snapshot(
+                source.read(MAX_SNAPSHOT_BYTES + 1)
+            )
+        pinned = design.reviewed_source
+        if pinned is not None and (
+            pinned.id != reviewed.snapshot_id
+            or pinned.digest != reviewed.snapshot_digest
+        ):
+            raise ReleaseError(
+                "source_snapshot_changed",
+                "The resumed design has a different approved snapshot.",
+            )
+        if design.reviewed_source is None and (
+            design.provenance or (design.documents and design.stage != "interview")
+        ):
+            raise ReleaseError(
+                "source_snapshot_changed",
+                "Start a new design to replace unreviewed source changes.",
+            )
+        actual = {source.pin.source_sha256 for source in reviewed.sources}
+        if any(f"sha256:{doc.sha256}" not in actual for doc in design.documents):
+            raise ReleaseError(
+                "source_snapshot_changed",
+                "The approved snapshot does not cover the uploaded documents.",
+            )
+        compiled = compile_environment_inputs(reviewed)
+        generated = generate_source_scenarios(
+            reviewed,
+            environment_requirements=EnvironmentRequirements(
+                task=design.requirements.strip() or f"Design {design.name}",
+            ),
+            requested_count=design.scenario_count,
+        )
+    except OSError as exc:
+        raise ReleaseError(
+            "source_snapshot_invalid", "Cannot read the approved source snapshot."
+        ) from exc
+    except EnvironmentInputError as exc:
+        raise ReleaseError(exc.code, str(exc)) from exc
+
+    evidence: dict[str, Any] = {"documents": [], "records": [], "cases": []}
+    for environment in compiled.agent_environments:
+        data = environment.as_dict()["data"]
+        evidence["documents"].extend(data.get("documents", []))
+        evidence["records"].extend(data.get("artifacts", {}).values())
+    for draft in generated.drafts:
+        if not draft.source_spans:
+            continue
+        persona = draft.scenario.dataset[0].persona
+        evidence["cases"].append(
+            {
+                "id": draft.scenario_id,
+                "category": draft.category,
+                "facts": persona["starting_facts"],
+                "citations": persona["citations"],
+            }
+        )
+    target = workspace / EVIDENCE
+    temporary = target.with_suffix(".tmp")
+    body = json.dumps(evidence, ensure_ascii=False, sort_keys=True).encode()
+    pin = ReviewedSourcePin(
+        id=reviewed.snapshot_id,
+        digest=reviewed.snapshot_digest,
+        evidence_digest=hashlib.sha256(body).hexdigest(),
+    )
+    if (
+        design.reviewed_source != pin
+        or not target.is_file()
+        or target.read_bytes() != body
+    ):
+        temporary.write_bytes(body)
+        temporary.replace(target)
+    return design.model_copy(update={"reviewed_source": pin})
+
+
+def load_evidence(workspace: Path, design: Design) -> dict[str, Any]:
+    if design.reviewed_source is None:
+        if design.documents:
+            raise ReleaseError("source_review_required", REVIEW_REQUIRED)
+        return {}
+    try:
+        body = (workspace / EVIDENCE).read_bytes()
+        if hashlib.sha256(body).hexdigest() == design.reviewed_source.evidence_digest:
+            return json.loads(body)
+    except (OSError, ValueError):
+        pass
+    raise ReleaseError(
+        "source_snapshot_invalid",
+        "The approved source projection is missing or changed.",
+    )
+
+
+def source_server(evidence: dict[str, Any]) -> ToolServer:
+    @tool(
+        "read_source",
+        "Read approved documents, mapped records or scenario cases. Use the counts in the brief. "
+        "Sections: documents, records, cases. Index is one-based. Paginate long entries with offset.",
+        schema({"section": str, "index": int, "offset": int}, ["section", "index"]),
+    )
+    async def read_source(args: dict[str, Any]) -> dict[str, Any]:
+        section = args.get("section")
+        index = int(args["index"]) - 1
+        offset = max(0, int(args.get("offset") or 0))
+        if section not in ("documents", "records", "cases") or not 0 <= index < len(
+            evidence[section]
+        ):
+            return {
+                "content": [{"type": "text", "text": "No such source entry."}],
+                "is_error": True,
+            }
+        text = json.dumps(evidence[section][index], ensure_ascii=False)
+        limit = offset + 12_000
+        page = text[offset:limit]
+        if limit < len(text):
+            page += f"\n[Read again with offset {limit}.]"
+        return {"content": [{"type": "text", "text": page}]}
+
+    return tool_server(name="reviewed_sources", tools=[read_source])
+
+
+def bind_scenario(evidence: dict[str, Any], args: dict[str, Any]) -> str:
+    fixture = args.get("fixture")
+    source = fixture.get(SOURCE_FIXTURE) if isinstance(fixture, dict) else None
+    if source is None:
+        return ""
+    selected = source.get("id") if isinstance(source, dict) else source
+    case = next((case for case in evidence["cases"] if case["id"] == selected), None)
+    if case is None:
+        return "Select a reviewed case ID from the cases section of read_source."
+    args["fixture"] = {**fixture, SOURCE_FIXTURE: case}
+    return ""
+
+
+def check_grounded_suite(workspace: Path, evidence: dict[str, Any]) -> None:
+    cases = {case["id"]: case for case in evidence.get("cases", [])}
+    if not cases:
+        return
+    grounded = False
+    for scenario in read_all(workspace):
+        source = scenario.fixture.get(SOURCE_FIXTURE)
+        if source is None:
+            continue
+        if not isinstance(source, dict) or source != cases.get(source.get("id")):
+            raise ReleaseError(
+                "design_source_invalid",
+                f"{scenario.name} cites an unapproved source case.",
+            )
+        grounded = True
+    if not grounded:
+        raise ReleaseError(
+            "design_source_required",
+            "Prove a scenario that uses at least one approved source case.",
+        )

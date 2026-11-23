@@ -10,6 +10,7 @@ the session again when `DesignTools.reopen` says the phase or the contract chang
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +31,8 @@ from ..session import Stage
 from ..world.snapshot import restore
 from ..world.tools import WORLD_SERVER, world_tools
 from .contract import design_contract
-from .documents import DOCUMENTS_SERVER, DocumentTools, parsed_root
 from .proof import ViewProof
+from .reviewed_sources import bind_scenario, load_evidence, source_server
 from .tools import DESIGN_SERVER, Approve, DesignTools
 from .workspace import load_design
 
@@ -72,7 +73,9 @@ def open_for_designing(
     """The design's session for its current phase. `view_proof` is the caller's, kept across
     reopenings and closed when the design ends."""
     design = load_design(workspace)
+    evidence = load_evidence(workspace, design)
     contract = design_contract(workspace, design)
+    source_tools = {"reviewed_sources": source_server(evidence)} if evidence else {}
     options: dict[str, Any] = {
         "approve": approve,
         "postgres_dsn": postgres_dsn,
@@ -81,27 +84,30 @@ def open_for_designing(
     }
     if design.stage == "suite":
         tools = DesignTools(workspace, restore(workspace), contract, **options)
-        documents = _documents(tools)
         stage = open_builder(
             contract,
             out=workspace,
             source_root=None,
             ask=ask,
+            scenario_problem=(lambda args: bind_scenario(evidence, args))
+            if evidence
+            else None,
             hosted_prompt=hosted_prompt,
             brief=f"## This design\n\n{tools.brief()}",
             sealed=False,
-            more_servers={DESIGN_SERVER: tools.server(), **documents},
+            more_servers={DESIGN_SERVER: tools.server(), **source_tools},
             files_note=_FILES.format(out=workspace),
             without=FIXED_ENVIRONMENT_TOOLS,
             skill=DESIGNER,
             postgres_proof=view_proof.scenario,
         )
+        if evidence:
+            stage.configure(replace(stage.spec, builtins=(ASK_TOOL,), workers={}))
         return stage, tools
     world_server, world = world_tools(
         contract, workspace, implementation=WORLD_IMPLEMENTATION
     )
     tools = DesignTools(workspace, world, contract, **options)
-    documents = _documents(tools)
     spec = SessionSpec(
         system_prompt=(
             load_skill(DESIGNER)
@@ -116,24 +122,18 @@ def open_for_designing(
             WORLD_SERVER: tools.guard_world(world_server, WORLD_LEFT_OUT),
             DESIGN_SERVER: tools.server(),
             KNOWLEDGE_SERVER: knowledge_server(contract, workspace),
-            **documents,
+            **source_tools,
         },
-        builtins=(*FILE_TOOLS, ASK_TOOL) if ask is not None else FILE_TOOLS,
+        builtins=(
+            *(FILE_TOOLS if not evidence else ()),
+            *((ASK_TOOL,) if ask is not None else ()),
+        ),
         cwd=str(workspace),
         max_turns=BUILDER_TURNS,
         model=chosen_model(),
         ask=ask,
     )
     return Stage(spec, name=BUILDER), tools
-
-
-def _documents(tools: DesignTools) -> dict[str, Any]:
-    """The document tools, when the person uploaded any."""
-    if not tools.design().documents:
-        return {}
-    return {
-        DOCUMENTS_SERVER: DocumentTools(tools, parsed_root(tools.workspace)).server()
-    }
 
 
 def unfinished(stage: str) -> str:

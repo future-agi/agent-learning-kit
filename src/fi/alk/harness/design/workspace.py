@@ -124,6 +124,14 @@ class Provenance(BaseModel):
     replaced: int = 0
 
 
+class ReviewedSourcePin(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    digest: str
+    evidence_digest: str
+
+
 class Design(BaseModel):
     """`design.json`: what the design is called, what it started from, and how far it got."""
 
@@ -150,6 +158,8 @@ class Design(BaseModel):
     stage: Literal["interview", "world", "suite"] = "interview"
     documents: list[DocumentRecord] = Field(default_factory=list)
     provenance: list[Provenance] = Field(default_factory=list)
+    scenario_count: int = Field(default=10, ge=1, le=1000)
+    reviewed_source: ReviewedSourcePin | None = None
 
 
 def load_design(workspace: str | Path) -> Design:
@@ -179,27 +189,45 @@ def open_design(
     modality: str = "chat",
     template: tuple[Path, Path] | None = None,
     documents: list[DocumentRecord] | None = None,
+    scenario_count: int = 10,
+    reviewed_snapshot: Path | None = None,
 ) -> Design:
     """The workspace's design: an empty one, or a root template's environment and suite unpacked
     into it. `template` is `(environment_root, suite_root)`; `documents` are the person's uploads
     as parsed. A workspace that already holds a design keeps it."""
+    from .reviewed_sources import bind_reviewed_sources, load_evidence
+
     workspace = Path(workspace)
     if (workspace / DESIGN).is_file():
-        return load_design(workspace)
+        design = load_design(workspace)
+        if documents and {(doc.file, doc.sha256) for doc in documents} != {
+            (doc.file, doc.sha256) for doc in design.documents
+        }:
+            raise ReleaseError(
+                "source_snapshot_changed", "The design's uploaded documents changed."
+            )
+        updated = bind_reviewed_sources(workspace, design, reviewed_snapshot)
+        if updated != design:
+            save_design(workspace, updated)
+        load_evidence(workspace, updated)
+        return updated
     try:
         design = Design(
             name=name,
             requirements=requirements,
             modality=modality,
             documents=documents or [],
+            scenario_count=scenario_count,
         )
     except ValidationError as exc:
         raise ReleaseError("design_invalid", str(exc)) from exc
     workspace.mkdir(parents=True, exist_ok=True)
     if template is not None:
         design = _unpack(workspace, design, Path(template[0]), Path(template[1]))
+    design = bind_reviewed_sources(workspace, design, reviewed_snapshot)
     # Written last, so a failed unpack leaves no design and opening again lays it out afresh.
     save_design(workspace, design)
+    load_evidence(workspace, design)
     return design
 
 
@@ -413,8 +441,11 @@ def seal_design(
 ) -> tuple[EnvironmentReleaseV1, SuiteReleaseV1]:
     """Seal the design into `out/environment` and `out/suite`, or raise `ReleaseError` and leave
     no `out`. Every scenario is proved on PostgreSQL, which hosted runs require."""
+    from .reviewed_sources import check_grounded_suite, load_evidence
+
     workspace, out = Path(workspace), Path(out)
     design = load_design(workspace)
+    check_grounded_suite(workspace, load_evidence(workspace, design))
     if not saved(workspace):
         raise ReleaseError("design_world_missing", "the design has no saved world yet")
     _derive_policy_rows(workspace)

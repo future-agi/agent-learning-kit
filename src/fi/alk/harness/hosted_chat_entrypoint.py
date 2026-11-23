@@ -848,17 +848,21 @@ class HostedChatRuntime:
 
     async def _open_for_designing(self) -> Stage:
         from . import spend
-        from .design.hosted import OUTPUT
+        from .design.hosted import OUTPUT, ready_marker
         from .design.session import open_for_designing
-        from .design.workspace import DESIGN
+        from .design.tools import FINISHED_MARKER
 
         # The platform reads this ledger before the sandbox is deleted and bills it as authoring.
         spend.journal_to(self.workspace / "cost.json")
-        # The control process lays the design out (unpacking any template) before it is opened.
+        # A resumed design file predates validation for this launch.
         for _ in range(150):
-            if (self.workspace / DESIGN).is_file():
+            if ready_marker(self.workspace).is_file():
                 break
+            if (self.workspace / FINISHED_MARKER).is_file():
+                raise RuntimeError("The design control process could not open the design.")
             await asyncio.sleep(2)
+        else:
+            raise RuntimeError("The design control process has not opened the design.")
         if self._view_proof is None:
             from .design.proof import ViewProof
 

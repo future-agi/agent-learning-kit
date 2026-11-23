@@ -28,11 +28,15 @@ from ..releases import (
     ReleaseError,
     environment_directory,
 )
-from .documents import parse_documents, parsed_root
+from .reviewed_sources import document_manifest
 from .tools import FINISHED_MARKER, RESULT
-from .workspace import open_design
+from .workspace import DocumentRecord, open_design
 
 OUTPUT = "design-output"
+
+
+def ready_marker(workspace: Path) -> Path:
+    return workspace.parent / f".{workspace.name}-design-ready"
 
 
 class _Release(BaseModel):
@@ -52,6 +56,14 @@ class DesignTemplateRef(BaseModel):
     suite: _Release
 
 
+class DesignDocumentRef(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    size: int = Field(ge=0)
+
+
 class DesignJob(BaseModel):
     """`metadata.design` of a hosted design job, written by the platform."""
 
@@ -62,6 +74,7 @@ class DesignJob(BaseModel):
     modality: Literal["chat", "voice"] = "chat"
     template: DesignTemplateRef | None = None
     resume_from: str | None = None
+    documents: list[DesignDocumentRef] = Field(default_factory=list)
 
 
 def design_job(job: dict) -> DesignJob:
@@ -69,6 +82,7 @@ def design_job(job: dict) -> DesignJob:
 
 
 def failed(output: Path, workspace: Path, code: str, message: str) -> int:
+    workspace.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
     (output / RESULT).write_text(
         json.dumps({"status": "failed", "failure": {"code": code, "message": message}}),
@@ -81,11 +95,25 @@ def failed(output: Path, workspace: Path, code: str, message: str) -> int:
     return 2
 
 
+def clear_source_failure(output: Path, workspace: Path) -> None:
+    try:
+        result = json.loads((output / RESULT).read_bytes())
+    except (OSError, ValueError):
+        return
+    if result.get("status") == "failed" and (result.get("failure") or {}).get(
+        "code", ""
+    ).startswith("source_"):
+        (output / RESULT).unlink()
+        (workspace / FINISHED_MARKER).unlink(missing_ok=True)
+
+
 def run_hosted(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace)
     output = workspace / OUTPUT
+    ready_marker(workspace).unlink(missing_ok=True)
     try:
-        job = design_job(json.loads(Path(args.job).read_text(encoding="utf-8")))
+        payload = json.loads(Path(args.job).read_text(encoding="utf-8"))
+        job = design_job(payload)
     except (OSError, ValueError, ValidationError) as exc:
         return failed(output, workspace, "design_job_invalid", str(exc)[:600])
     releases = Path(args.releases)
@@ -98,9 +126,14 @@ def run_hosted(args: argparse.Namespace) -> int:
         else None
     )
     try:
-        # Parsed before the design is written: the chat opens once design.json exists. A resumed
-        # design keeps its records, and its documents are parsed again for this sandbox.
-        documents = parse_documents(Path(args.documents), parsed_root(workspace))
+        documents = [
+            DocumentRecord(
+                name=doc.name, file=doc.name, sha256=doc.sha256, size=doc.size
+            )
+            for doc in job.documents
+        ]
+        if not documents:
+            documents = document_manifest(Path(args.documents), workspace=workspace)
         open_design(
             workspace,
             name=job.name,
@@ -108,9 +141,13 @@ def run_hosted(args: argparse.Namespace) -> int:
             modality=job.modality,
             template=template,
             documents=documents,
+            scenario_count=payload.get("scenario_count", 10),
+            reviewed_snapshot=args.reviewed_snapshot,
         )
     except ReleaseError as exc:
         return failed(output, workspace, exc.code, exc.detail[:600])
+    clear_source_failure(output, workspace)
+    ready_marker(workspace).touch()
     deadline = time.monotonic() + int(
         os.environ.get("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS") or 3300
     )

@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Any
 
 from ..backends import resolve
+from ..releases import ReleaseError
+from .reviewed_sources import document_manifest
 from .tools import (
     APPROVE,
     PARKED,
@@ -157,6 +159,7 @@ async def _resumed(person: Person) -> str:
 
 async def _design(args: argparse.Namespace) -> int:
     from .. import spend
+    from .hosted import clear_source_failure, failed
     from .proof import ViewProof
     from .session import open_for_designing, unfinished
 
@@ -171,18 +174,22 @@ async def _design(args: argparse.Namespace) -> int:
         if args.template_environment
         else None
     )
-    from .documents import parse_documents, parsed_root
-
-    open_design(
-        workspace,
-        name=args.name,
-        requirements=requirements,
-        modality=args.modality,
-        template=template,
-        documents=parse_documents(Path(args.documents), parsed_root(workspace))
-        if args.documents
-        else None,
-    )
+    try:
+        open_design(
+            workspace,
+            name=args.name,
+            requirements=requirements,
+            modality=args.modality,
+            template=template,
+            documents=document_manifest(Path(args.documents), workspace=workspace)
+            if args.documents
+            else None,
+            scenario_count=args.scenario_count,
+            reviewed_snapshot=args.reviewed_snapshot,
+        )
+    except ReleaseError as exc:
+        return failed(output, workspace, exc.code, exc.detail[:600])
+    clear_source_failure(output, workspace)
     spend.journal_to(workspace / "cost.json")
     person = Person(
         workspace, mode=args.answers, window=args.question_window, park_at=args.park_at
@@ -258,6 +265,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--template-suite")
     run.add_argument("--modality", choices=("chat", "voice"), default="chat")
     run.add_argument("--documents", help="a folder of the person's documents")
+    run.add_argument("--scenario-count", type=int, default=10)
     run.add_argument("--output", required=True)
     run.add_argument(
         "--postgres-dsn",
@@ -272,6 +280,10 @@ def _parser() -> argparse.ArgumentParser:
     hosted.add_argument("--releases", required=True)
     hosted.add_argument("--workspace", required=True)
     hosted.add_argument("--documents", default="/work/documents")
+    for command in (run, hosted):
+        command.add_argument(
+            "--reviewed-snapshot", type=Path, help="private approved source snapshot"
+        )
     return parser
 
 
