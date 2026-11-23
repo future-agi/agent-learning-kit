@@ -15,7 +15,7 @@ from fi.alk.harness import call_runner, tool_evidence
 from fi.alk.harness.chat_call_runner import _HostedChatTarget, _record_completed_tool_call
 from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 from fi.alk.harness.tool_evidence import AGENT, SPAN, TRACER, WORLD, seen, tagged
-from fi.alk.harness.world.runtime import Call, trace_row
+from fi.alk.harness.world.runtime import Call, graded_calls, trace_row
 from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, _decode_json_or_sse
 
 
@@ -30,8 +30,9 @@ def _call(name="look_up_order", source="", arguments=None, result=None, *, at=0.
     )
 
 
-def _runtime(tmp_path: Path, lines: list[dict]) -> EnvironmentRuntime:
+def _runtime(tmp_path: Path, lines: list[dict], route: str = "") -> EnvironmentRuntime:
     trace = tmp_path / "calls.jsonl"
+    trace.parent.mkdir(parents=True, exist_ok=True)
     trace.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
     return EnvironmentRuntime(
         runtime_id="rt-1",
@@ -39,7 +40,7 @@ def _runtime(tmp_path: Path, lines: list[dict]) -> EnvironmentRuntime:
         bundle_digest="sha256:" + "0" * 64,
         state=RuntimeState.READY,
         endpoints={},
-        metadata={"tool_trace_path": str(trace)},
+        metadata={"tool_trace_path": str(trace), **({"tool_trace_route": route} if route else {})},
     )
 
 
@@ -208,8 +209,8 @@ def _digest_as_it_was(call: Call) -> str:
     return json.dumps(fields, sort_keys=True, default=repr)
 
 
-def _chat_readings(tmp_path, monkeypatch, observed, lines, log=None):
-    runtime = _runtime(tmp_path, lines)
+def _chat_readings(tmp_path, monkeypatch, observed, lines, log=None, route=""):
+    runtime = _runtime(tmp_path, lines, route)
     lend_now, digest_now = call_runner._lend_span, call_runner._digest
 
     def as_it_was(recorded):
@@ -448,10 +449,16 @@ def test_a_google_adk_reply_streamed_in_parts_reads_as_one_record_per_call(tmp_p
 
 
 
-# -- the agent's call id decides a pair ---------------------------------------------------------------------------
+
+# -- the callback route: spans pair by the agent's call id, and add calls only to an empty list -----------------
 
 _ID_SPAN = {"name": "look_up_order", "output": "", "source": "otel", "agent_key": "Support", "event_id": "e1",
             "at": 1.0}
+_A1001 = "{\"order_id\": \"A1001\"}"
+
+
+def _callback(tmp_path, observed, lines) -> tuple[Call, ...]:
+    return call_runner._with_span_calls(copy.deepcopy(observed), _runtime(tmp_path, lines, call_runner.CALLBACK_ROUTE))
 
 
 def test_a_span_and_the_agents_account_with_one_call_id_are_one_call_however_the_arguments_are_shaped(
@@ -461,7 +468,8 @@ def test_a_span_and_the_agents_account_with_one_call_id_are_one_call_however_the
     observed = [_told(call_id="c1")]
     lines = [{**_ID_SPAN, "arguments": "{\"order_id\": {\"id\": \"A1001\"}}", "call_id": "c1"}]
 
-    before, now = _chat_readings(tmp_path, monkeypatch, observed, lines)
+    before, _ = _chat_readings(tmp_path, monkeypatch, observed, lines)
+    now = _callback(tmp_path, observed, lines)
 
     assert len(before) == 2
     assert [(call.source, call.seen_by, call.arguments, call.runtime_ids) for call in now] == [
@@ -469,14 +477,14 @@ def test_a_span_and_the_agents_account_with_one_call_id_are_one_call_however_the
     ]
 
 
-def test_the_call_id_picks_the_agents_account_a_span_is_whatever_the_order(tmp_path, monkeypatch) -> None:
+def test_the_call_id_picks_the_agents_account_a_span_is_whatever_the_order(tmp_path) -> None:
     observed = [_told(call_id="c1"), _told(call_id="c2")]
     lines = [
-        {**_ID_SPAN, "arguments": "{\"order_id\": \"A1001\"}", "call_id": "c2"},
-        {**_ID_SPAN, "arguments": "{\"order_id\": \"A1001\"}", "call_id": "c1", "event_id": "e2", "at": 2.0},
+        {**_ID_SPAN, "arguments": _A1001, "call_id": "c2"},
+        {**_ID_SPAN, "arguments": _A1001, "call_id": "c1", "event_id": "e2", "at": 2.0},
     ]
 
-    _before, now = _chat_readings(tmp_path, monkeypatch, observed, lines)
+    now = _callback(tmp_path, observed, lines)
 
     assert sorted((call.runtime_ids["call_id"], call.runtime_ids.get("event_id")) for call in now) == [
         ("c1", "e2"), ("c2", "e1")
@@ -484,23 +492,133 @@ def test_the_call_id_picks_the_agents_account_a_span_is_whatever_the_order(tmp_p
 
 
 def test_a_span_and_the_agents_account_with_different_call_ids_are_never_one_call(tmp_path, monkeypatch) -> None:
-    # Alike in all else: without the ids, the span would be the agent's call.
+    # Alike in all else: without the ids, the span would be the agent's call. Here it is no call either, since the
+    # agent's account is.
     observed = [_told(call_id="c1")]
-    lines = [{**_ID_SPAN, "arguments": "{\"order_id\": \"A1001\"}", "call_id": "c2"}]
+    lines = [{**_ID_SPAN, "arguments": _A1001, "call_id": "c2"}]
 
-    before, now = _chat_readings(tmp_path, monkeypatch, observed, lines)
+    before, _ = _chat_readings(tmp_path, monkeypatch, observed, lines)
+    now = _callback(tmp_path, observed, lines)
 
-    assert len(before) == 1
-    assert sorted((call.source, call.seen_by, call.runtime_ids.get("call_id")) for call in now) == [
-        (AGENT, [], "c1"), (SPAN, [], "c2")
+    assert [(call.source, call.seen_by) for call in before] == [(AGENT, [])]
+    assert [(call.source, call.seen_by, call.runtime_ids) for call in now] == [(AGENT, [], {"call_id": "c1"})]
+
+
+def test_without_a_call_id_on_the_span_the_agents_account_pairs_as_on_the_command_route(tmp_path, monkeypatch) -> None:
+    observed = [_told(call_id="c1")]
+    lines = [{**_ID_SPAN, "arguments": _A1001}]
+
+    _before, command = _chat_readings(tmp_path, monkeypatch, observed, lines)
+    now = _callback(tmp_path, observed, lines)
+
+    assert _unnamed(now) == _unnamed(command)
+    assert [(call.source, call.seen_by) for call in now] == [(AGENT, [SPAN])]
+
+
+def _graded(calls) -> list[str]:
+    """What a check grades of each call, in no order."""
+    return sorted(
+        json.dumps([call.name, call.arguments, call.ok, call.result], sort_keys=True, default=repr)
+        for call in graded_calls(calls)
+    )
+
+
+_RAN = {"name": "look_up_order", "arguments": {"order_id": "A1001"}, "output": "shipped", "at": 5.0}
+_SPAN_LINE = {"source": "otel", "agent_key": "Support", "at": 1.0, "ended_at": 1.5}
+_EQUAL_ROWS = {
+    "a span whose result text differs": (
+        [_RAN], [{**_SPAN_LINE, "name": "look_up_order", "arguments": _A1001, "output": "delayed", "event_id": "e1"}],
+    ),
+    "a span whose shared argument differs": (
+        [_RAN], [{**_SPAN_LINE, "name": "look_up_order", "arguments": "{\"order_id\": \"A9\"}", "output": "shipped",
+                  "event_id": "e1"}],
+    ),
+    "a span that spells the tool's name differently": (
+        [_RAN], [{**_SPAN_LINE, "name": "orders.lookup", "arguments": _A1001, "output": "shipped", "event_id": "e1"}],
+    ),
+    "more spans than calls": (
+        [_RAN], [{**_SPAN_LINE, "name": "look_up_order", "arguments": _A1001, "output": "shipped", "event_id": "e1"},
+                 {**_SPAN_LINE, "name": "look_up_order", "arguments": _A1001, "output": "shipped", "event_id": "e2",
+                  "at": 2.0}],
+    ),
+    "a hand-off span": (
+        [_RAN], [{**_SPAN_LINE, "name": "transfer_to_billing", "arguments": "", "output": "", "event_id": "e1",
+                  "delegated_to": "Billing", "transfer": True, "kind": "handoff"}],
+    ),
+    "a job's hand-off under a span of the same tool": (
+        [_RAN], [{**_SPAN_LINE, "name": "look_up_order", "arguments": _A1001, "output": "shipped", "event_id": "e1"},
+                 {**_SPAN_LINE, "name": "look_up_order", "arguments": _A1001, "output": "", "event_id": "e2",
+                  "parent_event_id": "e1", "delegated_to": "Worker", "at": 3.0}],
+    ),
+}
+
+
+@pytest.mark.parametrize("row", list(_EQUAL_ROWS))
+@pytest.mark.parametrize("recorded_by", ["the tracer", "the world", "the agent's account"])
+def test_on_the_callback_route_spans_never_change_the_graded_calls_another_source_recorded(
+    tmp_path, row, recorded_by
+) -> None:
+    written, spans = _EQUAL_ROWS[row]
+    if recorded_by == "the tracer":
+        observed, lines = [], [*written, *spans]
+    elif recorded_by == "the world":
+        observed, lines = [_call(result="shipped", at=5.0)], spans
+    else:
+        observed, lines = [_told()], spans
+
+    off = _callback(tmp_path / "off", observed, written if recorded_by == "the tracer" else [])
+    on = _callback(tmp_path / "on", observed, lines)
+
+    assert _graded(on) == _graded(off)
+    assert len(on) == len(off)
+
+
+def test_the_equal_rows_would_add_calls_on_the_command_route(tmp_path) -> None:
+    # The rows above are cases a span is not paired in: on the command route each adds a call.
+    for row, (written, spans) in _EQUAL_ROWS.items():
+        if "hand-off" in row:
+            continue
+        command = call_runner._with_span_calls((), _runtime(tmp_path / row.replace(" ", "-"), [*written, *spans]))
+        assert len(_graded(command)) > 1, row
+
+
+def test_on_the_callback_route_a_lend_never_takes_a_call_out_of_the_graded_list(tmp_path) -> None:
+    # Two plain calls of one tool; the span that pairs with the second carries a hand-off mark and a parent, which
+    # would read that call as a job repeating the call that launched it.
+    written = [{**_RAN, "at": 5.0}, {**_RAN, "arguments": {"order_id": "A1002"}, "at": 6.0}]
+    spans = [{**_SPAN_LINE, "name": "look_up_order", "arguments": "{\"order_id\": \"A1002\"}", "output": "shipped",
+              "event_id": "e2", "parent_event_id": "e0", "delegated_to": "Worker"}]
+
+    on = _callback(tmp_path, [], [*written, *spans])
+
+    assert _graded(on) == _graded(_callback(tmp_path / "off", [], written))
+    assert len(graded_calls(on)) == 2
+
+
+def test_on_the_callback_route_with_no_other_record_the_spans_are_the_calls(tmp_path) -> None:
+    spans = [
+        {**_SPAN_LINE, "name": "look_up_order", "arguments": _A1001, "output": "shipped", "event_id": "e1"},
+        {**_SPAN_LINE, "name": "start_return", "arguments": _A1001, "output": "ok", "event_id": "e2", "at": 2.0},
     ]
 
+    now = _callback(tmp_path, [], spans)
+    command = call_runner._with_span_calls((), _runtime(tmp_path / "command", spans))
 
-def test_without_a_call_id_on_the_span_the_agents_account_pairs_as_before(tmp_path, monkeypatch) -> None:
-    observed = [_told(call_id="c1")]
-    lines = [{**_ID_SPAN, "arguments": "{\"order_id\": \"A1001\"}"}]
+    assert [(call.name, call.source) for call in now] == [("look_up_order", SPAN), ("start_return", SPAN)]
+    assert _unnamed(now) == _unnamed(command)
 
-    before, now = _chat_readings(tmp_path, monkeypatch, observed, lines)
 
-    assert _unnamed(now) == _unnamed(before)
-    assert [(call.source, call.seen_by) for call in now] == [(AGENT, [SPAN])]
+@pytest.mark.parametrize(
+    ("account_id", "span_id"),
+    [("adk-1", "adk-1"), ("adk-1", "adk-2"), ("", "adk-1"), ("adk-1", "")],
+)
+def test_on_the_command_route_a_spans_call_id_leaves_dev_graded_calls(tmp_path, monkeypatch, account_id, span_id):
+    observed = [_told(call_id=account_id)]
+    lines = [{**_ID_SPAN, "arguments": _A1001, **({"call_id": span_id} if span_id else {})}]
+    dev_lines = [{**_ID_SPAN, "arguments": _A1001}]
+
+    before, _ = _chat_readings(tmp_path / "dev", monkeypatch, observed, dev_lines)
+    _, now = _chat_readings(tmp_path / "now", monkeypatch, observed, lines)
+
+    assert _graded(now) == _graded(before)
+    assert [(call.source, call.seen_by, call.runtime_ids.get("event_id")) for call in now] == [(AGENT, [SPAN], "e1")]

@@ -1391,6 +1391,36 @@ def test_callable_contract_compiles_repository_callback_adapter(
     )
 
 
+def test_a_callback_bundle_tells_the_reader_its_route(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness import call_runner
+    from fi.alk.harness.process_runtime import ProcessRuntimeProvider
+
+    source = tmp_path / "ava"
+    app = source / "app"
+    app.mkdir(parents=True)
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text(
+        "async def agent_callback(input):\n    return {'content': input.new_message['content']}\n",
+        encoding="utf-8",
+    )
+    (source / "requirements.txt").write_text("agent-simulate\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_callable_contract(authoring)
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", with_secrets=True),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    provider = object.__new__(ProcessRuntimeProvider)
+    provider._manifest = bundle
+    provider._context = SimpleNamespace(work_directory=tmp_path, dispatch_id="", job_id="job-1")
+
+    assert provider._control_metadata(0)["tool_trace_route"] == call_runner.CALLBACK_ROUTE
+
+
 def test_repository_callback_is_discovered_when_contract_omits_interface(
     tmp_path: Path,
 ) -> None:
