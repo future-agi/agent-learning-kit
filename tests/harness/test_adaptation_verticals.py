@@ -42,12 +42,23 @@ needs_releases = pytest.mark.skipif(
 
 
 def _adapt(
-    tmp_path: Path, vertical: str, profile: dict, mapping: dict, **drafts
+    tmp_path: Path,
+    vertical: str,
+    profile: dict,
+    mapping: dict,
+    *,
+    trajectories: dict | None = None,
+    **drafts,
 ) -> dict:
     release = Path(RELEASES) / vertical
     profile_path, drafts_path = fixtures.write_drafts(
         tmp_path / "inputs", profile, mapping, **drafts
     )
+    if trajectories:
+        body = json.loads(drafts_path.read_text(encoding="utf-8"))
+        drafts_path.write_text(
+            json.dumps({**body, "trajectories": trajectories}), encoding="utf-8"
+        )
     code = main(
         [
             "run",
@@ -147,3 +158,177 @@ def test_cardguard_is_adapted_to_banking(tmp_path):
         for key in call["arguments"]
     }
     assert "customer_id" not in arguments and "customer" in arguments
+
+
+# Internal Knowledge's gap_noticed_flag_declined reads the Acceptable Use Policy whole through
+# Drive's `read_file_content`; fetching its two passages with the environment's own `fetch_passage`
+# is a valid route to the same outcome (`test_internal_knowledge_validation`, ALTERNATES).
+ROUTED = "gap-noticed-flag-declined"
+
+
+def _mine(tool: str, **arguments: object) -> dict:
+    return {
+        "tool": f"my_{tool}",
+        "arguments": {f"my_{name}": value for name, value in arguments.items()},
+    }
+
+
+def _run_manifest(tmp_path: Path, binding: dict, keys: list[str]) -> Path:
+    from fi.alk.harness.releases import RunManifestV1, object_digest
+
+    release = Path(RELEASES) / "internal_knowledge"
+    environment = json.loads(
+        (release / "environment" / "release.json").read_text(encoding="utf-8")
+    )
+    suite = json.loads((release / "suite" / "suite.json").read_text(encoding="utf-8"))
+    body = {
+        "schema_version": "futureagi.run-manifest.v1",
+        "digest": "sha256:" + "0" * 64,
+        "environment": [{"digest": environment["digest"], "name": environment["name"]}],
+        "suite": {"digest": suite["digest"]},
+        "binding": {"digest": binding["digest"]},
+        "agent": binding["agent"],
+        "selection": {"scenario_keys": keys, "trials": 1},
+        "simulator": {"llm": {"provider": "openai", "model": "gpt-test"}},
+        "scorer": {"alk_version": "test"},
+        "runtime": {
+            "provider": "test",
+            "image_name": "alk",
+            "image_digest": "sha256:" + "1" * 64,
+        },
+    }
+    manifest = RunManifestV1.model_validate(body)
+    manifest = manifest.model_copy(update={"digest": object_digest(manifest)})
+    path = tmp_path / f"manifest-{len(keys)}-{keys[0]}.json"
+    path.write_text(json.dumps(manifest.model_dump(mode="json")), encoding="utf-8")
+    return path
+
+
+@needs_releases
+def test_an_agent_without_a_tool_is_proved_on_another_route_and_runs_only_its_subset(
+    tmp_path,
+):
+    """An Internal Knowledge agent without Drive's `read_file_content`: gap_noticed_flag_declined's
+    reference needs it, but the builder's trajectory through `fetch_passage` passes the same
+    outcome and adversarial controls, so the scenario is proved, not unscorable. The scenarios no
+    route and no trajectory reaches are unscorable, and compose refuses to run them and leaves
+    them out of the bundle."""
+    import shutil
+
+    from fi.alk.harness.job import HarnessJob
+    from fi.alk.harness.releases import (
+        ReleaseError,
+        compose_bundle,
+        environment_directory,
+    )
+
+    release = Path(RELEASES) / "internal_knowledge"
+    profile, mapping = fixtures.renamed_agent(release / "environment")
+    profile["tools"] = [
+        tool for tool in profile["tools"] if tool["name"] != "my_read_file_content"
+    ]
+    mapping["tools"] = [
+        entry
+        for entry in mapping["tools"]
+        if entry["agent_tool"] != "my_read_file_content"
+    ]
+    result = _adapt(
+        tmp_path,
+        "internal_knowledge",
+        profile,
+        mapping,
+        trajectories={
+            ROUTED: [
+                _mine("get_user_profile", employee_id="E13"),
+                _mine(
+                    "get_effective_version", employee_id="E13", family="acceptable_use"
+                ),
+                _mine("fetch_passage", employee_id="E13", passage_id="P-AUPV2-01"),
+                _mine("fetch_passage", employee_id="E13", passage_id="P-AUPV2-02"),
+                _mine(
+                    "search_documents",
+                    employee_id="E13",
+                    query="client data system",
+                    include_superseded=False,
+                    collection_id="C_IT",
+                ),
+                _mine("get_document_owner", employee_id="E13", drive_file_id="aup_v2"),
+            ]
+        },
+    )
+    out = tmp_path / "out"
+    proof = json.loads((out / "binding-proof.json").read_text(encoding="utf-8"))
+    assert proof["scenarios"][ROUTED]["status"] == "proved", proof["scenarios"][ROUTED]
+    unscorable = {one["scenario_key"] for one in result["alignment"]["unscorable"]}
+    assert unscorable and ROUTED not in unscorable
+    assert unscorable == {
+        key for key, one in proof["scenarios"].items() if one["status"] == "unscorable"
+    }
+
+    releases = tmp_path / "releases"
+    environment = json.loads(
+        (release / "environment" / "release.json").read_text(encoding="utf-8")
+    )
+    shutil.copytree(
+        release / "environment", environment_directory(releases, environment["digest"])
+    )
+    shutil.copytree(release / "suite", releases / "suite")
+    binding = json.loads((out / "binding.json").read_text(encoding="utf-8"))
+    job = tmp_path / "job.json"
+    job.write_text(
+        HarnessJob(
+            job_id="subset",
+            run_id="subset-run",
+            execution="local",
+            source={"kind": "local_repository", "local_path": str(tmp_path)},
+            agent={
+                "connector": "mcp_client",
+                "config": {
+                    key: value for key, value in profile.items() if key != "provider"
+                },
+            },
+            scenario_count=1,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    common = {
+        "binding_path": out / "binding.json",
+        "job_path": job,
+        "binding_proof_path": out / "binding-proof.json",
+    }
+    picked = min(unscorable)
+    with pytest.raises(ReleaseError) as caught:
+        compose_bundle(
+            releases,
+            manifest_path=_run_manifest(tmp_path, binding, [ROUTED, picked]),
+            output=tmp_path / "refused",
+            **common,
+        )
+    assert caught.value.code == "scenario_unscorable" and picked in caught.value.detail
+    with pytest.raises(ReleaseError) as caught:
+        compose_bundle(
+            releases,
+            manifest_path=_run_manifest(tmp_path, binding, [ROUTED]),
+            output=tmp_path / "unproved",
+            **{**common, "binding_proof_path": None},
+        )
+    assert caught.value.code == "binding_unproved"
+
+    bundle = compose_bundle(
+        releases,
+        manifest_path=_run_manifest(tmp_path, binding, [ROUTED]),
+        output=tmp_path / "bundle",
+        **common,
+    )
+    proved = sorted(
+        key for key, one in proof["scenarios"].items() if one["status"] == "proved"
+    )
+    assert bundle.metadata["release"]["scenarios"] == proved
+    carried = {
+        json.loads((folder / "scenario.json").read_text(encoding="utf-8"))[
+            "scenario_key"
+        ]
+        for folder in (tmp_path / "bundle" / "scenarios").iterdir()
+        if (folder / "scenario.json").is_file()
+    }
+    assert carried == set(proved)

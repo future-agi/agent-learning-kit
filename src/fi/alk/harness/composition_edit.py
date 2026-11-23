@@ -213,8 +213,9 @@ class Composition:
                         "for every scenario you add or rewrite. `save_changes` proves each one through "
                         "the binding on PostgreSQL and saves nothing until every reachable scenario "
                         "holds and every adversarial variant fails. A scenario whose solution needs a "
-                        "tool no mapped step reaches is unscorable for this agent: it stays in the "
-                        "suite, is not scored, and needs no trajectory."
+                        "tool no mapped step reaches is unscorable for this agent unless a trajectory "
+                        "you write solves it another way: it stays in the suite, is not scored, and "
+                        "runs cannot select it."
                     ),
                 ]
             )
@@ -250,7 +251,10 @@ class Composition:
         return sorted(
             scenario.scenario_key
             for scenario in load_scenarios(self.workspace)
-            if {step.tool for step in scenario.solution} <= reached
+            if any(
+                {step.tool for step in route} <= reached
+                for route in [scenario.solution, *scenario.alternatives]
+            )
             and scenario.scenario_key not in stored
         )
 

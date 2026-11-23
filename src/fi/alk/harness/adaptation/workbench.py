@@ -351,7 +351,7 @@ class Workbench:
         derived = derive_trajectories(
             binding,
             (
-                (entry.key, scenario.solution)
+                (entry.key, scenario.solution, scenario.alternatives)
                 for entry in self.base_suite.scenarios
                 if (scenario := read_folder(self.suite_root, Path(entry.path).name))
                 is not None
@@ -391,12 +391,16 @@ class Workbench:
             for key, reason in derived.undecided.items()
             if key not in written
         }
+        # A scenario none of whose routes the binding reaches is unscorable unless a trajectory
+        # written in the agent's own tools solves it; run_proof proves that one like any other.
+        closed = sorted(key for key in derived.unreached if key not in written)
         lines = [
             f"accepted as {binding.digest}: {len(derived.trajectories)} trajectories derived "
             f"from the reference solutions, {len(written)} written by you"
             + (
-                f", {len(derived.unreached)} scenarios use a tool no entry reaches (unscorable)"
-                if derived.unreached
+                f", {len(closed)} scenarios use a tool no entry reaches (unscorable unless "
+                f"you write a trajectory that solves them another way: {', '.join(closed)})"
+                if closed
                 else ""
             )
             + "."
