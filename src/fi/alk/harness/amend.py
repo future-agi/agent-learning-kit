@@ -278,6 +278,8 @@ def fix_tool(
         spec.arg_types = {k: v for k, v in spec.arg_types.items() if k in spec.args}
         spec.arg_values = {k: v for k, v in spec.arg_values.items() if k in spec.args}
         spec.arg_units = {k: v for k, v in spec.arg_units.items() if k in spec.args}
+        spec.arg_required = [k for k in spec.arg_required if k in spec.args]
+        spec.arg_bounds = {k: v for k, v in spec.arg_bounds.items() if k in spec.args}
         changed.append(f"arguments are now {', '.join(args)}")
         if orphaned:
             changed.append(f"dropped values recorded for {', '.join(orphaned)}")

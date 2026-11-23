@@ -83,6 +83,103 @@ def test_types_declared_for_arguments_that_do_not_exist_are_rejected():
     assert "tool[order]:types-for-unknown-args:size" in validate_contract(contract)
 
 
+def test_required_and_bounds_must_name_real_arguments():
+    contract = _contract(
+        tools=[
+            ToolSpec(
+                name="order",
+                args=["item_id", "quantity"],
+                arg_required=["item_id", "size"],
+                arg_bounds={"quantity": {"min": 1, "max": 10}, "weight": {"max": 5}},
+            )
+        ]
+    )
+
+    problems = validate_contract(contract)
+
+    assert "tool[order]:required-unknown-args:size" in problems
+    assert "tool[order]:bounds-for-unknown-args:weight" in problems
+
+
+def test_bounds_with_the_lowest_above_the_highest_are_rejected():
+    contract = _contract(
+        tools=[
+            ToolSpec(
+                name="order",
+                args=["quantity"],
+                arg_bounds={"quantity": {"min": 10, "max": 1}},
+            )
+        ]
+    )
+
+    assert "tool[order]:bounds-min-above-max:quantity" in validate_contract(contract)
+
+
+def test_bounds_keep_only_numeric_lowest_and_highest_values():
+    spec = ToolSpec(
+        name="order",
+        args=["quantity", "note", "flag"],
+        arg_bounds={
+            "quantity": {"min": 1, "max": "ten", "step": 2},
+            "note": "short",
+            "flag": {"min": True},
+        },
+    )
+
+    assert spec.arg_bounds == {"quantity": {"min": 1}}
+
+
+def test_brief_names_required_arguments_and_limits():
+    contract = _contract(
+        tools=[
+            ToolSpec(
+                name="order",
+                args=["item_id", "quantity"],
+                arg_required=["item_id"],
+                arg_bounds={"quantity": {"min": 1, "max": 10}},
+            )
+        ]
+    )
+
+    brief = contract.brief()
+
+    assert "required: item_id" in brief
+    assert "limits: quantity max 10 min 1" in brief
+
+
+def test_a_provider_schema_marks_only_required_arguments_and_carries_limits():
+    from fi.alk.providers.agent import _authored_tool
+
+    tool = _authored_tool(
+        {
+            "name": "order",
+            "args": ["item_id", "quantity", "size"],
+            "arg_values": {"size": ["s", "m"]},
+            "arg_required": ["item_id"],
+            "arg_bounds": {"quantity": {"min": 1, "max": 10}},
+        },
+        [],
+    )
+
+    assert tool["parameters"] == {
+        "type": "object",
+        "properties": {
+            "item_id": {},
+            "quantity": {"minimum": 1, "maximum": 10},
+            "size": {"enum": ["s", "m"]},
+        },
+        "required": ["item_id"],
+    }
+
+
+def test_a_provider_schema_without_required_arguments_still_requires_them_all():
+    from fi.alk.providers.agent import _authored_tool
+
+    tool = _authored_tool({"name": "order", "args": ["item_id", "quantity"]}, [])
+
+    assert tool["parameters"]["required"] == ["item_id", "quantity"]
+
+
 def test_brief_carries_argument_types_into_downstream_prompts():
     contract = _contract(
         tools=[

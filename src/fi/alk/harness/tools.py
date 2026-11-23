@@ -1056,6 +1056,15 @@ def contract_tools(
                                 "their words disagree, the code's: "
                                 '{"<an amount field>": "<its minor unit and currency>", "timeout": "milliseconds"}.',
                             },
+                            "arg_required": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": 'Arguments the tool cannot be called without, from the code (a parameter with no default) or the provider\'s schema (its `required` list): ["order_id"]. Leave out an argument that has a default.',
+                            },
+                            "arg_bounds": {
+                                "type": "object",
+                                "description": 'The lowest and highest value a number argument accepts, where the code or the provider\'s schema states one (a check, `ge`/`le`, `minimum`/`maximum`): {"quantity": {"min": 1, "max": 10}}. Only the sides that are stated.',
+                            },
                             "returns": {
                                 "type": "object",
                                 "description": "Every field the tool hands back, with its type and, where the "

@@ -174,6 +174,8 @@ class ToolSpec(BaseModel):
     arg_values: dict[str, Any] = Field(default_factory=dict)
     # The unit or format a field is written in, where the name alone does not say: `timeout` -> "milliseconds".
     arg_units: dict[str, str] = Field(default_factory=dict)
+    arg_required: list[str] = Field(default_factory=list)
+    arg_bounds: dict[str, dict[str, float]] = Field(default_factory=dict)
     # What the tool hands back, by output field: its type and, where the name does not say it, its unit or format.
     returns: dict[str, str] = Field(default_factory=dict)
     # The world's tables the tool reads, and the ones it adds to, changes or deletes from, declared from its code.
@@ -190,6 +192,25 @@ class ToolSpec(BaseModel):
     refuses: str = ""
     effects: str = ""
     inputs_from: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("arg_bounds", mode="before")
+    @classmethod
+    def _numeric_bounds(cls, value: Any) -> dict[str, dict[str, float]]:
+        if not isinstance(value, dict):
+            return {}
+        bounds: dict[str, dict[str, float]] = {}
+        for argument, bound in value.items():
+            if not isinstance(bound, dict):
+                continue
+            kept = {
+                side: bound[side]
+                for side in ("min", "max")
+                if isinstance(bound.get(side), (int, float))
+                and not isinstance(bound.get(side), bool)
+            }
+            if kept:
+                bounds[str(argument)] = kept
+        return bounds
 
 
 class ToolEntry(BaseModel):
@@ -1336,6 +1357,14 @@ class AgentContract(BaseModel):
                         ("effects", tool.effects),
                         ("arguments from", ", ".join(f"{arg} <- {source}" for arg, source in tool.inputs_from.items())),
                         ("units", ", ".join(f"{arg} in {unit}" for arg, unit in sorted(tool.arg_units.items()))),
+                        ("required", ", ".join(tool.arg_required)),
+                        (
+                            "limits",
+                            ", ".join(
+                                f"{arg} " + " ".join(f"{side} {limit}" for side, limit in sorted(bound.items()))
+                                for arg, bound in sorted(tool.arg_bounds.items())
+                            ),
+                        ),
                         ("returns", ", ".join(f"{field}: {kind}" for field, kind in tool.returns.items())),
                         ("reads tables (declared)", ", ".join(tool.tables_read)),
                         ("changes tables (declared)", ", ".join(tool.tables_changed)),
@@ -1574,6 +1603,8 @@ KEPT_AS_WRITTEN = (
     "ToolSpec.arg_units",
     # The world answers with these as written.
     "ToolSpec.arg_values",
+    "ToolSpec.arg_required",
+    "ToolSpec.arg_bounds",
     "ToolSpec.requires",
     "ToolSpec.inputs_from",
     # Names of the world's tables, matched against the tables a proof run changed
@@ -1927,6 +1958,25 @@ def validate_contract(contract: AgentContract) -> list[str]:
         if unknown_units:
             problems.append(
                 f"tool[{tool.name}]:units-for-unknown-args:{','.join(unknown_units)}"
+            )
+        unknown_required = sorted(set(tool.arg_required) - set(tool.args))
+        if unknown_required:
+            problems.append(
+                f"tool[{tool.name}]:required-unknown-args:{','.join(unknown_required)}"
+            )
+        unknown_bounds = sorted(set(tool.arg_bounds) - set(tool.args))
+        if unknown_bounds:
+            problems.append(
+                f"tool[{tool.name}]:bounds-for-unknown-args:{','.join(unknown_bounds)}"
+            )
+        inverted = sorted(
+            arg
+            for arg, bound in tool.arg_bounds.items()
+            if "min" in bound and "max" in bound and bound["min"] > bound["max"]
+        )
+        if inverted:
+            problems.append(
+                f"tool[{tool.name}]:bounds-min-above-max:{','.join(inverted)}"
             )
     # Conversational agents may expose no tools. Zero-argument tools are also legitimate;
     # cardinality alone is not evidence that authoring omitted something.
