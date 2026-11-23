@@ -121,6 +121,7 @@ hosted-tracing = [
   "traceai-claude-agent-sdk>=0.1.1",
 ]
 feedback = ["chromadb>=0.4.0"]
+environment-inputs = ["pypdf>=7.0.1,<8"]
 notebook = [
   "ipykernel>=6",                        # kernel for examples/agent_learning_sdk_demo.ipynb
   "nbformat>=5",
@@ -139,6 +140,7 @@ all = [
   "chromadb>=0.4.0",
   "livekit-agents[cartesia,deepgram,openai,silero,google]>=1.8.3,<2",
   "livekit-plugins-elevenlabs>=1.8.3,<2",
+  "pypdf>=7.0.1,<8",
   "sentence-transformers>=5.2.3,<6",
   "torch>=2.10.0,<3",
   "transformers>=5.2.0,<6",

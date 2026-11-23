@@ -34,6 +34,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Request,
     UploadFile,
     status,
 )
@@ -119,7 +120,9 @@ class LocalSandboxRequest(BaseModel):
             sum(
                 bool(value)
                 for value in (
-                    self.source_path, self.source_id, self.github_repository,
+                    self.source_path,
+                    self.source_id,
+                    self.github_repository,
                     self.provider_only,
                 )
             )
@@ -1764,7 +1767,8 @@ class LocalSandbox:
             "adjustment_id": str(uuid.uuid4()),
             "client_request_id": request.client_request_id,
             "instruction": instruction,
-            "target_stage": request.target_stage or _adjustment_stage(response.status.stage.value),
+            "target_stage": request.target_stage
+            or _adjustment_stage(response.status.stage.value),
             "scenario_delta": request.scenario_delta,
             "status": "pending",
             "created_at": _now(),
@@ -2513,6 +2517,29 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok", "provider": "local-process"}
+
+    @app.post(
+        "/v1/environment-sources",
+        dependencies=[Depends(_authorize)],
+    )
+    async def environment_sources(request: Request) -> JSONResponse:
+        from fi.alk.studio.environment_sources import (
+            MAX_REQUEST_BYTES,
+            execute_request,
+            request_too_large_response,
+        )
+
+        content_length = request.headers.get("content-length")
+        if content_length and content_length.isdecimal():
+            if int(content_length) > MAX_REQUEST_BYTES:
+                return JSONResponse(request_too_large_response())
+        payload = bytearray()
+        async for chunk in request.stream():
+            if len(payload) + len(chunk) > MAX_REQUEST_BYTES:
+                return JSONResponse(request_too_large_response())
+            payload.extend(chunk)
+        result = await asyncio.to_thread(execute_request, bytes(payload))
+        return JSONResponse(result)
 
     @app.post(
         "/v1/sources",

@@ -140,9 +140,7 @@ def _manifest(required_env: str) -> dict:
                                 "name": "agent_node",
                                 "input": "refund request",
                                 "output": "approved",
-                                "tool_calls": [
-                                    {"name": "apply_world_transition"}
-                                ],
+                                "tool_calls": [{"name": "apply_world_transition"}],
                                 "signals": ["model", "tool", "state"],
                             }
                         ],
@@ -298,7 +296,9 @@ def test_browser_cua_probe_scores_local_replay_and_rejects_external_target() -> 
         )
 
 
-def test_realtime_stack_probe_scores_local_voice_streaming_and_rejects_external_target() -> None:
+def test_realtime_stack_probe_scores_local_voice_streaming_and_rejects_external_target() -> (
+    None
+):
     example_path = PROJECT_ROOT / "examples" / "sdk_realtime_voice_optimization.py"
     spec = importlib.util.spec_from_file_location(
         "sdk_realtime_voice_optimization_probe",
@@ -353,7 +353,9 @@ def test_realtime_stack_probe_scores_local_voice_streaming_and_rejects_external_
         )
 
 
-def test_orchestration_stack_probe_scores_local_stack_and_rejects_external_target() -> None:
+def test_orchestration_stack_probe_scores_local_stack_and_rejects_external_target() -> (
+    None
+):
     example_path = PROJECT_ROOT / "examples" / "sdk_orchestration_optimization.py"
     spec = importlib.util.spec_from_file_location(
         "sdk_orchestration_optimization_probe",
@@ -411,7 +413,9 @@ def test_orchestration_stack_probe_scores_local_stack_and_rejects_external_targe
         )
 
 
-def test_multi_agent_room_probe_scores_local_coordination_and_rejects_external_target() -> None:
+def test_multi_agent_room_probe_scores_local_coordination_and_rejects_external_target() -> (
+    None
+):
     participants = {
         "planner": {"name": "planner", "role": "task planner"},
         "retriever": {"name": "retriever", "role": "policy evidence retriever"},
@@ -506,8 +510,9 @@ def test_multi_agent_room_probe_scores_local_coordination_and_rejects_external_t
     assert result["contract"]["local_executable_fixture"] is True
     assert result["summary"]["participant_count"] == 3
     assert result["summary"]["handoff_contract_matched_count"] == 1
-    assert result["summary"]["matched_coordination_check_count"] == (
-        result["summary"]["coordination_check_count"]
+    assert (
+        result["summary"]["matched_coordination_check_count"]
+        == (result["summary"]["coordination_check_count"])
     )
     assert result["summary"]["terminal_state"] is True
     assert result["environment"]["type"] == "multi_agent_room"
@@ -607,8 +612,9 @@ def test_framework_adapter_probe_runs_custom_framework_runtime() -> None:
         "agent-learning.framework-adapter-observed-io-contract.v1"
     )
     assert case["observed_io_contract"]["summary"]["signature_bound"] is True
-    assert case["runtime_trace"]["metadata"]["framework_adapter_contract"] == (
-        result["contract"]
+    assert (
+        case["runtime_trace"]["metadata"]["framework_adapter_contract"]
+        == (result["contract"])
     )
 
 
@@ -660,7 +666,9 @@ def test_framework_adapter_probe_proves_keyword_only_signature_io_contract() -> 
     } <= check_ids
 
 
-def test_framework_adapter_discovery_ranks_custom_methods_and_rejects_external_target() -> None:
+def test_framework_adapter_discovery_ranks_custom_methods_and_rejects_external_target() -> (
+    None
+):
     class CustomRefundOrchestrator:
         def run(self, text):
             return f"weak text adapter: {text}"
@@ -701,7 +709,9 @@ def test_framework_adapter_discovery_ranks_custom_methods_and_rejects_external_t
         )
 
 
-def test_framework_adapter_probe_runs_sync_callable_and_rejects_external_target() -> None:
+def test_framework_adapter_probe_runs_sync_callable_and_rejects_external_target() -> (
+    None
+):
     def callable_agent(agent_input):
         return simulate.AgentResponse(
             content="Callable adapter probe passed.",
@@ -1162,17 +1172,20 @@ def test_task_run_manifest_builder_runs_world_task_with_eval(
 
 
 def test_public_manifest_command_detection_prioritizes_optimization() -> None:
-    assert simulate.detect_manifest_command(
-        {
-            "redteam": {"auto_generate": True},
-            "optimization": {
-                "target": {
-                    "base_config": {},
-                    "search_space": {"redteam.surfaces": [["tool"]]},
-                }
-            },
-        }
-    ) == "optimize"
+    assert (
+        simulate.detect_manifest_command(
+            {
+                "redteam": {"auto_generate": True},
+                "optimization": {
+                    "target": {
+                        "base_config": {},
+                        "search_space": {"redteam.surfaces": [["tool"]]},
+                    }
+                },
+            }
+        )
+        == "optimize"
+    )
 
 
 def test_public_eval_suite_api_runs_local_prompt_provider(tmp_path: Path) -> None:
@@ -1356,3 +1369,76 @@ def test_public_eval_suite_api_reports_json_path_assertion_failures() -> None:
     assert "missing key" in failed[1]["error"]
     assert case["findings"][0]["actual"] == pytest.approx(0.4)
     assert case["findings"][0]["path"] == "metrics.score"
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    [
+        {"type": "regex", "value": ".*"},
+        {"type": "fi_eval", "value": "safety"},
+        {"type": "python", "value": "exec()"},
+        {"type": "unknown", "value": "x"},
+        {"type": "contains", "value": ""},
+        {"type": "contains", "value": "ok", "path": "response"},
+        {"type": "json_path_gte", "path": "score", "value": "0.5"},
+        {"type": "json_path_lte", "path": "score", "value": True},
+        {"type": "json_path_equals", "path": "$.score", "value": float("inf")},
+        {"type": "json_path_exists", "path": "score", "value": True},
+        {"type": "json_path_equals", "path": "$..[*]", "value": "x"},
+        {"type": "json_path_equals", "path": "$score", "value": 1},
+        {"type": "json_path_gte", "path": "score", "value": 10**400},
+        {"type": "json_path_equals", "path": "score", "value": {"nested": True}},
+    ],
+)
+def test_deterministic_assertion_validator_rejects_unsupported_checks(
+    assertion,
+) -> None:
+    from fi.simulate.manifest import ManifestError
+    from fi.simulate.suite import validate_deterministic_assertion
+
+    with pytest.raises(ManifestError):
+        validate_deterministic_assertion(assertion)
+
+
+@pytest.mark.parametrize(
+    "assertion,output",
+    [
+        ({"type": "contains", "value": "approved"}, "Request approved"),
+        ({"type": "not_contains", "value": "secret"}, "Request approved"),
+        ({"type": "equals", "value": "approved"}, "approved"),
+        ({"type": "json_path_exists", "path": "$.score"}, '{"score":1}'),
+        (
+            {"type": "json_path_equals", "path": "$[0].status", "value": "ready"},
+            '[{"status":"ready"}]',
+        ),
+        ({"type": "json_path_gte", "path": "score", "value": 0.5}, '{"score":1}'),
+        ({"type": "json_path_lte", "path": "score", "value": 2}, '{"score":1}'),
+        ({"type": "json_path_equals", "path": "score", "value": 1}, '{"score":1}'),
+        (
+            {"type": "json_path_contains", "path": "response", "value": "ok"},
+            '{"response":"ok"}',
+        ),
+        (
+            {"type": "json_path_not_contains", "path": "response", "value": "secret"},
+            '{"response":"ok"}',
+        ),
+    ],
+)
+def test_validated_deterministic_assertions_run_through_real_evaluator(
+    assertion, output
+) -> None:
+    from fi.simulate.suite import evaluate_assertions, validate_deterministic_assertion
+
+    validated = validate_deterministic_assertion(assertion)
+    assert evaluate_assertions(output, [validated])["passed"]
+
+
+def test_deterministic_numeric_assertion_handles_unrepresentable_actual() -> None:
+    from fi.simulate.suite import evaluate_assertions, validate_deterministic_assertion
+
+    assertion = validate_deterministic_assertion(
+        {"type": "json_path_gte", "path": "score", "value": 1}
+    )
+    result = evaluate_assertions(json.dumps({"score": 10**400}), [assertion])
+    assert not result["passed"]
+    assert "numeric JSON path values" in result["results"][0]["error"]
