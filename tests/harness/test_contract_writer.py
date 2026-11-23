@@ -1543,7 +1543,7 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, "writes each scenario's sealed worker limits (call_runner.write_worker_limits), not the contract"),
     ("fi.alk.harness.chat_call_runner", "HostedChatCallRunner._run", "_drive_conversation"): (
         1, _TRACE),
-    ("fi.alk.harness.chat_call_runner", "handler_child_for", "start_handler_child"): (
+    ("fi.alk.harness.chat_call_runner", "handler_child_at", "start_handler_child"): (
         1, "makes the handler child's own scratch folder and log, not the contract"),
     ("fi.alk.harness.cli", "_auto", "save_session"): (
         1, "sessions.save writes the session's own record (META)"),
