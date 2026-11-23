@@ -1499,6 +1499,7 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     # did would be listed under its own name), so each reason says what the helper writes.
     ("fi.alk.harness.agent_reading", "_read", "_reading"): (1, "calls _reading, listed below"),
     ("fi.alk.harness.agent_reading", "_reading", "_timed_out"): (1, _FAILURE),
+    ("fi.alk.harness.agent_reading", "_reading", "call_limit"): (1, _FAILURE),
     ("fi.alk.harness.agent_reading", "_reading", "classify"): (
         1, _FAILURE + "; classify's document writes agent.json"),
     ("fi.alk.harness.agent_reading", "_reading", "model_error"): (1, _FAILURE),
@@ -1549,6 +1550,7 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, "sessions.save writes the session's own record (META)"),
     ("fi.alk.harness.compose_integration", "compile_bundle", "select_runtime"): (
         1, _TEMP_COMPOSE),
+    ("fi.alk.harness.reading_result", "classify", "call_limit"): (1, _FAILURE),
     ("fi.alk.harness.reading_result", "classify", "model_error"): (2, _FAILURE),
     ("fi.alk.harness.reading_result", "classify", "write_reading_failure"): (1, _FAILURE),
     ("fi.alk.harness.reading_result", "document", "write_reading_failure"): (2, _FAILURE),

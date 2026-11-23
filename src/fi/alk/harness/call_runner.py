@@ -143,6 +143,7 @@ from .simulator_voice import (
     simulator_definition,
     voice_providers,
 )
+from . import tool_evidence as evidence
 from .world.errors import WorldUnavailable
 from .world.runtime import (
     Call,
@@ -1364,7 +1365,8 @@ def collect_seam_calls(
         written, from_spans = _read_file_tool_calls(runtime, strict=strict, routes=routes)
     except ToolCaptureFailed as exc:
         written, from_spans, unread = [], [], exc
-    calls = list(observed)
+    # Each record names its source (tool_evidence.py): what another source saw and the seam's rows are the world's.
+    calls = evidence.tagged(observed, evidence.WORLD)
     if not calls and graded_calls(written):
         calls = written
     elif not calls:
@@ -1381,7 +1383,7 @@ def collect_seam_calls(
                 unread = unread or exc
         # Unrecognized/None (should not happen for a `kind: process` bundle past preflight) degrades to the span
         # lines alone, keeping this on the scheduler's own evidence_missing path, never a raw exception.
-        calls = [*written, *found]
+        calls = [*written, *evidence.tagged(found, evidence.WORLD)]
     for call in calls:
         # The door names a worker by its contract id, its spans by the framework's name: give the call both, so the
         # span and the door row of one call are read as one worker's call, not two calls.
@@ -2943,9 +2945,11 @@ def collect_file_tool_calls(
 def _with_span_calls(
     observed: Sequence[Call], runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
-    """Calls another source saw, else the trace file's own lines, joined with the file's span lines."""
+    """Calls another source saw, else the trace file's own lines, joined with the file's span lines. Each record names
+    its source (tool_evidence.py): the agent's own account is tagged where it is recorded, and the rest of ``observed``
+    is the world's."""
     written, from_spans = _read_file_tool_calls(runtime, strict=strict)
-    return _merge_span_calls(list(observed) or written, from_spans)
+    return _merge_span_calls(evidence.tagged(observed, evidence.WORLD) or written, from_spans)
 
 
 def tool_routes(contract: Mapping[str, Any]) -> dict[str, str]:
@@ -3032,6 +3036,10 @@ def _read_file_tool_calls(
         )
         ended = record.get("ended_at")
         call.ended_at = float(ended) if isinstance(ended, (int, float)) else 0.0
+        mark = record.get("source")
+        call.source = evidence.SPAN if mark == _SPAN_SOURCE else evidence.TRACER
+        if call.source == evidence.TRACER and isinstance(mark, str):
+            call.trace_mark = mark
         if record.get("source") == _SPAN_SOURCE:
             if _framework_message(call.result):
                 # Only the framework's message object around the answer: nothing to hold against the call's own.
@@ -3520,9 +3528,11 @@ def _loose(value: Any) -> Any:
 
 
 def _digest(call: Call) -> str:
-    """Everything a call carries but its times."""
+    """Everything a call carries but its times and the names of the sources that saw it."""
     fields = {
-        key: value for key, value in vars(call).items() if key not in ("at", "ended_at")
+        key: value
+        for key, value in vars(call).items()
+        if key not in ("at", "ended_at", *evidence.FIELDS)
     }
     return json.dumps(fields, sort_keys=True, default=repr)
 
@@ -3571,7 +3581,8 @@ def _other_worker(span: Call, call: Call) -> bool:
 
 
 def _lend_span(span: Call, other: Call) -> None:
-    """Give another tracer's call the span's agent, hand-off and times, keeping what it recorded itself."""
+    """Give another tracer's call the span's agent, hand-off and times, keeping what it recorded itself. The span is
+    listed as having seen the call; it never takes the call's graded facts (tool_evidence.py)."""
     if not (other.worker_id or other.worker_label):
         other.worker_id, other.worker_label = span.worker_id, span.worker_label
     other.delegated_to = other.delegated_to or span.delegated_to
@@ -3584,8 +3595,10 @@ def _lend_span(span: Call, other: Call) -> None:
             span.parent_span_id,
             span.relationship,
         )
-    # A span starts when the call does; another tracer may stamp a call only once it reads its result.
+    # The call's time is not a graded fact: it comes from the source that measured it. A span starts when the call
+    # does; another tracer may stamp a call only once it reads its result.
     other.at = span.at or other.at
+    evidence.seen(other, span.source or evidence.SPAN)
 
 
 def _target_metrics(case: Any) -> dict[str, Any] | None:

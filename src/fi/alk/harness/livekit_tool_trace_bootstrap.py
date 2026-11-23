@@ -428,7 +428,17 @@ class _ChatStyleLoader:
             _set_openai_agents_chat_style(module)
 
     def __getattr__(self, name: str) -> Any:
+        # Only reached for a name the wrapper lacks. Its own fields are absent while copy or
+        # pickle rebuilds it, and asking the loader for them would call this again without end.
+        if name in {"_loader", "_finder"}:
+            raise AttributeError(name)
         return getattr(self._loader, name)
+
+    @property  # type: ignore[misc]
+    def __class__(self) -> type:
+        # isinstance(agents.__loader__, SourceFileLoader) holds as it does without the kit, so a
+        # tool that picks its handling by the loader's class (pkg_resources) is unchanged.
+        return type(self._loader)
 
 
 class _OpenAIAgentsFinder:
@@ -439,10 +449,22 @@ class _OpenAIAgentsFinder:
 
     def __init__(self) -> None:
         self.armed = True
+        self._walking = threading.local()
 
     def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> Any:
         if fullname != "agents" or not self.armed:
             return None
+        # A finder ahead of this one that walks the list again (or a second copy of the hook)
+        # must not call back into this walk without end.
+        if getattr(self._walking, "active", False):
+            return None
+        self._walking.active = True
+        try:
+            return self._find_spec(fullname, path, target)
+        finally:
+            self._walking.active = False
+
+    def _find_spec(self, fullname: str, path: Any, target: Any) -> Any:
         spec = None
         for finder in list(sys.meta_path):
             if finder is self:

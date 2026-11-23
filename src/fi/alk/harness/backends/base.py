@@ -259,6 +259,16 @@ class SessionSpec:
     # Workers this session may run, by name.
     workers: dict[str, WorkerSpec] = field(default_factory=dict)
     conversation: ConversationSession | None = None
+    # Model calls the whole session may make, its workers' included, across every message sent
+    # to it. Zero sets none, leaving the per-loop and per-worker turn limits as the only bounds.
+    # The Gemini backend checks it before each call and sends nothing past it. The Claude backend
+    # can only count calls as they arrive: it says when the count reaches the budget
+    # (`CallBudgetSpent`) and refuses every tool after, and its caller stops the session, so the
+    # calls already on their way, at most one per loop then running, land past the number.
+    call_budget: int = 0
+    # Workers this session may run at once; zero takes MOST_WORKERS_AT_ONCE. The Claude backend
+    # holds it; the Gemini backend has no such bound.
+    workers_at_once: int = 0
 
     def granted(self) -> list[str]:
         """Every tool name this session may call, qualified the way the model calls it."""
@@ -330,12 +340,31 @@ class ToolReturned:
     invocation_id: str = ""
 
 
+# The outcome of an exchange stopped because the session's call budget was spent.
+CALL_BUDGET_SPENT = "call_budget_spent"
+
+
+@dataclass
+class CallBudgetSpent:
+    """A model call past the session's budget was made; ``calls`` is the count so far.
+
+    From a backend that cannot stop a call before it is made. Sent for the first call past the
+    budget and again for each call after it, so the caller knows to stop the session and what
+    the stop cost. The call that reaches the budget is inside it and sends nothing.
+    """
+
+    calls: int
+
+
 @dataclass
 class StageDone:
     """The exchange is over. The raw facts; Stage turns them into words."""
 
     outcome: str = "success"
     turns: int = 0
+    # Model calls this exchange made, its workers' included, where the backend counts them; the
+    # number a call budget is held to. Zero from a backend that does not count them.
+    calls: int = 0
     cost_usd: float | None = None
     # The units behind the price, so a bill can be checked rather than trusted.
     tokens_in: int = 0

@@ -39,7 +39,7 @@ from fastapi import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
 
 from fi.simulate.runtime.spec import SecretRef
 
@@ -58,6 +58,7 @@ from .job import (
     AgentConnection,
     ExecutionMode,
     HarnessArtifactPolicy,
+    parse_execution_manifest,
     HarnessJob,
     HarnessJobStatus,
     HarnessStage,
@@ -65,6 +66,16 @@ from .job import (
     RepositorySource,
     SourceKind,
     SourceVisibility,
+    is_commit_sha,
+)
+from .refusals import (
+    AGENT_FIELDS,
+    SOURCE_FIELDS,
+    JobRefused,
+    Place,
+    by_field,
+    in_job,
+    in_plan,
 )
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
@@ -141,7 +152,26 @@ class LocalSandboxRequest(BaseModel):
                 )
         _validate_environment_values(self.environment_values, self.secret_refs)
         _validate_controller_names(self.connector_config, self.secret_refs)
+        if self.github_repository:
+            self._check_commit_sha()
         return self
+
+    def _check_commit_sha(self) -> None:
+        """A GitHub job runs hosted, and the job refuses a hosted GitHub job without the commit
+        it checks out, or with one that isn't 40 hex characters. Refuse it here, at the
+        boundary, before submit claims any upload.
+
+        Checked after the reserved names, so those are reported first, and only for a location
+        that is a GitHub repository: submit refuses any other location for what it is (a 400),
+        which would otherwise show only once a commit was added."""
+        try:
+            parse_github_location(self.github_repository or "")
+        except ValueError:
+            return
+        if not self.github_commit_sha:
+            raise ValueError("github_commit_sha_required")
+        if not is_commit_sha(self.github_commit_sha):
+            raise ValueError("github_commit_sha_invalid")
 
 
 class SandboxPreflightRequest(BaseModel):
@@ -482,6 +512,25 @@ class LocalSandbox:
             raise
         return claimed, names
 
+    def _return_job_secret_files(
+        self, job_id: str, references: dict[str, SecretRef]
+    ) -> None:
+        """Undo ``_claim_secret_files`` for a job that was refused: each upload goes back to
+        pending/ under its own id, so the caller can fix the request and send it again. The
+        upload keeps its original age, so the pending TTL still applies."""
+        job_root = self.secret_files_root / "jobs" / job_id
+        for environment_name, reference in references.items():
+            match = re.fullmatch(
+                r"ALK_SECRET_FILE_([0-9A-F]{32})_[0-9A-F]{12}", reference.key
+            )
+            claimed = job_root / environment_name
+            if reference.manager != "mounted" or match is None or not claimed.is_file():
+                continue
+            identifier = str(uuid.UUID(hex=match.group(1).lower()))
+            pending = self.secret_files_root / "pending" / identifier
+            claimed.chmod(0o600)
+            claimed.replace(pending)
+
     def _delete_job_secret_files(self, job_id: str) -> None:
         shutil.rmtree(self.secret_files_root / "jobs" / job_id, ignore_errors=True)
 
@@ -684,65 +733,95 @@ class LocalSandbox:
             job_refs, mounted_values, secret_file_names = self._job_secret_refs(
                 identifier, request, hosted=hosted
             )
-            source_spec = (
-                RepositorySource(kind=SourceKind.PROVIDER)
-                if request.provider_only
-                else RepositorySource(
-                    kind=SourceKind.ARCHIVE,
-                    archive_artifact_id=request.source_id,
+            # The source, the agent, the artifact policy and the scenario plan are each judged
+            # on their own and every refusal kept, so faults in any of them are heard at once.
+            # The job's own checks run only once all of them pass, and stop at the first.
+            refused: list[tuple[ValidationError, Place | None]] = []
+            source_spec: RepositorySource | None = None
+            agent: AgentConnection | None = None
+            artifacts: HarnessArtifactPolicy | None = None
+            try:
+                source_spec = (
+                    RepositorySource(kind=SourceKind.PROVIDER)
+                    if request.provider_only
+                    else RepositorySource(
+                        kind=SourceKind.ARCHIVE,
+                        archive_artifact_id=request.source_id,
+                    )
+                    if request.source_id
+                    else RepositorySource(
+                        kind=SourceKind.LOCAL_REPOSITORY, local_path=str(source)
+                    )
+                    if source
+                    else RepositorySource(
+                        kind=SourceKind.GITHUB,
+                        repository=github_repository,
+                        ref=(github_location.ref if github_location else None)
+                        or request.github_ref,
+                        commit_sha=request.github_commit_sha,
+                        visibility=request.github_visibility,
+                        installation_id=request.github_installation_id,
+                        subfolder=request.github_subfolder,
+                    )
                 )
-                if request.source_id
-                else RepositorySource(
-                    kind=SourceKind.LOCAL_REPOSITORY, local_path=str(source)
-                )
-                if source
-                else RepositorySource(
-                    kind=SourceKind.GITHUB,
-                    repository=github_repository,
-                    ref=(github_location.ref if github_location else None)
-                    or request.github_ref,
-                    commit_sha=request.github_commit_sha,
-                    visibility=request.github_visibility,
-                    installation_id=request.github_installation_id,
-                    subfolder=request.github_subfolder,
-                )
-            )
-            job = HarnessJob(
-                job_id=identifier,
-                run_id=run_id,
-                execution=ExecutionMode.HOSTED if hosted else ExecutionMode.LOCAL,
-                source=source_spec,
-                agent=AgentConnection(
+            except ValidationError as exc:
+                refused.append((exc, by_field(SOURCE_FIELDS)))
+            try:
+                agent = AgentConnection(
                     connector=request.connector,
                     mode=request.connector_mode,
                     config=request.connector_config,
                     secret_refs=job_refs,
-                ),
-                scenario_count=request.scenario_count,
-                seed=request.seed,
-                artifacts=HarnessArtifactPolicy(
+                )
+            except ValidationError as exc:
+                refused.append((exc, by_field(AGENT_FIELDS)))
+            try:
+                artifacts = HarnessArtifactPolicy(
                     level="full", allow_bundle_download=True
-                ),
-                platform_run_id=request.platform_run_id,
-                metadata={
-                    **request.metadata,
-                    "agent_name": request.agent_name
-                    or (
-                        _uploaded_source_name(source)
-                        if request.source_id and source
-                        else source.name
-                        if source
-                        else str(github_repository).split("/")[-1]
-                    ),
-                    "source_kind": source_spec.kind.value,
-                    # Both dotenv values and credential-file paths are runtime configuration. Only
-                    # their names are persisted; values and provider-local paths remain ephemeral.
-                    "environment_value_names": sorted(
-                        {*request.environment_values, *secret_file_names}
-                    ),
-                    "secret_file_names": sorted(secret_file_names),
-                },
-            )
+                )
+            except ValidationError as exc:
+                # Submit chooses the policy: nothing the caller sent is at fault.
+                refused.append((exc, None))
+            manifest = request.metadata.get("execution_manifest")
+            if manifest is not None:
+                try:
+                    parse_execution_manifest(manifest, request.scenario_count)
+                except ValidationError as exc:
+                    refused.append((exc, in_plan))
+            if refused or source_spec is None or agent is None or artifacts is None:
+                raise JobRefused(refused, job_id=identifier)
+            try:
+                job = HarnessJob(
+                    job_id=identifier,
+                    run_id=run_id,
+                    execution=ExecutionMode.HOSTED if hosted else ExecutionMode.LOCAL,
+                    source=source_spec,
+                    agent=agent,
+                    scenario_count=request.scenario_count,
+                    seed=request.seed,
+                    artifacts=artifacts,
+                    platform_run_id=request.platform_run_id,
+                    metadata={
+                        **request.metadata,
+                        "agent_name": request.agent_name
+                        or (
+                            _uploaded_source_name(source)
+                            if request.source_id and source
+                            else source.name
+                            if source
+                            else str(github_repository).split("/")[-1]
+                        ),
+                        "source_kind": source_spec.kind.value,
+                        # Both dotenv values and credential-file paths are runtime configuration. Only
+                        # their names are persisted; values and provider-local paths remain ephemeral.
+                        "environment_value_names": sorted(
+                            {*request.environment_values, *secret_file_names}
+                        ),
+                        "secret_file_names": sorted(secret_file_names),
+                    },
+                )
+            except ValidationError as exc:
+                raise JobRefused([(exc, in_job)], job_id=identifier) from None
             directory = self.jobs_root / identifier
             directory.mkdir()
             if request.provider_only:
@@ -765,9 +844,20 @@ class LocalSandbox:
                     "controller_token": _CONTROLLER_TOKEN,
                 },
             )
-        except Exception:
-            self._delete_job_secret_files(identifier)
-            shutil.rmtree(self.jobs_root / identifier, ignore_errors=True)
+        except Exception as exc:
+            try:
+                if isinstance(exc, JobRefused):
+                    # The caller fixes the request and sends it again, with the same uploads.
+                    self._return_job_secret_files(identifier, request.secret_refs)
+            except OSError:
+                # The refusal still stands and is still answered; the uploads that could not go
+                # back are deleted with the claim, so the caller uploads them again.
+                logger.exception(
+                    "job_refused_uploads_not_returned: job_id=%s", identifier
+                )
+            finally:
+                self._delete_job_secret_files(identifier)
+                shutil.rmtree(self.jobs_root / identifier, ignore_errors=True)
             raise
         if mounted_values:
             self._ephemeral_secrets[identifier] = mounted_values
@@ -2495,6 +2585,10 @@ def create_app(root: Path | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.sandbox = sandbox
+
+    @app.exception_handler(JobRefused)
+    async def job_refused(_request, exc: JobRefused):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request, exc: RequestValidationError):
