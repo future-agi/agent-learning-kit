@@ -35,6 +35,7 @@ from .proof_records import CheckRecord, ControlResult, LiveResult
 from .proofs import proof_key
 from .prove import (
     Proof,
+    actors_in,
     assumed_tools,
     checks_for,
     excused_by_assumed_steps,
@@ -127,10 +128,16 @@ def _outcomes(scenario: Scenario, catalogue: Catalogue, world: Any, calls: list[
 
 
 def _play(
-    scenario: Scenario, world: Any, steps: list[Step], recordable: frozenset[str] = frozenset()
+    scenario: Scenario,
+    world: Any,
+    steps: list[Step],
+    recordable: frozenset[str] = frozenset(),
+    authoring: Path | None = None,
 ) -> tuple[list[Call], list[str], list[str]]:
     """Set up, play `steps`, and say which ran unbound (assumed) and which were refused. A step of a `recordable` tool
-    nothing here runs is recorded, not run (`record_unrun_step`), as the offline proof records it."""
+    nothing here runs is recorded, not run (`record_unrun_step`), as the offline proof records it. With the
+    `authoring` tree, the scenario's actors act around the steps as in the offline proof (`actors_in`), so an
+    approval an actor gives reaches the world before the step that needs it; their calls are never the agent's."""
     applied = apply_setup(scenario, world)
     if not applied.ok:
         raise RuntimeError(f"setup: {applied.said}")
@@ -139,6 +146,9 @@ def _play(
         raise RuntimeError(f"ready: {ready.said}")
     world.calls = []
     world.recorded = []
+    acting, by_actors = actors_in(scenario, authoring, world) if authoring is not None else (None, {})
+    if acting is not None and steps:
+        acting.act_on(None)
     refused = []
     for step in steps:
         tool = str(step.tool)
@@ -146,8 +156,10 @@ def _play(
         call = record_unrun_step(world, step) if unrun else play_reference_step(world, step)
         if call.ok is False and not unrun:
             refused.append(f"{call.name}({step.arguments}): {call.error}")
+        if acting is not None:
+            acting.act_on(step)
     assumed = [tool for tool in assumed_tools(world, steps) if tool not in world.recorded]
-    return list(world.calls), assumed, refused
+    return [call for index, call in enumerate(world.calls) if index not in by_actors], assumed, refused
 
 
 def _digest(world: Any) -> str | None:
@@ -293,7 +305,11 @@ async def prove_live(
             return world
 
         return await _prove_case(
-            scenario, catalogue, fresh, recordable_tools(scenario, contract, checks_for(scenario, catalogue))
+            scenario,
+            catalogue,
+            fresh,
+            recordable_tools(scenario, contract, checks_for(scenario, catalogue)),
+            Path(authoring),
         )
 
     if len(lanes) == 1 or len(order) <= 1:
@@ -430,11 +446,17 @@ async def _measured(
 
 
 async def _prove_case(
-    scenario: Scenario, catalogue: Catalogue, fresh: Any, recordable: frozenset[str] = frozenset()
+    scenario: Scenario,
+    catalogue: Catalogue,
+    fresh: Any,
+    recordable: frozenset[str] = frozenset(),
+    authoring: Path | None = None,
 ) -> LiveResult:
     """One case on one runtime instance: its reference, an empty run and each control, each on a fresh world."""
     world = await fresh()
-    calls, assumed, refused = await asyncio.to_thread(_play, scenario, world, list(scenario.solution), recordable)
+    calls, assumed, refused = await asyncio.to_thread(
+        _play, scenario, world, list(scenario.solution), recordable, authoring
+    )
     recorded = list(getattr(world, "recorded", None) or [])
     with_solution = await asyncio.to_thread(_outcomes, scenario, catalogue, world, calls)
     inconclusive = await asyncio.to_thread(
@@ -448,7 +470,7 @@ async def _prove_case(
     )
     right = await asyncio.to_thread(_digest, world)
     world = await fresh()
-    nothing_calls, _, _ = await asyncio.to_thread(_play, scenario, world, [])
+    nothing_calls, _, _ = await asyncio.to_thread(_play, scenario, world, [], frozenset(), authoring)
     with_nothing = await asyncio.to_thread(_outcomes, scenario, catalogue, world, nothing_calls)
     untouched = await asyncio.to_thread(_digest, world)
     controls: list[ControlResult] = []
@@ -456,7 +478,7 @@ async def _prove_case(
         try:
             world = await fresh()
             control_calls, control_assumed, _ = await asyncio.to_thread(
-                _play, scenario, world, list(control.steps), recordable
+                _play, scenario, world, list(control.steps), recordable, authoring
             )
             # A control's assumed step is read as gone through: an unknown result is no evidence that it fails.
             control_calls = as_gone_through(control_calls, control_assumed)
