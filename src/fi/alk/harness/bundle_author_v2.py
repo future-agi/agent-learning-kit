@@ -4551,7 +4551,9 @@ def author_bundle_v2(
         raise
 
 
-def reseal_scenarios(authoring: str | Path) -> str | None:
+def reseal_scenarios(
+    authoring: str | Path, *, reviewed_source_pin: dict[str, str | None] | None = None
+) -> str | None:
     """Carry an edited scenario set into the sealed bundle and seal it again.
 
     Runs replay the bundle, never the authoring folders, so a scenario added or rewritten after
@@ -4567,7 +4569,10 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
         return None
     manifest = load_bundle_v2(bundle)
     reviewed_source = load_review_pin(authoring_root)
-    if reviewed_source != (manifest.metadata or {}).get("reviewed_source"):
+    if (
+        reviewed_source_pin is None
+        and reviewed_source != (manifest.metadata or {}).get("reviewed_source")
+    ):
         raise BundleAuthorError("source_snapshot_changed: the approved source pin changed")
     count = sum(1 for path in (authoring_root / "scenarios").iterdir() if path.is_dir())
     staging = Path(tempfile.mkdtemp(prefix=".environment-bundle.", dir=authoring_root))
@@ -4587,6 +4592,9 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
             for key, value in metadata.items()
             if key not in {"sealed_from", "contract_compiled"}
         }
+        if reviewed_source_pin is not None:
+            (staging / PIN_FILE).unlink(missing_ok=True)
+            metadata["reviewed_source"] = reviewed_source_pin
         if compiled and _carries_world(authoring_root, staging):
             # Unstamped, the platform never replays this bundle for an edit.
             metadata["sealed_from"] = sealed_from(authoring_root)

@@ -504,6 +504,71 @@ def test_scenario_transport_refuses_unverified_snapshot_and_count():
     assert "UNAPPROVED_OVERRIDE" not in json.dumps(response)
 
 
+def test_reseal_transport_rejects_invalid_and_oversized_archive(monkeypatch):
+    from test_genuine_agent_source_scenarios import _reviewed_order_knowledge
+
+    from fi.alk.studio import serialize_environment_snapshot
+
+    snapshot = json.loads(
+        serialize_environment_snapshot(
+            _reviewed_order_knowledge("Tuesday", infer_schema=True)
+        )
+    )
+    request = {
+        "version": transport.REQUEST_VERSION,
+        "operation": "reseal_scenarios",
+        "snapshot": snapshot,
+        "authoring_archive_base64": "not-base64",
+        "mode": "existing_environment",
+        "generated_scenario_keys": ["source-case-test"],
+    }
+    invalid = transport.execute_request(json.dumps(request).encode())
+    assert invalid["error"]["code"] == "source_request_invalid"
+
+    monkeypatch.setattr(transport, "MAX_AUTHORING_ARCHIVE_BYTES", 2)
+    request["authoring_archive_base64"] = base64.b64encode(b"abc").decode()
+    oversized = transport.execute_request(json.dumps(request).encode())
+    assert oversized["error"]["code"] == "source_too_large"
+
+
+def test_reseal_transport_requires_schema_basis_for_v2_and_matches_v3():
+    from test_genuine_agent_source_scenarios import _reviewed_order_knowledge
+
+    from fi.alk.studio import serialize_environment_snapshot
+
+    schema = {"fields": [{"name": "id", "data_type": "string", "required": True}]}
+    draft = _inferred([_csv("accounts", "id\n001\n")], destination_schema=schema)[
+        "draft"
+    ]
+    snapshot_v2 = _accept_proposed(draft)["result"]["snapshot"]
+    request = {
+        "version": transport.REQUEST_VERSION,
+        "operation": "reseal_scenarios",
+        "snapshot": snapshot_v2,
+        "authoring_archive_base64": "not-base64",
+        "mode": "existing_environment",
+        "generated_scenario_keys": ["source-case-test"],
+    }
+    missing = transport.execute_request(json.dumps(request).encode())
+    assert missing["error"]["code"] == "source_schema_required"
+    request["schema_digest"] = "sha256:invalid"
+    invalid = transport.execute_request(json.dumps(request).encode())
+    assert invalid["error"]["code"] == "source_schema_required"
+    request["schema_digest"] = "sha256:" + "a" * 64
+    accepted = transport.execute_request(json.dumps(request).encode())
+    assert accepted["error"]["code"] == "source_request_invalid"
+
+    snapshot_v3 = json.loads(
+        serialize_environment_snapshot(
+            _reviewed_order_knowledge("Tuesday", infer_schema=True)
+        )
+    )
+    request["snapshot"] = snapshot_v3
+    request["schema_digest"] = "sha256:" + "b" * 64
+    changed = transport.execute_request(json.dumps(request).encode())
+    assert changed["error"]["code"] == "source_schema_changed"
+
+
 @pytest.mark.parametrize(
     "payload",
     [
