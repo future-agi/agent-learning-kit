@@ -702,8 +702,9 @@ def binding_server(workbench: Workbench, approve: Approve) -> Any:
 
     @tool(
         "submit_binding",
-        "Submit the complete binding and a trajectory for every reachable scenario. Each "
-        "argument is JSON text.",
+        "Submit the complete binding. Trajectories are optional: the harness derives one for "
+        "every scenario the binding inverts and says which still need yours. Each argument is "
+        "JSON text.",
         {
             "type": "object",
             "properties": {
@@ -713,7 +714,8 @@ def binding_server(workbench: Workbench, approve: Approve) -> Any:
                 },
                 "trajectories": {
                     "type": "string",
-                    "description": "JSON object {scenario_key: [{tool, arguments}]}",
+                    "description": "JSON object {scenario_key: [{tool, arguments}]}, only for "
+                    "scenarios the harness could not derive (yours win where both exist)",
                 },
                 "extension_candidates": {
                     "type": "string",
@@ -721,7 +723,7 @@ def binding_server(workbench: Workbench, approve: Approve) -> Any:
                     "that act on business state this environment lacks",
                 },
             },
-            "required": ["binding", "trajectories"],
+            "required": ["binding"],
         },
     )
     async def submit_binding(args: dict[str, Any]) -> dict[str, Any]:

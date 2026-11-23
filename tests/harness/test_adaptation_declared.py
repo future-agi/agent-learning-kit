@@ -509,6 +509,38 @@ def test_a_draft_may_leave_the_trajectories_to_the_harness():
         parse_binding_draft({"binding": {"tools": []}, "trajectories": []})
 
 
+def test_the_submit_binding_tool_may_leave_the_trajectories_out():
+    """The tool's schema and the workbench agree: a call with only the binding is valid for the
+    model to make, and reaches the workbench with no trajectories, for the harness to derive."""
+    import asyncio
+
+    from jsonschema import Draft202012Validator
+
+    from fi.alk.harness.adaptation.workbench import binding_server
+
+    received = []
+
+    class Bench:
+        def submit_binding(self, body):
+            received.append(body)
+            return True, "accepted"
+
+    async def approve(_question, _options):
+        return "yes"
+
+    tool = next(
+        one
+        for one in binding_server(Bench(), approve).tools
+        if one.name == "submit_binding"
+    )
+    args = {"binding": '{"tools": []}'}
+    Draft202012Validator(tool.input_schema).validate(args)
+    answer = asyncio.run(tool.handler(args))
+    assert not answer.get("is_error"), answer
+    assert received[0]["trajectories"] is None
+    assert parse_binding_draft(received[0]).trajectories == {}
+
+
 # --- the world's MCP endpoint -----------------------------------------------------------------
 
 
