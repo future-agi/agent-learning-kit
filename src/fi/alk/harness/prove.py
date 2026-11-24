@@ -40,7 +40,7 @@ from typing import Any, Callable, Collection, Iterator, Mapping, Sequence
 
 from .actors import load_actors
 from .catalogue import Catalogue
-from .checks import Outcome, reference_of, run_check
+from .checks import Outcome, _number, reference_of, run_check, same_value
 from .contract import AgentContract
 from .controls import (
     JUDGED_CONTROL_TEXT,
@@ -1166,6 +1166,10 @@ class _WorldActors:
         self.counts: dict[str, int] = {}
         # Actions refused before the world, each with how many world calls came before it.
         self.refusals: list[tuple[int, dict[str, Any]]] = []
+        # The world calls each scripted action made, by index: whose action, and which.
+        self.acted: dict[int, tuple[str, str]] = {}
+        # The scripted actions refused before the world for want of permission, as `refused` names them.
+        self.not_permitted: list[str] = []
 
     def events(
         self, actor_id: str | None = None, outcome: str | None = None
@@ -1310,9 +1314,7 @@ class _WorldActors:
 
     def refused(self) -> list[str]:
         """Each scripted action the world or the actor's permissions turned down, as `actor: action(args): why`."""
-        lines = [
-            f"{row['actor_id']}: {row['name']}({row['arguments']}): {row['refusal_code']}" for _, row in self.refusals
-        ]
+        lines = list(self.not_permitted)
         for index, who in sorted(self.by_actors.items()):
             call = self.world.calls[index]
             if call.ok is False:
@@ -1320,28 +1322,38 @@ class _WorldActors:
         return lines
 
     def unseen(self) -> list[str]:
-        """Each record change an actor made that a later step of the agent's follows, when none of the agent's results
-        after it shows the record: a dict whose shared fields all match the change, one of them a value the agent never
-        sent itself. As `actor: collection record (fields) before step`."""
+        """Each scripted actor action whose decision the agent acts on without any of its tools having shown it, as
+        `actor's action (values) never reaches the agent before step`. A decision is shown by a result that carries one
+        of the action's own text values the agent had not sent itself, in any field, list or text. The agent acts on it
+        with a step that sends one of the action's values. Whatever cannot be told apart gives no note."""
         agent = [(index, call) for index, call in enumerate(self.world.calls) if index not in self.by_actors]
-        sent = {str(value) for _, call in agent for value in _scalars(call.arguments)}
         lines = []
-        for index, who in sorted(self.by_actors.items()):
+        for index, (who, action) in sorted(self.acted.items()):
             call = self.world.calls[index]
-            kind = record_action(str(call.name)) if call.ok else None
-            if kind is None:
+            if not call.ok:
                 continue
             arguments = dict(call.arguments or {})
-            if kind[1] == "change":
+            if action.rpartition(".")[2] == "change":
                 record = {**dict(arguments.get("where") or {}), **dict(arguments.get("set") or {})}
             else:
                 record = dict(arguments["record"]) if isinstance(arguments.get("record"), dict) else arguments
-            later = [one for at, one in agent if at > index]
-            if not record or not later:
-                continue
-            if any(_shows(one.result, record, sent) for one in later):
-                continue
-            lines.append(f"{who}: {kind[0]} {record} before {later[-1].name}")
+            values = [one for one in record.values() if one is not None]
+            later = [(at, one) for at, one in agent if at > index]
+            for at, step in later:
+                sent = [one for before, made in agent if before <= at for one in _scalars(made.arguments)]
+                news = [
+                    one
+                    for one in values
+                    if isinstance(one, str) and _number(one) is None and not any(same_value(one, it) for it in sent)
+                ]
+                if not news:
+                    break
+                # The last step's own result comes after it acted, so it never shows the decision in time.
+                if at != later[-1][0] and _shows(step.result, news):
+                    break
+                if any(same_value(one, it) for one in values for it in _scalars(step.arguments)):
+                    lines.append(f"{who}'s {action} ({', '.join(map(str, news))}) never reaches the agent before {step.name}")
+                    break
         return lines
 
     def act_on(self, step: Any) -> None:
@@ -1368,6 +1380,7 @@ class _WorldActors:
                     "at": time.time(),
                 }
                 self.refusals.append((len(self.world.calls), refusal))
+                self.not_permitted.append(f"{actor.id}: {action.action}({dict(action.arguments)}): not_permitted")
                 continue
             before = len(self.world.calls)
             # A source-hosted world knows the action by its route; a generated one by its name.
@@ -1403,6 +1416,7 @@ class _WorldActors:
             self.by_actors.update(
                 dict.fromkeys(range(before, len(self.world.calls)), actor.id)
             )
+            self.acted.update(dict.fromkeys(range(before, len(self.world.calls)), (actor.id, action.action)))
 
 
 def _scalars(value: Any) -> Iterator[Any]:
@@ -1417,19 +1431,13 @@ def _scalars(value: Any) -> Iterator[Any]:
         yield value
 
 
-def _shows(result: Any, record: Mapping[str, Any], sent: Collection[str]) -> bool:
-    """Whether a result holds the record: a dict whose fields shared with it all match, one a value not already sent."""
-    if isinstance(result, Mapping):
-        shared = [key for key in record if key in result]
-        if (
-            shared
-            and all(str(result[key]) == str(record[key]) for key in shared)
-            and any(str(record[key]) not in sent for key in shared)
-        ):
+def _shows(result: Any, news: Sequence[str]) -> bool:
+    """Whether a result carries any of `news` anywhere: as a value, or as a word in a text."""
+    for one in _scalars(result):
+        if any(same_value(one, it) for it in news):
             return True
-        return any(_shows(one, record, sent) for one in result.values())
-    if isinstance(result, (list, tuple)):
-        return any(_shows(one, record, sent) for one in result)
+        if isinstance(one, str) and any(re.search(rf"(?<!\w){re.escape(it)}(?!\w)", one, re.I) for it in news):
+            return True
     return False
 
 

@@ -2494,9 +2494,10 @@ def accept_scenario(
         )
     if proof is not None and proof.actors_unseen:
         unproved += (
-            "\nNOTE: no tool of the agent's shows it these actors' record changes before its later steps, and the "
-            "agent cannot act on a decision it cannot see: " + "; ".join(proof.actors_unseen) + ". Write this case as "
-            "request-and-wait, or give the agent a step that reads it."
+            "\nNOTE: the agent cannot act on a decision none of its tools has shown it: "
+            + "; ".join(proof.actors_unseen)
+            + ". Write this case as request-and-wait, or let the decision reach the agent through a tool or a channel "
+            "its rules accept."
         )
     if proof is not None and proof.recorded:
         unproved += (

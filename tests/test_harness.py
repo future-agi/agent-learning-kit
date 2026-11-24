@@ -2805,25 +2805,39 @@ def test_a_scripted_actor_action_the_world_refused_is_named_when_the_case_is_kep
     text = said["content"][0]["text"]
     assert not said.get("is_error"), said
     assert "NOTE: the world refused these scripted actor actions" in text
-    assert "reviewer: approve({}): not_permitted" in text
+    assert "reviewer: records.approve({}): not_permitted" in text
     assert [one.name for one in kept] == ["adds-a-big-mac"]
 
 
-def test_an_actor_change_the_agent_never_sees_is_named_when_the_case_is_kept(tmp_path, monkeypatch):
-    from fi.alk.harness import prove
+def test_an_actor_change_the_agent_never_sees_is_named_when_the_case_is_kept(tmp_path):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
     from fi.alk.harness.scenario_tools import accept_scenario
 
-    # What the actors' own reading of the proof finds, carried through the proof to the reply.
-    monkeypatch.setattr(
-        prove._WorldActors, "unseen", lambda self: ["alex: approvals {'deal_id': 9, 'status': 'approved'} before apply_discount"]
-    )
     root, _contract, catalogue = _built_environment(tmp_path)
+    save_actors(root, ActorList(actors=[Actor(id="reviewer", name="Robin", permitted_actions=["cart.lst"])]))
+    note = {"item_id": "big_mac", "note": "approved by the manager"}
     kept = []
-    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    said = accept_scenario(
+        {
+            **_delta(),
+            "actors": [
+                {
+                    "id": "reviewer",
+                    "actions": [
+                        {"action": "cart.lst", "arguments": note, "trigger": {"kind": "on_tool", "tool": "lst", "on_call": 1}}
+                    ],
+                }
+            ],
+        },
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
     text = said["content"][0]["text"]
     assert not said.get("is_error"), said
-    assert "NOTE: no tool of the agent's shows it these actors' record changes" in text
-    assert "alex: approvals {'deal_id': 9, 'status': 'approved'} before apply_discount" in text
+    assert "NOTE: the agent cannot act on a decision none of its tools has shown it" in text
+    assert "reviewer's cart.lst (big_mac, approved by the manager)" not in text
+    assert "reviewer's cart.lst (approved by the manager) never reaches the agent before add" in text
     assert [one.name for one in kept] == ["adds-a-big-mac"]
 
 
