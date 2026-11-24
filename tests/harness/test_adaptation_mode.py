@@ -265,3 +265,74 @@ def test_an_operation_the_environments_schema_refuses_runs_nothing():
     )
     assert taken.status == "ok"
     assert ran == [("open_case", {"account": {"id": "A-42"}})]
+
+
+# The environment forbids properties it does not name, at the top level and one level down.
+CLOSED = ToolDefinition(
+    name="close_case",
+    description="Close a case.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "case": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}},
+                "required": ["id"],
+                "additionalProperties": False,
+            }
+        },
+        "required": ["case"],
+        "additionalProperties": False,
+    },
+    mutates_state=True,
+)
+
+
+def _close(*, top: bool, nested: bool) -> AgentProfile:
+    case = {
+        "type": "object",
+        "properties": {"id": {"type": "string"}},
+        "required": ["id"],
+        **({"additionalProperties": False} if nested else {}),
+    }
+    tool = _tool("close_case", {"case": case}, ["case"])
+    if top:
+        tool["parameters"]["additionalProperties"] = False
+    return _agent(tool)
+
+
+def test_an_agent_that_forbids_what_the_environment_forbids_is_canonical():
+    assert select_mode(_close(top=True, nested=True), [CLOSED]) is BindingMode.CANONICAL
+
+
+@pytest.mark.parametrize(
+    "top, nested, where",
+    [(False, True, "arguments"), (True, False, "case")],
+    ids=["top-level", "nested"],
+)
+def test_an_agent_schema_that_allows_properties_the_environment_forbids_is_routed(
+    top, nested, where
+):
+    """The reviewer's case: the agent's schema says nothing of other properties, so it allows
+    them, and a call carrying one is refused by the environment at run time."""
+    agent = _close(top=top, nested=nested)
+    problems = argument_mismatches(
+        agent.agent_tools[0]["parameters"], CLOSED.parameters
+    )
+    assert problems == [
+        f"{where} may carry properties the environment forbids "
+        "(additionalProperties is false there, not here)"
+    ]
+    assert select_mode(agent, [CLOSED]) is BindingMode.TOOL_ROUTED
+
+
+def test_the_compatibility_answer_and_the_run_agree_on_an_extra_property():
+    """What the wider schema would let through is what the environment refuses."""
+    refused = run_bound_call(
+        None,
+        "close_case",
+        {"case": {"id": "a"}, "note": "extra"},
+        run_operation=lambda tool, arguments: {"closed": True},
+        environment_tools=[CLOSED],
+    )
+    assert refused.status == "invalid" and "note" in refused.error
