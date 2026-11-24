@@ -14,7 +14,12 @@ from fi.alk.harness.isolated_process import (
     send_message,
 )
 from fi.simulate.simulation.engines import livekit
-from fi.simulate.simulation.engines.livekit import CALL_CONNECTED, _announce_call
+from fi.simulate.simulation.engines.livekit import (
+    CALL_CONNECTED,
+    _announce_call,
+    _announce_in_background,
+    _settle_announcement,
+)
 
 
 def test_the_worker_sends_each_placed_call_to_the_harness_and_waits_for_its_answer() -> None:
@@ -123,3 +128,38 @@ def test_a_listener_that_fails_never_fails_the_call(caplog) -> None:
 def test_with_no_listener_the_engine_says_nothing() -> None:
     assert asyncio.run(_announce_call("call-1")) is None
     assert livekit.CALL_CONNECTED.get() is None
+
+
+def test_a_slow_platform_never_holds_up_the_call() -> None:
+    answered = asyncio.Event()
+    heard: list[str] = []
+
+    async def slow(provider_call_id: str) -> None:
+        await answered.wait()
+        heard.append(provider_call_id)
+
+    async def run() -> tuple[bool, bool]:
+        CALL_CONNECTED.set(slow)
+        task = _announce_in_background("call-1")
+        await asyncio.sleep(0)
+        pending = not task.done()
+        answered.set()
+        await _settle_announcement(task, 1.0)
+        return pending, task.done()
+
+    assert asyncio.run(run()) == (True, True)
+    assert heard == ["call-1"]
+
+
+def test_an_announcement_still_waiting_at_cleanup_is_cancelled() -> None:
+    async def never(provider_call_id: str) -> None:
+        await asyncio.Event().wait()
+
+    async def run() -> bool:
+        CALL_CONNECTED.set(never)
+        task = _announce_in_background("call-1")
+        await _settle_announcement(task, 0.05)
+        await asyncio.sleep(0)
+        return task.cancelled()
+
+    assert asyncio.run(run()) is True

@@ -1647,6 +1647,17 @@ async def _announce_call(provider_call_id: str | None) -> None:
         )
 
 
+def _announce_in_background(provider_call_id: str | None) -> asyncio.Task[None]:
+    return asyncio.create_task(_announce_call(provider_call_id))
+
+
+async def _settle_announcement(task: asyncio.Task[None], timeout: float) -> None:
+    done, _ = await asyncio.wait({task}, timeout=max(timeout, 0.0))
+    if not done:
+        task.cancel()
+        task.add_done_callback(_consume_background_task_result)
+
+
 class LiveKitEngine(BaseEngine):
     async def run(
         self,
@@ -2070,6 +2081,7 @@ class LiveKitEngine(BaseEngine):
         caller_verification: str | None = None
         audio_bridge: LiveKitAudioBridge | None = None
         bridge_task: asyncio.Task[None] | None = None
+        announce_task: asyncio.Task[None] | None = None
         case_started_at = datetime.now(timezone.utc)
         transport = agent_definition.transport or TelephonyTransport()
         profile = _resolve_target_profile(transport.kind)
@@ -2527,8 +2539,8 @@ class LiveKitEngine(BaseEngine):
                         audio_bridge.connect(), timeout=connect_timeout
                     )
                     provider_call_id = audio_bridge.call_id
-                    await _announce_call(provider_call_id)
                     bridge_task = asyncio.create_task(audio_bridge.run())
+                    announce_task = _announce_in_background(provider_call_id)
                 except asyncio.TimeoutError:
                     outcome = _failure_outcome(
                         TestCaseStatus.TIMED_OUT,
@@ -2654,7 +2666,7 @@ class LiveKitEngine(BaseEngine):
                         call_originator.start(), timeout=connect_timeout
                     )
                     provider_call_id = originated_call.call_id
-                    await _announce_call(provider_call_id)
+                    announce_task = _announce_in_background(provider_call_id)
                 except asyncio.TimeoutError:
                     outcome = _failure_outcome(
                         TestCaseStatus.TIMED_OUT,
@@ -3201,6 +3213,8 @@ class LiveKitEngine(BaseEngine):
                         run_id,
                         test_case_id,
                     )
+            if announce_task is not None:
+                await _settle_announcement(announce_task, _cleanup_budget())
             if audio_bridge is not None:
                 try:
                     await asyncio.wait_for(
