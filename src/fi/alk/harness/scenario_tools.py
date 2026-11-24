@@ -114,7 +114,7 @@ from .scenario import (
 )
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
-from .world_door import ToolCall, call_effect, route_action
+from .world_door import ToolCall, call_effect, fault_action, route_action
 from .world.snapshot import read_manifest, restore
 
 logger = logging.getLogger(__name__)
@@ -1691,7 +1691,7 @@ def accept_scenario(
     if reading := [
         fault.action
         for fault in scenario.faults
-        if fault.mode == "approval_required" and fault.action in (read_tools or set())
+        if fault.mode == "approval_required" and fault_action(fault.action, contract) in (read_tools or set())
     ]:
         return _err(
             "Not kept. faults: approval_required holds a change, and " + ", ".join(reading) + " only reads; set it "
