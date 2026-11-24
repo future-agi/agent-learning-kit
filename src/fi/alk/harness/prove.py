@@ -176,6 +176,8 @@ class Proof:
     assumed: list[str] = field(default_factory=list)
     # World actors' actions on a clock or a chance: a proof has neither, so it never plays them.
     unplayed: list[str] = field(default_factory=list)
+    # World actors' scripted actions the world refused while the reference played, each with the reason.
+    actors_refused: list[str] = field(default_factory=list)
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
@@ -1055,6 +1057,7 @@ def run_steps(
             if call.ok is False and not unrun:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
             acting.act_on(step)
+        world.actors_refused = acting.refused()
         answered = world.answered_by_record
         played = scenario.solution if steps is None else steps
         assumed = [
@@ -1160,6 +1163,8 @@ class _WorldActors:
         self.counts: dict[str, int] = {}
         # Actions refused before the world, each with how many world calls came before it.
         self.refusals: list[tuple[int, dict[str, Any]]] = []
+        # The scripted actions refused before the world for want of permission, as `refused` names them.
+        self.not_permitted: list[str] = []
 
     def events(
         self, actor_id: str | None = None, outcome: str | None = None
@@ -1302,6 +1307,15 @@ class _WorldActors:
         state = getattr(self.world, "state", None)
         return list((state() if callable(state) else {}).get(collection) or [])
 
+    def refused(self) -> list[str]:
+        """Each scripted action the world or the actor's permissions turned down, as `actor: action(args): why`."""
+        lines = list(self.not_permitted)
+        for index, who in sorted(self.by_actors.items()):
+            call = self.world.calls[index]
+            if call.ok is False:
+                lines.append(f"{who}: {call.name}({call.arguments}): {call.error or call.refusal_code or 'refused'}")
+        return lines
+
     def act_on(self, step: Any) -> None:
         if step is not None:
             self.counts[step.tool] = self.counts.get(step.tool, 0) + 1
@@ -1326,6 +1340,7 @@ class _WorldActors:
                     "at": time.time(),
                 }
                 self.refusals.append((len(self.world.calls), refusal))
+                self.not_permitted.append(f"{actor.id}: {action.action}({dict(action.arguments)}): not_permitted")
                 continue
             before = len(self.world.calls)
             # A source-hosted world knows the action by its route; a generated one by its name.
@@ -1927,6 +1942,7 @@ def prove(
     proof.refused = refused
     proof.faulted = list(getattr(world, "faulted", None) or [])
     proof.recorded = list(getattr(world, "recorded", None) or [])
+    proof.actors_refused = list(getattr(world, "actors_refused", None) or [])
     proof.broken = [one.name for one in proof.with_solution if one.broken]
     proof.solvable = all(one.held or one.name in proof.excused for one in proof.with_solution) and not proof.broken
 

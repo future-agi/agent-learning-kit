@@ -45,11 +45,13 @@ decoration. Each actor scenario gives the actor one of these parts, and its sub-
 did about it, read from the world's final state:
 - **A decision the agent must wait for and act on.** The approver is brought in by the agent's own request
   (`contacted`, `on_tool` on the request, or `conditional` on the pending request record), never `always`
-  with the decision already made: a decision in place before the run is seed data and tests nothing. Across
+  with the decision already made: a decision in place before the run is seed data and tests nothing. The
+  decision is made by the actor during the run, never also placed in the starting records, and the actor's
+  action carries every field its record needs. Across
   scenarios: approves, refuses with a reason, approves only part or with a condition, answers after a
   delay, never answers (a timeout and its fallback). The check reads whether the agent acted only on what
-  was actually decided. The agent learns the decision through one of its own tools; when none can see it, the
-  case is not written this way (see the write-scenarios check rules).
+  was actually decided. The agent learns the decision through one of its own tools or a channel its rules accept;
+  when neither can show it, the case is written as request-and-wait (write-scenarios step 1).
 - **A fact that conflicts.** Someone nearby or in the channel says something that contradicts the person or
   the record (a different date, amount or name). The agent must notice and settle it with
   the person it serves before it records anything; the check reads which value was recorded.

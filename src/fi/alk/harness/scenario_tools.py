@@ -2486,6 +2486,12 @@ def accept_scenario(
         if proof is not None and proof.unplayed
         else ""
     )
+    if proof is not None and proof.actors_refused:
+        unproved += (
+            "\nNOTE: the world refused these scripted actor actions while the reference played, so they never "
+            "happened: " + "; ".join(proof.actors_refused) + ". Give each action every field its record needs and "
+            "an action its actor is permitted, or write the case without it."
+        )
     if proof is not None and proof.recorded:
         unproved += (
             f"\nNOTE: {', '.join(proof.recorded)}: {RECORDED_NOT_RUN}. These tools touch no world and nothing here "
