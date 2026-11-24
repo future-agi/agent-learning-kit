@@ -499,6 +499,8 @@ same sub-goal in twelve scenarios, you can say it failed in seven of them.
 call or the records carry the value (a record changed, a record looked up, a document sent), so a scenario never has to borrow an
 unrelated one to name two.
 
+**What a check may compare with the reference** is set by write-scenarios ("What the answer key may fix").
+
 **Cover the difficulties the suite will test, not only the outcome.** A catalogue whose sub-goals
 all fit every call (answered the request, stayed on topic, spoke clearly) leaves every scenario
 checked by the same few lines, and a scenario built around a hard moment passes whether or not the
