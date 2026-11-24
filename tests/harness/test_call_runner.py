@@ -5673,12 +5673,15 @@ def test_a_tool_that_hands_back_the_proxy_s_failure_answer_made_a_failed_call_no
          "is_error": False},
         {"name": "file_request", "arguments": {"id": 7}, "output": '{"detail": "tool_upstream_timeout"}',
          "is_error": False},
+        {"name": "file_request", "arguments": {"id": 7}, "is_error": False,
+         "output": {"detail": "tool_key_outcome_unknown", "reason": "first try unknown"}},
         {"name": "file_request", "arguments": {"id": 7}, "output": {"detail": "pending"}, "is_error": False},
     )
 
     written, _ = cr._read_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
 
     assert [(call.ok, call.result) for call in written] == [
+        (False, None),
         (False, None),
         (False, None),
         (True, {"detail": "pending"}),
