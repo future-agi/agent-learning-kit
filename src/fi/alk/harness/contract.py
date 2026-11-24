@@ -20,7 +20,7 @@ import shlex
 import threading
 import typing
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 from pydantic.json_schema import SkipJsonSchema
@@ -37,6 +37,22 @@ from .observations import HttpObservation
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
+# What an agent needs from the environment it runs in, beside how it is reached. One word today: a
+# browser agent is reached by chat and needs a browser. A list, so a later need adds a word.
+ENVIRONMENT_NEEDS = ("browser",)
+
+
+class HowItRuns(NamedTuple):
+    """How a person reaches the agent, and what it needs from its environment."""
+
+    reached_by: str
+    needs: frozenset[str]
+
+
+def how_it_runs(contract: "AgentContract") -> HowItRuns:
+    """The one answer to both questions a run asks of a contract. A contract stored before needs
+    existed has none, and is reached by its modality as it always was."""
+    return HowItRuns(contract.modality, frozenset(contract.environment_needs))
 
 
 def known_modalities() -> tuple[str, ...]:
@@ -1222,6 +1238,10 @@ class AgentContract(BaseModel):
     agent: str = ""
     one_liner: str = ""
     modality: str = "chat"
+    # Set by the save, never by the reading's own words: what the agent needs from its environment
+    # (`ENVIRONMENT_NEEDS`). The save sets `browser`, with modality chat, for an agent read as
+    # driving a web browser.
+    environment_needs: list[str] = Field(default_factory=list)
     # Voice only: whether this agent places calls or answers them. Chat is always started by the
     # person, so it stays inbound. It changes how the simulated person is briefed, not who speaks
     # first: an outbound agent still greets, it just has to say who it is and why it called.
@@ -1284,6 +1304,9 @@ class AgentContract(BaseModel):
         # The same for the record of unconfirmed prompt lines, kept only when there are some.
         if not data.get("unconfirmed_prompt_from"):
             data.pop("unconfirmed_prompt_from", None)
+        # And for what the agent needs from its environment: only a browser agent has any.
+        if not data.get("environment_needs"):
+            data.pop("environment_needs", None)
         return data
 
     @model_validator(mode="after")
@@ -1535,6 +1558,7 @@ FREE_TEXT = (
 KEPT_AS_WRITTEN = (
     "AgentContract.agent",
     "AgentContract.modality",
+    "AgentContract.environment_needs",
     "AgentContract.call_direction",
     "AgentContract.agent_languages",
     "AgentContract.conversational",
@@ -1898,6 +1922,12 @@ def validate_contract(contract: AgentContract) -> list[str]:
     problems: list[str] = []
     if not contract.agent.strip():
         problems.append("empty:agent")
+    for need in contract.environment_needs:
+        if need not in ENVIRONMENT_NEEDS:
+            problems.append(f"environment_needs:unknown:{need}")
+    if "browser" in contract.environment_needs and contract.modality != "chat":
+        # A browser agent is reached as a chat agent is.
+        problems.append(f"environment_needs:browser-needs-chat:{contract.modality}")
     for dependency in contract.dependencies:
         if dependency.reached.dsn_env in {"LIVEKIT_URL", "LIVEKIT_INFERENCE_URL"}:
             problems.append(

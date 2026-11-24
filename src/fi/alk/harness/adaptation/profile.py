@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ..json_schemas import schema_problems
 from ..provider_import import (
     ProviderImportError,
     ToolAdmission,
@@ -209,15 +210,45 @@ def select_mode(
 
 
 def _as_is(
-    profile: AgentProfile, environment_tools: Sequence[ToolDefinition]
+    profile: AgentProfile,
+    environment_tools: Sequence[ToolDefinition],
+    *,
+    forwarded: bool = False,
 ) -> set[str]:
-    """The agent's tools it can call as the environment's own: same name, compatible arguments."""
+    """The agent's tools it can call as the environment's own: same name, compatible arguments.
+    `forwarded` is through a mapping that passes on only the arguments the agent declares."""
     environment = {tool.name: tool.parameters for tool in environment_tools}
     return {
         name
         for one in profile.agent_tools
         if (name := str(one.get("name"))) in environment
-        and not argument_mismatches(one.get("parameters") or {}, environment[name])
+        and not argument_mismatches(
+            _forwarded(one.get("parameters") or {})
+            if forwarded
+            else one.get("parameters") or {},
+            environment[name],
+        )
+    }
+
+
+def _forwarded(parameters: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The calls that reach the environment when only the declared arguments are passed on: an
+    agent whose schema is open to other names still never sends one."""
+    if schema_problems(parameters):
+        return parameters
+    properties = parameters.get("properties") or {}
+    return {
+        **{
+            keyword: parameters[keyword]
+            for keyword in ("$defs", "definitions")
+            if keyword in parameters
+        },
+        "type": "object",
+        "properties": properties,
+        "required": [
+            name for name in parameters.get("required") or [] if name in properties
+        ],
+        "additionalProperties": False,
     }
 
 
@@ -227,7 +258,7 @@ def identity_mapping(
     """The routed mapping of an agent whose every tool is an environment tool it calls as-is: each
     one onto itself, every argument passed through. None when a tool needs a mapping written."""
     names = [str(one.get("name")) for one in profile.agent_tools]
-    if not names or set(names) - _as_is(profile, environment_tools):
+    if not names or set(names) - _as_is(profile, environment_tools, forwarded=True):
         return None
     return {
         "tools": [
@@ -259,7 +290,8 @@ def _argument_path(name: str) -> str:
     return json.dumps(name)
 
 
-# Keywords that say nothing about which values a schema accepts.
+# Keywords that say nothing about which values a schema accepts. Definitions are among them: a
+# `$ref` into them does (`_same`).
 _ANNOTATIONS = frozenset(
     {
         "description",
@@ -270,11 +302,115 @@ _ANNOTATIONS = frozenset(
         "deprecated",
         "readOnly",
         "writeOnly",
+        "$defs",
+        "definitions",
     }
 )
-# Keywords `_implied` reads itself; any other the environment sets must be the agent's too.
-_COMPARED = frozenset({"type", "enum", "const", "required", "properties", "items"})
-_ABSENT = object()
+# Keywords `_implied` reads itself, together: what one accepts depends on its neighbours.
+_COMPARED = frozenset(
+    {
+        "type",
+        "enum",
+        "const",
+        "required",
+        "properties",
+        "items",
+        "additionalProperties",
+    }
+)
+# Keywords whose answer depends on nothing but their own value: the same one accepts the same
+# values wherever it stands, and one only the agent sets can only accept fewer.
+_ALONE = frozenset(
+    {
+        "pattern",
+        "format",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "minProperties",
+        "maxProperties",
+        "propertyNames",
+        "dependentRequired",
+        "dependentSchemas",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "not",
+    }
+)
+# Keywords that make a schema's meaning depend on where it stands.
+_PLACED = frozenset(
+    {
+        "$ref",
+        "$dynamicRef",
+        "$recursiveRef",
+        "$id",
+        "$anchor",
+        "$dynamicAnchor",
+        "$schema",
+    }
+)
+
+
+def _json(value: Any) -> str:
+    """Equal only for the same JSON: 1 is not true."""
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+# Where a schema holds other schemas: as the keyword's value, or under names.
+_ONE = frozenset({"items", "additionalProperties", "propertyNames", "not"})
+_LISTED = frozenset({"allOf", "anyOf", "oneOf"})
+_NAMED = frozenset({"properties", "dependentSchemas"})
+
+
+def _plain(schema: Any) -> Any:
+    """`schema` without its annotations, at every depth they are looked for."""
+    if not isinstance(schema, Mapping):
+        return schema
+    plain = {}
+    for keyword, value in schema.items():
+        if keyword in _ANNOTATIONS:
+            continue
+        if keyword in _ONE:
+            value = _plain(value)
+        elif keyword in _LISTED and isinstance(value, list):
+            value = [_plain(one) for one in value]
+        elif keyword in _NAMED and isinstance(value, Mapping):
+            value = {name: _plain(one) for name, one in value.items()}
+        plain[keyword] = value
+    return plain
+
+
+def _placed(value: Any) -> Iterator[tuple[str, Any]]:
+    if isinstance(value, Mapping):
+        for keyword, inner in value.items():
+            if keyword in _PLACED:
+                yield keyword, inner
+            yield from _placed(inner)
+    elif isinstance(value, list):
+        for inner in value:
+            yield from _placed(inner)
+
+
+def _into_definitions(keyword: str, target: Any) -> bool:
+    return keyword == "$ref" and str(target).startswith(("#/$defs/", "#/definitions/"))
+
+
+def _same(agent: Any, environment: Any, shared: bool) -> bool:
+    """One schema, annotations aside. With a reference in it, only where both roots hold the same
+    definitions (`shared`) and that is where it leads."""
+    return _json(_plain(agent)) == _json(_plain(environment)) and all(
+        shared and _into_definitions(*one)
+        for schema in (agent, environment)
+        for one in _placed(schema)
+    )
 
 
 def _types(schema: Mapping[str, Any]) -> set[str]:
@@ -284,18 +420,29 @@ def _types(schema: Mapping[str, Any]) -> set[str]:
     )
 
 
-def _implied(agent: Any, environment: Any, where: str) -> list[str]:
+def _implied(agent: Any, environment: Any, where: str, shared: bool) -> list[str]:
     """Why a value the agent's schema allows at `where` could be one the environment's refuses.
 
-    Sound, not complete: it reads types, enums, constants, required names, properties and items,
-    at every depth, and asks that any other rule the environment sets (a pattern, a bound, a
-    union) be set the same in the agent's schema. A schema it cannot show compatible is a
-    mismatch, and the agent's tool is then mapped rather than called as-is."""
-    if not isinstance(environment, Mapping) or not environment:
+    Sound, not complete. The same schema is compatible. Otherwise types, enums, constants,
+    required names, properties, additional properties and items are read at every depth, any
+    other rule the environment sets (a pattern, a bound, a union) must be set the same in the
+    agent's schema, and a keyword this does not know, on either side, is a mismatch. The agent's
+    tool is then mapped rather than called as-is."""
+    if agent is False or _same(agent, environment, shared):
+        return []
+    if environment is False:
+        return [f"{where} may be sent, the environment accepts no value there"]
+    if environment is True or not set(environment) - _ANNOTATIONS:
         return []
     if not isinstance(agent, Mapping):
         return [f"{where} has no schema, the environment constrains it"]
-    problems: list[str] = []
+    known = _ANNOTATIONS | _COMPARED | _ALONE
+    problems = [
+        f"{where}: the {side} sets {keyword}, which cannot be compared"
+        for side, schema in (("agent", agent), ("environment", environment))
+        for keyword in schema
+        if keyword not in known
+    ]
     if taken := _types(environment):
         sent = _types(agent)
         # Every integer is a number.
@@ -310,35 +457,40 @@ def _implied(agent: Any, environment: Any, where: str) -> list[str]:
             problems.append(
                 f"{where} is {', '.join(sorted(sent))}, the environment takes {', '.join(sorted(taken))}"
             )
-    if "const" in environment and agent.get("const", _ABSENT) != environment["const"]:
-        problems.append(f"{where} may carry values the environment does not accept")
-    if "enum" in environment:
-        allowed = list(environment["enum"] or [])
-        offered = [agent["const"]] if "const" in agent else agent.get("enum")
-        if not offered or any(value not in allowed for value in offered):
+    offered = [agent["const"]] if "const" in agent else agent.get("enum")
+    for allowed in (
+        [environment["const"]] if "const" in environment else None,
+        environment.get("enum"),
+    ):
+        if allowed is not None and (
+            not offered or {_json(one) for one in offered} - {*map(_json, allowed)}
+        ):
             problems.append(f"{where} may carry values the environment does not accept")
     sent_properties = agent.get("properties") or {}
     taken_properties = environment.get("properties") or {}
+    # What each side says of a property it does not name: nothing at all accepts any.
+    sent_others = agent.get("additionalProperties", True)
+    taken_others = environment.get("additionalProperties", True)
     inside = "" if where == "arguments" else f"{where}."
     problems += [
         f"{inside}{name} is not an environment argument"
         for name in sent_properties
         if name not in taken_properties
-        and (
-            "properties" in environment
-            or environment.get("additionalProperties") is False
-        )
+        and ("properties" in environment or taken_others is False)
     ]
-    # An object schema that does not forbid other properties allows any: where the environment
-    # forbids them, the agent's schema has to forbid them too, or it is the wider one.
-    if (
-        environment.get("additionalProperties") is False
-        and agent.get("additionalProperties") is not False
-    ):
+    problems += [
+        f"{inside}{name} is an environment argument the agent does not declare, and may carry "
+        "a value the environment does not accept (additionalProperties is not false)"
+        for name, schema in taken_properties.items()
+        if name not in sent_properties and _implied(sent_others, schema, name, shared)
+    ]
+    if taken_others is False and sent_others is not False:
         problems.append(
             f"{where} may carry properties the environment forbids "
             "(additionalProperties is false there, not here)"
         )
+    elif taken_others is not False:
+        problems += _implied(sent_others, taken_others, f"{inside}*", shared)
     always = set(agent.get("required") or [])
     for name in environment.get("required") or []:
         if name not in sent_properties:
@@ -348,20 +500,23 @@ def _implied(agent: Any, environment: Any, where: str) -> list[str]:
                 f"{inside}{name} is required but the agent may leave it out"
             )
     for name, schema in sent_properties.items():
-        if name in taken_properties:
-            problems += _implied(schema, taken_properties[name], f"{inside}{name}")
-    if "items" in environment:
-        problems += _implied(agent.get("items"), environment["items"], f"{where}[]")
-    for keyword, rule in environment.items():
-        if keyword in _COMPARED or keyword in _ANNOTATIONS:
-            continue
-        if keyword == "additionalProperties" and not isinstance(rule, Mapping):
-            # True allows anything; false is held above.
-            continue
-        if agent.get(keyword, _ABSENT) != rule:
-            problems.append(
-                f"{where}: the environment sets {keyword}, which the agent's schema does not match"
+        taken_schema = taken_properties.get(name, taken_others)
+        if name in taken_properties or taken_others is not False:
+            problems += _implied(schema, taken_schema, f"{inside}{name}", shared)
+    problems += _implied(
+        agent.get("items", True), environment.get("items", True), f"{where}[]", shared
+    )
+    problems += [
+        f"{where}: the environment sets {keyword}, which the agent's schema does not match"
+        for keyword in environment
+        if keyword in _ALONE
+        and not (
+            keyword in agent
+            and _same(
+                {keyword: agent[keyword]}, {keyword: environment[keyword]}, shared
             )
+        )
+    ]
     return problems
 
 
@@ -371,10 +526,36 @@ def argument_mismatches(
     """Why calls the agent makes with this schema would not be valid environment calls.
 
     The whole schema is compared, nested objects and array items included (`_implied`): every
-    argument the agent sends must be one the environment takes, of a type and with only values
+    argument the agent may send must be one the environment takes, of a type and with only values
     it accepts; every argument the environment requires must be one the agent always sends.
     """
-    return _implied(agent, environment, "arguments")
+    if problems := schema_problems(agent):
+        return [f"the agent's schema cannot be used: {one}" for one in problems]
+    # Word for word the same, its references lead to the same places whatever they are.
+    if _json(agent) == _json(environment):
+        return []
+    # Which draft a schema says it is written in changes nothing: both are read as 2020-12.
+    agent, environment = (
+        {keyword: value for keyword, value in one.items() if keyword != "$schema"}
+        if isinstance(one, Mapping)
+        else one
+        for one in (agent, environment)
+    )
+    return _implied(
+        agent, environment, "arguments", _shared_definitions(agent, environment)
+    )
+
+
+def _shared_definitions(agent: Any, environment: Any) -> bool:
+    ours, theirs = (
+        {one: schema[one] for one in ("$defs", "definitions") if one in schema}
+        if isinstance(schema, Mapping)
+        else {}
+        for schema in (agent, environment)
+    )
+    return _json(ours) == _json(theirs) and all(
+        _into_definitions(*one) for one in _placed(ours)
+    )
 
 
 def binding_fields(

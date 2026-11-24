@@ -289,7 +289,9 @@ class Workbench:
             self._identity() if self.mode is BindingMode.TOOL_ROUTED else None
         )
         if self.identity is not None and self.draft is None:
-            self.submit_binding({"binding": self.identity})
+            accepted, _said = self.submit_binding({"binding": self.identity})
+            if not accepted:
+                self.identity = None
 
     # --- releases -------------------------------------------------------------------------
 
@@ -441,7 +443,7 @@ class Workbench:
                 "harness submitted the binding that maps each onto itself, so the agent is served "
                 "its own tools and no others. Resubmit only to change it; run_proof next."
             )
-        if mismatched:
+        if mismatched and self.identity is None:
             lines.append(
                 "\nSAME NAME, DIFFERENT ARGUMENTS (these need a mapping like any other tool):\n"
                 + json.dumps(mismatched, indent=1)

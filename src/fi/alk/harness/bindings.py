@@ -22,7 +22,6 @@ import jmespath
 from jinja2 import StrictUndefined, TemplateError, nodes
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from jmespath.exceptions import JMESPathError
-from jsonschema import Draft202012Validator
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -32,6 +31,8 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+
+from .json_schemas import schema_problems, value_problems
 
 # The one class handlers raise to refuse, in the tool server, in proofs and in worlds.
 from .world.runtime import ToolError
@@ -534,12 +535,25 @@ def binding_problems(
     for name in sorted(set(mapped) - set(declared)):
         problems.append(f"binding entry {name!r} is not an agent tool")
     environment = {tool.name: tool for tool in environment_tools}
+    unusable = {
+        tool.name: found
+        for tool in agent_tools
+        if (found := schema_problems(tool.parameters))
+    }
     parameters = {
         tool.name: set((tool.parameters.get("properties") or {}).keys())
         for tool in agent_tools
+        if tool.name not in unusable
     }
     for entry in tools:
         if isinstance(entry, UnsupportedToolBinding):
+            continue
+        # No call could be held to such a schema, so the tool cannot be served.
+        if found := unusable.get(entry.agent_tool):
+            problems.append(
+                f"{entry.agent_tool}: the agent's schema for it cannot be used "
+                f"({'; '.join(found)}): mark the tool unsupported"
+            )
             continue
         agent_parameters = parameters.get(entry.agent_tool, set())
         if not entry.steps:
@@ -759,28 +773,21 @@ def agent_call_problems(
     if not isinstance(arguments, Mapping):
         return ["arguments must be a JSON object"]
     # A null optional argument is one left out: the binding never sends a null on (`_resolve`).
-    required = set(tool.parameters.get("required") or [])  # type: ignore[arg-type]
+    required = tool.parameters.get("required")
+    required = required if isinstance(required, list) else []
     sent = {
         name: value
         for name, value in arguments.items()
         if value is not None or name in required
     }
-    errors = Draft202012Validator(tool.parameters).iter_errors(sent)
-    return sorted(
-        f"{'.'.join(map(str, error.absolute_path)) or 'arguments'}: {error.message}"
-        for error in errors
-    )
+    return value_problems(tool.parameters, sent)
 
 
 def operation_problems(tool: ToolDefinition, arguments: Mapping[str, Any]) -> list[str]:
     """Why `arguments` is not a call the environment's `tool` takes, under its whole JSON Schema;
     empty when it is. Every operation is held to it before its handler runs, whichever mode
     produced it: a schema the agent's own allows is no evidence the environment's does."""
-    errors = Draft202012Validator(tool.parameters).iter_errors(dict(arguments))
-    return sorted(
-        f"{'.'.join(map(str, error.absolute_path)) or 'arguments'}: {error.message}"
-        for error in errors
-    )
+    return value_problems(tool.parameters, dict(arguments))
 
 
 def _refused_by_schema(tool: ToolDefinition, arguments: Mapping[str, Any]) -> str:
