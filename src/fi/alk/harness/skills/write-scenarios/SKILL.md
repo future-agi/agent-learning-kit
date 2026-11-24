@@ -291,8 +291,9 @@ against it, so it is written for the checks as much as for the proof.
 that governs this situation in the agent's instructions, then write only the steps that rule asks for,
 every one of them, complete to the outcome, with this caller's values as they last corrected them, exactly as the agent's
 tools take them. A fact the rules say to check in the system (an approval, a status) is never fixed from the caller's
-words: the reference reads it with the agent's own tool. If no tool shows it, the case cannot test acting on it:
-write the request-and-wait case instead.
+words: the reference reads it with the agent's own tool, or it reaches the agent through a channel its rules accept.
+When neither can show it, the case cannot test acting on it and is written as **request-and-wait**: the agent asks
+for the decision, tells the person it is waiting, and does nothing the decision would allow.
 
 - When the caller states something a rule says to hand over, stop or refuse on, the solution is that
   action with nothing before it the rule does not ask for: no identity check and no lookup. An
@@ -557,8 +558,7 @@ that did the right thing:
   the request, or leave it to the judge.
 - **An actor's decision.** Write the case for every outcome the actor can produce: it agrees, refuses,
   grants part, asks back, answers late or never answers, and a live actor may decide differently from one
-  trial to the next. A decision the agent's rules tell it to verify follows step 1: the agent reads it with its
-  own tools, or the actor tells it through a channel its rules accept. The person's rules say what the
+  trial to the next. A decision the agent's rules tell it to verify follows step 1. The person's rules say what the
   agent does in each; a branch they say nothing about is
   pinned (the actor's action scripted) or the case is not written. The check holds the agent to the branch that
   happened, read from the world: nothing done after a refusal, only the part granted, the fallback when no

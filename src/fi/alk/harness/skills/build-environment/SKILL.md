@@ -499,10 +499,7 @@ same sub-goal in twelve scenarios, you can say it failed in seven of them.
 call or the records carry the value (a record changed, a record looked up, a document sent), so a scenario never has to borrow an
 unrelated one to name two.
 
-**A check compares only what is known before the run against the reference**: what the person asks and what
-the starting records hold. A value decided during the run (an amount an actor grants, an approval or a refusal,
-an id or a time the world assigns) is read from the world's final records, or judged, never compared with a
-value the answer key fixes. Free text is checked for carrying what the person said, never as an exact string.
+**What a check may compare with the reference** is set by write-scenarios ("What the answer key may fix").
 
 **Cover the difficulties the suite will test, not only the outcome.** A catalogue whose sub-goals
 all fit every call (answered the request, stayed on topic, spoke clearly) leaves every scenario
