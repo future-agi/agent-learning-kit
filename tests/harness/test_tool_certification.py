@@ -7,6 +7,9 @@ import pytest
 from fi.alk.harness.contract import AgentContract
 from fi.alk.harness.tool_certification import (
     ToolAvailability,
+    ToolCertification,
+    ToolCertificationReport,
+    ToolProbeMode,
     certify_tool_inventory,
 )
 
@@ -420,3 +423,61 @@ def test_the_build_check_lets_the_framework_s_injected_job_tools_through(tmp_pat
     blocked = blockers(factory, str(source))
     assert [one for one in blocked if one.startswith("refund")]
     assert not [one for one in blocked if "launch_async_subagent" in one]
+
+
+def _certification(
+    tool: str,
+    availability: ToolAvailability,
+    probe_mode: ToolProbeMode,
+) -> ToolCertification:
+    return ToolCertification(
+        tool=tool,
+        entrypoint_mode="import",
+        probe_mode=probe_mode,
+        availability=availability,
+        schema_validated=True,
+        implementation_validated=True,
+        reason="test",
+    )
+
+
+def test_external_driver_needs_a_handler_in_a_world_we_own() -> None:
+    """Only a compiled handler running in our own world can serve a trainer.
+
+    An external trainer never runs the submitted agent, so a tool executing inside that
+    agent's process answers the call while the world is unchanged.
+    """
+    drivable = _certification(
+        "refund", ToolAvailability.CERTIFIED, ToolProbeMode.DISPOSABLE_WORLD
+    )
+    assert ToolCertificationReport.create([drivable]).serves_external_driver
+
+    for availability, probe_mode in [
+        (ToolAvailability.RUNTIME_ONLY, ToolProbeMode.RUNTIME_ONLY),
+        (ToolAvailability.REJECTED, ToolProbeMode.RUNTIME_ONLY),
+        # Certified is not sufficient: effects must land in a world we own.
+        (ToolAvailability.CERTIFIED, ToolProbeMode.RUNTIME_ONLY),
+    ]:
+        report = ToolCertificationReport.create(
+            [_certification("refund", availability, probe_mode)]
+        )
+        assert not report.serves_external_driver
+        assert [item.tool for item in report.external_driver_blockers] == ["refund"]
+
+
+def test_one_agent_run_tool_blocks_the_bundle_and_is_named() -> None:
+    report = ToolCertificationReport.create(
+        [
+            _certification("refund", ToolAvailability.CERTIFIED, ToolProbeMode.DISPOSABLE_WORLD),
+            _certification("look_up", ToolAvailability.RUNTIME_ONLY, ToolProbeMode.RUNTIME_ONLY),
+        ]
+    )
+    assert not report.serves_external_driver
+    assert [item.tool for item in report.external_driver_blockers] == ["look_up"]
+
+
+def test_a_bundle_with_no_tools_does_not_serve_a_trainer() -> None:
+    """There is nothing for a trainer to drive, so an empty inventory is not a pass."""
+    report = ToolCertificationReport.create([])
+    assert not report.serves_external_driver
+    assert report.external_driver_blockers == ()

@@ -71,6 +71,36 @@ class ToolCertificationReport(BaseModel):
         raw["fingerprint"] = _fingerprint(raw)
         return cls.model_validate(raw)
 
+    @property
+    def external_driver_blockers(self) -> tuple[ToolCertification, ...]:
+        """Tools that stop this bundle serving a driver outside the submitted agent's process.
+
+        An external RL trainer never runs the submitted agent, so a tool is only usable when
+        this layer can execute it: ``CERTIFIED`` with ``DISPOSABLE_WORLD``, meaning a compiled
+        handler exists in the bundle and its effects land in a world we own.
+
+        ``RUNTIME_ONLY`` is the blocker that matters. Those tools are declared but execute
+        inside the agent's own process or service, so a trainer calling one is acknowledged
+        while nothing in the world changes -- see ``ProvisionedWorld.call``, which answers
+        ``ok=True`` with ``execution="submitted_agent_runtime"``. Reward earned that way is
+        measuring a tool that did nothing. ``REJECTED`` blocks for the plainer reason that no
+        seam was found at all.
+        """
+        return tuple(
+            item
+            for item in self.tools
+            if item.availability is not ToolAvailability.CERTIFIED
+            or item.probe_mode is not ToolProbeMode.DISPOSABLE_WORLD
+        )
+
+    @property
+    def serves_external_driver(self) -> bool:
+        """Whether every declared tool can be driven without the submitted agent running.
+
+        A bundle with no tools is not serviceable: there is nothing for a trainer to do.
+        """
+        return bool(self.tools) and not self.external_driver_blockers
+
     @model_validator(mode="after")
     def _canonical(self) -> "ToolCertificationReport":
         if self.schema_version != TOOL_CERTIFICATION_SCHEMA_VERSION:

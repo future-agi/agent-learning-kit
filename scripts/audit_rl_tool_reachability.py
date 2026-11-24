@@ -1,36 +1,30 @@
 #!/usr/bin/env python3
-"""Which agent contracts could serve an external RL trainer, and which cannot.
+"""Which certified bundles could serve an external RL trainer, and which could not.
 
-Gate 0 of the RL-endpoint tool sweep (T28). An external trainer has no submitted agent
-process, so a tool whose implementation lives *inside* that process cannot run for it.
-``ProvisionedWorld.call`` returns a hollow acknowledgement for exactly those tools --
-``{"observed": True, "execution": "submitted_agent_runtime"}``, ``ok=True`` -- so the
-trainer sees success while nothing happened. See
-``src/fi/alk/harness/world/provisioned.py`` (``local_runtime_tools``).
+Triage for T28: an external trainer never runs the submitted agent, so a tool is only
+usable when this layer can execute it itself. ``certify_tool_inventory`` already decides
+that per tool, so this script reads its reports rather than re-deriving the answer from
+raw contracts:
 
-``ToolEntry.mode`` decides it:
+    certified + disposable_world   a compiled handler is in the bundle and its effects land
+                                   in a world we own -> a trainer can drive it
+    runtime_only                   declared, but it executes inside the agent's own process
+                                   or service -> a trainer is acknowledged while nothing in
+                                   the world changes
+    rejected                       no implementation seam was found at all
 
-    service      reachable over HTTP          -> usable, if the service runs without the
-                                                agent's decision loop (verify live)
-    import       module-level callable        -> hollow for a trainer
-    construct    method on a built instance   -> hollow for a trainer
-    unreachable  no runnable seam             -> the bundle build already stops
+``ToolEntry.mode`` is NOT the signal. An ``import`` tool is certified once its handler is
+compiled into the bundle, so mode alone says nothing about whether a trainer can drive it.
 
-A hollow *read* is survivable: the trainer sees less. A hollow *write* is
-disqualifying, because the trainer is told an effect landed when it did not -- the
-refund that never happened. That is the verdict this script reports.
-
-This is a static pre-filter. It reads sealed contracts and never boots a world, so it
-cannot prove a ``service`` tool actually works; it narrows the candidate set before the
-live sweep pays for that. ALK deliberately never synthesises a missing implementation
-("The harness never generates agent behavior"), so a hollow write is fixed only by the
-agent exposing that tool over HTTP.
+``ToolCertificationReport.serves_external_driver`` is the authority; this script only walks
+a tree of reports and prints the verdicts. Use it to pick pilot candidates before paying
+for a live sweep, and see ``external_driver_blockers`` for the per-tool reasons.
 
 Usage:
     python scripts/audit_rl_tool_reachability.py <path-or-dir>...
     python scripts/audit_rl_tool_reachability.py --self-check
 
-Exit status: 0 when every contract qualifies, 1 when any is disqualified, 2 on bad input.
+Exit status: 0 when every report is serviceable, 1 when any is not, 2 on bad input.
 """
 
 from __future__ import annotations
@@ -38,105 +32,46 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, NamedTuple
 
-# Modes whose implementation runs inside the submitted agent's own process.
-IN_PROCESS_MODES = frozenset({"import", "construct"})
-# HTTP methods that only read. Mirrors ToolEntry.effect's documented fallback.
-READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from fi.alk.harness.tool_certification import (  # noqa: E402
+    ToolCertificationReport,
+)
+
+REPORT_NAME = "tool-certification.json"
 
 
-class ToolVerdict(NamedTuple):
-    tool: str
-    mode: str
-    effect: str
-    reachable: bool
-    disqualifying: bool
-
-
-class ContractVerdict(NamedTuple):
-    name: str
+class Verdict(NamedTuple):
+    label: str
     path: Path
-    tools: list[ToolVerdict]
+    report: ToolCertificationReport
 
     @property
-    def hollow_writes(self) -> list[ToolVerdict]:
-        return [t for t in self.tools if t.disqualifying]
-
-    @property
-    def hollow_reads(self) -> list[ToolVerdict]:
-        return [t for t in self.tools if not t.reachable and not t.disqualifying]
-
-    @property
-    def qualifies(self) -> bool:
-        # No tools at all is not a pass: there is nothing for a trainer to do.
-        return bool(self.tools) and not self.hollow_writes
+    def serviceable(self) -> bool:
+        return self.report.serves_external_driver
 
 
-def tool_effect(entry: dict[str, Any]) -> str:
-    """`effect` as declared, else derived from the HTTP method, as ToolEntry documents.
-
-    An absent method is treated as a write: ToolEntry defaults `method` to POST, and
-    guessing `read` on silence would hide the failure this audit exists to find.
-    """
-    declared = str(entry.get("effect") or "").strip().lower()
-    if declared in {"read", "write"}:
-        return declared
-    method = str(entry.get("method") or "POST").strip().upper()
-    return "read" if method in READ_METHODS else "write"
+def label_for(path: Path) -> str:
+    """The agent a report belongs to, read from the bundle layout it sits in."""
+    parts = path.parts
+    if "artifacts" in parts:
+        index = parts.index("artifacts")
+        if index + 1 < len(parts):
+            return parts[index + 1]
+    # …/<agent>/generic-harness/tool-certification.json
+    return path.parent.parent.name or path.parent.name
 
 
-def unwrap(payload: dict[str, Any]) -> dict[str, Any]:
-    """The contract itself, whether it is the document or nested under ``contract``.
-
-    Authored fixtures wrap it (``{"agent": ..., "contract": {...}}``); agent readings store
-    it flat. Returning the outer document for a wrapped file would find no tools and pass it
-    as "nothing declared", which is the one failure a qualification audit must not have.
-    """
-    inner = payload.get("contract")
-    if isinstance(inner, dict) and ("tools" in inner or "tool_entrypoints" in inner):
-        return inner
-    return payload
-
-
-def audit_contract(payload: dict[str, Any], path: Path) -> ContractVerdict:
-    payload = unwrap(payload)
-    entries = {
-        str(e.get("tool")): e
-        for e in (payload.get("tool_entrypoints") or [])
-        if isinstance(e, dict) and e.get("tool")
-    }
-    verdicts: list[ToolVerdict] = []
-    for spec in payload.get("tools") or []:
-        if not isinstance(spec, dict) or not spec.get("name"):
-            continue
-        name = str(spec["name"])
-        # A tool with no entry has no recorded seam at all, which is strictly worse than
-        # `unreachable`; treat it as in-process so it cannot pass unnoticed.
-        entry = entries.get(name, {})
-        mode = str(entry.get("mode") or "unreachable").strip().lower()
-        effect = tool_effect(entry)
-        reachable = mode == "service"
-        verdicts.append(
-            ToolVerdict(
-                tool=name,
-                mode=mode,
-                effect=effect,
-                reachable=reachable,
-                disqualifying=not reachable and effect == "write",
-            )
-        )
-    name = str(payload.get("agent") or path.stem)
-    return ContractVerdict(name=name, path=path, tools=verdicts)
-
-
-def contract_paths(targets: list[str]) -> list[Path]:
+def report_paths(targets: list[str]) -> list[Path]:
     found: list[Path] = []
     for target in targets:
         path = Path(target)
         if path.is_dir():
-            found.extend(sorted(path.rglob("*.json")))
+            found.extend(sorted(path.rglob(REPORT_NAME)))
         elif path.is_file():
             found.append(path)
         else:
@@ -145,108 +80,131 @@ def contract_paths(targets: list[str]) -> list[Path]:
     return found
 
 
-def report(verdicts: list[ContractVerdict]) -> None:
-    for verdict in verdicts:
-        status = "QUALIFIES" if verdict.qualifies else "DISQUALIFIED"
-        print(f"\n{status}  {verdict.name}  ({verdict.path})")
-        if not verdict.tools:
-            print("    no tools declared - nothing for a trainer to drive")
-            continue
-        for tool in verdicts and verdict.tools:
-            mark = "ok    " if tool.reachable else ("HOLLOW" if tool.disqualifying else "thin  ")
-            print(f"    {mark} {tool.tool}  mode={tool.mode} effect={tool.effect}")
-        if verdict.hollow_writes:
-            names = ", ".join(t.tool for t in verdict.hollow_writes)
-            print(f"    -> hollow WRITE tools, trainer told an effect landed: {names}")
-        if verdict.hollow_reads:
-            names = ", ".join(t.tool for t in verdict.hollow_reads)
-            print(f"    -> hollow reads, trainer sees less than the agent does: {names}")
+def load(path: Path) -> ToolCertificationReport | None:
+    """The report at ``path``, or None when it is unreadable or not one.
 
-    qualifying = [v for v in verdicts if v.qualifies]
-    print(f"\n{'=' * 60}")
-    print(f"{len(qualifying)} of {len(verdicts)} contracts could serve an external trainer")
-    if qualifying:
-        print("candidates for the live sweep: " + ", ".join(v.name for v in qualifying))
+    Validation is deliberate: the model verifies the fingerprint, so a report edited by hand
+    is refused rather than quietly steering a pilot choice.
+    """
+    try:
+        payload: Any = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"skipped {path}: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(payload, dict) or "tools" not in payload:
+        return None
+    try:
+        return ToolCertificationReport.model_validate(payload)
+    except Exception as exc:  # pydantic ValidationError, or a canonical/fingerprint failure
+        print(f"skipped {path}: not a valid certification report: {exc}", file=sys.stderr)
+        return None
+
+
+def latest_by_label(verdicts: list[Verdict]) -> dict[str, Verdict]:
+    """Each agent judged by its most recent report.
+
+    An agent is authored many times and older runs fail for reasons already fixed, so a
+    stale report must not decide a pilot. Both the printed verdict and the exit status read
+    this same selection; computing it twice let them disagree.
+    """
+    latest: dict[str, Verdict] = {}
+    for verdict in sorted(verdicts, key=lambda v: v.path.stat().st_mtime):
+        latest[verdict.label] = verdict
+    return latest
+
+
+def report(latest: dict[str, Verdict]) -> None:
+    for label in sorted(latest, key=lambda name: (not latest[name].serviceable, name)):
+        verdict = latest[label]
+        status = "SERVICEABLE " if verdict.serviceable else "not usable  "
+        tools = verdict.report.tools
+        counts = Counter(f"{t.availability.value}/{t.probe_mode.value}" for t in tools)
+        summary = ", ".join(f"{count}x {kind}" for kind, count in sorted(counts.items()))
+        print(f"{status} {label:24s} {len(tools):3d} tools  {summary or 'none declared'}")
+        for blocker in verdict.report.external_driver_blockers:
+            print(f"                 - {blocker.tool}: {blocker.reason}")
+
+    usable = [v for v in latest.values() if v.serviceable]
+    print(f"\n{'=' * 70}")
+    print(f"{len(usable)} of {len(latest)} agents could serve an external trainer")
+    if usable:
+        ranked = sorted(usable, key=lambda v: -len(v.report.tools))
+        print("pilot candidates, most tools first:")
+        for verdict in ranked:
+            print(f"    {verdict.label}  ({len(verdict.report.tools)} tools)  {verdict.path}")
     else:
-        print("no candidate: every contract has a tool that only the agent's process runs.")
-        print("RL access needs the agent to expose its write tools over HTTP (mode=service).")
+        print("no candidate: every agent has a tool only its own process can run.")
 
 
 def self_check() -> None:
-    """Assert the verdict rules on the four cases that matter."""
-    service_write = {"tool": "refund", "mode": "service", "endpoint": "refund", "method": "POST"}
-    import_write = {"tool": "refund", "mode": "import", "module": "agent", "callable": "refund"}
-    import_read = {"tool": "lookup", "mode": "import", "effect": "read"}
-    get_no_effect = {"tool": "status", "mode": "import", "method": "GET"}
-
-    def one(entry: dict[str, Any]) -> ToolVerdict:
-        payload = {"agent": "t", "tools": [{"name": entry["tool"]}], "tool_entrypoints": [entry]}
-        return audit_contract(payload, Path("t.json")).tools[0]
-
-    assert one(service_write).reachable, "service mode must be reachable"
-    assert not one(service_write).disqualifying, "a reachable write must not disqualify"
-    assert one(import_write).disqualifying, "an in-process write must disqualify"
-    assert not one(import_read).disqualifying, "a declared read must not disqualify"
-    assert one(get_no_effect).effect == "read", "GET with no effect must read"
-    assert one(import_write).effect == "write", "POST default must count as a write"
-
-    # A tool with no entry at all must not slip through as reachable.
-    orphan = audit_contract(
-        {"agent": "t", "tools": [{"name": "refund"}], "tool_entrypoints": []}, Path("t.json")
+    """Assert the serviceability rule on the cases that decide a pilot."""
+    from fi.alk.harness.tool_certification import (
+        ToolAvailability,
+        ToolCertification,
+        ToolProbeMode,
     )
-    assert orphan.tools[0].disqualifying, "a tool with no entry must disqualify"
-    assert not orphan.qualifies
 
-    # A contract nested under `contract` must be read, not silently skipped as empty.
-    nested = audit_contract(
-        {"agent": "t", "contract": {"tools": [{"name": "refund"}], "tool_entrypoints": [import_write]}},
-        Path("t.json"),
+    def tool(name: str, availability: ToolAvailability, probe: ToolProbeMode) -> ToolCertification:
+        return ToolCertification(
+            tool=name,
+            entrypoint_mode="import",
+            probe_mode=probe,
+            availability=availability,
+            schema_validated=True,
+            implementation_validated=True,
+            reason="test",
+        )
+
+    drivable = tool("refund", ToolAvailability.CERTIFIED, ToolProbeMode.DISPOSABLE_WORLD)
+    in_agent = tool("refund", ToolAvailability.RUNTIME_ONLY, ToolProbeMode.RUNTIME_ONLY)
+    no_seam = tool("refund", ToolAvailability.REJECTED, ToolProbeMode.RUNTIME_ONLY)
+    # Certified, but only observable during a live call: the trap this audit exists to catch.
+    observed_only = tool("refund", ToolAvailability.CERTIFIED, ToolProbeMode.RUNTIME_ONLY)
+
+    assert ToolCertificationReport.create([drivable]).serves_external_driver
+    assert not ToolCertificationReport.create([in_agent]).serves_external_driver
+    assert not ToolCertificationReport.create([no_seam]).serves_external_driver
+    assert not ToolCertificationReport.create([observed_only]).serves_external_driver, (
+        "certified is not enough; the handler must run in a world we own"
     )
-    assert nested.tools, "a nested contract must be unwrapped, not read as toolless"
-    assert nested.tools[0].disqualifying
-    assert not nested.qualifies, "a nested contract must not pass by being skipped"
-
-    # An all-service contract qualifies; an empty one does not.
-    assert audit_contract(
-        {"agent": "t", "tools": [{"name": "refund"}], "tool_entrypoints": [service_write]},
-        Path("t.json"),
-    ).qualifies
-    assert not audit_contract({"agent": "t", "tools": []}, Path("t.json")).qualifies
+    # One in-agent tool among drivable ones still blocks, and is named.
+    mixed = ToolCertificationReport.create([drivable, tool("look_up", ToolAvailability.RUNTIME_ONLY, ToolProbeMode.RUNTIME_ONLY)])
+    assert not mixed.serves_external_driver
+    assert [b.tool for b in mixed.external_driver_blockers] == ["look_up"]
+    # No tools is not a pass.
+    assert not ToolCertificationReport.create([]).serves_external_driver
+    assert not ToolCertificationReport.create([]).external_driver_blockers
 
     print("self-check: all assertions passed")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("targets", nargs="*", help="contract .json files, or directories to search")
-    parser.add_argument("--self-check", action="store_true", help="verify the verdict rules and exit")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("targets", nargs="*", help=f"{REPORT_NAME} files, or directories to search")
+    parser.add_argument("--self-check", action="store_true", help="verify the rule and exit")
     args = parser.parse_args()
 
     if args.self_check:
         self_check()
         return 0
     if not args.targets:
-        parser.error("give at least one contract path, or --self-check")
+        parser.error(f"give at least one path to search for {REPORT_NAME}, or --self-check")
 
-    verdicts: list[ContractVerdict] = []
-    for path in contract_paths(args.targets):
-        try:
-            payload = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
-            print(f"skipped {path}: {exc}", file=sys.stderr)
-            continue
-        if not isinstance(payload, dict):
-            continue
-        if "tools" not in unwrap(payload):
-            continue
-        verdicts.append(audit_contract(payload, path))
+    verdicts: list[Verdict] = []
+    for path in report_paths(args.targets):
+        loaded = load(path)
+        if loaded is not None and loaded.tools:
+            verdicts.append(Verdict(label=label_for(path), path=path, report=loaded))
 
     if not verdicts:
-        print("no agent contracts found in the given paths", file=sys.stderr)
+        print(f"no {REPORT_NAME} with tools found in the given paths", file=sys.stderr)
         return 2
 
-    report(verdicts)
-    return 0 if all(v.qualifies for v in verdicts) else 1
+    latest = latest_by_label(verdicts)
+    report(latest)
+    return 0 if all(v.serviceable for v in latest.values()) else 1
 
 
 if __name__ == "__main__":
