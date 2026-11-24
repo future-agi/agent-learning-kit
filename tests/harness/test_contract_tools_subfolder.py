@@ -1048,7 +1048,7 @@ def test_a_refusal_during_the_check_wins_though_its_failure_file_is_not_written(
     from fi.alk.harness import agent_type_check
 
     # The reading's verdict, as SecondLook asks for it.
-    monkeypatch.setattr(agent_type_check, "decide", lambda claimed, *args, **kwargs: "refuse" if claimed == "browser" else "keep")
+    monkeypatch.setattr(agent_type_check, "decide", lambda claimed, *args, **kwargs: "refuse" if claimed == "computer_use" else "keep")
     monkeypatch.setattr(tools, "write_failure_file", unwritable)
 
     async def both():
@@ -1056,7 +1056,7 @@ def test_a_refusal_during_the_check_wins_though_its_failure_file_is_not_written(
         # The refusal comes once the check is under way, so only the check after it can see it.
         assert await asyncio.to_thread(checking.wait, 10)
         with pytest.raises(OSError):
-            await submit({**_plain("refusing"), "modality": "browser"})
+            await submit({**_plain("refusing"), "modality": "computer_use"})
         return await saving
 
     saving = asyncio.run(both())
@@ -2477,7 +2477,7 @@ def test_a_refusal_during_the_childs_check_wins_though_its_failure_file_is_not_w
     monkeypatch.setattr(
         agent_type_check,
         "decide",
-        lambda claimed, *args, **kwargs: "refuse" if claimed == "browser" else "keep",
+        lambda claimed, *args, **kwargs: "refuse" if claimed == "computer_use" else "keep",
     )
     monkeypatch.setattr(tools, "write_failure_file", unwritable)
 
@@ -2486,7 +2486,7 @@ def test_a_refusal_during_the_childs_check_wins_though_its_failure_file_is_not_w
         # The refusal comes once the check is under way in the child.
         await _until(repo / ".tool_evidence-running", 1.5)
         with pytest.raises(OSError):
-            await submit({**_plain("refusing"), "modality": "browser"})
+            await submit({**_plain("refusing"), "modality": "computer_use"})
         (repo / ".tool_evidence-go").write_text("")
         return await saving
 

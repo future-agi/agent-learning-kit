@@ -151,8 +151,8 @@ Find, in roughly this order:
    lines are recorded as unconfirmed).
 
 7. **The modality.** How this agent is run: a voice session, a text conversation, or work it
-   carries out on websites or a computer. This decides how it is later run, so getting it wrong
-   reroutes every test.
+   carries out in a browser, through a screen or by crawling. This decides how it is later run,
+   so getting it wrong reroutes every test.
    **Decide it from the source and always record it.** A run is unattended, so there is nobody to
    ask, and a modality left unsaid is read as chat: a voice agent then never places a call and the
    whole run tests nothing. Read it off what the agent depends on:
@@ -161,12 +161,21 @@ Find, in roughly this order:
      name, an STT or TTS provider, an audio session it enters on connect.
    - **chat** if a person reaches it as text: an HTTP endpoint taking messages, a completions-shaped
      API, a socket carrying turns.
-   - **browser** if a person uses it to carry out work on websites or a computer rather than for
-     a conversation: driving a browser, operating a computer or crawling sites is its main job.
-     Ask: does a person come to this agent for a conversation, or to have it carry out that work?
-     An agent that looks things up on the web to answer a person (research, comparison, support)
-     is chat, or voice if it takes calls, even if it can't work without that tool. So is one with a
-     web page in front of it. A coding agent is chat.
+   - **browser** if a person uses it to carry out work rather than for a conversation, and it does
+     that work by driving a web browser with a browser library (Playwright, Selenium,
+     Puppeteer, browser-use and the like). It is run only in an environment that gives it a
+     browser and a list of sites. It takes its task in words and answers in words, so it is run as
+     a chat agent is: record how it is reached (its endpoint, its runtime) exactly as for chat.
+   - **computer_use** if it carries out that work through a screen instead: it reads pixels and
+     moves a mouse and keyboard, through a computer-use tool or a desktop library. This stops the
+     build as not supported.
+   - **crawler** if it fetches pages by rule with no model choosing each step (Scrapy, Crawlee,
+     Firecrawl and the like). This stops the build as not supported.
+
+   Ask: does a person come to this agent for a conversation, or to have it carry out that work? An
+   agent that looks things up on the web to answer a person (research, comparison, support) is
+   chat, or voice if it takes calls, even if it can't work without that tool. So is one with a
+   web page in front of it. A coding agent is chat.
 
    When an agent genuinely ships more than one runtime, take the one its entrypoint starts, and say
    in `notes` which others exist and that you chose by entrypoint. Never leave the field out.
