@@ -578,6 +578,47 @@ def test_hosted_authoring_inspects_imported_target_once_then_reuses_safe_profile
     assert "retell-secret" not in cache.read_text(encoding="utf-8")
 
 
+def test_a_cached_provider_profile_still_removes_the_secrets_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import authoring_entrypoint
+
+    job = HarnessJob(
+        job_id="job-provider-import",
+        run_id="run-provider-import",
+        execution="hosted",
+        source={"kind": "archive", "archive_artifact_id": "source-id"},
+        agent={
+            "connector": "retell",
+            "mode": "provider_import",
+            "config": {"agent_id": "source-agent"},
+            "secret_refs": {
+                "RETELL_API_KEY": {
+                    "manager": "platform-vault",
+                    "key": "secret-id",
+                    "purpose": "target_provider",
+                }
+            },
+        },
+        scenario_count=1,
+        runtime={"isolation": "dedicated_vm"},
+    )
+    secrets = tmp_path / "target-secrets.json"
+    secrets.write_text('{"RETELL_API_KEY":"retell-secret"}', encoding="utf-8")
+    cache = tmp_path / "provider-profile.json"
+    cache.write_text('{"provider": "retell", "general_prompt": "Cached."}', encoding="utf-8")
+
+    def inspect(provider, **kwargs):
+        raise AssertionError("a cached profile is never fetched again")
+
+    monkeypatch.setattr(authoring_entrypoint, "inspect_provider_target", inspect)
+
+    profile = authoring_entrypoint._load_provider_import_profile(job, secrets, cache)
+
+    assert profile == {"provider": "retell", "general_prompt": "Cached."}
+    assert not secrets.exists()
+
+
 @pytest.mark.parametrize(
     ("connector", "secret_name", "config", "expected_provider", "expected_modality"),
     [

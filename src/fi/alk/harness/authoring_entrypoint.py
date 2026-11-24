@@ -511,6 +511,8 @@ def _load_provider_import_profile(
     if source is None:
         return None
     if profile_cache_path is not None and profile_cache_path.is_file():
+        if secrets_path is not None:
+            secrets_path.unlink(missing_ok=True)
         cached = json.loads(profile_cache_path.read_text(encoding="utf-8"))
         if not isinstance(cached, dict):
             raise RuntimeError("provider_import_authoring_profile_invalid")
@@ -720,6 +722,7 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         return _certify_only(args)
     if args.read_agent_only:
         import logging
+        from dataclasses import replace
 
         from .agent_reading import READ_AGENT
         from .reading_entry import run_reading_mode
@@ -731,7 +734,10 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         if not logging.getLogger().handlers:
             reading_log.addHandler(logging.StreamHandler())
         return run_reading_mode(
-            READ_AGENT,
+            replace(
+                READ_AGENT,
+                work=partial(READ_AGENT.work, profile_cache=args.provider_profile_cache),
+            ),
             job_path=args.job,
             source=args.source.resolve(),
             output=args.output.resolve(),

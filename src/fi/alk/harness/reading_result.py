@@ -124,13 +124,15 @@ def classify(
     output: Path,
     stage: _ReadingStage,
     error: BaseException | None,
+    *,
+    profile: dict[str, Any] | None = None,
 ) -> int:
     saved = saved_file(output)
     if saved == FAILURE_FILE:
         return EXIT_REFUSED
     # Before any error: the gate accepted the reading, and refusing it now would pay for it twice.
     if saved == CONTRACT_FILE:
-        return document(job, source, output)
+        return document(job, source, output, profile=profile)
     forbidden = stage.forbidden_models()
     if forbidden:
         # A retry would bill the same model again.
@@ -214,7 +216,13 @@ def _write_whole(path: Path, body: bytes) -> None:
         raise
 
 
-def document(job: HarnessJob, source: Path, output: Path) -> int:
+def document(
+    job: HarnessJob,
+    source: Path,
+    output: Path,
+    *,
+    profile: dict[str, Any] | None = None,
+) -> int:
     """The agent's description from the saved contract, as a build makes it."""
     # One catch over every step: a saved contract is paid for, so nothing after it is retryable.
     try:
@@ -230,7 +238,7 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
 
             # What the reading was made from, so a build can tell whether it may reuse it. Made
             # from these bytes and written only over them, so a later save is never lost.
-            recorded = with_record(job, raw)
+            recorded = with_record(job, raw, profile)
             if recorded is not None:
                 replace_if_unchanged(output / CONTRACT_FILE, raw, recorded)
         except Exception:
