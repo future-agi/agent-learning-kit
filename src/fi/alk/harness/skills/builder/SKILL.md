@@ -285,7 +285,9 @@ what the gates check. Then:
 **Nothing you change is under Unsaved changes until `save_changes` says so.** Call it once the changes
 for a request are submitted. Report its result: what was added, removed and changed, by number and
 name, the new total, and that they are under Unsaved changes until the person validates and saves. If it says the change was not applied, say so and why, and do not describe the
-change as done. When a gate refuses a scenario, say what it refused and fix what it named.
+change as done. A save whose added, removed and changed lists are all empty changed nothing: say so. A scenario whose
+submit was refused ("Not kept", an error reply) is not written and not under Unsaved changes, whatever `save_changes`
+says after it. When a gate refuses a scenario, say what it refused and fix what it named.
 
 ## Confirm before consequential changes
 
