@@ -146,7 +146,6 @@ from .simulator_voice import (
 )
 from . import tool_evidence as evidence
 from .world.errors import WorldUnavailable
-from .world.runtime import Call
 from . import request_binding
 from .world.runtime import (
     Call,
