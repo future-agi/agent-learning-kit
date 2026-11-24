@@ -4,9 +4,12 @@ trajectories; the world's MCP endpoint serves its own tool names; a `both` goal 
 from __future__ import annotations
 
 import hashlib
+import http.server
 import json
 import os
+import threading
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -24,12 +27,17 @@ from fi.alk.harness.adaptation.profile import (
     select_mode,
 )
 from fi.alk.harness.adaptation.workbench import (
+    Workbench,
     parse_binding_draft,
     profile_from_document,
 )
 from fi.alk.harness.binding_proof import BindingProofV1, proof_digest, unscored
 from fi.alk.harness.binding_trajectories import derive_trajectories
-from fi.alk.harness.bindings import agent_call_problems, run_bound_call
+from fi.alk.harness.bindings import (
+    agent_call_problems,
+    operation_problems,
+    run_bound_call,
+)
 from fi.alk.harness.catalogue import Catalogue, SubGoal
 from fi.alk.harness.releases import (
     AgentBindingV1,
@@ -37,6 +45,7 @@ from fi.alk.harness.releases import (
     DigestRef,
     ReleaseError,
     ToolDefinition,
+    check_tool_routed,
 )
 from fi.alk.harness.run.grade import _claims
 from fi.alk.harness.scenario import Scenario, Step
@@ -243,6 +252,151 @@ def test_a_declaration_that_is_not_one_is_refused(body, code):
     with pytest.raises(AdaptationFailure) as caught:
         profile_from_file(body)
     assert caught.value.code == code
+
+
+# Parameters no call can be checked against, as a customer may write them.
+UNUSABLE = {
+    "unknown type": {"properties": {"x": {"type": "strng"}}},
+    "reference to nothing": {"properties": {"x": {"$ref": "#/$defs/x"}}},
+    "reference outside": {"properties": {"x": {"$ref": "https://example.com/x.json"}}},
+    "reference to a file": {"properties": {"x": {"$ref": "file:///etc/passwd"}}},
+    "bad pattern": {"properties": {"x": {"type": "string", "pattern": "["}}},
+    "listed properties": {"properties": ["x"]},
+    "required by a name": {"properties": {"x": {}}, "required": "x"},
+}
+
+
+@pytest.mark.parametrize("name", UNUSABLE)
+def test_a_declared_tool_whose_schema_cannot_be_used_is_refused(name):
+    tool = {"name": "look_up", "parameters": {"type": "object", **UNUSABLE[name]}}
+    with pytest.raises(AdaptationFailure) as caught:
+        profile_from_file(_declared(tool))
+    assert caught.value.code == "adaptation_profile_invalid"
+    assert "JSON Schema" in str(caught.value)
+    config = {k: v for k, v in _declared(tool).items() if k != "provider"}
+    with pytest.raises(AdaptationFailure) as caught:
+        profile_from_job(_job(config), credentials={})
+    assert caught.value.code == "adaptation_job_invalid"
+
+
+def test_a_declared_tool_may_refer_to_its_own_definitions():
+    tool = _tool("look_up", {"x": {"$ref": "#/$defs/x"}}, [])
+    tool["parameters"]["$defs"] = {"x": {"type": "string"}}
+    assert profile_from_file(_declared(tool)).agent_tools[0]["name"] == "look_up"
+
+
+@pytest.mark.parametrize("name", UNUSABLE)
+def test_a_provider_tool_whose_schema_cannot_be_used_is_one_to_mark_unsupported(name):
+    """Nobody declared it to us, so it is not ours to refuse: the agent is adapted without it."""
+    tool = {
+        "name": "escalate_to_staff",
+        "description": "",
+        "parameters": {"type": "object", **UNUSABLE[name]},
+    }
+    target = {"tools": [{"type": "function", "function": tool}]}
+    profile = profile_from_file(
+        {"provider": "vapi", "source_target_id": "assistant", "model": target}
+    )
+    assert [one["name"] for one in profile.agent_tools] == ["escalate_to_staff"]
+    assert select_mode(profile, [ESCALATE]) is BindingMode.TOOL_ROUTED
+    assert identity_mapping(profile, [ESCALATE]) is None
+    step = {"id": "call", "tool": "escalate_to_staff", "arguments": {}}
+    mapped = _binding(
+        {"agent_tool": "escalate_to_staff", "steps": [step]}, agent_tools=[tool]
+    )
+    with pytest.raises(ReleaseError) as caught:
+        check_tool_routed(mapped, [ESCALATE])
+    assert "mark the tool unsupported" in caught.value.detail
+    # A binding sealed before that was checked refuses the call rather than breaking on it.
+    outcome = run_bound_call(
+        mapped,
+        "escalate_to_staff",
+        {"x": "a"},
+        run_operation=lambda *_: {},
+        environment_tools=[ESCALATE],
+    )
+    assert outcome.status in {"invalid", "ok"}
+    check_tool_routed(
+        _binding(
+            {"agent_tool": "escalate_to_staff", "unsupported": "No usable schema."},
+            agent_tools=[tool],
+        ),
+        [ESCALATE],
+    )
+
+
+def test_a_schemas_references_are_never_fetched(tmp_path: Path):
+    """Neither over http nor from a file: what a customer's schema names is not ours to open."""
+    asked: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            asked.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"type": "string"}')
+
+        def log_message(self, *_: object) -> None:
+            pass
+
+    secret = tmp_path / "secret.json"
+    secret.write_text('{"const": "FILECONTENT"}', encoding="utf-8")
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        for reference in (
+            f"http://127.0.0.1:{server.server_port}/internal",
+            secret.as_uri(),
+        ):
+            tool = _tool("escalate_to_staff", {"reason": {"$ref": reference}}, [])
+            binding = _binding(
+                {"agent_tool": "escalate_to_staff", "unsupported": "x"},
+                agent_tools=[tool],
+            )
+            for problems in (
+                agent_call_problems(
+                    binding.agent_tools, "escalate_to_staff", {"reason": 1}
+                ),
+                operation_problems(
+                    ESCALATE.model_copy(update={"parameters": tool["parameters"]}),
+                    {"reason": 1},
+                ),
+            ):
+                assert len(problems) == 1 and "cannot be applied" in problems[0]
+                assert "FILECONTENT" not in problems[0]
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert asked == []
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_an_identity_mapping_that_was_refused_is_not_one_the_brief_speaks_of(
+    tmp_path, monkeypatch, accepted
+):
+    def load(self: Workbench) -> None:
+        self.environment_tools = [BOOK, SEND]
+        self.base_suite = SimpleNamespace(scenarios=[])
+        self.target_root = tmp_path
+
+    submitted: list[dict] = []
+    monkeypatch.setattr(Workbench, "_load_releases", load)
+    monkeypatch.setattr(
+        Workbench,
+        "submit_binding",
+        lambda _self, body: submitted.append(body) or (accepted, "why"),
+    )
+    tool = _tool("book_appointment", dict(BOOK.parameters["properties"]), [])
+    tool["parameters"]["required"] = list(BOOK.parameters["required"])
+    workbench = Workbench(
+        environments=[tmp_path],
+        suite_root=tmp_path,
+        output=tmp_path / "out",
+        postgres_dsn="",
+        profile=profile_from_file(_declared(tool)),
+    )
+    assert len(submitted) == 1
+    assert (workbench.identity is not None) is accepted
 
 
 # --- derived trajectories ---------------------------------------------------------------------

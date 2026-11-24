@@ -167,6 +167,90 @@ def test_every_provider_header_value_is_withheld_whatever_its_name() -> None:
     }
 
 
+def test_every_provider_value_that_may_be_a_credential_is_withheld() -> None:
+    """Query parameters are withheld as headers are, a secret-named key however it is spelled, and
+    a URL's userinfo inside longer text; the names and the rest of the text are kept."""
+    tool = {
+        "name": "record",
+        "query_params": {"k": "qp-1", "tenant": "qp-2"},
+        "queryParams": {"sig": "qp-3"},
+        "query": {"sig": "qp-4"},
+    }
+    safe = provider_import._safe_profile_value({"general_tools": [tool]})
+    assert safe == {
+        "general_tools": [
+            {
+                "name": "record",
+                "query_params": {"k": "[redacted]", "tenant": "[redacted]"},
+                "queryParams": {"sig": "[redacted]"},
+                "query": {"sig": "[redacted]"},
+            }
+        ]
+    }
+    named = (
+        "password userPassword passwd DB-PASSWD auth basicauth HTTPAuth X-Client-Auth OAuth2 authKey private_key "
+        "privateKey PRIVATE-KEY x-api-key X_Api_Key apiKey access-key accessToken cookie pwd pass"
+    ).split()
+    safe = provider_import._safe_profile_value(
+        {name: {"value": "hidden"} for name in named}
+    )
+    assert safe == {name: "[redacted]" for name in named}
+    kept = {"author": "Ada", "passenger": "clinic", "voice_id": "21m00Tcm4TlvDq8ikWAM"}
+    assert provider_import._safe_profile_value(kept) == kept
+
+    prompt = (
+        "https://clinic.test/hours lists the hours. Post to https://bot:pw-1@clinic.test/hook, "
+        "then read postgres://svc:pw@2@db.test/app.\nAsk for the caller's password: never say it."
+    )
+    safe = provider_import._safe_profile_value({"general_prompt": prompt})
+    assert safe["general_prompt"] == (
+        "https://clinic.test/hours lists the hours. Post to https://clinic.test/hook, "
+        "then read postgres://db.test/app.\nAsk for the caller's password: never say it."
+    )
+
+
+def test_a_tool_s_schema_is_kept_whatever_its_parameters_are_called() -> None:
+    parameters = {
+        "type": "object",
+        "required": ["password", "query"],
+        "properties": {
+            "password": {"type": "string", "description": "The caller's password."},
+            "query": {"type": "string"},
+            "headers": {"type": "object", "additionalProperties": True},
+            "x-api-key": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "auth": {
+                "type": "object",
+                "properties": {"card_token": {"type": "string", "enum": ["a", "b"]}},
+            },
+        },
+    }
+    profile = {"general_tools": [{"name": "sign_in", "parameters": parameters}]}
+    assert provider_import._safe_profile_value(profile) == profile
+
+    # The value a schema fixes for such a parameter is withheld, and so is anything not a schema.
+    safe = provider_import._safe_profile_value(
+        {
+            "type": "object",
+            "properties": {
+                "password": {"type": "string", "default": "pw-1"},
+                "api_key": {"type": "string", "const": "key-1"},
+                "city": {"type": "string", "default": "Leeds"},
+                "auth": {"user": "svc", "pass": "pw-2"},
+                "token": "pw-3",
+            },
+        }
+    )
+    assert safe["properties"] == {
+        "password": {"type": "string", "default": "[redacted]"},
+        "api_key": {"type": "string", "const": "[redacted]"},
+        "city": {"type": "string", "default": "Leeds"},
+        "auth": "[redacted]",
+        "token": "[redacted]",
+    }
+    # A saved profile is redacted again, and its digest must not move.
+    assert provider_import._safe_profile_value(safe) == safe
+
+
 def test_retell_import_profile_includes_prompt_and_exact_tool_schema() -> None:
     def request(method, url, api_key, body):
         assert method == "GET"

@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
-from urllib.parse import urlsplit, urlunsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import model_validator
 
+from ..providers.agent import _redact_text
 from .request_binding import SECRET_HEADER
 from .provider_lifecycle import (
     ProviderCleanupReceipt,
@@ -85,6 +86,46 @@ class ProviderImportSpec(BaseModel):
 JsonRequest = Callable[[str, str, str, Mapping[str, Any] | None], dict[str, Any]]
 
 
+# Compared with the key's separators and case removed, so `x-api-key` is `apikey`.
+_SECRET_MARKERS = (
+    "secret",
+    "token",
+    "apikey",
+    "accesskey",
+    "privatekey",
+    "credential",
+    "authorization",
+    "authentication",
+    "password",
+    "passwd",
+    "passphrase",
+    "cookie",
+)
+# Too short to look for anywhere in a key, so only where a word ends: `auth` is not `author`.
+_SECRET_ENDINGS = ("auth", "pass", "pwd")
+# Maps whose names say nothing about whether a value is a credential (`X-Client-Auth`,
+# `X-Tenant`): every value is withheld, and only the names are kept.
+_WITHHELD_MAPS = ("headers", "queryparams", "queryparameters")
+# JSON Schema: the maps that name sub-schemas, what makes a value a schema, and what fixes one.
+_SCHEMA_MAPS = frozenset({"properties", "patternProperties", "$defs", "definitions"})
+_SCHEMA_KEYWORDS = frozenset(
+    {"type", "properties", "items", "enum", "const", "anyOf", "oneOf", "allOf", "$ref"}
+)
+_SCHEMA_VALUES = frozenset({"const", "default", "example", "examples", "value"})
+
+
+def _compact_key(key: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", key.lower())
+
+
+def _secret_key(key: str) -> bool:
+    compact = _compact_key(key)
+    words = re.split(r"[^A-Za-z]+|(?<=[a-z])(?=[A-Z])", key)
+    return any(marker in compact for marker in _SECRET_MARKERS) or any(
+        word.lower().endswith(_SECRET_ENDINGS) for word in words
+    )
+
+
 def _safe_profile_value(value: Any, key: str = "") -> Any:
     """Return provider configuration that is safe to give the authoring model.
 
@@ -92,39 +133,41 @@ def _safe_profile_value(value: Any, key: str = "") -> Any:
     authoring, but provider responses may also contain credentials or signed callback URLs. Keep
     behavioral configuration while removing secrets and URL userinfo/query fragments.
     """
-    lowered = key.lower()
-    if any(
-        marker in lowered
-        for marker in (
-            "secret",
-            "token",
-            "api_key",
-            "apikey",
-            "credential",
-            "authorization",
-        )
-    ):
+    if _secret_key(key):
         return "[redacted]"
-    if lowered.endswith("headers"):
-        # A header's name says nothing about whether its value is a credential (`X-Client-Auth`,
-        # `X-Tenant`): every value is withheld, and only the names are kept.
+    compact = _compact_key(key)
+    if compact.endswith(_WITHHELD_MAPS) or compact == "query":
         if isinstance(value, Mapping):
             return {str(name): "[redacted]" for name in value}
         return "[redacted]"
     if isinstance(value, Mapping):
         return {
-            str(item_key): _safe_profile_value(item, str(item_key))
+            str(item_key): _safe_schemas(item)
+            if item_key in _SCHEMA_MAPS and isinstance(item, Mapping)
+            else _safe_profile_value(item, str(item_key))
             for item_key, item in value.items()
         }
     if isinstance(value, list):
         return [_safe_profile_value(item, key) for item in value]
     if isinstance(value, str) and "://" in value:
-        parsed = urlsplit(value)
-        if parsed.scheme and parsed.netloc:
-            hostname = parsed.hostname or ""
-            port = f":{parsed.port}" if parsed.port else ""
-            return urlunsplit((parsed.scheme, hostname + port, parsed.path, "", ""))
+        return _redact_text(value, [])
     return value
+
+
+def _safe_schemas(schemas: Mapping[str, Any]) -> dict[str, Any]:
+    """Schemas by the argument each one describes: such a name is never the key of a stored value,
+    so its schema is kept whatever the name, without any value it fixes for a secret."""
+    safe: dict[str, Any] = {}
+    for name, schema in schemas.items():
+        if not isinstance(schema, Mapping) or not _SCHEMA_KEYWORDS & schema.keys():
+            safe[str(name)] = _safe_profile_value(schema, str(name))
+            continue
+        safe[str(name)] = _safe_profile_value(schema)
+        if _secret_key(str(name)):
+            safe[str(name)].update(
+                dict.fromkeys(_SCHEMA_VALUES & schema.keys(), "[redacted]")
+            )
+    return safe
 
 
 def inspect_provider_target(

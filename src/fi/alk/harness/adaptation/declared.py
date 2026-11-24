@@ -20,6 +20,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..json_schemas import schema_problems
 from ..provider_import import ToolAdmission, provider_profile_digest
 
 DECLARED = "declared"  # the profile's `provider`
@@ -40,6 +41,10 @@ class DeclaredTool(BaseModel):
     def _object_schema(cls, value: dict[str, Any]) -> dict[str, Any]:
         if value.get("type") != "object":
             raise ValueError("parameters must be a JSON Schema object")
+        if problems := schema_problems(value):
+            raise ValueError(
+                f"parameters must be a JSON Schema of its own: {'; '.join(problems)}"
+            )
         return value
 
 
