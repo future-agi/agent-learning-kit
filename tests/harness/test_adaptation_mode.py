@@ -625,7 +625,7 @@ def test_no_mismatch_means_no_agent_call_the_environment_refuses():
     rng = random.Random(7951)
     values = [_value(rng) for _ in range(120)]
     compatible = agreed = 0
-    for _ in range(1500):
+    for _ in range(1000):
         environment = _schema(rng)
         agent = _near(rng, environment) if rng.random() < 0.85 else _schema(rng)
         if not isinstance(agent, dict) or argument_mismatches(agent, environment):

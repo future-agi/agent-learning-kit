@@ -9,7 +9,11 @@ from types import SimpleNamespace
 import pytest
 
 from fi.alk.harness import call_runner as cr
-from fi.alk.harness.bindings import MappedToolBinding, UnsupportedToolBinding
+from fi.alk.harness.bindings import (
+    AgentTool,
+    MappedToolBinding,
+    UnsupportedToolBinding,
+)
 from fi.alk.harness.bundle_author_v2 import WORLD_SEED_PREFIX
 from fi.alk.harness.releases import ToolDefinition
 from fi.alk.harness.request_binding import REQUEST_BINDING_SQL
@@ -24,6 +28,10 @@ _CHANGE = (
     "def handle(args, db):\n"
     "    if args['id'] == 'locked':\n"
     "        raise ToolError('the booking is locked')\n"
+    "    if args['id'] == 'kept':\n"
+    "        refusal = ToolError('the line dropped')\n"
+    "        refusal.keep_writes = True\n"
+    "        raise refusal\n"
     "    if args['id'] == 'broken':\n"
     "        raise RuntimeError('no such shelf')\n"
     "    return {'changed': args['id']}\n"
@@ -49,6 +57,15 @@ def _step(tool: str) -> dict:
 # other.
 _BINDING = SimpleNamespace(
     mode="tool_routed",
+    agent_tools=[
+        AgentTool(
+            name=name,
+            description=name,
+            parameters={"type": "object", "properties": {"ref": {"type": "string"}}},
+            admission="routed",
+        )
+        for name in ("reschedule", "find_booking", "fax_receipt")
+    ],
     tools=[
         MappedToolBinding.model_validate(
             {
@@ -220,3 +237,11 @@ def test_a_call_is_still_traced_in_a_world_seeded_before_outcomes_were_logged(
 
     (call,) = _read(dsn)
     assert (call.name, call.ok, call.refused) == ("change_booking", False, True)
+
+
+def test_a_refusal_that_keeps_its_writes_still_reads_refused(dsn) -> None:
+    _world(dsn).call("change_booking", {"id": "kept"})
+
+    assert [row["outcome"] for row in cr._read_action_log(dsn)] == ["refused"]
+    (call,) = _read(dsn)
+    assert (call.ok, call.refused) == (False, True)
