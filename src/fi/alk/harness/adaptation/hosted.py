@@ -60,6 +60,7 @@ def _values(path: Path) -> dict[str, str]:
     except (OSError, ValueError):
         return {}
 
+
 def _target_credentials() -> dict[str, str]:
     """The target's provider key, read once: an adaptation runs no customer process, so nothing
     else in the sandbox needs either file afterwards."""
@@ -161,7 +162,9 @@ def run_hosted(args: argparse.Namespace) -> int:
                 raise AdaptationFailure("postgres_unavailable", str(exc)) from exc
         credentials_path = _postgres_credentials(output.parent)
         credentials_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        descriptor = os.open(credentials_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        descriptor = os.open(
+            credentials_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+        )
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump({"postgres_dsn": dsn}, stream)
         write_json(output / PROFILE, profile.document())
@@ -173,6 +176,10 @@ def run_hosted(args: argparse.Namespace) -> int:
             {
                 "environments": [str(one) for one in environments],
                 "suite": str(suite_root),
+                # The pairing the person reviewed, which the builder's bindings are held to.
+                "pairing": ((job.metadata or {}).get("adaptation") or {}).get(
+                    "pairing"
+                ),
             },
         )
         return _await_result(output)
@@ -245,4 +252,5 @@ async def load_workbench(workspace: Path) -> Workbench:
         ),
         profile=profile,
         finished_marker=workspace / FINISHED_MARKER,
+        pairing=inputs.get("pairing"),
     )

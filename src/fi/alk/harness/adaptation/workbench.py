@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from ..binding_trajectories import derive_trajectories
-from ..bindings import agent_call_problems
+from ..bindings import UnsupportedToolBinding, agent_call_problems
 from ..catalogue import load_catalogue
 from ..folder import read_folder
 from ..releases import (
@@ -65,6 +65,76 @@ def write_json(path: Path, value: Any) -> None:
         json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+
+
+def frozen_pairing(
+    pairing: Any, environment_tools: Sequence[Any], agent_tools: Sequence[str]
+) -> dict[str, str | None]:
+    """The pairing the person reviewed (environment tool -> agent tool, or null), complete: every
+    environment tool is in it, one it does not name paired with nothing. A name that is not an
+    environment tool, or a value that is not one of the agent's admitted tools, is refused, so
+    what is bound is the design the person saw and nothing else."""
+    if not isinstance(pairing, Mapping):
+        raise AdaptationFailure(
+            "adaptation_pairing_invalid",
+            "the pairing must be an object of environment tool -> agent tool or null",
+        )
+    environment = [tool.name for tool in environment_tools]
+    admitted = set(agent_tools)
+    problems = [
+        f"{name!r} is not an environment tool"
+        for name in pairing
+        if name not in environment
+    ]
+    problems += [
+        f"{name}: {value!r} is not one of the agent's admitted tools"
+        for name, value in pairing.items()
+        if value is not None and value not in admitted
+    ]
+    if problems:
+        raise AdaptationFailure("adaptation_pairing_invalid", "; ".join(problems))
+    return {name: pairing.get(name) for name in environment}
+
+
+def pairing_problems(
+    binding: Any, pairing: Mapping[str, str | None], environment_tools: Sequence[Any]
+) -> list[str]:
+    """Why `binding` is not the reviewed `pairing`; empty when it is. An agent tool paired with
+    an environment tool reaches it, changes state through no environment tool it was not paired
+    with (a step that only reads may look a value up), and an agent tool paired with none is
+    unsupported."""
+    wanted: dict[str, set[str]] = {}
+    for environment_tool, agent_tool in pairing.items():
+        if agent_tool:
+            wanted.setdefault(agent_tool, set()).add(environment_tool)
+    changing = {tool.name for tool in environment_tools if tool.mutates_state}
+    problems: list[str] = []
+    for entry in binding.tools:
+        targets = wanted.get(entry.agent_tool, set())
+        if isinstance(entry, UnsupportedToolBinding):
+            if targets:
+                problems.append(
+                    f"{entry.agent_tool}: the reviewed pairing maps it onto "
+                    f"{', '.join(sorted(targets))}, the binding marks it unsupported"
+                )
+            continue
+        if not targets:
+            problems.append(
+                f"{entry.agent_tool}: the reviewed pairing gives it no environment tool, so "
+                "it must be unsupported"
+            )
+            continue
+        reached = {step.tool for step in entry.steps}
+        if missing := sorted(targets - reached):
+            problems.append(
+                f"{entry.agent_tool}: paired with {', '.join(missing)}, which no step calls"
+            )
+        if extra := sorted((reached & changing) - targets):
+            problems.append(
+                f"{entry.agent_tool}: a step changes state through {', '.join(extra)}, which "
+                "the reviewed pairing does not give it"
+            )
+    return problems
 
 
 def failed_result(code: str, message: str) -> dict[str, Any]:
@@ -137,6 +207,7 @@ class Workbench:
         postgres_dsn: str,
         profile: AgentProfile,
         finished_marker: Path | None = None,
+        pairing: Mapping[str, str | None] | None = None,
     ) -> None:
         self.environments = [Path(one) for one in environments]
         self.suite_root = Path(suite_root)
@@ -148,6 +219,11 @@ class Workbench:
         self._load_releases()
         write_json(self.output / PROFILE, profile.document())
         self.mode = select_mode(profile, self.environment_tools)
+        # The pairing the person reviewed, when the platform sent one: every binding submitted
+        # is held to it in code (`submit_binding`), whoever wrote it.
+        self.pairing: dict[str, str | None] | None = None
+        if pairing is not None:
+            self.freeze_pairing(pairing)
         self.binding: Any = None
         self.draft: BindingDraft | None = None
         self.proof: dict[str, Any] | None = None
@@ -376,6 +452,15 @@ class Workbench:
 
     # --- binding, proof, conflicts --------------------------------------------------------
 
+    def freeze_pairing(self, pairing: Any) -> None:
+        """Raises `AdaptationFailure` (`adaptation_pairing_invalid`) for a pairing that names a
+        tool neither side has."""
+        self.pairing = frozen_pairing(
+            pairing,
+            self.environment_tools,
+            [str(one["name"]) for one in self.profile.agent_tools],
+        )
+
     def submit_binding(self, body: Mapping[str, Any]) -> tuple[bool, str]:
         if self.mode is not BindingMode.TOOL_ROUTED:
             return False, f"mode is {self.mode.value}: there is no binding to write"
@@ -393,8 +478,12 @@ class Workbench:
             )
         except ReleaseError as exc:
             return False, "\n".join(exc.detail.splitlines() or [exc.code])
-        # The harness writes every trajectory the binding determines; the builder's own, where it
-        # wrote one, wins.
+        if self.pairing is not None and (
+            unlike := pairing_problems(binding, self.pairing, self.environment_tools)
+        ):
+            return False, "not the reviewed pairing:\n" + "\n".join(unlike)
+        # The harness writes every trajectory the binding determines, and those stand: a
+        # written one is taken only for a scenario code could not derive.
         derived = derive_trajectories(
             binding,
             (
@@ -405,7 +494,12 @@ class Workbench:
             ),
             self.environment_tools,
         )
-        written = dict(draft.trajectories)
+        written = {
+            key: calls
+            for key, calls in draft.trajectories.items()
+            if key not in derived.trajectories
+        }
+        replaced = sorted(set(draft.trajectories) & set(derived.trajectories))
         draft.trajectories = {**derived.trajectories, **written}
         problems: list[str] = []
         keys = {entry.key for entry in self.base_suite.scenarios}
@@ -453,6 +547,12 @@ class Workbench:
         lines = [
             f"accepted as {binding.digest}: {len(derived.trajectories)} trajectories derived "
             f"from the reference solutions, {len(written)} written by you"
+            + (
+                f" ({len(replaced)} you wrote were set aside for the derived ones: "
+                f"{', '.join(replaced)})"
+                if replaced
+                else ""
+            )
             + (
                 f", {len(closed)} scenarios use a tool no entry reaches (unscorable unless "
                 f"you write a trajectory that solves them another way: {', '.join(closed)})"
@@ -506,28 +606,6 @@ class Workbench:
             and not any(v.status == "failed" for v in self.verdicts.values())
             and any(v.status == "proved" for v in self.verdicts.values())
         )
-
-    def leave_failed_unscorable(self) -> None:
-        """`hosted --auto` only, with nobody to repair the mapping: a scenario whose proof still
-        fails is left out of the agent's score with the reason, rather than blocking the seal.
-        The proof is rewritten to say so, so what is sealed and what is restored agree."""
-        from ..binding_proof import BindingProofV1
-
-        if self.proof is None:
-            return
-        scenarios = self.proof.get("scenarios") or {}
-        for key, verdict in self.verdicts.items():
-            if verdict.status == "failed" and key in scenarios:
-                scenarios[key] = {
-                    "status": "unscorable",
-                    "reason": f"the mapping failed the check: {verdict.reason}",
-                    "adversarial": {},
-                }
-        self.proof["passed"] = not any(
-            one["status"] == "failed" for one in scenarios.values()
-        )
-        self.verdicts = binding_verdicts(BindingProofV1.model_validate(self.proof))
-        self._save_state()
 
     def report_conflicts(self, items: Sequence[Any]) -> tuple[bool, str]:
         rules = {rule.id: rule for rule in self.policy.rules}

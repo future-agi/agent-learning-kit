@@ -3,8 +3,10 @@
 One model call drafts the binding, any trajectories code cannot derive, and the policy conflicts,
 from the same brief and the same mapping language the builder session gets (the `bind-agent`
 skill). Code does the rest through the workbench, exactly as `run --drafts` does: one retry on a
-refusal and one on a failing proof, then a scenario whose proof still fails is left out of the
-score with its reason. The person chose run mode, so the approval is given.
+refusal and one on a failing proof. The pairing the person reviewed is frozen first, and every
+binding the model writes is held to it in code. A scenario whose proof still fails after the
+retry fails the adaptation: only a scenario no route of which the binding reaches is unscorable,
+and the proof decides that, not this module. The person chose run mode, so the approval is given.
 """
 
 from __future__ import annotations
@@ -202,7 +204,14 @@ async def adapt(workbench: Workbench, pairing: Any = None) -> None:
             answer = {}
         workbench.report_conflicts(_quoted(workbench, answer.get("conflicts")))
         return await _finish(workbench)
-    messages = _binding_prompt(workbench, pairing)
+    if pairing is None:
+        raise AdaptationFailure(
+            "adaptation_pairing_missing",
+            "run mode binds the pairing the person reviewed, and the job carries none",
+        )
+    # Frozen and complete before the model is asked: the prompt shows what code will enforce.
+    workbench.freeze_pairing(pairing)
+    messages = _binding_prompt(workbench, workbench.pairing)
     answer = await _ask(messages)
     accepted, said = workbench.submit_binding(answer)
     if not accepted:
@@ -224,17 +233,16 @@ async def adapt(workbench: Workbench, pairing: Any = None) -> None:
                 "and answer again with the whole JSON object.",
             )
         except AdaptationFailure:
-            # The proved part still stands; what failed is left out below.
             retry = {}
         if retry and workbench.submit_binding(retry)[0]:
             answer = retry
             passed, said = await asyncio.to_thread(workbench.run_proof)
     if not passed:
-        workbench.leave_failed_unscorable()
-        if not any(one.status == "proved" for one in workbench.verdicts.values()):
-            return workbench.fail(
-                "binding_unproved", f"no scenario was proved:\n{said}"
-            )
+        # A failed proof is the mapping or a trajectory not achieving the scenario, never a
+        # scenario the agent cannot be measured on: nothing is sealed.
+        return workbench.fail(
+            "binding_unproved", f"the binding is not proved:\n{_failed(said) or said}"
+        )
     workbench.report_conflicts(_quoted(workbench, answer.get("conflicts")))
     await _finish(workbench)
 

@@ -1,5 +1,6 @@
-"""Run mode (`hosted --auto`): one model call drafts the binding, code proves and seals it, and a
-scenario whose proof still fails is left out of the score instead of blocking the seal.
+"""Run mode (`hosted --auto`): one model call drafts the binding, code holds it to the pairing
+the person reviewed, proves it and seals it. A scenario whose proof still fails after the retry
+fails the adaptation; it is never relabelled unscorable.
 
 The flow, the workbench's run-mode gate and the hosted control process run offline with the model
 mocked. The end-to-end cases bind CardGuard to Banking on PostgreSQL, like
@@ -29,9 +30,15 @@ from fi.alk.harness import spend
 from fi.alk.harness.adaptation import auto, hosted
 from fi.alk.harness.adaptation.profile import profile_from_file
 from fi.alk.harness.adaptation.proofs import BindingVerdict
-from fi.alk.harness.adaptation.workbench import RESULT, STATE, Workbench
+from fi.alk.harness.adaptation.errors import AdaptationFailure
+from fi.alk.harness.adaptation.workbench import (
+    RESULT,
+    Workbench,
+    frozen_pairing,
+    pairing_problems,
+)
 from fi.alk.harness.bindings import MappedToolBinding, UnsupportedToolBinding
-from fi.alk.harness.releases import BindingMode
+from fi.alk.harness.releases import BindingMode, ToolDefinition
 
 SHA = "sha256:" + "ab" * 32
 RELEASES = os.environ.get("ALK_ADAPTATION_RELEASES", "")
@@ -78,6 +85,7 @@ class Bench:
         self.failed: tuple[str, str] | None = None
         self.answer = ""
         self.sealed = False
+        self.pairing: Any = None
 
     def brief(self) -> str:
         return "THE BRIEF"
@@ -92,15 +100,8 @@ class Bench:
         lines = [f"{key}: {one.status}: {one.reason}" for key, one in verdicts.items()]
         return passed, ("Proved. " if passed else "Not proved. ") + "\n".join(lines)
 
-    def leave_failed_unscorable(self):
-        self.verdicts = {
-            key: BindingVerdict(
-                "unscorable", f"the mapping failed the check: {one.reason}"
-            )
-            if one.status == "failed"
-            else one
-            for key, one in self.verdicts.items()
-        }
+    def freeze_pairing(self, pairing):
+        self.pairing = dict(pairing)
 
     def report_conflicts(self, items):
         self.conflicts = items
@@ -121,6 +122,7 @@ class Bench:
 PROVED = BindingVerdict("proved", "")
 FAILED = BindingVerdict("failed", "grace_booked did not hold")
 DRAFT = {"binding": {"tools": []}, "conflicts": []}
+PAIRING = {"lock_card": "block_card", "send_sms": None}
 
 
 def test_a_refused_binding_is_retried_once_with_the_refusal(monkeypatch):
@@ -129,7 +131,7 @@ def test_a_refused_binding_is_retried_once_with_the_refusal(monkeypatch):
         submits=[(False, "tools: block_card is missing"), (True, "accepted")],
         proofs=[(True, {"S01": PROVED})],
     )
-    asyncio.run(auto.adapt(bench, {"lock_card": "block_card", "send_sms": None}))
+    asyncio.run(auto.adapt(bench, PAIRING))
     assert bench.sealed and bench.answer == "yes" and bench.failed is None
     first, retry = seen
     assert '"lock_card": "block_card"' in first[1]["content"]
@@ -142,31 +144,52 @@ def test_a_refused_binding_is_retried_once_with_the_refusal(monkeypatch):
 def test_a_binding_refused_twice_fails_as_invalid(monkeypatch):
     _model(monkeypatch, DRAFT, DRAFT)
     bench = Bench(submits=[(False, "bad"), (False, "still bad")])
-    asyncio.run(auto.adapt(bench))
+    asyncio.run(auto.adapt(bench, PAIRING))
     assert bench.failed == ("binding_invalid", "still bad") and not bench.sealed
 
 
-def test_a_scenario_still_failing_after_the_retry_is_left_unscorable(monkeypatch):
+def test_a_scenario_still_failing_after_the_retry_fails_the_adaptation(monkeypatch):
+    """One scenario proved and one failed is not a smaller score: the mapping did not achieve
+    the scenario, so nothing is sealed and no verdict is rewritten."""
     seen = _model(monkeypatch, DRAFT, DRAFT)
     failing = {"S01": PROVED, "S02": FAILED}
     bench = Bench(
         submits=[(True, "accepted"), (True, "accepted")],
         proofs=[(False, failing), (False, failing)],
     )
-    asyncio.run(auto.adapt(bench))
+    asyncio.run(auto.adapt(bench, PAIRING))
     assert "S02: failed: grace_booked did not hold" in seen[1][-1]["content"]
     assert "S01" not in seen[1][-1]["content"]
-    assert bench.sealed and bench.failed is None
-    assert bench.verdicts["S02"].status == "unscorable"
+    assert not bench.sealed
+    code, message = bench.failed
+    assert code == "binding_unproved" and "S02: failed" in message
+    assert bench.verdicts["S02"].status == "failed"
 
 
-def test_nothing_proved_fails_as_unproved(monkeypatch):
+def test_a_failed_proof_fails_even_when_the_retry_cannot_be_asked(monkeypatch):
     _model(monkeypatch, DRAFT, RuntimeError("gateway down"))
     bench = Bench(
-        submits=[(True, "accepted")], proofs=[(False, {"S01": FAILED, "S02": FAILED})]
+        submits=[(True, "accepted")], proofs=[(False, {"S01": PROVED, "S02": FAILED})]
     )
-    asyncio.run(auto.adapt(bench))
+    asyncio.run(auto.adapt(bench, PAIRING))
     assert bench.failed[0] == "binding_unproved" and not bench.sealed
+
+
+def test_run_mode_without_the_reviewed_pairing_binds_nothing(monkeypatch):
+    seen = _model(monkeypatch, DRAFT)
+    bench = Bench(submits=[(True, "accepted")], proofs=[(True, {"S01": PROVED})])
+    with pytest.raises(AdaptationFailure) as refused:
+        asyncio.run(auto.adapt(bench))
+    assert refused.value.code == "adaptation_pairing_missing"
+    assert seen == [] and bench.submitted == [] and not bench.sealed
+
+
+def test_the_pairing_is_frozen_before_the_model_is_asked(monkeypatch):
+    seen = _model(monkeypatch, DRAFT)
+    bench = Bench(submits=[(True, "accepted")], proofs=[(True, {"S01": PROVED})])
+    asyncio.run(auto.adapt(bench, PAIRING))
+    assert bench.pairing == PAIRING and bench.sealed
+    assert '"send_sms": null' in seen[0][1]["content"]
 
 
 def test_conflicts_that_are_not_quoted_or_not_rules_are_dropped(monkeypatch):
@@ -182,7 +205,7 @@ def test_conflicts_that_are_not_quoted_or_not_rules_are_dropped(monkeypatch):
     ]
     _model(monkeypatch, {**DRAFT, "conflicts": conflicts})
     bench = Bench(submits=[(True, "accepted")], proofs=[(True, {"S01": PROVED})])
-    asyncio.run(auto.adapt(bench))
+    asyncio.run(auto.adapt(bench, PAIRING))
     assert bench.conflicts == [conflicts[0]]
 
 
@@ -226,7 +249,118 @@ def test_the_model_call_is_one_json_completion_through_the_gateway(monkeypatch):
     assert request["response_format"] == {"type": "json_object"}
 
 
-# --- the workbench's run-mode gate and approval data -------------------------------------------
+# --- the reviewed pairing, held in code ---------------------------------------------------------
+
+LOCK = ToolDefinition(
+    name="lock_card",
+    description="Lock a card.",
+    parameters={"type": "object", "properties": {"card_id": {"type": "string"}}},
+    mutates_state=True,
+)
+FIND = ToolDefinition(
+    name="find_card",
+    description="Find a card.",
+    parameters={"type": "object", "properties": {"last4": {"type": "string"}}},
+    mutates_state=False,
+)
+CLOSE = ToolDefinition(
+    name="close_account",
+    description="Close the account.",
+    parameters={"type": "object", "properties": {}},
+    mutates_state=True,
+)
+WORLD = [LOCK, FIND, CLOSE]
+AGENT = ["block_card", "card_lookup", "send_sms_alert"]
+
+
+def _entry(agent_tool: str, *steps: str):
+    return MappedToolBinding.model_validate(
+        {
+            "agent_tool": agent_tool,
+            "steps": [
+                {"id": f"s{number}", "tool": tool, "arguments": {}}
+                for number, tool in enumerate(steps, start=1)
+            ],
+        }
+    )
+
+
+def _unsupported(agent_tool: str):
+    return UnsupportedToolBinding.model_validate(
+        {"agent_tool": agent_tool, "unsupported": "the agent has no such channel"}
+    )
+
+
+def _bound(*entries) -> SimpleNamespace:
+    return SimpleNamespace(tools=list(entries))
+
+
+def test_a_pairing_is_completed_and_names_only_tools_each_side_has():
+    assert frozen_pairing({"lock_card": "block_card"}, WORLD, AGENT) == {
+        "lock_card": "block_card",
+        "find_card": None,
+        "close_account": None,
+    }
+    for pairing, said in (
+        ({"freeze_card": "block_card"}, "'freeze_card' is not an environment tool"),
+        ({"lock_card": "blok_card"}, "'blok_card' is not one of the agent's admitted"),
+        (["lock_card"], "must be an object"),
+    ):
+        with pytest.raises(AdaptationFailure) as refused:
+            frozen_pairing(pairing, WORLD, AGENT)
+        assert refused.value.code == "adaptation_pairing_invalid"
+        assert said in refused.value.message
+
+
+def test_a_binding_that_is_the_reviewed_pairing_is_taken():
+    pairing = frozen_pairing(
+        {"lock_card": "block_card", "find_card": "card_lookup"}, WORLD, AGENT
+    )
+    binding = _bound(
+        # A step that only reads may look a value up before the paired call.
+        _entry("block_card", "find_card", "lock_card"),
+        _entry("card_lookup", "find_card"),
+        _unsupported("send_sms_alert"),
+    )
+    assert pairing_problems(binding, pairing, WORLD) == []
+
+
+@pytest.mark.parametrize(
+    "entries, said",
+    [
+        # Another valid mapping than the one reviewed: the paired tool is never called.
+        (
+            [_entry("block_card", "find_card"), _unsupported("card_lookup")],
+            "block_card: paired with lock_card, which no step calls",
+        ),
+        # A tool the person paired with nothing is mapped anyway.
+        (
+            [_entry("block_card", "lock_card"), _entry("card_lookup", "find_card")],
+            "card_lookup: the reviewed pairing gives it no environment tool",
+        ),
+        # A paired tool is dropped as unsupported.
+        (
+            [_unsupported("block_card"), _unsupported("card_lookup")],
+            "block_card: the reviewed pairing maps it onto lock_card",
+        ),
+        # The paired call is there, and so is a write nobody reviewed.
+        (
+            [
+                _entry("block_card", "lock_card", "close_account"),
+                _unsupported("card_lookup"),
+            ],
+            "block_card: a step changes state through close_account",
+        ),
+    ],
+    ids=["another-target", "unpaired-mapped", "paired-unsupported", "unreviewed-write"],
+)
+def test_a_binding_that_is_not_the_reviewed_pairing_is_refused(entries, said):
+    pairing = frozen_pairing({"lock_card": "block_card"}, WORLD, AGENT)
+    problems = pairing_problems(_bound(*entries), pairing, WORLD)
+    assert any(said in one for one in problems), problems
+
+
+# --- the approval data -------------------------------------------
 
 
 def _bench(tmp_path: Path) -> Workbench:
@@ -266,7 +400,7 @@ def _bench(tmp_path: Path) -> Workbench:
         "binding": ref,
         "suite": ref,
         "environment": ref,
-        "passed": False,
+        "passed": True,
         "scenarios": {
             "S01": {
                 "status": "proved",
@@ -274,9 +408,9 @@ def _bench(tmp_path: Path) -> Workbench:
                 "adversarial": {"no_calls": "failed"},
             },
             "S02": {
-                "status": "failed",
-                "reason": "adversarial variants held: no_calls",
-                "adversarial": {"no_calls": "held"},
+                "status": "proved",
+                "reason": "",
+                "adversarial": {"no_calls": "failed"},
             },
             "S03": {
                 "status": "unscorable",
@@ -294,37 +428,14 @@ def _bench(tmp_path: Path) -> Workbench:
     return workbench
 
 
-def test_a_failed_scenario_becomes_unscorable_and_the_proof_passes(tmp_path):
-    workbench = _bench(tmp_path)
-    assert not workbench._proved(SHA)
-    workbench.leave_failed_unscorable()
-    assert workbench._proved(SHA)
-    assert workbench.proof["passed"] is True
-    assert workbench.proof["scenarios"]["S02"] == {
-        "status": "unscorable",
-        "reason": "the mapping failed the check: adversarial variants held: no_calls",
-        "adversarial": {},
-    }
-    assert workbench.verdicts["S02"].status == "unscorable"
-    # Saved, so a reopened workbench restores the same proof.
-    saved = json.loads((tmp_path / STATE).read_text(encoding="utf-8"))
-    assert saved["proof"] == workbench.proof
-
-
 def test_the_approval_data_is_the_question_as_data(tmp_path):
     workbench = _bench(tmp_path)
-    workbench.leave_failed_unscorable()
     data = workbench.approval_data()
     assert data == {
         "mapped": [{"agent_tool": "block_card", "steps": ["lock_card"]}],
         "unsupported": [{"agent_tool": "send_sms_alert", "reason": "no SMS channel"}],
-        "unscorable": [
-            {
-                "scenario_key": "S02",
-                "reason": "the mapping failed the check: adversarial variants held: no_calls",
-            },
-            {"scenario_key": "S03", "reason": "uses send_sms"},
-        ],
+        # Only the scenario no route of which the binding reaches.
+        "unscorable": [{"scenario_key": "S03", "reason": "uses send_sms"}],
         "conflicts": [
             {
                 "rule": "confirm_before_lock",
@@ -333,7 +444,7 @@ def test_the_approval_data_is_the_question_as_data(tmp_path):
             }
         ],
         "total": 3,
-        "scorable": 1,
+        "scorable": 2,
     }
     assert json.loads(json.dumps(data)) == data
 
@@ -433,6 +544,17 @@ def _banking(tmp_path: Path) -> tuple[Workbench, dict[str, Any]]:
     return workbench, mapping
 
 
+def _pairing(mapping: dict[str, Any]) -> dict[str, str]:
+    """The pairing a person would have reviewed for this mapping: each environment tool an
+    entry's steps call, onto that entry's agent tool."""
+    return {
+        step["tool"]: entry["agent_tool"]
+        for entry in mapping["tools"]
+        if not entry.get("unsupported")
+        for step in entry["steps"]
+    }
+
+
 def _result(workbench: Workbench) -> dict[str, Any]:
     return json.loads((workbench.output / RESULT).read_text(encoding="utf-8"))
 
@@ -450,7 +572,7 @@ def test_cardguard_is_bound_in_run_mode_after_one_refusal(tmp_path, monkeypatch)
         {"binding": broken, "trajectories": {}, "conflicts": []},
         {"binding": mapping, "trajectories": {}, "conflicts": conflicts},
     )
-    asyncio.run(auto.adapt(workbench))
+    asyncio.run(auto.adapt(workbench, _pairing(mapping)))
     result = _result(workbench)
     assert result["status"] == "completed", result["failure"]
     assert {one["rule"] for one in result["alignment"]["conflicts"]} == {
@@ -465,33 +587,37 @@ def test_cardguard_is_bound_in_run_mode_after_one_refusal(tmp_path, monkeypatch)
 
 
 @needs_releases
-def test_a_scenario_whose_proof_fails_is_left_out_and_the_rest_seals(
-    tmp_path, monkeypatch
-):
+def test_a_written_trajectory_never_replaces_one_code_derives(tmp_path, monkeypatch):
+    """The model writes an empty trajectory for every scenario. Code derives each from the
+    reference solution, so the derived ones are proved and the written ones are set aside:
+    a bad draft can neither shrink the score nor fail what the binding does achieve."""
     workbench, mapping = _banking(tmp_path)
-    key = workbench.base_suite.scenarios[0].key
-    # The agent makes no call in this one scenario, in both answers: its checks cannot hold.
-    answer = {"binding": mapping, "trajectories": {key: []}, "conflicts": []}
-    _model(monkeypatch, answer, answer)
-    asyncio.run(auto.adapt(workbench))
+    nothing = {entry.key: [] for entry in workbench.base_suite.scenarios}
+    _model(monkeypatch, {"binding": mapping, "trajectories": nothing, "conflicts": []})
+    asyncio.run(auto.adapt(workbench, _pairing(mapping)))
     result = _result(workbench)
     assert result["status"] == "completed", result["failure"]
-    (left_out,) = result["alignment"]["unscorable"]
-    assert left_out["scenario_key"] == key
-    assert left_out["reason"].startswith("the mapping failed the check: ")
+    assert result["alignment"]["unscorable"] == []
     proof = json.loads((workbench.output / "binding-proof.json").read_text())
-    assert proof["passed"] is True and proof["scenarios"][key]["status"] == "unscorable"
+    assert proof["passed"] is True
+    assert {one["status"] for one in proof["scenarios"].values()} == {"proved"}
     trajectories = json.loads((workbench.output / "trajectories.json").read_text())
-    assert key not in trajectories and len(trajectories) == len(proof["scenarios"]) - 1
+    assert all(trajectories[key] for key in nothing)
 
 
 @needs_releases
-def test_a_binding_that_proves_nothing_fails(tmp_path, monkeypatch):
+def test_a_binding_that_is_not_the_reviewed_pairing_is_never_proved(
+    tmp_path, monkeypatch
+):
+    """The person unpaired one tool the model maps anyway, in both answers."""
     workbench, mapping = _banking(tmp_path)
-    nothing = {entry.key: [] for entry in workbench.base_suite.scenarios}
-    answer = {"binding": mapping, "trajectories": nothing, "conflicts": []}
+    pairing = _pairing(mapping)
+    dropped = next(iter(pairing))
+    answer = {"binding": mapping, "trajectories": {}, "conflicts": []}
     _model(monkeypatch, answer, answer)
-    asyncio.run(auto.adapt(workbench))
+    asyncio.run(auto.adapt(workbench, {**pairing, dropped: None}))
     result = _result(workbench)
     assert result["status"] == "failed"
-    assert result["failure"]["code"] == "binding_unproved"
+    assert result["failure"]["code"] == "binding_invalid"
+    assert "not the reviewed pairing" in result["failure"]["message"]
+    assert not (workbench.output / "binding-proof.json").exists()
