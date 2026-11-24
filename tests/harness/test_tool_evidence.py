@@ -565,6 +565,22 @@ def test_on_the_callback_route_a_lend_never_takes_a_call_out_of_the_graded_list(
     assert len(graded_calls(on)) == 2
 
 
+def test_on_the_callback_route_a_kept_call_never_points_at_a_span_left_out(tmp_path) -> None:
+    # The tool span pairs with the tracer's call and lends it its parent, a hand-off span. The hand-off is no call on
+    # this route, so the call keeps the parent it had.
+    spans = [
+        {**_SPAN_LINE, "name": "transfer_to_worker", "arguments": "", "output": "", "event_id": "h1",
+         "kind": "handoff", "delegated_to": "Worker"},
+        {**_SPAN_LINE, "name": "look_up_order", "arguments": _A1001, "output": "shipped", "event_id": "e1",
+         "parent_span_id": "h1", "relationship": "observed", "at": 2.0},
+    ]
+
+    on = _callback(tmp_path, [], [_RAN, *spans])
+
+    assert [(call.name, call.parent_span_id, call.relationship) for call in on] == [("look_up_order", "", "")]
+    assert on[0].runtime_ids.get("event_id") == "e1"
+
+
 def test_on_the_callback_route_with_no_other_record_the_spans_are_the_calls(tmp_path) -> None:
     spans = [
         {**_SPAN_LINE, "name": "look_up_order", "arguments": _A1001, "output": "shipped", "event_id": "e1"},
@@ -644,6 +660,17 @@ def test_a_span_source_that_wrote_a_span_is_on_and_not_silent(tmp_path) -> None:
     assert _codes(notices) == [call_runner.TOOL_SPANS_ON]
 
 
+def test_a_span_source_that_wrote_only_hand_offs_is_silent_for_tools(tmp_path) -> None:
+    # A hand-off span is no sign the source recorded the tools the agent ran.
+    runtime = _runtime(tmp_path, [_RAN, {**_SPAN_LINE, "name": "transfer_to_worker", "arguments": "", "output": "",
+                                         "event_id": "h1", "kind": "handoff", "delegated_to": "Worker"}])
+    _observing(tmp_path, agents="on")
+
+    notices = call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ()))
+
+    assert _codes(notices) == [call_runner.TOOL_SPANS_ON, call_runner.TOOL_SPANS_SILENT]
+
+
 def test_a_silent_span_source_is_not_said_when_the_agent_ran_no_call(tmp_path) -> None:
     runtime = _runtime(tmp_path, [])
     _observing(tmp_path, agents="on")
@@ -693,3 +720,63 @@ def test_a_note_that_is_missing_cut_or_unreadable_says_nothing(tmp_path, tail) -
         )
 
     assert call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ())) == []
+
+
+def test_a_note_keeps_only_the_frameworks_and_states_the_hook_writes(tmp_path) -> None:
+    runtime = _runtime(tmp_path, [_RAN])
+    _observing(tmp_path, agents="on", made_up="on", crewai="half_on")
+
+    notices = call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ()))
+
+    assert _codes(notices) == [call_runner.TOOL_SPANS_ON, call_runner.TOOL_SPANS_SILENT]
+    assert notices[0]["message"] == "Framework span sources were on for agents."
+    assert "made_up" not in json.dumps(notices) and "half_on" not in json.dumps(notices)
+
+
+def test_a_note_of_nothing_the_hook_writes_says_nothing(tmp_path) -> None:
+    runtime = _runtime(tmp_path, [_RAN])
+    _observing(tmp_path, made_up="on")
+
+    assert call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ())) == []
+
+
+def test_a_long_note_is_read_only_as_far_as_its_whole_lines_fit(tmp_path, monkeypatch) -> None:
+    # A process started on every turn appends its line each time. Only the whole lines within the limit are read.
+    runtime = _runtime(tmp_path, [_RAN])
+    line = json.dumps({"framework": "agents", "state": "on"}) + "\n"
+    later = json.dumps({"framework": "crewai", "state": "not_installed"}) + "\n"
+    monkeypatch.setattr(call_runner, "_LARGEST_OBSERVING_NOTE", len(line) * 3 + 5)
+    (tmp_path / "calls.jsonl.observing").write_text(line * 3 + later * 2, encoding="utf-8")
+
+    notices = call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ()))
+
+    assert _codes(notices) == [call_runner.TOOL_SPANS_ON, call_runner.TOOL_SPANS_SILENT]
+    assert notices[0]["message"] == "Framework span sources were on for agents."
+
+
+def test_a_note_at_the_limit_is_read_whole(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, [_RAN])
+    line = json.dumps({"framework": "agents", "state": "on"}) + "\n"
+    later = json.dumps({"framework": "crewai", "state": "not_installed"}) + "\n"
+    monkeypatch.setattr(call_runner, "_LARGEST_OBSERVING_NOTE", len(line) * 2 + len(later))
+    (tmp_path / "calls.jsonl.observing").write_text(line * 2 + later, encoding="utf-8")
+
+    notices = call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ()))
+
+    assert _codes(notices) == [
+        call_runner.TOOL_SPANS_ON, call_runner.TOOL_SPANS_NOT_INSTALLED, call_runner.TOOL_SPANS_SILENT
+    ]
+
+
+def test_the_note_reader_knows_each_framework_and_state_the_hook_writes() -> None:
+    # Read from the hook's source: importing the hook installs it.
+    import ast
+    import re
+
+    source = (Path(call_runner.__file__).parent / "simulation_mark_bootstrap.py").read_text(encoding="utf-8")
+    [table] = [
+        node.value for node in ast.parse(source).body
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "_INSTRUMENTORS" for t in node.targets)
+    ]
+    assert {key.value for key in table.keys} == call_runner._OBSERVED_FRAMEWORKS
+    assert set(re.findall(r'_observing\(module\.__name__, "(\w+)"\)', source)) == call_runner._OBSERVED_STATES
