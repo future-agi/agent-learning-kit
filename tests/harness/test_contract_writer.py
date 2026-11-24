@@ -1489,6 +1489,9 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     # Found by the widened scan (change review r1, A-M1): calls to a helper that writes to what
     # it is given, found to a fixed point. None of these helpers names contract.json (one that
     # did would be listed under its own name), so each reason says what the helper writes.
+    ("fi.alk.harness.agent_reading", "_read", "_profile"): (
+        1, "authoring_entrypoint._load_provider_import_profile writes the hosted agent's profile "
+        "cache, not the contract"),
     ("fi.alk.harness.agent_reading", "_read", "_reading"): (1, "calls _reading, listed below"),
     ("fi.alk.harness.agent_reading", "_reading", "_timed_out"): (1, _FAILURE),
     ("fi.alk.harness.agent_reading", "_reading", "call_limit"): (1, _FAILURE),
@@ -1496,7 +1499,7 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, _FAILURE + "; classify's document writes agent.json"),
     ("fi.alk.harness.agent_reading", "_reading", "model_error"): (1, _FAILURE),
     ("fi.alk.harness.agent_reading", "_reading", "refuse_unusable_folder"): (1, _FAILURE),
-    ("fi.alk.harness.agent_reading", "_reading", "write_reading_failure"): (1, _FAILURE),
+    ("fi.alk.harness.agent_reading", "_reading", "write_reading_failure"): (2, _FAILURE),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair",
      "apply_runtime_plan_patch"): (
         1, "the runtime-plan repair, which saves through write_contract (B13); " + _TEMP_COMPOSE),
