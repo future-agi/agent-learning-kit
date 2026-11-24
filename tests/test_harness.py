@@ -7598,8 +7598,9 @@ def test_suite_eval_agent_prompt_loses_url_credentials(monkeypatch):
 _WHOLE_LINES = [{"path": "agent.py", "start_line": 1, "end_line": 1}]
 
 
-def _judged_suite(monkeypatch, contract, *, hosted=False):
-    """The default suite judged for one voice call, and what each eval was sent."""
+def _judged_suite(monkeypatch, contract, *, hosted=False, suite_evals=None):
+    """The default suite (or the evals given) judged for one voice call, and what each eval
+    was sent."""
     from fi.alk.harness.catalogue import default_suite_evals
     from fi.alk.harness.run import platform_evals
     from fi.alk.harness.run.conversation import Exchange, Transcript
@@ -7619,7 +7620,7 @@ def _judged_suite(monkeypatch, contract, *, hosted=False):
     monkeypatch.setattr(platform_evals, "configured", lambda: True)
     monkeypatch.setattr(platform_evals, "judge_builtin", judge_builtin)
     verdicts = judge_suite_evals(
-        default_suite_evals(),
+        default_suite_evals() if suite_evals is None else suite_evals,
         Scenario(name="order-status", instruction="check an order", sub_goals=[]),
         Transcript(exchanges=[Exchange("customer", "Where is it?"), Exchange("agent", "Here.")]),
         contract,
@@ -7631,6 +7632,18 @@ def _voice(**fields):
     from fi.alk.harness.contract import AgentContract
 
     return AgentContract(agent="voice-agent", modality="voice", **fields)
+
+
+def test_suite_eval_sends_a_providers_whole_prompt_copied_with_no_lines(monkeypatch):
+    verdicts, sent = _judged_suite(
+        monkeypatch,
+        _voice(system_prompt_excerpt="Take bookings. Be brief.", system_prompt_copied=True),
+    )
+
+    assert dict(sent)["customer_agent_task_completion"]["agent_prompt"] == (
+        "Take bookings. Be brief."
+    )
+    assert [verdict.unmeasured for verdict in verdicts] == ["", ""]
 
 
 def test_suite_eval_sends_the_whole_prompt_when_its_lines_were_copied(monkeypatch):
@@ -7654,11 +7667,9 @@ def test_suite_eval_sends_the_whole_prompt_when_its_lines_were_copied(monkeypatc
         {"system_prompt_excerpt": "Be kind ... and brief.", "system_prompt_from": _WHOLE_LINES},
         # A quote with no lines at all.
         {"system_prompt_excerpt": "Be kind ... and brief."},
-        # Marked copied, but no lines name where from.
-        {"system_prompt_excerpt": "Be kind ... and brief.", "system_prompt_copied": True},
     ],
 )
-def test_suite_eval_needing_the_prompt_is_unmeasured_when_only_an_excerpt_was_read(
+def test_suite_eval_needing_the_prompt_is_unmeasured_without_whole_instructions(
     monkeypatch, fields
 ):
     verdicts, sent = _judged_suite(monkeypatch, _voice(**fields))
@@ -7666,7 +7677,7 @@ def test_suite_eval_needing_the_prompt_is_unmeasured_when_only_an_excerpt_was_re
     assert [name for name, _ in sent] == ["customer_agent_conversation_quality"]
     by_kind = {verdict.kind: verdict for verdict in verdicts}
     unmeasured = by_kind["customer_agent_task_completion"]
-    assert unmeasured.unmeasured == "only_an_excerpt"
+    assert unmeasured.unmeasured == "no_whole_instructions"
     assert not unmeasured.grading_error
     assert "agent_prompt" in unmeasured.why
     assert by_kind["customer_agent_conversation_quality"].holds
@@ -7683,13 +7694,15 @@ def test_suite_eval_needing_the_prompt_is_unmeasured_when_no_instructions_were_r
     assert not unmeasured.grading_error
 
 
-def test_hosted_suite_eval_with_only_an_excerpt_is_unmeasured_not_a_grading_error(monkeypatch):
+def test_hosted_suite_eval_without_whole_instructions_is_unmeasured_not_a_grading_error(
+    monkeypatch,
+):
     verdicts, _ = _judged_suite(
         monkeypatch, _voice(system_prompt_excerpt="Be kind ... and brief."), hosted=True
     )
 
     unmeasured = {verdict.kind: verdict for verdict in verdicts}["customer_agent_task_completion"]
-    assert unmeasured.unmeasured == "only_an_excerpt"
+    assert unmeasured.unmeasured == "no_whole_instructions"
     assert not unmeasured.grading_error
 
 
@@ -7698,14 +7711,13 @@ def _unmeasured_task_completion():
 
     return _not_measured(
         "customer_agent_task_completion",
-        ["agent_prompt"],
         _voice(system_prompt_excerpt="Be kind ... and brief."),
     )
 
 
 _EXCERPT_ONLY = (
-    "Not measured: agent_prompt was not sent, since only an excerpt of the agent's "
-    "instructions was read, not the whole of them."
+    "Not measured: agent_prompt was not sent, since the instructions were not copied from the "
+    "agent's source and may be incomplete."
 )
 
 
@@ -7720,22 +7732,59 @@ def test_a_blank_copied_prompt_is_not_the_agents_instructions(monkeypatch):
     assert unmeasured.unmeasured == "no_instructions"
 
 
-def test_each_missing_input_is_named_with_its_own_reason():
+def _an_eval_needing(*names):
+    from fi.alk.harness.catalogue import SuiteEval
+
+    return [SuiteEval(name="custom_eval", required_inputs=list(names))]
+
+
+@pytest.mark.parametrize(
+    "needs",
+    [
+        # An input this function never builds: a setup error that repeats on every run.
+        ["context", "conversation"],
+        # The same, beside the instructions: the setup error decides.
+        ["agent_prompt", "context"],
+    ],
+)
+def test_a_missing_input_other_than_the_instructions_is_a_hosted_grading_error(
+    monkeypatch, needs
+):
+    verdicts, sent = _judged_suite(
+        monkeypatch,
+        _voice(system_prompt_excerpt="Be kind ... and brief."),
+        hosted=True,
+        suite_evals=_an_eval_needing(*needs),
+    )
+
+    assert sent == []
+    [verdict] = verdicts
+    assert verdict.grading_error
+    assert not verdict.holds
+    assert verdict.unmeasured == ""
+    missing = ", ".join(name for name in needs if name != "conversation")
+    assert verdict.why == f"Required evaluation inputs were unavailable: {missing}"
+
+
+def test_a_missing_input_other_than_the_instructions_is_skipped_on_a_local_run(monkeypatch):
+    verdicts, sent = _judged_suite(
+        monkeypatch,
+        _voice(system_prompt_excerpt="Be kind ... and brief."),
+        suite_evals=_an_eval_needing("agent_prompt", "context"),
+    )
+
+    assert sent == []
+    assert verdicts == []
+
+
+def test_the_reason_says_only_what_is_known_about_the_instructions():
     from fi.alk.harness.run.grade import _not_measured
 
-    other = _not_measured("an_eval", ["context"], _voice(system_prompt_excerpt="Be kind."))
-    assert other.unmeasured == "input_missing"
-    assert other.why == "Not measured: context had no value in this run."
-
-    both = _not_measured(
-        "an_eval", ["agent_prompt", "context"], _voice(system_prompt_excerpt="Be kind.")
+    assert _not_measured("an_eval", _voice(system_prompt_excerpt="Be kind.")).why == (
+        "Not measured: agent_prompt was not sent, since the instructions were not copied from "
+        "the agent's source and may be incomplete."
     )
-    assert both.unmeasured == "only_an_excerpt"
-    assert both.why == (
-        "Not measured: agent_prompt was not sent, since only an excerpt of the agent's "
-        "instructions was read, not the whole of them; context had no value in this run."
-    )
-    assert _not_measured("an_eval", ["agent_prompt"], _voice()).why == (
+    assert _not_measured("an_eval", _voice()).why == (
         "Not measured: agent_prompt was not sent, since the agent's instructions were not read."
     )
 
@@ -7780,7 +7829,7 @@ def test_reconciliation_leaves_an_unmeasured_task_completion_alone():
     assert reconciled[0].holds is False
     assert reconciled[0].why == _EXCERPT_ONLY
     assert reconciled[0].by == ""
-    assert reconciled[0].unmeasured == "only_an_excerpt"
+    assert reconciled[0].unmeasured == "no_whole_instructions"
 
 
 def test_unmeasured_eval_in_summary_and_json():
@@ -7804,10 +7853,10 @@ def test_unmeasured_eval_in_summary_and_json():
     )
 
     assert (
-        f"  not measured (only_an_excerpt): customer_agent_task_completion: {_EXCERPT_ONLY}"
+        f"  not measured (no_whole_instructions): customer_agent_task_completion: {_EXCERPT_ONLY}"
     ) in summarise([result])
     conduct = json.loads(as_json([result]))[0]["conduct"]
-    assert [item.get("unmeasured") for item in conduct] == [None, "only_an_excerpt"]
+    assert [item.get("unmeasured") for item in conduct] == [None, "no_whole_instructions"]
     assert json.loads(as_json([result]))[0]["checkpoints_met"] == "2/2"
 
 
@@ -7844,7 +7893,7 @@ def test_unmeasured_eval_reaches_the_platform_as_unmeasured():
     assert metadata["harness_unmeasured"] == [
         {
             "name": "customer_agent_task_completion",
-            "cause": "only_an_excerpt",
+            "cause": "no_whole_instructions",
             "reason": _EXCERPT_ONLY,
         }
     ]

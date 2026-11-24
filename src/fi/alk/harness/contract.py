@@ -1256,10 +1256,12 @@ class AgentContract(BaseModel):
     # the quote given for it. The quote went out instead, or, when the quote was too short to
     # stand for the prompt, the lines did, unconfirmed. Empty for nearly every contract.
     unconfirmed_prompt_from: list[PromptSource] = Field(default_factory=list)
-    # Set by the save, never by the reading: true only when the save replaced the excerpt with
-    # the lines in system_prompt_from, copied from the source as written. Without it the excerpt
-    # is a quote that may leave text out, and the built-in suite evals do not grade on it.
-    # "Copied" is as written, not complete: the lines are the ones the reading named.
+    # Set by the save, never by the reading: true only when the save replaced the excerpt by
+    # code, either with the lines in system_prompt_from, copied from the source as written, or,
+    # with system_prompt_from empty, with a provider's whole prompt from its own definition.
+    # Without it the excerpt is a quote that may leave text out, and the built-in suite evals do
+    # not grade on it. Copied lines are as written, not complete: they are the ones the reading
+    # named.
     system_prompt_copied: bool = False
     # None is unknown. Kept only when its name was found on the line cited in the source.
     model: ModelSource | None = None

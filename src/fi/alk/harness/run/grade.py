@@ -70,9 +70,9 @@ class Judgement:
     # Which eval decided this, when it was decided by one rather than here.
     by: str = ""
     grading_error: bool = False
-    # Why this was not measured, when an input it needs was not there to send: "only_an_excerpt"
-    # or "no_instructions" for the agent's instructions, "input_missing" for any other input.
-    # Empty when it was measured. Not measured is neither a pass nor a fail, so it is no
+    # Why this was not measured, when the agent's whole instructions were not there to send:
+    # "no_whole_instructions" when some were read, "no_instructions" when none were. Empty when
+    # it was measured. Not measured is neither a pass nor a fail, so it is no
     # checkpoint and no failure: it is listed apart, with its reason.
     unmeasured: str = ""
 
@@ -309,14 +309,11 @@ def judge_suite_evals(
             for suite_eval in suite_evals
         ]
     verdicts: list[Judgement] = []
-    # Only instructions the save copied whole are sent. An excerpt may leave text out, and an
-    # eval graded on part of the instructions reads as a verdict on all of them, so with only
-    # an excerpt the eval is reported as not measured rather than run on it.
-    whole = (
-        contract.system_prompt_copied
-        and bool(contract.system_prompt_from)
-        and bool(contract.system_prompt_excerpt.strip())
-    )
+    # Only instructions the save copied whole are sent: the lines named in the source, or a
+    # provider's whole prompt. A quote may leave text out, and an eval graded on part of the
+    # instructions reads as a verdict on all of them, so without whole instructions the eval is
+    # reported as not measured rather than run on them.
+    whole = contract.system_prompt_copied and bool(contract.system_prompt_excerpt.strip())
     # Sent to the platform, so cleaned once here for an older bundle's contract.
     agent_prompt = _redact(contract.system_prompt_excerpt) if whole else ""
     for suite_eval in suite_evals:
@@ -325,13 +322,31 @@ def judge_suite_evals(
             "agent_prompt": agent_prompt,
         }
         missing = [name for name in suite_eval.required_inputs if not inputs.get(name)]
-        if missing:
+        if missing == ["agent_prompt"]:
             logging.getLogger(__name__).warning(
-                "platform suite eval %s not measured: missing %s",
+                "platform suite eval %s not measured: missing agent_prompt", suite_eval.name
+            )
+            verdicts.append(_not_measured(suite_eval.name, contract))
+            continue
+        if missing:
+            # Any other name is one this function never builds: a setup error that repeats on
+            # every run, not a value this run happened to lack.
+            logging.getLogger(__name__).warning(
+                "platform suite eval %s skipped: missing %s",
                 suite_eval.name,
                 ", ".join(missing),
             )
-            verdicts.append(_not_measured(suite_eval.name, missing, contract))
+            if hosted:
+                verdicts.append(
+                    Judgement(
+                        claim=suite_eval.name,
+                        kind=suite_eval.name,
+                        holds=False,
+                        why="Required evaluation inputs were unavailable: "
+                        + ", ".join(missing),
+                        grading_error=True,
+                    )
+                )
             continue
         try:
             answered = platform_evals.judge_builtin(
@@ -372,32 +387,23 @@ def judge_suite_evals(
     return verdicts
 
 
-def _not_measured(name: str, missing: list[str], contract: AgentContract) -> Judgement:
-    """An eval that was not run because an input it needs was not there to send."""
-    # Each missing input with its own reason. The cause is the instructions' when they are
-    # among them, since that is the one a later reading can supply.
-    reasons: list[str] = []
-    cause = "input_missing"
-    if "agent_prompt" in missing:
-        if contract.system_prompt_excerpt.strip():
-            cause = "only_an_excerpt"
-            reasons.append(
-                "agent_prompt was not sent, since only an excerpt of the agent's instructions "
-                "was read, not the whole of them"
-            )
-        else:
-            cause = "no_instructions"
-            reasons.append(
-                "agent_prompt was not sent, since the agent's instructions were not read"
-            )
-    others = [one for one in missing if one != "agent_prompt"]
-    if others:
-        reasons.append(f"{', '.join(others)} had no value in this run")
+def _not_measured(name: str, contract: AgentContract) -> Judgement:
+    """An eval that was not run because the agent's whole instructions were not there to send."""
+    # Only what is known: the lines were not copied, so the text may or may not be complete.
+    if contract.system_prompt_excerpt.strip():
+        cause = "no_whole_instructions"
+        reason = (
+            "agent_prompt was not sent, since the instructions were not copied from the "
+            "agent's source and may be incomplete"
+        )
+    else:
+        cause = "no_instructions"
+        reason = "agent_prompt was not sent, since the agent's instructions were not read"
     return Judgement(
         claim=name,
         kind=name,
         holds=False,
-        why="Not measured: " + "; ".join(reasons) + ".",
+        why=f"Not measured: {reason}.",
         unmeasured=cause,
     )
 

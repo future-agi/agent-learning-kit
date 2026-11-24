@@ -641,6 +641,27 @@ def _modules_as_the_process_imports_them(
 _ROOTED_MODES = {"import", "construct", "unreachable"}
 
 
+def _provider_prompt_copied(
+    contract: AgentContract, profile: dict[str, Any] | None
+) -> AgentContract:
+    """The contract with the provider's whole prompt as its excerpt, recorded as copied, when a
+    profile is in force and code can take every text of it. Otherwise it is left as checked:
+    the reading's quote, nothing marked."""
+    from .provider_import import whole_prompt
+
+    whole = whole_prompt(profile) if profile is not None else None
+    if whole is None:
+        return contract
+    return contract.model_copy(
+        update={
+            "system_prompt_excerpt": whole,
+            "system_prompt_from": [],
+            "unconfirmed_prompt_from": [],
+            "system_prompt_copied": True,
+        }
+    )
+
+
 def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
     # write_contract writes beside the file and moves it into place: a write that fails partway
     # leaves the contract an earlier call was told was saved as it was.
@@ -858,6 +879,7 @@ def contract_tools(
     subfolder: str | None = None,
     save_checks: Mode | None = None,
     save_stand_in: str | None = None,
+    provider_profile: dict[str, Any] | None = None,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
@@ -867,6 +889,10 @@ def contract_tools(
     ``save_checks`` picks where the checks that read the customer's files run (the default is the
     kit's); ``save_stand_in`` names a module whose stages replace the real ones in the child, for
     tests.
+
+    ``provider_profile`` is the provider definition the reading is shown, when there is one. It is
+    then the source of the agent's prompt: no repository lines are copied for it, and the save
+    copies its whole prompt where code can take every text of it.
     """
     # Here rather than at the top: the checker's child imports this module.
     from . import save_checker
@@ -1812,6 +1838,9 @@ def contract_tools(
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
         payload = dict(unwrapped(args))
+        if provider_profile is not None:
+            # The provider's definition is what runs, so repository lines can't be the prompt.
+            payload.pop("system_prompt_from", None)
         # The quote as the contract will read it: under any alias, a list joined.
         excerpt = prompt_quote(_without_nulls(payload))
         if not excerpt.strip():
@@ -2127,6 +2156,8 @@ def contract_tools(
                 # since a prompt built at run time has no lines to name, and its quote is kept.
                 "prompt-lines",
                 source_root is not None
+                # With a provider's definition in force, repository lines are not its prompt.
+                and provider_profile is None
                 and bool(excerpt)
                 and not payload.get("system_prompt_from")
                 # Asked already, with the "prompt" nudge or a refusal of named lines: the lines
@@ -2176,7 +2207,9 @@ def contract_tools(
                 "Not saved: a contract submitted after this one, in the same turn, was saved "
                 "instead. Don't submit this one again."
             )
-        result = _save_contract(checked.contract, destination)
+        result = _save_contract(
+            _provider_prompt_copied(checked.contract, provider_profile), destination
+        )
         # After the write: if it raised, nothing was saved for an earlier call to defer to.
         saved = mine
         return result
