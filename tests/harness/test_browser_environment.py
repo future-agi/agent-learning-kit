@@ -19,6 +19,8 @@ from fi.alk.harness.browser_environment import (
     allowed_sites,
     environment_failure,
     job_failure,
+    refuse_saved_contract,
+    saved_contract_failure,
 )
 from fi.alk.harness.contract import AgentContract
 from fi.alk.harness.failure_file import FAILURE_FILE
@@ -79,6 +81,14 @@ def test_a_list_present_and_empty_or_not_a_list_fails(value, reason):
         "LOCALHOST",
         "app.localhost",
         "::1",
+        # Read by a browser as IPv4: 127.0.0.1, and 169.254.169.254, the cloud metadata address.
+        "0x7f000001",
+        "0X7F000001",
+        "0x7f.0.0.1",
+        "0xa9fea9fe",
+        "2130706433",
+        "shop.0x1",
+        "*.10",
         "",
         " shop.example.com",
         "-bad.example.com",
@@ -171,16 +181,20 @@ def _failure(folder: Path) -> dict:
 
 def test_the_refusal_is_written_where_the_build_reads_it(tmp_path):
     _write(tmp_path, _BROWSER)
-    job = SimpleNamespace(metadata={})
-    assert cli.environment_refusal(tmp_path, job) == BROWSER_ENVIRONMENT_REQUIRED
+    assert refuse_saved_contract(tmp_path, {}) == BROWSER_ENVIRONMENT_REQUIRED
     assert _failure(tmp_path)["code"] == BROWSER_ENVIRONMENT_REQUIRED
 
 
-@pytest.mark.parametrize("body", [None, _CHAT])
+@pytest.mark.parametrize("body", [None, _CHAT, "{not json"])
 def test_nothing_is_written_without_a_need(tmp_path, body):
-    if body is not None:
+    # No contract yet, one that needs nothing, or one that can't be read: that is for the steps
+    # that read it.
+    if isinstance(body, dict):
         _write(tmp_path, body)
-    assert cli.environment_refusal(tmp_path, SimpleNamespace(metadata={})) is None
+    elif body is not None:
+        (tmp_path / "contract.json").write_text(body, encoding="utf-8")
+    assert saved_contract_failure(tmp_path, {}) is None
+    assert refuse_saved_contract(tmp_path, {}) is None
     assert not (tmp_path / FAILURE_FILE).exists()
 
 

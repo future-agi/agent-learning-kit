@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from .contract import AgentContract, how_it_runs
@@ -31,7 +32,9 @@ BROWSER_SITE_NOT_IN_EGRESS = "browser_site_not_in_egress"
 # for every name under it, as the egress list writes it. No scheme, port, path or address.
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 _HOST = re.compile(rf"(?:\*\.)?{_LABEL}(?:\.{_LABEL})*", re.IGNORECASE)
-_ADDRESS = re.compile(r"[0-9.]+")
+# A browser reads a host as an IPv4 address when its last label is a number (decimal, octal or
+# `0x` hex), as the URL standard does: `0x7f000001` is 127.0.0.1. Such a host is never a site.
+_NUMBER_LABEL = re.compile(r"[0-9]+|0x[0-9a-f]*", re.IGNORECASE)
 
 
 class SitesProblem(ValueError):
@@ -59,7 +62,7 @@ def _is_host(site: str) -> bool:
         len(site) <= 253
         and _HOST.fullmatch(site) is not None
         # An address is not a site, and loopback holds the world itself.
-        and _ADDRESS.fullmatch(name) is None
+        and _NUMBER_LABEL.fullmatch(name.rsplit(".", 1)[-1]) is None
         and name not in LOOPBACK
         and not name.endswith(".localhost")
     )
@@ -140,3 +143,27 @@ def environment_failure(
         retryable=False,
         details={"needs": ["browser"]},
     )
+
+
+def saved_contract_failure(folder: Path, metadata: Mapping[str, Any] | None) -> HarnessFailure | None:
+    """The refusal of the contract saved in ``folder``, when its agent needs an environment the job
+    doesn't give. None when there is none to refuse, no contract yet, or one that can't be read:
+    that is for the steps that read it."""
+    from .understand import load
+
+    try:
+        contract = load(folder)
+    except (OSError, ValueError):
+        return None
+    return None if contract is None else environment_failure(contract, metadata)
+
+
+def refuse_saved_contract(folder: Path, metadata: Mapping[str, Any] | None) -> str | None:
+    """``saved_contract_failure``, written to ``folder`` for the build; the refusal's code, or None."""
+    from .failure_file import write_failure_file
+
+    failure = saved_contract_failure(folder, metadata)
+    if failure is None:
+        return None
+    write_failure_file(failure, folder)
+    return failure.code

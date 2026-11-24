@@ -1727,19 +1727,12 @@ class HostedChatRuntime:
     def _environment_refused(self) -> bool:
         """Refuse a saved contract whose agent needs an environment the job doesn't give, before
         its world is built. True once refused: the failure is written for the build."""
-        from types import SimpleNamespace
-
-        from .cli import environment_refusal
+        from .browser_environment import refuse_saved_contract
 
         # Only the metadata is read, never the whole job: a job this process can't validate must
         # not pass for one with nothing to check.
         metadata = self.job.get("metadata") if isinstance(self.job, dict) else None
-        job = SimpleNamespace(metadata=metadata if isinstance(metadata, dict) else {})
-        try:
-            return environment_refusal(self.workspace, job) is not None
-        except (OSError, ValueError):
-            # A contract that can't be read is for the steps that read it.
-            return False
+        return refuse_saved_contract(self.workspace, metadata if isinstance(metadata, dict) else {}) is not None
 
     def _take_seed(self) -> None:
         """Use the reading the platform handed this build, at the first opening only, and leave

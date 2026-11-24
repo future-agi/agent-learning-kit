@@ -312,20 +312,20 @@ def _starting_environment_failure(
     seed; else the platform's seed, when it matches this job (one that doesn't is read again, and
     the new reading is checked once saved). A contract that can't be read is left to the steps
     that read it."""
-    from .browser_environment import environment_failure
+    from .browser_environment import environment_failure, saved_contract_failure
     from .contract import AgentContract
     from .seed_contract import differs, read_seed
-    from .understand import load
 
+    if (output / "contract.json").exists() or seed is None:
+        return saved_contract_failure(output, job.metadata)
     try:
-        contract = load(output)
-        if contract is None and seed is not None:
-            body, problem, _ = read_seed(seed)
-            if problem is None and body is not None and not differs(body, job):
-                contract = AgentContract.model_validate(body)
+        body, problem, _ = read_seed(seed)
+        if problem is not None or body is None or differs(body, job):
+            return None
+        contract = AgentContract.model_validate(body)
     except (OSError, ValueError):
         return None
-    return None if contract is None else environment_failure(contract, job.metadata)
+    return environment_failure(contract, job.metadata)
 
 
 def _refresh_source_facts(job: HarnessJob, source: Path, output: Path) -> list[str]:
