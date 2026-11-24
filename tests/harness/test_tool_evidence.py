@@ -830,3 +830,24 @@ def test_a_pipe_at_the_notes_path_is_not_read(tmp_path) -> None:
 
     assert not reader.is_alive()
     assert said == [[]]
+
+
+def test_the_agents_own_account_of_the_proxys_failure_answer_is_a_failed_call_of_ours() -> None:
+    from fi.alk.harness.world_door import UPSTREAM_UNAVAILABLE
+
+    world = _World()
+    # The agent's tool handed back the tool proxy's 502 answer as its value, in the response beside the call.
+    _record_completed_tool_call(
+        world,
+        name="request_discount",
+        arguments={"deal_id": 7, "discount_percent": 20},
+        response={"tool_call_id": "call_9", "content": '{"detail": "tool_upstream_unavailable", "status": 502}'},
+        call_id="call_9",
+    )
+    _record_completed_tool_call(
+        world, name="request_discount", arguments={"deal_id": 7}, response={"content": '{"status": "pending"}'}
+    )
+
+    failed, answered = world.calls
+    assert (failed.ok, failed.error, failed.result, failed.source) == (False, UPSTREAM_UNAVAILABLE, None, AGENT)
+    assert (answered.ok, answered.result) == (True, {"status": "pending"})
