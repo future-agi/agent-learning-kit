@@ -2492,6 +2492,12 @@ def accept_scenario(
             "happened: " + "; ".join(proof.actors_refused) + ". Give each action every field its record needs and "
             "an action its actor is permitted, or write the case without it."
         )
+    if proof is not None and proof.actors_unseen:
+        unproved += (
+            "\nNOTE: no tool of the agent's shows it these actors' record changes before its later steps, and the "
+            "agent cannot act on a decision it cannot see: " + "; ".join(proof.actors_unseen) + ". Write this case as "
+            "request-and-wait, or give the agent a step that reads it."
+        )
     if proof is not None and proof.recorded:
         unproved += (
             f"\nNOTE: {', '.join(proof.recorded)}: {RECORDED_NOT_RUN}. These tools touch no world and nothing here "

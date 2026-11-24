@@ -149,3 +149,50 @@ def test_an_actor_action_the_world_accepts_is_not_named_refused(tmp_path):
     acting.act_on(SimpleNamespace(tool="get_deal", arguments={"deal_id": 7}))
 
     assert acting.refused() == []
+
+
+def _approval_then_apply(tmp_path, apply_result):
+    """An actor approves on the agent's discount request; the agent then applies it, its tools answering as given."""
+    save_actors(tmp_path, ActorList(actors=[Actor(id="alex", name="Alex", play="live", permitted_actions=["approvals.put"])]))
+    scenario = Scenario(
+        name="approved",
+        instruction="x",
+        actors=[
+            {
+                "id": "alex",
+                "actions": [
+                    {
+                        "action": "approvals.put",
+                        "trigger": {"kind": "on_tool", "tool": "request_discount", "on_call": 1},
+                        "arguments": {"deal_id": 9, "status": "approved", "decided_by": "Alex", "discount_percent": 20},
+                    }
+                ],
+            }
+        ],
+    )
+    world, by_actors = _World(_Records()), {}
+    acting = _WorldActors(scenario, tmp_path, world, by_actors)
+    for tool, arguments, result in (
+        ("get_deal", {"deal_id": 9}, {"id": 9, "name": "Globex", "stage": "negotiation"}),
+        ("request_discount", {"deal_id": 9, "discount_percent": 20}, {"deal_id": 9, "status": "pending"}),
+        ("apply_discount", {"deal_id": 9, "discount_percent": 20}, apply_result),
+    ):
+        world._record(SimpleNamespace(name=tool, arguments=arguments, ok=True, result=result, error=""))
+        acting.act_on(SimpleNamespace(tool=tool, arguments=arguments))
+    return acting
+
+
+def test_an_actor_s_approval_no_tool_of_the_agent_s_shows_it_is_named_before_the_step_that_acts_on_it(tmp_path):
+    # The deal's own status, still pending, is not the approval.
+    acting = _approval_then_apply(tmp_path, {"deal_id": 9, "discount_percent": 20, "status": "pending"})
+
+    [line] = acting.unseen()
+    assert line.startswith("alex: approvals {") and line.endswith("} before apply_discount")
+
+
+def test_an_actor_s_approval_a_later_result_of_the_agent_s_shows_is_not_named(tmp_path):
+    acting = _approval_then_apply(
+        tmp_path, {"deal_id": 9, "applied": True, "approval": {"deal_id": 9, "status": "approved"}}
+    )
+
+    assert acting.unseen() == []

@@ -36,7 +36,7 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Collection, Mapping, Sequence
+from typing import Any, Callable, Collection, Iterator, Mapping, Sequence
 
 from .actors import load_actors
 from .catalogue import Catalogue
@@ -178,6 +178,8 @@ class Proof:
     unplayed: list[str] = field(default_factory=list)
     # World actors' scripted actions the world refused while the reference played, each with the reason.
     actors_refused: list[str] = field(default_factory=list)
+    # World actors' record changes none of the agent's later results shows it before its last step there.
+    actors_unseen: list[str] = field(default_factory=list)
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
@@ -1058,6 +1060,7 @@ def run_steps(
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
             acting.act_on(step)
         world.actors_refused = acting.refused()
+        world.actors_unseen = acting.unseen()
         answered = world.answered_by_record
         played = scenario.solution if steps is None else steps
         assumed = [
@@ -1316,6 +1319,31 @@ class _WorldActors:
                 lines.append(f"{who}: {call.name}({call.arguments}): {call.error or call.refusal_code or 'refused'}")
         return lines
 
+    def unseen(self) -> list[str]:
+        """Each record change an actor made that a later step of the agent's follows, when none of the agent's results
+        after it shows the record: a dict whose shared fields all match the change, one of them a value the agent never
+        sent itself. As `actor: collection record (fields) before step`."""
+        agent = [(index, call) for index, call in enumerate(self.world.calls) if index not in self.by_actors]
+        sent = {str(value) for _, call in agent for value in _scalars(call.arguments)}
+        lines = []
+        for index, who in sorted(self.by_actors.items()):
+            call = self.world.calls[index]
+            kind = record_action(str(call.name)) if call.ok else None
+            if kind is None:
+                continue
+            arguments = dict(call.arguments or {})
+            if kind[1] == "change":
+                record = {**dict(arguments.get("where") or {}), **dict(arguments.get("set") or {})}
+            else:
+                record = dict(arguments["record"]) if isinstance(arguments.get("record"), dict) else arguments
+            later = [one for at, one in agent if at > index]
+            if not record or not later:
+                continue
+            if any(_shows(one.result, record, sent) for one in later):
+                continue
+            lines.append(f"{who}: {kind[0]} {record} before {later[-1].name}")
+        return lines
+
     def act_on(self, step: Any) -> None:
         if step is not None:
             self.counts[step.tool] = self.counts.get(step.tool, 0) + 1
@@ -1375,6 +1403,34 @@ class _WorldActors:
             self.by_actors.update(
                 dict.fromkeys(range(before, len(self.world.calls)), actor.id)
             )
+
+
+def _scalars(value: Any) -> Iterator[Any]:
+    """Every scalar inside a call's arguments or result."""
+    if isinstance(value, Mapping):
+        for one in value.values():
+            yield from _scalars(one)
+    elif isinstance(value, (list, tuple)):
+        for one in value:
+            yield from _scalars(one)
+    elif value is not None:
+        yield value
+
+
+def _shows(result: Any, record: Mapping[str, Any], sent: Collection[str]) -> bool:
+    """Whether a result holds the record: a dict whose fields shared with it all match, one a value not already sent."""
+    if isinstance(result, Mapping):
+        shared = [key for key in record if key in result]
+        if (
+            shared
+            and all(str(result[key]) == str(record[key]) for key in shared)
+            and any(str(record[key]) not in sent for key in shared)
+        ):
+            return True
+        return any(_shows(one, record, sent) for one in result.values())
+    if isinstance(result, (list, tuple)):
+        return any(_shows(one, record, sent) for one in result)
+    return False
 
 
 def native_runtime(world_root: Path) -> bool:
@@ -1942,6 +1998,7 @@ def prove(
     proof.faulted = list(getattr(world, "faulted", None) or [])
     proof.recorded = list(getattr(world, "recorded", None) or [])
     proof.actors_refused = list(getattr(world, "actors_refused", None) or [])
+    proof.actors_unseen = list(getattr(world, "actors_unseen", None) or [])
     proof.broken = [one.name for one in proof.with_solution if one.broken]
     proof.solvable = all(one.held or one.name in proof.excused for one in proof.with_solution) and not proof.broken
 

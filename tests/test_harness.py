@@ -2809,6 +2809,24 @@ def test_a_scripted_actor_action_the_world_refused_is_named_when_the_case_is_kep
     assert [one.name for one in kept] == ["adds-a-big-mac"]
 
 
+def test_an_actor_change_the_agent_never_sees_is_named_when_the_case_is_kept(tmp_path, monkeypatch):
+    from fi.alk.harness import prove
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    # What the actors' own reading of the proof finds, carried through the proof to the reply.
+    monkeypatch.setattr(
+        prove._WorldActors, "unseen", lambda self: ["alex: approvals {'deal_id': 9, 'status': 'approved'} before apply_discount"]
+    )
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    text = said["content"][0]["text"]
+    assert not said.get("is_error"), said
+    assert "NOTE: no tool of the agent's shows it these actors' record changes" in text
+    assert "alex: approvals {'deal_id': 9, 'status': 'approved'} before apply_discount" in text
+    assert [one.name for one in kept] == ["adds-a-big-mac"]
+
+
 def _removed_case(tmp_path):
     """An environment that had `adds-a-big-mac` and lost it: its key is used, no case holds it."""
     from fi.alk.harness.scenario_tools import accept_scenario
