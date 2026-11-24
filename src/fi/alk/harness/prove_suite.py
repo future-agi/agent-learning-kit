@@ -25,7 +25,7 @@ from typing import Any
 
 from .catalogue import load_catalogue
 from .json_file import write_json_atomic
-from .live_proof import apply_live, load_live, load_unplayed
+from .live_proof import apply_live, load_live, load_unplayed, outside_the_agent
 from .outbound import redact_outbound_text
 from .proof_records import ProofEntry
 from .proofs import proof_entry, proof_key, unprovable_entry
@@ -104,12 +104,8 @@ def prove_suite(
     actors = load_world_actors(authoring)
     live = load_live(authoring)
     unplayed = load_unplayed(authoring)
-    # The tools a live server plays (`mode` service); a tool in the agent's own process is assumed live and offline alike.
-    served = (
-        None
-        if contract is None
-        else {name for name in contract.tool_names() if getattr(contract.entry_for(name), "mode", "") == "service"}
-    )
+    # The tools a live lane could play; a tool in the agent's own process is assumed live and offline alike.
+    served = None if contract is None else outside_the_agent(contract)
     tools = agent_tools(agent_document)
     started = time.monotonic()
     allowed = budget_seconds(suite_budget_seconds() if budget is None else budget, deadline_at, time.time())

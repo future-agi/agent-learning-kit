@@ -84,15 +84,26 @@ def service_endpoints(
 
     Empty when neither server is up: nothing could be played."""
     endpoints = endpoints or {}
+    outside = outside_the_agent(contract)
     bound: dict[str, str] = {}
     for name in contract.tool_names():
         entry = contract.entry_for(name)
         mode = entry.mode if entry is not None else ""
         if TOOL_PROXY in endpoints and mode == "service":
             bound[name] = str(entry.endpoint or name).strip("/")
-        elif MCP_TOOLBOX in endpoints and name in toolbox_tools and mode not in IN_PROCESS_MODES:
+        elif MCP_TOOLBOX in endpoints and name in toolbox_tools and name in outside:
             bound[name] = MCP_ROUTE + name
     return bound
+
+
+def outside_the_agent(contract: AgentContract) -> set[str]:
+    """The tools a live lane could play: every one the contract does not place in the agent's own process, served
+    behind the tool proxy or by an MCP Toolbox."""
+    return {
+        name
+        for name in contract.tool_names()
+        if getattr(contract.entry_for(name), "mode", "") not in IN_PROCESS_MODES
+    }
 
 
 def served_by_toolbox(endpoints: Mapping[str, RuntimeEndpoint]) -> set[str]:

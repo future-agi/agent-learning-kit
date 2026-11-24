@@ -171,7 +171,9 @@ def test_an_unplayed_case_whose_offline_proof_ran_every_step_keeps_that_proof(mo
     assert prove_suite(tmp_path, tmp_path / "proofs.json")["ran"]["proved"] is True
 
 
-@pytest.mark.parametrize(("mode", "downgraded"), [("service", True), ("import", False)])
+@pytest.mark.parametrize(
+    ("mode", "downgraded"), [("service", True), ("unreachable", True), ("import", False), ("construct", False)]
+)
 def test_an_unplayed_case_is_not_proved_only_when_a_live_server_would_have_run_its_assumed_steps(
     monkeypatch, tmp_path, mode, downgraded
 ):
@@ -191,6 +193,7 @@ def test_an_unplayed_case_is_not_proved_only_when_a_live_server_would_have_run_i
 
     proof = prove_suite(tmp_path, tmp_path / "proofs.json")["case"]
 
-    # A tool in the agent's own process is never on a live server: its case keeps what its offline proof says.
+    # A tool in the agent's own process is never on a live lane (an MCP Toolbox may serve any other): its case keeps what
+    # its offline proof says.
     assert (proof["blocked_reason"] == "validation_incomplete") is downgraded
     assert proof["kept_as_written"] is not downgraded
