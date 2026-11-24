@@ -20,7 +20,7 @@ import json
 import logging
 import random
 import time
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -63,6 +63,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 LIVE_PROOFS = ".futureagi-live-proofs.json"
+# The cases a live pass was to play and did not, each with why: their offline proof cannot speak for the steps it
+# could not run here, so `prove_suite` records them not proved rather than kept as written.
+LIVE_UNPLAYED = ".futureagi-live-unplayed.json"
+BUDGET_SPENT = "the time budget ran out before it"
 TOOL_PROXY = "tool_proxy"
 MCP_TOOLBOX = "mcp_toolbox"
 # Entry modes whose tool runs inside the agent's own process: a server serving a tool of the same name is not it.
@@ -247,7 +251,7 @@ async def prove_live(
     return `{scenario_key: live result}`. Returns {} when no tool is bound to a running server.
 
     `keys` plays only those cases. No case starts once `until` (epoch seconds) has passed: a case not
-    reached keeps its offline proof. With `runtimes` (instances of the same sealed runtime in this sandbox, `runtime`
+    reached, or one the lane could not play, is written unplayed with why (`write_unplayed`). With `runtimes` (instances of the same sealed runtime in this sandbox, `runtime`
     among them), up to `prove_concurrency()` cases are played at once, one per instance; one instance plays them one
     after another, as before."""
     lanes = [runtime, *(one for one in runtimes or () if one is not runtime)][: prove_concurrency()]
@@ -276,6 +280,7 @@ async def prove_live(
         )
     ]
     results: dict[str, LiveResult] = {}
+    unplayed: dict[str, str] = {}
     retry: list[Scenario] = []
     flushed = {"at": time.monotonic()}
 
@@ -321,12 +326,13 @@ async def prove_live(
         # One instance: today's loop, case after case.
         for scenario in order:
             if not due():
-                logger.warning("live proof: time budget spent before %s; it keeps its offline proof", proof_key(scenario))
+                logger.warning("live proof: time budget spent before %s; it is not proved live", proof_key(scenario))
+                unplayed[proof_key(scenario)] = BUDGET_SPENT
                 continue
             try:
                 keep(scenario, await prove_on(lanes[0], scenario))
-            except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play keeps its offline proof
-                _skipped(scenario, exc)
+            except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play is recorded unplayed
+                unplayed[proof_key(scenario)] = _skipped(scenario, exc)
     else:
         pending = list(order)
         # The first case alone, its memory growth measured, so the lanes used fit what this agent takes.
@@ -390,16 +396,22 @@ async def prove_live(
         leftover = [*retry, *_drained(queue)]
         for scenario in sorted(leftover, key=order.index):
             if not due():
-                logger.warning("live proof: time budget spent before %s; it keeps its offline proof", proof_key(scenario))
+                logger.warning("live proof: time budget spent before %s; it is not proved live", proof_key(scenario))
+                unplayed[proof_key(scenario)] = BUDGET_SPENT
                 continue
             try:
                 keep(scenario, await prove_on(lanes[0], scenario))
-            except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play keeps its offline proof
-                _skipped(scenario, exc)
+            except Exception as exc:  # noqa: BLE001 - a case the live lane cannot play is recorded unplayed
+                unplayed[proof_key(scenario)] = _skipped(scenario, exc)
     for lane in lanes:
         await provider.reset(lane, work_directory=work)
     ordered = {proof_key(one): results[proof_key(one)] for one in order if proof_key(one) in results}
     write_live(authoring, ordered)
+    write_unplayed(
+        authoring,
+        {proof_key(one): unplayed.get(proof_key(one), BUDGET_SPENT) for one in order if proof_key(one) not in results},
+        played=set(ordered),
+    )
     record["cases_total"] = len(order)
     record["seconds"] = round(time.monotonic() - started, 2)
     _write_lanes(authoring, record)
@@ -423,10 +435,11 @@ def _drained(queue: asyncio.Queue) -> list[Scenario]:
     return out
 
 
-def _skipped(scenario: Scenario, exc: Exception) -> None:
-    logger.warning(
-        "live proof skipped for %s: %s", proof_key(scenario), redact_outbound_text(f"{type(exc).__name__}: {exc}")
-    )
+def _skipped(scenario: Scenario, exc: Exception) -> str:
+    """Log a case the live lane could not play; return why, in one line."""
+    why = redact_outbound_text(f"{type(exc).__name__}: {exc}").splitlines()[0][:300]
+    logger.warning("live proof skipped for %s: %s", proof_key(scenario), why)
+    return why
 
 
 async def _measured(
@@ -541,13 +554,30 @@ def write_live(authoring: Path, results: Mapping[str, LiveResult]) -> None:
 
 
 def forget_live(authoring: Path, keys: set[str] | None) -> None:
-    """Drop the live results of `keys` (every key when None), so a case is never given a result an
+    """Drop the live results and unplayed marks of `keys` (every key when None), so a case is never given a result an
     earlier job played on what may since have been edited."""
-    if not (Path(authoring) / LIVE_PROOFS).is_file():
-        return
-    kept = {} if keys is None else {key: value for key, value in load_live(authoring).items() if key not in keys}
-    (Path(authoring) / LIVE_PROOFS).unlink()
-    write_live(authoring, kept)
+    for name, load in ((LIVE_PROOFS, load_live), (LIVE_UNPLAYED, load_unplayed)):
+        path = Path(authoring) / name
+        if not path.is_file():
+            continue
+        kept = {} if keys is None else {key: value for key, value in load(authoring).items() if key not in keys}
+        path.unlink()
+        write_json_atomic(path, kept)
+
+
+def write_unplayed(authoring: Path, unplayed: Mapping[str, str], *, played: Collection[str] = ()) -> None:
+    """Merge `unplayed` ({key: why}) into the unplayed file by key, and drop the keys just `played`."""
+    merged = {key: why for key, why in load_unplayed(authoring).items() if key not in played}
+    write_json_atomic(Path(authoring) / LIVE_UNPLAYED, {**merged, **unplayed})
+
+
+def load_unplayed(authoring: Path) -> dict[str, str]:
+    """The cases a live pass was to play and did not, with why; none when the file is absent or unreadable."""
+    try:
+        value = json.loads((Path(authoring) / LIVE_UNPLAYED).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(key): str(why) for key, why in value.items()} if isinstance(value, dict) else {}
 
 
 def load_live(authoring: Path) -> dict[str, LiveResult]:

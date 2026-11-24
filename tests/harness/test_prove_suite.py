@@ -139,3 +139,31 @@ def test_each_case_s_own_goals_read_the_suite_s_shared_goals_once(monkeypatch, t
     monkeypatch.setattr(module, "shared_goals", counted)
     prove_suite(tmp_path, tmp_path / "proofs.json", judge_case_goals=True)
     assert reads == [5]
+
+
+def test_a_case_the_live_pass_did_not_play_is_not_kept_as_written_on_steps_that_never_ran(monkeypatch, tmp_path):
+    from fi.alk.harness import live_proof
+
+    # Offline nothing runs `refund_order`: its steps are assumed and, alone, the case would be kept as written.
+    install(monkeypatch, runtime_tools={"refund_order"})
+    _suite(monkeypatch, [refund_case(name=key, scenario_key=key) for key in ("unplayed", "not_asked")])
+    alone = prove_suite(tmp_path, tmp_path / "alone.json")
+    assert alone["unplayed"]["kept_as_written"] is True and alone["unplayed"]["ready"] is True
+    live_proof.write_unplayed(tmp_path, {"unplayed": "ProcessRuntimeError: seed_failed"})
+
+    proofs = prove_suite(tmp_path, tmp_path / "proofs.json")
+
+    assert proofs["unplayed"]["blocked_reason"] == "validation_incomplete"
+    assert proofs["unplayed"]["ready"] is False and proofs["unplayed"]["kept_as_written"] is False
+    assert "seed_failed" in proofs["unplayed"]["why"]
+    # A case the live pass was never meant to play keeps what its offline proof says.
+    assert proofs["not_asked"] == {**alone["not_asked"], "proved_at": proofs["not_asked"]["proved_at"]}
+
+
+def test_an_unplayed_case_whose_offline_proof_ran_every_step_keeps_that_proof(monkeypatch, tmp_path):
+    from fi.alk.harness import live_proof
+
+    install(monkeypatch)
+    _suite(monkeypatch, [refund_case(name="ran", scenario_key="ran")])
+    live_proof.write_unplayed(tmp_path, {"ran": "the time budget ran out before it"})
+    assert prove_suite(tmp_path, tmp_path / "proofs.json")["ran"]["proved"] is True

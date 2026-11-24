@@ -25,7 +25,7 @@ from typing import Any
 
 from .catalogue import load_catalogue
 from .json_file import write_json_atomic
-from .live_proof import apply_live, load_live
+from .live_proof import apply_live, load_live, load_unplayed
 from .outbound import redact_outbound_text
 from .proof_records import ProofEntry
 from .proofs import proof_entry, proof_key, unprovable_entry
@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 EXIT_UNREADABLE = 3
 DEADLINE_MARGIN_SECONDS = 300
 INCOMPLETE_WHY = "not proved: the validation's time budget ran out before this case"
+UNPLAYED_WHY = "not proved: the live check could not run its expected handling here ({why})"
 # The offline pass's own budget when the caller gives none (`ALK_PROVE_SUITE_SECONDS`): generous, since at about 0.05 s
 # a case a thousand cases take under a minute; the job's deadline still bounds it.
 DEFAULT_SUITE_SECONDS = 3600.0
@@ -102,6 +103,7 @@ def prove_suite(
     contract = load_proof_contract(authoring)
     actors = load_world_actors(authoring)
     live = load_live(authoring)
+    unplayed = load_unplayed(authoring)
     tools = agent_tools(agent_document)
     started = time.monotonic()
     allowed = budget_seconds(suite_budget_seconds() if budget is None else budget, deadline_at, time.time())
@@ -130,6 +132,13 @@ def prove_suite(
             if key in live:
                 # The certification just played this case on the live runtime: its gates win.
                 proof = apply_live(proof, live[key])
+            elif key in unplayed and proof.assumed:
+                # The live pass was to run the steps this offline proof could only assume, and did not: nothing here
+                # shows the case can be solved, so it is not proved, never kept as written on steps that never ran.
+                proofs[key] = unprovable_entry(
+                    UNPLAYED_WHY.format(why=unplayed[key]), blocked_reason=BlockedReason.VALIDATION_INCOMPLETE
+                )
+                continue
         except Exception as exc:  # noqa: BLE001 - a case that cannot be proved is recorded, never fatal
             first = (redact_outbound_text(str(exc)).splitlines() or [""])[0][:200]
             proofs[key] = unprovable_entry(f"{type(exc).__name__}: {first}".rstrip(": "))

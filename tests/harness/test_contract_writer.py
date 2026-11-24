@@ -1462,6 +1462,8 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     ("fi.alk.harness.bundle", "export_session_bundle", "shutil.copy2"): (2, _COPIES),
     ("fi.alk.harness.bundle", "export_session_bundle", "write_environment_plan"): (1, _COPIES),
     ("fi.alk.harness.bundle", "export_session_bundle", "write_text"): (1, _COPIES),
+    ("fi.alk.harness.authoring_runtime_validation", "prove_on_sealed_runtime", "shutil.copytree"): (
+        1, _COPIES + ": the sealed bundle, into the live proof's own work folder"),
     ("fi.alk.harness.bundle_author_v2", "_carry_contract", "_compile_source_tool_handlers"): (
         1, _COPIES),
     ("fi.alk.harness.bundle_author_v2", "_carry_contract", "shutil.copy2"): (1, _COPIES),

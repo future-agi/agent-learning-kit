@@ -1650,6 +1650,9 @@ async def prove_on_sealed_runtime(
     with tempfile.TemporaryDirectory(prefix="live-proof-", dir=authoring.parent) as root:
         work = Path(root)
         secrets = _prepare_runtime_work(job, work, secrets_path, local_runtime=local_runtime)
+        # Inside the runtime's own work directory, as certification lays it: per-user isolation lets declared users
+        # pass through that directory only, so a seed file under the private authoring tree is out of their reach.
+        bundle = Path(shutil.copytree(bundle, work / "bundle", symlinks=True))
         provider = _runtime_provider(job, secrets, authoring, local_runtime=local_runtime, generic=generic)
         try:
             # Up to `prove_concurrency()` instances in this one sandbox; provisioning admits only what its own CPU and

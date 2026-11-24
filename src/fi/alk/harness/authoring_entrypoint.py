@@ -490,7 +490,7 @@ SCENARIO_PROOFS = "scenario-proofs.json"
 def _prove_only(args: argparse.Namespace) -> int:
     """Prove the cases of a certified pair, `--keys` or every one, into `SCENARIO_PROOFS`: first on the
     pair's sealed runtime for the tools a running server serves, then offline. Certifies nothing,
-    calls no model and never fails: a case the live pass did not reach keeps its offline proof."""
+    calls no model and never fails: a case the live pass did not reach is recorded unplayed, which `prove_suite` reads."""
     output = args.output.resolve()
     keys = {one.strip() for one in args.keys.split(",") if one.strip()} if args.keys is not None else None
     if args.target_secrets is not None:
@@ -504,7 +504,14 @@ def _prove_only(args: argparse.Namespace) -> int:
         live = asyncio.run(authoring_runtime_validation.prove_on_sealed_runtime(job, args.source.resolve(), output, keys=keys, until=until))
         print(f"prove-only: {live_proof.live_summary(live)}", file=sys.stderr, flush=True)
     except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
-        print(f"prove-only: live proofs not run: {redact_outbound_text(_one_line(exc))}", file=sys.stderr, flush=True)
+        from .proofs import proof_key
+        from .scenario_tools import load_scenarios
+
+        why = redact_outbound_text(_one_line(exc))
+        print(f"prove-only: live proofs not run: {why}", file=sys.stderr, flush=True)
+        # No case was played: those whose steps only the live runtime could run are not proved (`prove_suite`).
+        asked = keys if keys is not None else {proof_key(one) for one in load_scenarios(output)}
+        live_proof.write_unplayed(output, {key: why for key in asked})
     prove_suite.prove_suite(
         output, output / SCENARIO_PROOFS, deadline_at=args.deadline_at, keys=keys, agent_document=args.agent_document
     )
