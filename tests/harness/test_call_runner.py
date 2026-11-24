@@ -5660,3 +5660,26 @@ def test_a_voice_lost_answer_is_one_done_call_with_the_tools_own_result(tmp_path
     assert graded == ["start_return"]
     (call,) = calls
     assert (call["ok"], call["error"], call["answer_lost"], call["result"]) == (True, "", True, "started")
+
+
+def test_a_tool_that_hands_back_the_proxy_s_failure_answer_made_a_failed_call_not_a_successful_one(
+    tmp_path: Path,
+) -> None:
+    # The door held the call (a test condition, or the world did not answer); the agent's tool returned the proxy's
+    # answer as its value instead of failing. A check must never read it as a call that went through.
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {"name": "file_request", "arguments": {"id": 7}, "output": {"detail": "tool_upstream_unavailable", "status": 502},
+         "is_error": False},
+        {"name": "file_request", "arguments": {"id": 7}, "output": '{"detail": "tool_upstream_timeout"}',
+         "is_error": False},
+        {"name": "file_request", "arguments": {"id": 7}, "output": {"detail": "pending"}, "is_error": False},
+    )
+
+    written, _ = cr._read_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert [(call.ok, call.result) for call in written] == [
+        (False, None),
+        (False, None),
+        (True, {"detail": "pending"}),
+    ]

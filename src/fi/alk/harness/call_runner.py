@@ -72,6 +72,7 @@ from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_ac
 from .actor_meter import ActorMeter
 from .world_door import (
     NOT_STOPPED,
+    door_failure,
     APPROVAL_REQUIRED,
     APPROVAL_UNKNOWN,
     DOOR_FILE,
@@ -3068,8 +3069,9 @@ def _read_file_tool_calls(
                 arguments = {"raw": arguments}
         if not isinstance(arguments, dict):
             arguments = {}
-        is_error = bool(record.get("is_error", False))
         output = record.get("output")
+        # The proxy's failure answer the agent's tool handed back as its value is a failed call, never a result.
+        is_error = bool(record.get("is_error", False)) or door_failure(_structured(output)) is not None
         raw_at = record.get("at")
         call = Call(
             name=name,

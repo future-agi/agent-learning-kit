@@ -42,6 +42,20 @@ IDENTITY_HEADER = "X-ALK-Actor-Identity"
 # HTTP methods that only read: a call made with one changes nothing in the world.
 READ_METHODS = ("GET", "HEAD", "OPTIONS")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+# What the tool proxy answers when the door held a call before the world saw it, or the world did not answer: never a
+# result. An agent's tool may hand that answer back as its value instead of failing (`door_failure`).
+UPSTREAM_UNAVAILABLE = "tool_upstream_unavailable"
+UPSTREAM_TIMEOUT = "tool_upstream_timeout"
+
+
+def door_failure(result: Any) -> str | None:
+    """The proxy's own failure answer when `result` is it (`{"detail": <code>}`, with any status the agent's tool kept
+    beside it), else None."""
+    if isinstance(result, Mapping) and result.get("detail") in (UPSTREAM_UNAVAILABLE, UPSTREAM_TIMEOUT):
+        return str(result["detail"])
+    return None
+
+
 # The code of a row that marks a call of the agent's which ran without the door deciding or recording it: the trial's
 # evidence is incomplete. Never a call or a change itself.
 EVIDENCE_INCOMPLETE = "evidence_incomplete"
