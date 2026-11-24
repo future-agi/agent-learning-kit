@@ -16,7 +16,7 @@ from urllib import request
 
 import pytest
 
-from fi.alk.harness.browser_record import BrowserRecorder
+from fi.alk.harness.browser_record import BrowserRecorder, sealed_record
 from fi.alk.harness.kit_browser import KitBrowser, chromium_binary
 from fi.alk.harness.world_door import MemoryLog
 
@@ -313,6 +313,8 @@ def test_what_the_agent_clicked_and_typed_is_kept_and_a_password_never_is(browse
         ("password", True, None),
     ]
     assert "hunter2" not in json.dumps(body)
+    sealed = sealed_record(kit.recorder.record_path, timeout=5)
+    assert sealed["complete"] is True and len(sealed["rows"]) == len(body["rows"])
     assert any(row["kind"] == "navigation" and row["url"] == "http://shop.test/form" for row in body["rows"])
 
 
@@ -342,10 +344,10 @@ def test_a_page_s_own_script_cannot_write_the_record(browser) -> None:
 
 def test_a_tab_is_let_go_even_when_the_recorder_cannot_watch_it(site, tmp_path) -> None:
     class _Failing(BrowserRecorder):
-        def _command(self, method, params=None, session=None):
+        def _command(self, method, params=None, session=None, **kwargs):
             if method == "Page.addScriptToEvaluateOnNewDocument":
                 raise ConnectionError("lost")
-            super()._command(method, params, session)
+            super()._command(method, params, session, **kwargs)
 
     def connect(host: str, port: int) -> socket.socket:
         return socket.create_connection(("127.0.0.1", site.server_port), timeout=5)

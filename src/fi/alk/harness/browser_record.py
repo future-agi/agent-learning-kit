@@ -379,6 +379,11 @@ class BrowserRecorder:
         self._ids_lock = threading.Lock()
         self._tabs: dict[str, tuple[str, str]] = {}  # session -> (tab, its main frame)
         self._leaving = False
+        # A seal asked for at the trial's end: answered once the browser has answered a command sent after it, so
+        # every event before the ask is in the record.
+        self._seals: dict[int, str] = {}
+        self._closed = threading.Event()
+        threading.Thread(target=self._watch_seals, daemon=True).start()
 
     def attach(self, port: int) -> None:
         """Start a new record and attach to the browser on ``port``: a browser that knows no client yet."""
@@ -407,6 +412,30 @@ class BrowserRecorder:
         self._drop()
         self.write()
 
+    def close(self) -> None:
+        self.detach()
+        self._closed.set()
+
+    def seal(self, nonce: str) -> None:
+        """Write the record marked with ``nonce`` once every event the browser sent before now is in it."""
+        try:
+            self._command("Browser.getVersion", seal=nonce)
+        except Exception:  # noqa: BLE001 - no connection: nothing more can arrive, the record is as it is
+            with self._ids_lock:
+                self._seals = {}
+            self.write(sealed=nonce)
+
+    def _watch_seals(self) -> None:
+        asked = seal_request_path(self.record_path)
+        while not self._closed.wait(0.05):
+            try:
+                nonce = asked.read_text(encoding="utf-8").strip()
+                asked.unlink()
+            except OSError:
+                continue
+            if nonce:
+                self.seal(nonce)
+
     def write(self, **extra: Any) -> None:
         try:
             _write_json(self.record_path, {**self.record.body(), **extra})
@@ -418,13 +447,17 @@ class BrowserRecorder:
         if current is not None:
             current.close()
 
-    def _command(self, method: str, params: dict[str, Any] | None = None, session: str | None = None) -> None:
+    def _command(
+        self, method: str, params: dict[str, Any] | None = None, session: str | None = None, *, seal: str = ""
+    ) -> None:
         current = self._socket
         if current is None:
             raise ConnectionError("the recorder is not attached")
         with self._ids_lock:
             self._ids += 1
             message: dict[str, Any] = {"id": self._ids, "method": method, "params": params or {}}
+            if seal:
+                self._seals[self._ids] = seal
         if session is not None:
             message["sessionId"] = session
         current.send(message)
@@ -442,6 +475,12 @@ class BrowserRecorder:
                 self.write()
 
     def handle(self, message: dict[str, Any]) -> None:
+        if "id" in message:
+            with self._ids_lock:
+                nonce = self._seals.pop(message["id"], None)
+            if nonce is not None:
+                self.write(sealed=nonce)
+            return
         method = message.get("method")
         params = message.get("params") or {}
         session = message.get("sessionId")
@@ -501,3 +540,43 @@ class BrowserRecorder:
                     self._command("Runtime.runIfWaitingForDebugger", None, session)
                 except Exception:  # noqa: BLE001 - a lost connection lets every held tab go
                     pass
+
+
+def seal_request_path(record_path: Path) -> Path:
+    return record_path.with_name(record_path.name + ".seal")
+
+
+def sealed_record(record_path: Path, *, timeout: float = 5.0) -> dict[str, Any] | None:
+    """The world's record of its browser at the trial's end: asks the kit's client to seal it and waits, within
+    ``timeout``, for the record that answers. One not sealed in time is read as it stands and says it is incomplete;
+    None when there is no record at all."""
+    nonce = uuid.uuid4().hex
+    try:
+        _write_text(seal_request_path(record_path), nonce)
+    except OSError:
+        logger.warning("browser record: the seal could not be asked for at %s", record_path)
+    deadline = time.monotonic() + timeout
+    body: Any = None
+    while True:
+        try:
+            body = json.loads(record_path.read_text(encoding="utf-8")[: 64 * 1024 * 1024])
+        except (OSError, ValueError):
+            body = None
+        if isinstance(body, dict) and body.get("sealed") == nonce:
+            body.pop("sealed", None)
+            return body
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.05)
+    if not isinstance(body, dict):
+        return None
+    body.pop("sealed", None)
+    body["complete"] = False
+    body.setdefault("why_incomplete", "the record was not sealed in time")
+    return body
+
+
+def _write_text(path: Path, text: str) -> None:
+    fresh = path.with_name(f"{path.name}.{uuid.uuid4().hex}.new")
+    fresh.write_text(text, encoding="utf-8")
+    os.replace(fresh, path)

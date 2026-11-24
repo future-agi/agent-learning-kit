@@ -386,6 +386,8 @@ class KitBrowser:
 
     def close(self) -> None:
         self.stop()
+        if self.recorder is not None:
+            self.recorder.close()
         self.relay.close()
         self.proxy.close()
 

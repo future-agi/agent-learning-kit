@@ -272,3 +272,120 @@ def test_a_closed_connection_ends_the_read() -> None:
             client.receive()
     finally:
         client.close()
+
+
+# Sealing the record at the trial's end
+
+
+class _FakeCdp:
+    """A DevTools connection that answers each command after the events queued before it."""
+
+    def __init__(self) -> None:
+        self.inbox: list[dict] = []
+        self.sent: list[dict] = []
+        self.ready = threading.Condition()
+        self.closed = False
+
+    def send(self, message: dict) -> None:
+        with self.ready:
+            self.sent.append(message)
+            self.inbox.append({"id": message["id"], "result": {}})
+            self.ready.notify_all()
+
+    def queue(self, message: dict) -> None:
+        with self.ready:
+            self.inbox.append(message)
+            self.ready.notify_all()
+
+    def receive(self) -> dict:
+        with self.ready:
+            while not self.inbox:
+                if self.closed:
+                    raise ConnectionError("closed")
+                self.ready.wait(0.05)
+            return self.inbox.pop(0)
+
+    def close(self) -> None:
+        with self.ready:
+            self.closed = True
+            self.ready.notify_all()
+
+
+@pytest.fixture()
+def devtools_port():
+    """`/json/version` for a recorder that then connects through a fake."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Version(BaseHTTPRequestHandler):
+        def log_message(self, *_args: object) -> None:
+            return
+
+        def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+            content = json.dumps({"webSocketDebuggerUrl": "ws://127.0.0.1:1/devtools/browser/x"}).encode()
+            self.send_response(200)
+            self.send_header("content-length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Version)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield server.server_port
+    finally:
+        server.shutdown()
+
+
+def _attached(page: str = "T1") -> dict:
+    return {
+        "method": "Target.attachedToTarget",
+        "params": {"sessionId": "S1", "targetInfo": {"type": "page", "targetId": page}, "waitingForDebugger": True},
+    }
+
+
+def test_a_sealed_record_holds_every_event_the_browser_sent_before_the_seal(tmp_path, devtools_port) -> None:
+    fake = _FakeCdp()
+    recorder = browser_record.BrowserRecorder(["shop.test"], tmp_path / "w0-record.json", connect=lambda url: fake)
+    recorder.attach(devtools_port)
+    try:
+        fake.queue(_attached())
+        fake.queue(
+            {
+                "method": "Page.frameNavigated",
+                "sessionId": "S1",
+                "params": {"frame": {"id": "T1", "url": "http://shop.test/cart"}},
+            }
+        )
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    assert [row["url"] for row in body["rows"]] == ["http://shop.test/cart"]
+    assert body["complete"] is True
+    # A held tab is let go after its listener is set up.
+    methods = [one["method"] for one in fake.sent]
+    assert methods.index("Runtime.runIfWaitingForDebugger") > methods.index("Page.addScriptToEvaluateOnNewDocument")
+
+
+def test_a_record_not_sealed_in_time_is_read_as_incomplete(tmp_path) -> None:
+    path = tmp_path / "w0-record.json"
+    path.write_text(json.dumps({"complete": True, "truncated": False, "rows": [], "blocked_navigations": []}))
+    body = browser_record.sealed_record(path, timeout=0.2)
+    assert body["complete"] is False
+    assert "not sealed" in body["why_incomplete"]
+
+
+def test_no_record_at_all_is_none(tmp_path) -> None:
+    assert browser_record.sealed_record(tmp_path / "w0-record.json", timeout=0.2) is None
+
+
+def test_a_connection_that_ends_while_the_browser_runs_leaves_an_incomplete_record(tmp_path, devtools_port) -> None:
+    fake = _FakeCdp()
+    recorder = browser_record.BrowserRecorder(["shop.test"], tmp_path / "w0-record.json", connect=lambda url: fake)
+    recorder.attach(devtools_port)
+    try:
+        fake.close()
+        deadline = __import__("time").monotonic() + 5
+        while recorder.record.body()["complete"] and __import__("time").monotonic() < deadline:
+            __import__("time").sleep(0.02)
+    finally:
+        recorder.close()
+    assert json.loads((tmp_path / "w0-record.json").read_text())["complete"] is False
