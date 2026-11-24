@@ -255,3 +255,62 @@ def test_of_two_identical_calls_the_actor_is_credited_the_one_closest_to_its_own
     rows = _over(calls, {1: "alex"}, log)()
 
     assert [(row["at"], row.get("actor_id") or "agent") for row in rows] == [(98.0, "agent"), (101.1, "alex")]
+
+
+class _Desk:
+    """A world of requests and approvals: `request` files one, `approve` and `notify` record the actors' answers."""
+
+    def __init__(self):
+        self.records = {"requests": [], "approvals": [], "notices": []}
+        self.calls = []
+
+    def call(self, name, arguments):
+        from fi.alk.harness.world.runtime import Call
+
+        table = {"request": "requests", "approve": "approvals", "notify": "notices"}[name]
+        self.records[table].append(dict(arguments))
+        self.calls.append(Call(name, dict(arguments), result={"ok": True}))
+        return self.calls[-1]
+
+    def state(self):
+        return {name: list(rows) for name, rows in self.records.items()}
+
+
+def test_an_actor_waiting_on_a_record_acts_in_the_proof_once_the_record_is_there_and_in_turn_brings_in_the_next(
+    tmp_path,
+):
+    from fi.alk.harness.prove import _unplayed, _WorldActors
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(id="approver", name="Approver", play="mocked", permitted_actions=["approve"]),
+                Actor(id="clerk", name="Clerk", play="mocked", permitted_actions=["notify"]),
+            ]
+        ),
+    )
+
+    def waits_on(collection, action):
+        return {"action": action, "arguments": {"id": 7}, "trigger": {"kind": "conditional", "collection": collection, "where": {"id": 7}}}
+
+    scenario = Scenario(
+        name="request",
+        instruction="x",
+        # The clerk is listed first: it is brought in only by what the approver does after it was passed over.
+        actors=[
+            {"id": "clerk", "actions": [waits_on("approvals", "notify")]},
+            {"id": "approver", "actions": [waits_on("requests", "approve")]},
+        ],
+    )
+    world, by_actors = _Desk(), {}
+    acting = _WorldActors(scenario, tmp_path, world, by_actors)
+
+    acting.act_on(None)
+    assert world.calls == []
+    world.call("request", {"id": 7})
+    acting.act_on(SimpleNamespace(tool="request", arguments={"id": 7}))
+
+    assert [call.name for call in world.calls] == ["request", "approve", "notify"]
+    assert by_actors == {1: "approver", 2: "clerk"}
+    assert _unplayed(scenario) == []

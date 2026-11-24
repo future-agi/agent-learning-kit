@@ -1124,7 +1124,7 @@ class _Faults:
 
 
 # The triggers a reference solution can meet; the rest are reported in `Proof.unplayed`.
-_PLAYED_TRIGGERS = ("always", "on_tool", "contacted")
+_PLAYED_TRIGGERS = ("always", "on_tool", "contacted", "conditional")
 
 
 def _unplayed(scenario: Scenario) -> list[str]:
@@ -1254,6 +1254,11 @@ class _WorldActors:
 
     def _due(self, actor: Any, action: Any, step: Any) -> bool:
         trigger = action.trigger
+        if trigger.kind == "conditional":
+            # Due once its record is in the world, whatever brought it there, by the run's own rule.
+            from fi.simulate.simulation.call_actors import Moment, due
+
+            return due(trigger.model_dump(), Moment(agent_turns=None, records=self._records), seed="", actor_id=actor.id)
         if step is None:
             return trigger.kind == "always"
         if trigger.kind == "on_tool":
@@ -1289,9 +1294,22 @@ class _WorldActors:
                 results.append(made[-1].result if made else None)
                 self.by_actors.update(dict.fromkeys(range(before, len(self.world.calls)), message.actor))
 
+    def _records(self, collection: str) -> list[dict[str, Any]]:
+        """The world's records of one collection as they stand now."""
+        store = _records_of(self.world)
+        if store is not None:
+            return store.table(collection)
+        state = getattr(self.world, "state", None)
+        return list((state() if callable(state) else {}).get(collection) or [])
+
     def act_on(self, step: Any) -> None:
         if step is not None:
             self.counts[step.tool] = self.counts.get(step.tool, 0) + 1
+        # Until nothing more is due: an actor's action can write the record another actor waits for.
+        while any(self._due(actor, action, step) for actor, action in self.pending):
+            self._act_on(step)
+
+    def _act_on(self, step: Any) -> None:
         for actor, action in list(self.pending):
             if not self._due(actor, action, step):
                 continue
