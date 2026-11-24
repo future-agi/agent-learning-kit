@@ -5,12 +5,16 @@ provider key (never placed in the process environment, never seen by the model),
 PostgreSQL the proofs run on, hands the conversation's builder what it needs in the workspace, and
 waits until the builder finishes, exactly as a build waits for its harness. The builder session
 does the binding through the workbench; this process turns its `result.json` into the exit code.
+With `--auto` (the platform's run mode) there is no builder: this process binds the agent itself
+(`auto.py`) and writes the same files.
 
 Workspace layout (`/work/authoring`): `adaptation/inputs.json` and `adaptation/profile.json` from
 this process; `adaptation/result.json` and the sealed files from the workbench; the builder's
 `.futureagi-build-finished.json` marker when the work ends either way. The scratch PostgreSQL's
 superuser DSN sits beside the workspace in `.authoring-credentials/`, which the model's file tools
-refuse and the workspace checkpoint never packs.
+refuse and the workspace checkpoint never packs. What this process verified (the sealed binding's
+digest and its proof's) is recorded there too, in `adaptation-verified.json`: the platform reads
+it from that path, not from the workspace, and takes a proof only when it has that digest.
 """
 
 from __future__ import annotations
@@ -33,9 +37,12 @@ from ..hosted_authoring_entrypoint import (
 from ..releases import RELEASES_SUITE, environment_directory
 from .errors import AdaptationFailure
 from .workbench import (
+    BINDING,
+    BINDING_PROOF,
     INPUTS,
     PROFILE,
     RESULT,
+    TRAJECTORIES,
     Workbench,
     failed_result,
     profile_from_document,
@@ -46,10 +53,36 @@ ADAPTATION_DIRECTORY = "adaptation"
 FINISHED_MARKER = ".futureagi-build-finished.json"
 _INPUTS_WAIT_SECONDS = 300
 _POSTGRES_CREDENTIALS = Path(".authoring-credentials") / "adaptation-postgres.json"
+VERIFIED_SCHEMA = "futureagi.adaptation-verified.v1"
+_VERIFIED = Path(".authoring-credentials") / "adaptation-verified.json"
 
 
 def _postgres_credentials(workspace: Path) -> Path:
     return workspace.parent / _POSTGRES_CREDENTIALS
+
+
+def verified_path(workspace: Path) -> Path:
+    """Where the control process records what it verified: beside the workspace, in the folder
+    the builder session's tools refuse, never inside the output the session can write."""
+    return workspace.parent / _VERIFIED
+
+
+def record_verified(
+    workspace: Path, *, binding: dict[str, Any] | None, proof_digest: str | None
+) -> None:
+    """Write the control process's own statement of what it sealed: the binding's digest and
+    mode and, for a routed binding, the digest of the proof this process made. Written from
+    values this process holds, never read back from the output directory."""
+    path = verified_path(workspace)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    body = {
+        "schema_version": VERIFIED_SCHEMA,
+        "binding": binding,
+        "binding_proof": {"digest": proof_digest} if proof_digest else None,
+    }
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(body, stream, sort_keys=True)
 
 
 def _values(path: Path) -> dict[str, str]:
@@ -57,6 +90,7 @@ def _values(path: Path) -> dict[str, str]:
         return _load_values(path)
     except (OSError, ValueError):
         return {}
+
 
 def _target_credentials() -> dict[str, str]:
     """The target's provider key, read once: an adaptation runs no customer process, so nothing
@@ -108,15 +142,98 @@ def failed_before_start(
     return 2
 
 
-def _await_result(output: Path) -> int:
-    """Wait while the conversation's builder binds the agent in this sandbox."""
+def prove_again(
+    output: Path, environment_root: Path, suite_root: Path, postgres_dsn: str
+) -> dict[str, Any]:
+    """The result of a builder's adaptation, with its proof made by this process.
+
+    The builder's session can write everything under `output`, its saved state included, so the
+    proof it left is not what is sealed. The control process reads only the sealed binding (its
+    digest is checked) and the trajectories, proves the binding against the released suite
+    itself, and writes the proof, its digest and the unscorable list from that. A binding it
+    cannot prove fails the adaptation, whatever the proof the builder left said."""
+    from ..binding_proof import proof_digest
+    from ..releases import BindingMode, ReleaseError, load_agent_binding
+    from .proofs import binding_verdicts, prove_binding_on
+
+    result = json.loads((output / RESULT).read_text(encoding="utf-8"))
+    if result.get("status") != "completed":
+        return result
+    try:
+        binding = load_agent_binding(output / BINDING)
+        # What is reported is the sealed binding as this process read and checked it, not what
+        # the result file says of it.
+        result["binding"] = {"digest": binding.digest, "mode": binding.mode.value}
+        if binding.mode is not BindingMode.TOOL_ROUTED:
+            result["binding_proof"] = None
+            return result
+        trajectories = json.loads((output / TRAJECTORIES).read_text(encoding="utf-8"))
+        proof = prove_binding_on(
+            suite_root,
+            binding,
+            trajectories if isinstance(trajectories, dict) else {},
+            environment_root=environment_root,
+            postgres_dsn=postgres_dsn,
+        )
+    except (OSError, ValueError, ReleaseError) as exc:
+        detail = (
+            f"{exc.code}: {exc.detail}" if isinstance(exc, ReleaseError) else str(exc)
+        )
+        failed = failed_result(
+            "binding_unproved",
+            f"the sealed binding could not be proved again: {detail}",
+        )
+        failed["environment"] = result.get("environment") or []
+        write_json(output / RESULT, failed)
+        return failed
+    verdicts = binding_verdicts(proof)
+    if not proof.passed or not any(one.status == "proved" for one in verdicts.values()):
+        failed = failed_result(
+            "binding_unproved",
+            "the sealed binding is not proved:\n"
+            + "\n".join(
+                f"{key}: {one.status}: {one.reason}"
+                for key, one in sorted(verdicts.items())
+                if one.status != "proved"
+            ),
+        )
+        failed["environment"] = result.get("environment") or []
+        write_json(output / RESULT, failed)
+        return failed
+    write_json(output / BINDING_PROOF, proof.model_dump(mode="json"))
+    result["binding"] = {"digest": binding.digest, "mode": binding.mode.value}
+    result["binding_proof"] = {"digest": proof_digest(proof)}
+    result["alignment"] = {
+        **(result.get("alignment") or {}),
+        "unscorable": [
+            {"scenario_key": key, "reason": one.reason}
+            for key, one in sorted(verdicts.items())
+            if one.status == "unscorable"
+        ],
+    }
+    write_json(output / RESULT, result)
+    return result
+
+
+def _await_result(
+    output: Path, environment_root: Path, suite_root: Path, postgres_dsn: str
+) -> int:
+    """Wait while the conversation's builder binds the agent in this sandbox, then prove what it
+    sealed again here (`prove_again`)."""
     marker = output.parent / FINISHED_MARKER
     deadline = time.monotonic() + int(
         os.environ.get("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS") or 3300
     )
     while time.monotonic() < deadline:
         if marker.is_file() and (output / RESULT).is_file():
-            result = json.loads((output / RESULT).read_text(encoding="utf-8"))
+            result = prove_again(output, environment_root, suite_root, postgres_dsn)
+            if result.get("status") == "completed":
+                # From what this process just proved and holds, not from the files it wrote.
+                record_verified(
+                    output.parent,
+                    binding=result.get("binding"),
+                    proof_digest=(result.get("binding_proof") or {}).get("digest"),
+                )
             print(json.dumps({"status": result.get("status")}))
             return 0 if result.get("status") == "completed" else 2
         time.sleep(5)
@@ -159,19 +276,67 @@ def run_hosted(args: argparse.Namespace) -> int:
                 raise AdaptationFailure("postgres_unavailable", str(exc)) from exc
         credentials_path = _postgres_credentials(output.parent)
         credentials_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        descriptor = os.open(credentials_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        descriptor = os.open(
+            credentials_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+        )
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump({"postgres_dsn": dsn}, stream)
         write_json(output / PROFILE, profile.document())
+        if getattr(args, "auto", False):
+            return _run_auto(output, environments, suite_root, dsn, profile, job)
         # Written last: its presence tells the builder everything else is in place.
         write_json(
             output / INPUTS,
             {
                 "environments": [str(one) for one in environments],
                 "suite": str(suite_root),
+                # The pairing the person reviewed, which the builder's bindings are held to.
+                "pairing": ((job.metadata or {}).get("adaptation") or {}).get(
+                    "pairing"
+                ),
             },
         )
-        return _await_result(output)
+        return _await_result(output, environments[-1], suite_root, dsn)
+
+
+def _run_auto(
+    output: Path,
+    environments: list[Path],
+    suite_root: Path,
+    dsn: str,
+    profile: Any,
+    job: Any,
+) -> int:
+    """Run mode: no builder session. This process binds the agent itself (`auto.py`) and leaves
+    the same result.json and marker a builder would."""
+    from .. import spend
+    from .auto import adapt
+
+    # The platform reads this ledger before the sandbox is deleted and bills it as authoring.
+    spend.journal_to(output.parent / "cost.json")
+    workbench = Workbench(
+        environments=environments,
+        suite_root=suite_root,
+        output=output,
+        postgres_dsn=dsn,
+        profile=profile,
+        finished_marker=output.parent / FINISHED_MARKER,
+    )
+    try:
+        asyncio.run(adapt(workbench, (job.metadata or {})["adaptation"].get("pairing")))
+    except AdaptationFailure as exc:
+        workbench.fail(exc.code, exc.message)
+    result = json.loads((output / RESULT).read_text(encoding="utf-8"))
+    if result.get("status") == "completed":
+        # Run mode has no session: this process made the proof, and says so from its own
+        # workbench, not from the files.
+        record_verified(
+            output.parent,
+            binding={"digest": workbench.binding.digest, "mode": workbench.mode.value},
+            proof_digest=(workbench.proof_ref() or {}).get("digest"),
+        )
+    print(json.dumps({"status": result.get("status")}))
+    return 0 if result.get("status") == "completed" else 2
 
 
 async def load_workbench(workspace: Path) -> Workbench:
@@ -209,4 +374,5 @@ async def load_workbench(workspace: Path) -> Workbench:
         ),
         profile=profile,
         finished_marker=workspace / FINISHED_MARKER,
+        pairing=inputs.get("pairing"),
     )

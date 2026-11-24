@@ -953,7 +953,16 @@ class HostedChatRuntime:
 
     async def _approve(self, question: str, options: list[str]) -> str:
         """The person's answer to a question code asks, not the model."""
-        answer = await self._ask("finish_adaptation", {"question": question, "options": options}, None)
+        answer = await self._ask(
+            "finish_adaptation",
+            {
+                "question": question,
+                "options": options,
+                # The same review as data, for the platform's review page.
+                "data": self.workbench.approval_data(),
+            },
+            None,
+        )
         content = answer.get("content") if isinstance(answer, dict) else None
         return "\n".join(str(part.get("text") or "") for part in content or [])
 
@@ -2711,7 +2720,7 @@ class HostedChatRuntime:
         return reply
 
     async def _ask(
-        self, _tool_name: str, payload: dict[str, Any], _context: Any
+        self, tool_name: str, payload: dict[str, Any], _context: Any
     ) -> Any:
         asked = [one for one in payload.get("questions") or [] if isinstance(one, dict)]
         # A design asks the person even when the platform started its turn: its approval blocks.
@@ -2775,6 +2784,12 @@ class HostedChatRuntime:
                 "prompt": shown_question,
                 "options": shown_options,
                 **({"options_only": True} if payload.get("options_only") else {}),
+                # Only code's own approval question carries data; a model's question never does.
+                **(
+                    {"data": payload["data"]}
+                    if tool_name == "finish_adaptation" and isinstance(payload.get("data"), dict)
+                    else {}
+                ),
             },
         )
         self._asking = True

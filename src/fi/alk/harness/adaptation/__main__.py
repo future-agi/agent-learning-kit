@@ -3,10 +3,12 @@
     run     --environment DIR [--extension DIR] --suite DIR (--profile FILE | --job FILE)
             --output DIR --postgres-dsn DSN [--drafts FILE] [--approve | --console]
     hosted  --job /work/job.json --releases /work/releases --output /work/authoring/adaptation
+            [--auto]
 
 `run` binds locally: with `--drafts` (binding, trajectories, extension_candidates, conflicts) no
 model is involved; without it the builder's binding session drafts. `hosted` is the sandbox's
-control process; the conversation's builder does the binding (see `hosted.py`).
+control process; the conversation's builder does the binding (see `hosted.py`), or with `--auto`
+one model call drafts it and the approval is given (`auto.py`).
 
 Exit codes: 0 completed, 2 failed with result.json written, anything else a crash.
 """
@@ -161,6 +163,11 @@ def _parser() -> argparse.ArgumentParser:
     hosted.add_argument("--output", required=True)
     hosted.add_argument(
         "--postgres-dsn", help="use this server instead of starting a scratch cluster"
+    )
+    hosted.add_argument(
+        "--auto",
+        action="store_true",
+        help="run mode: bind without a builder session, with one model call (see auto.py)",
     )
     return parser
 

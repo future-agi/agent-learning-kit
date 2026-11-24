@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -359,6 +360,47 @@ harness_chat:
     question = client.events[0]
     assert question["kind"] == "question_requested"
     assert question["payload"]["options"] == ["app/api.py", "worker.py"]
+
+
+def test_the_adaptation_approval_carries_its_review_as_data(tmp_path):
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        """schema_version: 1
+harness_chat:
+  enabled: true
+  stages:
+    reception:
+      enabled: true
+  lifecycle:
+    request_user_input: true
+    interrupt_response: true
+""",
+        encoding="utf-8",
+    )
+    client = QuestionClient()
+    runtime = HostedChatRuntime(
+        client=client,  # type: ignore[arg-type]
+        policy=load_chat_policy(policy_path),
+        workspace=tmp_path,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
+    )
+    data = {"mapped": [], "unscorable": [], "total": 1, "scorable": 1}
+    runtime.workbench = SimpleNamespace(approval_data=lambda: data)
+    answer = asyncio.run(runtime._approve("Use this binding?", ["yes", "no"]))
+    assert answer == "Use app/api.py"
+    assert client.events[0]["payload"] == {
+        "prompt": "Use this binding?",
+        "options": ["yes", "no"],
+        "data": data,
+    }
+    # A question the model asks never carries data, whatever its input says.
+    client.events.clear()
+    (tmp_path / ".futureagi-pending-question.json").unlink(missing_ok=True)
+    asyncio.run(
+        runtime._ask("AskUserQuestion", {"question": "Which?", "data": data}, None)
+    )
+    assert "data" not in client.events[0]["payload"]
 
 
 def test_runtime_reuses_warm_state_and_does_not_reexecute_cold_replays(
