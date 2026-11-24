@@ -35,6 +35,7 @@ from .call_runner import (
 from .contract import AgentContract
 from .privilege import IsolationMode, isolation_mode
 from .hosted_scheduler import WORKER_LIMITS_NOT_ENFORCED, CallAborted, CallCancelled, CallOutcome, Scenario, World
+from .kit_browser import browser_notices
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import ChatActors, TargetConversationEnded, Transcript, converse
@@ -1445,6 +1446,8 @@ class HostedChatCallRunner:
         said += unenforced_deadline_notices(unenforced) + stopped_notices
         said += repeated_untimed_notices(transcript.calls) + hand_off_notices(runtime)
         said += tool_span_notices(runtime, transcript.calls)
+        # Whether the environment's browser was started, and used: an unused browser never reads as a clean trial.
+        said += browser_notices(runtime)
         if said:
             transcript.notices = said
         ended = datetime.now(timezone.utc)

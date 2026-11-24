@@ -112,6 +112,23 @@ environment in the staged run, and when the hosted build first sees a saved cont
 of host names (`browser_allowed_sites_invalid`), each one the run's egress allows when the job
 controls egress (`browser_site_not_in_egress`).
 
+**The environment's browser** (`kit_browser.py`). Where the job has sites and the contract needs a
+browser, the kit starts one headless Chromium for each world (`alk-chromium` from the image, or
+`ALK_CHROMIUM` for a local run), as the agent's user with a bare environment, on an empty profile
+at each spawn of the world, so a reset never keeps the agent's process. The agent's process alone
+gets its DevTools address in `ALK_BROWSER_CDP_URL`: a relay in front of the browser's port, fixed
+for the world's life, which counts the clients that attach. The browser's requests go through a
+refusing proxy of its own whose list is the sites and nothing else: never loopback, and never a
+site whose name resolves to loopback; Chromium sends loopback through it too, and QUIC and WebRTC
+are off. A refusal is logged at the world's door as the agent's `egress_blocked` attempt marked
+`via: browser`, and shows in the trial's `blocked` list, only while a client holds the browser;
+the browser's own service traffic is pointed at `kit-browser.invalid` and never logged. A trial
+says `browser_not_used` when no client attached, and `browser_not_started` when the job has sites
+for an agent not read as needing a browser. That bound holds for the environment's browser only:
+the agent's own code, or a browser it starts itself, is bound by the sandbox's firewall. It covers
+what the browser is asked to load, not a client that changes the browser's own settings through
+its DevTools address.
+
 **A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
 it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the
 reminder's. The platform sets it in `ALK_READING_MAX_MODEL_CALLS`; a missing, unreadable or

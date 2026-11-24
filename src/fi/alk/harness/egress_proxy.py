@@ -56,10 +56,11 @@ def no_proxy(allowed: Iterable[str], hosts: Iterable[str] = ()) -> str:
     return ",".join(dict.fromkeys(one for one in entries if one))
 
 
-def host_allowed(host: str, allowed: Iterable[str]) -> bool:
-    """Whether a host is one the run allows, matched the way clients read `NO_PROXY`."""
+def host_allowed(host: str, allowed: Iterable[str], *, loopback: bool = True) -> bool:
+    """Whether a host is one the run allows, matched the way clients read `NO_PROXY`; loopback too unless
+    `loopback` is False."""
     host = host.strip().strip("[]").lower().rstrip(".")
-    for entry in (*LOOPBACK, *allowed):
+    for entry in (*(LOOPBACK if loopback else ()), *allowed):
         name = no_proxy_entry(entry).lstrip(".")
         if name and (host == name or host.endswith("." + name)):
             return True
@@ -109,6 +110,10 @@ def _max_clients() -> int:
     return max(1, int(_setting("ALK_EGRESS_MAX_CLIENTS", cpus * _CLIENTS_PER_CPU)))
 
 
+class RefusedAddress(OSError):
+    """A host the proxy allows by name, refused for the address it resolves to."""
+
+
 class _BadBody(Exception):
     """The client's request body does not follow its own framing."""
 
@@ -142,6 +147,9 @@ class _Server(ThreadingHTTPServer):
 class EgressProxy:
     """A local proxy that refuses every host the run does not allow and logs each refusal."""
 
+    # Names the path a refused call took, in its logged arguments, when it is not the agent's own process.
+    via: str | None = None
+
     def __init__(
         self,
         allowed: Iterable[str],
@@ -172,11 +180,24 @@ class EgressProxy:
             "NODE_USE_ENV_PROXY": "1",
         }
 
+    def allows(self, host: str) -> bool:
+        return host_allowed(host, self.allowed)
+
+    def open(self, host: str, port: int) -> socket.socket:
+        """A connection to an allowed host. Raises OSError when it can't be reached, `RefusedAddress` when it must
+        not be."""
+        return socket.create_connection((host, port), timeout=30)
+
     def refuse(self, host: str, method: str) -> None:
         if self.door is None:
             return
         tool = self.tools_by_host.get(host.lower())
-        arguments = {"host": host, "method": method, **({"tool": tool} if tool else {})}
+        arguments = {
+            "host": host,
+            "method": method,
+            **({"tool": tool} if tool else {}),
+            **({"via": self.via} if self.via else {}),
+        }
         self.door.refuse(
             ToolCall(action=f"egress.{host}", name=host, arguments=arguments, actor=AGENT, method=method),
             REFUSAL_CODE,
@@ -199,11 +220,11 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
         def do_CONNECT(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
             host, _, port = self.path.rpartition(":")
             host = host.strip("[]") or self.path
-            if not host_allowed(host, proxy.allowed):
+            if not proxy.allows(host):
                 proxy.refuse(host, "CONNECT")
                 self._refuse(host)
                 return
-            upstream = self._upstream(host, port or 443)
+            upstream = self._upstream(host, port or 443, "CONNECT")
             if upstream is None:
                 return
             self.send_response(200, "Connection established")
@@ -224,11 +245,16 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
                 return
             self._pipe(upstream)
 
-        def _upstream(self, host: str, port: int | str) -> socket.socket | None:
-            """A connection to an allowed host, or None once the client has its error: 502 when the host cannot be
-            reached, 400 when the address is this proxy's own, which would only relay the client back to itself."""
+        def _upstream(self, host: str, port: int | str, method: str) -> socket.socket | None:
+            """A connection to an allowed host, or None once the client has its error: 403 when its address is one
+            the proxy refuses, 502 when it cannot be reached, 400 when the address is this proxy's own, which would
+            only relay the client back to itself."""
             try:
-                upstream = socket.create_connection((host, int(port)), timeout=30)
+                upstream = proxy.open(host, int(port))
+            except RefusedAddress as refused:
+                proxy.refuse(host, method)
+                self._refuse(host, str(refused))
+                return None
             except (OSError, ValueError):
                 self.send_error(502)
                 return None
@@ -267,7 +293,7 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
                 # Not a proxy request (`GET /x` names no host): nothing was asked of the world, so nothing is logged.
                 self.send_error(400, "A proxy request names an absolute http:// URL")
                 return
-            if not host_allowed(host, proxy.allowed):
+            if not proxy.allows(host):
                 proxy.refuse(host, self.command)
                 self._refuse(host)
                 return
@@ -288,7 +314,7 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
             head = [f"{self.command} {path} {self.request_version}", f"host: {authority}"] + [
                 f"{key}: {value}" for key, value in self.headers.items() if key.lower() not in dropped
             ]
-            upstream = self._upstream(host, port)
+            upstream = self._upstream(host, port, self.command)
             if upstream is None:
                 return
             self.close_connection = True
@@ -351,8 +377,8 @@ def _handler(proxy: EgressProxy) -> type[BaseHTTPRequestHandler]:
                 raise _BadBody
             return line
 
-        def _refuse(self, host: str) -> None:
-            content = f"{host} is outside the test world".encode()
+        def _refuse(self, host: str, why: str = "") -> None:
+            content = (why or f"{host} is outside the test world").encode()
             self.send_response(403, "Forbidden")
             self.send_header("content-type", "text/plain")
             self.send_header("content-length", str(len(content)))

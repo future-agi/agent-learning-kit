@@ -1502,10 +1502,13 @@ def trial_state_changes(
             # A call to a host outside the test world, stopped before it left: never a tool call or a change.
             asked = row_arguments(row.get("arguments"))
             asked = asked if isinstance(asked, dict) else {}
-            seen = {key: str(asked[key]) for key in ("host", "method", "tool") if asked.get(key)}
+            # `via` names the environment's browser, when the call went through its proxy and not the agent's.
+            seen = {key: str(asked[key]) for key in ("host", "method", "tool", "via") if asked.get(key)}
             blocked = entry.setdefault("blocked", [])
-            place = (seen.get("host"), seen.get("method"))
-            same = next((one for one in blocked if (one.get("host"), one.get("method")) == place), None)
+            place = (seen.get("host"), seen.get("method"), seen.get("via"))
+            same = next(
+                (one for one in blocked if (one.get("host"), one.get("method"), one.get("via")) == place), None
+            )
             if same is None:
                 blocked.append({**seen, "count": 1})
             else:
