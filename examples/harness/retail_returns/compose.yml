@@ -1,0 +1,37 @@
+# No cache service: this world is one store on purpose. A refund must be provable from a single
+# place, so there is nowhere for a second copy of the truth to drift to.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: source
+      POSTGRES_PASSWORD: source
+      POSTGRES_DB: app
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U source -d app"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+  agent:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://source:source@postgres:5432/app
+      PORT: "8080"
+    ports:
+      - "18083:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')",
+        ]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+    depends_on:
+      postgres:
+        condition: service_healthy
