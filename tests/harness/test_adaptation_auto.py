@@ -480,7 +480,7 @@ def test_hosted_auto_binds_in_process_and_never_waits_for_a_builder(
         lambda job, credentials: SimpleNamespace(document=lambda: {"agent": {}}),
     )
 
-    def never(_output):
+    def never(*_arguments):
         raise AssertionError("run mode must not wait for a builder")
 
     monkeypatch.setattr(hosted, "_await_result", never)
@@ -525,6 +525,118 @@ def test_the_hosted_command_takes_auto():
         ["hosted", "--job", "j", "--releases", "r", "--output", "o", "--auto"]
     )
     assert args.auto is True
+
+
+# --- review mode: the control process proves the builder's binding again --------------------------
+
+
+def _left_by_the_builder(output: Path, proof: dict[str, Any]) -> None:
+    """What a builder's session leaves, with the proof it claims."""
+    output.mkdir(parents=True)
+    (output / "binding.json").write_text("{}", encoding="utf-8")
+    (output / "trajectories.json").write_text(
+        json.dumps({"S01": [{"tool": "block_card", "arguments": {}}]}),
+        encoding="utf-8",
+    )
+    (output / "binding-proof.json").write_text(json.dumps(proof), encoding="utf-8")
+    (output / RESULT).write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "environment": [{"digest": SHA}],
+                "binding": {"digest": SHA, "mode": "tool_routed"},
+                "binding_proof": {"digest": "sha256:" + "ee" * 32},
+                "alignment": {"mapped": [], "unscorable": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _control(monkeypatch, **scenarios: tuple[str, str]):
+    """The control process's own proof of the sealed binding, scripted per scenario."""
+    from fi.alk.harness import releases
+    from fi.alk.harness.adaptation import proofs
+    from fi.alk.harness.binding_proof import BindingProofV1
+
+    ref = {"digest": SHA}
+    proof = BindingProofV1(
+        binding=ref,
+        suite=ref,
+        environment=ref,
+        scenarios={
+            key: {"status": status, "reason": reason}
+            for key, (status, reason) in scenarios.items()
+        },
+        passed=all(status != "failed" for status, _ in scenarios.values()),
+    )
+    seen: dict[str, Any] = {}
+
+    def prove(suite_root, binding, trajectories, *, environment_root, postgres_dsn):
+        seen.update(suite=suite_root, trajectories=trajectories, dsn=postgres_dsn)
+        return proof
+
+    monkeypatch.setattr(
+        releases,
+        "load_agent_binding",
+        lambda _path: SimpleNamespace(digest=SHA, mode=BindingMode.TOOL_ROUTED),
+    )
+    monkeypatch.setattr(proofs, "prove_binding_on", prove)
+    return proof, seen
+
+
+def test_the_proof_a_builder_left_is_replaced_by_the_control_processes_own(
+    tmp_path, monkeypatch
+):
+    """The builder's session can write its whole output: here it left a proof with every
+    scenario proved. What is sealed is the proof this process made of the same binding."""
+    from fi.alk.harness.binding_proof import proof_digest
+
+    output = tmp_path / "adaptation"
+    claimed = {"passed": True, "scenarios": {"S01": "proved", "S02": "proved"}}
+    _left_by_the_builder(output, claimed)
+    proof, seen = _control(
+        monkeypatch, S01=("proved", ""), S02=("unscorable", "uses send_sms")
+    )
+
+    result = hosted.prove_again(output, tmp_path / "environment", tmp_path, "dsn")
+
+    assert result["status"] == "completed"
+    assert result["binding_proof"] == {"digest": proof_digest(proof)}
+    assert result["alignment"]["unscorable"] == [
+        {"scenario_key": "S02", "reason": "uses send_sms"}
+    ]
+    assert json.loads((output / RESULT).read_text()) == result
+    assert json.loads((output / "binding-proof.json").read_text()) == proof.model_dump(
+        mode="json"
+    )
+    # Proved from the sealed trajectories against the released suite, nothing else.
+    assert seen["suite"] == tmp_path and set(seen["trajectories"]) == {"S01"}
+
+
+def test_a_binding_the_control_process_cannot_prove_fails_whatever_was_left(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "adaptation"
+    _left_by_the_builder(output, {"passed": True, "scenarios": {"S01": "proved"}})
+    _control(
+        monkeypatch, S01=("proved", ""), S02=("failed", "grace_booked did not hold")
+    )
+
+    result = hosted.prove_again(output, tmp_path / "environment", tmp_path, "dsn")
+
+    assert result["status"] == "failed"
+    assert result["failure"]["code"] == "binding_unproved"
+    assert "S02: failed: grace_booked did not hold" in result["failure"]["message"]
+    assert json.loads((output / RESULT).read_text())["status"] == "failed"
+
+
+def test_a_failed_or_canonical_result_is_left_as_it_is(tmp_path, monkeypatch):
+    output = tmp_path / "adaptation"
+    _left_by_the_builder(output, {})
+    failed = {"status": "failed", "failure": {"code": "adaptation_declined"}}
+    (output / RESULT).write_text(json.dumps(failed), encoding="utf-8")
+    assert hosted.prove_again(output, tmp_path, tmp_path, "dsn") == failed
 
 
 # --- end to end: CardGuard on Banking ----------------------------------------------------------
@@ -621,3 +733,35 @@ def test_a_binding_that_is_not_the_reviewed_pairing_is_never_proved(
     assert result["failure"]["code"] == "binding_invalid"
     assert "not the reviewed pairing" in result["failure"]["message"]
     assert not (workbench.output / "binding-proof.json").exists()
+
+
+@needs_releases
+def test_a_proof_edited_in_the_workspace_does_not_survive_the_control_process(
+    tmp_path, monkeypatch
+):
+    """CardGuard is bound and sealed, then the proof file is edited as a session could: the
+    control process's own proof of the sealed binding replaces it."""
+    workbench, mapping = _banking(tmp_path)
+    _model(monkeypatch, {"binding": mapping, "trajectories": {}, "conflicts": []})
+    asyncio.run(auto.adapt(workbench, _pairing(mapping)))
+    sealed = _result(workbench)
+    assert sealed["status"] == "completed", sealed["failure"]
+    genuine = json.loads((workbench.output / "binding-proof.json").read_text())
+    key = next(iter(genuine["scenarios"]))
+    edited = {
+        **genuine,
+        "scenarios": {
+            **genuine["scenarios"],
+            key: {"status": "unscorable", "reason": "edited", "adversarial": {}},
+        },
+    }
+    (workbench.output / "binding-proof.json").write_text(json.dumps(edited))
+
+    release = Path(RELEASES) / "banking"
+    result = hosted.prove_again(
+        workbench.output, release / "environment", release / "suite", DSN
+    )
+
+    assert result["status"] == "completed", result.get("failure")
+    assert result["binding_proof"] == sealed["binding_proof"]
+    assert json.loads((workbench.output / "binding-proof.json").read_text()) == genuine

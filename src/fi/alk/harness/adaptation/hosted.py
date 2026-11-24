@@ -35,9 +35,12 @@ from ..hosted_authoring_entrypoint import (
 from ..releases import RELEASES_SUITE, environment_directory
 from .errors import AdaptationFailure
 from .workbench import (
+    BINDING,
+    BINDING_PROOF,
     INPUTS,
     PROFILE,
     RESULT,
+    TRAJECTORIES,
     Workbench,
     failed_result,
     profile_from_document,
@@ -111,15 +114,87 @@ def failed_before_start(
     return 2
 
 
-def _await_result(output: Path) -> int:
-    """Wait while the conversation's builder binds the agent in this sandbox."""
+def prove_again(
+    output: Path, environment_root: Path, suite_root: Path, postgres_dsn: str
+) -> dict[str, Any]:
+    """The result of a builder's adaptation, with its proof made by this process.
+
+    The builder's session can write everything under `output`, its saved state included, so the
+    proof it left is not what is sealed. The control process reads only the sealed binding (its
+    digest is checked) and the trajectories, proves the binding against the released suite
+    itself, and writes the proof, its digest and the unscorable list from that. A binding it
+    cannot prove fails the adaptation, whatever the proof the builder left said."""
+    from ..binding_proof import proof_digest
+    from ..releases import BindingMode, ReleaseError, load_agent_binding
+    from .proofs import binding_verdicts, prove_binding_on
+
+    result = json.loads((output / RESULT).read_text(encoding="utf-8"))
+    if result.get("status") != "completed":
+        return result
+    try:
+        binding = load_agent_binding(output / BINDING)
+        if binding.mode is not BindingMode.TOOL_ROUTED:
+            return result
+        trajectories = json.loads((output / TRAJECTORIES).read_text(encoding="utf-8"))
+        proof = prove_binding_on(
+            suite_root,
+            binding,
+            trajectories if isinstance(trajectories, dict) else {},
+            environment_root=environment_root,
+            postgres_dsn=postgres_dsn,
+        )
+    except (OSError, ValueError, ReleaseError) as exc:
+        detail = (
+            f"{exc.code}: {exc.detail}" if isinstance(exc, ReleaseError) else str(exc)
+        )
+        failed = failed_result(
+            "binding_unproved",
+            f"the sealed binding could not be proved again: {detail}",
+        )
+        failed["environment"] = result.get("environment") or []
+        write_json(output / RESULT, failed)
+        return failed
+    verdicts = binding_verdicts(proof)
+    if not proof.passed or not any(one.status == "proved" for one in verdicts.values()):
+        failed = failed_result(
+            "binding_unproved",
+            "the sealed binding is not proved:\n"
+            + "\n".join(
+                f"{key}: {one.status}: {one.reason}"
+                for key, one in sorted(verdicts.items())
+                if one.status != "proved"
+            ),
+        )
+        failed["environment"] = result.get("environment") or []
+        write_json(output / RESULT, failed)
+        return failed
+    write_json(output / BINDING_PROOF, proof.model_dump(mode="json"))
+    result["binding"] = {"digest": binding.digest, "mode": binding.mode.value}
+    result["binding_proof"] = {"digest": proof_digest(proof)}
+    result["alignment"] = {
+        **(result.get("alignment") or {}),
+        "unscorable": [
+            {"scenario_key": key, "reason": one.reason}
+            for key, one in sorted(verdicts.items())
+            if one.status == "unscorable"
+        ],
+    }
+    write_json(output / RESULT, result)
+    return result
+
+
+def _await_result(
+    output: Path, environment_root: Path, suite_root: Path, postgres_dsn: str
+) -> int:
+    """Wait while the conversation's builder binds the agent in this sandbox, then prove what it
+    sealed again here (`prove_again`)."""
     marker = output.parent / FINISHED_MARKER
     deadline = time.monotonic() + int(
         os.environ.get("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS") or 3300
     )
     while time.monotonic() < deadline:
         if marker.is_file() and (output / RESULT).is_file():
-            result = json.loads((output / RESULT).read_text(encoding="utf-8"))
+            result = prove_again(output, environment_root, suite_root, postgres_dsn)
             print(json.dumps({"status": result.get("status")}))
             return 0 if result.get("status") == "completed" else 2
         time.sleep(5)
@@ -182,7 +257,7 @@ def run_hosted(args: argparse.Namespace) -> int:
                 ),
             },
         )
-        return _await_result(output)
+        return _await_result(output, environments[-1], suite_root, dsn)
 
 
 def _run_auto(
