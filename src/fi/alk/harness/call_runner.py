@@ -4057,8 +4057,9 @@ async def upload_end_state(
         "action_log": [dict(row) for row in log or []],
     }
     if browser is not None:
-        # The world's record of its browser: kept apart from the action log, so no check counts it as a call.
-        body["browser"] = dict(browser)
+        # The world's record of its browser and its refusals: kept apart from the action log, so no check counts
+        # them as calls.
+        body.update(browser)
     try:
         return await adapter.upload_artifact(
             json.dumps(body, sort_keys=True, default=str).encode("utf-8"),

@@ -329,6 +329,7 @@ class KitBrowser:
         recorder: Any = None,
     ) -> None:
         self.binary = binary
+        self.log = log
         # The kit's own client to the browser: what the agent did there, kept as the world's record.
         self.recorder = recorder
         self.directory = directory
@@ -348,12 +349,19 @@ class KitBrowser:
         found = {"state": "started", "state_path": str(self.relay.state_path)}
         if self.recorder is not None:
             found["record_path"] = str(self.recorder.record_path)
+        if isinstance(getattr(self.log, "path", None), Path):
+            # A world with no door keeps the browser's refusals in a kit-owned file.
+            found["blocked_log_path"] = str(self.log.path)
         return found
 
     def start(self) -> None:
         """Stop any browser running now and start a new one that remembers nothing: a new, empty profile folder,
         whether or not the last one could be removed."""
         self.stop()
+        reset = getattr(self.log, "reset", None)
+        if callable(reset):
+            # A new trial: the last one's refusals are not this one's.
+            reset()
         if self.directory.exists():
             try:
                 shutil.rmtree(self.directory)

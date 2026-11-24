@@ -2748,3 +2748,85 @@ def test_a_chat_trial_s_browser_screenshots_are_uploaded_after_its_transcript(
     assert adapter.kinds[-1] == "screenshot"
     assert adapter.kinds.index("transcript") < adapter.kinds.index("screenshot")
     assert outcome.recording_artifacts == (f"artifact-{len(adapter.kinds)}",)
+
+
+@pytest.mark.parametrize("include_tools", [False, True])
+def test_a_browser_trial_with_no_door_keeps_a_world_state_file_saying_the_world_was_not_recorded(
+    tmp_path: Path, monkeypatch: Any, include_tools: bool
+) -> None:
+    from fi.alk.harness.browser_record import BROWSER_STATE_SCHEMA, BlockedFileLog
+    from fi.alk.harness.egress_proxy import EgressProxy
+
+    tool_world = _ToolWorld()
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Nothing to buy.")
+
+    class Bodies(_Adapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stored: list[tuple[str, bytes]] = []
+
+        async def upload_artifact(self, data: bytes, **kwargs: Any) -> str:
+            self.stored.append((kwargs["kind"].value, data))
+            return f"artifact-{len(self.stored)}"
+
+    class _Proxy(EgressProxy):
+        via = "browser"
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    state = tmp_path / "w0.json"
+    state.write_text(json.dumps({"attached": 0}), encoding="utf-8")
+    blocked_log = BlockedFileLog(tmp_path / "w0-blocked.jsonl")
+    proxy = _Proxy([], blocked_log)
+    proxy.refuse("www.example.com", "GET")
+    proxy.close()
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http", protocol="http", address="http://localhost:18080"
+            )
+        },
+        metadata={
+            "browser": {
+                "state": "started",
+                "state_path": str(state),
+                "record_path": str(tmp_path / "w0-record.json"),
+                "blocked_log_path": str(blocked_log.path),
+            }
+        },
+    )
+    adapter = Bodies()
+    context = _context(tmp_path)
+    if not include_tools:
+        contract = json.loads((context.bundle_dir / "contract.json").read_text())
+        contract["runtime"]["interface"]["include_tools"] = False
+        (context.bundle_dir / "contract.json").write_text(json.dumps(contract))
+    asyncio.run(
+        chat.HostedChatCallRunner(adapter, context).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+    [(_, end)] = [one for one in adapter.stored if one[0] == "world_state"]
+    body = json.loads(end)
+    assert (body["schema"], body["recorded"], body["browser"]) == (BROWSER_STATE_SCHEMA, False, {"state": "not_used"})
+    assert body["why"] == ("world_end_unreadable" if include_tools else "no_world_door")
+    assert body["blocked"] == [{"host": "www.example.com", "method": "GET", "via": "browser", "count": 1}]
+    [(_, transcript)] = [one for one in adapter.stored if one[0] == "transcript"]
+    world = json.loads(transcript)["world_actors"]
+    # World changes names the file and keeps counts only, never rows; with no door it still says the agent's tools
+    # were not seen.
+    assert world["end_state_artifact"].startswith("artifact-")
+    assert world["browser"] == {"state": "not_used"}
+    if not include_tools:
+        assert world["recorded"] is False

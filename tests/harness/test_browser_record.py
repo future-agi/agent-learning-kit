@@ -583,34 +583,6 @@ def test_a_used_browser_s_record_is_sealed_and_kept(tmp_path) -> None:
     assert evidence == {"state": "used", "complete": True, "rows": [{"kind": "click"}]}
 
 
-def test_browser_rows_never_count_as_tool_calls_or_world_actions() -> None:
-    # A trial with browser actions and no tool calls: zero attempted and zero committed, the record beside them.
-    world = {
-        "state_changes": [
-            {
-                "who": "agent",
-                "attempted": 0,
-                "committed": 0,
-                "blocked": [{"host": "www.example.com", "method": "GET", "via": "browser", "count": 2}],
-            }
-        ]
-    }
-    evidence = {
-        "state": "used",
-        "rows": [{"kind": "click"}, {"kind": "typing"}],
-        "blocked_navigations": [{"url": "http://www.example.com/", "at": 1.0}],
-        "blocked_page_requests": [],
-    }
-    kept = browser_record.with_browser(world, evidence)
-    [agent] = kept["state_changes"]
-    assert (agent["attempted"], agent["committed"]) == (0, 0)
-    assert agent["blocked"] == [
-        {"host": "www.example.com", "via": "browser", "what": "navigation", "url": "http://www.example.com/", "at": 1.0}
-    ]
-    assert kept["browser"]["rows"] == evidence["rows"]
-    assert world["state_changes"][0]["blocked"][0]["count"] == 2  # the world record it was given is not changed
-
-
 class _Uploads:
     def __init__(self, refuse: bool = False) -> None:
         self.refuse = refuse
@@ -689,3 +661,95 @@ def test_an_end_screenshot_the_browser_never_answers_does_not_hold_the_seal(tmp_
         recorder.close()
     assert body["complete"] is True
     assert [row["url"] for row in body["rows"]] == ["http://shop.test/"]
+
+
+# A world with no door: the browser's refusals in a kit-owned file, and the world_state file that says what it holds
+
+
+def _refused(log, host: str) -> None:
+    from fi.alk.harness.egress_proxy import EgressProxy
+
+    class _Proxy(EgressProxy):
+        via = "browser"
+
+    proxy = _Proxy([], log)
+    try:
+        proxy.refuse(host, "GET")
+    finally:
+        proxy.close()
+
+
+def test_a_world_with_no_door_keeps_the_browser_s_refusals_in_a_kit_file_cut_at_each_trial(tmp_path) -> None:
+    log = browser_record.BlockedFileLog(tmp_path / "w0-blocked.jsonl")
+    _refused(log, "www.example.com")
+    _refused(log, "www.example.com")
+    assert browser_record.blocked_from_file(tmp_path / "w0-blocked.jsonl") == [
+        {"host": "www.example.com", "method": "GET", "via": "browser", "count": 2}
+    ]
+    log.reset()
+    assert browser_record.blocked_from_file(tmp_path / "w0-blocked.jsonl") == []
+
+
+def test_a_blocked_file_is_capped_and_says_so(tmp_path) -> None:
+    log = browser_record.BlockedFileLog(tmp_path / "w0-blocked.jsonl", cap=2)
+    for host in ["a.example.com", "b.example.com", "c.example.com"]:
+        _refused(log, host)
+    found = browser_record.blocked_from_file(tmp_path / "w0-blocked.jsonl")
+    assert [one["host"] for one in found if "host" in one] == ["a.example.com", "b.example.com"]
+    assert {"truncated": True} in found
+
+
+def test_a_blocked_file_that_cannot_be_read_is_unreadable_never_empty(tmp_path) -> None:
+    assert browser_record.blocked_from_file(tmp_path / "missing.jsonl") is None
+    (tmp_path / "bad.jsonl").write_text("{not json\n")
+    assert browser_record.blocked_from_file(tmp_path / "bad.jsonl") is None
+
+
+def test_the_sealed_record_carries_counts_never_rows() -> None:
+    evidence = {
+        "state": "used",
+        "complete": True,
+        "rows": [{"kind": "click"}, {"kind": "typing", "text": "red"}],
+        "blocked_navigations": [{"url": "http://www.example.com/"}],
+        "blocked_page_requests": [{"host": "t.example.net", "count": 4}],
+        "screenshots": [{"file": "shot-001-end.jpg"}],
+        "blocked": [{"host": "www.example.com"}],
+    }
+    assert browser_record.browser_counts(evidence) == {
+        "state": "used",
+        "complete": True,
+        "rows": 2,
+        "blocked_navigations": 1,
+        "blocked_page_requests": 4,
+        "screenshots": 1,
+    }
+    assert browser_record.browser_counts({"state": "not_used"}) == {"state": "not_used"}
+
+
+def test_the_file_for_a_world_with_no_door_says_its_world_was_not_recorded(tmp_path) -> None:
+    import asyncio
+
+    adapter = _Uploads()
+    stored = asyncio.run(
+        browser_record.upload_browser_state(
+            adapter, "one", {"state": "used", "rows": [{"kind": "click"}]}, [{"host": "x.example.com", "count": 1}]
+        )
+    )
+    [(kind, data)] = adapter.kinds
+    body = json.loads(data)
+    assert stored == "artifact-1" and kind.value == "world_state"
+    assert body["schema"] != "futureagi.world-state.v1"
+    assert body["recorded"] is False and body["why"] == "no_world_door"
+    # Absent, never empty: no tables and no action log stand in for a world that was not read.
+    assert "tables" not in body and "action_log" not in body
+    assert body["browser"]["rows"] == [{"kind": "click"}]
+    assert body["blocked"] == [{"host": "x.example.com", "count": 1}]
+
+
+def test_a_blocked_list_that_could_not_be_read_is_said_to_be_unreadable(tmp_path) -> None:
+    import asyncio
+
+    adapter = _Uploads()
+    asyncio.run(browser_record.upload_browser_state(adapter, "one", {"state": "used"}, None))
+    body = json.loads(adapter.kinds[0][1])
+    assert body["blocked_unreadable"] is True and "blocked" not in body

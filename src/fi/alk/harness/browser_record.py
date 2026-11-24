@@ -39,6 +39,7 @@ from urllib.parse import urlsplit
 
 from .egress_proxy import host_allowed
 from .outbound import redact_outbound_text
+from .world_door import MemoryLog
 
 logger = logging.getLogger(__name__)
 
@@ -798,20 +799,6 @@ def browser_evidence(runtime: Any, *, timeout: float = 5.0) -> dict[str, Any] | 
     return {"state": "used", **record}
 
 
-def with_browser(world_record: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
-    """The trial's world record with its browser's: the record beside the counts, never in them, and the agent's
-    blocked list with the browser's refusals split in two."""
-    changes = []
-    for entry in world_record.get("state_changes") or []:
-        if isinstance(entry, dict) and entry.get("who") == "agent" and entry.get("blocked"):
-            entry = {**entry, "blocked": split_blocked(entry["blocked"], evidence)}
-        changes.append(entry)
-    kept = {**world_record, "browser": evidence}
-    if "state_changes" in world_record:
-        kept["state_changes"] = changes
-    return kept
-
-
 async def upload_screenshots(
     adapter: Any, scenario_key: str, evidence: dict[str, Any] | None, shots_dir: Path
 ) -> tuple[tuple[str, ...], list[dict[str, str]]]:
@@ -866,3 +853,153 @@ def browser_shots_dir(runtime: Any) -> Path:
     browser = (getattr(runtime, "metadata", None) or {}).get("browser")
     record_path = browser.get("record_path") if isinstance(browser, dict) else None
     return shots_dir_for(Path(str(record_path))) if record_path else Path("/nonexistent-browser-shots")
+
+
+BROWSER_STATE_SCHEMA = "futureagi.browser-world-state.v1"
+NO_WORLD_DOOR = "no_world_door"
+WORLD_END_UNREADABLE = "world_end_unreadable"
+
+
+class BlockedFileLog(MemoryLog):
+    """The browser's refused attempts in a world with no door: a kit-owned file the agent's user cannot write, cut
+    at each start of the browser, capped, and cleaned as other rows are."""
+
+    def __init__(self, path: Path, *, cap: int = RECORD_ROWS) -> None:
+        super().__init__()
+        self.path = path
+        self.cap = cap
+        self._written = 0
+        self._file_lock = threading.Lock()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.reset()
+
+    def reset(self) -> None:
+        with self._file_lock:
+            self._written = 0
+            try:
+                _write_text(self.path, "")
+            except OSError:
+                logger.warning("browser record: the blocked log %s could not be cut", self.path)
+        with self._lock:
+            self._rows.clear()
+
+    def write(self, row: dict[str, Any]) -> None:
+        super().write(row)
+        arguments = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
+        kept = {
+            **{key: row[key] for key in ("actor_id", "outcome", "refusal_code", "method") if key in row},
+            "arguments": {key: _clean(arguments[key], 253) for key in ("host", "method", "via") if arguments.get(key)},
+            "at": time.time(),
+        }
+        with self._file_lock:
+            if self._written > self.cap:
+                return
+            self._written += 1
+            line = {"truncated": True} if self._written > self.cap else kept
+            try:
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(line, default=str) + "\n")
+            except OSError:
+                logger.warning("browser record: the blocked log %s could not be written", self.path)
+
+
+def blocked_from_file(path: Path) -> list[dict[str, Any]] | None:
+    """The browser's refusals from its kit-owned file, grouped as a trial's blocked list; None when the file cannot be
+    read, never an empty list in its place."""
+    from .call_runner import trial_state_changes
+
+    try:
+        lines = path.read_text(encoding="utf-8")[: 16 * 1024 * 1024].splitlines()
+        rows = [json.loads(line) for line in lines if line.strip()]
+    except (OSError, ValueError):
+        return None
+    if not all(isinstance(row, dict) for row in rows):
+        return None
+    truncated = any(row.get("truncated") is True for row in rows)
+    changes = trial_state_changes([row for row in rows if "truncated" not in row], {})
+    blocked = next((list(entry.get("blocked") or []) for entry in changes if entry.get("who") == "agent"), [])
+    return blocked + ([{"truncated": True}] if truncated else [])
+
+
+def browser_counts(evidence: dict[str, Any]) -> dict[str, Any]:
+    """What the sealed record says of the browser: counts, never rows. The rows are in the trial's world_state file."""
+    counts: dict[str, Any] = {"state": evidence.get("state")}
+    if "complete" in evidence:
+        counts["complete"] = evidence["complete"]
+    for key in ("rows", "blocked_navigations", "screenshots"):
+        if key in evidence:
+            counts[key] = len(evidence.get(key) or [])
+    if "blocked_page_requests" in evidence:
+        counts["blocked_page_requests"] = sum(
+            int(one.get("count") or 0) for one in evidence.get("blocked_page_requests") or [] if isinstance(one, dict)
+        )
+    if evidence.get("truncated"):
+        counts["truncated"] = True
+    return counts
+
+
+def browser_file_body(evidence: dict[str, Any], blocked: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """The browser's part of the trial's world_state file: its record, and the trial's blocked list split by it, or
+    that the list could not be read."""
+    body: dict[str, Any] = {"browser": dict(evidence)}
+    if blocked is None:
+        body["blocked_unreadable"] = True
+    else:
+        body["blocked"] = split_blocked(blocked, evidence)
+    return body
+
+
+async def upload_browser_state(
+    adapter: Any,
+    scenario_key: str,
+    evidence: dict[str, Any],
+    blocked: list[dict[str, Any]] | None,
+    *,
+    why: str = NO_WORLD_DOOR,
+) -> str | None:
+    """The world_state file for a world with a browser and no door: it says the world's records were not recorded,
+    and holds no tables or action log in their place. A lost upload never fails the trial."""
+    from .outbound import ArtifactKind
+
+    body = {
+        "schema": BROWSER_STATE_SCHEMA,
+        "recorded": False,
+        "why": why,
+        "not_held": ["tables", "action_log"],
+        **browser_file_body(evidence, blocked),
+    }
+    try:
+        return await adapter.upload_artifact(
+            json.dumps(body, sort_keys=True, default=str).encode("utf-8"),
+            kind=ArtifactKind.WORLD_STATE,
+            scenario_key=scenario_key,
+        )
+    except Exception:  # noqa: BLE001 - a lost record never fails the trial
+        logger.warning("browser record: the trial's world_state file was not stored")
+        return None
+
+
+def trial_blocked(log: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The agent's blocked list from a trial's action log, as the trial's world record groups it."""
+    from .call_runner import trial_state_changes
+
+    return next(
+        (list(entry.get("blocked") or []) for entry in trial_state_changes(log, {}) if entry.get("who") == "agent"), []
+    )
+
+
+def browser_blocked_from_runtime(runtime: Any) -> list[dict[str, Any]] | None:
+    """The browser's refusals from the kit-owned file its metadata names, used where no door's database keeps them;
+    None when there is none to read."""
+    browser = (getattr(runtime, "metadata", None) or {}).get("browser")
+    path = browser.get("blocked_log_path") if isinstance(browser, dict) else None
+    return blocked_from_file(Path(str(path))) if path else None
+
+
+def browser_blocked(runtime: Any, door_log: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """The browser's refusals from the one place the world sent them: the kit-owned file when the browser was given
+    one, else the door's log. None when neither can be read."""
+    browser = (getattr(runtime, "metadata", None) or {}).get("browser")
+    if isinstance(browser, dict) and browser.get("blocked_log_path"):
+        return browser_blocked_from_runtime(runtime)
+    return None if door_log is None else trial_blocked(door_log)

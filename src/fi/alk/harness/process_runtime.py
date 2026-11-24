@@ -6301,13 +6301,17 @@ def _world_browser_environment(
         return {}
     browser = context.browsers.get(world_index)
     if browser is None:
+        from .browser_record import BlockedFileLog
+
         database = next((one for one in endpoints.values() if one.protocol == "postgres"), None)
-        log = PostgresLog(database.address) if database is not None else None
-        if log is None:
-            logger.warning(
-                "browser: the world has no postgres endpoint to hold its action log; the browser's refused sites are "
-                "refused but not recorded"
-            )
+        door = any(name in endpoints for name in ("world_door", "tool_proxy"))
+        # With a door and a database the door's log is the one source of refusals, read by the trial as the agent's
+        # other calls are; with no door a trial never reads that log, so the refusals go to a kit-owned file.
+        log: Any = (
+            PostgresLog(database.address)
+            if door and database is not None
+            else BlockedFileLog(context.work_directory / "browser-state" / f"w{world_index}-blocked.jsonl")
+        )
         make = context.browser_factory or _kit_browser_factory(context)
         browser = make(world_index, log)
         context.browsers[world_index] = browser

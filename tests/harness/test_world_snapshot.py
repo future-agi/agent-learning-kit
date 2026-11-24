@@ -338,3 +338,46 @@ def test_each_trial_of_a_run_starts_from_the_seed_and_its_setup_s_key_never_bloc
             connection.execute(f'DROP DATABASE IF EXISTS "{world}" WITH (FORCE)')
             connection.execute(f'ALTER DATABASE "{template}" WITH IS_TEMPLATE false')
             connection.execute(f'DROP DATABASE IF EXISTS "{template}"')
+
+
+def test_a_browser_world_s_end_state_holds_its_record_and_its_refusals_split_never_as_calls(monkeypatch):
+    import asyncio
+    import json
+
+    import fi.alk.harness.world_snapshot as ws
+    from fi.alk.harness.browser_record import browser_file_body, trial_blocked
+    from fi.alk.harness.call_runner import trial_state_changes, upload_end_state
+
+    taken = iter([from_rows(_orders({"id": 1, "status": "paid"})), from_rows(_orders({"id": 1, "status": "paid"}))])
+    monkeypatch.setattr(ws, "snapshot", lambda dsn, **_: next(taken))
+    records = TrialRecords()
+    records.start("w0", "dsn")
+    sealed = records.end("w0", "dsn")
+    uploads = []
+
+    class _Adapter:
+        async def upload_artifact(self, data, *, kind, scenario_key):
+            uploads.append(json.loads(data))
+            return "art-1"
+
+    refused = {
+        "outcome": "refused", "refusal_code": "egress_blocked", "actor_id": "agent",
+        "arguments": {"host": "www.example.com", "method": "GET", "via": "browser"},
+    }
+    log = [refused, dict(refused)]
+    browser = {
+        "state": "used",
+        "rows": [{"kind": "click"}, {"kind": "typing", "text": "red"}],
+        "blocked_navigations": [{"url": "http://www.example.com/deals", "at": 1.0}],
+        "blocked_page_requests": [],
+    }
+    asyncio.run(upload_end_state(_Adapter(), "k1", sealed, log, browser=browser_file_body(browser, trial_blocked(log))))
+    [body] = uploads
+    # The browser's clicks and typing are the world's record, never the agent's calls or world actions.
+    [agent] = trial_state_changes(body["action_log"], {})
+    assert (agent["attempted"], agent["committed"]) == (0, 0)
+    assert body["browser"]["rows"] == browser["rows"]
+    assert body["blocked"] == [
+        {"host": "www.example.com", "via": "browser", "what": "navigation", "url": "http://www.example.com/deals", "at": 1.0}
+    ]
+    assert body["tables"]["orders"] == [{"id": 1, "status": "paid"}]
