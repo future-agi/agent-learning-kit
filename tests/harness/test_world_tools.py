@@ -175,3 +175,48 @@ def test_a_call_through_the_tool_proxy_is_still_graded_by_the_agent_s_own_tool(
     assert [one.name for one in _read(dsn)] == ["list_refunds"]
     changes = cr.trial_state_changes(cr._read_action_log(dsn), {})
     assert changes[0]["committed_actions"] == ["list_refunds"]
+
+
+def test_what_a_call_came_to_is_read_back_from_the_world_s_own_log(dsn) -> None:
+    world = _world(dsn, _BINDING)
+    world.call("find_booking", {"ref": "B1"})
+    # All of a routed call's operations share its outcome: the first was rolled back with the refused second.
+    world.call("reschedule", {"ref": "locked"})
+    world.call("find_booking", {"ref": "broken"})
+    world.call("find_booking", {})
+    world.call("fax_receipt", {})
+
+    calls = _read(dsn)
+    assert [(one.name, one.ok, one.refused) for one in calls] == [
+        ("change_booking", True, False),
+        ("find_booking", False, True),
+        ("change_booking", False, True),
+        ("change_booking", False, False),
+        ("find_booking", False, False),
+        ("fax_receipt", False, False),
+    ]
+    log = cr._read_action_log(dsn)
+    assert [row["outcome"] for row in log] == [
+        "committed",
+        "refused",
+        "refused",
+        "faulted",
+        "faulted",
+        "faulted",
+    ]
+    agent = cr.trial_state_changes(log, {})[0]
+    assert (agent["committed"], agent["refused"], agent["faulted"]) == (1, 2, 3)
+    assert agent["committed_actions"] == ["change_booking"]
+
+
+def test_a_call_is_still_traced_in_a_world_seeded_before_outcomes_were_logged(
+    dsn,
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn, autocommit=True) as connection:
+        connection.execute("ALTER TABLE _alk_tool_trace DROP COLUMN outcome")
+    _world(dsn).call("change_booking", {"id": "locked"})
+
+    (call,) = _read(dsn)
+    assert (call.name, call.ok, call.refused) == ("change_booking", False, True)

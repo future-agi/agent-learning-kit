@@ -42,6 +42,9 @@ ATTACHED_START_SECONDS = 60.0
 # Passed through to attached servers besides what the MCP client already inherits, so a server
 # that is an ALK module runs from the same source as this process.
 _SERVER_ENV = ("PYTHONPATH", "LANG", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR")
+# What the action log (`_alk_tool_trace.outcome`) says of a call's status: only a handler's own
+# `ToolError` is a refusal, as in the proofs; a call that could not run at all is a fault.
+_OUTCOMES = {"ok": "committed", "refused": "refused"}
 
 
 def _postgres(statement: str) -> str:
@@ -381,23 +384,28 @@ class WorldTools:
         ] or [(agent_tool, arguments, outcome.result, outcome.error)]
         try:
             with psycopg.connect(self.database_url, autocommit=True) as connection:
+                cursor = connection.execute("SELECT * FROM _alk_tool_trace LIMIT 0")
+                # A world seeded before outcomes were logged has no column for one.
+                logs_outcome = "outcome" in {one.name for one in cursor.description}
                 for name, step_arguments, result, error in steps:
+                    row = {
+                        "name": name,
+                        "arguments": json.dumps(step_arguments, default=str),
+                        "result": json.dumps(result if ok else None, default=str),
+                        "ok": ok,
+                        "error": "" if ok else (outcome.error or error or ""),
+                        "at": time.time(),
+                        "agent_tool": agent_tool,
+                        "provider_call_id": provider_call_id,
+                        "tool_call_id": tool_call_id,
+                        "status": outcome.status,
+                    }
+                    if logs_outcome:
+                        row["outcome"] = _OUTCOMES.get(outcome.status, "faulted")
                     connection.execute(
-                        "INSERT INTO _alk_tool_trace (name, arguments, result, ok, error, at, "
-                        "agent_tool, provider_call_id, tool_call_id, status) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                        (
-                            name,
-                            json.dumps(step_arguments, default=str),
-                            json.dumps(result if ok else None, default=str),
-                            ok,
-                            "" if ok else (outcome.error or error or ""),
-                            time.time(),
-                            agent_tool,
-                            provider_call_id,
-                            tool_call_id,
-                            outcome.status,
-                        ),
+                        f"INSERT INTO _alk_tool_trace ({', '.join(row)}) "  # noqa: S608 - fixed columns
+                        f"VALUES ({', '.join(['%s'] * len(row))})",
+                        list(row.values()),
                     )
         except Exception:  # noqa: BLE001, S110 - evidence must never change the tool's answer
             pass
