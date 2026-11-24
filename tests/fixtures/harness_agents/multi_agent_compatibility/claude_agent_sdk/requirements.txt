@@ -1,0 +1,4 @@
+# 0.1.8 is the first release that ships the Claude Code CLI it runs; the sandbox installs no Node CLI.
+claude-agent-sdk==0.1.8
+# claude-agent-sdk 0.1 registers tools through the MCP Server decorators that mcp 2 removed.
+mcp==1.30.0

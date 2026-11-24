@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import gc
 import json
 import os
 import re
@@ -113,8 +112,8 @@ def _submit_tool(server):
     return next(one for one in server.tools if one.name == "submit_contract")
 
 
-def _submitter(destination: Path, scan_root: Path | None = None):
-    tool = _submit_tool(contract_tools(destination, scan_root=scan_root))
+def _submitter(destination: Path, scan_root: Path | None = None, save_checks=None):
+    tool = _submit_tool(contract_tools(destination, scan_root=scan_root, save_checks=save_checks))
     return lambda payload: asyncio.run(tool.handler(payload))
 
 
@@ -1984,7 +1983,7 @@ def test_the_scan_runs_off_the_event_loop(tmp_path, monkeypatch):
         return [], frozenset()
 
     monkeypatch.setattr(tools, "browser_scan", scan)
-    _submitter(tmp_path / "out", tmp_path)(_reading("chat"))
+    _submitter(tmp_path / "out", tmp_path, "thread")(_reading("chat"))
     assert threads and threads[0] is not threading.main_thread()
 
 
@@ -1997,7 +1996,7 @@ def test_a_refusal_during_the_scan_stops_this_call_too(tmp_path, monkeypatch, mo
         return [], frozenset()
 
     monkeypatch.setattr(tools, "browser_scan", scan)
-    answer = _submitter(output, tmp_path)(_reading(modality))
+    answer = _submitter(output, tmp_path, "thread")(_reading(modality))
     assert not (output / "contract.json").exists()
     # The stop itself, not a second look: the reading was refused while the scan ran. A browser
     # reading would otherwise be asked for a second look before the write's own check.
@@ -2816,7 +2815,7 @@ def test_one_scan_and_one_look_when_an_answer_comes_back_without_its_value(
 ):
     output = tmp_path / "out"
     scans = _counted_scans(monkeypatch)
-    submit = _submitter(output, browser_repo)
+    submit = _submitter(output, browser_repo, "thread")
     assert "second-look" in _text(submit(_reading("chat")))
     # An answer with the value stands, even when the contract is then sent back for another fix.
     rejected = submit(_reading("chat", real_use_cases=[], second_look_read=_READ))
@@ -2840,7 +2839,7 @@ def test_a_different_answer_without_the_value_after_an_answer_gets_a_look(tmp_pa
 
 def test_calls_waiting_on_the_first_scan_share_it(tmp_path, plain_repo, monkeypatch):
     scans = _counted_scans(monkeypatch)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def first_message():
         return await asyncio.gather(*(tool.handler(_reading("browser")) for _ in range(3)))
@@ -2860,7 +2859,7 @@ def test_a_call_cancelled_while_waiting_on_the_scan_leaves_it_to_the_others(
         return [], frozenset()
 
     monkeypatch.setattr(tools, "browser_scan", slow)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def first_message():
         cancelled = asyncio.ensure_future(tool.handler(_reading("browser")))
@@ -2884,7 +2883,7 @@ def test_a_scan_that_fails_is_run_again_by_the_next_call(tmp_path, plain_repo, m
         return outcome
 
     monkeypatch.setattr(tools, "browser_scan", scan)
-    submit = _submitter(tmp_path / "out", plain_repo)
+    submit = _submitter(tmp_path / "out", plain_repo, "thread")
     with pytest.raises(OSError, match="gone"):
         submit(_reading("chat"))
     assert not submit(_reading("chat")).get("is_error")
@@ -2902,7 +2901,7 @@ def test_a_scan_that_fails_is_run_again_by_the_next_call_in_the_same_message(
         return outcome
 
     monkeypatch.setattr(tools, "browser_scan", scan)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def one_message():
         with pytest.raises(OSError, match="gone"):
@@ -2925,7 +2924,7 @@ def test_a_scan_that_finished_after_its_only_caller_was_cancelled_is_not_run_aga
         return [], frozenset()
 
     monkeypatch.setattr(tools, "browser_scan", slow)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def cancelled_then_next():
         cancelled = asyncio.ensure_future(tool.handler(_reading("browser")))
@@ -2952,7 +2951,7 @@ def test_a_scan_left_running_on_a_closed_loop_is_started_again(tmp_path, plain_r
         return [], frozenset()
 
     monkeypatch.setattr(tools, "browser_scan", scan)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
     closed = asyncio.new_event_loop()
     try:
         closed.create_task(tool.handler(_reading("browser")))
@@ -3698,7 +3697,10 @@ def test_script_type_imports_are_dropped_as_before():
     assert _script_imports(code) == ["./c", "./far"]
 
 
-def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
+def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path, monkeypatch):
+    import threading
+
+    from fi.alk.harness import credentials
     from fi.alk.harness.tools import contract_tools
 
     # Each keyword cost the old pattern a 1,000-character rescan: 0.6 s for this file, on the loop.
@@ -3707,7 +3709,10 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
     files["agents/a/r.ts"] = _quote_left_open(1_000_000)
     repo = _tree(tmp_path / "repo", {**files, "agents/a/agent.py": "x = 1\n"})
     destination = tmp_path / "out"
-    server = contract_tools(destination, source_root=repo, scan_root=repo, subfolder="agents/a")
+    # The patched scan lives in this process, so the save's checks run here, off the loop.
+    server = contract_tools(
+        destination, source_root=repo, scan_root=repo, subfolder="agents/a", save_checks="thread"
+    )
     reading = {
         "agent": "a",
         "modality": "chat",
@@ -3717,38 +3722,61 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
         "runtime": {"language": "python"},
         "tools": [{"name": "add", "args": ["i"]}],
     }
+    beat = threading.Event()
+    seen: dict = {"threads": set()}
+    scan = credentials._script_imports
+
+    def scan_that_waits_for_the_loop(content):
+        # Off the loop, the loop keeps beating while this waits; on it, no beat could come.
+        seen["threads"].add(threading.get_ident())
+        if "loop_beat_meanwhile" not in seen:
+            beat.clear()
+            seen["loop_beat_meanwhile"] = beat.wait(10)
+        return scan(content)
+
+    monkeypatch.setattr(credentials, "_script_imports", scan_that_waits_for_the_loop)
 
     async def save():
-        worst = [0.0]
+        seen["loop"] = threading.get_ident()
         done = asyncio.Event()
 
-        async def beat():
-            last = time.perf_counter()
+        async def beating():
             while not done.is_set():
+                beat.set()
                 await asyncio.sleep(0.01)
-                now = time.perf_counter()
-                worst[0], last = max(worst[0], now - last), now
 
-        beating = asyncio.create_task(beat())
-        started = time.perf_counter()
-        result = await server.tools[0].handler(reading)
-        waited = time.perf_counter() - started
+        task = asyncio.create_task(beating())
+        # A save made while the session's checks still run answers "not checked in time" (on a
+        # loaded host they can outlast the deadline), and the model writes again: so does this.
+        for _ in range(60):
+            result = await server.tools[0].handler(reading)
+            if not _text(result).startswith("not checked in time"):
+                break
+            await asyncio.sleep(0.5)
         done.set()
-        await beating
-        return result, worst[0], waited
+        await task
+        return result
 
-    # The heap the tests before this one built is frozen, so a full collection of it can't land
-    # inside the save. The save's own collections still count.
-    gc.collect()
-    gc.freeze()
-    try:
-        result, worst, waited = asyncio.run(save())
-    finally:
-        gc.unfreeze()
+    result = asyncio.run(save())
 
     assert not result.get("is_error"), result
-    assert worst < 0.25
-    assert waited < 2
+    assert seen["threads"] and seen["loop"] not in seen["threads"]
+    assert seen["loop_beat_meanwhile"] is True
+
+
+def test_the_script_import_scan_grows_with_the_file_not_its_square():
+    from fi.alk.harness.credentials import _script_imports
+
+    def work(text: str) -> float:
+        # This thread's own CPU time: other processes and waits on the GIL don't count.
+        started = time.thread_time()
+        _script_imports(text)
+        return time.thread_time() - started
+
+    for crafted in (_type_keywords, lambda size: _quote_left_open(size)):
+        small, large = work(crafted(250_000)), work(crafted(1_000_000))
+        # Four times the file is about four times the work; a rescan per keyword is sixteen.
+        assert large < 8 * max(small, 0.005), (crafted, small, large)
 
 
 def _quote_left_open(size: int) -> str:
@@ -7007,3 +7035,127 @@ def test_a_decode_total_spent_exactly_doesnt_say_the_walk_stopped(tmp_path, monk
 
     found, stopped = _save_walk(repo)
     assert not stopped and repo / "common" / "web.py" in found
+
+
+# The scan and the save in the save checker's child, through every way the server is held
+
+
+def _checker_of(handler):
+    import inspect
+
+    return inspect.getclosurevars(handler).nonlocals["checker"]
+
+
+def test_a_scan_that_raises_twice_in_the_child_counts_as_cut(tmp_path, plain_repo):
+    from fi.alk.harness.save_checker import SessionChecksFailed
+
+    (plain_repo / "save-stand-in.json").write_text(json.dumps({"scan": "raise"}))
+    tool = _submit_tool(
+        contract_tools(
+            tmp_path / "out",
+            scan_root=plain_repo,
+            save_checks="child",
+            save_stand_in="_save_stand_ins",
+        )
+    )
+
+    async def calls():
+        with pytest.raises(SessionChecksFailed):
+            await tool.handler(_reading("chat"))
+        return await tool.handler(_reading("chat"))
+
+    answer = asyncio.run(calls())
+
+    # A scan that never answered can't say there is no browser tool: the reading gets a look.
+    assert "second-look" in _text(answer)
+    assert "stopped before reading all of the agent's code" in _text(answer)
+    assert not (tmp_path / "out" / "contract.json").exists()
+    assert _checker_of(tool.handler).ran_in_child == 0
+
+
+def test_the_hosted_builders_copy_of_the_server_saves_in_the_child(
+    tmp_path, plain_repo, monkeypatch
+):
+    import gc
+
+    from fi.alk.harness.builder import open_for_building
+
+    monkeypatch.delenv("ALK_SAVE_CHECKS", raising=False)
+    output = tmp_path / "out"
+    stage = open_for_building(None, out=output, source=RepoSource(name="fixture", root=plain_repo))
+    # The hosted chat puts a copy of each server in place of the one the stage opened with.
+    _runtime(tmp_path)._guard(stage.spec)
+    gc.collect()
+    tool = _submit_tool(_server_of(stage))
+
+    async def calls():
+        # The first is asked for the prompt's lines; the second is accepted.
+        await tool.handler(_reading("chat"))
+        return await tool.handler(_reading("chat"))
+
+    answer = asyncio.run(calls())
+
+    assert not answer.get("is_error"), answer
+    assert load(output).modality == "chat"
+    assert _checker_of(tool.handler).ran_in_child == 1
+
+
+def test_a_stage_opened_again_leaves_no_child_behind(tmp_path, plain_repo, monkeypatch):
+    import gc
+    import multiprocessing
+
+    from fi.alk.harness.builder import open_for_building
+
+    monkeypatch.delenv("ALK_SAVE_CHECKS", raising=False)
+    source = RepoSource(name="fixture", root=plain_repo)
+    before = {child.pid for child in multiprocessing.active_children()}
+    first = open_for_building(None, out=tmp_path / "out", source=source)
+    handler = _submit_tool(_server_of(first)).handler
+
+    async def calls(handler):
+        await handler(_reading("chat"))
+        return await handler(_reading("chat"))
+
+    assert not asyncio.run(calls(handler)).get("is_error")
+    started = {child.pid for child in multiprocessing.active_children()} - before
+    assert started
+
+    del first, handler
+    again = open_for_building(None, out=tmp_path / "out", source=source)
+    gc.collect()
+
+    assert not started & {child.pid for child in multiprocessing.active_children()}
+    assert _submit_tool(_server_of(again))
+
+
+@pytest.mark.parametrize("where", ["scan", "check"])
+def test_a_checker_that_keeps_losing_its_child_ends_the_stage_with_a_failure(
+    tmp_path, plain_repo, monkeypatch, where
+):
+    from fi.alk.harness.save_checker import ChildKeepsEnding
+
+    destination = tmp_path / "out"
+    tool = _submit_tool(
+        contract_tools(destination, scan_root=plain_repo, save_checks="thread")
+    )
+    checker = _checker_of(tool.handler)
+
+    async def worn(*args, **kwargs):
+        raise ChildKeepsEnding(3)
+
+    monkeypatch.setattr(checker, where, worn)
+
+    async def calls():
+        return [await tool.handler(_reading("chat")), await tool.handler(_reading("chat"))]
+
+    first, second = asyncio.run(calls())
+
+    # The stage ends with a failure that names the cause, as the agent-type refusal does.
+    for answer in (first, second):
+        assert not answer.get("is_error")
+        assert _STOP in _text(answer)
+    failure = _failure(destination)
+    assert failure["code"] == "save_checks_child_keeps_ending"
+    assert failure["retryable"] is False
+    assert failure["details"] == {"deaths": 3}
+    assert not (destination / "contract.json").exists()

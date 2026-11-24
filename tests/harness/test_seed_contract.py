@@ -144,7 +144,9 @@ def _reading(tmp_path: Path, data: bytes) -> Path:
 # -- the record a reading leaves ---------------------------------------------------------------
 
 
-def test_a_reading_records_what_it_was_made_from(tmp_path):
+def test_a_reading_records_what_it_was_made_from(tmp_path, monkeypatch):
+    # The shell's own ALK_BUILD_ID must not decide what this test expects.
+    monkeypatch.delenv("ALK_BUILD_ID", raising=False)
     job = _job()
     original = json.dumps(CONTRACT, indent=1).encode()
 
@@ -158,11 +160,140 @@ def test_a_reading_records_what_it_was_made_from(tmp_path):
         "evals_sha256": hashlib.sha256(b'[{"name":"a"}]').hexdigest(),
         "generic_harness_v1": True,
     }
-    assert json.loads(saved)[RECORD_KEY] == record_for(job)
-    compact = json.dumps(record_for(job), separators=(",", ":")).encode()
+    stored = json.loads(saved)[RECORD_KEY]
+    # The kit build is beside what the reading was made from, not part of it.
+    assert stored.pop("made_by") is not None
+    assert stored == record_for(job)
+    compact = json.dumps(
+        {**record_for(job), "made_by": _made_by_now()}, separators=(",", ":")
+    ).encode()
     prefix = b'"reading_inputs": ' + compact + b", "
     assert saved[1 : 1 + len(prefix)] == prefix
     assert saved[:1] + saved[1 + len(prefix) :] == original
+
+
+def _made_from(body: dict) -> dict:
+    """The stored record without the entry that says which build wrote it."""
+    return {k: v for k, v in body[RECORD_KEY].items() if k != "made_by"}
+
+
+def _made_by_now() -> dict:
+    # The same reading of the environment the writer does (hex only, lower-case), not the raw value.
+    return seed_contract._made_by()
+
+
+def test_a_reading_records_the_kit_version_and_build_that_made_it(monkeypatch):
+    monkeypatch.setenv("ALK_BUILD_ID", "abc123def456")
+    from importlib.metadata import version
+
+    from fi.alk import __version__
+
+    saved = with_record(_job(), json.dumps(CONTRACT).encode())
+
+    assert saved is not None
+    assert __version__ == version("agent-learning-kit")
+    assert json.loads(saved)[RECORD_KEY]["made_by"] == {
+        "kit_version": __version__,
+        "build_id": "abc123def456",
+    }
+
+
+def test_a_reading_made_without_a_build_id_records_an_empty_one(monkeypatch):
+    monkeypatch.delenv("ALK_BUILD_ID", raising=False)
+
+    saved = with_record(_job(), json.dumps(CONTRACT).encode())
+
+    assert saved is not None
+    assert json.loads(saved)[RECORD_KEY]["made_by"]["build_id"] == ""
+
+
+@pytest.mark.parametrize(
+    ("given", "kept"),
+    [
+        (
+            "ABCDEF0123456789abcdef0123456789ABCDEF01",
+            "abcdef0123456789abcdef0123456789abcdef01",
+        ),
+        ("abc1234", "abc1234"),
+        ("abc123", ""),
+        ("a" * 41, ""),
+        ("v1.2_3-x\n; rm -rf /", ""),
+        ("zzzzzzzz", ""),
+        ("abc1234\n", ""),
+        ("", ""),
+    ],
+    ids=[
+        "lowercased",
+        "seven_hex",
+        "too_short",
+        "too_long",
+        "odd_text",
+        "non_hex",
+        "newline",
+        "empty",
+    ],
+)
+def test_the_build_id_is_stored_only_when_it_is_a_commit_hash(monkeypatch, given, kept):
+    monkeypatch.setenv("ALK_BUILD_ID", given)
+
+    saved = with_record(_job(), json.dumps(CONTRACT).encode())
+
+    assert saved is not None
+    assert json.loads(saved)[RECORD_KEY]["made_by"]["build_id"] == kept
+
+
+@pytest.mark.parametrize(
+    "made_by",
+    [
+        {"kit_version": "0.0.1", "build_id": "other"},
+        {"kit_version": "", "build_id": ""},
+        "odd",
+    ],
+    ids=["another_build", "empty", "not_an_object"],
+)
+def test_a_reading_made_by_another_build_is_still_reused(tmp_path, made_by):
+    job = _job()
+    body = json.loads(_seed_bytes(job))
+    body[RECORD_KEY]["made_by"] = made_by
+
+    assert differs(body, job) == []
+    seed = _place(tmp_path, json.dumps(body).encode())
+    assert use_seed(seed, job, _source(tmp_path), tmp_path / "authoring") == (
+        "used",
+        [],
+    )
+
+
+def test_a_reading_without_made_by_is_reused_as_before(tmp_path):
+    job = _job()
+    body = json.loads(_seed_bytes(job))
+    assert "made_by" not in body[RECORD_KEY]
+
+    assert differs(body, job) == []
+    seed = _place(tmp_path, _seed_bytes(job))
+    assert use_seed(seed, job, _source(tmp_path), tmp_path / "authoring") == (
+        "used",
+        [],
+    )
+
+
+def test_the_only_new_bytes_in_a_stored_reading_are_the_made_by_entry(monkeypatch):
+    monkeypatch.setenv("ALK_BUILD_ID", "abc1234")
+    job = _job()
+    original = json.dumps(CONTRACT, indent=2).encode()
+
+    saved = with_record(job, original)
+
+    assert saved is not None
+    made_by = json.dumps(_made_by_now(), separators=(",", ":")).encode()
+    without = saved.replace(b',"made_by":' + made_by, b"", 1)
+    assert without != saved
+    assert without == _seed_bytes_like(job, original)
+
+
+def _seed_bytes_like(job: HarnessJob, raw: bytes) -> bytes:
+    # What the reading stored before made_by existed: the same splice of record_for alone.
+    return seed_contract._splice(raw, record_for(job), empty=False)
 
 
 def test_the_record_never_reaches_the_agent_document(tmp_path):
@@ -175,7 +306,8 @@ def test_the_record_never_reaches_the_agent_document(tmp_path):
     text = (reading / "agent.json").read_text(encoding="utf-8")
     assert RECORD_KEY not in text
     saved = json.loads((reading / "contract.json").read_text(encoding="utf-8"))
-    assert saved[RECORD_KEY] == record_for(job)
+    stored = {k: v for k, v in saved[RECORD_KEY].items() if k != "made_by"}
+    assert stored == record_for(job)
     contract = AgentContract.model_validate(saved).model_dump(mode="json")
     framework = detect_framework(source / FOLDER, repo_root=source, package_dir=None)
     assert json.loads(text)["agent"] == build_authored_agent(
@@ -212,6 +344,53 @@ def test_the_record_is_skipped_near_the_size_cap(tmp_path, monkeypatch, size):
         assert code == 0
     else:
         assert parsed == []
+
+
+def test_a_reading_that_only_fits_without_made_by_still_gets_its_record():
+    job = _job()
+    base = json.dumps(CONTRACT).encode()
+    old = seed_contract._splice(base, record_for(job), empty=False)
+    # Padded so the record alone lands exactly on the cap, and made_by would cross it.
+    raw = base + b" " * (SEED_LIMIT_BYTES - len(old))
+    assert len(seed_contract._splice(raw, record_for(job), empty=False)) == (
+        SEED_LIMIT_BYTES
+    )
+
+    saved = with_record(job, raw)
+
+    assert saved is not None
+    assert len(saved) == SEED_LIMIT_BYTES
+    stored = json.loads(saved)[RECORD_KEY]
+    assert "made_by" not in stored
+    assert stored == record_for(job)
+    assert saved == seed_contract._splice(raw, record_for(job), empty=False)
+
+
+def test_a_reading_that_lands_on_the_cap_with_made_by_keeps_made_by(monkeypatch):
+    monkeypatch.setenv("ALK_BUILD_ID", "abc1234")
+    job = _job()
+    base = json.dumps(CONTRACT).encode()
+    full = {**record_for(job), "made_by": seed_contract._made_by()}
+    # Padded so the record with made_by lands exactly on the cap.
+    raw = base + b" " * (
+        SEED_LIMIT_BYTES - len(seed_contract._splice(base, full, empty=False))
+    )
+    assert len(seed_contract._splice(raw, full, empty=False)) == SEED_LIMIT_BYTES
+
+    saved = with_record(job, raw)
+
+    assert saved is not None
+    assert len(saved) == SEED_LIMIT_BYTES
+    assert json.loads(saved)[RECORD_KEY]["made_by"]["build_id"] == "abc1234"
+
+
+def test_a_reading_over_the_cap_even_without_made_by_keeps_no_record():
+    job = _job()
+    base = json.dumps(CONTRACT).encode()
+    old = seed_contract._splice(base, record_for(job), empty=False)
+    raw = base + b" " * (SEED_LIMIT_BYTES - len(old) + 1)
+
+    assert with_record(job, raw) is None
 
 
 def test_a_record_is_never_parsed_from_a_contract_over_the_cap(monkeypatch):
@@ -370,7 +549,7 @@ def test_no_record_without_a_source_identity(tmp_path, make, made_from):
     else:
         assert record_for(job)["source"] == made_from
         assert record_for(job)["subfolder"] == ""
-        assert json.loads(saved)[RECORD_KEY] == record_for(job)
+        assert _made_from(json.loads(saved)) == record_for(job)
 
 
 def test_the_record_lowercases_the_commit():
@@ -1976,7 +2155,7 @@ def test_a_readings_saves_hold_only_the_record_the_reading_put_in(tmp_path):
         assert RECORD_KEY not in json.loads(saved.read_bytes())
 
     assert document(job, source, reading) == 0
-    assert json.loads(saved.read_bytes())[RECORD_KEY] == record_for(job)
+    assert _made_from(json.loads(saved.read_bytes())) == record_for(job)
 
     write_contract(contract, reading)
-    assert json.loads(saved.read_bytes())[RECORD_KEY] == record_for(job)
+    assert _made_from(json.loads(saved.read_bytes())) == record_for(job)

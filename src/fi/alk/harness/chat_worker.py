@@ -16,11 +16,12 @@ from types import SimpleNamespace
 from typing import Any
 
 from .backends import GOOGLE_ADK_APPROVAL_ENV
+from .bundle_v2 import EvidenceSeam
 from .call_runner import ArtifactUploader, CallRunnerContext
 from .chat_call_runner import _check_text_usage, handler_child_for
 from .handler_child import HandlerChannel
-from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
-from .isolated_process import run_json_worker, run_worker
+from .hosted_scheduler import USER_CANCELED, CallAborted, CallCancelled, CallOutcome, Scenario, World, call_sealed
+from .isolated_process import IsolatedWorkerError, run_json_worker, run_worker, stop_requested
 from .outbound import ArtifactKind
 from .privilege import IsolationMode, isolation_mode
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
@@ -63,6 +64,9 @@ _CHAT_ENV = frozenset(
 
 
 class IsolatedChatCallRunner:
+    # A stop reaches the worker, which seals the call it cut; the scheduler gives it the seal bound to do so.
+    stops_at_turn_boundary = True
+
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
         from .call_runner import TrialRecords, sealed_seed
 
@@ -120,6 +124,7 @@ class IsolatedChatCallRunner:
                     "target_secrets": dict(context.target_provider_secret_values),
                     "local_auth_values": dict(runtime._local_auth_values),
                     "attempt_number": context.attempt_number,
+                    "evidence_seam": context.evidence_seam.value if context.evidence_seam else None,
                     "runtime": runtime.model_dump(mode="json"),
                     "scenario_key": scenario.scenario_key,
                     "source_scenario_key": getattr(
@@ -130,12 +135,20 @@ class IsolatedChatCallRunner:
                 },
                 environ=environ,
                 work_directory=context.work_directory / "chat-workers",
+                stop_requested=context.stop_requested,
                 pass_fds=(handler_fd,) if handler_fd is not None else (),
             )
+        except IsolatedWorkerError:
+            if not context.stop_requested():
+                raise
+            # Stopped before the worker could seal anything: it was still starting, or failed on the way out.
+            raise CallCancelled() from None
         finally:
             # This side's copy of the socket goes with the child, once the worker is done.
             if handlers is not None:
                 handlers.close()
+        # The worker sealed the call: what follows delivers it, and a stop no longer cuts that.
+        call_sealed()
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
         artifact_ids = {}
         artifacts = list(result.get("artifacts", []))
@@ -162,6 +175,9 @@ class IsolatedChatCallRunner:
                 raw_outcome["transcript_artifact"]
             )
             outcome = CallOutcome(**raw_outcome)
+        if result.get("error_code") == USER_CANCELED:
+            # The worker sealed the call the person stopped: what it kept goes with the stop.
+            raise CallCancelled(partial=outcome)
         if "error" in result:
             raise CallAborted(
                 f"chat_worker_failed: {result['error']}",
@@ -280,13 +296,14 @@ async def main() -> None:
             job=job,
             bundle_dir=Path(payload["bundle_dir"]),
             work_directory=Path(payload["work_directory"]),
-            evidence_seam=None,
+            evidence_seam=EvidenceSeam(payload["evidence_seam"]) if payload.get("evidence_seam") else None,
             target_provider_secret_values=payload["target_secrets"],
             attempt_number=payload["attempt_number"],
             source_directory=Path(payload["source_directory"])
             if payload["source_directory"]
             else None,
             usage_reporter=usage,  # type: ignore[arg-type]
+            stop_requested=stop_requested,
             handler_channel=HandlerChannel(socket.socket(fileno=handler_fd))
             if handler_fd is not None
             else None,
@@ -324,6 +341,11 @@ async def main() -> None:
             result["partial"] = asdict(exc.partial)
         if collector.artifacts:
             result["artifacts"] = collector.artifacts
+    except asyncio.CancelledError:
+        if not stop_requested():
+            raise
+        # Stopped outside the conversation (before it began, or while sealing): nothing sealed to return.
+        result = {"error": USER_CANCELED, "error_code": USER_CANCELED}
     except Exception as exc:  # noqa: BLE001 - return a secret-safe worker failure
         result = {"error": type(exc).__name__}
     result["usage"] = usage.records
@@ -333,4 +355,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    run_worker(main)
+    run_worker(main, cancel_on_stop=True)

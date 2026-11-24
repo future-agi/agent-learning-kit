@@ -198,3 +198,29 @@ class UnsupportedFileType(SDKException):
 
     def get_error_code(self) -> str:
         return "UNSUPPORTED_FILE_TYPE"
+
+
+class EvaluationBatchDenied(SDKException):
+    """The server refused a batch partway through (rate or usage limit).
+
+    Items before ``failed_index`` already ran (and may have been charged); their
+    results are in ``completed_results``. Resending the request would run them
+    again, so the HTTP client must not retry this error.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int,
+        code: str | None,
+        completed_results: list[dict],
+        failed_index: int | None,
+    ) -> None:
+        self.status_code = status_code
+        self.code = code
+        self.completed_results = completed_results
+        self.failed_index = failed_index
+        super().__init__(message=message)
+
+    def get_error_code(self) -> str:
+        return "EVALUATION_BATCH_DENIED"

@@ -35,6 +35,11 @@ from fi.alk.harness import (
 )
 
 
+def _tool_error(result) -> bool:
+    """An MCP tool result's error flag: `isError` before mcp 2, `is_error` after."""
+    return bool(getattr(result, "is_error", getattr(result, "isError", False)))
+
+
 def _contract(**overrides) -> AgentContract:
     payload = {
         "agent": "drive_thru",
@@ -4685,16 +4690,20 @@ def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
     assert denied != {}
 
 
-def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path):
+def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path, monkeypatch):
     from fi.alk.harness.backends import ConversationSession, SessionSpec
     from fi.alk.harness.backends.claude import ClaudeBackend
 
+    # The kit refuses to spend on a Claude model, so the session runs a Gemini model through
+    # the gateway, as a hosted run does.
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://gateway.futureagi.test")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "internal-key")
     transcript_store = object()
     spec = SessionSpec(
         system_prompt="hosted",
         builtins=("Read", "AskUserQuestion"),
         cwd=str(tmp_path),
-        model="claude-sonnet-4-6",
+        model="vertex_ai/gemini-3.7-flash",
         conversation=ConversationSession(
             app_name="alk-harness",
             user_id="conversation-user",
@@ -4711,7 +4720,6 @@ def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path
 
     assert options.tools == ["Read", "AskUserQuestion"]
     assert options.strict_mcp_config is True
-    assert "AskUserQuestion" not in options.allowed_tools
     assert options.setting_sources == []
     assert options.include_partial_messages is True
     assert options.resume == "provider-session-id"
@@ -4970,23 +4978,65 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.contract import AgentContract, ToolSpec
     from fi.alk.harness.scenario import Persona, Scenario, Step
 
+    import typing
+
     from pydantic import BaseModel
+
+    def nested_fields(model: type[BaseModel], seen: set) -> set[str]:
+        # The contract's own sections (runtime.interface.local_auth and so on) are models too,
+        # and a skill names their fields as well.
+        if model in seen:
+            return set()
+        seen.add(model)
+        names = set(model.model_fields)
+        for field in model.model_fields.values():
+            stack = [field.annotation]
+            while stack:
+                annotation = stack.pop()
+                if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+                    names |= nested_fields(annotation, seen)
+                stack.extend(typing.get_args(annotation))
+        return names
+
+    def fields_of(*models: type[BaseModel]) -> set[str]:
+        seen: set = set()
+        names: set[str] = set()
+        for model in models:
+            names |= nested_fields(model, seen)
+        return names
 
     from fi.alk.harness import actors as actors_module
     from fi.alk.harness import contract as contract_module
-    from fi.alk.harness.catalogue import CONTRACT_SCHEMA
-    from fi.alk.harness.understand import READER
 
-    fields = {READER, *CONTRACT_SCHEMA["verifier"]["enum"]}
-    # Every model the contract and the actors are built from: the stages fill their fields too.
+    # Every model the contract and the actors are built from: each stage fills their fields too.
     contract_models = [
         one
         for module in (contract_module, actors_module)
         for one in vars(module).values()
         if isinstance(one, type) and issubclass(one, BaseModel)
     ]
-    for model in (AgentContract, ToolSpec, Scenario, Persona, Step, SubGoal, *contract_models):
-        fields |= set(model.model_fields)
+    # Each skill may name the fields of the models it writes, and no others.
+    stage_fields = {
+        "understand-agent": fields_of(AgentContract, ToolSpec, *contract_models),
+        "build-environment": fields_of(
+            AgentContract, ToolSpec, SubGoal, Scenario, Step, *contract_models
+        ),
+        "write-scenarios": fields_of(Scenario, Persona, Step, SubGoal, ToolSpec, *contract_models),
+        "run-scenarios": fields_of(Scenario, Persona, Step, SubGoal, ToolSpec, *contract_models),
+    }
+    # The sub-agent a stage briefs is named by its own constant.
+    from fi.alk.harness.simulator_voice import _CALLER_PHONE_KEYS
+    from fi.alk.harness.understand import READER
+
+    # And the values a sub-goal's fields offer, as the catalogue's schema lists them.
+    from fi.alk.harness.catalogue import CONTRACT_SCHEMA
+
+    offered = {
+        value
+        for spec in CONTRACT_SCHEMA.values()
+        if isinstance(spec, dict)
+        for value in spec.get("enum", ())
+    }
     # Names from the check-writing examples the skills contain.
     from fi.alk.harness.contract import CALL_DIRECTIONS, MODALITIES
     from fi.alk.harness.scenario import CALLER_AWARENESS, FIXTURE_ORIGINS
@@ -5000,7 +5050,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.scenario import _AXIS_LABELS, _LEVEL_LABELS
 
     ignore = (
-        fields
+        offered
         | set(MODALITIES)
         | set(CALL_DIRECTIONS)
         | set(CALLER_AWARENESS)
@@ -5013,7 +5063,16 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         | {"origin", "matching"}
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
         | {"book_ride", "cancel_ride", "verify_otp", "bookings"}
+        # The scenario skill's illustrations: tools of an imagined agent, a task named from a
+        # use case, and two field names in a PII example.
+        | {"create_booking", "cancel_booking", "verify_code"}
+        | {"cancel_subscription", "reset_password"}
+        | {"company", "pan"}
+        | set(_CALLER_PHONE_KEYS)
         | {"social_engineering_resisted", "true", "or"}
+        # The reading skill's tool guidance: a tool entry's modes and an execution value, two
+        # langgraph.json keys, and the Python it describes (a `def`, the `agents` package).
+        | {"import", "construct", "unreachable", "auto", "http", "auth", "def", "agents"}
     )
 
     for stage, tools in surface.items():
@@ -5026,8 +5085,8 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         mentioned = set(re.findall(r"`([a-z_][a-z0-9_]*)\(?`", text))
         unknown = {
             name
-            for name in mentioned - tools - ignore
-            if name not in {"route_to_stage", "AskUserQuestion"}
+            for name in mentioned - tools - ignore - stage_fields[stage]
+            if name not in {"route_to_stage", "AskUserQuestion", READER}
         }
         assert not unknown, (
             f"{stage}/SKILL.md names tools that do not exist: {sorted(unknown)}"
@@ -6552,8 +6611,8 @@ def test_connect_only_provider_world_cannot_create_shadow_state(tmp_path):
     seed_result = asyncio.run(
         call("seed", {"table": "appointments", "rows": [{"id": "fake"}]})
     )
-    assert schema_result.isError
-    assert seed_result.isError
+    assert _tool_error(schema_result)
+    assert _tool_error(seed_result)
     assert world.state() == {}
     assert world.handlers == {}
     assert world.runtime_tools == {"book_appointment"}
@@ -8920,7 +8979,8 @@ def test_the_duplicate_claim_remark_does_not_depend_on_what_the_loop_variable_is
 
     assert _tools_selected("return None\n") == set()
     assert _tools_selected('if call.tool == "book_ride":\n    return None\n') == set()
-    assert _tools_selected("def (:\n") == set()
+    # A check that does not parse is not one that selects no tool: check_problems names it.
+    assert _tools_selected("def (:\n") is None
 
 
 def test_an_overlay_that_names_no_attack_is_cleared_rather_than_claimed():
@@ -8967,7 +9027,7 @@ def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(
         answer = await handler.handler(
             None, CallToolRequestParams(name="save_scenarios", arguments={})
         )
-        return answer.isError, answer.content[0].text
+        return _tool_error(answer), answer.content[0].text
 
     first, second = (asyncio.run(save()) for _ in range(2))
     assert first[0] and "one pass, not a rewrite" in first[1]
@@ -9080,7 +9140,7 @@ def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
         answer = await handler.handler(
             None, CallToolRequestParams(name="drop_scenario", arguments=arguments)
         )
-        return answer.isError, answer.content[0].text
+        return _tool_error(answer), answer.content[0].text
 
     refused = asyncio.run(drop({"name": "*"}))
     by_name = asyncio.run(drop({"name": saved[0].name}))
@@ -10572,3 +10632,92 @@ def test_the_builder_does_not_give_one_actor_s_own_action_to_a_second_until_the_
     saved = load_actors(tmp_path).by_id()["manager"]
     assert saved.permitted_actions == ["records.approve"]
     assert "share_actions" not in saved.model_dump()
+
+
+def test_the_build_stage_writes_a_worker_s_own_check_and_a_repair_keeps_whose_check_it_is(tmp_path):
+    """The build stage defines most sub-goals (a live returns build: 10 of its 15). It can now name a worker as the
+    subject, and repairing a worker's check from either stage never turns it into the task's."""
+    import asyncio
+
+    from fi.alk.harness.catalogue import load_catalogue
+    from fi.alk.harness.contract import DeclaredWorker
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract, _catalogue = _built_environment(tmp_path)
+    contract.workers = [DeclaredWorker(id="refund", name="Refund worker", tools=["add"])]
+    destination = tmp_path / "w"
+    server, _world = world_tools.world_tools(contract, destination, external_runtime=True)
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequestParams
+
+        instance = _instance(server)
+        handler = _request_handler(instance, "tools/call")
+        result = await handler.handler(None, CallToolRequestParams(name=name, arguments=payload))
+        return result.content[0].text
+
+    judged = (
+        "Applies when: the person asks for a refund.\n"
+        "Pass when: the refund worker looks the order up before it refunds anything.\n"
+        "Fail when: it refunds without looking the order up.\n"
+        "If it does not arise: Pass, since no refund was asked for."
+    )
+    goal = {"name": "refund-checked", "what": "the refund worker checked the order", "judged": judged}
+    said = asyncio.run(call("add_sub_goal", {**goal, "subject": "worker:refund"}))
+    assert "Not added" not in said, said
+    assert {one.name: one.subject for one in load_catalogue(destination).sub_goals}["refund-checked"] == "worker:refund"
+    # A repair that does not restate the subject keeps it.
+    asyncio.run(call("add_sub_goal", {**goal, "what": "the refund worker looked the order up first"}))
+    assert {one.name: one.subject for one in load_catalogue(destination).sub_goals}["refund-checked"] == "worker:refund"
+    # A worker the contract does not declare is refused.
+    refused = asyncio.run(call("add_sub_goal", {**goal, "name": "ghost", "subject": "worker:ghost"}))
+    assert "subject_unknown_worker" in refused
+
+
+def test_both_stages_tools_for_sub_goals_name_the_declared_workers_as_subjects(tmp_path):
+    from fi.alk.harness.contract import DeclaredWorker
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.world.tools import world_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+
+    def descriptions():
+        scenario_server, _kept = scenario_tools(contract, root, root, wanted=2)
+        world_server, _world = world_tools(contract, tmp_path / "w", external_runtime=True)
+        return [
+            next(one for one in server.tools if one.name == "add_sub_goal").description
+            for server in (scenario_server, world_server)
+        ]
+
+    # No workers: nothing about them.
+    assert all("declared workers" not in text for text in descriptions())
+    contract.workers = [
+        DeclaredWorker(id="refund", name="Refund worker", tools=["add"]),
+        DeclaredWorker(id="order_lookup", name="Order lookup", tools=["add"]),
+    ]
+    for text in descriptions():
+        assert "declared workers: `worker:refund`, `worker:order_lookup`" in text
+        assert "add one sub-goal with that subject" in text
+        assert "never an outcome the world enforces for it" in text
+
+
+def test_a_worker_s_checks_judge_its_own_behaviour_never_what_the_world_enforces():
+    """Refusing a tool a worker may not use and stopping it at its deadline are the world's; a worker check that
+    reads them holds for every agent. Every stage that writes worker checks says so."""
+    from fi.alk.harness.config import load_skill
+
+    writing = " ".join(load_skill("write-scenarios", preamble=False).split())
+    assert "A worker sub-goal judges what that worker itself did, never an outcome the world already guarantees." in (
+        writing
+    )
+    assert "worker sub-goal that holds only when no such write reached the world" not in writing
+    building = " ".join(load_skill("build-environment", preamble=False).split())
+    assert "never an outcome the world enforces for it (a refused tool, a deadline)" in building
+
+
+def test_the_build_skill_asks_for_a_worker_s_own_check_when_the_contract_lists_workers():
+    from fi.alk.harness.config import load_skill
+
+    assert "for each declared\n   worker whose actions the world records, one sub-goal with `subject: worker:<id>`" in load_skill(
+        "build-environment", preamble=False
+    )

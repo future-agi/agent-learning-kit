@@ -31,6 +31,7 @@ from fi import agentcc
 
 from .base import (
     ASK_TOOL,
+    CALL_BUDGET_SPENT,
     FILE_TOOLS,
     Call,
     ModelReply,
@@ -341,6 +342,10 @@ class VertexGeminiSession:
         self._pending: str | None = None
         # Calls each worker run has taken, keyed by the scope ADK gives that run.
         self._worker_calls: dict[str, int] = {}
+        # Model calls the whole session has made, its workers' included, and whether one was
+        # refused for the session's call budget.
+        self._calls = 0
+        self._budget_spent = False
         self._resume_invocation_id: str | None = None
         context = spec.conversation
         self.session_id = (
@@ -373,6 +378,23 @@ class VertexGeminiSession:
             )
         return offered
 
+    def _spend_a_call(self) -> Any:
+        """Count one model call against the session's budget; a final reply once it is spent.
+
+        Called before every model call, the main loop's and every worker's, so no request goes
+        out past the budget. The reply it returns in place of a call ends that agent's run.
+        """
+        budget = self._spec.call_budget
+        if budget > 0 and self._calls >= budget:
+            self._budget_spent = True
+            return _stopped(f"Stopped: this session's budget of {budget} model calls is spent.")
+        self._calls += 1
+        return None
+
+    def _before_main_call(self, callback_context: Any, llm_request: Any) -> Any:
+        _pruned_history(callback_context, llm_request)
+        return self._spend_a_call()
+
     def _workers(self) -> list[Any]:
         """Every declared worker as a sub-agent this loop may run."""
         from google.adk.agents import LlmAgent
@@ -382,7 +404,7 @@ class VertexGeminiSession:
             def before(callback_context: Any, llm_request: Any) -> Any:
                 _forget_old_reads(llm_request.contents or [])
                 if ceiling <= 0:
-                    return None
+                    return self._spend_a_call()
                 run = (
                     getattr(callback_context, "isolation_scope", None)
                     or getattr(callback_context, "branch", None)
@@ -390,7 +412,7 @@ class VertexGeminiSession:
                 )
                 self._worker_calls[run] = self._worker_calls.get(run, 0) + 1
                 if self._worker_calls[run] <= ceiling:
-                    return None
+                    return self._spend_a_call()
                 return _stopped(
                     f"I have used all {ceiling} of my turns. Everything I submitted is already "
                     "in the suite. Report what is missing to whoever briefed me so it can be "
@@ -440,7 +462,7 @@ class VertexGeminiSession:
             ),
             tools=self._tools(),
             sub_agents=self._workers(),
-            before_model_callback=_pruned_history,
+            before_model_callback=self._before_main_call,
         )
         context = self._spec.conversation
         if context is None:
@@ -529,6 +551,7 @@ class VertexGeminiSession:
         self._pending = None
         self._resume_invocation_id = None
         turns = 0
+        calls_before = self._calls
         tokens_in = 0
         tokens_out = 0
         tokens_cached = 0
@@ -658,6 +681,7 @@ class VertexGeminiSession:
             yield StageDone(
                 outcome="failed",
                 turns=turns,
+                calls=self._calls - calls_before,
                 cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
@@ -669,6 +693,24 @@ class VertexGeminiSession:
                 errors=[str(exc)[:400]],
             )
             return
+        if self._budget_spent:
+            # The final reply was ours, not the model's: the session's budget stopped it.
+            yield StageDone(
+                outcome=CALL_BUDGET_SPENT,
+                is_error=True,
+                turns=turns,
+                calls=self._calls - calls_before,
+                cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                tokens_cached=tokens_cached,
+                session_id=self.session_id,
+                models={self._model},
+                errors=[
+                    f"the session spent its whole budget of {self._spec.call_budget} model calls"
+                ],
+            )
+            return
         # A stream that ends without a final response ran out of its call budget, which is
         # not the same as the model having finished. Reported as success it reads as a stage
         # that did its work, and a half-written suite comes back green.
@@ -676,6 +718,7 @@ class VertexGeminiSession:
             outcome="success" if settled else "max_turns",
             is_error=not settled,
             turns=turns,
+            calls=self._calls - calls_before,
             cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
             tokens_in=tokens_in,
             tokens_out=tokens_out,

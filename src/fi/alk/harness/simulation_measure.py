@@ -140,6 +140,9 @@ def register(patches: dict, write, mark) -> bool:
     for name in _UNSEEN_SDKS:
         patches.setdefault(name, _unseen_sdk)
     patches.setdefault("httpx", _patch_httpx)
+    # openai 3, and the OpenAI Agents SDK from 0.24, send through httpx2, whose clients have the
+    # same send.
+    patches.setdefault("httpx2", _patch_httpx)
     patches.setdefault("http.client", _patch_http_client)
     atexit.register(_flush)
     _flush_on_sigterm()
@@ -502,7 +505,7 @@ def _wrap(cls, method: str, target_of) -> None:
 
 
 def _request_target(_client, args, kwargs):
-    """The host and path an httpx request goes to."""
+    """The host and path an httpx or httpx2 request goes to."""
     request = args[0] if args else kwargs.get("request")
     url = getattr(request, "url", None)
     return getattr(url, "host", None), getattr(url, "path", "")

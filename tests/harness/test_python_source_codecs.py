@@ -817,13 +817,6 @@ def test_a_decoded_cr_reads_as_todays_code_reads_it(tmp_path, raw, name):
             marks=(_FROM_312, _KEEPS_A_DECODED_CR),
         ),
         pytest.param(
-            _UTF7
-            + b"try:\n    import +AHQ-raceai_openai\n+AA0-[0]\nexcept ImportError:\n    pass\n",
-            "traceai_openai",
-            id="cr-in-a-try-traceai",
-            marks=(_FROM_312, _KEEPS_A_DECODED_CR),
-        ),
-        pytest.param(
             _UTF7 + b"+AA0-\\+AA0-\n import playwright\n",
             "playwright",
             id="cr-then-continued",
@@ -841,6 +834,18 @@ def test_a_decoded_cr_reads_as_todays_code_reads_it(tmp_path, raw, name):
 def test_the_known_misses_stay_unread(tmp_path, raw, name):
     assert name in _names_python_runs(raw)
     assert _scan(tmp_path, raw, name) == _missed(name)
+
+
+@_FROM_312
+@_KEEPS_A_DECODED_CR
+def test_a_tracing_import_in_a_file_the_parser_ends_early_is_found_by_its_lines(tmp_path):
+    # The parser ends the line at the decoded CR and refuses the file; Python runs the import.
+    # The instrumentation check searches the lines of a file that doesn't parse, so
+    # this is no longer a miss for it. The browser check still misses its twin, cr-in-a-try.
+    raw = _UTF7 + b"try:\n    import +AHQ-raceai_openai\n+AA0-[0]\nexcept ImportError:\n    pass\n"
+
+    assert "traceai_openai" in _names_python_runs(raw)
+    assert _scan(tmp_path, raw, "traceai_openai") == _found("traceai_openai")
 
 
 @pytest.mark.parametrize(

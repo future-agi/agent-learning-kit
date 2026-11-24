@@ -7,6 +7,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
@@ -37,10 +38,13 @@ from .chat_call_runner import (
     _duration_ms,
     _record_text_usage,
     _scenario_document,
+    _sealed_through_stop,
+    _stopped_call,
     _tool_world,
+    _within_stop_bound,
 )
 from .contract import AgentContract
-from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
+from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome, Scenario, World
 from .run.conversation import Transcript
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
@@ -293,6 +297,11 @@ class RetellChatCallRunner:
         world: World | None = None,
     ) -> CallOutcome:
         del world
+        return await _sealed_through_stop(
+            self._context.stop_requested, lambda sealing: self._run(scenario, runtime, sealing)
+        )
+
+    async def _run(self, scenario: Scenario, runtime: EnvironmentRuntime, sealing: asyncio.Event) -> CallOutcome:
         if self._contract is None:
             raise CallAborted(
                 "chat_contract_unavailable: bundle/contract.json is absent"
@@ -365,6 +374,11 @@ class RetellChatCallRunner:
         except CallAborted as exc:
             failure = exc
             raise
+        except asyncio.CancelledError as exc:
+            if not self._context.stop_requested():
+                raise
+            # The person stopped the run: seal what the call kept below, then raise.
+            failure, transcript = _stopped_call(exc)
         except Exception as exc:
             wrapped = CallAborted(
                 f"retell_chat_target_failed: {type(exc).__name__}: {exc}"
@@ -375,8 +389,9 @@ class RetellChatCallRunner:
             failure = wrapped
             raise wrapped from exc
         finally:
+            sealing.set()
             try:
-                await wrapper.aclose()
+                await _within_stop_bound(self._context.stop_requested, wrapper.aclose())
             finally:
                 await _record_text_usage(
                     self._context.usage_reporter,
@@ -413,7 +428,7 @@ class RetellChatCallRunner:
         await _upload_tool_trace(
             self._adapter, calls, scenario_key=scenario.scenario_key, binding=binding
         )
-        return CallOutcome(
+        outcome = CallOutcome(
             calls=calls,
             tool_capture_failed=capture_failed,
             evidence_collected=traced and not capture_failed,
@@ -424,6 +439,10 @@ class RetellChatCallRunner:
             transcript_artifact=transcript_id,
             messages=tuple(transcript.canonical_messages()),
         )
+        if isinstance(failure, CallCancelled):
+            failure.partial = replace(outcome, stop_reason="user_canceled")
+            raise failure
+        return outcome
 
 
 __all__ = [

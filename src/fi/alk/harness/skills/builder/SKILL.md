@@ -193,6 +193,10 @@ what the gates check. Then:
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and
   `declare_tool` for a tool the contract lacks (with the line in the agent's source that defines it),
   always with the reason. This corrects the harness's understanding; it never changes the agent.
+- **Which tools a participant may use**: `set_worker_tools`, only when the person asks for it, and nothing else.
+  Tell them this changes what is tested by their say, not what the agent's code shows. A changed description, effect or
+  argument value never lets a participant use a tool. Say a participant may use a tool only after
+  `set_worker_tools` answered that it may.
 - **Reading and searching**: Read, Grep and Glob, over the scenario folders and the agent's source. The
   proved files (scenarios, catalogue, contract, world, bundle) and the agent's source only change
   through the checked tools above; there is no shell and no hand editing.

@@ -9,9 +9,11 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from livekit.agents.llm import ChatMessage
 
+# Before the first livekit import, so an environment without LiveKit skips this file.
 pytest.importorskip("livekit")
+
+from livekit.agents.llm import ChatMessage  # noqa: E402
 
 from fi.simulate.agent.definition import AgentDefinition, TelephonyTransport
 from fi.simulate.recording.room_recorder import (
@@ -3975,6 +3977,63 @@ def test_room_disconnect_ends_conversation() -> None:
     assert failed.failure.retryable is True
 
 
+def test_a_person_s_stop_ends_the_live_conversation_and_keeps_what_was_said() -> None:
+    # Nothing else ends this call: without the stop it would run to its 5 s deadline.
+    room = _FakeEventRoom(participants={"t": SimpleNamespace(identity="target-agent")})
+    stopped = {"now": False}
+
+    class FakeSession:
+        history = SimpleNamespace(items=[])
+
+        def on(self, _event, _callback):
+            return None
+
+    async def run() -> tuple[str, float]:
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.1, stopped.update, {"now": True})
+        token = livekit.STOP_CHECK.set(lambda: stopped["now"])
+        started = loop.time()
+        try:
+            reason = await livekit._wait_for_conversation_end(
+                room,
+                FakeSession(),
+                customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
+                target_identity="target-agent",
+                timeout=5,
+                conversation_direction="simulator_first",
+                agent_first_silence_timeout_seconds=30,
+            )
+        finally:
+            livekit.STOP_CHECK.reset(token)
+        return reason, loop.time() - started
+
+    reason, took = asyncio.run(run())
+
+    assert (reason, took < 2) == ("user_canceled", True)
+    messages = [
+        {"role": "user", "content": "I need my atorvastatin refill."},
+        {"role": "assistant", "content": "Can I have your date of birth?"},
+    ]
+    outcome = livekit._conversation_outcome(reason, messages, min_turn_messages=8)
+    # A short stopped call is kept as said, never failed for its few turns.
+    assert (outcome.status, outcome.failure, outcome.messages) == (CaseStatus.COMPLETED, None, messages)
+    assert outcome.metadata == {"stop_reason": "user_canceled"}
+
+
+def test_a_stopped_call_s_teardown_is_cut_short_so_it_seals_inside_the_stop_bound() -> None:
+    stopped = {"now": False}
+    token = livekit.STOP_CHECK.set(lambda: stopped["now"])
+    try:
+        assert livekit._cleanup_limit(30.0) == 30.0
+        stopped["now"] = True
+        # A LiveKit teardown that hangs takes at most this bound once the person stopped the call.
+        assert livekit._cleanup_limit(30.0) == livekit._STOPPED_CLEANUP_SECONDS < 15
+        assert livekit._cleanup_limit(3.0) == 3.0
+    finally:
+        livekit.STOP_CHECK.reset(token)
+    assert livekit._cleanup_limit(30.0) == 30.0
+
+
 def test_short_explicit_farewell_disconnect_is_completed_for_eval() -> None:
     messages = [
         {"role": "assistant", "content": "Hello, what can I help with?"},
@@ -4928,3 +4987,44 @@ def test_a_call_actor_line_cut_short_stops_its_audio(monkeypatch) -> None:
     asyncio.run(cut(call.say(frames(), "a line", "Near")))
     asyncio.run(cut(call.play(frames(), 1.0, "a line", "Near")))
     assert spoken.stopped and played.stopped
+
+
+def test_a_tool_call_the_world_holds_is_not_silence_and_the_wait_restarts_once_it_is_answered() -> None:
+    """As in the payment-timeout trials: the caller asked for the refund, then the target went quiet while the world
+    held its refund call. The backstop waits through the hold, and counts its quiet from the hold's end."""
+    import time as clock
+
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[SimpleNamespace(type="message", role="assistant", text_content="Yes, go ahead and submit it.")]
+        )
+    )
+    held_until = clock.time() + 0.3
+
+    async def run() -> float:
+        token = livekit.TARGET_BUSY_UNTIL.set(lambda: held_until)
+        try:
+            started = clock.time()
+            await asyncio.wait_for(livekit._wait_for_conversation_silence(session, quiet_seconds=0.1), timeout=3)
+            return clock.time() - started
+        finally:
+            livekit.TARGET_BUSY_UNTIL.reset(token)
+
+    waited = asyncio.run(run())
+    assert waited >= 0.3 + 0.1
+
+    # A check that fails, or none at all, leaves the backstop as it always was.
+    def failing() -> float:
+        raise RuntimeError("log unreadable")
+
+    async def unchanged(check) -> float:
+        token = livekit.TARGET_BUSY_UNTIL.set(check)
+        try:
+            started = clock.time()
+            await asyncio.wait_for(livekit._wait_for_conversation_silence(session, quiet_seconds=0.05), timeout=3)
+            return clock.time() - started
+        finally:
+            livekit.TARGET_BUSY_UNTIL.reset(token)
+
+    assert asyncio.run(unchanged(failing)) < 0.3
+    assert asyncio.run(unchanged(None)) < 0.3
