@@ -574,6 +574,75 @@ def test_hosted_chat_takes_each_call_s_worker_from_the_agent_s_framework_spans(
     assert json.loads(adapter.uploads[1])["worker_label"] == "Accounts worker"
 
 
+@pytest.mark.parametrize("join", ["", "empty_list_only"])
+def test_hosted_chat_reads_spans_switched_on_for_a_callback_agent_only_into_an_empty_list(
+    tmp_path: Path, monkeypatch: Any, join: str
+) -> None:
+    """Through the chat runner's own read: the agent's process traced one call, and its framework wrote a span of it
+    that does not pair (another argument). Where the build switched the spans on with the empty-list rule, the span
+    adds no call; without the marker it reads as before, and the span is a second call."""
+    tool_world = _ToolWorld()
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+    trace = tmp_path / "agent-tool-calls.jsonl"
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            # A callback agent: its reply reports no calls; its process wrote the tracer's line and the span.
+            line = {"name": "lookup_account", "arguments": {"account_id": "ACC-2048"}, "output": "active", "at": 1.0}
+            span = {
+                "name": "lookup_account",
+                "arguments": '{"account_id": "ACC-9999"}',
+                "output": "closed",
+                "is_error": False,
+                "source": "otel",
+                "agent_key": "Accounts worker",
+                "at": 1.1,
+            }
+            trace.write_text(json.dumps(line) + "\n" + json.dumps(span) + "\n", encoding="utf-8")
+            # The mark hook's note: the framework's spans were on in the agent's process.
+            Path(str(trace) + ".observing").write_text(
+                json.dumps({"framework": "agents", "state": "on"}) + "\n", encoding="utf-8"
+            )
+            return AgentResponse(content="The account is active.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http",
+                protocol="http",
+                address="http://localhost:18080",
+            )
+        },
+        metadata={"tool_trace_path": str(trace), **({"tool_spans_join": join} if join else {})},
+    )
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), _context(tmp_path)).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+
+    if join:
+        assert [(c.name, c.arguments) for c in outcome.calls] == [("lookup_account", {"account_id": "ACC-2048"})]
+    else:
+        assert sorted(c.arguments["account_id"] for c in outcome.calls) == ["ACC-2048", "ACC-9999"]
+    from fi.alk.harness import call_runner
+
+    # The source wrote a tool span, so it was on and not silent.
+    spans_said = [
+        one["code"] for one in outcome.notices if one["code"].startswith("tool_spans_")
+    ]
+    assert spans_said == [call_runner.TOOL_SPANS_ON]
+
+
 @pytest.mark.parametrize(
     "metadata",
     [
@@ -714,9 +783,12 @@ def test_hosted_chat_executes_nested_message_call_despite_metadata_response(
     assert world.calls[0].result == {"ok": True}
 
 
+@pytest.mark.parametrize(("given", "kept"), [("tool-1", {"call_id": "tool-1"}), ("", {})], ids=["agent-id", "no-id"])
 def test_hosted_callable_accepts_completed_tool_response_without_second_call(
-    tmp_path: Path, monkeypatch: Any
+    tmp_path: Path, monkeypatch: Any, given: str, kept: dict[str, str]
 ) -> None:
+    """An id the agent gave the call is kept with it. A call with no id is paired with its response by the kit's own
+    stand-in, `call_1`, which is never kept as the agent's id."""
     context = _context(tmp_path)
     contract = json.loads(
         (context.bundle_dir / "contract.json").read_text(encoding="utf-8")
@@ -746,7 +818,7 @@ def test_hosted_callable_accepts_completed_tool_response_without_second_call(
                 content="The account is active.",
                 tool_calls=[
                     {
-                        "id": "tool-1",
+                        **({"id": given} if given else {}),
                         "function": {
                             "name": "lookup_account",
                             "arguments": '{"account_id":"ACC-2048"}',
@@ -756,7 +828,7 @@ def test_hosted_callable_accepts_completed_tool_response_without_second_call(
                 tool_responses=[
                     {
                         "role": "tool",
-                        "tool_call_id": "tool-1",
+                        "tool_call_id": given or "call_1",
                         "content": '{"status":"active"}',
                     }
                 ],
@@ -791,6 +863,7 @@ def test_hosted_callable_accepts_completed_tool_response_without_second_call(
     assert [call.name for call in outcome.calls] == ["lookup_account"]
     assert outcome.calls[0].ok is True
     assert outcome.calls[0].result == {"status": "active"}
+    assert outcome.calls[0].runtime_ids == kept
     assert b"The account is active" in adapter.uploads[0]
 
 
