@@ -49,7 +49,8 @@ def _earlier_heap_frozen():
         gc.unfreeze()
 
 EMPTY_NAME = (
-    "model: name is empty; give the model's name as written in the source, or leave model out"
+    "model: name is empty; give the model's name as written in the source, or the setting it "
+    "is read from as setting, or leave model out"
 )
 NAME_CHARACTERS = (
     "model: a model name is letters, digits and . _ : / @ -; write it as it appears in the "
@@ -92,8 +93,9 @@ def outside(line: int, path: str, count: int) -> str:
 def not_named(name: str, line: int, path: str) -> str:
     return (
         f"model: the name {name[:100]} is not the value written on line {line} of {path[:200]}; "
-        "cite the line where it is written in quotes, or after : or = in a configuration file, "
-        "or leave model out if the name is only set at run time"
+        "cite the line where it is written in quotes, or after : or = in a configuration file; "
+        "if it is only set at run time, give the setting it is read from as setting, or leave "
+        "model out"
     )
 
 
@@ -742,7 +744,7 @@ def test_submit_contract_schema_describes_model(tmp_path):
 
     model = schema["properties"]["model"]
 
-    assert set(model["properties"]) == {"provider", "name", "path", "line"}
+    assert set(model["properties"]) == {"provider", "name", "setting", "path", "line"}
     assert "required" not in model
     assert "model" not in schema["required"]
 
@@ -842,15 +844,17 @@ def test_a_quote_under_an_alias_is_not_called_missing(tmp_path, root):
         pytest.param(
             'MODEL = os.getenv("OPENAI_MODEL")',
             "OPENAI_MODEL",
-            "model: OPENAI_MODEL reads as the name of a setting, not a model; cite the line its "
-            "value is written on, or leave model out",
+            "model: OPENAI_MODEL reads as the name of a setting, not a model; give it as "
+            "setting, with the default the line gives it as name if there is one, or leave model "
+            "out",
             id="getenv-setting-name",
         ),
         pytest.param(
             "llm = ChatOpenAI(model=settings.llm_model)",
             "settings.llm_model",
-            "model: settings.llm_model reads as the name of a setting, not a model; cite the line "
-            "its value is written on, or leave model out",
+            "model: settings.llm_model reads as the name of a setting, not a model; give it as "
+            "setting, with the default the line gives it as name if there is one, or leave model "
+            "out",
             id="attribute",
         ),
         pytest.param('model = "gpt-4o"  # was gpt-4o-mini', "gpt-4o-mini", None, id="in-a-comment"),
@@ -1079,8 +1083,8 @@ def test_a_setting_name_is_not_a_model(root, file, written, name):
     problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
 
     assert problems == [
-        f"model: {name} reads as the name of a setting, not a model; cite the line its value is "
-        "written on, or leave model out"
+        f"model: {name} reads as the name of a setting, not a model; give it as setting, with the "
+        "default the line gives it as name if there is one, or leave model out"
     ]
 
 
@@ -1198,8 +1202,8 @@ def test_settings_in_any_spelling_are_not_models(root, written, name):
     problems, _, _ = checked(root, {"name": name, "path": "llm.py", "line": 2})
 
     assert problems == [
-        f"model: {name} reads as the name of a setting, not a model; cite the line its value is "
-        "written on, or leave model out"
+        f"model: {name} reads as the name of a setting, not a model; give it as setting, with the "
+        "default the line gives it as name if there is one, or leave model out"
     ]
 
 
@@ -4135,3 +4139,434 @@ def test_a_first_save_whose_command_runs_inline_code_is_refused(tmp_path, root):
     assert result.get("is_error"), result
     assert "program as an argument" in text_of(result)
     assert not (destination / "contract.json").exists()
+
+
+# The setting a model is read from: the line looks it up, and its default, if any, is the name
+
+
+SETTING_SHAPE = (
+    "model: setting is the name of an environment variable as the line looks it up: letters, "
+    "digits and _, not starting with a digit, at most 255 characters; or leave setting out"
+)
+_SETTING_LEFT_OUT_NEXT_TIME = (
+    "model: if the model is refused again, its setting is left out, and the model too unless "
+    "its name passes alone"
+)
+
+
+def not_looked_up(setting: str, line: int, path: str) -> str:
+    return (
+        f"model: line {line} of {path} doesn't look up the setting {setting}; cite the line that "
+        f'reads it, such as os.getenv("{setting}", ...), or leave setting out'
+    )
+
+
+def not_the_default(name: str, setting: str, line: int, path: str) -> str:
+    return (
+        f"model: the name {name} is not the default written on line {line} of {path}; give as "
+        f"name the default the line gives {setting}, or leave name out if it gives none"
+    )
+
+
+def a_credential_setting(setting: str) -> str:
+    return f"model: {setting} names a credential, not the model; leave model out"
+
+
+def a_credentials_default(name: str, looked_up: str, line: int, path: str) -> str:
+    return (
+        f"model: {name} is the default of {looked_up} on line {line} of {path}, which names a "
+        "credential; a credential's default is never recorded as the model, so leave model out"
+    )
+
+
+# The reference agents' own line: the customer sets ANTHROPIC_MODEL, and the value written is
+# only what the agent falls back to.
+_READ_FROM_A_SETTING = 'MODEL = os.getenv("ANTHROPIC_MODEL", "vertex_ai/gemini-3.7-flash")'
+
+
+def test_a_setting_with_a_default_is_kept_with_its_default_as_the_name(root):
+    (root / "agent.py").write_text(f"import os\n{_READ_FROM_A_SETTING}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(
+        root,
+        {
+            "provider": "anthropic",
+            "name": " vertex_ai/gemini-3.7-flash ",
+            "setting": " ANTHROPIC_MODEL ",
+            "path": "agent.py",
+            "line": 2,
+        },
+    )
+
+    assert problems == []
+    assert contract.model.model_dump() == {
+        "provider": "anthropic",
+        "name": "vertex_ai/gemini-3.7-flash",
+        "setting": "ANTHROPIC_MODEL",
+        "path": "agent.py",
+        "line": 2,
+    }
+
+
+def test_a_setting_with_a_default_is_saved(tmp_path, root):
+    (root / "agent.py").write_text(f"import os\n{_READ_FROM_A_SETTING}\n", encoding="utf-8")
+    destination = tmp_path / "out"
+    model = {
+        "name": "vertex_ai/gemini-3.7-flash",
+        "setting": "ANTHROPIC_MODEL",
+        "path": "agent.py",
+        "line": 2,
+    }
+
+    result = accept_contract(payload(model=model), destination, source_root=root)
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["model"] == {"provider": "", **model}
+
+
+@pytest.mark.parametrize(
+    "file, written, setting, name",
+    [
+        pytest.param("llm.py", 'MODEL = os.getenv("OPENAI_MODEL")', "OPENAI_MODEL", "", id="getenv-no-default"),
+        pytest.param("llm.py", 'MODEL = os.environ["OPENAI_MODEL"]', "OPENAI_MODEL", "", id="environ-subscript"),
+        pytest.param(
+            "llm.py", "MODEL = os.environ.get('LLM_MODEL', 'gpt-4o')", "LLM_MODEL", "gpt-4o", id="environ-get"
+        ),
+        pytest.param(
+            "llm.py", 'MODEL = os.getenv("OPENAI_MODEL") or "gpt-4o-mini"', "OPENAI_MODEL", "gpt-4o-mini", id="or-default"
+        ),
+        pytest.param(
+            "llm.ts", 'const model = process.env["OPENAI_MODEL"] ?? "gpt-4o";', "OPENAI_MODEL", "gpt-4o", id="process-env-subscript"
+        ),
+        pytest.param("llm.yaml", "model: ${OPENAI_MODEL:-gpt-4o}", "OPENAI_MODEL", "gpt-4o", id="compose-default"),
+        pytest.param("llm.yaml", "model: ${OPENAI_MODEL}", "OPENAI_MODEL", "", id="compose-no-default"),
+        pytest.param("llm.py", 'MODEL = os.getenv("model_name", "gpt-4o")', "model_name", "gpt-4o", id="lowercase"),
+    ],
+)
+def test_a_setting_the_line_looks_up_is_kept(root, file, written, setting, name):
+    (root / file).write_text(f"# settings\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(
+        root, {"name": name, "setting": setting, "path": file, "line": 2}
+    )
+
+    assert problems == []
+    assert (contract.model.setting, contract.model.name) == (setting, name)
+
+
+def test_a_setting_with_no_default_is_saved_with_no_name(tmp_path, root):
+    (root / "agent.py").write_text('import os\nMODEL = os.getenv("OPENAI_MODEL")\n', encoding="utf-8")
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(model={"setting": "OPENAI_MODEL", "path": "agent.py", "line": 2}),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["model"] == {
+        "provider": "",
+        "name": "",
+        "setting": "OPENAI_MODEL",
+        "path": "agent.py",
+        "line": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param('MODEL = "gpt-4o"', id="not-on-the-line"),
+        pytest.param('MODEL = "OPENAI_MODEL"', id="a-value-not-a-lookup"),
+        pytest.param('MODEL = "gpt-4o"  # os.getenv("OPENAI_MODEL")', id="in-a-comment"),
+        pytest.param('MODEL = os.getenv("OPENAI_MODEL_V2", "gpt-4o")', id="a-longer-name"),
+        pytest.param('MODEL = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")', id="a-name-ending-in-it"),
+        pytest.param('MODEL = GenerativeModel("OPENAI_MODEL")', id="passed-to-another-call"),
+    ],
+)
+def test_a_setting_the_line_does_not_look_up_is_refused(root, written):
+    (root / "llm.py").write_text(f"import os\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(
+        root, {"name": "gpt-4o", "setting": "OPENAI_MODEL", "path": "llm.py", "line": 2}
+    )
+
+    assert problems == [not_looked_up("OPENAI_MODEL", 2, "llm.py")]
+
+
+def test_a_name_with_a_setting_must_be_its_default(root):
+    (root / "agent.py").write_text(f"import os\n{_READ_FROM_A_SETTING}\n", encoding="utf-8")
+
+    problems, _, _ = checked(
+        root, {"name": "gpt-5", "setting": "ANTHROPIC_MODEL", "path": "agent.py", "line": 2}
+    )
+
+    assert problems == [not_the_default("gpt-5", "ANTHROPIC_MODEL", 2, "agent.py")]
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        pytest.param("OPENAI-MODEL", id="a-dash"),
+        pytest.param("1MODEL", id="starts-with-a-digit"),
+        pytest.param("OPENAI MODEL", id="a-space"),
+        pytest.param("os.environ", id="a-dot"),
+        pytest.param("MODÈLE", id="not-ascii"),
+        pytest.param("M" * 256, id="too-long"),
+    ],
+)
+def test_a_setting_not_shaped_like_an_environment_name_is_refused(root, setting):
+    problems, _, _ = checked(
+        root, {"name": "gpt-4o", "setting": setting, "path": "agent.py", "line": 2}
+    )
+
+    assert problems == [SETTING_SHAPE]
+
+
+def test_a_bad_setting_is_refused_once_then_left_out_keeping_the_name(tmp_path, root):
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    bad = payload(
+        hard_constraints=["Be polite."],
+        model={
+            "provider": "openai",
+            "name": "gpt-4o",
+            "setting": "OPENAI-MODEL",
+            "path": "agent.py",
+            "line": 2,
+        },
+    )
+
+    first = submit(bad)
+
+    assert text_of(first) == REFUSED + SETTING_SHAPE + "\n  - " + _SETTING_LEFT_OUT_NEXT_TIME
+    assert not (destination / "contract.json").exists()
+
+    second = submit(bad)
+
+    assert not second.get("is_error"), second
+    # The name passes alone (root's agent.py writes MODEL = "gpt-4o" on line 2): it is kept, and
+    # the setting left out of the saved bytes.
+    assert saved(destination)["model"] == {
+        "provider": "openai",
+        "name": "gpt-4o",
+        "path": "agent.py",
+        "line": 2,
+    }
+
+
+def test_a_setting_refused_twice_with_no_name_leaves_the_model_out(tmp_path, root):
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    bad = payload(
+        hard_constraints=["Be polite."],
+        model={"setting": "OPENAI-MODEL", "path": "agent.py", "line": 2},
+    )
+
+    first = submit(bad)
+    assert first.get("is_error")
+
+    second = submit(bad)
+
+    assert not second.get("is_error"), second
+    assert "model" not in saved(destination)
+
+
+def test_a_setting_not_looked_up_is_left_out_the_second_time(tmp_path, root):
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    unread = payload(
+        hard_constraints=["Be polite."],
+        model={"name": "gpt-4o", "setting": "OPENAI_MODEL", "path": "agent.py", "line": 2}
+    )
+
+    first = submit(unread)
+
+    assert text_of(first) == (
+        REFUSED + not_looked_up("OPENAI_MODEL", 2, "agent.py") + "\n  - "
+        + _SETTING_LEFT_OUT_NEXT_TIME
+    )
+
+    second = submit(unread)
+
+    assert not second.get("is_error"), second
+    assert saved(destination)["model"]["name"] == "gpt-4o"
+    assert "setting" not in saved(destination)["model"]
+
+
+def test_accept_contract_refuses_a_bad_setting_every_time(tmp_path, root):
+    bad = payload(model={"name": "gpt-4o", "setting": "OPENAI-MODEL", "path": "agent.py", "line": 2})
+
+    for _ in range(2):
+        result = accept_contract(bad, tmp_path / "out", source_root=root)
+        assert text_of(result) == REFUSED + SETTING_SHAPE
+    assert not (tmp_path / "out" / "contract.json").exists()
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        pytest.param("OPENAI_API_KEY", id="key"),
+        pytest.param("HF_TOKEN", id="token"),
+        pytest.param("CLIENT_SECRET", id="secret"),
+        pytest.param("DB_PASSWORD", id="password"),
+        pytest.param("AUTHORIZATION", id="scan-authorization"),
+        pytest.param("GOOGLE_CREDENTIALS", id="scan-credentials"),
+        pytest.param("openai_api_key", id="lowercase"),
+    ],
+)
+def test_a_credential_setting_refuses_the_model_whole(root, setting):
+    (root / "agent.py").write_text(
+        f'import os\nVALUE = os.getenv("{setting}", "placeholder-value")\n', encoding="utf-8"
+    )
+
+    problems, _, _ = checked(
+        root,
+        {"name": "placeholder-value", "setting": setting, "path": "agent.py", "line": 2},
+    )
+
+    assert problems == [a_credential_setting(setting)]
+
+
+def test_a_credential_setting_refused_twice_leaves_the_model_out(tmp_path, root):
+    (root / "agent.py").write_text(
+        'import os\nKEY = os.getenv("OPENAI_API_KEY", "sk-placeholder")\n', encoding="utf-8"
+    )
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    credential = payload(
+        hard_constraints=["Be polite."],
+        model={
+            "name": "sk-placeholder",
+            "setting": "OPENAI_API_KEY",
+            "path": "agent.py",
+            "line": 2,
+        }
+    )
+
+    first = submit(credential)
+
+    assert text_of(first) == (
+        REFUSED + a_credential_setting("OPENAI_API_KEY") + "\n  - " + _LEFT_OUT_NEXT_TIME
+    )
+
+    second = submit(credential)
+
+    # Neither the setting nor the default on that line: dropping the setting leaves a name that
+    # is a credential's default, which the line check refuses too.
+    assert not second.get("is_error"), second
+    assert "model" not in saved(destination)
+
+
+@pytest.mark.parametrize(
+    "file, written, looked_up, name",
+    [
+        pytest.param("llm.py", 'KEY = os.getenv("OPENAI_API_KEY", "sk-placeholder")', "OPENAI_API_KEY", "sk-placeholder", id="getenv"),
+        pytest.param("llm.py", "KEY = os.environ.get('HF_TOKEN', 'hf-placeholder')", "HF_TOKEN", "hf-placeholder", id="environ-get"),
+        pytest.param("llm.py", 'KEY = os.getenv("HF_TOKEN") or "hf-placeholder"', "HF_TOKEN", "hf-placeholder", id="or-fallback"),
+        pytest.param("llm.ts", 'const key = process.env["API_SECRET"] ?? "placeholder";', "API_SECRET", "placeholder", id="nullish-fallback"),
+        pytest.param("llm.yaml", "token: ${API_SECRET:-placeholder}", "API_SECRET", "placeholder", id="compose-default"),
+    ],
+)
+def test_the_default_of_a_credential_lookup_is_never_the_model(root, file, written, looked_up, name):
+    (root / file).write_text(f"# settings\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == [a_credentials_default(name, looked_up, 2, file)]
+
+
+@pytest.mark.parametrize(
+    "written, model",
+    [
+        pytest.param(
+            'llm = ChatOpenAI(model="gpt-4o", api_key=os.getenv("OPENAI_API_KEY"))',
+            {"name": "gpt-4o"},
+            id="a-name",
+        ),
+        pytest.param(
+            'llm = ChatOpenAI(api_key=os.getenv("OPENAI_API_KEY", "sk-x"), model="gpt-4o")',
+            {"name": "gpt-4o"},
+            id="a-name-after-a-credentials-default",
+        ),
+        pytest.param(
+            'llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o"), api_key=os.getenv("OPENAI_API_KEY"))',
+            {"name": "gpt-4o", "setting": "OPENAI_MODEL"},
+            id="a-setting",
+        ),
+    ],
+)
+def test_a_model_on_a_line_that_also_reads_a_credential_is_kept(root, written, model):
+    # Only a credential's own default is never the model: the model written beside it is.
+    (root / "llm.py").write_text(f"import os\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {**model, "path": "llm.py", "line": 2})
+
+    assert problems == []
+    assert contract.model.name == "gpt-4o"
+
+
+def test_a_name_with_no_setting_saves_the_same_bytes_as_before(tmp_path, root):
+    # A model read with no setting is stored as it was before the field existed: four keys, and
+    # the document and its hash as dev builds them.
+    from fi.alk.providers.agent import build_authored_agent
+
+    contract = json.loads((FIXTURES / "chat_source.json").read_text(encoding="utf-8"))["contract"]
+    contract["model"] = {"provider": "openai", "name": "gpt-4o", "path": "agent.py", "line": 9}
+
+    dumped = AgentContract.model_validate(contract).model_dump(mode="json")
+
+    assert dumped["model"] == {"provider": "openai", "name": "gpt-4o", "path": "agent.py", "line": 9}
+    document = build_authored_agent(dumped)
+    assert "model_source" not in document["extension"]
+    assert document["setup_hash"] == (
+        "sh1:33bc380f296679cff54d1f5dd8bc8c67380ea234318cf6f3e368a622224d49eb"
+    )
+
+
+def test_a_setting_reaches_the_document_beside_the_contract(tmp_path, root):
+    from fi.alk.providers.agent import build_authored_agent
+
+    (root / "agent.py").write_text(f"import os\n{_READ_FROM_A_SETTING}\n", encoding="utf-8")
+    destination = tmp_path / "out"
+    model = {
+        "provider": "anthropic",
+        "name": "vertex_ai/gemini-3.7-flash",
+        "setting": "ANTHROPIC_MODEL",
+        "path": "agent.py",
+        "line": 2,
+    }
+
+    result = accept_contract(payload(model=model), destination, source_root=root)
+
+    assert not result.get("is_error"), result
+    document = build_authored_agent(
+        AgentContract.model_validate(saved(destination)).model_dump(mode="json")
+    )
+    assert document["model"] == {
+        "provider": "anthropic",
+        "name": "vertex_ai/gemini-3.7-flash",
+        "temperature": None,
+        "max_tokens": None,
+    }
+    assert document["extension"]["model_source"] == {
+        "setting": "ANTHROPIC_MODEL",
+        "path": "agent.py",
+        "line": 2,
+    }
+    assert document["schema_version"] == "1.0"
+
+
+def test_a_crafted_line_of_lookups_does_not_hold_up_the_check(root):
+    # Every lookup on the line is found, and each credential's is looked past for its default:
+    # a few characters beside each, so the line costs about one pass.
+    crafted = 'f(os.getenv("A_KEY", "y"), os.environ["B_MODEL"], ' * (MIB // 64)
+    (root / "crafted.py").write_text(crafted + 'model="gpt-4o")\n', encoding="utf-8")
+
+    problems, _, took = checked(
+        root, {"name": "gpt-4o", "setting": "B_MODEL", "path": "crafted.py", "line": 1}
+    )
+
+    assert problems == []
+    assert took < QUICK_SECONDS

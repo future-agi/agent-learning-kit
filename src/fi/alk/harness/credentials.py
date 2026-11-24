@@ -2090,6 +2090,11 @@ def _candidate_files(
     return result
 
 
+def secret_name(name: str) -> bool:
+    """Whether this scan asks for an environment variable as a secret, by its name alone."""
+    return bool(_SECRET_NAME.search(name.upper()))
+
+
 def _kind(name: str) -> RequirementKind:
     if name in _HARNESS_PROVIDED:
         return RequirementKind.HARNESS_INFRASTRUCTURE

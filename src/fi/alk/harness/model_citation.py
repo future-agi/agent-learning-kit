@@ -2,7 +2,10 @@
 agent's own files, while a conversation waits on the answer.
 
 A model is kept only when its name is the value written on the line the reader cites: the
-Agents page shows it as fact, and an unknown model is better left empty than guessed. The files
+Agents page shows it as fact, and an unknown model is better left empty than guessed. When the code
+reads the model from an environment variable, the reader gives that variable as the model's
+setting: the cited line must look it up, and the name is then only the default written there, if
+any, since the customer's run uses whatever value they give the variable. The files
 can be built to stall whoever reads them, so every path is resolved within the save's one lookup
 budget, every read is bounded in size and decoded as UTF-8 whatever coding line the file carries,
 and every check of a line costs at most a few passes over it.
@@ -22,6 +25,7 @@ from pathlib import Path
 
 from .backends.files import secret_text
 from .contract import AgentContract
+from .credentials import secret_name
 from .runtime_selection import charged_path
 from .source_folder import is_within
 
@@ -458,6 +462,7 @@ def named_on(
     hash_comments: str = _HASH_ANYWHERE,
     block_comments: bool = True,
     block: str | None = None,
+    scanned: tuple[int, list[tuple[int, int]]] | None = None,
 ) -> bool:
     """Whether ``name`` is the value written on ``line``: whole, outside a comment and outside
     a triple-quoted string or a block comment (``block`` is the triple quote, or the */ or -->,
@@ -467,19 +472,23 @@ def named_on(
     MODEL_NAME_CHARS, so an occurrence starting inside one that failed has a name character just
     before it, and the search resumes after the failed one. The line is scanned once, its
     triple-quoted stretches walked alongside the occurrences, and each step looks at a few
-    characters beside one, so a line costs about one pass."""
+    characters beside one, so a line costs about one pass. ``scanned`` is the line's comment
+    start and text stretches when the caller has already scanned it with these settings."""
     if not name:
         # find("") matches at every position without moving on.
         return False
-    comment, inside, _ = _line_scan(
-        line,
-        block,
-        dashes=dashes,
-        ini=ini,
-        triple=triple,
-        hash_comments=hash_comments,
-        block_comments=block_comments,
-    )
+    if scanned is None:
+        comment, inside, _ = _line_scan(
+            line,
+            block,
+            dashes=dashes,
+            ini=ini,
+            triple=triple,
+            hash_comments=hash_comments,
+            block_comments=block_comments,
+        )
+    else:
+        comment, inside = scanned
     stretches = iter(inside)
     stretch = next(stretches, None)
     at = line.find(name, 0, comment)
@@ -649,21 +658,135 @@ def _env_value_is_a_locator(value: str) -> bool:
     return "@" in value and not _VERSIONED_NAME.fullmatch(value)
 
 
+# The setting a model is read from is an environment variable's name: the platform shows it as
+# where the model comes from.
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+LONGEST_SETTING = 255
+# Names shaped like a credential's: a default for one is a placeholder or a leak, never a model.
+# The credential scan's own list (credentials.secret_name) is checked beside these.
+_CREDENTIAL_ENDINGS = ("_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
+# A setting's name, quoted, as a lookup call or a subscript takes it: os.getenv("OPENAI_MODEL").
+_QUOTED_SETTING = re.compile(r"([\"'`])([A-Za-z_][A-Za-z0-9_]*)\1")
+# A shell or Compose lookup in a configuration file: ${OPENAI_MODEL}, ${OPENAI_MODEL:-gpt-4o}.
+_SHELL_SETTING = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)")
+# What comes between a lookup's quoted name and a default written for it: the next argument
+# (os.getenv("X", "gpt-4o")) or a fallback after the call (os.getenv("X") or "gpt-4o", ?? and ||
+# in JavaScript), up to the default's opening quote.
+_DEFAULT_AFTER = re.compile(r"[ \t]*(?:,|[)\]][ \t]*(?:or\b|\|\||\?\?))[ \t]*([\"'`])")
+
+
+def names_a_credential(setting: str) -> bool:
+    """Whether an environment variable's name is shaped like a credential's: *_KEY, *_TOKEN,
+    *_SECRET, *_PASSWORD, or a name the credential scan asks for as a secret."""
+    upper = setting.upper()
+    return upper.endswith(_CREDENTIAL_ENDINGS) or secret_name(upper)
+
+
+def _outside_text(
+    found: list[tuple[str, int, int]], inside: list[tuple[int, int]]
+) -> list[tuple[str, int, int]]:
+    """``found`` (in the order of the line) without what starts in a triple-quoted string or a
+    block comment: the stretches are walked alongside, so a line costs one pass."""
+    stretches = iter(inside)
+    stretch = next(stretches, None)
+    kept = []
+    for one in found:
+        while stretch is not None and stretch[1] <= one[1]:
+            stretch = next(stretches, None)
+        if stretch is None or stretch[0] > one[1]:
+            kept.append(one)
+    return kept
+
+
+def _lookups(
+    line: str, comment: int, inside: list[tuple[int, int]], *, config: bool
+) -> tuple[list[tuple[str, int, int]], list[tuple[str, int, int]]]:
+    """The settings ``line`` looks up before its comment starts at ``comment`` and outside the
+    text stretches ``inside`` (as _line_scan gives them), as (name, where it starts, where its
+    lookup ends): quoted as the first argument of a lookup call or as a subscript
+    (os.getenv("X", ...), os.environ.get("X"), os.environ["X"], process.env["X"], cfg.get("X")),
+    and, in a configuration file, as a shell or Compose variable (${X}, ${X:-default}). Quoted
+    lookups first, then shell ones. Each step looks at a few characters beside a match."""
+    quoted = [
+        (found.group(2), found.start(2), found.end())
+        for found in _QUOTED_SETTING.finditer(line, 0, comment)
+        if _is_a_lookup(line, found.start(2))
+    ]
+    shell = (
+        [
+            (found.group(1), found.start(1), found.end())
+            for found in _SHELL_SETTING.finditer(line, 0, comment)
+        ]
+        if config
+        else []
+    )
+    return _outside_text(quoted, inside), _outside_text(shell, inside)
+
+
+def _a_credentials_default(
+    line: str,
+    name: str,
+    quoted: list[tuple[str, int, int]],
+    shell: list[tuple[str, int, int]],
+) -> str | None:
+    """The credential-shaped setting whose default ``name`` is written as on ``line``, or None:
+    the next argument of its lookup or a fallback after it (os.getenv("OPENAI_API_KEY",
+    "sk-placeholder"), os.getenv("HF_TOKEN") or "hf-x"), or a shell default (${API_SECRET:-x})."""
+    for setting, _, end in quoted:
+        if not names_a_credential(setting):
+            continue
+        after = _DEFAULT_AFTER.match(line, end)
+        if after is None:
+            continue
+        start = after.end()
+        if line.startswith(name, start) and line.startswith(after.group(1), start + len(name)):
+            return setting
+    for setting, _, end in shell:
+        if not names_a_credential(setting):
+            continue
+        start = end + 1 if line.startswith(":-", end) else end
+        if (
+            line.startswith("-", start)
+            and line.startswith(name, start + 1)
+            and line.startswith("}", start + 1 + len(name))
+        ):
+            return setting
+    return None
+
+
 def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
-    """Problems with contract.model, checked against the cited line. On success, strips name and
-    provider and stores path as the resolved file relative to the root, in POSIX form. Resolves
-    one path (charged to the save's budget) and reads at most one file."""
+    """Problems with contract.model, checked against the cited line. On success, strips name,
+    provider and setting and stores path as the resolved file relative to the root, in POSIX
+    form. Resolves one path (charged to the save's budget) and reads at most one file.
+
+    With a setting, the line must look it up and the name, when given, is the default written
+    there. A setting shaped like a credential, or a name that is a credential lookup's default,
+    is refused: a credential's default is a placeholder or a leak, never a model."""
     model = contract.model
     if model is None:
         return []
     name, provider, path = model.name.strip(), model.provider.strip(), model.path.strip()
-    shown_name, shown_path = name[:100], path[:200]
+    setting = model.setting.strip()
+    shown_name, shown_path, shown_setting = name[:100], path[:200], setting[:100]
     problems: list[str] = []
-    if not name:
+    if setting and (len(setting) > LONGEST_SETTING or not _ENV_NAME.fullmatch(setting)):
         problems.append(
-            "model: name is empty; give the model's name as written in the source, or leave "
-            "model out"
+            "model: setting is the name of an environment variable as the line looks it up: "
+            "letters, digits and _, not starting with a digit, at most 255 characters; or leave "
+            "setting out"
         )
+    elif setting and names_a_credential(setting):
+        # Neither the setting nor a default for it is recorded: a credential's default is a
+        # placeholder or a leak, and the page would show it.
+        problems.append(
+            f"model: {shown_setting} names a credential, not the model; leave model out"
+        )
+    if not name:
+        if not setting:
+            problems.append(
+                "model: name is empty; give the model's name as written in the source, or the "
+                "setting it is read from as setting, or leave model out"
+            )
     elif not MODEL_NAME_CHARS.issuperset(name):
         problems.append(
             "model: a model name is letters, digits and . _ : / @ -; write it as it appears in "
@@ -672,8 +795,9 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     elif _reads_as_a_setting(name):
         # OPENAI_MODEL in os.getenv("OPENAI_MODEL") is where the model is read from, not which.
         problems.append(
-            f"model: {shown_name} reads as the name of a setting, not a model; cite the line its "
-            "value is written on, or leave model out"
+            f"model: {shown_name} reads as the name of a setting, not a model; give it as "
+            "setting, with the default the line gives it as name if there is one, or leave model "
+            "out"
         )
     if not MODEL_NAME_CHARS.issuperset(provider):
         problems.append(
@@ -726,11 +850,14 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
             return [f"model: line {model.line} is outside {shown_path}"]
         return [f"model: line {model.line} is outside {shown_path}, which has {len(lines)} lines"]
     # In a .env file the name must be the value of the one setting that names the model, so a
-    # guess is never checked against another setting on the same line.
+    # guess is never checked against another setting on the same line. With a setting and no
+    # name, the line still has to set the model.
     if env_file and (
         not _names_a_model(lines[model.line - 1])
-        or _env_value(lines[model.line - 1]) != name
-        or _env_value_is_a_locator(name)
+        or (
+            bool(name)
+            and (_env_value(lines[model.line - 1]) != name or _env_value_is_a_locator(name))
+        )
     ):
         return [
             f"model: in a .env file, cite the line whose setting names the model (such as "
@@ -756,41 +883,69 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     # Configuration files have no block comments, but JSON read as JSONC (appsettings.json,
     # tsconfig.json) has: outside a string, // and /* can only be comments there.
     block_comments = suffix == ".json" or not (config or suffix in _NO_BLOCK_COMMENT_SUFFIXES)
-    if not named_on(
-        lines[model.line - 1],
+    # A block open from an earlier line: a triple quote, /* where block comments are, <!--
+    # outside code and configuration.
+    block = block_open_before(
+        lines,
+        model.line - 1,
+        triple=triple,
+        dashes=dashes,
+        ini=ini,
+        hash_comments=hash_comments,
+        block_comments=block_comments,
+        # Configuration by its suffix or its whole name: env.xml is markup. A name that is
+        # configuration by itself stays so whatever its suffix (Dockerfile.xml, .env.xml).
+        markup=not (
+            suffix in CONFIG_SUFFIXES
+            or _names_configuration(name_lower)
+            or suffix in _NO_MARKUP_COMMENT_SUFFIXES
+        ),
+    )
+    scan = {
+        "dashes": dashes,
+        "ini": ini,
+        "triple": triple,
+        "hash_comments": hash_comments,
+        "block_comments": block_comments,
+    }
+    cited_line = lines[model.line - 1]
+    # The cited line is scanned once, for its lookups and for the name.
+    comment, inside, _ = _line_scan(cited_line, block, **scan)
+    quoted, shell = _lookups(cited_line, comment, inside, config=config)
+    if setting and not any(found[0] == setting for found in (*quoted, *shell)):
+        return [
+            f"model: line {model.line} of {shown_path} doesn't look up the setting "
+            f'{shown_setting}; cite the line that reads it, such as os.getenv("{shown_setting}", '
+            "...), or leave setting out"
+        ]
+    if name and not named_on(
+        cited_line,
         name,
         config=config,
         yaml=suffix in _YAML_SUFFIXES,
-        dashes=dashes,
-        ini=ini,
-        triple=triple,
-        hash_comments=hash_comments,
-        block_comments=block_comments,
-        # A block open from an earlier line: a triple quote, /* where block comments are, <!--
-        # outside code and configuration.
-        block=block_open_before(
-            lines,
-            model.line - 1,
-            triple=triple,
-            dashes=dashes,
-            ini=ini,
-            hash_comments=hash_comments,
-            block_comments=block_comments,
-            # Configuration by its suffix or its whole name: env.xml is markup. A name that
-            # is configuration by itself stays so whatever its suffix (Dockerfile.xml, .env.xml).
-            markup=not (
-                suffix in CONFIG_SUFFIXES
-                or _names_configuration(name_lower)
-                or suffix in _NO_MARKUP_COMMENT_SUFFIXES
-            ),
-        ),
+        block=block,
+        scanned=(comment, inside),
+        **scan,
     ):
+        if setting:
+            return [
+                f"model: the name {shown_name} is not the default written on line {model.line} "
+                f"of {shown_path}; give as name the default the line gives {shown_setting}, or "
+                "leave name out if it gives none"
+            ]
         return [
             f"model: the name {shown_name} is not the value written on line {model.line} of "
             f"{shown_path}; cite the line where it is written in quotes, or after : or = in a "
-            "configuration file, or leave model out if the name is only set at run time"
+            "configuration file; if it is only set at run time, give the setting it is read from "
+            "as setting, or leave model out"
         ]
-    model.name, model.provider = name, provider
+    if name and (credential := _a_credentials_default(cited_line, name, quoted, shell)):
+        return [
+            f"model: {shown_name} is the default of {credential[:100]} on line {model.line} of "
+            f"{shown_path}, which names a credential; a credential's default is never recorded "
+            "as the model, so leave model out"
+        ]
+    model.name, model.provider, model.setting = name, provider, setting
     # The file the path leads to, so a link inside the source is stored as its target.
     model.path = resolved.relative_to(root).as_posix()
     return []

@@ -374,9 +374,14 @@ Find, in roughly this order:
     or provider is made only of letters, digits and . _ : / @ -, so a name with a space in it
     can't be recorded; leave `model` out then.
 
-    Leave `model` out when the name is only set at run time: an environment variable with no
-    default in the code, or a value fetched from elsewhere. Where the code gives an environment
-    variable a default, record the default.
+    When the code reads the model from an environment variable, the customer's run uses whatever
+    they set it to, so give the variable's name as `setting` and cite the line that looks it up
+    (`os.getenv("OPENAI_MODEL", "gpt-4o")`, `os.environ["OPENAI_MODEL"]`, `${OPENAI_MODEL:-gpt-4o}`
+    in configuration). Give as `name` the default written on that line (`gpt-4o` here), and no
+    `name` when it has none. A setting is the variable's name exactly as the line writes it:
+    letters, digits and _. Never give a credential's variable (`*_KEY`, `*_TOKEN`, `*_SECRET`,
+    `*_PASSWORD`) as the setting, nor its default as the name. Leave `model` out when the name
+    is fetched from elsewhere at run time.
 
 ## A repository may not hold one agent
 
