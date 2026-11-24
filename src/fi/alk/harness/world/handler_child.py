@@ -175,14 +175,16 @@ def evaluate_authored(
     name: str,
     calls: Any = (),
     reference: Any = (),
+    helpers: Any = None,
 ) -> AuthoredOutcome:
     """Run one environment-authored setup, readiness check, or deterministic check."""
     if kind in {"setup", "ready"} and not source.strip():
         return AuthoredOutcome(True)
 
     # The names every check is given wherever it runs (`checks.check_namespace`), so a check that
-    # proves while authoring never fails here on a helper such as `same_id`.
-    namespace: dict[str, Any] = {"same_id": same_id}
+    # proves while authoring never fails here on a helper such as `same_id`. In process the caller
+    # passes them all; this child, which imports nothing from the kit, has `same_id` alone.
+    namespace: dict[str, Any] = {"same_id": same_id, **(helpers or {})}
     filename = (
         f"<check:{name}>"
         if kind == "check"

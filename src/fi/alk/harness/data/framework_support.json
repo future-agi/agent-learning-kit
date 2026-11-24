@@ -1,0 +1,666 @@
+{
+  "schema_version": "futureagi.framework-support.v1",
+  "frameworks": [
+    {
+      "key": "claude_agent_sdk",
+      "name": "Claude Agent SDK",
+      "package": "claude-agent-sdk",
+      "tested_versions": [],
+      "pinned_versions": [
+        "claude-agent-sdk==0.2.174"
+      ],
+      "python": "3.12",
+      "reference": "examples/harness/claude_agent_sdk_support",
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[claude_agent_sdk_agent.py-]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_every_framework_is_detected[claude_code_sdk]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_claude_agent_sdk_reference.py::test_example_is_detected_as_the_claude_agent_sdk",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "not_proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-claude_agent_sdk.md#Result",
+              "date": "2026-11-18",
+              "result": "miss",
+              "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "The 18 Nov reading missed one line: it made ANTHROPIC_MODEL and ANTHROPIC_API_KEY required, though the model has a default and the agent blanks the API key in gateway mode. Everything else matched."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "No run from a reading. CI runs the reference on the real SDK and CLI against a local stub model, from a hand-written contract, which is not a real run.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
+      },
+      "limits": [
+        "The kit builds and binds the reference from a hand-written contract (test_build_runs_the_callback_bridge_with_the_generic_tool_tracer)."
+      ]
+    },
+    {
+      "key": "crewai",
+      "name": "CrewAI",
+      "package": "crewai",
+      "tested_versions": [],
+      "pinned_versions": [
+        "crewai==1.15.33"
+      ],
+      "python": "3.12",
+      "reference": "examples/harness/crewai_support",
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[crewai_agent.py-]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_crewai_reference.py::test_example_is_detected_as_crewai",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-crewai.md#Result",
+              "date": "2026-11-18",
+              "result": "pass",
+              "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
+              "model": "claude-sonnet (laptop gateway)",
+              "reference_sha256": "6b85b3095df38d3957aeb60dc0b7eca4cf280c381e8b06d376d669d939642c39"
+            }
+          ],
+          "note": ""
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "No run from a reading; the kit's tests use a stand-in CrewAI.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
+      },
+      "limits": [
+        "The kit builds and binds the reference from a hand-written contract, against a stand-in CrewAI only."
+      ]
+    },
+    {
+      "key": "deepagents",
+      "name": "Deep Agents",
+      "package": "deepagents",
+      "tested_versions": [],
+      "pinned_versions": [
+        "deepagents==0.7.32"
+      ],
+      "python": "3.12",
+      "reference": "examples/harness/deep_agents_support",
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_every_framework_is_detected[deepagents]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_deep_agents_reference.py::test_example_is_detected_as_deep_agents",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "pending",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Deep Agents",
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": null,
+              "model": "claude-sonnet (laptop gateway)"
+            },
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-deepagents.md#Result",
+              "date": "2026-11-18",
+              "result": "pass",
+              "kit": "5aa31fdb30aa02260d2d006cad121991a3b3828c",
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "Read on kit PR #341's head (5aa31fdb) before #341 merged; #341 is now merged with this folder unchanged, and the 18 Nov reading there matched its expected contract fully (the kit's graph route). Held pending until the first full run reads it again with production's model, rather than proven on a laptop-model reading made before the merge. The 12 Nov reading, on the kit before #341, saved `langgraph dev`."
+        },
+        "run": {
+          "status": "pending",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Deep Agents",
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": null,
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "Waits on the first full run, from a reading on a kit commit merged here. #341 sends such an app to the kit's own graph route; the 12 Nov run, from the reading before #341 and on no single kit commit, failed to start. Its check results are not shown, because no single commit holds what ran.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
+      },
+      "limits": [
+        "Readings stored before #341 merges need reading again."
+      ]
+    },
+    {
+      "key": "google_adk",
+      "name": "Google ADK",
+      "package": "google-adk",
+      "tested_versions": [],
+      "pinned_versions": [
+        "google-adk==2.13.0"
+      ],
+      "python": "3.12",
+      "reference": "examples/harness/google_adk_support",
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[google_adk_agent.py-]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_google_adk_reference.py::test_example_is_detected_as_an_adk_app",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "pending",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Google ADK",
+              "date": "2026-11-12",
+              "result": "pass",
+              "kit": null,
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "The 12 Nov reading described the agent, but it ran on a local merge of then-open pull requests: no single kit commit holds that reference agent and reading code, and no expectation was written first. Waits on a new reading on a kit commit merged here, against a written expectation."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Google ADK",
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": null,
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "The 12 Nov run, on no single kit commit, started and replied right over two turns with its tools bound, but the transcript recorded 5 tool calls for 3 and stopping wasn't recorded; not rechecked since. Its check results are not shown, because no single commit holds what ran.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
+      },
+      "limits": [
+        "The reference pins google-adk 2.13.0, outside the kit's own google-adk range (below 2.8, held there by OpenTelemetry). The tested version is the agent's."
+      ]
+    },
+    {
+      "key": "langchain",
+      "name": "LangChain",
+      "package": "langchain-core",
+      "tested_versions": [],
+      "pinned_versions": [],
+      "python": null,
+      "reference": null,
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[langchain_agent.py-]",
+              "date": null
+            }
+          ],
+          "note": "The reader's file check names LangChain for the kit's LangChain example. For harbor-hotels-langchain, the one real LangChain agent tried, the offline walk (scan_walk) does not name it; only the reading does."
+        },
+        "read": {
+          "status": "pending",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-langchain.md#Result",
+              "date": "2026-11-18",
+              "result": "pass",
+              "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "The 18 Nov reading of an outside agent (harbor-hotels-langchain) passed against its written expectation. Waits on a reference agent in the kit, at a fixed commit, with pinned versions."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "No LangChain agent has run in the kit's tests.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
+      },
+      "limits": [
+        "No reference agent in the kit.",
+        "The 18 Nov reading binds the tools as `check_availability.func` (the plain function inside the `@tool` object); whether the tool tracer binds `.func` is unchecked until an agent run."
+      ]
+    },
+    {
+      "key": "langgraph",
+      "name": "LangGraph",
+      "package": "langgraph",
+      "tested_versions": [],
+      "pinned_versions": [],
+      "python": null,
+      "reference": null,
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[langgraph_agent.py-]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_every_framework_is_detected[langgraph_star]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_agent_reading.py::test_the_framework_is_a_builds_shape[langgraph]",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "not_proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-langgraph.md#Result",
+              "date": "2026-11-18",
+              "result": "miss",
+              "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "The 18 Nov reading (of page-turner-langgraph-otel, an outside agent) left the contract's model empty, describing the provider and default model only in prose. Everything else matched."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Only the kit's LangGraph adapter against a stand-in graph.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
+      },
+      "limits": [
+        "No reference agent in the kit. Deep Agents, built on LangGraph, has its own entry."
+      ]
+    },
+    {
+      "key": "livekit",
+      "name": "LiveKit Agents",
+      "package": "livekit-agents",
+      "tested_versions": [],
+      "pinned_versions": [],
+      "python": null,
+      "reference": null,
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_every_framework_is_detected[livekit]",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "pending",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-livekit.md#Result",
+              "date": "2026-11-18",
+              "result": "pass",
+              "kit": "d9b61c0370800a5faa3140012ec50211ba0bfd82",
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "The 18 Nov reading of an outside agent (harbor-voice-livekit) passed against its written expectation. Waits on a reference agent in the kit, at a fixed commit, with pinned versions."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "No run from a reading. 15 real calls on three livekit/agents examples are recorded (Aug 2026, src/fi/alk/harness/IMPLEMENTATION_AND_VALIDATION_STATUS.md), from hand-made setups; the record doesn't give the livekit-agents version.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
+      },
+      "limits": [
+        "No reference agent in the kit."
+      ]
+    },
+    {
+      "key": "openai_agents",
+      "name": "OpenAI Agents SDK",
+      "package": "openai-agents",
+      "tested_versions": [],
+      "pinned_versions": [
+        "openai-agents==0.24.0"
+      ],
+      "python": "3.12",
+      "reference": "examples/harness/openai_agents_support",
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[openai_agents_agent.py-]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_openai_agents_reference.py::test_example_is_detected_as_the_sdk_agent",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "pending",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": null,
+              "model": "claude-sonnet (laptop gateway)"
+            },
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-18-openai_agents.md#Result",
+              "date": "2026-11-18",
+              "result": "pass",
+              "kit": "5aa31fdb30aa02260d2d006cad121991a3b3828c",
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "Read on kit PR #341's head (5aa31fdb) before #341 merged; #341 is now merged with this folder unchanged, and the 18 Nov reading there matched its expected contract fully. Held pending until the first full run reads it again with production's model, rather than proven on a laptop-model reading made before the merge. The 12 Nov reading, on the kit before #341, described the agent but marked its tools unreachable from the repository root."
+        },
+        "run": {
+          "status": "pending",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#OpenAI Agents SDK",
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": null,
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "Waits on the first full run, from a reading on a kit commit merged here. The 12 Nov run, on no single kit commit, started and replied right over two turns but recorded no tool calls, so tool binding and evidence failed; #341 has since bound the tools. Its check results are not shown, because no single commit holds what ran.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
+      },
+      "limits": [
+        "Readings stored before #341 merges need reading again.",
+        "The kit's own hook also runs on openai-agents 0.18.3 and 0.20.0 in CI."
+      ]
+    },
+    {
+      "key": "pipecat",
+      "name": "Pipecat",
+      "package": "pipecat-ai",
+      "tested_versions": [],
+      "pinned_versions": [],
+      "python": null,
+      "reference": null,
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_every_framework_is_detected[pipecat]",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "No reference agent and no reading."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Hosted Pipecat runs are not built.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
+      },
+      "limits": [
+        "Recognised by name only."
+      ]
+    },
+    {
+      "key": "pydantic_ai",
+      "name": "Pydantic AI",
+      "package": "pydantic-ai-slim",
+      "tested_versions": [],
+      "pinned_versions": [
+        "pydantic-ai-slim==2.61.0"
+      ],
+      "python": "3.12",
+      "reference": "examples/harness/pydantic_ai_support",
+      "layers": {
+        "found": {
+          "status": "proven",
+          "evidence": [
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_framework_detection.py::test_examples_report_their_framework[pydantic_ai_agent.py-]",
+              "date": null
+            },
+            {
+              "kind": "test",
+              "ref": "tests/harness/test_pydantic_ai_reference.py::test_example_is_detected_as_pydantic_ai",
+              "date": null
+            }
+          ],
+          "note": ""
+        },
+        "read": {
+          "status": "pending",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Pydantic AI",
+              "date": "2026-11-12",
+              "result": "pass",
+              "kit": null,
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "The 12 Nov reading described the agent, but it ran on a local merge of then-open pull requests: no single kit commit holds that reference agent and reading code, and no expectation was written first. Waits on a new reading on a kit commit merged here, against a written expectation."
+        },
+        "run": {
+          "status": "not_proven",
+          "evidence": [
+            {
+              "kind": "real_run",
+              "ref": "src/fi/alk/harness/data/framework_evidence/2026-11-12-reference-readings.md#Pydantic AI",
+              "date": "2026-11-12",
+              "result": "miss",
+              "kit": null,
+              "model": "claude-sonnet (laptop gateway)"
+            }
+          ],
+          "note": "The 12 Nov run, on no single kit commit, passed four of the five checks (start, two turns, tool binding, evidence); stopping wasn't recorded. Its check results are not shown, because no single commit holds what ran.",
+          "checks": {
+            "start": "not_run",
+            "two_turn": "not_run",
+            "tool_binding": "not_run",
+            "evidence": "not_run",
+            "stop": "not_run"
+          }
+        },
+        "platform": {
+          "status": "not_proven",
+          "evidence": [],
+          "note": "Not yet connected through the platform's own screens."
+        }
+      },
+      "limits": []
+    }
+  ]
+}
