@@ -104,6 +104,12 @@ def prove_suite(
     actors = load_world_actors(authoring)
     live = load_live(authoring)
     unplayed = load_unplayed(authoring)
+    # The tools a live server plays (`mode` service); a tool in the agent's own process is assumed live and offline alike.
+    served = (
+        None
+        if contract is None
+        else {name for name in contract.tool_names() if getattr(contract.entry_for(name), "mode", "") == "service"}
+    )
     tools = agent_tools(agent_document)
     started = time.monotonic()
     allowed = budget_seconds(suite_budget_seconds() if budget is None else budget, deadline_at, time.time())
@@ -132,7 +138,7 @@ def prove_suite(
             if key in live:
                 # The certification just played this case on the live runtime: its gates win.
                 proof = apply_live(proof, live[key])
-            elif key in unplayed and proof.assumed:
+            elif key in unplayed and proof.assumed and (served is None or served & set(proof.assumed)):
                 # The live pass was to run the steps this offline proof could only assume, and did not: nothing here
                 # shows the case can be solved, so it is not proved, never kept as written on steps that never ran.
                 proofs[key] = unprovable_entry(

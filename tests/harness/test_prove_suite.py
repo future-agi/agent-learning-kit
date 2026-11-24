@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import time
 
+import pytest
+
 from fi.alk.harness import prove as module
 from fi.alk.harness import prove_suite as suite_module
 from fi.alk.harness.prove_suite import main, prove_suite
@@ -167,3 +169,28 @@ def test_an_unplayed_case_whose_offline_proof_ran_every_step_keeps_that_proof(mo
     _suite(monkeypatch, [refund_case(name="ran", scenario_key="ran")])
     live_proof.write_unplayed(tmp_path, {"ran": "the time budget ran out before it"})
     assert prove_suite(tmp_path, tmp_path / "proofs.json")["ran"]["proved"] is True
+
+
+@pytest.mark.parametrize(("mode", "downgraded"), [("service", True), ("import", False)])
+def test_an_unplayed_case_is_not_proved_only_when_a_live_server_would_have_run_its_assumed_steps(
+    monkeypatch, tmp_path, mode, downgraded
+):
+    from fi.alk.harness import live_proof
+    from fi.alk.harness.contract import AgentContract
+
+    install(monkeypatch, runtime_tools={"refund_order"})
+    _suite(monkeypatch, [refund_case(name="case", scenario_key="case")])
+    contract = AgentContract.model_validate(
+        {
+            "tools": [{"name": "lookup_order"}, {"name": "refund_order"}],
+            "tool_entrypoints": [{"tool": "refund_order", "mode": mode, "endpoint": "refund"}],
+        }
+    )
+    monkeypatch.setattr(suite_module, "load_proof_contract", lambda root: contract)
+    live_proof.write_unplayed(tmp_path, {"case": "RuntimeError: the sealed runtime did not start"})
+
+    proof = prove_suite(tmp_path, tmp_path / "proofs.json")["case"]
+
+    # A tool in the agent's own process is never on a live server: its case keeps what its offline proof says.
+    assert (proof["blocked_reason"] == "validation_incomplete") is downgraded
+    assert proof["kept_as_written"] is not downgraded
