@@ -544,6 +544,28 @@ that did the right thing:
   or place resolved to, or leave the spelling to the judge, never its exact letters.
 - **A value the tool decides.** An amount the tool computes is in what it returned (the call's
   result), not in an argument it does not take.
+- **What the answer key may fix.** The answer key may fix only what is known before the run: what the
+  person asks and what the starting records hold. Anything decided during the run, by an actor or by the
+  world (an amount granted, an approval or a refusal, an id or a time the world assigns), is never a value in
+  the reference: a check reads it from the world's final records, or the judge decides it.
+- **Free text.** A note, a description or a message the agent writes is checked for carrying what the person
+  said, by the judge or a lenient comparison, never as an exact string.
+- **A relative time.** "Tomorrow at four" or "in two hours" resolves when the run happens, so the reference
+  cannot hold the resolved value: read it from the world and compare it with the time the world recorded for
+  the request, or leave it to the judge.
+- **An actor's decision.** Write the case for every outcome the actor can produce: it agrees, refuses,
+  grants part, asks back, answers late or never answers, and a live actor may decide differently from one
+  trial to the next. The person's rules say what the agent does in each; a branch they say nothing about is
+  pinned (the actor's action scripted) or the case is not written. The check holds the agent to the branch that
+  happened, read from the world: nothing done after a refusal, only the part granted, the fallback when no
+  answer came. Ask of every such check: if the actor had decided differently, would it still judge the agent
+  fairly? Give it a negative control that acts beyond what the actor decided (applies more than was granted,
+  or acts before the approval exists); the check must fail it. In the run an actor acts on its own time,
+  shortly after its trigger: the agent's right behaviour is to look again or wait as the rules say, and no
+  check requires the actor to have acted before the agent's very next call. A sub-goal grades the agent, never
+  what the actor did.
+- **An actor that comes in by chance.** A trigger with a probability makes two worlds, one with the actor and
+  one without; every check holds in both.
 
 **Keep the cases that ask for what is not there.** A caller who asks about an order that does not
 exist, for something the agent has no tool to do, or for what its rules forbid is one of the most
