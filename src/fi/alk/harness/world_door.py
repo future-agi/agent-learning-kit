@@ -273,7 +273,8 @@ def route_action(endpoint: str) -> str:
 def routed_faults(faults: Sequence[Any], contract: Any) -> list[dict[str, Any]]:
     """The scenario's faults with each one that names a tool by its name renamed to the world action of that tool's
     route, from the contract's own tool entrypoints, so the HTTP door, which sees only routes, holds it. A tool with no
-    route (one the agent runs in its own process) keeps its name, which the in-process door matches."""
+    route (one the agent runs in its own process) keeps its name, which the in-process door matches. An action written
+    as a route's path (`crm/apply_discount`) is read as that route's world action (`crm.apply_discount`)."""
     entries = contract.get("tool_entrypoints") if isinstance(contract, Mapping) else getattr(contract, "tool_entrypoints", None)
     routes: dict[str, dict[str, str]] = {}
     for entry in entries or []:
@@ -284,11 +285,15 @@ def routed_faults(faults: Sequence[Any], contract: Any) -> list[dict[str, Any]]:
             # a fault on one off the other.
             method = str(entry.get("method") or "").strip().upper()
             routes[tool] = {"action": route, **({"method": method} if method else {})}
-    return [
-        {**one, **routes[str(one.get("action"))]} if str(one.get("action") or "") in routes else dict(one)
-        for one in faults or []
-        if isinstance(one, Mapping)
-    ]
+    routed: list[dict[str, Any]] = []
+    for one in faults or []:
+        if not isinstance(one, Mapping):
+            continue
+        action = str(one.get("action") or "")
+        if "/" in action:
+            action = route_action(action)
+        routed.append({**one, "action": action, **routes.get(action, {})} if action else dict(one))
+    return routed
 
 
 def same_action(row: Mapping[str, Any], action: str) -> bool:
