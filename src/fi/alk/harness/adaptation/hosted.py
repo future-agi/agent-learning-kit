@@ -12,7 +12,9 @@ Workspace layout (`/work/authoring`): `adaptation/inputs.json` and `adaptation/p
 this process; `adaptation/result.json` and the sealed files from the workbench; the builder's
 `.futureagi-build-finished.json` marker when the work ends either way. The scratch PostgreSQL's
 superuser DSN sits beside the workspace in `.authoring-credentials/`, which the model's file tools
-refuse and the workspace checkpoint never packs.
+refuse and the workspace checkpoint never packs. What this process verified (the sealed binding's
+digest and its proof's) is recorded there too, in `adaptation-verified.json`: the platform reads
+it from that path, not from the workspace, and takes a proof only when it has that digest.
 """
 
 from __future__ import annotations
@@ -51,10 +53,36 @@ ADAPTATION_DIRECTORY = "adaptation"
 FINISHED_MARKER = ".futureagi-build-finished.json"
 _INPUTS_WAIT_SECONDS = 300
 _POSTGRES_CREDENTIALS = Path(".authoring-credentials") / "adaptation-postgres.json"
+VERIFIED_SCHEMA = "futureagi.adaptation-verified.v1"
+_VERIFIED = Path(".authoring-credentials") / "adaptation-verified.json"
 
 
 def _postgres_credentials(workspace: Path) -> Path:
     return workspace.parent / _POSTGRES_CREDENTIALS
+
+
+def verified_path(workspace: Path) -> Path:
+    """Where the control process records what it verified: beside the workspace, in the folder
+    the builder session's tools refuse, never inside the output the session can write."""
+    return workspace.parent / _VERIFIED
+
+
+def record_verified(
+    workspace: Path, *, binding: dict[str, Any] | None, proof_digest: str | None
+) -> None:
+    """Write the control process's own statement of what it sealed: the binding's digest and
+    mode and, for a routed binding, the digest of the proof this process made. Written from
+    values this process holds, never read back from the output directory."""
+    path = verified_path(workspace)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    body = {
+        "schema_version": VERIFIED_SCHEMA,
+        "binding": binding,
+        "binding_proof": {"digest": proof_digest} if proof_digest else None,
+    }
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(body, stream, sort_keys=True)
 
 
 def _values(path: Path) -> dict[str, str]:
@@ -133,7 +161,11 @@ def prove_again(
         return result
     try:
         binding = load_agent_binding(output / BINDING)
+        # What is reported is the sealed binding as this process read and checked it, not what
+        # the result file says of it.
+        result["binding"] = {"digest": binding.digest, "mode": binding.mode.value}
         if binding.mode is not BindingMode.TOOL_ROUTED:
+            result["binding_proof"] = None
             return result
         trajectories = json.loads((output / TRAJECTORIES).read_text(encoding="utf-8"))
         proof = prove_binding_on(
@@ -195,6 +227,13 @@ def _await_result(
     while time.monotonic() < deadline:
         if marker.is_file() and (output / RESULT).is_file():
             result = prove_again(output, environment_root, suite_root, postgres_dsn)
+            if result.get("status") == "completed":
+                # From what this process just proved and holds, not from the files it wrote.
+                record_verified(
+                    output.parent,
+                    binding=result.get("binding"),
+                    proof_digest=(result.get("binding_proof") or {}).get("digest"),
+                )
             print(json.dumps({"status": result.get("status")}))
             return 0 if result.get("status") == "completed" else 2
         time.sleep(5)
@@ -288,6 +327,14 @@ def _run_auto(
     except AdaptationFailure as exc:
         workbench.fail(exc.code, exc.message)
     result = json.loads((output / RESULT).read_text(encoding="utf-8"))
+    if result.get("status") == "completed":
+        # Run mode has no session: this process made the proof, and says so from its own
+        # workbench, not from the files.
+        record_verified(
+            output.parent,
+            binding={"digest": workbench.binding.digest, "mode": workbench.mode.value},
+            proof_digest=(workbench.proof_ref() or {}).get("digest"),
+        )
     print(json.dumps({"status": result.get("status")}))
     return 0 if result.get("status") == "completed" else 2
 

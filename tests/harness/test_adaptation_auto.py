@@ -490,8 +490,14 @@ def test_hosted_auto_binds_in_process_and_never_waits_for_a_builder(
         def __init__(self, **kwargs):
             built.update(kwargs)
 
+        binding = SimpleNamespace(digest=SHA)
+        mode = BindingMode.TOOL_ROUTED
+
         def fail(self, code, message):
             raise AssertionError(f"{code}: {message}")
+
+        def proof_ref(self):
+            return {"digest": "sha256:" + "cd" * 32}
 
     async def adapt(workbench, given):
         built["pairing"] = given
@@ -516,6 +522,12 @@ def test_hosted_auto_binds_in_process_and_never_waits_for_a_builder(
     assert built["postgres_dsn"] == "postgresql://nowhere/postgres"
     assert built["finished_marker"] == output.parent / hosted.FINISHED_MARKER
     assert not (output / "inputs.json").exists()
+    # What this process sealed is recorded outside the workspace, from its own workbench.
+    assert json.loads(hosted.verified_path(output.parent).read_text()) == {
+        "schema_version": "futureagi.adaptation-verified.v1",
+        "binding": {"digest": SHA, "mode": "tool_routed"},
+        "binding_proof": {"digest": "sha256:" + "cd" * 32},
+    }
 
 
 def test_the_hosted_command_takes_auto():
@@ -631,12 +643,90 @@ def test_a_binding_the_control_process_cannot_prove_fails_whatever_was_left(
     assert json.loads((output / RESULT).read_text())["status"] == "failed"
 
 
-def test_a_failed_or_canonical_result_is_left_as_it_is(tmp_path, monkeypatch):
+def test_a_failed_result_is_left_as_it_is(tmp_path, monkeypatch):
     output = tmp_path / "adaptation"
     _left_by_the_builder(output, {})
     failed = {"status": "failed", "failure": {"code": "adaptation_declined"}}
     (output / RESULT).write_text(json.dumps(failed), encoding="utf-8")
     assert hosted.prove_again(output, tmp_path, tmp_path, "dsn") == failed
+
+
+def test_a_canonical_binding_is_reported_as_this_process_read_it(tmp_path, monkeypatch):
+    """Nothing to prove, but the binding named is the sealed one, whatever the result file says."""
+    from fi.alk.harness import releases
+
+    output = tmp_path / "adaptation"
+    _left_by_the_builder(output, {})
+    monkeypatch.setattr(
+        releases,
+        "load_agent_binding",
+        lambda _path: SimpleNamespace(digest=SHA, mode=BindingMode.CANONICAL),
+    )
+    result = hosted.prove_again(output, tmp_path, tmp_path, "dsn")
+    assert result["binding"] == {"digest": SHA, "mode": "canonical"}
+    assert result["binding_proof"] is None
+
+
+def test_what_was_verified_is_recorded_outside_the_workspace(tmp_path):
+    """Beside the workspace, in the folder the session's tools refuse, readable by its owner
+    only: the platform reads the proof's digest from here, not from the output."""
+    workspace = tmp_path / "authoring"
+    (workspace / "adaptation").mkdir(parents=True)
+    digest = "sha256:" + "cd" * 32
+
+    hosted.record_verified(
+        workspace, binding={"digest": SHA, "mode": "tool_routed"}, proof_digest=digest
+    )
+
+    path = hosted.verified_path(workspace)
+    assert path == tmp_path / ".authoring-credentials" / "adaptation-verified.json"
+    assert workspace not in path.parents
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert json.loads(path.read_text()) == {
+        "schema_version": "futureagi.adaptation-verified.v1",
+        "binding": {"digest": SHA, "mode": "tool_routed"},
+        "binding_proof": {"digest": digest},
+    }
+    from fi.alk.harness.backends.files import secret_path
+
+    assert secret_path(str(path))
+
+
+def test_the_control_process_records_the_proof_it_made_not_the_one_left(
+    tmp_path, monkeypatch
+):
+    """Review mode end to end, offline: the builder leaves a proof and a matching digest in its
+    output; the record outside the workspace carries the control process's own."""
+    from fi.alk.harness.binding_proof import proof_digest
+
+    workspace = tmp_path / "authoring"
+    output = workspace / "adaptation"
+    _left_by_the_builder(output, {"passed": True, "scenarios": {"S01": "proved"}})
+    (workspace / hosted.FINISHED_MARKER).write_text("{}")
+    proof, _seen = _control(
+        monkeypatch, S01=("proved", ""), S02=("unscorable", "uses send_sms")
+    )
+
+    assert hosted._await_result(output, tmp_path / "environment", tmp_path, "dsn") == 0
+
+    recorded = json.loads(hosted.verified_path(workspace).read_text())
+    assert recorded["binding"] == {"digest": SHA, "mode": "tool_routed"}
+    assert recorded["binding_proof"] == {"digest": proof_digest(proof)}
+    # A later writer changes the output's pair to another that agrees with itself.
+    forged = {"status": "completed", "binding_proof": {"digest": "sha256:" + "ee" * 32}}
+    (output / RESULT).write_text(json.dumps(forged))
+    assert json.loads(hosted.verified_path(workspace).read_text()) == recorded
+
+
+def test_a_failed_adaptation_records_nothing_verified(tmp_path, monkeypatch):
+    workspace = tmp_path / "authoring"
+    output = workspace / "adaptation"
+    _left_by_the_builder(output, {})
+    (workspace / hosted.FINISHED_MARKER).write_text("{}")
+    _control(monkeypatch, S01=("failed", "grace_booked did not hold"))
+
+    assert hosted._await_result(output, tmp_path / "environment", tmp_path, "dsn") == 2
+    assert not hosted.verified_path(workspace).exists()
 
 
 # --- end to end: CardGuard on Banking ----------------------------------------------------------

@@ -800,12 +800,12 @@ class Workbench:
                 },
                 "binding": {"digest": self.binding.digest, "mode": self.mode.value},
                 # What a run's manifest freezes, so compose reads only this proof's statuses.
-                "binding_proof": self._proof_ref(),
+                "binding_proof": self.proof_ref(),
                 "alignment": self.alignment,
             }
         )
 
-    def _proof_ref(self) -> dict[str, str] | None:
+    def proof_ref(self) -> dict[str, str] | None:
         if self.mode is not BindingMode.TOOL_ROUTED:
             return None
         from ..binding_proof import BindingProofV1, proof_digest
