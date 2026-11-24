@@ -1355,6 +1355,7 @@ class HostedChatCallRunner:
             sealed_without_door,
             unenforced_deadline_notices,
             unmeasured_reasons,
+            world_failure_reasons,
             worker_stop_outcomes,
         )
 
@@ -1500,6 +1501,7 @@ class HostedChatCallRunner:
             world_actions=tuple((world_record or {}).get("actions") or ()),
             duplicates=tuple(duplicates),
             unmeasured=unmeasured_reasons(transcript.notices or ()),
+            world_failures=world_failure_reasons(transcript.notices or ()),
             missing_evidence=missing_evidence(transcript.notices or (), world_record),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in chat_actors if one.get("brief")},

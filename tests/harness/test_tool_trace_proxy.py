@@ -665,7 +665,8 @@ def test_the_proxy_reads_its_sealed_routes_strictly(tmp_path, monkeypatch):
         ({"outcome": "faulted", "status": 503, "reason": "unavailable", "fault": {"mode": "unavailable"}}, 503,
          "tool_upstream_unavailable"),
         # The door or the world failed with no test condition: ours.
-        ({"outcome": "faulted", "status": 502, "reason": "OSError: the world's door failed"}, 502, "tool_world_failed"),
+        ({"outcome": "faulted", "status": 502, "reason": "OSError: the world's door failed", "refusal_code": "door_failed"},
+         502, "tool_world_failed"),
         ({"outcome": "faulted", "status": 503, "reason": "whether this action was approved could not be read",
           "refusal_code": "approval_unknown"}, 503, "tool_world_failed"),
         # A keyed retry after a lost answer: the agent's to handle, told why.

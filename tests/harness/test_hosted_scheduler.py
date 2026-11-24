@@ -5622,3 +5622,21 @@ def test_an_actor_who_waited_and_never_spoke_says_why_it_waited_in_the_verdict()
     missing = hs._call_actors_missing(scenario, replace(_call_outcome(), call_actors=(waited,)))
 
     assert missing == "Jordan (not_delivered: waited (already handled))"
+
+
+def test_a_door_failure_leaves_the_trial_unmeasured_unless_the_agent_failed_a_check_or_committed_twice(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {}
+
+    ours = replace(_call_outcome(turns=2), world_failures=("The world failed on the agent's refund call.",))
+    passing = [FakeSubGoal("refunded", lambda w, c: None)]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=ours)
+    assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+
+    failing = [FakeSubGoal("refunded", lambda w, c: "not refunded")]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=failing, outcome=ours)
+    assert receipt.status == "failed"
+
+    twice = replace(ours, duplicates=({"action": "orders.issue_refund", "name": "issue_refund"},))
+    receipt, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=twice)
+    assert receipt.status == "failed"

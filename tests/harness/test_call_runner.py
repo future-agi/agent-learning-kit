@@ -5686,23 +5686,24 @@ def test_a_tool_that_hands_back_the_proxy_s_failure_answer_made_a_failed_call_no
 
 
 def test_a_call_the_world_failed_on_with_no_test_condition_makes_the_trial_ours_not_the_agent_s() -> None:
-    from fi.alk.harness.world_door import KEY_UNKNOWN
+    from fi.alk.harness.world_door import DOOR_FAILED, KEY_UNKNOWN, LOG_UNKNOWN, WORLD_UNREACHABLE
 
     def row(**fields):
-        return {"name": "file_request", "actor_id": "agent", "outcome": "faulted", "fault": None, **fields}
+        return {"name": "file_request", "actor_id": "agent", "outcome": "faulted", "refusal_code": None, **fields}
 
     log = [
-        row(),  # the world's service failed (an exception, or a 5xx with a body): ours
-        row(fault={"mode": "unavailable"}),  # the scenario's test condition: the agent's to handle
-        row(refusal_code=KEY_UNKNOWN),  # a keyed retry after a lost answer: the agent's to handle
-        row(actor_id="approver"),  # an actor's own call
+        row(refusal_code=DOOR_FAILED),  # the door itself failed: ours
+        row(refusal_code=WORLD_UNREACHABLE),  # the world it calls could not be reached: ours
+        row(refusal_code=LOG_UNKNOWN),  # a key the action log could not check: ours
+        row(),  # the agent's tools server answered 5xx: the agent's world, graded
+        row(fault={"mode": "unavailable"}),  # the scenario's test condition
+        row(fault=None),  # the same on a log with no `fault` column: still never ours
+        row(refusal_code=KEY_UNKNOWN),  # a keyed retry after a test condition lost the answer
+        row(actor_id="approver", refusal_code=DOOR_FAILED),  # an actor's own call
         row(outcome="committed"),
     ]
 
-    notices = cr.world_failure_notices(log)
+    reasons = cr.world_failure_reasons(cr.world_failure_notices(log))
 
-    # Unmeasured: the scheduler ends it as ours (`evidence_unmeasured`), never passed or failed.
-    assert cr.unmeasured_reasons(notices) == (
-        "The world failed on the agent's file_request call, so this trial cannot be graded.",
-    )
+    assert reasons == ("The world failed on the agent's file_request call, so this trial cannot be graded.",) * 3
     assert cr.world_failure_notices(None) == []

@@ -271,6 +271,9 @@ class CallOutcome:
     # Why this trial cannot be graded (a fault the scenario set never applied, evidence that could not be read or was
     # never written), one reason each, as its notices say: the trial reads unmeasured, never passed or failed.
     unmeasured: tuple[str, ...] = ()
+    # Calls of the agent's the world's door failed on by its own fault, one reason each: the trial is unmeasured
+    # unless the agent failed a verified check or the world committed one of its writes twice.
+    world_failures: tuple[str, ...] = ()
     # Each kind of evidence this trial is missing or could not read (`world_state`, `tool_calls`, `transcript`,
     # `recording`), with why: a sub-goal that reads one is unmeasured, never passed or failed.
     missing_evidence: dict[str, str] = field(default_factory=dict)
@@ -2969,9 +2972,22 @@ class HostedScheduler:
                 retry=False,
                 reason=note,
             )
+        failed = any(result.held is False and result.subject == "task" for result in sub_goal_results)
+        if call_outcome.world_failures and not failed and not call_outcome.duplicates:
+            # Our door failed on one of the agent's calls: nothing the agent did fails it here, so it is not graded.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure("evidence_unmeasured", "unmeasured: " + "; ".join(call_outcome.world_failures)),
+                sub_goals=tuple(sub_goal_results),
+                call=self._call_summary(call_outcome),
+                retry=False,
+                reason=note,
+            )
         # A task sub-goal's `False` fails the scenario, an unsettled one leaves it undecided. Worker sub-goals sit beside
         # the verdict, never in it: the product plan's hand-off journey asks for both, aggregate and per worker.
-        if any(result.held is False and result.subject == "task" for result in sub_goal_results):
+        if failed:
             status = "failed"
         elif any(result.held is None and result.subject == "task" for result in sub_goal_results):
             undecided = [result for result in sub_goal_results if result.held is None and result.subject == "task"]

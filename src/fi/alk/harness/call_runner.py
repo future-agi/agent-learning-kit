@@ -2233,7 +2233,12 @@ def _names_action(entry: Mapping[str, Any], action: str) -> bool:
 
 
 # Notices that make a trial unmeasured, never passed or failed on what it lacked.
-UNMEASURED_NOTICES = ("fault_not_applied", "fault_unknown_action", "fault_unreadable", "world_failed")
+UNMEASURED_NOTICES = ("fault_not_applied", "fault_unknown_action", "fault_unreadable")
+
+
+def world_failure_reasons(notices: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Why the door failed on the agent's calls by its own fault, one reason per `world_failed` notice."""
+    return tuple(str(one.get("message")) for one in notices if one.get("code") == "world_failed")
 
 
 def world_failure_notices(log: Sequence[Mapping[str, Any]] | None) -> list[dict[str, str]]:
@@ -5031,6 +5036,7 @@ class CallRunnerImpl:
             world_actions=tuple(acted),
             duplicates=tuple(duplicates),
             unmeasured=unmeasured_reasons(trial_notices),
+            world_failures=world_failure_reasons(trial_notices),
             missing_evidence=missing_evidence(trial_notices, records),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in call_actors if one.get("brief")},
