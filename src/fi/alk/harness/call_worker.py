@@ -45,7 +45,6 @@ async def main() -> None:
     faulthandler.enable()
     os.environ.setdefault("RUST_BACKTRACE", "1")
     from fi.simulate.runtime import SimulationSpec
-    from fi.simulate.simulation.engines.livekit import CALL_CONNECTED
 
     from .call_runner import _default_place_call
 
@@ -57,6 +56,8 @@ async def main() -> None:
     )
     logging.getLogger(__name__).info("voice worker started")
     if channel_fd := os.environ.get(CHANNEL_FD_ENV):
+        from fi.simulate.simulation.engines.livekit import CALL_CONNECTED
+
         CALL_CONNECTED.set(_call_announcer(int(channel_fd)))
     # On the person's stop the engine hangs up at the next turn boundary and still reports the call it kept.
     report = await _default_place_call(spec, stop_when=lambda _messages, _persona: stop_requested())
