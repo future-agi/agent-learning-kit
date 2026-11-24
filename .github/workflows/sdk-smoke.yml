@@ -349,6 +349,7 @@ jobs:
           tests/harness/test_chat_call_runner.py
           tests/harness/test_http_completed_events.py
           tests/harness/test_http_native_response.py
+          tests/harness/test_http_sse_stream.py
           tests/test_harness_secrets.py
           tests/test_evals_openai_instrumentor.py
           tests/test_live_mcp_worker_errors.py
