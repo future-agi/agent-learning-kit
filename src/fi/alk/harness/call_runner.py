@@ -3206,8 +3206,12 @@ def _observing(runtime: EnvironmentRuntime) -> set[tuple[str, str]] | None:
     path = _tool_trace_file(runtime)
     if path is None:
         return None
+    note = Path(str(path) + ".observing")
     try:
-        with open(str(path) + ".observing", "rb") as handle:
+        # The agent's process can write this folder: only a plain file is read, never a pipe or device it left.
+        if not note.is_file():
+            return None
+        with open(note, "rb") as handle:
             raw = handle.read(_LARGEST_OBSERVING_NOTE + 1)
         if len(raw) > _LARGEST_OBSERVING_NOTE:
             # Each process that imports a framework appends its line, so a process started on every turn writes the

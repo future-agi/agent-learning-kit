@@ -6,6 +6,7 @@ import asyncio
 import copy
 import dataclasses
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -769,14 +770,63 @@ def test_a_note_at_the_limit_is_read_whole(tmp_path, monkeypatch) -> None:
 
 
 def test_the_note_reader_knows_each_framework_and_state_the_hook_writes() -> None:
-    # Read from the hook's source: importing the hook installs it.
+    # Read from the hook's source: importing the hook installs it. Every call that writes the note must name its
+    # framework by the module and its state by a word, so a new spelling can't slip past this test.
     import ast
-    import re
 
     source = (Path(call_runner.__file__).parent / "simulation_mark_bootstrap.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
     [table] = [
-        node.value for node in ast.parse(source).body
+        node.value for node in tree.body
         if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "_INSTRUMENTORS" for t in node.targets)
     ]
     assert {key.value for key in table.keys} == call_runner._OBSERVED_FRAMEWORKS
-    assert set(re.findall(r'_observing\(module\.__name__, "(\w+)"\)', source)) == call_runner._OBSERVED_STATES
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "_observing"
+    ]
+    assert calls
+    for call in calls:
+        framework, state = call.args
+        assert not call.keywords and ast.unparse(framework) == "module.__name__"
+        assert isinstance(state, ast.Constant)
+    assert {call.args[1].value for call in calls} == call_runner._OBSERVED_STATES
+
+
+def test_the_note_is_read_no_further_than_the_limit(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, [_RAN])
+    _observing(tmp_path, agents="on")
+    asked: list[int] = []
+
+    def counted(path, mode="r", *args, **kwargs):
+        handle = open(path, mode, *args, **kwargs)
+        read = handle.read
+
+        def read_counted(size=-1):
+            asked.append(size)
+            return read(size)
+
+        handle.read = read_counted
+        return handle
+
+    monkeypatch.setattr(call_runner, "open", counted, raising=False)
+    call_runner.tool_span_notices(runtime, call_runner.collect_seam_calls(runtime, None, ()))
+
+    assert asked == [call_runner._LARGEST_OBSERVING_NOTE + 1]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_a_pipe_at_the_notes_path_is_not_read(tmp_path) -> None:
+    # The agent's process can write the world folder; a pipe there must not hold the end of the trial.
+    import threading
+
+    runtime = _runtime(tmp_path, [_RAN])
+    os.mkfifo(tmp_path / "calls.jsonl.observing")
+    calls = call_runner.collect_seam_calls(runtime, None, ())
+    said: list = []
+    reader = threading.Thread(target=lambda: said.append(call_runner.tool_span_notices(runtime, calls)), daemon=True)
+    reader.start()
+    reader.join(timeout=5)
+
+    assert not reader.is_alive()
+    assert said == [[]]

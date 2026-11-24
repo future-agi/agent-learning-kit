@@ -200,27 +200,58 @@ esac
 """
 
 
+# Stands in for GNU stat with the real mode and the owner a test names, since a test can't make a
+# file root's. A folder reports DIR_OWNER, anything else FILE_OWNER.
+_FAKE_STAT = """#!/usr/bin/env python3
+import os, stat, sys
+args = sys.argv[1:]
+follow = "-L" in args
+args = [a for a in args if a != "-L"]
+fmt, path = args[args.index("-c") + 1], args[-1]
+info = os.stat(path) if follow else os.lstat(path)
+owner = os.environ["DIR_OWNER" if stat.S_ISDIR(info.st_mode) else "FILE_OWNER"]
+print(fmt.replace("%a", format(info.st_mode & 0o7777, "o")).replace("%U", owner))
+"""
+
+
 def _run_browser_check(
-    script, tmp_path, *, mode: int, png_bytes: str, renders: bool = True
+    script,
+    tmp_path,
+    *,
+    mode: int,
+    png_bytes: str,
+    renders: bool = True,
+    folder_mode: int = 0o555,
+    file_owner: str = "root",
+    folder_owner: str = "root",
 ):
-    if (
-        subprocess.run(["stat", "-L", "-c", "%a", "/"], capture_output=True).returncode
-        != 0
-    ):
-        pytest.skip("needs GNU stat, as in the template")
-    fake = tmp_path / "bin" / "alk-chromium"
-    fake.parent.mkdir()
+    # As in the image: alk-chromium on the path is a link, in a writable folder, to the browser in
+    # its own folder, so the check must follow the link for both the binary and its folder.
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    (tools / "stat").write_text(_FAKE_STAT)
+    (tools / "stat").chmod(0o755)
+    folder = tmp_path / "browser"
+    folder.mkdir()
+    fake = folder / "chrome"
     fake.write_text(_FAKE_CHROMIUM)
     fake.chmod(mode)
+    (tools / "alk-chromium").symlink_to(fake)
+    folder.chmod(folder_mode)
     env = {
         **os.environ,
-        "PATH": f"{fake.parent}:{os.environ['PATH']}",
+        "PATH": f"{tools}:{os.environ['PATH']}",
         "PNG_BYTES": png_bytes,
         "RENDERS": "1" if renders else "0",
+        "FILE_OWNER": file_owner,
+        "DIR_OWNER": folder_owner,
     }
-    return subprocess.run(
-        ["sh", "-c", _browser_check(script)], env=env, capture_output=True
-    )
+    try:
+        return subprocess.run(
+            ["sh", "-c", _browser_check(script)], env=env, capture_output=True
+        )
+    finally:
+        folder.chmod(0o755)
 
 
 def test_the_browser_check_passes_a_browser_that_runs_the_page_and_screenshots(
@@ -231,22 +262,34 @@ def test_the_browser_check_passes_a_browser_that_runs_the_page_and_screenshots(
 
 
 @pytest.mark.parametrize(
-    ("mode", "png_bytes", "renders"),
+    "case",
     [
-        (
-            0o755,
-            _PNG,
-            True,
-        ),  # writable: an agent's user could replace the kit's browser
-        (0o550, _PNG, True),  # not runnable by the agent's user
-        (0o555, "GIF89a", True),  # wrote something that is not a PNG
-        (0o555, _PNG, False),  # printed its own arguments back, and no page
+        # Writable: an agent's user could replace the kit's browser.
+        dict(mode=0o755, png_bytes=_PNG),
+        # Not runnable by the agent's user.
+        dict(mode=0o550, png_bytes=_PNG),
+        # Wrote something that is not a PNG.
+        dict(mode=0o555, png_bytes="GIF89a"),
+        # Printed its own arguments back, and no page.
+        dict(mode=0o555, png_bytes=_PNG, renders=False),
+        # Owned by a user other than root, who can make it writable again.
+        dict(mode=0o555, png_bytes=_PNG, file_owner="svc-agent"),
+        # In a folder where a new file can be moved over it: owned by another user, or writable.
+        dict(mode=0o555, png_bytes=_PNG, folder_owner="svc-agent"),
+        dict(mode=0o555, png_bytes=_PNG, folder_mode=0o755),
+    ],
+    ids=[
+        "writable",
+        "not-runnable",
+        "not-a-png",
+        "no-page",
+        "file-owner",
+        "folder-owner",
+        "folder-writable",
     ],
 )
 def test_the_browser_check_fails_a_browser_it_should_not_certify(
-    script, tmp_path, mode, png_bytes, renders
+    script, tmp_path, case
 ):
-    result = _run_browser_check(
-        script, tmp_path, mode=mode, png_bytes=png_bytes, renders=renders
-    )
+    result = _run_browser_check(script, tmp_path, **case)
     assert result.returncode != 0

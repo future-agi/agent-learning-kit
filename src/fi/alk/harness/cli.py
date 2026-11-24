@@ -1369,6 +1369,15 @@ async def _auto(args: argparse.Namespace) -> int:
                         file=sys.stderr,
                     )
                     status = 1
+            if label == "understand" and not status:
+                # The kind is known only now; refused before anything is installed for it.
+                from .browser_environment import refuse_saved_contract
+
+                refusal = refuse_saved_contract(destination, getattr(job, "metadata", None))
+                if refusal is not None:
+                    emit("harness.stage.failed", label, status=EXIT_REFUSED, code=refusal)
+                    _report_failure_file(destination)
+                    return EXIT_REFUSED
             if label == "scenarios" and not status and job.require_tool_workflow:
                 from .contract import AgentContract, validate_tool_workflow
 
