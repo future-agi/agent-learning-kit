@@ -2556,7 +2556,13 @@ def _authorize(authorization: str | None = Header(default=None)) -> None:
     )
 
 
-def create_app(root: Path | None = None) -> FastAPI:
+def create_app(root: Path | None = None, releases: Any | None = None) -> FastAPI:
+    """The sandbox app. With ``releases``, it also serves the external-trainer protocol.
+
+    ``releases`` is passed in rather than discovered because only the caller standing this
+    sandbox up knows whether it is holding a release a trainer may drive. A sandbox running an
+    ordinary simulation gets none, and exposes no trainer surface at all.
+    """
     # No schema or docs pages: they skip the token check, and a closed server shows nothing to
     # a caller without one.
     sandbox = LocalSandbox(
@@ -2706,6 +2712,15 @@ def create_app(root: Path | None = None) -> FastAPI:
             return sandbox.adjust(job_id, request)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="job not found") from exc
+
+    # The external-trainer protocol (T28), mounted only when this sandbox is holding releases
+    # a trainer may drive. Behind the same `_authorize` as every other route: a second app
+    # would mean a second port to open and a second auth story. Absent otherwise, so a sandbox
+    # running an ordinary simulation exposes no trainer surface at all.
+    if releases is not None:
+        from .ors_routes import ors_router
+
+        app.include_router(ors_router(releases, authorize=Depends(_authorize)))
 
     return app
 
