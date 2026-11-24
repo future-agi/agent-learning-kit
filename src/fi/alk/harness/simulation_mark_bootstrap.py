@@ -468,22 +468,45 @@ def _patch_proxy(module) -> None:
         setattr(cls, method, wrapper)
 
 
+# Beside the tool trace, which the harness removes before every call: which framework's instrumentor
+# this process turned on, written once when the framework is imported, so a framework that wrote no
+# span can be told from one that was never observed.
+_OBSERVING = ".observing"
+
+
+def _observing(framework: str, state: str) -> None:
+    """Note one framework's instrumentor state beside the tool trace; a failure is ignored."""
+    path = os.environ.get(_TOOL_TRACE)
+    if not path:
+        return
+    try:
+        # A module name and a fixed state hold nothing JSON escapes, so the hook needs no `json`.
+        with open(path + _OBSERVING, "a", encoding="utf-8") as handle:
+            handle.write('{"framework": "%s", "state": "%s"}\n' % (framework, state))
+    except Exception:
+        pass
+
+
 def _instrument(module, target) -> None:
     """Turn on the framework's instrumentor unless the process already has; it reads the global provider per span."""
     name, attribute = target
     if name in sys.modules:
         # The process imports the instrumentor itself, and this framework import is part of
         # that: it instruments with its own settings.
+        _observing(module.__name__, "process_own")
         return
     try:
         instrumentor = getattr(importlib.import_module(name), attribute)()
     except ImportError:
         # The build could not install it: this framework's calls go unobserved, and the log says so.
         _write("unobserved " + module.__name__ + ", its instrumentor is not installed")
+        _observing(module.__name__, "not_installed")
         return
     if getattr(instrumentor, "is_instrumented_by_opentelemetry", False):
+        _observing(module.__name__, "on")
         return
     instrumentor.instrument()
+    _observing(module.__name__, "on")
     _yield_to_process(type(instrumentor))
     serialiser = _SERIALISERS.get(name)
     if serialiser is not None:

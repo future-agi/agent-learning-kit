@@ -492,20 +492,37 @@ def test_with_no_folder_named_the_framework_comes_from_the_contracts_folder(tmp_
     }
 
 
-def test_a_browser_agent_is_refused_by_the_real_gate(tmp_path, model):
+def test_a_computer_use_agent_is_refused_by_the_real_gate(tmp_path, model):
     _repo(tmp_path)
-    fake = model(_submits({"modality": "browser"}, cost_usd=0.37))
+    fake = model(_submits({"modality": "computer_use"}, cost_usd=0.37))
     output = tmp_path / "reading"
 
     assert _run(tmp_path, _job(subfolder=SCRAPER)) == 78
 
-    assert _failure_in(output)["code"] == "agent_type_unsupported"
-    # One second look before any refusal: the browser answer to it stands and is refused.
+    failure = _failure_in(output)
+    assert failure["code"] == "agent_type_unsupported"
+    assert failure["details"] == {"agent_type": "computer_use", "tools": ["playwright"]}
+    # One second look before any refusal: the answer to it stands and is refused.
     assert fake.submissions == 2
     assert len(fake.sent) == 1
     assert not (output / "agent.json").exists()
     assert not (output / "contract.json").exists()
     _assert_cost(output, 0.37, True)
+
+
+def test_a_browser_agent_is_read_as_a_chat_agent_that_needs_a_browser(tmp_path, model):
+    _repo(tmp_path)
+    fake = model(_submits({**CHAT, "modality": "browser"}))
+    output = tmp_path / "reading"
+
+    # A reading knows no job, so it never refuses for want of a browser: it records the need.
+    assert _run(tmp_path, _job(subfolder=SCRAPER)) == 0
+
+    contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
+    assert (contract["modality"], contract["environment_needs"]) == ("chat", ["browser"])
+    # The second look comes first; what else the gate asks of this fixture is not this test's.
+    assert fake.submissions >= 2
+    assert not (output / "failure.json").exists()
 
 
 def test_a_missing_folder_is_refused_as_a_build_refuses_it(tmp_path, model):

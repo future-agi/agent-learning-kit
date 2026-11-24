@@ -2870,3 +2870,40 @@ def test_adk_s_transfers_and_agent_tool_calls_are_read_as_hand_offs_beside_the_c
     # The AgentTool call is still a hand-off that returns, and a worker's own call keeps its worker.
     assert any(row["name"] == "poi_agent" for row in sealed)
     assert next(row for row in sealed if row["name"] == "memorize")["agent"] == "planning_agent"
+
+
+def test_the_hook_notes_each_frameworks_span_source_beside_the_trace(tmp_path: Path) -> None:
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    _place_hook(hook)
+    (hook / "sitecustomize.py").write_text(
+        "import simulation_mark_bootstrap\nsimulation_mark_bootstrap.install()\n"
+    )
+    for framework in ("smolagents", "crewai", "langchain_core"):
+        (hook / f"{framework}.py").write_text("")
+    instrumentor = "class {name}:\n    def instrument(self, **kwargs):\n        pass\n"
+    (hook / "traceai_crewai.py").write_text(instrumentor.format(name="CrewAIInstrumentor"))
+    (hook / "traceai_langchain.py").write_text(instrumentor.format(name="LangChainInstrumentor"))
+    trace = tmp_path / "calls.jsonl"
+    result = subprocess.run(
+        [sys.executable, "-c", "import smolagents, crewai, traceai_langchain, langchain_core"],
+        env={
+            **os.environ,
+            "PYTHONPATH": str(hook),
+            "HARNESS_TOOL_TRACE": str(trace),
+            "ALK_OBSERVE_FRAMEWORKS": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    noted = [json.loads(line) for line in (tmp_path / "calls.jsonl.observing").read_text().splitlines()]
+    assert noted == [
+        {"framework": "smolagents", "state": "not_installed"},
+        {"framework": "crewai", "state": "on"},
+        {"framework": "langchain_core", "state": "process_own"},
+    ]
+    # The note is never a line of the trace the calls are read from.
+    assert not trace.exists()
