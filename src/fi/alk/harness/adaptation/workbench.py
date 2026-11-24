@@ -89,7 +89,7 @@ def frozen_pairing(
     problems += [
         f"{name}: {value!r} is not one of the agent's admitted tools"
         for name, value in pairing.items()
-        if value is not None and value not in admitted
+        if value is not None and not (isinstance(value, str) and value in admitted)
     ]
     if problems:
         raise AdaptationFailure("adaptation_pairing_invalid", "; ".join(problems))
@@ -224,6 +224,12 @@ class Workbench:
         self.pairing: dict[str, str | None] | None = None
         if pairing is not None:
             self.freeze_pairing(pairing)
+            # A canonical binding serves every environment tool, so one the person left unpaired
+            # is served only by a routed binding, which holds to the pairing.
+            if self.mode is BindingMode.CANONICAL and any(
+                name != paired for name, paired in pairing.items()
+            ):
+                self.mode = BindingMode.TOOL_ROUTED
         self.binding: Any = None
         self.draft: BindingDraft | None = None
         self.proof: dict[str, Any] | None = None
@@ -280,9 +286,7 @@ class Workbench:
         # An agent with some of the environment's tools, each called as-is, needs no mapping
         # written: its own tools onto themselves, so only those are served.
         self.identity = (
-            identity_mapping(profile, self.environment_tools)
-            if self.mode is BindingMode.TOOL_ROUTED
-            else None
+            self._identity() if self.mode is BindingMode.TOOL_ROUTED else None
         )
         if self.identity is not None and self.draft is None:
             self.submit_binding({"binding": self.identity})
@@ -460,6 +464,26 @@ class Workbench:
             self.environment_tools,
             [str(one["name"]) for one in self.profile.agent_tools],
         )
+
+    def _identity(self) -> dict[str, Any] | None:
+        """`identity_mapping`, held to the reviewed pairing: a tool paired with nothing is
+        unsupported, and one paired with another tool needs a mapping written."""
+        mapping = identity_mapping(self.profile, self.environment_tools)
+        if mapping is None or self.pairing is None:
+            return mapping
+        if any(paired not in (None, name) for name, paired in self.pairing.items()):
+            return None
+        return {
+            "tools": [
+                entry
+                if self.pairing.get(entry["agent_tool"])
+                else {
+                    "agent_tool": entry["agent_tool"],
+                    "unsupported": "the reviewed pairing gives it no environment tool",
+                }
+                for entry in mapping["tools"]
+            ]
+        }
 
     def submit_binding(self, body: Mapping[str, Any]) -> tuple[bool, str]:
         if self.mode is not BindingMode.TOOL_ROUTED:
@@ -902,7 +926,7 @@ def binding_server(workbench: Workbench, approve: Approve) -> Any:
                 "trajectories": {
                     "type": "string",
                     "description": "JSON object {scenario_key: [{tool, arguments}]}, only for "
-                    "scenarios the harness could not derive (yours win where both exist)",
+                    "scenarios the harness could not derive (the harness's win where both exist)",
                 },
                 "extension_candidates": {
                     "type": "string",

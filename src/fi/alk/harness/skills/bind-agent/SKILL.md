@@ -27,7 +27,7 @@ and whether it is sealed.
    scenario whose reference solution the binding inverts (an agent tool mapped onto one
    environment tool, its arguments renamed, converted, mapped or aliased); the reply says how many
    it derived and which scenarios still need a trajectory from you, with the reason. Write those
-   (and any derived one you know the agent would make differently) and submit again. A refusal
+   and submit again (a derived trajectory always stands over a written one). A refusal
    lists exactly what is wrong; fix it and submit again. Then `run_proof`. It replays every trajectory through the binding on a fresh PostgreSQL world and
    says, per scenario, `proved`, `failed` (with the reason) or `unscorable`. Repair what failed and
    repeat until no scenario fails. A tool the environment cannot serve is `unsupported`, with the

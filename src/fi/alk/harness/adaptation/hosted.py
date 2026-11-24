@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,7 @@ from ..hosted_authoring_entrypoint import (
     _TARGET_SECRETS_PATH,
     _load_values,
 )
-from ..releases import RELEASES_SUITE, environment_directory
+from ..releases import RELEASES_SUITE, BindingMode, environment_directory
 from .errors import AdaptationFailure
 from .workbench import (
     BINDING,
@@ -55,6 +56,7 @@ _INPUTS_WAIT_SECONDS = 300
 _POSTGRES_CREDENTIALS = Path(".authoring-credentials") / "adaptation-postgres.json"
 VERIFIED_SCHEMA = "futureagi.adaptation-verified.v1"
 _VERIFIED = Path(".authoring-credentials") / "adaptation-verified.json"
+_CONTROL = Path(".authoring-credentials") / "adaptation-control"
 
 
 def _postgres_credentials(workspace: Path) -> Path:
@@ -80,7 +82,9 @@ def record_verified(
         "binding": binding,
         "binding_proof": {"digest": proof_digest} if proof_digest else None,
     }
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # A new file, never one that is already there: a planted link or mode is not written through.
+    path.unlink(missing_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(body, stream, sort_keys=True)
 
@@ -142,54 +146,98 @@ def failed_before_start(
     return 2
 
 
+def _unproved(output: Path, result: dict[str, Any], message: str) -> dict[str, Any]:
+    failed = failed_result("binding_unproved", message)
+    failed["environment"] = result.get("environment") or []
+    write_json(output / RESULT, failed)
+    return failed
+
+
+def _sealed_as_ours(output: Path, control: Workbench) -> Any:
+    """The sealed binding, once this process's own workbench makes the same one: the mode the
+    profile gives, the reviewed pairing and, for a routed binding, the derived trajectories
+    (kept in `control.draft`). Raises `ValueError` for any other."""
+    from ..releases import load_agent_binding
+
+    binding = load_agent_binding(output / BINDING)
+    if binding.mode is not control.mode:
+        raise ValueError(
+            f"the sealed binding is {binding.mode.value}, the agent's is "
+            f"{control.mode.value}"
+        )
+    if control.mode is BindingMode.TOOL_ROUTED:
+        trajectories = json.loads((output / TRAJECTORIES).read_text(encoding="utf-8"))
+        accepted, said = control.submit_binding(
+            {
+                "binding": json.loads((output / BINDING).read_text(encoding="utf-8")),
+                "trajectories": trajectories,
+            }
+        )
+        if not accepted:
+            raise ValueError(said)
+    if binding.digest != control.binding.digest:
+        raise ValueError(
+            "the sealed binding is not the one this process makes from the same mapping"
+        )
+    return binding
+
+
 def prove_again(
-    output: Path, environment_root: Path, suite_root: Path, postgres_dsn: str
+    output: Path,
+    environment_root: Path,
+    suite_root: Path,
+    postgres_dsn: str,
+    control: Workbench,
 ) -> dict[str, Any]:
     """The result of a builder's adaptation, with its proof made by this process.
 
     The builder's session can write everything under `output`, its saved state included, so the
-    proof it left is not what is sealed. The control process reads only the sealed binding (its
-    digest is checked) and the trajectories, proves the binding against the released suite
-    itself, and writes the proof, its digest and the unscorable list from that. A binding it
-    cannot prove fails the adaptation, whatever the proof the builder left said."""
+    proof it left is not what is sealed. The control process takes only the sealed binding and
+    the trajectories, makes the same binding in its own workbench (`control`, which holds the
+    inspected agent and the reviewed pairing), proves it against the released suite itself, and
+    writes the proof, its digest and the unscorable list from that. A binding it would not make,
+    or cannot prove, fails the adaptation, whatever the proof the builder left said."""
     from ..binding_proof import proof_digest
-    from ..releases import BindingMode, ReleaseError, load_agent_binding
+    from ..releases import ReleaseError
     from .proofs import binding_verdicts, prove_binding_on
 
-    result = json.loads((output / RESULT).read_text(encoding="utf-8"))
-    if result.get("status") != "completed":
-        return result
+    result: dict[str, Any] = {}
     try:
-        binding = load_agent_binding(output / BINDING)
+        left = json.loads((output / RESULT).read_text(encoding="utf-8"))
+        if not isinstance(left, dict):
+            raise TypeError(f"{RESULT} is not an object")
+        result = left
+        if result.get("status") != "completed":
+            return result
+        binding = _sealed_as_ours(output, control)
         # What is reported is the sealed binding as this process read and checked it, not what
         # the result file says of it.
         result["binding"] = {"digest": binding.digest, "mode": binding.mode.value}
         if binding.mode is not BindingMode.TOOL_ROUTED:
             result["binding_proof"] = None
+            write_json(output / RESULT, result)
             return result
-        trajectories = json.loads((output / TRAJECTORIES).read_text(encoding="utf-8"))
         proof = prove_binding_on(
             suite_root,
             binding,
-            trajectories if isinstance(trajectories, dict) else {},
+            control.draft.trajectories,
             environment_root=environment_root,
             postgres_dsn=postgres_dsn,
         )
-    except (OSError, ValueError, ReleaseError) as exc:
+    except (OSError, ValueError, TypeError, AttributeError, ReleaseError) as exc:
         detail = (
             f"{exc.code}: {exc.detail}" if isinstance(exc, ReleaseError) else str(exc)
         )
-        failed = failed_result(
-            "binding_unproved",
+        return _unproved(
+            output,
+            result,
             f"the sealed binding could not be proved again: {detail}",
         )
-        failed["environment"] = result.get("environment") or []
-        write_json(output / RESULT, failed)
-        return failed
     verdicts = binding_verdicts(proof)
     if not proof.passed or not any(one.status == "proved" for one in verdicts.values()):
-        failed = failed_result(
-            "binding_unproved",
+        return _unproved(
+            output,
+            result,
             "the sealed binding is not proved:\n"
             + "\n".join(
                 f"{key}: {one.status}: {one.reason}"
@@ -197,11 +245,15 @@ def prove_again(
                 if one.status != "proved"
             ),
         )
-        failed["environment"] = result.get("environment") or []
-        write_json(output / RESULT, failed)
-        return failed
     write_json(output / BINDING_PROOF, proof.model_dump(mode="json"))
-    result["binding"] = {"digest": binding.digest, "mode": binding.mode.value}
+    write_json(
+        output / TRAJECTORIES,
+        {
+            key: calls
+            for key, calls in control.draft.trajectories.items()
+            if getattr(verdicts.get(key), "status", None) == "proved"
+        },
+    )
     result["binding_proof"] = {"digest": proof_digest(proof)}
     result["alignment"] = {
         **(result.get("alignment") or {}),
@@ -216,7 +268,11 @@ def prove_again(
 
 
 def _await_result(
-    output: Path, environment_root: Path, suite_root: Path, postgres_dsn: str
+    output: Path,
+    environment_root: Path,
+    suite_root: Path,
+    postgres_dsn: str,
+    control: Workbench,
 ) -> int:
     """Wait while the conversation's builder binds the agent in this sandbox, then prove what it
     sealed again here (`prove_again`)."""
@@ -226,7 +282,9 @@ def _await_result(
     )
     while time.monotonic() < deadline:
         if marker.is_file() and (output / RESULT).is_file():
-            result = prove_again(output, environment_root, suite_root, postgres_dsn)
+            result = prove_again(
+                output, environment_root, suite_root, postgres_dsn, control
+            )
             if result.get("status") == "completed":
                 # From what this process just proved and holds, not from the files it wrote.
                 record_verified(
@@ -282,8 +340,23 @@ def run_hosted(args: argparse.Namespace) -> int:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump({"postgres_dsn": dsn}, stream)
         write_json(output / PROFILE, profile.document())
+        # What an earlier round verified is not this one's.
+        verified_path(output.parent).unlink(missing_ok=True)
         if getattr(args, "auto", False):
             return _run_auto(output, environments, suite_root, dsn, profile, job)
+        # This process's own workbench, where the builder's tools cannot write: what the builder
+        # seals is held to it. A pairing it cannot take fails here, before anyone waits.
+        pairing = ((job.metadata or {}).get("adaptation") or {}).get("pairing")
+        control_output = output.parent.parent / _CONTROL
+        shutil.rmtree(control_output, ignore_errors=True)
+        control = Workbench(
+            environments=environments,
+            suite_root=suite_root,
+            output=control_output,
+            postgres_dsn=dsn,
+            profile=profile,
+            pairing=pairing,
+        )
         # Written last: its presence tells the builder everything else is in place.
         write_json(
             output / INPUTS,
@@ -291,12 +364,10 @@ def run_hosted(args: argparse.Namespace) -> int:
                 "environments": [str(one) for one in environments],
                 "suite": str(suite_root),
                 # The pairing the person reviewed, which the builder's bindings are held to.
-                "pairing": ((job.metadata or {}).get("adaptation") or {}).get(
-                    "pairing"
-                ),
+                "pairing": pairing,
             },
         )
-        return _await_result(output, environments[-1], suite_root, dsn)
+        return _await_result(output, environments[-1], suite_root, dsn, control)
 
 
 def _run_auto(
@@ -321,9 +392,10 @@ def _run_auto(
         postgres_dsn=dsn,
         profile=profile,
         finished_marker=output.parent / FINISHED_MARKER,
+        pairing=(job.metadata or {})["adaptation"].get("pairing"),
     )
     try:
-        asyncio.run(adapt(workbench, (job.metadata or {})["adaptation"].get("pairing")))
+        asyncio.run(adapt(workbench))
     except AdaptationFailure as exc:
         workbench.fail(exc.code, exc.message)
     result = json.loads((output / RESULT).read_text(encoding="utf-8"))

@@ -68,10 +68,15 @@ def _model(monkeypatch, *answers: Any) -> list[list[dict[str, str]]]:
 # --- the flow, over a stand-in workbench ------------------------------------------------------
 
 
+PAIRING = {"lock_card": "block_card", "send_sms": None}
+
+
 class Bench:
     """The workbench's surface `auto.adapt` uses, scripted."""
 
-    def __init__(self, *, submits=(), proofs=(), mode=BindingMode.TOOL_ROUTED):
+    def __init__(
+        self, *, submits=(), proofs=(), mode=BindingMode.TOOL_ROUTED, pairing=PAIRING
+    ):
         self.mode = mode
         self.submits = list(submits)
         self.proofs = list(proofs)
@@ -85,7 +90,7 @@ class Bench:
         self.failed: tuple[str, str] | None = None
         self.answer = ""
         self.sealed = False
-        self.pairing: Any = None
+        self.pairing: Any = pairing
 
     def brief(self) -> str:
         return "THE BRIEF"
@@ -99,9 +104,6 @@ class Bench:
         self.verdicts = verdicts
         lines = [f"{key}: {one.status}: {one.reason}" for key, one in verdicts.items()]
         return passed, ("Proved. " if passed else "Not proved. ") + "\n".join(lines)
-
-    def freeze_pairing(self, pairing):
-        self.pairing = dict(pairing)
 
     def report_conflicts(self, items):
         self.conflicts = items
@@ -122,7 +124,6 @@ class Bench:
 PROVED = BindingVerdict("proved", "")
 FAILED = BindingVerdict("failed", "grace_booked did not hold")
 DRAFT = {"binding": {"tools": []}, "conflicts": []}
-PAIRING = {"lock_card": "block_card", "send_sms": None}
 
 
 def test_a_refused_binding_is_retried_once_with_the_refusal(monkeypatch):
@@ -131,7 +132,7 @@ def test_a_refused_binding_is_retried_once_with_the_refusal(monkeypatch):
         submits=[(False, "tools: block_card is missing"), (True, "accepted")],
         proofs=[(True, {"S01": PROVED})],
     )
-    asyncio.run(auto.adapt(bench, PAIRING))
+    asyncio.run(auto.adapt(bench))
     assert bench.sealed and bench.answer == "yes" and bench.failed is None
     first, retry = seen
     assert '"lock_card": "block_card"' in first[1]["content"]
@@ -144,7 +145,7 @@ def test_a_refused_binding_is_retried_once_with_the_refusal(monkeypatch):
 def test_a_binding_refused_twice_fails_as_invalid(monkeypatch):
     _model(monkeypatch, DRAFT, DRAFT)
     bench = Bench(submits=[(False, "bad"), (False, "still bad")])
-    asyncio.run(auto.adapt(bench, PAIRING))
+    asyncio.run(auto.adapt(bench))
     assert bench.failed == ("binding_invalid", "still bad") and not bench.sealed
 
 
@@ -157,7 +158,7 @@ def test_a_scenario_still_failing_after_the_retry_fails_the_adaptation(monkeypat
         submits=[(True, "accepted"), (True, "accepted")],
         proofs=[(False, failing), (False, failing)],
     )
-    asyncio.run(auto.adapt(bench, PAIRING))
+    asyncio.run(auto.adapt(bench))
     assert "S02: failed: grace_booked did not hold" in seen[1][-1]["content"]
     assert "S01" not in seen[1][-1]["content"]
     assert not bench.sealed
@@ -171,24 +172,26 @@ def test_a_failed_proof_fails_even_when_the_retry_cannot_be_asked(monkeypatch):
     bench = Bench(
         submits=[(True, "accepted")], proofs=[(False, {"S01": PROVED, "S02": FAILED})]
     )
-    asyncio.run(auto.adapt(bench, PAIRING))
+    asyncio.run(auto.adapt(bench))
     assert bench.failed[0] == "binding_unproved" and not bench.sealed
 
 
 def test_run_mode_without_the_reviewed_pairing_binds_nothing(monkeypatch):
     seen = _model(monkeypatch, DRAFT)
-    bench = Bench(submits=[(True, "accepted")], proofs=[(True, {"S01": PROVED})])
+    bench = Bench(
+        submits=[(True, "accepted")], proofs=[(True, {"S01": PROVED})], pairing=None
+    )
     with pytest.raises(AdaptationFailure) as refused:
         asyncio.run(auto.adapt(bench))
     assert refused.value.code == "adaptation_pairing_missing"
     assert seen == [] and bench.submitted == [] and not bench.sealed
 
 
-def test_the_pairing_is_frozen_before_the_model_is_asked(monkeypatch):
+def test_the_model_is_shown_the_complete_pairing(monkeypatch):
     seen = _model(monkeypatch, DRAFT)
     bench = Bench(submits=[(True, "accepted")], proofs=[(True, {"S01": PROVED})])
-    asyncio.run(auto.adapt(bench, PAIRING))
-    assert bench.pairing == PAIRING and bench.sealed
+    asyncio.run(auto.adapt(bench))
+    assert bench.sealed
     assert '"send_sms": null' in seen[0][1]["content"]
 
 
@@ -205,7 +208,7 @@ def test_conflicts_that_are_not_quoted_or_not_rules_are_dropped(monkeypatch):
     ]
     _model(monkeypatch, {**DRAFT, "conflicts": conflicts})
     bench = Bench(submits=[(True, "accepted")], proofs=[(True, {"S01": PROVED})])
-    asyncio.run(auto.adapt(bench, PAIRING))
+    asyncio.run(auto.adapt(bench))
     assert bench.conflicts == [conflicts[0]]
 
 
@@ -499,8 +502,7 @@ def test_hosted_auto_binds_in_process_and_never_waits_for_a_builder(
         def proof_ref(self):
             return {"digest": "sha256:" + "cd" * 32}
 
-    async def adapt(workbench, given):
-        built["pairing"] = given
+    async def adapt(workbench):
         (built["output"] / RESULT).write_text('{"status": "completed"}')
         built["finished_marker"].write_text('{"status": "completed"}')
 
@@ -594,7 +596,24 @@ def _control(monkeypatch, **scenarios: tuple[str, str]):
         lambda _path: SimpleNamespace(digest=SHA, mode=BindingMode.TOOL_ROUTED),
     )
     monkeypatch.setattr(proofs, "prove_binding_on", prove)
+    seen["control"] = _own(BindingMode.TOOL_ROUTED)
     return proof, seen
+
+
+def _own(mode: BindingMode, *, digest: str = SHA, refused: str = "") -> SimpleNamespace:
+    """The control process's workbench: what it makes of the mapping the builder sealed."""
+    control = SimpleNamespace(
+        mode=mode, binding=SimpleNamespace(digest=digest), draft=None
+    )
+
+    def submit(body):
+        control.draft = SimpleNamespace(
+            trajectories={**body["trajectories"], "S02": []}
+        )
+        return not refused, refused or "accepted"
+
+    control.submit_binding = submit
+    return control
 
 
 def test_the_proof_a_builder_left_is_replaced_by_the_control_processes_own(
@@ -611,7 +630,9 @@ def test_the_proof_a_builder_left_is_replaced_by_the_control_processes_own(
         monkeypatch, S01=("proved", ""), S02=("unscorable", "uses send_sms")
     )
 
-    result = hosted.prove_again(output, tmp_path / "environment", tmp_path, "dsn")
+    result = hosted.prove_again(
+        output, tmp_path / "environment", tmp_path, "dsn", seen["control"]
+    )
 
     assert result["status"] == "completed"
     assert result["binding_proof"] == {"digest": proof_digest(proof)}
@@ -622,8 +643,10 @@ def test_the_proof_a_builder_left_is_replaced_by_the_control_processes_own(
     assert json.loads((output / "binding-proof.json").read_text()) == proof.model_dump(
         mode="json"
     )
-    # Proved from the sealed trajectories against the released suite, nothing else.
-    assert seen["suite"] == tmp_path and set(seen["trajectories"]) == {"S01"}
+    # Proved from this process's own trajectories (the sealed ones, and those code derives over
+    # them) against the released suite, nothing else.
+    assert seen["suite"] == tmp_path and set(seen["trajectories"]) == {"S01", "S02"}
+    assert set(json.loads((output / "trajectories.json").read_text())) == {"S01"}
 
 
 def test_a_binding_the_control_process_cannot_prove_fails_whatever_was_left(
@@ -631,11 +654,13 @@ def test_a_binding_the_control_process_cannot_prove_fails_whatever_was_left(
 ):
     output = tmp_path / "adaptation"
     _left_by_the_builder(output, {"passed": True, "scenarios": {"S01": "proved"}})
-    _control(
+    _proof, seen = _control(
         monkeypatch, S01=("proved", ""), S02=("failed", "grace_booked did not hold")
     )
 
-    result = hosted.prove_again(output, tmp_path / "environment", tmp_path, "dsn")
+    result = hosted.prove_again(
+        output, tmp_path / "environment", tmp_path, "dsn", seen["control"]
+    )
 
     assert result["status"] == "failed"
     assert result["failure"]["code"] == "binding_unproved"
@@ -648,7 +673,71 @@ def test_a_failed_result_is_left_as_it_is(tmp_path, monkeypatch):
     _left_by_the_builder(output, {})
     failed = {"status": "failed", "failure": {"code": "adaptation_declined"}}
     (output / RESULT).write_text(json.dumps(failed), encoding="utf-8")
-    assert hosted.prove_again(output, tmp_path, tmp_path, "dsn") == failed
+    control = _own(BindingMode.TOOL_ROUTED)
+    assert hosted.prove_again(output, tmp_path, tmp_path, "dsn", control) == failed
+
+
+@pytest.mark.parametrize(
+    "left, control, said",
+    [
+        # The profile routes this agent: an unproved canonical binding is not its binding.
+        (
+            BindingMode.CANONICAL,
+            _own(BindingMode.TOOL_ROUTED),
+            "is canonical, the agent's is tool_routed",
+        ),
+        # Another mapping than the reviewed one, refused by this process's own workbench.
+        (
+            BindingMode.TOOL_ROUTED,
+            _own(
+                BindingMode.TOOL_ROUTED, refused="not the reviewed pairing: block_card"
+            ),
+            "not the reviewed pairing: block_card",
+        ),
+        # The same mapping over other agent tools, or any other edit, seals another digest.
+        (
+            BindingMode.TOOL_ROUTED,
+            _own(BindingMode.TOOL_ROUTED, digest="sha256:" + "12" * 32),
+            "not the one this process makes",
+        ),
+        (
+            BindingMode.CANONICAL,
+            _own(BindingMode.CANONICAL, digest="sha256:" + "12" * 32),
+            "not the one this process makes",
+        ),
+    ],
+    ids=["canonical-swap", "another-pairing", "another-binding", "another-canonical"],
+)
+def test_a_sealed_binding_this_process_would_not_make_is_refused(
+    tmp_path, monkeypatch, left, control, said
+):
+    from fi.alk.harness import releases
+
+    output = tmp_path / "adaptation"
+    _left_by_the_builder(output, {"passed": True, "scenarios": {"S01": "proved"}})
+    _control(monkeypatch, S01=("proved", ""))
+    monkeypatch.setattr(
+        releases,
+        "load_agent_binding",
+        lambda _path: SimpleNamespace(digest=SHA, mode=left),
+    )
+
+    result = hosted.prove_again(output, tmp_path, tmp_path, "dsn", control)
+
+    assert result["failure"]["code"] == "binding_unproved"
+    assert said in result["failure"]["message"]
+    assert json.loads((output / RESULT).read_text())["status"] == "failed"
+
+
+@pytest.mark.parametrize("body", ["not json", "[]"])
+def test_a_malformed_result_fails_instead_of_crashing(tmp_path, body):
+    output = tmp_path / "adaptation"
+    _left_by_the_builder(output, {})
+    (output / RESULT).write_text(body, encoding="utf-8")
+    result = hosted.prove_again(
+        output, tmp_path, tmp_path, "dsn", _own(BindingMode.TOOL_ROUTED)
+    )
+    assert result["failure"]["code"] == "binding_unproved"
 
 
 def test_a_canonical_binding_is_reported_as_this_process_read_it(tmp_path, monkeypatch):
@@ -662,7 +751,9 @@ def test_a_canonical_binding_is_reported_as_this_process_read_it(tmp_path, monke
         "load_agent_binding",
         lambda _path: SimpleNamespace(digest=SHA, mode=BindingMode.CANONICAL),
     )
-    result = hosted.prove_again(output, tmp_path, tmp_path, "dsn")
+    result = hosted.prove_again(
+        output, tmp_path, tmp_path, "dsn", _own(BindingMode.CANONICAL)
+    )
     assert result["binding"] == {"digest": SHA, "mode": "canonical"}
     assert result["binding_proof"] is None
 
@@ -703,11 +794,16 @@ def test_the_control_process_records_the_proof_it_made_not_the_one_left(
     output = workspace / "adaptation"
     _left_by_the_builder(output, {"passed": True, "scenarios": {"S01": "proved"}})
     (workspace / hosted.FINISHED_MARKER).write_text("{}")
-    proof, _seen = _control(
+    proof, seen = _control(
         monkeypatch, S01=("proved", ""), S02=("unscorable", "uses send_sms")
     )
 
-    assert hosted._await_result(output, tmp_path / "environment", tmp_path, "dsn") == 0
+    assert (
+        hosted._await_result(
+            output, tmp_path / "environment", tmp_path, "dsn", seen["control"]
+        )
+        == 0
+    )
 
     recorded = json.loads(hosted.verified_path(workspace).read_text())
     assert recorded["binding"] == {"digest": SHA, "mode": "tool_routed"}
@@ -718,21 +814,46 @@ def test_the_control_process_records_the_proof_it_made_not_the_one_left(
     assert json.loads(hosted.verified_path(workspace).read_text()) == recorded
 
 
+def test_a_record_is_a_new_file_never_one_already_there(tmp_path):
+    workspace = tmp_path / "authoring"
+    (workspace / "adaptation").mkdir(parents=True)
+    path = hosted.verified_path(workspace)
+    path.parent.mkdir()
+    elsewhere = workspace / "planted.json"
+    elsewhere.write_text("{}")
+    path.symlink_to(elsewhere)
+
+    hosted.record_verified(
+        workspace, binding={"digest": SHA, "mode": "canonical"}, proof_digest=None
+    )
+
+    assert elsewhere.read_text() == "{}" and not path.is_symlink()
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
 def test_a_failed_adaptation_records_nothing_verified(tmp_path, monkeypatch):
     workspace = tmp_path / "authoring"
     output = workspace / "adaptation"
     _left_by_the_builder(output, {})
     (workspace / hosted.FINISHED_MARKER).write_text("{}")
-    _control(monkeypatch, S01=("failed", "grace_booked did not hold"))
+    _proof, seen = _control(monkeypatch, S01=("failed", "grace_booked did not hold"))
 
-    assert hosted._await_result(output, tmp_path / "environment", tmp_path, "dsn") == 2
+    assert (
+        hosted._await_result(
+            output, tmp_path / "environment", tmp_path, "dsn", seen["control"]
+        )
+        == 2
+    )
     assert not hosted.verified_path(workspace).exists()
 
 
 # --- end to end: CardGuard on Banking ----------------------------------------------------------
 
 
-def _banking(tmp_path: Path) -> tuple[Workbench, dict[str, Any]]:
+def _banking(
+    tmp_path: Path, *, pairing: dict[str, Any] | None = None
+) -> tuple[Workbench, dict[str, Any]]:
+    """CardGuard on Banking, with the pairing its mapping is, or `pairing` over it."""
     release = Path(RELEASES) / "banking"
     profile, mapping = fixtures.cardguard(release / "environment")
     workbench = Workbench(
@@ -742,6 +863,7 @@ def _banking(tmp_path: Path) -> tuple[Workbench, dict[str, Any]]:
         postgres_dsn=DSN,
         profile=profile_from_file(profile),
         finished_marker=tmp_path / hosted.FINISHED_MARKER,
+        pairing={**_pairing(mapping), **(pairing or {})},
     )
     return workbench, mapping
 
@@ -774,7 +896,7 @@ def test_cardguard_is_bound_in_run_mode_after_one_refusal(tmp_path, monkeypatch)
         {"binding": broken, "trajectories": {}, "conflicts": []},
         {"binding": mapping, "trajectories": {}, "conflicts": conflicts},
     )
-    asyncio.run(auto.adapt(workbench, _pairing(mapping)))
+    asyncio.run(auto.adapt(workbench))
     result = _result(workbench)
     assert result["status"] == "completed", result["failure"]
     assert {one["rule"] for one in result["alignment"]["conflicts"]} == {
@@ -796,7 +918,7 @@ def test_a_written_trajectory_never_replaces_one_code_derives(tmp_path, monkeypa
     workbench, mapping = _banking(tmp_path)
     nothing = {entry.key: [] for entry in workbench.base_suite.scenarios}
     _model(monkeypatch, {"binding": mapping, "trajectories": nothing, "conflicts": []})
-    asyncio.run(auto.adapt(workbench, _pairing(mapping)))
+    asyncio.run(auto.adapt(workbench))
     result = _result(workbench)
     assert result["status"] == "completed", result["failure"]
     assert result["alignment"]["unscorable"] == []
@@ -812,12 +934,13 @@ def test_a_binding_that_is_not_the_reviewed_pairing_is_never_proved(
     tmp_path, monkeypatch
 ):
     """The person unpaired one tool the model maps anyway, in both answers."""
-    workbench, mapping = _banking(tmp_path)
-    pairing = _pairing(mapping)
-    dropped = next(iter(pairing))
+    _profile, mapping = fixtures.cardguard(Path(RELEASES) / "banking" / "environment")
+    workbench, mapping = _banking(
+        tmp_path, pairing={next(iter(_pairing(mapping))): None}
+    )
     answer = {"binding": mapping, "trajectories": {}, "conflicts": []}
     _model(monkeypatch, answer, answer)
-    asyncio.run(auto.adapt(workbench, {**pairing, dropped: None}))
+    asyncio.run(auto.adapt(workbench))
     result = _result(workbench)
     assert result["status"] == "failed"
     assert result["failure"]["code"] == "binding_invalid"
@@ -833,7 +956,7 @@ def test_a_proof_edited_in_the_workspace_does_not_survive_the_control_process(
     control process's own proof of the sealed binding replaces it."""
     workbench, mapping = _banking(tmp_path)
     _model(monkeypatch, {"binding": mapping, "trajectories": {}, "conflicts": []})
-    asyncio.run(auto.adapt(workbench, _pairing(mapping)))
+    asyncio.run(auto.adapt(workbench))
     sealed = _result(workbench)
     assert sealed["status"] == "completed", sealed["failure"]
     genuine = json.loads((workbench.output / "binding-proof.json").read_text())
@@ -848,10 +971,68 @@ def test_a_proof_edited_in_the_workspace_does_not_survive_the_control_process(
     (workbench.output / "binding-proof.json").write_text(json.dumps(edited))
 
     release = Path(RELEASES) / "banking"
+    control, _mapping = _banking(tmp_path / "control")
     result = hosted.prove_again(
-        workbench.output, release / "environment", release / "suite", DSN
+        workbench.output, release / "environment", release / "suite", DSN, control
     )
 
     assert result["status"] == "completed", result.get("failure")
     assert result["binding_proof"] == sealed["binding_proof"]
     assert json.loads((workbench.output / "binding-proof.json").read_text()) == genuine
+
+
+@needs_releases
+def test_the_control_process_refuses_a_binding_of_another_pairing(
+    tmp_path, monkeypatch
+):
+    """The builder's inputs could be edited, so its own check proves nothing: what it sealed is
+    held to the pairing the job carries."""
+    workbench, mapping = _banking(tmp_path)
+    _model(monkeypatch, {"binding": mapping, "trajectories": {}, "conflicts": []})
+    asyncio.run(auto.adapt(workbench))
+    assert _result(workbench)["status"] == "completed"
+    dropped = next(iter(_pairing(mapping)))
+    control, _mapping = _banking(tmp_path / "control", pairing={dropped: None})
+
+    release = Path(RELEASES) / "banking"
+    result = hosted.prove_again(
+        workbench.output, release / "environment", release / "suite", DSN, control
+    )
+
+    assert result["failure"]["code"] == "binding_unproved"
+    assert "not the reviewed pairing" in result["failure"]["message"]
+
+
+@needs_releases
+def test_an_agent_with_the_environments_tools_is_held_to_the_pairing(tmp_path):
+    """Its tools are the environment's, so it would be canonical and served every one. The person
+    left one unpaired: it is routed, and that tool is unsupported."""
+    release = Path(RELEASES) / "banking"
+    names = [
+        tool["name"]
+        for tool in json.loads((release / "environment" / "tools.json").read_text())
+    ]
+    profile, _mapping = fixtures.declared_agent(
+        release / "environment",
+        name="Teller",
+        instructions="Help.",
+        renames={name: (name, {}) for name in names},
+    )
+    identity = {name: name for name in names}
+    dropped = names[0]
+
+    def bench(where: str, pairing: dict[str, Any]) -> Workbench:
+        return Workbench(
+            environments=[release / "environment"],
+            suite_root=release / "suite",
+            output=tmp_path / where,
+            postgres_dsn=DSN,
+            profile=profile_from_file(profile),
+            pairing=pairing,
+        )
+
+    assert bench("whole", identity).mode is BindingMode.CANONICAL
+    held = bench("held", {**identity, dropped: None})
+    assert held.mode is BindingMode.TOOL_ROUTED
+    entry = next(one for one in held.binding.tools if one.agent_tool == dropped)
+    assert isinstance(entry, UnsupportedToolBinding)
