@@ -571,9 +571,11 @@ def test_the_customer_is_context_and_never_judged():
 def test_both_judges_hold_the_agent_only_to_what_its_own_actions_showed_it():
     from fi.alk.harness import joint_judge
 
-    for text in (judge_module._INSTRUCTIONS, joint_judge._INSTRUCTIONS):
-        assert "never knowledge the agent is expected to have had" in text
-        assert "a record its actions never showed it" in text
+    for prompt in (judge_module._INSTRUCTIONS, joint_judge._INSTRUCTIONS):
+        text = " ".join(prompt.split())
+        assert "never expected to know a record its own actions never showed it" in text
+        assert "states as fact something nothing it was told or saw supports" in text
+        assert "skips a lookup its rules require" in text
 
 
 def test_an_answer_with_nothing_to_check_it_against_is_never_called_accurate():
