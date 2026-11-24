@@ -28,9 +28,9 @@ import adaptation_fixtures as fixtures
 
 from fi.alk.harness import spend
 from fi.alk.harness.adaptation import auto, hosted
+from fi.alk.harness.adaptation.errors import AdaptationFailure
 from fi.alk.harness.adaptation.profile import profile_from_file
 from fi.alk.harness.adaptation.proofs import BindingVerdict
-from fi.alk.harness.adaptation.errors import AdaptationFailure
 from fi.alk.harness.adaptation.workbench import (
     RESULT,
     Workbench,
