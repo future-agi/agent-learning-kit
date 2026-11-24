@@ -2809,38 +2809,6 @@ def test_a_scripted_actor_action_the_world_refused_is_named_when_the_case_is_kep
     assert [one.name for one in kept] == ["adds-a-big-mac"]
 
 
-def test_an_actor_change_the_agent_never_sees_is_named_when_the_case_is_kept(tmp_path):
-    from fi.alk.harness.actors import Actor, ActorList, save_actors
-    from fi.alk.harness.scenario_tools import accept_scenario
-
-    root, _contract, catalogue = _built_environment(tmp_path)
-    save_actors(root, ActorList(actors=[Actor(id="reviewer", name="Robin", permitted_actions=["cart.lst"])]))
-    note = {"item_id": "big_mac", "note": "approved by the manager"}
-    kept = []
-    said = accept_scenario(
-        {
-            **_delta(),
-            "actors": [
-                {
-                    "id": "reviewer",
-                    "actions": [
-                        {"action": "cart.lst", "arguments": note, "trigger": {"kind": "on_tool", "tool": "lst", "on_call": 1}}
-                    ],
-                }
-            ],
-        },
-        world_root=root,
-        catalogue=catalogue,
-        kept=kept,
-    )
-    text = said["content"][0]["text"]
-    assert not said.get("is_error"), said
-    assert "NOTE: the agent cannot act on a decision none of its tools has shown it" in text
-    assert "reviewer's cart.lst (big_mac, approved by the manager)" not in text
-    assert "reviewer's cart.lst (approved by the manager) never reaches the agent before add" in text
-    assert [one.name for one in kept] == ["adds-a-big-mac"]
-
-
 def _removed_case(tmp_path):
     """An environment that had `adds-a-big-mac` and lost it: its key is used, no case holds it."""
     from fi.alk.harness.scenario_tools import accept_scenario

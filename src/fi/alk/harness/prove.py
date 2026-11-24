@@ -36,11 +36,11 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Collection, Iterator, Mapping, Sequence
+from typing import Any, Callable, Collection, Mapping, Sequence
 
 from .actors import load_actors
 from .catalogue import Catalogue
-from .checks import Outcome, _number, reference_of, run_check, same_value
+from .checks import Outcome, reference_of, run_check
 from .contract import AgentContract
 from .controls import (
     JUDGED_CONTROL_TEXT,
@@ -178,8 +178,6 @@ class Proof:
     unplayed: list[str] = field(default_factory=list)
     # World actors' scripted actions the world refused while the reference played, each with the reason.
     actors_refused: list[str] = field(default_factory=list)
-    # World actors' record changes none of the agent's later results shows it before its last step there.
-    actors_unseen: list[str] = field(default_factory=list)
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
@@ -1060,7 +1058,6 @@ def run_steps(
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
             acting.act_on(step)
         world.actors_refused = acting.refused()
-        world.actors_unseen = acting.unseen()
         answered = world.answered_by_record
         played = scenario.solution if steps is None else steps
         assumed = [
@@ -1166,8 +1163,6 @@ class _WorldActors:
         self.counts: dict[str, int] = {}
         # Actions refused before the world, each with how many world calls came before it.
         self.refusals: list[tuple[int, dict[str, Any]]] = []
-        # The world calls each scripted action made, by index: whose action, and which.
-        self.acted: dict[int, tuple[str, str]] = {}
         # The scripted actions refused before the world for want of permission, as `refused` names them.
         self.not_permitted: list[str] = []
 
@@ -1321,41 +1316,6 @@ class _WorldActors:
                 lines.append(f"{who}: {call.name}({call.arguments}): {call.error or call.refusal_code or 'refused'}")
         return lines
 
-    def unseen(self) -> list[str]:
-        """Each scripted actor action whose decision the agent acts on without any of its tools having shown it, as
-        `actor's action (values) never reaches the agent before step`. A decision is shown by a result that carries one
-        of the action's own text values the agent had not sent itself, in any field, list or text. The agent acts on it
-        with a step that sends one of the action's values. Whatever cannot be told apart gives no note."""
-        agent = [(index, call) for index, call in enumerate(self.world.calls) if index not in self.by_actors]
-        lines = []
-        for index, (who, action) in sorted(self.acted.items()):
-            call = self.world.calls[index]
-            if not call.ok:
-                continue
-            arguments = dict(call.arguments or {})
-            if action.rpartition(".")[2] == "change":
-                record = {**dict(arguments.get("where") or {}), **dict(arguments.get("set") or {})}
-            else:
-                record = dict(arguments["record"]) if isinstance(arguments.get("record"), dict) else arguments
-            values = [one for one in record.values() if one is not None]
-            later = [(at, one) for at, one in agent if at > index]
-            for at, step in later:
-                sent = [one for before, made in agent if before <= at for one in _scalars(made.arguments)]
-                news = [
-                    one
-                    for one in values
-                    if isinstance(one, str) and _number(one) is None and not any(same_value(one, it) for it in sent)
-                ]
-                if not news:
-                    break
-                # The last step's own result comes after it acted, so it never shows the decision in time.
-                if at != later[-1][0] and _shows(step.result, news):
-                    break
-                if any(same_value(one, it) for one in values for it in _scalars(step.arguments)):
-                    lines.append(f"{who}'s {action} ({', '.join(map(str, news))}) never reaches the agent before {step.name}")
-                    break
-        return lines
-
     def act_on(self, step: Any) -> None:
         if step is not None:
             self.counts[step.tool] = self.counts.get(step.tool, 0) + 1
@@ -1416,29 +1376,6 @@ class _WorldActors:
             self.by_actors.update(
                 dict.fromkeys(range(before, len(self.world.calls)), actor.id)
             )
-            self.acted.update(dict.fromkeys(range(before, len(self.world.calls)), (actor.id, action.action)))
-
-
-def _scalars(value: Any) -> Iterator[Any]:
-    """Every scalar inside a call's arguments or result."""
-    if isinstance(value, Mapping):
-        for one in value.values():
-            yield from _scalars(one)
-    elif isinstance(value, (list, tuple)):
-        for one in value:
-            yield from _scalars(one)
-    elif value is not None:
-        yield value
-
-
-def _shows(result: Any, news: Sequence[str]) -> bool:
-    """Whether a result carries any of `news` anywhere: as a value, or as a word in a text."""
-    for one in _scalars(result):
-        if any(same_value(one, it) for it in news):
-            return True
-        if isinstance(one, str) and any(re.search(rf"(?<!\w){re.escape(it)}(?!\w)", one, re.I) for it in news):
-            return True
-    return False
 
 
 def native_runtime(world_root: Path) -> bool:
@@ -2006,7 +1943,6 @@ def prove(
     proof.faulted = list(getattr(world, "faulted", None) or [])
     proof.recorded = list(getattr(world, "recorded", None) or [])
     proof.actors_refused = list(getattr(world, "actors_refused", None) or [])
-    proof.actors_unseen = list(getattr(world, "actors_unseen", None) or [])
     proof.broken = [one.name for one in proof.with_solution if one.broken]
     proof.solvable = all(one.held or one.name in proof.excused for one in proof.with_solution) and not proof.broken
 
