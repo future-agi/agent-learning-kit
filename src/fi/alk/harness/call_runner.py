@@ -88,6 +88,7 @@ from .world_door import (
     is_read,
     logged_as,
     named_alike,
+    own_tool,
     route_action,
     routed_faults,
     row_arguments,
@@ -1263,7 +1264,7 @@ def evidence_notices(
             # The in-process door names the call by the tool or records the tool beside it. The proxy logs the world
             # action it reached (a route's `{part}` standing for the part the call named) with the method it was
             # made with; its row's name is only the route's last part, never the tool.
-            if not proxied and (str(row.get("name") or "") in tools or str(row.get("agent_tool") or "") in tools):
+            if not proxied and (str(row.get("name") or "") in tools or own_tool(row) in tools):
                 return True
             made_with = str(row.get("method") or "").upper()
             return action_matches(logged_as(row), action) and not (method and made_with and made_with != method)
@@ -1388,7 +1389,7 @@ def _collect_tool_trace_calls(
     calls: list[Call] = []
     for record in records:
         # The agent's own tool name when the world recorded it beside the route the call took.
-        name = record.get("agent_tool") or record.get("name")
+        name = own_tool(record) or record.get("name")
         if not isinstance(name, str) or not name:
             continue
         arguments = record.get("arguments")
@@ -1640,7 +1641,7 @@ def trial_state_changes(
             "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
         )
         # A call through the tool proxy is named by the agent's own tool, as its checks are graded, not by its route.
-        name = str(row.get("agent_tool") or row.get("name") or "")
+        name = own_tool(row) or str(row.get("name") or "")
         if outcome == "committed" and is_read(row):
             entry["read"] += 1
             entry["read_actions"].append(name if who == AGENT or who.startswith("worker:") else logged_as(row))
@@ -1768,7 +1769,7 @@ def trial_shared_record_fields(
         arguments = row.get("arguments")
         if not isinstance(arguments, Mapping):
             continue
-        tool = str(row.get("agent_tool") or row.get("name") or "")
+        tool = own_tool(row) or str(row.get("name") or "")
         outcome = row.get("outcome") or (
             "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
         )
@@ -2262,7 +2263,7 @@ def fault_notices(
         # A call through the tool proxy also carries the agent's own tool name, which a fault may name instead.
         rows = [
             row for row in agent_rows
-            if same_action(row, action) or named_alike(action, str(row.get("agent_tool") or ""))
+            if same_action(row, action) or named_alike(action, own_tool(row))
         ]
         # A fault that names its method holds only calls made with it: a GET of the route is not a call of its DELETE.
         # A row from a log that kept no method still counts, as before methods were logged.
