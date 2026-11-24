@@ -1599,6 +1599,9 @@ def test_prove_only_proves_on_the_sealed_runtime_then_offline(tmp_path, monkeypa
     assert (keys, deadline_at, output) == ({"case_a"}, 10000, authoring / "scenario-proofs.json")
     expected = {"case_b": {"assumed": []}} if live_pass_fails else {"case_a": {"assumed": []}, "case_b": {"assumed": []}}
     assert live == expected
+    # A live pass that never ran leaves the asked case unplayed, with why, for the offline pass to read.
+    unplayed = live_proof.load_unplayed(authoring)
+    assert unplayed == ({"case_a": "RuntimeError: the sealed runtime did not start"} if live_pass_fails else {})
 
 
 def _sealed_tree(tmp_path: Path, monkeypatch, capabilities: dict, kind=None) -> Path:
@@ -1640,6 +1643,8 @@ def test_prove_on_sealed_runtime_plays_the_cases_on_the_started_bundle(tmp_path,
     started: list[str] = []
 
     async def provision(manifest, *, source, bundle_dir, work_directory, instances):
+        # The sealed bundle, copied inside the runtime's own work directory, the only one its users may pass through.
+        assert bundle_dir.parent == work_directory and (bundle_dir / "contract.json").is_file()
         started.append(bundle_dir.name)
         return [stack]
 
@@ -1657,7 +1662,7 @@ def test_prove_on_sealed_runtime_plays_the_cases_on_the_started_bundle(tmp_path,
         runtime_validation.prove_on_sealed_runtime(_job(1), tmp_path, authoring, secrets_path=secrets)
     )
 
-    assert started == ["environment-bundle", "closed"]
+    assert started == ["bundle", "closed"]
     assert results["refund_case"]["assumed"] == []
     assert live_proof.load_live(authoring)["refund_case"] == results["refund_case"]
     # Only the requested cases are played, within the budget.
@@ -1665,6 +1670,10 @@ def test_prove_on_sealed_runtime_plays_the_cases_on_the_started_bundle(tmp_path,
         assert asyncio.run(
             runtime_validation.prove_on_sealed_runtime(_job(1), tmp_path, authoring, secrets_path=secrets, **options)
         ) == {}
+    # The case the budget kept it from playing is recorded unplayed, with why; a case played since clears it.
+    assert live_proof.load_unplayed(authoring) == {"refund_case": live_proof.BUDGET_SPENT}
+    asyncio.run(runtime_validation.prove_on_sealed_runtime(_job(1), tmp_path, authoring, secrets_path=secrets))
+    assert live_proof.load_unplayed(authoring) == {}
 
 
 @pytest.mark.parametrize("compose", [False, True])
